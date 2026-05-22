@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Optional
 
 import streamlit as st
@@ -11,10 +12,38 @@ import streamlit as st
 
 ProviderInfo = tuple[str, str, str, bool, str, str]
 INTERNAL_PROVIDER_KEYS = {"easyicu_hosted"}
+_LOCAL_ENV_LOADED = False
+
+
+def _load_local_env_file() -> None:
+    """Load repo-local LLM defaults without exposing or overriding secrets."""
+    global _LOCAL_ENV_LOADED
+    if _LOCAL_ENV_LOADED:
+        return
+    _LOCAL_ENV_LOADED = True
+    for root in (Path.cwd(), *Path.cwd().parents):
+        env_path = root / ".env.local"
+        if not env_path.exists() or not env_path.is_file():
+            continue
+        try:
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+        for raw in lines:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and value and key not in os.environ:
+                os.environ[key] = value
+        return
 
 
 def hosted_base_url() -> str:
     """Return the configured EasyICU hosted relay URL, if any."""
+    _load_local_env_file()
     return (
         os.getenv("EASYICU_HOSTED_BASE_URL")
         or os.getenv("EASYICU_LLM_BASE_URL")
@@ -118,6 +147,7 @@ PROVIDERS: Dict[str, ProviderInfo] = {
 
 def ensure_llm_config_state() -> None:
     """Ensure the shared LLM keys exist in Streamlit session state."""
+    _load_local_env_file()
     defaults = {
         "llm_enabled": False,
         "llm_provider": default_provider_key(),

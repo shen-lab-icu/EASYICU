@@ -27,7 +27,9 @@ Expected shape of ``_agent_workbench`` (all keys optional)::
       "autopatch": {"from","to","ago"} | None,
       "results": [{"kind","title","metric","kind_svg"}],
       "evidence": [{"label","sub","tag"}],  # tag in data/paper/code/test/fix
-      "step_details": [{"code","trace","results","evidence"}],
+      "step_details": [{"code","trace","results","evidence","step_contract"}],
+      "audit_tasks": [{"title","detail","tone","action"}],
+      "review_decisions": [{"label","detail","state"}],
       "timeline": [{"label","t","d","status"}],
       "elapsed": float, "total": float, "tokens": int,
     }
@@ -41,6 +43,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import base64
 from pathlib import Path
 from typing import Any
 
@@ -219,7 +222,64 @@ def _step_subtitle(record: dict[str, Any], manifest: dict[str, Any]) -> str:
     return _compact_label(" · ".join(parts) or "recorded", max_len=60)
 
 
-def _result_cards_from_evidence(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _artifact_path_for_preview(run_dir: Path | None, record: dict[str, Any]) -> Path | None:
+    raw = record.get("relative_path") or record.get("path")
+    if not raw:
+        return None
+    path = Path(str(raw))
+    return path if path.is_absolute() else ((run_dir / path) if run_dir else path)
+
+
+def _figure_file_preview_html(path: Path | None) -> str:
+    if path is None or not path.exists() or not path.is_file():
+        return ""
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".svg":
+            svg = path.read_text(encoding="utf-8")[:500_000]
+            if "<svg" not in svg.lower() or "<script" in svg.lower():
+                return ""
+            return f'<div class="eu-result-artifact-preview real">{svg}</div>'
+        mime = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+        }.get(suffix)
+        if mime:
+            data = base64.b64encode(path.read_bytes()[:4_000_000]).decode("ascii")
+            return (
+                '<div class="eu-result-artifact-preview real">'
+                f'<img src="data:{mime};base64,{data}" alt="{_esc(path.name)}" />'
+                '</div>'
+            )
+    except Exception:
+        return ""
+    return ""
+
+
+def _artifact_slot_html(kind: str, *, lang: str, real: bool) -> str:
+    if real:
+        title = _T(lang, "Registered artifact", "已注册产物")
+        detail = _T(lang, "Preview opens only when the generated file can be rendered safely.", "仅当生成文件可安全渲染时才显示预览。")
+    else:
+        title = _T(lang, "No generated output", "尚无生成输出")
+        detail = _T(lang, "Run the agent or open a manifest to populate this slot.", "运行 agent 或打开 manifest 后填充此处。")
+    return (
+        '<div class="eu-result-artifact-preview empty">'
+        f'<b>{_esc(kind)}</b>'
+        f'<span>{_esc(title)}</span>'
+        f'<small>{_esc(detail)}</small>'
+        '</div>'
+    )
+
+
+def _result_cards_from_evidence(
+    evidence: list[dict[str, Any]],
+    *,
+    run_dir: Path | None = None,
+    lang: str = "en",
+) -> list[dict[str, Any]]:
     cards: list[dict[str, Any]] = []
     for record in evidence:
         if not isinstance(record, dict):
@@ -227,13 +287,16 @@ def _result_cards_from_evidence(evidence: list[dict[str, Any]]) -> list[dict[str
         kind = str(record.get("kind") or "").lower()
         if kind not in {"figure", "table"}:
             continue
+        path = _artifact_path_for_preview(run_dir, record)
+        preview_html = _figure_file_preview_html(path) if kind == "figure" else ""
         rel = str(record.get("relative_path") or record.get("path") or "")
         cards.append({
             "kind": kind,
             "title": _evidence_label(record),
-            "metric": "staged",
+            "metric": _T(lang, "rendered", "已渲染") if preview_html else _T(lang, "registered", "已注册"),
             "sub": rel or _evidence_sub(record),
-            "svg": cc.render_tile_calibration() if kind == "figure" else "",
+            "preview_html": preview_html or _artifact_slot_html(kind.title(), lang=lang, real=True),
+            "svg": "",
         })
         if len(cards) >= 4:
             break
@@ -381,6 +444,175 @@ def _step_trace_from_record(record: dict[str, Any], step_evidence: list[dict[str
     return trace[:10]
 
 
+def _contract_status(ok: bool | None) -> str:
+    if ok is True:
+        return "ok"
+    if ok is False:
+        return "bad"
+    return "wait"
+
+
+def _artifact_display_path(record: dict[str, Any]) -> str:
+    return _compact_label(
+        record.get("relative_path")
+        or record.get("path")
+        or record.get("evidence_id")
+        or record.get("kind")
+        or "artifact",
+        max_len=82,
+    )
+
+
+def _method_binding_for_step(
+    *,
+    step_id: str,
+    record: dict[str, Any],
+    step_evidence: list[dict[str, Any]],
+    lang: str,
+) -> dict[str, str]:
+    text = " ".join(
+        str(v or "")
+        for v in (
+            step_id,
+            record.get("intent"),
+            record.get("generation_mode"),
+            record.get("step_summary"),
+        )
+    ).lower()
+    evidence_kinds = sorted({
+        str(ev.get("kind") or "artifact").lower()
+        for ev in step_evidence
+        if isinstance(ev, dict)
+    })
+    if any(token in text for token in ("probe", "profile", "cohort", "frame")):
+        label = _T(lang, "Cohort / variable probe", "队列 / 变量探查")
+        audit = _T(lang, "denominator, available variables, missingness", "分母、可用变量、缺失情况")
+    elif any(token in text for token in ("missing", "qc", "quality", "audit")):
+        label = _T(lang, "Missingness and quality audit", "缺失与质量审计")
+        audit = _T(lang, "high-missingness flags, zero artefacts, cohort loss", "高缺失标记、零值伪影、队列损耗")
+    elif any(token in text for token in ("model", "association", "regression", "glm", "mortality")):
+        label = _T(lang, "Statistical association model", "统计关联模型")
+        audit = _T(lang, "estimand, covariates, complete-case risk", "估计目标、协变量、完整病例风险")
+    elif any(token in text for token in ("figure", "plot", "publication", "export")):
+        label = _T(lang, "Publication figure export", "发表图件导出")
+        audit = _T(lang, "source data, vector/bitmap outputs, rendering QA", "源数据、矢量/位图输出、渲染质检")
+    elif any(token in text for token in ("manuscript", "draft", "writer", "report")):
+        label = _T(lang, "Manuscript gate", "手稿关口")
+        audit = _T(lang, "claim ledger, evidence refs, guarded conclusion", "主张账本、证据引用、保守结论")
+    else:
+        label = _T(lang, "Execution step", "执行步骤")
+        audit = _T(lang, "script, log, and registered artifacts", "脚本、日志、注册产物")
+    outputs = ", ".join(evidence_kinds[:4]) if evidence_kinds else _T(lang, "no artifact yet", "暂无产物")
+    return {
+        "label": label,
+        "sub": _T(lang, "Bound method template", "已绑定方法模板"),
+        "audit": audit,
+        "outputs": outputs,
+    }
+
+
+def _step_contract_from_record(
+    *,
+    run_path: Path,
+    manifest: dict[str, Any],
+    record: dict[str, Any],
+    step_evidence: list[dict[str, Any]],
+    step_number: int,
+    lang: str,
+) -> dict[str, Any]:
+    step_id = str(record.get("step_id") or f"step_{step_number:02d}")
+    method = _method_binding_for_step(
+        step_id=step_id,
+        record=record,
+        step_evidence=step_evidence,
+        lang=lang,
+    )
+    inputs: list[dict[str, Any]] = []
+    for key, label in (
+        ("context_path", _T(lang, "Research context", "研究上下文")),
+        ("plan_path", _T(lang, "Analysis plan", "分析计划")),
+    ):
+        if manifest.get(key):
+            inputs.append({
+                "path": _compact_label(manifest[key], max_len=72),
+                "meta": label,
+                "ok": True,
+            })
+    if record.get("intent"):
+        inputs.append({
+            "path": _compact_label(record.get("intent"), max_len=72),
+            "meta": _T(lang, "step intent", "步骤意图"),
+            "ok": True,
+        })
+    if not inputs:
+        inputs.append({
+            "path": _compact_label(run_path, max_len=72),
+            "meta": _T(lang, "run directory", "运行目录"),
+            "ok": True,
+        })
+
+    outputs: list[dict[str, Any]] = []
+    for ev in step_evidence[:6]:
+        outputs.append({
+            "path": _artifact_display_path(ev),
+            "meta": _compact_label(ev.get("kind") or "artifact", max_len=28),
+            "ok": True,
+        })
+    if not outputs:
+        outputs.append({
+            "path": _T(lang, "No step artifact registered", "未注册步骤产物"),
+            "meta": _T(lang, "expected after execution", "执行后预期"),
+            "ok": None,
+        })
+
+    returncode = record.get("returncode")
+    status = str(record.get("status") or "").lower()
+    failure = status in _TERMINAL_FAIL or returncode not in (None, 0, "0")
+    checkpoints: list[dict[str, Any]] = [
+        {
+            "label": _T(lang, "Step status", "步骤状态"),
+            "detail": _compact_label(record.get("status") or "recorded", max_len=60),
+            "ok": not failure,
+        },
+        {
+            "label": _T(lang, "Evidence bound", "证据已绑定"),
+            "detail": _T(lang, f"{len(step_evidence)} artifact(s)", f"{len(step_evidence)} 个产物"),
+            "ok": bool(step_evidence),
+        },
+    ]
+    if returncode is not None:
+        checkpoints.append({
+            "label": _T(lang, "Return code", "返回码"),
+            "detail": str(returncode),
+            "ok": returncode in (0, "0"),
+        })
+    if record.get("code_repair_attempts"):
+        checkpoints.append({
+            "label": _T(lang, "Repair attempts", "修复尝试"),
+            "detail": str(record.get("code_repair_attempts")),
+            "ok": False if failure else None,
+        })
+    for field, label in (
+        ("contract_findings", _T(lang, "Contract audit", "契约审计")),
+        ("clinical_findings", _T(lang, "Clinical audit", "临床审计")),
+        ("stat_findings", _T(lang, "Stat audit", "统计审计")),
+    ):
+        findings = [f for f in record.get(field) or [] if isinstance(f, dict)]
+        if findings:
+            worst = next((f for f in findings if f.get("severity") == "error"), findings[0])
+            checkpoints.append({
+                "label": label,
+                "detail": _compact_label(worst.get("message") or worst.get("validator") or field, max_len=70),
+                "ok": False if worst.get("severity") == "error" else None,
+            })
+    return {
+        "method": method,
+        "inputs": inputs[:4],
+        "outputs": outputs[:6],
+        "checkpoints": checkpoints[:6],
+    }
+
+
 def _evidence_rows_from_records(evidence: list[dict[str, Any]], *, fallback_label: str) -> list[dict[str, str]]:
     rows = [
         {
@@ -402,6 +634,7 @@ def _step_detail_from_record(
     record: dict[str, Any],
     step_number: int,
     total_steps: int,
+    lang: str,
 ) -> dict[str, Any]:
     step_id = str(record.get("step_id") or f"step_{step_number:02d}")
     step_evidence = _evidence_for_step(manifest, record)
@@ -422,8 +655,16 @@ def _step_detail_from_record(
         "code": code,
         "code_path": code_path,
         "trace": _step_trace_from_record(record, step_evidence),
-        "results": _result_cards_from_evidence(step_evidence),
+        "results": _result_cards_from_evidence(step_evidence, run_dir=run_path, lang=lang),
         "evidence": _evidence_rows_from_records(step_evidence, fallback_label=step_id),
+        "step_contract": _step_contract_from_record(
+            run_path=run_path,
+            manifest=manifest,
+            record=record,
+            step_evidence=step_evidence,
+            step_number=step_number,
+            lang=lang,
+        ),
         "subtitle_short": f"step {step_number}/{total_steps} · {len(step_evidence)} evidence",
         "autopatch": {
             "from": _compact_label(record.get("runner_repair") or "LLM code", max_len=42),
@@ -476,6 +717,247 @@ def _audit_payload(
     }
 
 
+def _summary_outputs_from_manifest(
+    *,
+    manifest: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    lang: str,
+) -> list[dict[str, str]]:
+    """Build the output-summary gallery from registered run artifacts."""
+    outputs: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(kind: str, title: object, sub: object, badge: str = "") -> None:
+        label = _compact_label(title, max_len=58)
+        if not label:
+            return
+        key = f"{kind}:{label}:{sub}"
+        if key in seen:
+            return
+        seen.add(key)
+        outputs.append({
+            "kind": _compact_label(kind, max_len=20),
+            "title": label,
+            "sub": _compact_label(sub, max_len=80),
+            "badge": badge,
+        })
+
+    for rec in evidence:
+        if not isinstance(rec, dict):
+            continue
+        kind = str(rec.get("kind") or "").lower()
+        if kind in {"figure", "table", "dataset", "statistic", "report"}:
+            add(kind or "artifact", _evidence_label(rec), _evidence_sub(rec), _evidence_tag(rec))
+        if len(outputs) >= 6:
+            break
+
+    for key, label, kind in (
+        ("report_path", _T(lang, "Results report", "结果报告"), "report"),
+        ("manuscript_path", _T(lang, "Manuscript scaffold", "手稿草稿"), "draft"),
+        ("plan_path", _T(lang, "Study plan", "研究方案"), "plan"),
+        ("context_path", _T(lang, "Research context", "研究上下文"), "context"),
+    ):
+        if manifest.get(key) and len(outputs) < 8:
+            add(kind, label, manifest[key], key)
+
+    if not outputs:
+        outputs.append({
+            "kind": _T(lang, "preview", "预览"),
+            "title": _T(lang, "No generated artifact yet", "尚无生成产物"),
+            "sub": _T(lang, "Run or open a manifest to populate this gallery.", "运行或打开 manifest 后会填充此画廊。"),
+            "badge": _T(lang, "empty", "空"),
+        })
+    return outputs
+
+
+def _review_gate_actions_from_audit(audit: dict[str, Any], *, lang: str, is_demo: bool = False) -> list[dict[str, str]]:
+    counts = audit.get("counts") if isinstance(audit.get("counts"), dict) else {}
+    errors = int(counts.get("errors") or 0)
+    warnings = int(counts.get("warnings") or 0)
+    blocked_gates = [
+        gate for gate in audit.get("gates") or []
+        if isinstance(gate, dict) and gate.get("ok") is False
+    ]
+    if is_demo:
+        return [
+            {
+                "label": _T(lang, "Switch to Real Data", "切换到真实数据"),
+                "state": "ready",
+                "detail": _T(lang, "Demo mode shows structure only; it does not invent metrics.", "Demo 只展示结构，不编造指标。"),
+            },
+            {
+                "label": _T(lang, "Open Workbench", "打开工作台"),
+                "state": "ready",
+                "detail": _T(lang, "Inspect the step-by-step agent surface without token use.", "无需 token 即可查看逐步 agent 工作台。"),
+            },
+        ]
+    if errors or blocked_gates:
+        return [
+            {
+                "label": _T(lang, "Resolve audit blockers", "处理审计阻断"),
+                "state": "blocked",
+                "detail": _T(
+                    lang,
+                    f"{errors} error finding(s), {len(blocked_gates)} failed gate(s).",
+                    f"{errors} 个 error 级发现，{len(blocked_gates)} 个关口失败。",
+                ),
+            },
+            {
+                "label": _T(lang, "Keep manuscript locked", "保持手稿锁定"),
+                "state": "blocked",
+                "detail": _T(lang, "Drafting remains a second-stage action.", "写作仍是第二阶段动作。"),
+            },
+        ]
+    if warnings:
+        return [
+            {
+                "label": _T(lang, "Review warnings", "复核警告"),
+                "state": "review",
+                "detail": _T(lang, f"{warnings} warning(s) require human confirmation.", f"{warnings} 个 warning 需要人工确认。"),
+            },
+            {
+                "label": _T(lang, "Draft after confirmation", "确认后生成草稿"),
+                "state": "review",
+                "detail": _T(lang, "The evidence gate can be advanced after review.", "人工复核后可推进证据关口。"),
+            },
+        ]
+    return [
+        {
+            "label": _T(lang, "Analysis ready", "分析就绪"),
+            "state": "ready",
+            "detail": _T(lang, "Evidence gates are clear for a manuscript draft.", "证据关口已清空，可以进入手稿草稿。"),
+        },
+        {
+            "label": _T(lang, "Draft methods + results", "生成方法与结果草稿"),
+            "state": "ready",
+            "detail": _T(lang, "Drafting stays traceable to the manifest.", "草稿继续绑定 manifest 溯源。"),
+        },
+    ]
+
+
+def _review_decisions_from_audit(audit: dict[str, Any], *, lang: str, is_demo: bool = False) -> list[dict[str, str]]:
+    counts = audit.get("counts") if isinstance(audit.get("counts"), dict) else {}
+    errors = int(counts.get("errors") or 0)
+    warnings = int(counts.get("warnings") or 0)
+    failed_gates = [
+        gate for gate in audit.get("gates") or []
+        if isinstance(gate, dict) and gate.get("ok") is False
+    ]
+    if is_demo:
+        return [
+            {
+                "label": _T(lang, "Preview only", "仅预览"),
+                "state": "selected",
+                "detail": _T(lang, "No manuscript decision is written in Demo Mode.", "Demo 模式不写入手稿决策。"),
+            },
+            {
+                "label": _T(lang, "Open real data", "打开真实数据"),
+                "state": "idle",
+                "detail": _T(lang, "Use a manifest before approving outputs.", "使用 manifest 后再批准输出。"),
+            },
+        ]
+    if errors or failed_gates:
+        return [
+            {
+                "label": _T(lang, "Keep locked", "保持锁定"),
+                "state": "selected",
+                "detail": _T(lang, "Audit blockers remain unresolved.", "审计阻断尚未解决。"),
+            },
+            {
+                "label": _T(lang, "Request repair", "请求修复"),
+                "state": "warning",
+                "detail": _T(lang, "Send the selected step back to repair/re-run.", "将当前步骤退回修复或重跑。"),
+            },
+            {
+                "label": _T(lang, "Mark blocked", "标记阻塞"),
+                "state": "danger",
+                "detail": _T(lang, "Record external dependency or data issue.", "记录外部依赖或数据问题。"),
+            },
+        ]
+    if warnings:
+        return [
+            {
+                "label": _T(lang, "Conditional approve", "附条件通过"),
+                "state": "selected",
+                "detail": _T(lang, "Allow analysis-only output with caveats.", "允许带 caveat 的 analysis-only 输出。"),
+            },
+            {
+                "label": _T(lang, "Request clarification", "请求澄清"),
+                "state": "warning",
+                "detail": _T(lang, "Ask the agent to bind or explain warning evidence.", "要求 agent 绑定或解释 warning 证据。"),
+            },
+            {
+                "label": _T(lang, "Keep manuscript locked", "保持手稿锁定"),
+                "state": "idle",
+                "detail": _T(lang, "Do not promote to manuscript until reviewed.", "复核前不提升到手稿。"),
+            },
+        ]
+    return [
+        {
+            "label": _T(lang, "Approve analysis", "通过分析"),
+            "state": "selected",
+            "detail": _T(lang, "Unlock manuscript drafting from this manifest.", "从该 manifest 解锁手稿草稿。"),
+        },
+        {
+            "label": _T(lang, "Approve figure bundle", "通过图件包"),
+            "state": "idle",
+            "detail": _T(lang, "Mark generated figures as review-ready.", "将生成图件标记为可审阅。"),
+        },
+    ]
+
+
+def _audit_tasks_from_audit(audit: dict[str, Any], *, lang: str, is_demo: bool = False) -> list[dict[str, str]]:
+    if is_demo:
+        return [
+            {
+                "title": _T(lang, "Open a real manifest", "打开真实 manifest"),
+                "detail": _T(lang, "Demo tasks are placeholders and do not imply generated results.", "Demo 任务只是占位，不代表已生成结果。"),
+                "tone": "info",
+                "action": _T(lang, "Load run", "加载 run"),
+            },
+            {
+                "title": _T(lang, "Confirm cohort inputs", "确认队列输入"),
+                "detail": _T(lang, "Use real cohort/context before execution.", "执行前使用真实队列与上下文。"),
+                "tone": "info",
+                "action": _T(lang, "Setup", "配置"),
+            },
+        ]
+    tasks: list[dict[str, str]] = []
+    for gate in audit.get("gates") or []:
+        if isinstance(gate, dict) and gate.get("ok") is False:
+            label = _compact_label(gate.get("label"), max_len=52)
+            tasks.append({
+                "title": _T(lang, f"Resolve gate: {label}", f"处理关口: {label}"),
+                "detail": _T(lang, "Failed readiness gate blocks promotion.", "失败的 readiness gate 会阻止提升。"),
+                "tone": "danger",
+                "action": _T(lang, "Inspect", "检查"),
+            })
+    for finding in audit.get("findings") or []:
+        if not isinstance(finding, dict):
+            continue
+        severity = str(finding.get("severity") or "info").lower()
+        if severity not in {"error", "warning"}:
+            continue
+        validator = _compact_label(finding.get("validator") or "audit", max_len=32)
+        message = _compact_label(finding.get("message") or "", max_len=88)
+        tasks.append({
+            "title": _T(lang, f"{validator}: review finding", f"{validator}: 复核发现"),
+            "detail": message,
+            "tone": "danger" if severity == "error" else "warning",
+            "action": _T(lang, "Open evidence", "打开证据"),
+        })
+        if len(tasks) >= 6:
+            break
+    if not tasks:
+        tasks.append({
+            "title": _T(lang, "Draft guarded conclusion", "生成保守结论"),
+            "detail": _T(lang, "No blocking audit task is recorded for this manifest.", "该 manifest 暂无阻断性审计任务。"),
+            "tone": "ok",
+            "action": _T(lang, "Draft", "草稿"),
+        })
+    return tasks[:6]
+
+
 def build_workbench_state_from_manifest(
     run_dir: str | Path,
     manifest: dict[str, Any] | None,
@@ -513,6 +995,7 @@ def build_workbench_state_from_manifest(
             record=record,
             step_number=idx,
             total_steps=max(len(records), 1),
+            lang=lang,
         ))
     if not steps and progress_events:
         for idx, event in enumerate(progress_events[-6:], start=1):
@@ -600,7 +1083,7 @@ def build_workbench_state_from_manifest(
     )
 
     code, code_path = _code_from_run(run_path, manifest, records)
-    result_cards = _result_cards_from_evidence(evidence)
+    result_cards = _result_cards_from_evidence(evidence, run_dir=run_path, lang=lang)
     evidence_rows = [
         {
             "label": _evidence_label(record),
@@ -692,6 +1175,21 @@ def build_workbench_state_from_manifest(
 
     question = _compact_label(manifest.get("research_question") or run_id, max_len=72)
     subtitle_bits = [run_id, f"{len(steps)} steps", f"{len(evidence)} evidence", f"{len(findings)} findings"]
+    summary_outputs = _summary_outputs_from_manifest(
+        manifest=manifest,
+        evidence=evidence,
+        lang=lang,
+    )
+    execution_contract = {
+        "cohort": _compact_label(manifest.get("context_path") or manifest.get("cohort_path") or run_path, max_len=72),
+        "provider": _compact_label(
+            (manifest.get("reproducibility") or {}).get("provider")
+            if isinstance(manifest.get("reproducibility"), dict) else "",
+            max_len=44,
+        ) or _T(lang, "recorded in run", "运行中记录"),
+        "workdir": str(run_path),
+        "gate": gates.get("run_status") or ("partial" if partial else "complete"),
+    }
     return {
         "run_id": run_id,
         "run_dir": str(run_path),
@@ -716,6 +1214,11 @@ def build_workbench_state_from_manifest(
         "architecture": architecture,
         "manifest": manifest_rows,
         "review_rules": review_rules,
+        "summary_outputs": summary_outputs,
+        "execution_contract": execution_contract,
+        "review_gate_actions": _review_gate_actions_from_audit(gates, lang=lang),
+        "review_decisions": _review_decisions_from_audit(gates, lang=lang),
+        "audit_tasks": _audit_tasks_from_audit(gates, lang=lang),
         "state_lanes": state_lanes,
         "state_segments": state_segments,
         "audit": gates,
@@ -730,83 +1233,80 @@ def build_workbench_state_from_manifest(
 
 def _demo_state(lang: str) -> dict[str, Any]:
     state = {
-        "title": _T(lang, "Sepsis mortality predictors", "脓毒症死亡预测因子"),
-        "subtitle": "sepsis_mortality_v3 · 2,481 stays · gpt-oss-20b · seed 42",
-        "status": "running",
-        "status_step": _T(lang, "running · step 6 of 7", "运行中 · 第 6 / 7 步"),
+        "title": _T(lang, "Research workflow preview", "研究流程预览"),
+        "subtitle": _T(lang, "Demo structure only · no cohort loaded · no metrics generated", "仅 Demo 结构 · 未加载队列 · 未生成指标"),
+        "status": "preview",
+        "status_step": _T(lang, "preview only", "仅预览"),
         "steps": [
-            {"label": _T(lang, "Cohort summary", "队列总结"), "sub": "2.1s · n=2,481", "status": "ok"},
-            {"label": "Table 1", "sub": _T(lang, "3.4s · 11 features", "3.4s · 11 特征"), "status": "ok"},
-            {"label": _T(lang, "Missingness audit", "缺失审计"), "sub": "1.8s · 8.4%", "status": "ok"},
-            {"label": "LR · base", "sub": "0.6s · ValueError", "status": "fail"},
-            {"label": _T(lang, "Fix: aggregate lactate", "修复:聚合 lactate"), "sub": _T(lang, "auto-patch · 0.4s", "自动修复 · 0.4s"), "status": "retry"},
-            {"label": "LR · base (retry)", "sub": "4.2s · AUC 0.815", "status": "ok"},
-            {"label": "LR + lactate", "sub": "3.6s · AUC 0.842", "status": "ok"},
-            {"label": _T(lang, "ROC + calibration", "ROC + 校准"), "sub": _T(lang, "running… ~1.2s", "运行中… ~1.2s"), "status": "running"},
+            {"label": _T(lang, "Cohort summary", "队列总结"), "sub": _T(lang, "structure slot", "结构槽位"), "status": "ok"},
+            {"label": "Table 1", "sub": _T(lang, "table artifact slot", "表格产物槽位"), "status": "ok"},
+            {"label": _T(lang, "Missingness audit", "缺失审计"), "sub": _T(lang, "audit slot", "审计槽位"), "status": "ok"},
+            {"label": _T(lang, "Model step", "模型步骤"), "sub": _T(lang, "example blocked state", "示例阻断状态"), "status": "fail"},
+            {"label": _T(lang, "Repair branch", "修复分支"), "sub": _T(lang, "example retry state", "示例重试状态"), "status": "retry"},
+            {"label": _T(lang, "Model rerun", "模型重跑"), "sub": _T(lang, "method slot", "方法槽位"), "status": "ok"},
+            {"label": _T(lang, "Comparison step", "比较步骤"), "sub": _T(lang, "result slot", "结果槽位"), "status": "ok"},
+            {"label": _T(lang, "Figure export", "图件导出"), "sub": _T(lang, "example running state", "示例运行状态"), "status": "running"},
             {"label": _T(lang, "Findings", "结论"), "sub": _T(lang, "queued", "排队中"), "status": "pending"},
         ],
-        "code_path": "easyicu/agent/runs/sepsis_mortality_v3/step_06_roc.py",
+        "code_path": "demo/preview_only.py",
         "code": (
-            "# auto-generated · seed=42 · step 6 of 7\n\n"
-            "from easyicu.research import cohort, model, viz\n"
-            "from sklearn.metrics import roc_curve, auc, brier_score_loss\n\n"
-            'c = cohort.load("sepsis_mortality_v3")\n'
-            'y = c.outcomes["died_hosp"]\n\n'
-            "# Build features matching the LR + lactate model\n"
-            'X = c.features([\n'
-            '    "sofa_max", "age", "map_min",\n'
-            '    "lactate_max", "is_sepsis",\n'
-            '], window="first_24h", agg="per_stay")\n\n'
-            'm = model.load("lr_sepsis_lact_v2")\n'
-            "p = m.predict_proba(X)[:, 1]\n\n"
-            "fpr, tpr, _ = roc_curve(y, p)\n"
-            "auc_val = auc(fpr, tpr)            # -> 0.842\n"
-            "brier   = brier_score_loss(y, p)   # -> 0.108\n\n"
-            'viz.roc(fpr, tpr, save="04_roc.svg")\n'
-            'viz.calibration(y, p, bins=10, save="05_calib.svg")\n'
+            "# Demo preview only\n"
+            "# No cohort is loaded, no model is fitted, and no files are written here.\n"
+            "# Open a real manifest to inspect the bound script, table, figure, and audit log.\n\n"
+            "execution_contract = {\n"
+            '    "cohort": "selected in Setup",\n'
+            '    "provider": "selected in Setup",\n'
+            '    "outputs": ["table", "figure", "audit", "report"],\n'
+            '    "gate": "human review before manuscript draft",\n'
+            "}\n"
         ),
         "autopatch": {
-            "from": "features['lactate_max']",
-            "to": "features.groupby(stay_id)['lactate'].max()",
-            "ago": _T(lang, "Auto-patched 1 step ago", "1 步前已自动修复"),
+            "from": _T(lang, "example failing code", "示例失败代码"),
+            "to": _T(lang, "example repaired code", "示例修复代码"),
+            "ago": _T(lang, "Retry branch preview", "重试分支预览"),
         },
         "trace": [
-            {"t": "14:24:11", "msg": "loading cohort sepsis_mortality_v3 (2,481 stays)…", "level": "ok"},
-            {"t": "14:24:11", "msg": "building feature matrix [5 cols × 2,481 rows]…", "level": "ok"},
-            {"t": "14:24:11", "msg": "loading model lr_sepsis_lact_v2…", "level": "ok"},
-            {"t": "14:24:12", "msg": "scoring p̂… 0.842 AUC · 0.108 Brier", "level": "info"},
-            {"t": "14:24:12", "msg": "rendering 04_roc.svg…", "level": "ok"},
-            {"t": "14:24:12", "msg": "rendering 05_calib.svg…", "level": "warn"},
+            {"t": "demo", "msg": "preview mode: no cohort loaded", "level": "info"},
+            {"t": "demo", "msg": "preview mode: no model run", "level": "info"},
+            {"t": "demo", "msg": "preview mode: no table or figure file written", "level": "warn"},
         ],
         "results": [
-            {"kind": "04 · roc", "title": "ROC", "metric": "AUC 0.842",
-             "sub": "95% CI 0.81–0.87 · n=2,481", "svg": cc.render_tile_roc()},
-            {"kind": "05 · calibration", "title": "Calibration", "metric": _T(lang, "rendering…", "渲染中…"),
-             "sub": "Brier 0.108", "svg": cc.render_tile_calibration()},
+            {
+                "kind": _T(lang, "table slot", "表格槽位"),
+                "title": _T(lang, "Generated table", "生成表格"),
+                "metric": _T(lang, "not generated", "未生成"),
+                "sub": _T(lang, "Real run required for table preview.", "需要真实 run 才能预览表格。"),
+                "preview_html": _artifact_slot_html(_T(lang, "Table", "表格"), lang=lang, real=False),
+            },
+            {
+                "kind": _T(lang, "figure slot", "图件槽位"),
+                "title": _T(lang, "Generated figure", "生成图件"),
+                "metric": _T(lang, "not generated", "未生成"),
+                "sub": _T(lang, "Real manifest required for figure preview.", "需要真实 manifest 才能预览图件。"),
+                "preview_html": _artifact_slot_html(_T(lang, "Figure", "图件"), lang=lang, real=False),
+            },
         ],
         "evidence": [
-            {"label": "cohort.parquet", "sub": "2,481 rows · MIMIC-IV demo", "tag": "data"},
-            {"label": "labs.parquet", "sub": "lactate · 24,103 rows", "tag": "data"},
-            {"label": "sepsis-3 definition", "sub": "Singer 2016 · A41 R65.20", "tag": "paper"},
-            {"label": "SOFA components", "sub": "easyicu/concepts/sofa.py", "tag": "code"},
-            {"label": "χ² Sepsis × Mortality", "sub": "p < .001, df=1", "tag": "test"},
-            {"label": "auto-patch · 14:24:08", "sub": _T(lang, "aggregate lactate fix", "聚合 lactate 修复"), "tag": "fix"},
+            {"label": _T(lang, "cohort input", "队列输入"), "sub": _T(lang, "waiting for real setup", "等待真实配置"), "tag": "data"},
+            {"label": _T(lang, "analysis plan", "分析计划"), "sub": _T(lang, "created after launch", "启动后创建"), "tag": "test"},
+            {"label": _T(lang, "table artifact", "表格产物"), "sub": _T(lang, "no file in demo mode", "Demo 模式无文件"), "tag": "data"},
+            {"label": _T(lang, "figure artifact", "图件产物"), "sub": _T(lang, "no file in demo mode", "Demo 模式无文件"), "tag": "data"},
         ],
         "timeline": [
-            {"label": "cohort", "t": 0, "d": 2.1, "status": "ok"},
-            {"label": "table1", "t": 2.1, "d": 3.4, "status": "ok"},
-            {"label": "missing", "t": 5.5, "d": 1.8, "status": "ok"},
-            {"label": "LR base", "t": 7.3, "d": 0.6, "status": "fail"},
-            {"label": "fix", "t": 7.9, "d": 0.4, "status": "retry"},
-            {"label": "LR retry", "t": 8.3, "d": 4.2, "status": "ok"},
-            {"label": "LR + lact", "t": 12.5, "d": 3.6, "status": "ok"},
-            {"label": "ROC", "t": 16.1, "d": 1.3, "status": "running"},
-            {"label": "findings", "t": 17.4, "d": 2.0, "status": "pending"},
+            {"label": "cohort", "t": 0.0, "d": 0.1, "status": "ok"},
+            {"label": "table", "t": 0.1, "d": 0.1, "status": "ok"},
+            {"label": "audit", "t": 0.2, "d": 0.1, "status": "ok"},
+            {"label": "blocked", "t": 0.3, "d": 0.1, "status": "fail"},
+            {"label": "retry", "t": 0.4, "d": 0.1, "status": "retry"},
+            {"label": "rerun", "t": 0.5, "d": 0.1, "status": "ok"},
+            {"label": "compare", "t": 0.6, "d": 0.1, "status": "ok"},
+            {"label": "figure", "t": 0.7, "d": 0.1, "status": "running"},
+            {"label": "findings", "t": 0.8, "d": 0.1, "status": "pending"},
         ],
-        "elapsed": 16.1,
-        "total": 19.4,
-        "playhead": 16.1,
-        "tokens": 12408,
+        "elapsed": 0.0,
+        "total": 1.0,
+        "playhead": 0.0,
+        "tokens": 0,
         "architecture": [
             {
                 "label": _T(lang, "Input lock", "输入锁定"),
@@ -840,10 +1340,9 @@ def _demo_state(lang: str) -> dict[str, Any]:
             },
         ],
         "manifest": [
-            {"op": "READ", "path": "cohort.parquet", "note": "2,481 stays"},
-            {"op": "READ", "path": "concept_manifest.json", "note": "19 modules"},
-            {"op": "WRITE", "path": "results/04_roc.svg", "note": "staged"},
-            {"op": "WRITE", "path": "audit/numeric_audit.json", "note": "required"},
+            {"op": "CONFIG", "path": _T(lang, "cohort selected in Setup", "在配置页选择队列"), "note": "required"},
+            {"op": "CONFIG", "path": _T(lang, "LLM provider selected in Setup", "在配置页选择模型提供方"), "note": "required"},
+            {"op": "WRITE", "path": _T(lang, "none in demo mode", "Demo 模式不写入"), "note": "preview"},
         ],
         "review_rules": [
             _T(lang, "numeric claims require evidence refs", "数值主张必须有证据引用"),
@@ -858,12 +1357,12 @@ def _demo_state(lang: str) -> dict[str, Any]:
             {"key": "approved", "label": _T(lang, "Approved", "已通过"), "desc": _T(lang, "unlocks draft", "解锁草稿")},
         ],
         "state_segments": [
-            {"lane": "staging", "start": 0.0, "end": 2.1, "label": "lock"},
-            {"lane": "running", "start": 2.1, "end": 7.3, "label": "tables"},
-            {"lane": "issue", "start": 7.3, "end": 7.9, "label": "error"},
-            {"lane": "staging", "start": 7.9, "end": 8.3, "label": "patch"},
-            {"lane": "running", "start": 8.3, "end": 16.1, "label": "models"},
-            {"lane": "review", "start": 16.1, "end": 19.4, "label": "draft gate"},
+            {"lane": "staging", "start": 0.0, "end": 0.2, "label": "lock"},
+            {"lane": "running", "start": 0.2, "end": 0.4, "label": "run"},
+            {"lane": "issue", "start": 0.4, "end": 0.5, "label": "issue"},
+            {"lane": "staging", "start": 0.5, "end": 0.6, "label": "retry"},
+            {"lane": "running", "start": 0.6, "end": 0.8, "label": "outputs"},
+            {"lane": "review", "start": 0.8, "end": 1.0, "label": "gate"},
         ],
     }
     steps = state["steps"]
@@ -878,7 +1377,7 @@ def _demo_state(lang: str) -> dict[str, Any]:
                 state["code"] if i in {5, 6, 7} else
                 f"# Demo step {i + 1:02d}: {step['label']}\n"
                 f"# {step['sub']}\n"
-                "# This is sample content. Open a real run to inspect the bound script.\n"
+                "# Preview only. Open a real run to inspect the bound script.\n"
             ),
             "code_path": state["code_path"] if i in {5, 6, 7} else step["step_id"],
             "trace": [
@@ -886,14 +1385,99 @@ def _demo_state(lang: str) -> dict[str, Any]:
                 {"t": "note", "msg": step["sub"], "level": "info"},
             ],
             "results": state["results"] if i in {6, 7} else [],
-            "evidence": state["evidence"][:4] if i in {6, 7} else [{"label": step["label"], "sub": "sample step", "tag": "test"}],
-            "subtitle_short": f"sample step {i + 1}/{len(steps)}",
+            "evidence": state["evidence"][:4] if i in {6, 7} else [{
+                "label": step["label"],
+                "sub": _T(lang, "preview step, no artifact", "预览步骤，无产物"),
+                "tag": "test",
+            }],
+            "step_contract": {
+                "method": {
+                    "label": _T(lang, "Demo method slot", "Demo 方法槽"),
+                    "sub": _T(lang, "No real method is executed", "未执行真实方法"),
+                    "audit": _T(lang, "Open a real manifest for checkpoints.", "打开真实 manifest 查看检查点。"),
+                    "outputs": _T(lang, "preview only", "仅预览"),
+                },
+                "inputs": [
+                    {
+                        "path": _T(lang, "Demo cohort structure", "Demo 队列结构"),
+                        "meta": _T(lang, "sample only", "仅样例"),
+                        "ok": None,
+                    }
+                ],
+                "outputs": [
+                    {
+                        "path": _T(lang, "No file written", "未写入文件"),
+                        "meta": _T(lang, "demo mode", "Demo 模式"),
+                        "ok": None,
+                    }
+                ],
+                "checkpoints": [
+                    {
+                        "label": _T(lang, "No fabricated metrics", "不编造指标"),
+                        "detail": _T(lang, "Real outputs require a manifest.", "真实输出需要 manifest。"),
+                        "ok": True,
+                    }
+                ],
+            },
+            "subtitle_short": f"preview step {i + 1}/{len(steps)}",
             "autopatch": state["autopatch"] if i == 4 else None,
         }
         for i, step in enumerate(steps)
     ]
-    state["source_label"] = _T(lang, "Sample workflow", "示例流程")
+    state["source_label"] = _T(lang, "Demo structure only", "仅 Demo 结构")
     state["is_demo"] = True
+    state["summary_outputs"] = [
+        {
+            "kind": _T(lang, "plan", "计划"),
+            "title": _T(lang, "Study plan slot", "研究方案位置"),
+            "sub": _T(lang, "Generated only after a real or recorded run is opened.", "只有真实或历史 run 打开后才生成。"),
+            "badge": _T(lang, "preview", "预览"),
+        },
+        {
+            "kind": _T(lang, "table", "表格"),
+            "title": _T(lang, "Cohort table slot", "队列表位置"),
+            "sub": _T(lang, "Demo mode does not fabricate cohort metrics.", "Demo 模式不伪造队列指标。"),
+            "badge": _T(lang, "empty", "空"),
+        },
+        {
+            "kind": _T(lang, "figure", "图件"),
+            "title": _T(lang, "Analysis figure slot", "分析图位置"),
+            "sub": _T(lang, "Open a real manifest to preview generated figures.", "打开真实 manifest 后预览生成图件。"),
+            "badge": _T(lang, "empty", "空"),
+        },
+        {
+            "kind": _T(lang, "audit", "审计"),
+            "title": _T(lang, "Evidence manifest slot", "证据清单位置"),
+            "sub": _T(lang, "Evidence links appear only when artifacts exist.", "只有产物存在时才显示证据链接。"),
+            "badge": _T(lang, "gate", "关口"),
+        },
+    ]
+    state["execution_contract"] = {
+        "cohort": _T(lang, "Demo structure only", "仅 Demo 结构"),
+        "provider": _T(lang, "No LLM call", "不调用 LLM"),
+        "workdir": _T(lang, "No files written", "不写入文件"),
+        "gate": _T(lang, "No metrics generated", "不生成指标"),
+    }
+    state["review_gate_actions"] = _review_gate_actions_from_audit(
+        {"counts": {"errors": 0, "warnings": 0, "info": 0}, "gates": []},
+        lang=lang,
+        is_demo=True,
+    )
+    state["review_decisions"] = _review_decisions_from_audit(
+        {"counts": {"errors": 0, "warnings": 0, "info": 0}, "gates": []},
+        lang=lang,
+        is_demo=True,
+    )
+    state["audit_tasks"] = _audit_tasks_from_audit(
+        {"counts": {"errors": 0, "warnings": 0, "info": 0}, "gates": []},
+        lang=lang,
+        is_demo=True,
+    )
+    state["demo_notice"] = _T(
+        lang,
+        "Demo mode shows the agent surface without generating new metrics.",
+        "Demo 模式只展示 agent 界面，不生成或编造新指标。",
+    )
     return state
 
 
@@ -961,6 +1545,58 @@ def _step_status_label(status: str, lang: str) -> str:
     }.get(status, status)
 
 
+def _step_status_action_label(status: str, lang: str) -> str:
+    return {
+        "ok": _T(lang, "DONE", "完成"),
+        "fail": _T(lang, "NEEDS FIX", "需修复"),
+        "retry": _T(lang, "RETRYING", "重试中"),
+        "running": _T(lang, "RUNNING", "运行中"),
+        "pending": _T(lang, "QUEUED", "排队中"),
+    }.get(status, status.upper())
+
+
+def _step_legend_html(lang: str) -> str:
+    items = [
+        ("ok", _T(lang, "Done", "完成")),
+        ("running", _T(lang, "Running", "运行中")),
+        ("pending", _T(lang, "Queued", "等待")),
+        ("fail", _T(lang, "Needs fix", "需修复")),
+        ("retry", _T(lang, "Retrying", "重试中")),
+    ]
+    chips = "".join(
+        '<span class="eu-agent-step-legend-chip '
+        f'{status}"><i></i><b>{_esc(label)}</b></span>'
+        for status, label in items
+    )
+    return (
+        '<div class="eu-agent-step-legend" aria-label="Step status legend">'
+        + chips
+        + '</div>'
+    )
+
+
+def _step_button_label(step: dict[str, Any], idx: int, lang: str) -> str:
+    status = str(step.get("status") or "pending")
+    label = _compact_label(step.get("label") or step.get("step_id") or f"step {idx + 1}", max_len=32)
+    sub = _compact_label(step.get("sub"), max_len=42)
+    status_label = _step_status_action_label(status, lang)
+    if sub:
+        return f"{idx + 1:02d}  {label} · {status_label}\n{sub}"
+    return f"{idx + 1:02d}  {label}\n{status_label}"
+
+
+def _step_button_key(state: dict[str, Any], idx: int, status: str, selected: bool) -> str:
+    raw = str(state.get("run_id") or "demo")
+    safe_run = re.sub(r"[^A-Za-z0-9_]+", "_", raw)[:54]
+    safe_status = re.sub(r"[^a-z0-9_]+", "_", status.lower())[:24] or "pending"
+    suffix = "selected" if selected else "idle"
+    return f"_eu_wb_step_btn_{safe_run}_{idx:02d}_{safe_status}_{suffix}"
+
+
+def _set_selected_step(select_key: str, idx: int) -> None:
+    st.session_state[select_key] = idx
+
+
 def _step_select_key(state: dict[str, Any]) -> str:
     raw = str(state.get("run_id") or "demo")
     safe = re.sub(r"[^A-Za-z0-9_]+", "_", raw)[:70]
@@ -1005,7 +1641,7 @@ def _state_for_selected_step(state: dict[str, Any], selected_idx: int) -> dict[s
         return state
     detail = details[selected_idx]
     view_state = dict(state)
-    for key in ("code", "code_path", "trace", "results", "evidence", "subtitle_short", "autopatch"):
+    for key in ("code", "code_path", "trace", "results", "evidence", "subtitle_short", "autopatch", "step_contract"):
         if key in detail and detail[key] is not None:
             view_state[key] = detail[key]
     view_state["active_step"] = {
@@ -1034,37 +1670,69 @@ def _render_process_graph_controls(
         '</div>',
         unsafe_allow_html=True,
     )
-    st.markdown('<div class="eu-agent-start mono">START</div>', unsafe_allow_html=True)
-    options = list(range(len(steps)))
+    st.markdown(_step_legend_html(lang), unsafe_allow_html=True)
 
-    def fmt(i: int) -> str:
-        step = steps[i]
-        return (
-            f"{i + 1:02d}  {step.get('label', '')}  · "
-            f"{_step_status_label(str(step.get('status') or ''), lang)}  —  "
-            f"{_compact_label(step.get('sub'), max_len=46)}"
-        )
-
-    if options:
-        selected_idx = int(st.radio(
-            _T(lang, "Select step", "选择步骤"),
-            options,
-            index=selected_idx,
-            format_func=fmt,
-            key=select_key,
-            label_visibility="collapsed",
-        ))
     if steps:
-        active = steps[selected_idx]
         st.markdown(
-            '<div class="eu-agent-step-readout">'
-            f'<span class="mono">{selected_idx + 1:02d}</span>'
-            f'<b>{_esc(active.get("label", ""))}</b>'
-            f'<small>{_esc(active.get("sub", ""))}</small>'
+            '<div class="eu-agent-step-rail-note mono">'
+            f'{_T(lang, "Click a step to inspect its code, outputs, evidence, and review state.", "点击步骤查看对应代码、输出、证据和审阅状态。")}'
             '</div>',
             unsafe_allow_html=True,
         )
+    for i, step in enumerate(steps):
+        status = str(step.get("status") or "pending")
+        is_selected = i == selected_idx
+        st.button(
+            _step_button_label(step, i, lang),
+            key=_step_button_key(state, i, status, is_selected),
+            use_container_width=True,
+            on_click=_set_selected_step,
+            args=(select_key, i),
+        )
     return selected_idx
+
+
+def _step_dag_html(state: dict[str, Any], lang: str, *, selected_idx: int = 0) -> str:
+    steps = [s for s in state.get("steps", []) if isinstance(s, dict)]
+    if not steps:
+        return ""
+    nodes = [
+        (
+            '<div class="eu-agent-dag-node root">'
+            f'<span class="mono">{_T(lang, "INPUT", "输入")}</span>'
+            f'<b>{_T(lang, "Question + cohort", "问题 + 队列")}</b>'
+            '</div>'
+        )
+    ]
+    for idx, step in enumerate(steps):
+        status = str(step.get("status") or "pending")
+        label = _compact_label(step.get("label") or step.get("step_id") or f"step {idx + 1}", max_len=28)
+        sub = _compact_label(step.get("sub") or _step_status_label(status, lang), max_len=42)
+        selected = " selected" if idx == selected_idx else ""
+        branch = " branch" if status in {"retry", "fail"} else ""
+        nodes.append(
+            f'<div class="eu-agent-dag-node {status}{selected}{branch}">'
+            f'<span class="mono">{idx + 1:02d} · {_esc(_step_status_label(status, lang))}</span>'
+            f'<b>{_esc(label)}</b>'
+            f'<small>{_esc(sub)}</small>'
+            '</div>'
+        )
+    nodes.append(
+        (
+            '<div class="eu-agent-dag-node gate">'
+            f'<span class="mono">{_T(lang, "GATE", "闸门")}</span>'
+            f'<b>{_T(lang, "Evidence review", "证据复核")}</b>'
+            '</div>'
+        )
+    )
+    return (
+        '<div class="eu-agent-dag-wrap">'
+        '<div class="eu-agent-dag-rail"></div>'
+        '<div class="eu-agent-dag-nodes">'
+        + "".join(nodes)
+        + '</div>'
+        '</div>'
+    )
 
 
 def _live_code_html(state: dict[str, Any], lang: str) -> str:
@@ -1149,6 +1817,11 @@ def _result_evidence_html(state: dict[str, Any], lang: str) -> str:
     results = state.get("results", [])
     result_cards = []
     for r in results:
+        preview_html = r.get("preview_html") or r.get("svg") or _artifact_slot_html(
+            str(r.get("title") or r.get("kind") or "artifact"),
+            lang=lang,
+            real=not bool(state.get("is_demo")),
+        )
         result_cards.append(
             '<div class="eu-card" style="padding:10px">'
             '<div style="display:flex;justify-content:space-between;align-items:baseline">'
@@ -1156,7 +1829,8 @@ def _result_evidence_html(state: dict[str, Any], lang: str) -> str:
             f'text-transform:uppercase">{_esc(r["kind"])}</div>'
             f'<span class="mono" style="font-size:11px;color:var(--ink)">{_esc(r["metric"])}</span>'
             '</div>'
-            f'<div style="margin-top:4px">{r.get("svg", "")}</div>'
+            f'<div class="eu-result-card-title">{_esc(r.get("title", ""))}</div>'
+            f'<div style="margin-top:7px">{preview_html}</div>'
             f'{f"<div class=\"mono\" style=\"font-size:10px;color:var(--ink-4);margin-top:4px\">{_esc(r.get(chr(115)+chr(117)+chr(98), str()))}</div>" if r.get("sub") else ""}'
             '</div>'
         )
@@ -1306,7 +1980,7 @@ def _agent_command_strip_html(state: dict[str, Any], lang: str) -> str:
         '</div>'
         '<div class="eu-agent-command-line">'
         '<div class="eu-agent-command-now">'
-        f'<span class="mono">{_T(lang, "PlanAgent route", "PlanAgent 路线")}</span>'
+        f'<span class="mono">{_T(lang, "Phase overview", "阶段概览")}</span>'
         f'<b>{_esc(current)}</b>'
         '</div>'
         f'<div class="eu-cmd-stage-row">{stage_html}</div>'
@@ -1488,11 +2162,172 @@ def _audit_review_html(state: dict[str, Any], lang: str) -> str:
         f'<div class="warn"><span>{_T(lang, "Warnings", "警告")}</span><b>{warnings}</b></div>'
         f'<div><span>{_T(lang, "Info", "信息")}</span><b>{infos}</b></div>'
         '</div>'
+        '<div class="eu-audit-review-grid">'
+        f'{_review_decisions_html(state, lang)}'
+        f'{_audit_tasks_html(state, lang)}'
+        '</div>'
         f'<div class="eu-audit-gates">{"".join(gate_rows) or "<p class=\"muted\">No fail-closed gates recorded.</p>"}</div>'
         f'{repro_html}'
         f'<div class="eu-audit-findings">{"".join(finding_rows[:8]) or "<p class=\"muted\">No validator findings recorded.</p>"}</div>'
         '</div>'
     )
+
+
+def _output_summary_html(state: dict[str, Any], lang: str) -> str:
+    outputs = [o for o in state.get("summary_outputs", []) if isinstance(o, dict)]
+    steps = [s for s in state.get("steps", []) if isinstance(s, dict)]
+    actions = [a for a in state.get("review_gate_actions", []) if isinstance(a, dict)]
+    contract = state.get("execution_contract") if isinstance(state.get("execution_contract"), dict) else {}
+    audit = state.get("audit") if isinstance(state.get("audit"), dict) else {}
+    counts = audit.get("counts") if isinstance(audit.get("counts"), dict) else {}
+    is_demo = bool(state.get("is_demo"))
+
+    cohort_stats = [
+        (_T(lang, "Cohort", "队列"), contract.get("cohort") or state.get("run_dir") or _T(lang, "not selected", "未选择")),
+        (_T(lang, "Provider", "模型"), contract.get("provider") or _T(lang, "recorded in run", "运行中记录")),
+        (_T(lang, "Evidence", "证据"), f"{len(state.get('evidence', []) or [])}"),
+        (_T(lang, "Findings", "发现"), f"{int(counts.get('errors') or 0)}E / {int(counts.get('warnings') or 0)}W"),
+    ]
+    cohort_html = "".join(
+        '<div class="eu-summary-stat">'
+        f'<span>{_esc(label)}</span>'
+        f'<b>{_esc(value)}</b>'
+        '</div>'
+        for label, value in cohort_stats
+    )
+    concept_chips = [
+        _T(lang, "vitals", "生命体征"),
+        _T(lang, "labs", "化验"),
+        "SOFA",
+        _T(lang, "outcomes", "转归"),
+        _T(lang, "evidence", "证据"),
+    ]
+    chips_html = "".join(f'<span class="eu-chip mono">{_esc(chip)}</span>' for chip in concept_chips)
+
+    step_html = "".join(
+        f'<span class="eu-summary-step {s.get("status", "pending")}">'
+        f'{_esc(_compact_label(s.get("label"), max_len=28))}'
+        f'<em>{_esc(_step_status_label(str(s.get("status") or ""), lang))}</em>'
+        '</span>'
+        for s in steps[:8]
+    )
+    if not step_html:
+        step_html = f'<span class="eu-summary-step pending">{_T(lang, "Plan not generated yet", "计划尚未生成")}</span>'
+
+    output_html = "".join(
+        '<div class="eu-summary-output">'
+        '<div class="eu-summary-output-preview">'
+        f'<span class="mono">{_esc(o.get("kind", ""))}</span>'
+        '</div>'
+        '<div class="eu-summary-output-copy">'
+        f'<small class="mono">{_esc(o.get("badge", ""))}</small>'
+        f'<b>{_esc(o.get("title", ""))}</b>'
+        f'<p>{_esc(o.get("sub", ""))}</p>'
+        '</div>'
+        '</div>'
+        for o in outputs[:8]
+    )
+
+    findings = []
+    for finding in (audit.get("findings") or [])[:4]:
+        if isinstance(finding, dict):
+            findings.append(
+                '<div class="eu-summary-finding">'
+                f'<span class="{_esc(str(finding.get("severity") or "info").lower())}"></span>'
+                '<div>'
+                f'<b>{_esc(finding.get("validator", "?"))}</b>'
+                f'<p>{_esc(finding.get("message", ""))}</p>'
+                '</div>'
+                '</div>'
+            )
+    if not findings:
+        findings.append(
+            '<div class="eu-summary-finding">'
+            '<span class="info"></span>'
+            '<div>'
+            f'<b>{_T(lang, "No validator findings", "无校验发现")}</b>'
+            f'<p>{_T(lang, "A real manifest will populate this section.", "真实 manifest 会填充这里。")}</p>'
+            '</div>'
+            '</div>'
+        )
+    action_html = "".join(
+        f'<div class="eu-summary-action {a.get("state", "ready")}">'
+        f'<b>{_esc(a.get("label", ""))}</b>'
+        f'<p>{_esc(a.get("detail", ""))}</p>'
+        '</div>'
+        for a in actions[:3]
+    )
+    demo_notice = (
+        f'<div class="eu-summary-demo-note">{_esc(state.get("demo_notice", ""))}</div>'
+        if is_demo and state.get("demo_notice") else ""
+    )
+
+    return (
+        '<div class="eu-summary-page">'
+        f'{demo_notice}'
+        '<div class="eu-summary-top">'
+        '<div class="eu-summary-cohort">'
+        f'<div class="eu-section-label">{_T(lang, "Inbound cohort", "输入队列")}</div>'
+        f'<h3>{_esc(state.get("run_id") or _T(lang, "Current EasyICU session", "当前 EasyICU 会话"))}</h3>'
+        f'<p>{_esc(state.get("source_label", ""))} · {_esc(state.get("status", ""))}</p>'
+        f'<div class="eu-summary-stat-grid">{cohort_html}</div>'
+        f'<div class="eu-summary-chip-row">{chips_html}</div>'
+        '</div>'
+        '<div class="eu-summary-question">'
+        f'<div class="eu-section-label">{_T(lang, "Research question", "研究问题")}</div>'
+        f'<h2>{_esc(state.get("title", "Research Agent"))}</h2>'
+        f'<p>{_T(lang, "Analysis-first: generated outputs are reviewed before manuscript drafting.", "分析优先：生成产物先复核，再进入手稿草稿。")}</p>'
+        f'<div class="eu-summary-step-row">{step_html}</div>'
+        '</div>'
+        '</div>'
+        '<div class="eu-summary-output-block">'
+        '<div class="eu-summary-block-head">'
+        f'<b>{_T(lang, "Analysis outputs", "分析产出")}</b>'
+        f'<span class="mono">{len(outputs)} {_T(lang, "items", "项")}</span>'
+        '</div>'
+        f'<div class="eu-summary-output-grid">{output_html}</div>'
+        '</div>'
+        '<div class="eu-summary-bottom">'
+        '<div class="eu-summary-findings">'
+        f'<div class="eu-section-label">{_T(lang, "Findings", "主要发现")}</div>'
+        f'{"".join(findings)}'
+        '</div>'
+        '<div class="eu-summary-review">'
+        f'<div class="eu-section-label">{_T(lang, "Review gate", "复核关口")}</div>'
+        f'<div class="eu-summary-action-grid">{action_html}</div>'
+        '<div class="eu-summary-manuscript">'
+        f'<b>{_T(lang, "Manuscript stays behind the gate", "手稿保留在关口之后")}</b>'
+        f'<p>{_T(lang, "Draft methods and results only after evidence checks are accepted.", "只有证据检查通过后，才生成方法和结果草稿。")}</p>'
+        '</div>'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
+
+
+def render_agent_output_summary(lang: str) -> None:
+    """Render the analysis-first Research Agent summary page."""
+    state = _resolve_workbench_state(lang)
+    if not state.get("steps"):
+        _render_workbench_empty_state(lang, summary=True)
+        return
+    state.setdefault("source_label", _T(lang, "Real manifest", "真实 manifest") if not state.get("is_demo") else _T(lang, "Sample workflow", "示例流程"))
+    st.markdown(
+        cc.render_design_page_header(
+            kicker=_T(lang, "Research Agent", "研究代理"),
+            title_en=state.get("title", "Research Agent"),
+            title_zh=state.get("title", "研究 Agent"),
+            desc=_T(
+                lang,
+                "Analysis-first output summary. Manuscript drafting remains gated by evidence review.",
+                "分析优先的输出总览。手稿草稿仍受证据复核关口控制。",
+            ),
+            right_html=f'<span class="eu-pill">{_esc(state.get("source_label", ""))}</span>',
+            lang=lang,
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(_output_summary_html(state, lang), unsafe_allow_html=True)
 
 
 def _manifest_path_for_run(run_dir: Path) -> Path | None:
@@ -1575,21 +2410,194 @@ def _resolve_workbench_state(lang: str) -> dict[str, Any]:
     existing = st.session_state.get("_agent_workbench")
     if isinstance(existing, dict) and existing.get("steps"):
         return existing
-    latest = _latest_real_workbench_state(lang)
-    if latest:
-        st.session_state["_agent_workbench"] = latest
-        return latest
-    return _demo_state(lang)
+    if st.session_state.get("entry_mode") == "demo":
+        return _demo_state(lang)
+    return {}
 
 
 def prime_agent_workbench_state(lang: str) -> None:
-    """Preload a real run so app chrome can label Workbench correctly."""
+    """Compatibility shim; Workbench no longer auto-opens latest runs."""
     existing = st.session_state.get("_agent_workbench")
     if isinstance(existing, dict) and existing.get("steps"):
         return
-    latest = _latest_real_workbench_state(lang)
-    if latest:
-        st.session_state["_agent_workbench"] = latest
+
+
+def _workbench_empty_html(lang: str) -> str:
+    return (
+        '<div class="eu-agent-empty">'
+        '<div>'
+        f'<span class="eu-section-label">{_T(lang, "Project entry", "项目入口")}</span>'
+        f'<h2>{_T(lang, "No active agent run is open", "尚未打开当前 Agent run")}</h2>'
+        f'<p>{_T(lang, "Start from Setup to configure the question, cohort, and LLM, or explicitly open a historical manifest from the run history. Workbench will not silently load the newest old run.", "请先在配置页设置研究问题、队列和 LLM，或从历史记录中明确打开某个 manifest。工作台不会再自动加载最新旧 run。")}</p>'
+        '</div>'
+        '<div class="eu-agent-empty-grid">'
+        '<div>'
+        f'<b>{_T(lang, "1. Configure", "1. 配置")}</b>'
+        f'<small>{_T(lang, "Question, data recipe, model, workdir", "研究问题、数据来源、模型、写入目录")}</small>'
+        '</div>'
+        '<div>'
+        f'<b>{_T(lang, "2. Run or import", "2. 运行或导入")}</b>'
+        f'<small>{_T(lang, "Launch a real run or open an existing manifest", "启动真实 run 或打开已有 manifest")}</small>'
+        '</div>'
+        '<div>'
+        f'<b>{_T(lang, "3. Review", "3. 复核")}</b>'
+        f'<small>{_T(lang, "Step IO, checkpoints, evidence, review tasks", "步骤输入输出、检查点、证据和复核任务")}</small>'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _render_workbench_empty_state(lang: str, *, summary: bool = False) -> None:
+    st.markdown(
+        cc.render_design_page_header(
+            kicker=_T(lang, "Research Agent", "研究代理"),
+            title_en=_T(lang, "Agent project workspace", "Agent 项目工作区"),
+            title_zh=_T(lang, "Agent project workspace", "Agent 项目工作区"),
+            desc=_T(
+                lang,
+                "Choose a research request, cohort, and run manifest before reviewing agent outputs.",
+                "先选择研究请求、队列和 run manifest，再复核 agent 输出。",
+            ),
+            right_html=f'<span class="eu-pill">{_T(lang, "No active run", "无当前 run")}</span>',
+            lang=lang,
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(_workbench_empty_html(lang), unsafe_allow_html=True)
+    c1, c2, c3, _ = st.columns([1.4, 1.55, 1.4, 5.0])
+    with c1:
+        if st.button(_T(lang, "Configure new run", "配置新 run"), key=f"_eu_wb_empty_setup_{summary}", type="primary", use_container_width=True):
+            st.session_state["_ra_view"] = "setup"
+            st.rerun()
+    with c2:
+        if st.button(_T(lang, "Open run history", "打开历史记录"), key=f"_eu_wb_empty_history_{summary}", use_container_width=True):
+            st.session_state["_ra_view"] = "setup"
+            st.session_state["_research_agent_expand_history"] = True
+            st.rerun()
+    with c3:
+        if st.button(_T(lang, "Open latest run", "打开最近 run"), key=f"_eu_wb_empty_latest_{summary}", use_container_width=True):
+            latest = _latest_real_workbench_state(lang)
+            if latest:
+                st.session_state["_agent_workbench"] = latest
+                st.session_state["_agent_workbench_is_active_selection"] = True
+                st.session_state["_ra_view"] = "summary" if summary else "workbench"
+                st.rerun()
+            st.warning(_T(lang, "No local run manifest found.", "没有找到本地 run manifest。"))
+
+
+def _step_contract_html(state: dict[str, Any], lang: str) -> str:
+    contract = state.get("step_contract") if isinstance(state.get("step_contract"), dict) else {}
+    if not contract:
+        return ""
+    method = contract.get("method") if isinstance(contract.get("method"), dict) else {}
+
+    def rows(items: object, empty: str) -> str:
+        out = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            status = _contract_status(item.get("ok") if item.get("ok") in {True, False, None} else None)
+            out.append(
+                f'<div class="eu-step-contract-row {status}">'
+                '<span></span>'
+                '<div>'
+                f'<b>{_esc(item.get("path", ""))}</b>'
+                f'<small>{_esc(item.get("meta", ""))}</small>'
+                '</div>'
+                '</div>'
+            )
+        if not out:
+            out.append(f'<p class="muted">{_esc(empty)}</p>')
+        return "".join(out)
+
+    checkpoints = []
+    for item in contract.get("checkpoints") or []:
+        if not isinstance(item, dict):
+            continue
+        status = _contract_status(item.get("ok") if item.get("ok") in {True, False, None} else None)
+        checkpoints.append(
+            f'<div class="eu-step-checkpoint {status}">'
+            '<span></span>'
+            '<div>'
+            f'<b>{_esc(item.get("label", ""))}</b>'
+            f'<small>{_esc(item.get("detail", ""))}</small>'
+            '</div>'
+            '</div>'
+        )
+    if not checkpoints:
+        checkpoints.append(f'<p class="muted">{_T(lang, "No checkpoints recorded.", "未记录检查点。")}</p>')
+
+    return (
+        '<div class="eu-step-contract">'
+        '<div class="eu-step-contract-method">'
+        f'<span class="mono">{_T(lang, "Method binding", "方法绑定")}</span>'
+        f'<b>{_esc(method.get("label", ""))}</b>'
+        f'<p>{_esc(method.get("audit", ""))}</p>'
+        f'<small class="mono">{_T(lang, "Expected", "预期")} · {_esc(method.get("outputs", ""))}</small>'
+        '</div>'
+        '<div class="eu-step-contract-grid">'
+        '<div>'
+        f'<h4>{_T(lang, "Inputs", "输入")}</h4>'
+        f'{rows(contract.get("inputs"), _T(lang, "No input contract recorded.", "未记录输入契约。"))}'
+        '</div>'
+        '<div>'
+        f'<h4>{_T(lang, "Outputs", "输出")}</h4>'
+        f'{rows(contract.get("outputs"), _T(lang, "No output contract recorded.", "未记录输出契约。"))}'
+        '</div>'
+        '<div>'
+        f'<h4>{_T(lang, "Checkpoints", "检查点")}</h4>'
+        f'{"".join(checkpoints)}'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _review_decisions_html(state: dict[str, Any], lang: str) -> str:
+    decisions = [d for d in state.get("review_decisions", []) if isinstance(d, dict)]
+    if not decisions:
+        return ""
+    rows = []
+    for d in decisions:
+        rows.append(
+            f'<div class="eu-review-decision { _esc(d.get("state", "idle")) }">'
+            '<span></span>'
+            '<div>'
+            f'<b>{_esc(d.get("label", ""))}</b>'
+            f'<small>{_esc(d.get("detail", ""))}</small>'
+            '</div>'
+            '</div>'
+        )
+    return (
+        '<div class="eu-review-decision-panel">'
+        f'<div class="eu-contract-title mono">{_T(lang, "Reviewer decision", "审核决定")}</div>'
+        f'{"".join(rows)}'
+        '</div>'
+    )
+
+
+def _audit_tasks_html(state: dict[str, Any], lang: str) -> str:
+    tasks = [t for t in state.get("audit_tasks", []) if isinstance(t, dict)]
+    if not tasks:
+        return ""
+    rows = []
+    for task in tasks:
+        rows.append(
+            f'<div class="eu-audit-task { _esc(task.get("tone", "info")) }">'
+            '<div>'
+            f'<b>{_esc(task.get("title", ""))}</b>'
+            f'<p>{_esc(task.get("detail", ""))}</p>'
+            '</div>'
+            f'<span class="mono">{_esc(task.get("action", ""))}</span>'
+            '</div>'
+        )
+    return (
+        '<div class="eu-audit-task-panel">'
+        f'<div class="eu-contract-title mono">{_T(lang, "Audit tasks", "审计任务")}</div>'
+        f'{"".join(rows)}'
+        '</div>'
+    )
 
 
 def _workbench_action_panel_html(state: dict[str, Any], lang: str) -> str:
@@ -1600,6 +2608,24 @@ def _workbench_action_panel_html(state: dict[str, Any], lang: str) -> str:
         audit = state.get("audit") if isinstance(state.get("audit"), dict) else {}
         counts = audit.get("counts") if isinstance(audit.get("counts"), dict) else {}
         active = state.get("active_step") if isinstance(state.get("active_step"), dict) else {}
+        outputs = [o for o in state.get("summary_outputs", []) if isinstance(o, dict)]
+        output_html = "".join(
+            '<div>'
+            f'<span>{_esc(o.get("kind", ""))}</span>'
+            f'<b>{_esc(o.get("title", ""))}</b>'
+            f'<small>{_esc(o.get("sub", ""))}</small>'
+            '</div>'
+            for o in outputs[:4]
+        )
+        evidence = [e for e in state.get("evidence", []) if isinstance(e, dict)]
+        evidence_html = "".join(
+            '<div>'
+            f'<span>{_esc(e.get("tag", ""))}</span>'
+            f'<b>{_esc(e.get("label", ""))}</b>'
+            f'<small>{_esc(e.get("sub", ""))}</small>'
+            '</div>'
+            for e in evidence[:4]
+        )
         return (
             '<div class="eu-wb-action-panel">'
             f'<b>{_T(lang, "Run summary", "运行摘要")}</b>'
@@ -1610,11 +2636,15 @@ def _workbench_action_panel_html(state: dict[str, Any], lang: str) -> str:
             f'<div><span>{_T(lang, "Active step", "当前步骤")}</span><b>{_esc(active.get("label", ""))}</b></div>'
             f'<div><span>{_T(lang, "Findings", "发现")}</span><b>{int(counts.get("errors") or 0)}E / {int(counts.get("warnings") or 0)}W</b></div>'
             '</div>'
+            f'<div class="eu-wb-manifest-mini">{output_html}</div>'
+            f'<div class="eu-wb-manifest-mini">{evidence_html}</div>'
+            f'{_step_contract_html(state, lang)}'
             '</div>'
         )
     if panel == "plan":
         rules = state.get("review_rules") or []
         manifest = state.get("manifest") or []
+        contract = state.get("execution_contract") if isinstance(state.get("execution_contract"), dict) else {}
         rule_html = "".join(f'<li>{_esc(rule)}</li>' for rule in rules[:5])
         manifest_html = "".join(
             f'<div><span class="mono">{_esc(row.get("op", ""))}</span>'
@@ -1622,11 +2652,22 @@ def _workbench_action_panel_html(state: dict[str, Any], lang: str) -> str:
             f'<small>{_esc(row.get("note", ""))}</small></div>'
             for row in manifest[:6]
         )
+        contract_html = "".join(
+            f'<div><span>{_esc(label)}</span><b>{_esc(value)}</b></div>'
+            for label, value in [
+                (_T(lang, "Cohort", "队列"), contract.get("cohort", "")),
+                (_T(lang, "Provider", "模型提供方"), contract.get("provider", "")),
+                (_T(lang, "Workdir", "工作目录"), contract.get("workdir", "")),
+                (_T(lang, "Gate", "关口"), contract.get("gate", "")),
+            ]
+        )
         return (
             '<div class="eu-wb-action-panel">'
             f'<b>{_T(lang, "Plan and gate contract", "计划与关口契约")}</b>'
             f'<ul>{rule_html}</ul>'
+            f'<div class="eu-wb-action-grid">{contract_html}</div>'
             f'<div class="eu-wb-manifest-mini">{manifest_html}</div>'
+            f'{_step_contract_html(state, lang)}'
             '</div>'
         )
     if panel == "pause":
@@ -1722,6 +2763,9 @@ def _review_gate_html(state: dict[str, Any], lang: str) -> str:
 def render_agent_workbench(lang: str) -> None:
     """Render the live agent workbench (3 columns + timeline)."""
     state = _resolve_workbench_state(lang)
+    if not state.get("steps"):
+        _render_workbench_empty_state(lang)
+        return
     # carry a short subtitle into the results column
     state.setdefault("subtitle_short", "")
     state.setdefault("source_label", _T(lang, "Real manifest", "真实 manifest") if not state.get("is_demo") else _T(lang, "Sample workflow", "示例流程"))
@@ -1748,18 +2792,26 @@ def render_agent_workbench(lang: str) -> None:
     st.markdown(_agent_command_strip_html(state, lang), unsafe_allow_html=True)
 
     # Real action buttons (Streamlit) so callbacks work
-    c1, c2, c3, c4 = st.columns([7.2, 1.7, 1.1, 1.7])
+    c1, c2, c3, c4 = st.columns([7.0, 1.8, 1.8, 1.8])
     with c2:
         if st.button(_T(lang, "View summary", "查看摘要"), key="_eu_wb_summary", use_container_width=True):
             st.session_state["_eu_wb_action_panel"] = "summary"
     with c3:
-        if st.button(_T(lang, "Pause", "暂停"), key="_eu_wb_pause", use_container_width=True):
-            st.session_state["_eu_wb_action_panel"] = "pause"
+        st.button(
+            _T(lang, "Pause run", "暂停运行"),
+            key="_eu_wb_pause_disabled",
+            use_container_width=True,
+            disabled=True,
+            help=_T(
+                lang,
+                "Pause/cancel is only available inside an active live run. This Workbench is a review surface.",
+                "暂停/取消只在实时运行过程中可用；当前 Workbench 是复核视图。",
+            ),
+        )
     with c4:
         if st.button(
-            _T(lang, "Adjust plan", "调整计划"),
+            _T(lang, "Plan contract", "计划契约"),
             key="_eu_wb_adjust",
-            type="primary",
             use_container_width=True,
         ):
             st.session_state["_eu_wb_action_panel"] = "plan"
@@ -1796,6 +2848,72 @@ def render_agent_workbench(lang: str) -> None:
         )
 
     # Timeline scrubber
+    st.markdown(
+        '<div class="eu-agent-timeline" style="margin-top:18px">' + _state_track_html(state, lang) + '</div>',
+        unsafe_allow_html=True,
+    )
+    audit_html = _audit_review_html(state, lang)
+    if audit_html:
+        st.markdown(audit_html, unsafe_allow_html=True)
+
+
+def render_agent_live_workbench(lang: str) -> None:
+    """Render a widget-free live Workbench snapshot for in-run refreshes."""
+    state = _resolve_workbench_state(lang)
+    if not state.get("steps"):
+        _render_workbench_empty_state(lang)
+        return
+    state.setdefault("subtitle_short", "")
+    state.setdefault("source_label", _T(lang, "Live run", "实时运行"))
+    selected_idx = _default_selected_step([s for s in state.get("steps", []) if isinstance(s, dict)])
+    active_state = _state_for_selected_step(state, selected_idx)
+    actions = (
+        '<span class="eu-pill"><span class="dot eu-pulse" style="background:var(--accent)"></span>'
+        f'{_esc(state.get("status_step", ""))}</span>'
+    )
+    st.markdown(
+        cc.render_design_page_header(
+            kicker=_T(lang, "Live Workbench", "实时工作台"),
+            title_en=state.get("title", "Research Agent"),
+            title_zh=state.get("title", "研究 Agent"),
+            desc=state.get("subtitle", ""),
+            right_html=actions,
+            lang=lang,
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(_agent_command_strip_html(state, lang), unsafe_allow_html=True)
+    st.markdown('<div class="eu-agent-panel-spacer"></div>', unsafe_allow_html=True)
+    col_l, col_c, col_r = st.columns([1.05, 1.7, 1.15], gap="medium")
+    steps = [s for s in state.get("steps", []) if isinstance(s, dict)]
+    n_ok = sum(1 for s in steps if s.get("status") == "ok")
+    n_retry = sum(1 for s in steps if s.get("status") == "retry")
+    n_run = sum(1 for s in steps if s.get("status") == "running")
+    with col_l:
+        st.markdown(
+            '<div class="eu-agent-panel" style="padding:14px 16px;min-height:620px;overflow:auto">'
+            '<div class="eu-agent-process-head">'
+            f'<b>{_T(lang, "Step DAG", "步骤 DAG")} · {len(steps)} {_T(lang, "nodes", "节点")}</b>'
+            f'<span class="mono">{n_ok} ok · {n_retry} retry · {n_run} running</span>'
+            '</div>'
+            + _step_dag_html(state, lang, selected_idx=selected_idx)
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+    with col_c:
+        st.markdown(
+            '<div class="eu-agent-panel" style="padding:0;overflow:hidden;height:620px">'
+            + _live_code_html(active_state, lang)
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+    with col_r:
+        st.markdown(
+            '<div class="eu-agent-panel" style="padding:0;overflow:hidden;height:620px">'
+            + _result_evidence_html(active_state, lang)
+            + '</div>',
+            unsafe_allow_html=True,
+        )
     st.markdown(
         '<div class="eu-agent-timeline" style="margin-top:18px">' + _state_track_html(state, lang) + '</div>',
         unsafe_allow_html=True,

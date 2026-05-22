@@ -42,7 +42,10 @@ def _demographics_df() -> pd.DataFrame | None:
 
 def _cohort_name() -> str:
     """A short cohort name used in the breadcrumb / snapshot card."""
-    return st.session_state.get("cohort_label", "sepsis_mortality_v3")
+    label = st.session_state.get("cohort_label")
+    if label:
+        return str(label)
+    return "Demo cohort" if st.session_state.get("entry_mode") == "demo" else "Current cohort"
 
 
 def _mock_params_n() -> int:
@@ -99,19 +102,48 @@ def _render_agent_gate_strip(lang: str, *, context: str) -> None:
     without turning every analytic page into an agent dashboard.
     """
     loaded_concepts = st.session_state.get("loaded_concepts") or {}
-    df = _demographics_df()
-    patient_count = len(df) if df is not None else _mock_params_n() * 25
-    concept_count = len(loaded_concepts) if loaded_concepts else 167
-    signature = f"{context.lower().replace(' ', '_')}:{patient_count}:{concept_count}"
+    context_key = context.lower().replace(' ', '_')
+    if "cross-db" in context.lower() or "cross_db" in context_key:
+        db_count, row_count, concept_count = _crossdb_loaded_counts()
+        if db_count:
+            input_body = _T(
+                lang,
+                f"{db_count} DBs · {row_count:,} rows · {concept_count} concepts",
+                f"{db_count} 个库 · {row_count:,} 行 · {concept_count} 概念",
+            )
+            evidence_body = _T(lang, "distribution denominators ready", "分布分母已就绪")
+            signature = f"{context_key}:{db_count}:{row_count}:{concept_count}"
+        else:
+            df = _demographics_df()
+            patient_count = len(df) if df is not None else _mock_params_n()
+            concept_count = len(loaded_concepts) if loaded_concepts else 0
+            input_body = _T(
+                lang,
+                f"{patient_count:,} current-session stays · multi-DB data not loaded",
+                f"{patient_count:,} 当前会话病例 · 多库数据未加载",
+            )
+            evidence_body = _T(lang, "open loader for real denominators", "打开加载器以获得真实分母")
+            signature = f"{context_key}:{patient_count}:{concept_count}"
+    else:
+        df = _demographics_df()
+        patient_count = len(df) if df is not None else _mock_params_n() * 25
+        concept_count = len(loaded_concepts) if loaded_concepts else 0
+        input_body = (
+            _T(lang, f"{patient_count:,} stays · {concept_count} concepts", f"{patient_count:,} 例 · {concept_count} 概念")
+            if concept_count else
+            _T(lang, f"{patient_count:,} stays · demo concept set", f"{patient_count:,} 例 · 演示概念集")
+        )
+        evidence_body = _T(lang, "coverage + denominators ready", "覆盖率 + 分母已就绪")
+        signature = f"{context_key}:{patient_count}:{concept_count}"
     rows = [
         (
             _T(lang, "Input package", "输入包"),
-            _T(lang, f"{patient_count:,} stays · {concept_count} concepts", f"{patient_count:,} 例 · {concept_count} 概念"),
+            input_body,
             "ok",
         ),
         (
             _T(lang, "Evidence checks", "证据检查"),
-            _T(lang, "coverage + denominators ready", "覆盖率 + 分母已就绪"),
+            evidence_body,
             "ok",
         ),
         (
@@ -313,7 +345,7 @@ def _render_coverage_subtab(df: pd.DataFrame | None, lang: str) -> None:
     n = len(df) if df is not None else _mock_params_n() * 25
     cards: list[tuple[str, str, str, str]] = [
         (_T(lang, "Patients audited", "审计患者数"), f"{n:,}", "", ""),
-        (_T(lang, "Concepts", "概念变量"), "167", "", ""),
+        (_T(lang, "Concepts", "概念变量"), _T(lang, "Demo set", "演示集"), "", ""),
         (_T(lang, "Avg coverage", "平均覆盖率"), "94.6%", "", "ok"),
         (_T(lang, "Patients < 50%", "低覆盖患者"), "38", "", "warn"),
     ]
@@ -491,16 +523,14 @@ def render_cohort_redesign_page(
 ) -> None:
     """Shell-A Cohort Statistics page.
 
-    The visual chrome (PageHeader with breadcrumb + bilingual title +
-    Share/Export actions, plus the SubTabs strip) comes from the
-    redesign. The body of each subtab is delegated to the
-    ``*_fn`` callables passed in (which are the real app.py wrappers
-    that close over the app-level ``globals()`` context). This keeps
-    the actual cohort charts data-driven instead of mocked SVG.
+    The visual chrome comes from the redesign, while the body of each
+    panel is delegated to the original cohort renderers passed in from
+    ``app.py``. Those renderers carry the real main-branch statistics
+    and Plotly analyses, so the redesign does not replace clinical
+    content with design-preview summaries.
 
     Setting ``st.session_state["_eu_shell_only"] = True`` falls back
-    to the synthetic design-preview bodies — useful for design QA
-    when no real data has been loaded.
+    to the synthetic design-preview bodies for isolated visual QA.
     """
     _render_page_header(
         title_en="Sepsis vs Non-sepsis",
@@ -518,33 +548,47 @@ def render_cohort_redesign_page(
 
     _render_agent_gate_strip(lang, context="Cohort statistics")
 
-    # The default body now stays in Shell-A for every subtab. The
-    # delegated legacy renderers remain accepted for compatibility but
-    # are not used unless an old QA flag explicitly asks for them.
-    use_legacy = bool(st.session_state.get("_eu_legacy_cohort_panels"))
-    if use_legacy and None not in (group_fn, coverage_fn, snapshot_fn, sofa_fn):
-        tabs_labels = list(_SUBTABS_EN if lang == "en" else _SUBTABS_ZH)
-        tabs = st.tabs(tabs_labels)
-        with tabs[0]:
+    tabs_labels = list(_SUBTABS_EN if lang == "en" else _SUBTABS_ZH)
+    panel_keys = ["groups", "coverage", "snapshot", "sofa"]
+    panel_label_map = dict(zip(panel_keys, tabs_labels))
+    panel_state_key = "cohort_active_panel"
+    if st.session_state.get(panel_state_key) not in panel_keys:
+        st.session_state[panel_state_key] = panel_keys[0]
+
+    st.markdown(
+        f'<div class="inline-control-label">{_T(lang, "Cohort panel", "队列面板")}</div>',
+        unsafe_allow_html=True,
+    )
+    active_panel = st.radio(
+        _T(lang, "Cohort panel", "队列面板"),
+        options=panel_keys,
+        format_func=lambda key: panel_label_map.get(key, key),
+        horizontal=True,
+        key=panel_state_key,
+        label_visibility="collapsed",
+    )
+    st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
+
+    use_shell_only = bool(st.session_state.get("_eu_shell_only"))
+    if not use_shell_only and None not in (group_fn, coverage_fn, snapshot_fn, sofa_fn):
+        if active_panel == "groups":
             group_fn(lang)
-        with tabs[1]:
+        elif active_panel == "coverage":
             coverage_fn(lang)
-        with tabs[2]:
+        elif active_panel == "snapshot":
             snapshot_fn(lang)
-        with tabs[3]:
+        elif active_panel == "sofa":
             sofa_fn(lang)
         return
 
     df = _demographics_df()
-    tabs_labels = list(_SUBTABS_EN if lang == "en" else _SUBTABS_ZH)
-    tabs = st.tabs(tabs_labels)
-    with tabs[0]:
+    if active_panel == "groups":
         _render_groups_subtab(df, lang)
-    with tabs[1]:
+    elif active_panel == "coverage":
         _render_coverage_subtab(df, lang)
-    with tabs[2]:
+    elif active_panel == "snapshot":
         _render_snapshot_subtab(df, lang)
-    with tabs[3]:
+    elif active_panel == "sofa":
         _render_sofa_subtab(df, lang)
 
 
@@ -567,13 +611,93 @@ def _db_label(key: str) -> str:
     return _DB_LABELS.get(str(key).lower(), str(key).upper())
 
 
+def _crossdb_frame_row_count(frame: pd.DataFrame) -> int:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return 0
+    return int(len(frame))
+
+
+def _crossdb_frame_patient_count(frame: pd.DataFrame) -> int:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return 0
+    for col in ("stay_id", "patientunitstayid", "admissionid", "patientid", "icustay_id", "CaseID"):
+        if col in frame.columns:
+            return int(frame[col].dropna().nunique())
+    return int(len(frame))
+
+
+def _crossdb_frame_concepts(frame: pd.DataFrame) -> list[str]:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+    if "concept" in frame.columns:
+        return sorted(str(v) for v in frame["concept"].dropna().unique())
+    excluded = {
+        "stay_id", "patientunitstayid", "admissionid", "patientid", "icustay_id",
+        "CaseID", "time", "charttime", "starttime", "endtime", "datetime",
+        "timestamp",
+    }
+    return [str(c) for c in frame.columns if c not in excluded]
+
+
+def _crossdb_loaded_counts() -> tuple[int, int, int]:
+    data = st.session_state.get("multidb_data") or {}
+    if not isinstance(data, dict) or not data:
+        return 0, 0, 0
+    row_count = 0
+    concepts: set[str] = set()
+    for frame in data.values():
+        if not isinstance(frame, pd.DataFrame):
+            continue
+        row_count += _crossdb_frame_row_count(frame)
+        concepts.update(_crossdb_frame_concepts(frame))
+    return len(data), row_count, len(concepts)
+
+
+def _crossdb_concept_nonnull_share(frame: pd.DataFrame, concept: str) -> float:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return 0.0
+    if "concept" in frame.columns and "value" in frame.columns:
+        sub = frame[frame["concept"].astype(str) == str(concept)]
+        if sub.empty:
+            return 0.0
+        return float(pd.to_numeric(sub["value"], errors="coerce").notna().mean())
+    if concept not in frame.columns:
+        return 0.0
+    return float(pd.to_numeric(frame[concept], errors="coerce").notna().mean())
+
+
+def _crossdb_concept_median(frame: pd.DataFrame, concept: str) -> float:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return np.nan
+    if "concept" in frame.columns and "value" in frame.columns:
+        values = frame.loc[frame["concept"].astype(str) == str(concept), "value"]
+    elif concept in frame.columns:
+        values = frame[concept]
+    else:
+        return np.nan
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if numeric.empty:
+        return np.nan
+    return float(numeric.median())
+
+
 def _crossdb_active_databases(lang: str) -> list[tuple[str, str, bool, bool]]:
     data = st.session_state.get("multidb_data") or {}
     if isinstance(data, dict) and data:
+        is_demo = bool(st.session_state.get("multidb_is_demo") or st.session_state.get("entry_mode") == "demo")
         out: list[tuple[str, str, bool, bool]] = []
         for idx, (db, frame) in enumerate(data.items()):
-            n_rows = len(frame) if isinstance(frame, pd.DataFrame) else 0
-            out.append((_db_label(str(db)), f"{n_rows:,} records", True, idx == 0))
+            n_rows = _crossdb_frame_row_count(frame)
+            n_patients = _crossdb_frame_patient_count(frame)
+            if is_demo:
+                detail = f"{n_rows:,} demo rows"
+            else:
+                detail = (
+                    f"{n_patients:,} IDs · {n_rows:,} rows"
+                    if n_patients and n_patients != n_rows
+                    else f"{n_rows:,} rows"
+                )
+            out.append((_db_label(str(db)), detail, True, idx == 0))
         return out
 
     selected = st.session_state.get("multidb_selected") or ["miiv", "eicu", "aumc"]
@@ -593,35 +717,39 @@ def _crossdb_kpi_rows(lang: str) -> tuple[list[str], list[list[str]]]:
     data = st.session_state.get("multidb_data") or {}
     if not isinstance(data, dict) or not data:
         return (
-            [_T(lang, "Metric", "指标"), "MIMIC-IV", "eICU", "AUMC", _T(lang, "Δ range", "Δ 区间")],
+            [_T(lang, "Metric", "指标"), _T(lang, "Status", "状态"), _T(lang, "Source", "来源")],
             [
-                [_T(lang, "Patients",     "患者数"),       "2,481",  "12,083", "1,094",  ""],
-                [_T(lang, "Mean age, y",  "平均年龄"),     "63.2",   "64.8",   "62.1",   ""],
-                [_T(lang, "Male, %",      "男性 %"),       "41.0",   "54.2",   "63.4",   "22.4 pp"],
-                [_T(lang, "Mortality, %", "院内死亡 %"),   "18.0",   "14.6",   "20.8",   "6.2 pp"],
-                [_T(lang, "Lactate, med", "乳酸中位数"),   "3.8",    "2.9",    "4.1",    ""],
-                [_T(lang, "Vent, %",      "机械通气 %"),   "52.1",   "38.7",   "70.4",   "31.7 pp"],
-                [_T(lang, "LOS, d med",   "ICU 时长中位"), "4.8",    "3.2",    "5.6",    ""],
+                [
+                    _T(lang, "Cross-database summary", "跨库摘要"),
+                    _T(lang, "waiting for ≥2 loaded databases", "等待加载 ≥2 个数据库"),
+                    _T(lang, "Open detailed loader", "打开详细加载器"),
+                ],
             ],
         )
 
-    labels = [_db_label(db) for db in data.keys()][:4]
+    items = list(data.items())[:6]
+    labels = [_db_label(db) for db, _ in items]
     rows: list[list[str]] = []
-    metric_specs = [
-        (_T(lang, "Records", "记录数"), lambda df: float(len(df)), "{:,.0f}"),
-    ]
-    candidate_features = st.session_state.get("multidb_concepts") or ["hr", "map", "temp", "lact"]
-    for feature in candidate_features[:5]:
-        metric_specs.append((str(feature), lambda df, f=feature: float(pd.to_numeric(df[f], errors="coerce").median()) if f in df.columns else np.nan, "{:.2f}"))
 
-    for metric, getter, fmt in metric_specs:
-        values: list[float] = []
-        for frame in list(data.values())[:4]:
-            values.append(getter(frame) if isinstance(frame, pd.DataFrame) else np.nan)
+    def _add_metric(metric: str, values: list[float], fmt: str) -> None:
         shown = ["--" if np.isnan(v) else fmt.format(v) for v in values]
-        valid = [v for v in values if not np.isnan(v)]
-        delta = "" if len(valid) < 2 else f"{(max(valid) - min(valid)):.2f}"
+        valid = [float(v) for v in values if not np.isnan(v)]
+        delta = "" if len(valid) < 2 else fmt.format(max(valid) - min(valid))
         rows.append([metric, *shown, delta])
+
+    row_values = [float(_crossdb_frame_row_count(frame)) for _, frame in items]
+    concept_values = [float(len(_crossdb_frame_concepts(frame))) for _, frame in items]
+    _add_metric(_T(lang, "Rows", "数据行数"), row_values, "{:,.0f}")
+    _add_metric(_T(lang, "Concepts present", "可用概念数"), concept_values, "{:,.0f}")
+    if not bool(st.session_state.get("multidb_is_demo") or st.session_state.get("entry_mode") == "demo"):
+        id_values = [float(_crossdb_frame_patient_count(frame)) for _, frame in items]
+        _add_metric(_T(lang, "Distinct IDs", "唯一 ID 数"), id_values, "{:,.0f}")
+
+    candidate_features = st.session_state.get("multidb_concepts") or ["hr", "map", "temp", "lact", "sofa2"]
+    for feature in [str(f) for f in candidate_features[:5]]:
+        medians = [_crossdb_concept_median(frame, feature) for _, frame in items]
+        if any(not np.isnan(v) for v in medians):
+            _add_metric(f"{feature} median", medians, "{:.2f}")
 
     return ([_T(lang, "Metric", "指标"), *labels, _T(lang, "Δ range", "Δ 区间")], rows)
 
@@ -629,17 +757,16 @@ def _crossdb_kpi_rows(lang: str) -> tuple[list[str], list[list[str]]]:
 def _crossdb_availability_rows(lang: str) -> tuple[tuple[str, ...], list[tuple[str, list[float]]]]:
     data = st.session_state.get("multidb_data") or {}
     if isinstance(data, dict) and data:
-        db_items = list(data.items())[:4]
+        db_items = list(data.items())[:6]
         columns = tuple(_db_label(db) for db, _ in db_items)
-        concepts = st.session_state.get("multidb_concepts") or ["hr", "sbp", "map", "resp", "temp", "lact"]
+        configured = [str(c) for c in (st.session_state.get("multidb_concepts") or [])]
+        available = []
+        for _, frame in db_items:
+            available.extend(_crossdb_frame_concepts(frame))
+        concepts = configured or sorted(dict.fromkeys(available)) or ["hr", "sbp", "map", "resp", "temp", "lact"]
         rows: list[tuple[str, list[float]]] = []
         for concept in concepts[:9]:
-            vals: list[float] = []
-            for _, frame in db_items:
-                if not isinstance(frame, pd.DataFrame) or concept not in frame.columns or frame.empty:
-                    vals.append(0.0)
-                    continue
-                vals.append(float(pd.to_numeric(frame[concept], errors="coerce").notna().mean()))
+            vals = [_crossdb_concept_nonnull_share(frame, concept) for _, frame in db_items]
             rows.append((str(concept), vals))
         return columns, rows
 
@@ -677,6 +804,14 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
         lang=lang,
     )
 
+    if st.session_state.get("entry_mode") == "demo" and not st.session_state.get("multidb_data"):
+        try:
+            from easyicu.webapp.cohort_workspace import _ensure_cohort_demo_workspace
+
+            _ensure_cohort_demo_workspace(st.session_state, lang=lang)
+        except Exception:
+            pass
+
     _render_agent_gate_strip(lang, context="Cross-DB benchmark")
 
     st.markdown(cc.render_active_databases(_crossdb_active_databases(lang)), unsafe_allow_html=True)
@@ -685,8 +820,8 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
     st.markdown(
         '<div style="margin-top:14px">'
         + cc.render_mono_table(
-            title=_T(lang, "Sepsis-3 mortality benchmark",
-                     "Sepsis-3 死亡率基准"),
+            title=_T(lang, "Loaded cross-database distribution summary",
+                     "已加载跨库分布摘要"),
             columns=kpi_columns,
             rows=kpi_rows,
         )
@@ -708,9 +843,30 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
     )
 
     if multidb_fn is not None and not st.session_state.get("_eu_shell_only"):
+        advanced_open = bool(st.session_state.get("_eu_crossdb_advanced_open", False))
+        if not advanced_open:
+            st.markdown(
+                '<div class="eu-config-note" style="margin-top:14px">'
+                + _T(
+                    lang,
+                    "Detailed multi-database loading is kept closed so entering this page stays fast.",
+                    "详细多库加载默认关闭，确保进入页面时保持轻量。",
+                )
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                _T(lang, "Open detailed loader", "打开详细加载器"),
+                key="_eu_crossdb_open_advanced",
+                use_container_width=False,
+            ):
+                st.session_state["_eu_crossdb_advanced_open"] = True
+                st.rerun()
+            return
+
         with st.expander(
             _T(lang, "Load data / detailed distributions", "加载数据 / 详细分布"),
-            expanded=False,
+            expanded=True,
         ):
             st.markdown(
                 '<div class="eu-config-note">'
@@ -722,4 +878,10 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
                 + '</div>',
                 unsafe_allow_html=True,
             )
+            if st.button(
+                _T(lang, "Hide detailed loader", "隐藏详细加载器"),
+                key="_eu_crossdb_close_advanced",
+            ):
+                st.session_state["_eu_crossdb_advanced_open"] = False
+                st.rerun()
             multidb_fn(lang)

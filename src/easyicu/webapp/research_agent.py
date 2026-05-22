@@ -975,6 +975,7 @@ def _bind_workbench_state(
             progress_events=progress_events,
         )
         st.session_state["_agent_workbench_source_run_dir"] = str(run_dir)
+        st.session_state["_agent_workbench_is_active_selection"] = True
     except Exception:
         # Workbench binding is an observation layer; the canonical report
         # renderer below must remain available even if the visual adapter fails.
@@ -2919,9 +2920,18 @@ def _section_llm_picker(handles: Dict[str, Any]) -> Tuple[str, str, str, Optiona
         return default
 
     override_options = ["OpenAI", "OpenRouter", "Custom OpenAI-compatible"]
+    if _env_or_secret("OPENAI_BASE_URL") or _env_or_secret("EASYICU_CUSTOM_MODEL"):
+        default_override_client = "Custom OpenAI-compatible"
+    elif _env_or_secret("OPENROUTER_API_KEY"):
+        default_override_client = "OpenRouter"
+    elif _env_or_secret("OPENAI_API_KEY"):
+        default_override_client = "OpenAI"
+    else:
+        default_override_client = "OpenAI"
     override_client = st.selectbox(
         _ra_text("llm_client"),
         override_options,
+        index=override_options.index(default_override_client),
         key="research_agent_llm_override_client",
     )
     api_key, model, base_url, extra_headers = "", "", None, None
@@ -3067,7 +3077,23 @@ def _format_history_label(row: Dict[str, Any]) -> str:
 
 def _render_run_history(workdir: Path) -> None:
     selected_run: Dict[str, Any] | None = None
-    with st.expander(_ra_text("history_title"), expanded=False):
+    expand_history = bool(st.session_state.pop("_research_agent_expand_history", False))
+    with st.expander(_ra_text("history_title"), expanded=expand_history):
+        history_loaded = bool(st.session_state.get("_research_agent_history_loaded")) or expand_history
+        if not history_loaded:
+            st.caption(
+                "History is loaded on demand so Setup stays responsive."
+                if st.session_state.get("language", "en") == "en" else
+                "历史记录按需加载，避免配置页初始渲染变慢。"
+            )
+            if st.button(
+                "Load recent runs" if st.session_state.get("language", "en") == "en" else "加载最近 run",
+                key="research_agent_history_load",
+                use_container_width=True,
+            ):
+                st.session_state["_research_agent_history_loaded"] = True
+                st.rerun()
+            return
         rows = _scan_research_agent_runs(workdir)
         if not rows:
             st.info(_ra_text("history_empty"))
@@ -3394,6 +3420,81 @@ def _render_replication_section(*, default_workdir: Path) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+def _render_execution_preflight(
+    *,
+    free_question: str,
+    target_outcome: str,
+    cohort: Optional[pd.DataFrame],
+    cohort_label: str,
+    llm_choice: str,
+    model: str,
+    workdir_text: str,
+    stop_after_analysis: bool,
+    force_manuscript: bool,
+) -> None:
+    """Show the human-confirmation contract before a real agent run."""
+    lang = st.session_state.get("language", "en")
+    is_en = lang == "en"
+    question = (free_question or target_outcome or "").strip()
+    try:
+        cohort_rows = len(cohort) if cohort is not None else 0
+    except Exception:
+        cohort_rows = 0
+    provider = str(llm_choice or "mock")
+    model_label = str(model or "default")
+    output_dir = str(Path(workdir_text).expanduser())
+    mode = (
+        "Draft continuation" if force_manuscript else
+        ("Analysis only" if stop_after_analysis else "Analysis + optional manuscript gate")
+    ) if is_en else (
+        "续写草稿" if force_manuscript else
+        ("仅分析" if stop_after_analysis else "分析 + 可选手稿关口")
+    )
+    rows = [
+        ("Request" if is_en else "请求", question or ("not set" if is_en else "未设置")),
+        ("Cohort" if is_en else "队列", f"{cohort_label} · {cohort_rows:,} rows"),
+        ("LLM" if is_en else "模型", f"{provider} · {model_label}"),
+        ("Write path" if is_en else "写入路径", output_dir),
+        ("Mode" if is_en else "模式", mode),
+    ]
+    row_html = "".join(
+        '<div class="ra-preflight-row">'
+        f'<span>{html.escape(label)}</span>'
+        f'<b>{html.escape(value)}</b>'
+        '</div>'
+        for label, value in rows
+    )
+    checks = [
+        "Evidence manifest and run status are written for every run."
+        if is_en else "每次运行都会写入证据清单和 run status。",
+        "Numeric claims remain gated by evidence and validator findings."
+        if is_en else "数值主张继续受证据和校验发现约束。",
+        "Manuscript drafting is second-stage unless explicitly requested."
+        if is_en else "除非明确请求，手稿写作保持第二阶段。",
+    ]
+    check_html = "".join(
+        '<div class="ra-preflight-check"><span></span><p>'
+        f'{html.escape(check)}</p></div>'
+        for check in checks
+    )
+    st.markdown(
+        f"""
+        <div class="ra-preflight">
+          <div class="ra-preflight-head">
+            <div>
+              <div class="ra-preflight-kicker">{"Execution preflight" if is_en else "执行前预览"}</div>
+              <b>{"Confirm what the agent will read, write, and gate" if is_en else "确认 agent 将读取、写入和审计什么"}</b>
+            </div>
+            <span>{"human confirmation before run" if is_en else "运行前人工确认"}</span>
+          </div>
+          <div class="ra-preflight-grid">{row_html}</div>
+          <div class="ra-preflight-checks">{check_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_research_agent_page() -> None:
     """Top-level entry point used by the main webapp."""
     render_page_header(
@@ -3454,15 +3555,59 @@ def render_research_agent_page() -> None:
     with st.expander(_ra_text("replication_title"), expanded=False):
         _render_replication_section(default_workdir=history_workdir)
 
+    _render_execution_preflight(
+        free_question=free_question,
+        target_outcome=target_outcome,
+        cohort=cohort,
+        cohort_label=cohort_label,
+        llm_choice=llm_choice,
+        model=model,
+        workdir_text=workdir_text,
+        stop_after_analysis=stop_after_analysis,
+        force_manuscript=force_manuscript,
+    )
+
+    external_llm_selected = "MockLLMClient" not in str(llm_choice) and "offline" not in str(llm_choice).lower()
+    if external_llm_selected and not st.session_state.get("llm_enabled", False):
+        enable_for_run = st.checkbox(
+            (
+                "Enable external LLM calls for this run"
+                if _is_en else
+                "允许本次运行调用外部 LLM"
+            ),
+            key="research_agent_enable_external_llm_for_run",
+            help=(
+                "The research question, cohort schema/summary, generated prompts, and run logs may be sent to the selected provider."
+                if _is_en else
+                "研究问题、队列表结构/摘要、生成提示词和运行日志可能会发送给所选模型服务商。"
+            ),
+        )
+        if enable_for_run:
+            st.session_state["llm_enabled"] = True
+            st.session_state["_llm_toggle"] = True
+            st.info(
+                "External LLM calls are enabled for this session."
+                if _is_en else
+                "本会话已允许外部 LLM 调用。"
+            )
+
+    request_ready = bool(str(free_question or "").strip()) or force_manuscript
     run_clicked = st.button(
         "▶  " + (_ra_text("draft_button") if force_manuscript else _ra_text("run_button")),
         type="primary",
-        disabled=cohort is None,
+        disabled=cohort is None or not request_ready,
         use_container_width=True,
     ) or force_manuscript
 
     if cohort is None:
         st.info(_ra_text("select_cohort"))
+        return
+    if not request_ready:
+        st.info(
+            "Enter a research request above before launching the agent."
+            if _is_en else
+            "请先在上方填写研究请求，再启动 agent。"
+        )
         return
 
     if not run_clicked:
@@ -3498,12 +3643,31 @@ def render_research_agent_page() -> None:
         st.error(str(exc))
         return
 
+    st.session_state["_ra_view"] = "workbench"
     progress = st.empty()
-    progress.info(_ra_text("running"))
+    progress.info(
+        _ra_text("running")
+        + (
+            " Live Workbench is updating below."
+            if _is_en else
+            " 下方实时工作台正在更新。"
+        )
+    )
     progress_bar = st.progress(0)
     progress_log = st.empty()
-    live_steps = st.empty()
+    live_workbench = st.empty()
     progress_events: List[Dict[str, Any]] = []
+
+    def _render_live_workbench_snapshot() -> None:
+        try:
+            from easyicu.webapp.agent_workbench import render_agent_live_workbench
+
+            with live_workbench.container():
+                render_agent_live_workbench(st.session_state.get("language", "en"))
+        except Exception:
+            # The canonical run should never fail just because the visual
+            # observation layer could not repaint during a callback.
+            pass
 
     def _on_progress(event: Dict[str, Any]) -> None:
         progress_events.append(event)
@@ -3560,17 +3724,20 @@ def render_research_agent_page() -> None:
                     partial=True,
                     progress_events=progress_events,
                 )
-            if manifest:
-                with live_steps.container():
-                    st.markdown(f"### {_ra_text('live_steps')}")
-                    _render_literature_and_plan(workdir / str(run_id), manifest)
-                    if manifest.get("per_step_records"):
-                        st.divider()
-                        _render_step_records(
-                            workdir / str(run_id),
-                            manifest,
-                            key_prefix=f"research_agent_live_{run_id}",
-                        )
+        else:
+            _bind_workbench_state(
+                run_dir=workdir / "run_pending_webapp",
+                manifest={
+                    "run_id": "run_pending_webapp",
+                    "research_question": free_question or target_outcome or "Research Agent run",
+                    "per_step_records": [],
+                    "evidence": [],
+                    "findings": [],
+                },
+                partial=True,
+                progress_events=progress_events,
+            )
+        _render_live_workbench_snapshot()
 
     try:
         with st.spinner(_ra_text("spinner")):
@@ -3596,7 +3763,7 @@ def render_research_agent_page() -> None:
         return
     progress.empty()
     progress_bar.empty()
-    live_steps.empty()
+    live_workbench.empty()
     if force_manuscript:
         st.session_state.pop("research_agent_resume_run_id", None)
         st.session_state.pop("research_agent_force_manuscript", None)

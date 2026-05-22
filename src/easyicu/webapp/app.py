@@ -549,6 +549,184 @@ def _sync_quick_viz_screenshot_mode(state: dict[str, Any], *, lang: str) -> bool
     return False
 
 
+def _append_action_log(state: dict[str, Any], message: str, *, limit: int = 12) -> None:
+    """Keep a compact human-readable action history for the topbar."""
+    log = list(state.get('_eu_action_log') or [])
+    log.append(message)
+    state['_eu_action_log'] = log[-limit:]
+
+
+def _prepare_quick_viz_demo_workspace(
+    state: dict[str, Any],
+    *,
+    generate_data_func=generate_mock_data,
+) -> tuple[int, int]:
+    """Load a complete demo review workspace from the topbar Render action."""
+    params = state.get('mock_params') if isinstance(state.get('mock_params'), dict) else {}
+    params = dict(params)
+    try:
+        params['n_patients'] = int(params.get('n_patients') or 50)
+    except (TypeError, ValueError):
+        params['n_patients'] = 50
+    try:
+        params['hours'] = int(params.get('hours') or 72)
+    except (TypeError, ValueError):
+        params['hours'] = 72
+
+    generated = generate_data_func(**params)
+    if isinstance(generated, tuple):
+        mock_data, patient_ids = generated
+    else:
+        mock_data = generated
+        patient_ids = []
+
+    state['mock_params'] = params
+    state['loaded_concepts'] = mock_data
+    state['loaded_data_origin'] = 'demo_viz'
+    state['patient_ids'] = sorted(patient_ids) if patient_ids else []
+    state['id_col'] = 'stay_id'
+    state['time_col'] = 'time'
+    state['selected_concepts'] = list(mock_data.keys())
+    state['trigger_export'] = False
+    state['_exporting_in_progress'] = False
+    for tmp_key in ['_skipped_modules', '_overwrite_modules', '_viz_import_export_auto_trigger']:
+        state.pop(tmp_key, None)
+    return len(mock_data), len(state['patient_ids'])
+
+
+def _consume_topbar_run_request(
+    state: dict[str, Any],
+    active_page: str,
+    lang: str,
+    *,
+    ensure_demo_workspace_fn=_ensure_cohort_demo_workspace,
+    ensure_real_from_loaded_fn=_ensure_cohort_real_workspace_from_loaded_concepts,
+    ensure_real_workspace_fn=_ensure_cohort_real_workspace,
+    generate_data_func=generate_mock_data,
+) -> dict[str, str] | None:
+    """Turn the shell topbar primary button into page-specific behavior."""
+    request = state.get('_eu_topbar_run_request')
+    if not isinstance(request, dict) or request.get('page') != active_page:
+        return None
+
+    state.pop('_eu_topbar_run_request', None)
+    is_en = lang == 'en'
+    entry_mode = state.get('entry_mode', 'none')
+
+    if active_page == 'tutorial':
+        state['_active_main_page'] = 'extract'
+        message = 'Opened data extraction workflow.' if is_en else '已打开数据提取流程。'
+        _append_action_log(state, message)
+        return {'level': 'info', 'message': message}
+
+    if active_page == 'quick_viz':
+        if state.get('loaded_concepts'):
+            counts = cohort_feature_counts(state)
+            message = (
+                f"Review workspace already loaded: {counts['features']} concepts, {counts['patients']} patients."
+                if is_en else
+                f"审阅工作区已加载：{counts['features']} 个概念，{counts['patients']} 名患者。"
+            )
+        elif entry_mode == 'demo':
+            n_concepts, n_patients = _prepare_quick_viz_demo_workspace(
+                state,
+                generate_data_func=generate_data_func,
+            )
+            message = (
+                f"Loaded demo review workspace: {n_concepts} concepts, {n_patients} patients."
+                if is_en else
+                f"已加载演示审阅工作区：{n_concepts} 个概念，{n_patients} 名患者。"
+            )
+        else:
+            state['viz_data_source_mode'] = 'exported'
+            message = (
+                'Choose an exported EasyICU folder, then load selected data.'
+                if is_en else
+                '请选择 EasyICU 导出文件夹，然后加载所选数据。'
+            )
+            state['_viz_notices'] = [{'level': 'warning', 'message': message}]
+        _append_action_log(state, message)
+        return {'level': 'success' if entry_mode == 'demo' else 'info', 'message': message}
+
+    if active_page == 'cohort':
+        if entry_mode == 'demo':
+            ensure_demo_workspace_fn(state, lang=lang, force=True)
+            message = 'Demo cohort workspace refreshed for all panels.' if is_en else '已刷新所有面板的演示队列工作区。'
+            level = 'success'
+        elif state.get('loaded_concepts'):
+            ok, detail = ensure_real_from_loaded_fn(state, lang=lang)
+            message = detail if detail else (
+                'Built Cohort Statistics workspace from loaded exports.'
+                if is_en else
+                '已从加载的导出数据构建 Cohort Statistics 工作区。'
+            )
+            level = 'success' if ok else 'warning'
+        else:
+            ok, detail = ensure_real_workspace_fn(
+                state,
+                lang=lang,
+                max_patients=state.get('_cohort_real_ws_max_patients', _REAL_WORKSPACE_DEFAULT_MAX_PATIENTS),
+                force=True,
+            )
+            message = detail if detail else (
+                'Shared real-data cohort workspace is ready.'
+                if is_en else
+                '共享真实数据队列工作区已就绪。'
+            )
+            level = 'success' if ok else 'warning'
+        _append_action_log(state, message)
+        return {'level': level, 'message': message}
+
+    if active_page == 'cross_db':
+        if entry_mode == 'demo':
+            ensure_demo_workspace_fn(state, lang=lang, force=True)
+            message = 'Demo Cross-DB benchmark data refreshed.' if is_en else '已刷新演示跨库基准数据。'
+            level = 'success'
+        elif state.get('multidb_data'):
+            message = 'Cross-DB comparison data is already loaded.' if is_en else '跨库对比数据已加载。'
+            level = 'success'
+        else:
+            state['_eu_crossdb_advanced_open'] = True
+            message = (
+                'Open the loader below and connect at least two database roots.'
+                if is_en else
+                '请在下方加载器连接至少两个数据库根目录。'
+            )
+            level = 'warning'
+        _append_action_log(state, message)
+        return {'level': level, 'message': message}
+
+    if active_page == 'research_agent':
+        if entry_mode == 'demo':
+            state['_ra_view'] = 'summary'
+            message = 'Opened the demo Agent Summary.' if is_en else '已打开演示 Agent 总览。'
+            level = 'success'
+        else:
+            state['_ra_view'] = 'setup'
+            state['_eu_ra_launch_requested'] = True
+            message = (
+                'Configure the request, cohort, and LLM provider in Setup before launching a real run.'
+                if is_en else
+                '请先在配置页确认研究问题、队列和 LLM provider，再启动真实 run。'
+            )
+            level = 'info'
+        _append_action_log(state, message)
+        return {'level': level, 'message': message}
+
+    return None
+
+
+def _handle_topbar_run_request(active_page: str, lang: str) -> dict[str, str] | None:
+    """Consume a queued topbar request and surface a small user notice."""
+    result = _consume_topbar_run_request(st.session_state, active_page, lang)
+    if result and result.get('message'):
+        try:
+            st.toast(result['message'])
+        except Exception:
+            pass
+    return result
+
+
 FIGURE_TARGET_MAP = {
     'fig2': ('paper', 'Figure 2'),
     'figure2': ('paper', 'Figure 2'),
@@ -3155,18 +3333,9 @@ def main():
                          if lang == 'en' else '请使用下方页面控件确认此步骤。')
                     )
     else:
-        # Shell-A topbar: render a 4-col layout — breadcrumb / pills / icon
-        # buttons / primary action. The breadcrumb + pills are HTML; the
-        # buttons stay real ``st.button`` so callbacks survive a rerun.
-        _tb_left, _tb_pill, _tb_hist, _tb_agent, _tb_run = st.columns(
-            [7, 4, 2.2, 2.2, 2.2], gap="small"
-        )
-        with _tb_left:
-            _render_topbar(_crumbs, pills=())
-        with _tb_pill:
-            # Auto-saved + status pills row, right-aligned with the action group.
+        def _render_topbar_pills_row() -> None:
             _auto_pill = _render_pill_html(
-                'Auto-saved 2m ago' if lang == 'en' else '自动保存 · 2 分钟前',
+                'Session local' if lang == 'en' else '本地会话',
                 tone='neutral',
             )
             _other_pills = " ".join(_render_pill_html(label, tone=tone) for label, tone in _topbar_pills)
@@ -3176,59 +3345,72 @@ def main():
                 f'{_auto_pill}{_other_pills}</div>',
                 unsafe_allow_html=True,
             )
-        with _tb_hist:
-            if st.button(
-                ("History" if lang == 'en' else "历史"),
-                key="_eu_topbar_history",
-                use_container_width=True,
-                icon=":material/history:",
-                help=("Show recent activity" if lang == 'en' else "查看近期活动"),
-            ):
-                st.session_state['_eu_show_history'] = not st.session_state.get('_eu_show_history', False)
-        with _tb_agent:
-            if st.button(
-                ("Ask Agent" if lang == 'en' else "询问 Agent"),
-                key="_eu_topbar_agent",
-                use_container_width=True,
-                icon=":material/auto_awesome:",
-                help=("Open the floating research-agent dock" if lang == 'en' else "打开浮动研究 Agent"),
-            ):
-                if not _is_screenshot_mode():
-                    st.session_state['_floating_ai_open'] = True
-                    st.rerun()
-        with _tb_run:
-            _run_label_map = {
-                'tutorial':       ('Run',       '运行'),
-                'quick_viz':      ('Render',    '渲染'),
-                'cohort':         ('Re-run',    '重新运行'),
-                'cross_db':       ('Compare',   '对比'),
-                'research_agent': ('Launch',    '启动'),
-            }
-            _run_en, _run_zh = _run_label_map.get(_active, ('▶ Run', '▶ 运行'))
-            if st.button(
-                _run_en if lang == 'en' else _run_zh,
-                key="_eu_topbar_run",
-                type="primary",
-                use_container_width=True,
-                icon=":material/play_arrow:",
-            ):
-                # Surface a queued-action token; pages that listen for it
-                # can pick it up on their next render. Keeping the wiring
-                # cooperative avoids reaching across page boundaries.
-                st.session_state['_eu_topbar_run_request'] = {
-                    'page': _active,
-                    'requested_at': 'now',
+
+        if _active == 'tutorial':
+            # Tutorial already has explicit entry CTAs in the page body, so
+            # the global action buttons are withheld here to avoid duplicate,
+            # ambiguous calls to action.
+            _tb_left, _tb_pill = st.columns([7, 5], gap="small")
+            with _tb_left:
+                _render_topbar(_crumbs, pills=())
+            with _tb_pill:
+                _render_topbar_pills_row()
+        else:
+            # Shell-A topbar: render breadcrumb / pills / icon buttons /
+            # primary action. The breadcrumb + pills are HTML; the buttons
+            # stay real ``st.button`` so callbacks survive a rerun.
+            _tb_left, _tb_pill, _tb_hist, _tb_agent, _tb_run = st.columns(
+                [7, 4, 2.2, 2.2, 2.2], gap="small"
+            )
+            with _tb_left:
+                _render_topbar(_crumbs, pills=())
+            with _tb_pill:
+                _render_topbar_pills_row()
+            with _tb_hist:
+                if st.button(
+                    ("Activity" if lang == 'en' else "活动"),
+                    key="_eu_topbar_history",
+                    use_container_width=True,
+                    icon=":material/history:",
+                    help=("Show recent activity" if lang == 'en' else "查看近期活动"),
+                ):
+                    st.session_state['_eu_show_history'] = not st.session_state.get('_eu_show_history', False)
+            with _tb_agent:
+                if st.button(
+                    ("Ask Agent" if lang == 'en' else "询问 Agent"),
+                    key="_eu_topbar_agent",
+                    use_container_width=True,
+                    icon=":material/auto_awesome:",
+                    help=("Open the floating research-agent dock" if lang == 'en' else "打开浮动研究 Agent"),
+                ):
+                    if not _is_screenshot_mode():
+                        st.session_state['_floating_ai_open'] = True
+                        st.rerun()
+            with _tb_run:
+                _run_label_map = {
+                    'quick_viz':      ('Render',    '渲染'),
+                    'cohort':         ('Re-run',    '重新运行'),
+                    'cross_db':       ('Compare',   '对比'),
+                    'research_agent': ('Launch',    '启动'),
                 }
-                st.toast(
-                    ('Action queued — page picks it up on render.'
-                     if lang == 'en' else '已加入队列 — 页面会在渲染时接收。')
-                )
+                _run_en, _run_zh = _run_label_map.get(_active, ('▶ Run', '▶ 运行'))
+                if st.button(
+                    _run_en if lang == 'en' else _run_zh,
+                    key="_eu_topbar_run",
+                    type="primary",
+                    use_container_width=True,
+                    icon=":material/play_arrow:",
+                ):
+                    st.session_state['_eu_topbar_run_request'] = {
+                        'page': _active,
+                        'requested_at': 'now',
+                    }
 
     _render_global_status_strip(lang, entry_mode)
 
     if st.session_state.get('_eu_show_history'):
         with st.expander(
-            "⟳ " + ("History" if lang == 'en' else "历史"),
+            "⟳ " + ("Activity" if lang == 'en' else "活动"),
             expanded=True,
         ):
             recent = st.session_state.get('_eu_action_log') or []
@@ -3327,6 +3509,9 @@ def main():
             on_change=_propagate_main_nav,
         )
     active_page = st.session_state.get('_active_main_page', page_keys[0])
+    _topbar_result = _handle_topbar_run_request(active_page, lang)
+    if _topbar_result and st.session_state.get('_active_main_page') != active_page:
+        active_page = st.session_state.get('_active_main_page', active_page)
 
     if active_page == "extract":
         # Shell-A redesign: the data-extraction workflow (steps 1-4)
@@ -3521,8 +3706,9 @@ def main():
             # st.session_state['_agent_workbench'] when a run streams
             # into it, else primes the latest local manifest before using
             # the representative snapshot fallback.
-            _ra_view = st.session_state.get('_ra_view', 'setup')
-            _seg_l, _seg_r, _ = st.columns([1.3, 1.3, 6])
+            _default_ra_view = 'summary' if st.session_state.get('entry_mode') == 'demo' else 'setup'
+            _ra_view = st.session_state.get('_ra_view', _default_ra_view)
+            _seg_l, _seg_m, _seg_r, _ = st.columns([1.2, 1.35, 1.2, 5.9])
             with _seg_l:
                 if st.button(
                     ("● Setup" if _ra_view == 'setup' else "Setup") if lang == 'en'
@@ -3532,7 +3718,7 @@ def main():
                 ):
                     st.session_state['_ra_view'] = 'setup'
                     st.rerun()
-            with _seg_r:
+            with _seg_m:
                 if st.button(
                     ("● Workbench" if _ra_view == 'workbench' else "Workbench") if lang == 'en'
                     else ("● 工作台" if _ra_view == 'workbench' else "工作台"),
@@ -3540,16 +3726,23 @@ def main():
                     type="primary" if _ra_view == 'workbench' else "secondary",
                 ):
                     st.session_state['_ra_view'] = 'workbench'
-                    try:
-                        from easyicu.webapp.agent_workbench import prime_agent_workbench_state
-                        prime_agent_workbench_state(lang)
-                    except Exception:
-                        pass
+                    st.rerun()
+            with _seg_r:
+                if st.button(
+                    ("● Summary" if _ra_view == 'summary' else "Summary") if lang == 'en'
+                    else ("● 总览" if _ra_view == 'summary' else "总览"),
+                    key="_eu_ra_view_summary", use_container_width=True,
+                    type="primary" if _ra_view == 'summary' else "secondary",
+                ):
+                    st.session_state['_ra_view'] = 'summary'
                     st.rerun()
 
             if _ra_view == 'workbench':
                 from easyicu.webapp.agent_workbench import render_agent_workbench
                 render_agent_workbench(lang)
+            elif _ra_view == 'summary':
+                from easyicu.webapp.agent_workbench import render_agent_output_summary
+                render_agent_output_summary(lang)
             else:
                 try:
                     from easyicu.webapp.research_agent import (

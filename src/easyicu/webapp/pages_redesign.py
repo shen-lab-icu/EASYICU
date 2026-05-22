@@ -28,6 +28,12 @@ from typing import Any, Sequence
 import streamlit as st
 
 from easyicu.webapp import cohort_charts as cc
+from easyicu.webapp.concept_catalog import (
+    CONCEPT_DESCRIPTIONS,
+    CONCEPT_DICTIONARY,
+    CONCEPT_GROUP_NAMES,
+    CONCEPT_GROUPS_INTERNAL,
+)
 
 
 def _T(lang: str, en: str, zh: str) -> str:
@@ -112,9 +118,8 @@ def _tutorial_agent_card(lang: str) -> str:
 def _tutorial_resources_card(lang: str) -> str:
     resources = [
         _T(lang, "Sample cohorts", "样例队列"),
-        _T(lang, "Concept catalog · 19", "概念目录 · 19"),
-        _T(lang, "Video walkthrough · 4 min", "视频导览 · 4 分钟"),
-        _T(lang, "Cite · BibTeX", "引用 · BibTeX"),
+        _T(lang, "Concept catalog", "概念目录"),
+        _T(lang, "Citation info", "引用信息"),
     ]
     rows = "".join(
         f'<div class="eu-resource-row"><span>{_esc(item)}</span><i></i></div>'
@@ -126,6 +131,130 @@ def _tutorial_resources_card(lang: str) -> str:
         f'<div class="eu-resource-list">{rows}</div>'
         '</div>'
     )
+
+
+def _dictionary_module_label(module_key: str, lang: str) -> str:
+    names = CONCEPT_GROUP_NAMES.get(module_key, (module_key, module_key))
+    return names[0] if lang == "en" else names[1]
+
+
+def _tutorial_dictionary_modules(lang: str) -> list[dict[str, object]]:
+    """Return all user-facing dictionary modules and their concepts."""
+    modules: list[dict[str, object]] = []
+    for module_key, concept_names in CONCEPT_GROUPS_INTERNAL.items():
+        visible_concepts = [name for name in concept_names if name in CONCEPT_DICTIONARY]
+        if not visible_concepts:
+            continue
+        modules.append({
+            "key": module_key,
+            "label": _dictionary_module_label(module_key, lang),
+            "concepts": visible_concepts,
+        })
+    return modules
+
+
+def _concept_display_name(concept: str, lang: str) -> str:
+    name_en, name_zh, _unit = CONCEPT_DICTIONARY.get(concept, (concept, concept, ""))
+    return name_en if lang == "en" else name_zh
+
+
+def _concept_description(concept: str, lang: str) -> str:
+    desc_en, desc_zh = CONCEPT_DESCRIPTIONS.get(concept, ("", ""))
+    fallback = _concept_display_name(concept, lang)
+    return (desc_en if lang == "en" else desc_zh) or fallback
+
+
+def _tutorial_dictionary_module_html(
+    lang: str,
+    *,
+    selected_module: str | None = None,
+) -> str:
+    """Render the selected dictionary module without an internal scroll area."""
+    modules = _tutorial_dictionary_modules(lang)
+    selected = next(
+        (module for module in modules if module["key"] == selected_module),
+        modules[0],
+    )
+    module_key = str(selected["key"])
+    module_label = str(selected["label"])
+    concept_names = list(selected["concepts"])
+    rows: list[str] = []
+    for concept in concept_names:
+        _name_en, _name_zh, unit = CONCEPT_DICTIONARY.get(concept, (concept, concept, ""))
+        rows.append(
+            '<div class="eu-dict-list-row">'
+            f'<code>{_esc(concept)}</code>'
+            '<div>'
+            f'<b>{_esc(_concept_display_name(concept, lang))}</b>'
+            f'<p>{_esc(_concept_description(concept, lang))}</p>'
+            '</div>'
+            f'<em>{_esc(unit or "—")}</em>'
+            '</div>'
+        )
+    return (
+        '<section class="eu-dict-module-preview" data-active="true" '
+        f'data-module="{_esc(module_key)}">'
+        '<div class="eu-dict-module-heading">'
+        '<div>'
+        f'<span>{_T(lang, "Selected module", "当前模块")}</span>'
+        f'<b>{_esc(module_label)}</b>'
+        '</div>'
+        f'<em>{len(concept_names)} {_T(lang, "features", "个特征")}</em>'
+        '</div>'
+        '<div class="eu-dict-table-head">'
+        f'<span>{_T(lang, "Code", "代码")}</span>'
+        f'<span>{_T(lang, "Meaning", "含义")}</span>'
+        f'<span>{_T(lang, "Unit", "单位")}</span>'
+        '</div>'
+        f'{"".join(rows)}'
+        '</section>'
+    )
+
+
+def _render_tutorial_dictionary(lang: str) -> None:
+    """Render the full, selectable Tutorial data dictionary."""
+    modules = _tutorial_dictionary_modules(lang)
+    if not modules:
+        return
+    total_features = sum(len(module["concepts"]) for module in modules)
+    module_keys = [str(module["key"]) for module in modules]
+    labels_by_key = {str(module["key"]): str(module["label"]) for module in modules}
+    concepts_by_key = {str(module["key"]): list(module["concepts"]) for module in modules}
+
+    current_module = st.session_state.get("_eu_tutorial_dict_module")
+    if current_module not in concepts_by_key:
+        current_module = module_keys[0]
+        st.session_state["_eu_tutorial_dict_module"] = current_module
+
+    with st.container(key="eu_tutorial_dictionary_panel"):
+        st.markdown(
+            '<div class="eu-dict-head">'
+            '<div>'
+            f'<div class="eu-dict-kicker">{_T(lang, "Data dictionary", "数据字典")}</div>'
+            f'<h3>{_T(lang, "Canonical ICU concept catalog", "标准 ICU 概念目录")}</h3>'
+            f'<p>{_T(lang, "Browse the complete module-grouped EasyICU dictionary. Each row maps a compact code to its clinical meaning, description, and unit before extraction begins.", "浏览按模块组织的完整 EasyICU 数据字典。每一行都把简短代码映射到临床含义、解释和单位，供抽取前确认。")}</p>'
+            '</div>'
+            '<div class="eu-dict-source">'
+            '<span>source</span>'
+            '<code>src/easyicu/data/concept-dict.json</code>'
+            f'<strong>{total_features} {_T(lang, "features", "个特征")} · {len(modules)} {_T(lang, "modules", "个模块")}</strong>'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        selected_module = st.selectbox(
+            _T(lang, "Module", "模块"),
+            options=module_keys,
+            format_func=lambda key: f"{labels_by_key[str(key)]} · {len(concepts_by_key[str(key)])}",
+            key="_eu_tutorial_dict_module",
+        )
+        st.markdown(
+            _tutorial_dictionary_module_html(
+                lang,
+                selected_module=selected_module,
+            ),
+            unsafe_allow_html=True,
+        )
 
 
 # =====================================================================
@@ -175,9 +304,9 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
             "label_en": _T(lang, "Concepts", "Concepts"),
             "label_zh": _T(lang, "变量", "变量"),
             "desc": _T(lang,
-                "19 core modules, 167 features. Single-select or merge preview, with timestamps automatically aligned.",
-                "19 个核心模块,167 个特征。可单选/合并预览,自动对齐时间轴。"),
-            "sub": _T(lang, "19 modules", "19 模块"),
+                "Core clinical modules are ready for single-select or merge preview, with timestamps automatically aligned.",
+                "核心临床模块可单选或合并预览，并自动对齐时间轴。"),
+            "sub": _T(lang, "module catalog", "模块目录"),
         },
         {
             "number": "4",
@@ -203,7 +332,7 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
     )
 
     badge_recommended = (
-        '<span class="eu-pill" style="background:var(--surface);border-color:var(--hair-2)">recommended</span>'
+        f'<span class="eu-pill" style="background:var(--surface);border-color:var(--hair-2)">{_T(lang, "try first", "新手先试")}</span>'
     )
     badge_localonly = (
         '<span class="eu-pill ok"><span class="dot"></span>local-only</span>'
@@ -220,8 +349,8 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
         bullets=[
             _T(lang, "50–500 simulated patients · 24–168h windows",
                     "50–500 模拟患者 · 24–168 小时"),
-            _T(lang, "All 19 modules · 167 features generated",
-                    "19 模块、167 特征全部生成"),
+            _T(lang, "Full demo catalog is ready for review",
+                    "完整演示目录已准备好，可直接审阅"),
             _T(lang, "Research Agent static gallery available",
                     "Research Agent 静态输出画廊可看"),
             _T(lang, "Switching sessions never loses your real work",
@@ -310,13 +439,12 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
         '<div>'
         f'<div style="font-size:12.5px;font-weight:500">{_T(lang, "Resources", "资源")}</div>'
         f'<div class="eu-cn" style="font-size:11px;color:var(--ink-4)">'
-        f'{_T(lang, "docs · samples · video", "文档 / 样例 / 视频")}</div>'
+        f'{_T(lang, "docs · samples · citation", "文档 / 样例 / 引用")}</div>'
         '</div></div>'
         '<div style="display:flex;gap:6px;margin-left:auto;flex-wrap:wrap">'
         f'<span class="eu-pill" style="background:var(--surface);height:26px">{_T(lang, "Sample cohorts", "样例队列")}</span>'
-        f'<span class="eu-pill" style="background:var(--surface);height:26px">{_T(lang, "Concept catalog · 19", "概念目录 · 19")}</span>'
-        f'<span class="eu-pill" style="background:var(--surface);height:26px">{_T(lang, "Video walkthrough · 4 min", "视频导览 · 4 分钟")}</span>'
-        f'<span class="eu-pill" style="background:var(--surface);height:26px">{_T(lang, "Cite · Bibtex", "引用 · BibTeX")}</span>'
+        f'<span class="eu-pill" style="background:var(--surface);height:26px">{_T(lang, "Concept catalog", "概念目录")}</span>'
+        f'<span class="eu-pill" style="background:var(--surface);height:26px">{_T(lang, "Citation info", "引用信息")}</span>'
         '</div></div>',
         unsafe_allow_html=True,
     )
@@ -350,7 +478,7 @@ def render_tutorial_redesign_page(lang: str) -> None:
             "number": "3",
             "label": _T(lang, "Concepts", "变量"),
             "desc": _T(lang, "Select modules, merge previews, align timestamps.", "选择模块、合并预览并对齐时间轴。"),
-            "sub": _T(lang, "19 modules", "19 模块"),
+            "sub": _T(lang, "module catalog", "模块目录"),
         },
         {
             "number": "4",
@@ -361,7 +489,7 @@ def render_tutorial_redesign_page(lang: str) -> None:
     ]
 
     badge_recommended = (
-        f'<span class="eu-pill" style="background:var(--surface);border-color:var(--hair-2)">{_T(lang, "recommended", "推荐")}</span>'
+        f'<span class="eu-pill" style="background:var(--surface);border-color:var(--hair-2)">{_T(lang, "try first", "新手先试")}</span>'
     )
     badge_localonly = (
         f'<span class="eu-pill ok"><span class="dot"></span>{_T(lang, "local-only", "仅本地")}</span>'
@@ -377,8 +505,8 @@ def render_tutorial_redesign_page(lang: str) -> None:
         bullets=[
             _T(lang, "50-500 simulated patients with 24-168h windows",
                     "50-500 名模拟患者，24-168 小时时间窗"),
-            _T(lang, "All 19 modules and 167 features are available",
-                    "19 个模块和 167 个特征均可预览"),
+            _T(lang, "Full demo catalog is ready for review",
+                    "完整演示目录已准备好，可直接审阅"),
             _T(lang, "Agent gallery and audit handoff are ready",
                     "Agent 画廊和审计交接可直接查看"),
         ],
@@ -444,6 +572,30 @@ def render_tutorial_redesign_page(lang: str) -> None:
                 st.session_state["_active_main_page"] = "research_agent"
                 st.rerun()
 
+        _render_tutorial_dictionary(lang)
+        if st.button(
+            _T(lang, "Open selected module -> Concepts", "打开所选模块 -> 变量选择"),
+            key="_eu_tutorial_dictionary",
+            use_container_width=True,
+        ):
+            if st.session_state.get("entry_mode") == "none":
+                st.session_state["entry_mode"] = "demo"
+                st.session_state["use_mock_data"] = True
+                st.session_state["database"] = "mock"
+            st.session_state["step1_confirmed"] = True
+            st.session_state["step2_confirmed"] = True
+            st.session_state["step3_confirmed"] = False
+            selected_module = st.session_state.get("_eu_tutorial_dict_module")
+            module_concepts = [
+                name
+                for name in CONCEPT_GROUPS_INTERNAL.get(str(selected_module), [])
+                if name in CONCEPT_DICTIONARY
+            ]
+            if module_concepts:
+                st.session_state["selected_concepts"] = module_concepts
+            st.session_state["_active_main_page"] = "extract"
+            st.rerun()
+
     with rail_col:
         st.markdown(
             _tutorial_flow_card(steps, lang)
@@ -490,7 +642,7 @@ def _render_qv_data_tables(lang: str) -> None:
                 "Inspect exported data by module. Merge All shows the wide table; Single Feature shows the long table.",
                 "按模块查看导出的数据。Merge All 显示宽表;Single Feature 显示单变量长表。"),
             right_html=(
-                '<span class="eu-pill mono">19 modules · 167 features · 50 patients</span>'
+                f'<span class="eu-pill mono">{_T(lang, "demo catalog · 50 patients", "演示目录 · 50 例")}</span>'
             ),
         ),
         unsafe_allow_html=True,
@@ -774,7 +926,7 @@ def _render_qv_data_quality(lang: str) -> None:
         '</div></div>'
         f'{cc.render_missingness_bars(bars)}'
         '<div style="margin-top:12px;font-size:11.5px;color:var(--ink-4);font-family:var(--font-mono)">'
-        f'{_T(lang, "Showing 10 of 167 · sorted by missing rate desc", "显示 10 / 167 · 缺失率降序")}</div>'
+        f'{_T(lang, "Showing 10 demo concepts · sorted by missing rate desc", "显示 10 个演示概念 · 缺失率降序")}</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -830,8 +982,8 @@ def render_agent_redesign_page(lang: str) -> None:
             f'<span class="mono" style="text-transform:none;letter-spacing:0;color:var(--ink-3)">'
             f'{_T(lang, "handed off", "已交付")}</span></div>'
             '<div>'
-            '<div style="font-size:14px;font-weight:500">sepsis_mortality_v3</div>'
-            '<div class="mono" style="font-size:11px;color:var(--ink-4)">demo · 2,481 stays · 167 features</div>'
+            f'<div style="font-size:14px;font-weight:500">{_T(lang, "Demo cohort", "演示队列")}</div>'
+            f'<div class="mono" style="font-size:11px;color:var(--ink-4)">{_T(lang, "demo · 2,481 stays · review concept set", "演示 · 2,481 例 · 审阅概念集")}</div>'
             '</div>'
             '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
             + "".join([
@@ -876,7 +1028,7 @@ def render_agent_redesign_page(lang: str) -> None:
             f'{_T(lang, "Which bedside features within the first 24 hours best predict in-hospital mortality among Sepsis-3 patients, and how does adding lactate change the model’s calibration?", "在前 24 小时内,哪些床旁特征对 Sepsis-3 患者的院内死亡率有最强预测?加入 lactate 后模型的 calibration 如何变化?")}'
             '</div>'
             '<div style="margin-top:8px;display:flex;align-items:center;gap:6px">'
-            '<span class="eu-chip mono">@sepsis_mortality_v3</span>'
+            '<span class="eu-chip mono">@demo_cohort</span>'
             '<span class="eu-chip mono">@first_24h</span>'
             '<span class="eu-chip mono">@lactate</span>'
             '<span class="mono" style="margin-left:auto;font-size:10.5px;color:var(--ink-4)">42 / 600 words</span>'
@@ -1026,34 +1178,38 @@ def render_entry_redesign_page(lang: str) -> None:
     still drive the real ``entry_mode`` / ``use_mock_data`` session
     state so downstream pages continue to work.
     """
-    # Top bar (in-flow div, no negative margins — Streamlit collapses
-    # negative-margin or out-of-flow elements that try to break the
-    # block container).
-    st.markdown(
-        '<div class="eu-entry-topbar" style="height:56px;padding:0 24px;display:flex;'
-        'align-items:center;border:1px solid var(--hair);background:var(--surface);'
-        'border-radius:12px;margin-bottom:18px">'
-        '<div style="display:flex;align-items:center;gap:10px">'
-        '<div style="width:28px;height:28px;border-radius:7px;background:var(--ink);color:#fff;'
-        'display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px">E</div>'
-        '<div style="line-height:1.1">'
-        '<div style="font-size:15px;font-weight:500;letter-spacing:-0.005em">EasyICU</div>'
-        f'<div class="eu-cn" style="font-size:10.5px;color:var(--ink-4);font-family:var(--font-mono);'
-        f'letter-spacing:0.04em">{_T(lang, "ICU data research workspace", "ICU 数据研究台")}</div>'
-        '</div></div>'
-        '<div style="margin-left:auto;display:flex;gap:6px;align-items:center;font-size:12px;color:var(--ink-3)">'
-        f'<span style="padding:4px 10px">{_T(lang, "Docs", "文档")}</span>'
-        f'<span style="padding:4px 10px">{_T(lang, "Cite", "引用")}</span>'
-        f'<span style="padding:4px 10px">{_T(lang, "中 / EN", "中 / EN")}</span>'
-        '<div style="width:1px;height:16px;background:var(--hair);margin:0 4px"></div>'
-        '<span class="mono" style="font-size:10.5px;color:var(--ink-4);font-family:var(--font-mono)">v1.0 · py3.10+</span>'
-        '</div></div>',
-        unsafe_allow_html=True,
-    )
+    with st.container(key="eu_entry_topbar_shell"):
+        brand_col, lang_col, version_col = st.columns([1, 0.08, 0.14], gap="small")
+        with brand_col:
+            st.markdown(
+                '<div class="eu-entry-brand">'
+                '<div class="eu-entry-logo">E</div>'
+                '<div style="line-height:1.1">'
+                '<div class="eu-entry-brand-title">EasyICU</div>'
+                f'<div class="eu-entry-brand-sub">{_T(lang, "ICU data research workspace", "ICU 数据研究台")}</div>'
+                '</div></div>',
+                unsafe_allow_html=True,
+            )
+        with lang_col:
+            next_lang = "zh" if lang == "en" else "en"
+            if st.button(
+                "中" if lang == "en" else "EN",
+                key="_eu_entry_lang_toggle",
+                help=_T(lang, "Switch to Chinese", "切换到 English"),
+                use_container_width=True,
+            ):
+                st.session_state["language"] = next_lang
+                st.session_state["entry_lang_select"] = "ZH" if next_lang == "zh" else "EN"
+                st.rerun()
+        with version_col:
+            st.markdown(
+                '<div class="eu-entry-version mono">v1.0 · py3.10+</div>',
+                unsafe_allow_html=True,
+            )
 
     # Hero
     st.markdown(
-        '<div style="padding:32px 0 24px;text-align:center">'
+        '<div class="eu-entry-hero" style="padding:24px 0 20px;text-align:center">'
         f'<div class="mono" style="font-size:11px;color:var(--ink-4);letter-spacing:.08em;'
         f'text-transform:uppercase;font-family:var(--font-mono)">'
         f'{_T(lang, "Local-first ICU research workflow", "本地优先 · ICU 数据研究工作流")}</div>'
@@ -1071,7 +1227,7 @@ def render_entry_redesign_page(lang: str) -> None:
     demo_card = (
         '<div style="padding:24px 24px 18px;background:var(--accent-soft);'
         'border:1px solid var(--accent-border);border-radius:14px;display:flex;'
-        'flex-direction:column;gap:12px;min-height:340px">'
+        'flex-direction:column;gap:12px;min-height:300px">'
         '<div style="display:flex;align-items:center;gap:10px">'
         '<div style="width:36px;height:36px;border-radius:8px;background:var(--accent);color:#fff;'
         'display:flex;align-items:center;justify-content:center">'
@@ -1082,10 +1238,11 @@ def render_entry_redesign_page(lang: str) -> None:
         f'<div style="font-size:18px;font-weight:500;letter-spacing:-0.01em">{_T(lang, "Demo Mode", "演示模式")}</div>'
         f'<div class="eu-cn" style="font-size:12px;color:var(--ink-3)">{_T(lang, "演示模式", "Demo Mode")}</div>'
         '</div>'
-        '<span class="eu-pill" style="margin-left:auto;background:var(--surface)">recommended</span>'
+        f'<span class="eu-pill" style="margin-left:auto;background:var(--surface)">'
+        f'{_T(lang, "try first", "新手先试")}</span>'
         '</div>'
         f'<p style="margin:0;font-size:13.5px;color:var(--ink-2);line-height:1.55">'
-        f'{_T(lang, "Reproducible mock data for the full pipeline. No tokens, no local data, no outbound calls.", "自动生成可复现的模拟 ICU 数据,完整体验全流程。无 token、无本地数据、无外部连接。")}'
+        f'{_T(lang, "Best for a first run: experience the full workflow with reproducible mock ICU data. No tokens, no local data, no outbound calls.", "首次使用建议先体验演示模式：用可复现的模拟 ICU 数据走完整流程。无 token、无本地数据、无外部连接。")}'
         '</p>'
         '<ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px">'
         + "".join([
@@ -1095,8 +1252,8 @@ def render_entry_redesign_page(lang: str) -> None:
             for b in [
                 _T(lang, "50–500 simulated patients · 24–168h windows",
                         "50–500 模拟患者 · 24–168 小时数据"),
-                _T(lang, "All 19 modules / 167 features available",
-                        "19 模块 · 167 特征 全部可用"),
+                _T(lang, "Full module catalog available in demo",
+                        "演示模式可查看完整模块目录"),
                 _T(lang, "Research Agent static gallery viewable",
                         "Research Agent 静态输出画廊可查看"),
                 _T(lang, "Switch to real data anytime without losing work",
@@ -1108,7 +1265,7 @@ def render_entry_redesign_page(lang: str) -> None:
     real_card = (
         '<div style="padding:24px 24px 18px;background:var(--surface);'
         'border:1px solid var(--hair);border-radius:14px;display:flex;'
-        'flex-direction:column;gap:12px;min-height:340px">'
+        'flex-direction:column;gap:12px;min-height:300px">'
         '<div style="display:flex;align-items:center;gap:10px">'
         '<div style="width:36px;height:36px;border-radius:8px;background:var(--ink);color:#fff;'
         'display:flex;align-items:center;justify-content:center">'
@@ -1133,8 +1290,8 @@ def render_entry_redesign_page(lang: str) -> None:
             for b in [
                 _T(lang, "6 databases · MIMIC-IV / eICU / AUMC / HiRID / MIMIC-III / SICdb",
                         "6 大数据库 · MIMIC-IV / eICU / AUMC / HiRID / MIMIC-III / SICdb"),
-                _T(lang, "Auto path detection + 1-click CSV → parquet",
-                        "路径自动检测 + 一键 CSV → parquet"),
+                _T(lang, "Choose a local export folder; EasyICU detects known layouts",
+                        "选择本地导出目录；EasyICU 自动识别常见结构"),
                 _T(lang, "Module-folder mode reuses prior exports",
                         "Module-folder mode 可复用之前的导出"),
                 _T(lang, "Cross-DB Benchmark connects ≥2 databases",
@@ -1156,49 +1313,52 @@ def render_entry_redesign_page(lang: str) -> None:
             st.rerun()
     with col_real:
         st.markdown(real_card, unsafe_allow_html=True)
-        if st.button(_T(lang, "Configure data path →", "配置数据路径 →"),
+        if st.button(_T(lang, "Use local data folder →", "使用本地数据目录 →"),
                      key="_eu_entry_real", use_container_width=True):
             st.session_state["entry_mode"] = "real"
             st.session_state["use_mock_data"] = False
             st.rerun()
 
-    # No-data row + CTA
-    st.markdown(
-        '<div style="display:flex;align-items:center;gap:14px;padding:14px 18px;'
-        'background:var(--surface);border:1px dashed var(--hair-3);border-radius:12px;margin-top:16px">'
-        '<div style="color:var(--ink-3)">'
-        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>'
-        '<path d="M14 3v6h6"/></svg></div>'
-        '<div style="flex:1">'
-        f'<div style="font-size:13px;font-weight:500">{_T(lang, "No data yet?", "还没有数据?")}'
-        f' <span class="eu-cn" style="color:var(--ink-3);font-weight:400;margin-left:6px">'
-        f'{_T(lang, "还没有数据?", "No data yet?")}</span></div>'
-        f'<div style="font-size:12px;color:var(--ink-3)">'
-        f'{_T(lang, "Let the Research Agent generate a reusable code skeleton (cohort.py / analysis.py / methods draft), plug data in later.", "让 Research Agent 先生成可复用的代码骨架(cohort.py / analysis.py / methods 草稿),稍后再接入真实数据。")}</div>'
-        '</div></div>',
-        unsafe_allow_html=True,
-    )
-    _, col_skip = st.columns([7, 2])
-    with col_skip:
-        if st.button(_T(lang, "Generate code only →", "仅生成代码 →"),
-                     key="_eu_entry_nodata", use_container_width=True):
-            st.session_state["entry_mode"] = "demo"
-            st.session_state["_active_main_page"] = "research_agent"
-            st.rerun()
+    # Code-only is a real third action, but visually stays secondary.
+    with st.container(key="eu_entry_code_row"):
+        code_copy_col, code_action_col = st.columns([5, 2], gap="medium")
+        with code_copy_col:
+            st.markdown(
+                '<div class="eu-entry-nodata" style="display:flex;align-items:center;gap:14px;padding:12px 18px;'
+                'background:var(--surface);border:1px dashed var(--hair-3);border-radius:12px">'
+                '<div style="color:var(--ink-3)">'
+                '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
+                '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>'
+                '<path d="M14 3v6h6"/></svg></div>'
+                '<div style="flex:1">'
+                f'<div style="font-size:13px;font-weight:500">{_T(lang, "No data yet?", "还没有数据?")}'
+                f' <span class="eu-cn" style="color:var(--ink-3);font-weight:400;margin-left:6px">'
+                f'{_T(lang, "还没有数据?", "No data yet?")}</span></div>'
+                f'<div style="font-size:12px;color:var(--ink-3)">'
+                f'{_T(lang, "Let the Research Agent generate a reusable code skeleton, then plug data in later.", "让 Research Agent 先生成可复用代码骨架，稍后再接入真实数据。")}</div>'
+                '</div></div>',
+                unsafe_allow_html=True,
+            )
+        with code_action_col:
+            if st.button(_T(lang, "Generate code only →", "仅生成代码 →"),
+                         key="_eu_entry_nodata", use_container_width=True):
+                st.session_state["entry_mode"] = "demo"
+                st.session_state["_active_main_page"] = "research_agent"
+                st.rerun()
 
-    # Footer band (in-flow, no negative margins)
     st.markdown(
-        '<div class="eu-entry-footer" style="height:44px;padding:0 18px;'
-        'border:1px solid var(--hair);border-radius:10px;background:var(--surface);'
-        'display:flex;align-items:center;font-size:11.5px;color:var(--ink-4);margin-top:18px">'
-        f'<span class="mono" style="font-family:var(--font-mono)">{_T(lang, "Last opened: sepsis_mortality_v3 · 2 hours ago", "上次打开:sepsis_mortality_v3 · 2 小时前")}</span>'
-        '<span style="margin-left:auto;display:flex;gap:18px">'
-        f'<span>{_T(lang, "Tutorial", "教程")}</span>'
-        f'<span>{_T(lang, "Concept catalog", "概念目录")}</span>'
-        f'<span>{_T(lang, "Sample cohorts", "样例队列")}</span>'
-        '<span>BibTeX</span>'
-        '</span></div>',
+        '<div class="eu-entry-next">'
+        '<div class="eu-entry-next-head">'
+        f'<span>{_T(lang, "After you choose a mode", "选择入口后")}</span>'
+        f'<b>{_T(lang, "A quieter review path follows", "后续进入轻量审阅链路")}</b>'
+        '</div>'
+        '<div class="eu-entry-rail">'
+        f'<div class="eu-entry-step"><small>{_T(lang, "01", "01")}</small><b>{_T(lang, "Data gate", "数据闸门")}</b><span>{_T(lang, "Normalize demo or local exports before analysis.", "先标准化演示数据或本地导出。")}</span></div>'
+        f'<div class="eu-entry-step"><small>{_T(lang, "02", "02")}</small><b>{_T(lang, "Cohort review", "队列审阅")}</b><span>{_T(lang, "Confirm filters, time windows, and concept coverage.", "确认筛选、时间窗和概念覆盖。")}</span></div>'
+        f'<div class="eu-entry-step"><small>{_T(lang, "03", "03")}</small><b>{_T(lang, "Quality checks", "质量检查")}</b><span>{_T(lang, "Inspect missingness, ranges, density, and audit notes.", "检查缺失、范围、密度和审计提示。")}</span></div>'
+        f'<div class="eu-entry-step"><small>{_T(lang, "04", "04")}</small><b>{_T(lang, "Export handoff", "导出交付")}</b><span>{_T(lang, "Package code, tables, figures, and evidence ledger.", "打包代码、表格、图件和证据账本。")}</span></div>'
+        '</div>'
+        '</div>',
         unsafe_allow_html=True,
     )

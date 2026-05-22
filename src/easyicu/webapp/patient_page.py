@@ -23,6 +23,10 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
     lang = st.session_state.get('language', 'en')
     screenshot_mode = _is_screenshot_mode()
     loaded_concepts_map = st.session_state.loaded_concepts
+    time_candidates = [
+        'time', 'charttime', 'starttime', 'endtime', 'datetime',
+        'timestamp', 'Offset', 'measuredat_minutes', 'measuredat',
+    ]
 
     def _patient_concept_frame(concept_name, patient_id, id_col_name):
         frame = loaded_concepts_map.get(concept_name)
@@ -726,9 +730,6 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                 st.info(switch_msg)
 
         elif view_mode == category_mode:
-            # 时间列候选（提前定义，避免UnboundLocalError）
-            time_candidates = ['time', 'charttime', 'starttime', 'endtime', 'datetime', 'timestamp', 'Offset', 'measuredat_minutes', 'measuredat']
-
             # 生命体征
             vitals_title = "### ❤️ Vital Signs" if lang == 'en' else "### ❤️ 生命体征"
             st.markdown(vitals_title)

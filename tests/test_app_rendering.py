@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import sys
 import types
 
@@ -10,12 +11,16 @@ from easyicu.concept import load_dictionary
 import easyicu.webapp.app as app
 import easyicu.webapp.concept_catalog as concept_catalog
 import easyicu.webapp.cohort_filters as cohort_filters
+import easyicu.webapp.cohort_redesign as cohort_redesign
 import easyicu.webapp.cohort_workspace as cohort_workspace
 import easyicu.webapp.data_paths as data_paths
 import easyicu.webapp.data_workflows as data_workflows
 import easyicu.webapp.export_reports as export_reports
 import easyicu.webapp.export_workflow as export_workflow
+import easyicu.webapp.pages_redesign as pages_redesign
+import easyicu.webapp.quality_page as quality_page
 import easyicu.webapp.sidebar as sidebar
+import easyicu.webapp.shell_styles as shell_styles
 import easyicu.webapp.subprocess_workers as subprocess_workers
 import easyicu.webapp.ui_helpers as ui_helpers
 import pandas as pd
@@ -925,7 +930,163 @@ def test_plotly_compat_keeps_plotly_specific_width_api_untouched(monkeypatch) ->
     assert streamlit_stub.kwargs == {"use_container_width": True, "config": {"displaylogo": False}}
 
 
-def test_quick_visualization_demo_loads_after_entry_selection(tmp_path, monkeypatch) -> None:
+def test_quality_panel_switcher_renders_one_lazy_panel(monkeypatch) -> None:
+    class _Panel:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _QualitySwitchStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {"quality_active_panel": "temporal"}
+            self.radio_calls = 0
+            self.tabs_called = False
+
+        def container(self, **_kwargs):
+            return _Panel()
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def radio(self, _label, *, options, key, **_kwargs):
+            self.radio_calls += 1
+            assert options == ["missingness", "outliers", "temporal"]
+            return self.session_state[key]
+
+        def tabs(self, *_args, **_kwargs):
+            self.tabs_called = True
+            return []
+
+    streamlit_stub = _QualitySwitchStreamlit()
+    monkeypatch.setattr(quality_page, "st", streamlit_stub, raising=False)
+
+    active_panel = quality_page._render_quality_panel_switcher("en")
+
+    assert active_panel == "temporal"
+    assert streamlit_stub.radio_calls == 1
+    assert streamlit_stub.tabs_called is False
+    assert quality_page._render_quality_panel_switcher("en", screenshot_mode=True) == "missingness"
+
+
+def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
+    entry_source = pages_redesign.render_entry_redesign_page.__code__.co_consts
+    source_text = "\n".join(str(value) for value in entry_source if isinstance(value, str))
+    css_text = shell_styles._STREAMLIT_OVERRIDES
+
+    assert "All 19 modules / 167 features available" not in source_text
+    assert "Full module catalog available in demo" in source_text
+    assert "Use local data folder" in source_text
+    assert "try first" in source_text
+    assert "_eu_entry_lang_toggle" in source_text
+    assert "eu_entry_code_row" in source_text
+    assert "中 / EN" not in source_text
+    assert "Concept catalog" not in source_text
+    assert "Sample cohorts" not in source_text
+    assert "eu-entry-next" in source_text
+    assert "eu-entry-rail" in source_text
+    assert "eu-entry-step" in source_text
+    assert "Data gate" in source_text
+    assert "Cohort review" in source_text
+    assert "Quality checks" in source_text
+    assert "Export handoff" in source_text
+    assert "repeat(4, minmax(0, 1fr))" in css_text
+    assert "st-key-eu_entry_topbar_shell" in css_text
+    assert "st-key-_eu_entry_lang_toggle" in css_text
+    assert "st-key-eu_entry_code_row" in css_text
+    assert "margin-top: 68px" in css_text
+    assert ".eu-entry-step::before" in css_text
+    assert "st-key-_eu_entry_demo" in css_text
+    assert "st-key-_eu_entry_real" in css_text
+    assert "st-key-_eu_entry_nodata" in css_text
+    assert "margin-top: -49px" not in css_text
+
+
+def test_main_shell_copy_hides_internal_feature_counts() -> None:
+    with open(pages_redesign.__file__, encoding="utf-8") as handle:
+        page_source = handle.read()
+    with open(cohort_redesign.__file__, encoding="utf-8") as handle:
+        cohort_source = handle.read()
+    with open(app.__file__, encoding="utf-8") as handle:
+        app_source = handle.read()
+
+    assert "167 features" not in page_source
+    assert "10 of 167" not in page_source
+    assert "Concept catalog · 19" not in page_source
+    assert "try first" in page_source
+    assert "Full demo catalog is ready for review" in page_source
+    assert "review concept set" in page_source
+    assert "Demo set" in cohort_source
+    assert "if _active == 'tutorial':" in app_source
+    assert "'tutorial':       ('Run'" not in app_source
+
+
+def test_tutorial_surfaces_existing_data_dictionary_preview() -> None:
+    modules = pages_redesign._tutorial_dictionary_modules("en")
+    html = pages_redesign._tutorial_dictionary_scroll_html(
+        "en",
+        selected_module="vitals",
+    )
+    css_text = shell_styles._STREAMLIT_OVERRIDES
+    dictionary_source_text = "\n".join(
+        str(value)
+        for value in pages_redesign._render_tutorial_dictionary.__code__.co_consts
+        if isinstance(value, str)
+    )
+    source_text = "\n".join(
+        str(value)
+        for value in (
+            pages_redesign.render_tutorial_redesign_page.__code__.co_consts
+            + pages_redesign._render_tutorial_dictionary.__code__.co_consts
+        )
+        if isinstance(value, str)
+    )
+
+    total_features = sum(len(module["concepts"]) for module in modules)
+    module_counts: dict[str, int] = {}
+    for block in re.findall(r'<section class="eu-dict-module-block"[^>]*>(.*?)</section>', html):
+        heading = re.search(r"<b>(.*?)</b>.*?<span>(\d+) features</span>", block, re.S)
+        assert heading is not None
+        module_counts[heading.group(1)] = block.count("eu-dict-list-row")
+        assert module_counts[heading.group(1)] == int(heading.group(2))
+
+    assert len(modules) == 19
+    assert total_features >= 200
+    assert total_features == len(pages_redesign.CONCEPT_DICTIONARY)
+    assert html.count("eu-dict-list-row") == total_features
+    assert len(module_counts) == len(modules)
+    assert module_counts["❤️ Vital Signs"] == 8
+    assert module_counts["💊 Other Medications"] == 49
+    assert module_counts["🎯 Outcome"] == 3
+    assert html.count('data-active="true"') == 1
+    assert "eu-dict-scroll" in html
+    assert html.index("Vital Signs") < html.index("SOFA-2")
+    assert "norepi_rate" in html
+    assert "SOFA-2 Score" in html
+    assert "Heart Rate" in html
+    assert 'data-selected="true"' not in html
+    assert "167" not in html
+    assert "Browse the complete module-grouped EasyICU dictionary" in dictionary_source_text
+    assert "217" not in dictionary_source_text
+    assert "_eu_tutorial_dict_module" in source_text
+    assert "_eu_tutorial_dict_feature" not in source_text
+    assert "Selected concept" not in source_text
+    assert "_eu_tutorial_dictionary" in source_text
+    assert "Open selected module -> Concepts" in source_text
+    assert "src/easyicu/data/concept-dict.json" in source_text
+    assert "st-key-eu_tutorial_dictionary_panel" in css_text
+    assert "min-height: clamp(520px, 56vh, 720px)" in css_text
+    assert ".eu-dict-scroll" in css_text
+    assert "max-height: 390px" in css_text
+    assert 'content: "⌄"' in css_text
+    assert "width: 40px" in css_text
+    assert "font-size: 22px" in css_text
+    assert "rgba(216, 246, 248" not in css_text
+    assert '.eu-dict-module-block[data-active="true"]' in css_text
+
+
+def test_quick_visualization_demo_stays_light_until_render_request(tmp_path, monkeypatch) -> None:
     streamlit_testing = pytest.importorskip("streamlit.testing.v1")
 
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
@@ -935,25 +1096,23 @@ def test_quick_visualization_demo_loads_after_entry_selection(tmp_path, monkeypa
     at.session_state["entry_lang_select"] = "EN"
     at.session_state["language"] = "en"
     at.run(timeout=60)
-    at.button(key="entry_demo_btn").click().run(timeout=60)
+    at.button(key="_eu_entry_demo").click().run(timeout=60)
     # Main nav is a st.radio since the tabs→radio refactor: only the active
-    # page renders, so switch to the quick-viz page before its demo-load
-    # button (`viz_load_demo`) is reachable.
+    # page renders. Demo Quick Viz should not auto-generate the full review
+    # workspace on navigation; the Render action performs that heavier work.
     at.session_state["_active_main_page"] = "quick_viz"
     at.run(timeout=60)
-    at.button(key="viz_load_demo").click().run(timeout=60)
 
-    rendered_text = " ".join(
-        getattr(element, "value", "")
-        for collection_name in ("markdown", "html")
-        for element in getattr(at, collection_name, [])
-    )
-    assert "Data Loaded" in rendered_text
-    assert len(at.session_state["loaded_concepts"]) > 0
-    assert len(at.session_state["patient_ids"]) == 50
+    assert "loaded_concepts" not in at.session_state or len(at.session_state["loaded_concepts"]) == 0
+    assert "viz_load_demo" in {button.key for button in at.button}
+    markdown_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "Generate one complete demo review workspace" in markdown_text
+    warning_text = " ".join(getattr(warning, "value", "") for warning in at.warning)
+    assert "Dashboard rendering failed" not in warning_text
+    assert "time_candidates" not in warning_text
 
 
-def test_sidebar_quick_preview_is_one_click_after_feature_confirmation(tmp_path, monkeypatch) -> None:
+def test_topbar_render_loads_quick_preview_from_demo_mode(tmp_path, monkeypatch) -> None:
     streamlit_testing = pytest.importorskip("streamlit.testing.v1")
 
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
@@ -963,22 +1122,22 @@ def test_sidebar_quick_preview_is_one_click_after_feature_confirmation(tmp_path,
     at.session_state["entry_lang_select"] = "EN"
     at.session_state["language"] = "en"
     at.run(timeout=60)
-    at.button(key="entry_demo_btn").click().run(timeout=60)
-    at.button(key="step1_confirm_demo").click().run(timeout=60)
-    at.button(key="step2_confirm_no_filter").click().run(timeout=60)
-    at.button(key="select_all_groups").click().run(timeout=60)
-    at.button(key="step3_confirm_selection").click().run(timeout=60)
+    at.button(key="_eu_entry_demo").click().run(timeout=60)
+    at.session_state["_active_main_page"] = "quick_viz"
+    at.run(timeout=60)
 
     warning_text = " ".join(getattr(warning, "value", "") for warning in at.warning)
     assert "preview_n_patients" not in warning_text
-    assert "sidebar_preview_btn" in {button.key for button in at.button}
+    assert "_eu_topbar_run" in {button.key for button in at.button}
 
-    at.button(key="sidebar_preview_btn").click().run(timeout=60)
+    at.button(key="_eu_topbar_run").click().run(timeout=60)
 
-    assert at.session_state["loaded_data_origin"] == "preview"
+    assert at.session_state["loaded_data_origin"] == "demo_viz"
     assert len(at.session_state["loaded_concepts"]) > 0
-    assert len(at.session_state["patient_ids"]) == at.session_state["_preview_n"]
-    assert at.session_state["_preview_requested"] is False
+    assert len(at.session_state["patient_ids"]) == 100
+    success_text = " ".join(getattr(success, "value", "") for success in at.success)
+    assert "Loaded demo review workspace" not in success_text
+    assert "Demo review workspace loaded automatically" not in success_text
     info_text = " ".join(getattr(info, "value", "") for info in at.info)
     assert "Preview request received" not in info_text
 
@@ -993,7 +1152,9 @@ def test_real_data_mode_requires_data_path_before_validation(tmp_path, monkeypat
     at.session_state["entry_lang_select"] = "EN"
     at.session_state["language"] = "en"
     at.run(timeout=60)
-    at.button(key="entry_real_btn").click().run(timeout=60)
+    at.button(key="_eu_entry_real").click().run(timeout=60)
+    at.session_state["_active_main_page"] = "extract"
+    at.run(timeout=60)
     at.button(key="validate_path").click().run(timeout=60)
 
     assert any(error.value == "❌ Please enter data path" for error in at.error)
@@ -1108,6 +1269,14 @@ def test_data_table_page_copy_emphasizes_preview_language() -> None:
     assert chinese["title"] == "📋 模块数据预览"
 
 
+def test_quick_viz_data_table_overlap_guards_are_in_shell_css() -> None:
+    css = shell_styles._STREAMLIT_OVERRIDES
+
+    assert ".dt-page-head" in css
+    assert "st-key-dt_preview_mode" in css
+    assert "st-key-dt_preview_summary" in css
+
+
 def test_single_feature_preview_copy_matches_preview_style() -> None:
     english = app._get_single_feature_preview_copy("sofa", "en")
     chinese = app._get_single_feature_preview_copy("sofa", "zh")
@@ -1142,7 +1311,7 @@ def test_normalize_figure_target_maps_short_urls_to_panels() -> None:
     assert app._normalize_figure_target("figure4") == ("paper", "Figure 4")
     assert app._normalize_figure_target("s1") == ("paper", "Supplementary Figure S1")
     assert app._normalize_figure_target("coverage") == ("cohort", "Coverage Audit")
-    assert app._normalize_figure_target("cross-db") == ("cohort", "Cross-DB Benchmark")
+    assert app._normalize_figure_target("cross-db") == ("cross_db", "Cross-DB Benchmark")
     assert app._normalize_figure_target("quality") == ("viz", "Data Quality")
     assert app._normalize_figure_target("1") == ("", "")
     assert app._normalize_figure_target("unknown") == ("", "")
@@ -1282,11 +1451,10 @@ def test_real_cohort_page_keeps_panel_import_paths_visible_before_shared_workspa
     assert streamlit_stub.tabs_labels == [
         "👥 Groups",
         "🧾 Coverage",
-        "📈 Cross-DB",
         "🎯 Snapshot",
         "🧭 SOFA Δ",
     ]
-    assert rendered_panels == ["groups", "coverage", "crossdb", "snapshot", "sofa"]
+    assert rendered_panels == ["groups", "coverage", "snapshot", "sofa"]
 
 
 def test_real_cohort_page_gates_sub_tabs_when_no_data_path_validated(monkeypatch) -> None:
@@ -1987,3 +2155,291 @@ def test_get_sofa_reclassification_mode_availability_unlocks_time_series_when_lo
 
     assert availability["available"] == ["worst_icu", "first24_worst", "time_aligned"]
     assert availability["locked"] == []
+
+
+def test_topbar_render_action_loads_quick_viz_demo_workspace() -> None:
+    def fake_generate_mock_data(**params):
+        assert params["n_patients"] == 2
+        return (
+            {
+                "age": pd.DataFrame({"stay_id": [2, 1], "age": [70, 60]}),
+                "hr": pd.DataFrame({"stay_id": [2, 1], "time": [0, 0], "hr": [82, 91]}),
+            },
+            [2, 1],
+        )
+
+    state = {
+        "_eu_topbar_run_request": {"page": "quick_viz"},
+        "entry_mode": "demo",
+        "mock_params": {"n_patients": 2, "hours": 24},
+    }
+
+    result = app._consume_topbar_run_request(
+        state,
+        "quick_viz",
+        "en",
+        generate_data_func=fake_generate_mock_data,
+    )
+
+    assert result["level"] == "success"
+    assert state["loaded_data_origin"] == "demo_viz"
+    assert state["patient_ids"] == [1, 2]
+    assert state["selected_concepts"] == ["age", "hr"]
+    assert "_eu_topbar_run_request" not in state
+    assert state["_eu_action_log"]
+
+
+def test_topbar_cohort_action_refreshes_demo_workspace() -> None:
+    called = {}
+
+    def fake_ensure_demo(state, **kwargs):
+        called.update(kwargs)
+        state["cohort_is_demo"] = True
+
+    state = {
+        "_eu_topbar_run_request": {"page": "cohort"},
+        "entry_mode": "demo",
+    }
+
+    result = app._consume_topbar_run_request(
+        state,
+        "cohort",
+        "en",
+        ensure_demo_workspace_fn=fake_ensure_demo,
+    )
+
+    assert result["level"] == "success"
+    assert called == {"lang": "en", "force": True}
+    assert state["cohort_is_demo"] is True
+
+
+def test_topbar_crossdb_real_action_opens_loader_when_data_missing() -> None:
+    state = {
+        "_eu_topbar_run_request": {"page": "cross_db"},
+        "entry_mode": "real",
+    }
+
+    result = app._consume_topbar_run_request(state, "cross_db", "en")
+
+    assert result["level"] == "warning"
+    assert state["_eu_crossdb_advanced_open"] is True
+    assert "_eu_topbar_run_request" not in state
+
+
+def test_crossdb_page_does_not_render_advanced_loader_until_opened(monkeypatch) -> None:
+    class _FakePanel:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeStreamlit:
+        def __init__(self, session_state) -> None:
+            self.session_state = session_state
+            self.button_labels: list[str] = []
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def button(self, label, **_kwargs) -> bool:
+            self.button_labels.append(label)
+            return False
+
+        def expander(self, *_args, **_kwargs):
+            return _FakePanel()
+
+        def rerun(self) -> None:
+            raise AssertionError("rerun should not be called without a click")
+
+    rendered: list[str] = []
+    streamlit_stub = _FakeStreamlit({"language": "en", "entry_mode": "demo"})
+    monkeypatch.setattr(cohort_redesign, "st", streamlit_stub)
+
+    cohort_redesign.render_cross_db_redesign_page(
+        "en",
+        multidb_fn=lambda _lang: rendered.append("loader"),
+    )
+
+    assert rendered == []
+    assert "Open detailed loader" in streamlit_stub.button_labels
+
+    streamlit_stub = _FakeStreamlit({
+        "language": "en",
+        "entry_mode": "demo",
+        "_eu_crossdb_advanced_open": True,
+    })
+    monkeypatch.setattr(cohort_redesign, "st", streamlit_stub)
+
+    cohort_redesign.render_cross_db_redesign_page(
+        "en",
+        multidb_fn=lambda _lang: rendered.append("loader"),
+    )
+
+    assert rendered == ["loader"]
+
+
+def test_cohort_redesign_defaults_to_real_panel_body(monkeypatch) -> None:
+    class _FakeStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "entry_mode": "demo",
+                "cohort_active_panel": "coverage",
+            }
+            self.markdown_calls: list[str] = []
+
+        def markdown(self, body, *_args, **_kwargs) -> None:
+            self.markdown_calls.append(str(body))
+
+        def radio(self, _label, *, options, key, **_kwargs):
+            assert options == ["groups", "coverage", "snapshot", "sofa"]
+            return self.session_state[key]
+
+    streamlit_stub = _FakeStreamlit()
+    rendered: list[str] = []
+    monkeypatch.setattr(cohort_redesign, "st", streamlit_stub)
+
+    cohort_redesign.render_cohort_redesign_page(
+        "en",
+        group_fn=lambda _lang: rendered.append("groups"),
+        coverage_fn=lambda _lang: rendered.append("coverage"),
+        snapshot_fn=lambda _lang: rendered.append("snapshot"),
+        sofa_fn=lambda _lang: rendered.append("sofa"),
+    )
+
+    assert rendered == ["coverage"]
+
+
+def test_cohort_redesign_shell_only_keeps_design_preview_available(monkeypatch) -> None:
+    class _FakeStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "entry_mode": "demo",
+                "cohort_active_panel": "groups",
+                "_eu_shell_only": True,
+            }
+            self.markdown_calls: list[str] = []
+
+        def markdown(self, body, *_args, **_kwargs) -> None:
+            self.markdown_calls.append(str(body))
+
+        def radio(self, _label, *, options, key, **_kwargs):
+            assert options == ["groups", "coverage", "snapshot", "sofa"]
+            return self.session_state[key]
+
+    streamlit_stub = _FakeStreamlit()
+    rendered: list[str] = []
+    monkeypatch.setattr(cohort_redesign, "st", streamlit_stub)
+
+    cohort_redesign.render_cohort_redesign_page(
+        "en",
+        group_fn=lambda _lang: rendered.append("groups"),
+        coverage_fn=lambda _lang: rendered.append("coverage"),
+        snapshot_fn=lambda _lang: rendered.append("snapshot"),
+        sofa_fn=lambda _lang: rendered.append("sofa"),
+    )
+
+    assert rendered == []
+    assert any("Mortality by SOFA quartile" in body for body in streamlit_stub.markdown_calls)
+
+
+def test_crossdb_summary_uses_loaded_data_instead_of_static_design_numbers(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit({
+        "multidb_data": {
+            "miiv": pd.DataFrame({
+                "stay_id": [1, 1, 2, 2],
+                "concept": ["hr", "lact", "hr", "lact"],
+                "value": [80, 1.2, 100, 2.2],
+            }),
+            "eicu": pd.DataFrame({
+                "stay_id": [10, 11, 12],
+                "concept": ["hr", "hr", "lact"],
+                "value": [70, 90, 3.1],
+            }),
+        },
+        "multidb_concepts": ["hr", "lact"],
+        "multidb_is_demo": True,
+    })
+    monkeypatch.setattr(cohort_redesign, "st", streamlit_stub)
+
+    columns, rows = cohort_redesign._crossdb_kpi_rows("en")
+    payload = json.dumps({"columns": columns, "rows": rows}, ensure_ascii=False)
+
+    assert columns == ["Metric", "MIMIC-IV", "eICU-CRD", "Δ range"]
+    assert rows[0] == ["Rows", "4", "3", "1"]
+    assert rows[1] == ["Concepts present", "2", "2", "0"]
+    assert any(row[0] == "hr median" and row[1:] == ["90.00", "80.00", "10.00"] for row in rows)
+    assert "Patients" not in payload
+    assert "Distinct IDs" not in payload
+    assert "2,481" not in payload
+    assert "12,083" not in payload
+    assert "Sepsis-3 mortality benchmark" not in payload
+
+
+def test_topbar_research_agent_demo_action_opens_summary() -> None:
+    state = {
+        "_eu_topbar_run_request": {"page": "research_agent"},
+        "entry_mode": "demo",
+    }
+
+    result = app._consume_topbar_run_request(state, "research_agent", "en")
+
+    assert result["level"] == "success"
+    assert state["_ra_view"] == "summary"
+    assert "Summary" in result["message"]
+    assert "_eu_topbar_run_request" not in state
+
+
+def test_sidebar_session_summary_returns_html_without_none_leak(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit({
+        "mock_params": {"n_patients": 42},
+        "demo_mode_patients": 42,
+    })
+    monkeypatch.setattr(sidebar, "st", streamlit_stub)
+
+    html = sidebar._session_summary_html("demo", "en")
+
+    assert html.startswith('<div class="eu-session-card">')
+    assert "Ready demo cohort · 42 patients" in html
+    assert "simulated" in html
+    assert ">None<" not in html
+    assert "not an active project" not in html
+
+
+def test_sidebar_context_summary_uses_plain_setup_language(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit({
+        "mock_params": {"n_patients": 64},
+        "step2_confirmed": False,
+        "selected_concepts": [],
+    })
+    monkeypatch.setattr(sidebar, "st", streamlit_stub)
+
+    html = sidebar._context_summary_html("demo", "en")
+
+    assert "Current setup" in html
+    assert "Dataset" in html
+    assert "Demo · 64 patients" in html
+    assert "demo defaults" in html
+    assert "Data context" not in html
+    assert "not a project" not in html
+
+
+def test_sidebar_spacing_and_empty_rail_guide_address_review_comments(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit({
+        "mock_params": {"n_patients": 64},
+        "step2_confirmed": False,
+        "selected_concepts": [],
+    })
+    monkeypatch.setattr(sidebar, "st", streamlit_stub)
+
+    guide_html = sidebar._sidebar_next_steps_html("demo", "en")
+    css_text = shell_styles._STREAMLIT_OVERRIDES
+
+    assert "eu-side-guide" in guide_html
+    assert "Path after setup" in guide_html
+    assert "Start demo" in guide_html
+    assert "border-left: 3px solid var(--accent)" in css_text
+    assert ".eu-context-label" in css_text
+    assert "padding-top: 14px" in css_text
+    assert ".eu-side-guide" in css_text
+    assert "min-height: clamp(280px, 40vh, 500px)" in css_text

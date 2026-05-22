@@ -6,7 +6,14 @@ from pathlib import Path
 import pandas as pd
 
 from easyicu.webapp import research_agent as ra_page
-from easyicu.webapp.agent_workbench import build_workbench_state_from_manifest
+from easyicu.webapp.agent_workbench import (
+    _demo_state,
+    _result_cards_from_evidence,
+    _step_button_label,
+    _step_dag_html,
+    _step_legend_html,
+    build_workbench_state_from_manifest,
+)
 
 
 def test_module_export_folder_builds_filtered_stay_level_cohort(tmp_path: Path) -> None:
@@ -202,6 +209,104 @@ def test_workbench_state_builds_from_real_run_manifest(tmp_path: Path) -> None:
     assert any(gate["label"] == "numeric verified" and gate["ok"] is False for gate in state["audit"]["gates"])
     assert state["results"][0]["kind"] == "figure"
     assert state["evidence"][0]["tag"] == "code"
+    assert state["summary_outputs"][0]["kind"] == "figure"
+    assert state["execution_contract"]["workdir"] == str(run_dir)
+    assert state["review_gate_actions"][0]["state"] == "blocked"
+    assert state["step_details"][1]["step_contract"]["method"]["label"] == "Statistical association model"
+    assert state["step_details"][1]["step_contract"]["outputs"][0]["path"] == "analysis.py"
+    assert any(item["ok"] is False for item in state["step_details"][1]["step_contract"]["checkpoints"])
+    assert state["review_decisions"][0]["label"] == "Keep locked"
+    assert state["audit_tasks"][0]["tone"] == "danger"
+
+
+def test_demo_workbench_summary_slots_do_not_expose_fake_metrics() -> None:
+    state = _demo_state("en")
+    payload = json.dumps(state, ensure_ascii=False)
+
+    assert state["is_demo"] is True
+    assert "does not fabricate cohort metrics" in state["summary_outputs"][1]["sub"]
+    assert state["execution_contract"]["provider"] == "No LLM call"
+    assert state["review_gate_actions"][0]["state"] == "ready"
+    assert state["review_decisions"][0]["label"] == "Preview only"
+    assert state["audit_tasks"][0]["title"] == "Open a real manifest"
+    assert state["step_details"][0]["step_contract"]["method"]["label"] == "Demo method slot"
+    assert "AUC" not in payload
+    assert "Brier" not in payload
+    assert "2,481" not in payload
+    assert all(not result.get("svg") for result in state["results"])
+    assert all("No generated output" in result.get("preview_html", "") for result in state["results"])
+
+
+def test_real_figure_result_card_uses_bound_artifact_not_placeholder_chart(tmp_path: Path) -> None:
+    fig = tmp_path / "figures" / "roc.svg"
+    fig.parent.mkdir()
+    fig.write_text(
+        '<svg viewBox="0 0 10 10"><path d="M1 9 L5 5 L9 1" /></svg>',
+        encoding="utf-8",
+    )
+    evidence = [{
+        "evidence_id": "fig_1",
+        "kind": "figure",
+        "relative_path": "figures/roc.svg",
+        "produced_by_step": "02_plot",
+    }]
+
+    cards = _result_cards_from_evidence(evidence, run_dir=tmp_path, lang="en")
+
+    assert cards[0]["metric"] == "rendered"
+    assert '<svg viewBox="0 0 10 10"' in cards[0]["preview_html"]
+    assert "render_tile" not in cards[0]["preview_html"]
+
+
+def test_live_workbench_state_builds_from_progress_events(tmp_path: Path) -> None:
+    progress_events = [
+        {
+            "stage": "run",
+            "message": "Starting research-agent run.",
+            "status": "running",
+            "timestamp": "2026-05-22T00:00:00+00:00",
+        },
+        {
+            "stage": "step",
+            "step_id": "01_table_one",
+            "message": "Step 1/3 started: 01_table_one.",
+            "status": "running",
+            "current_step": 1,
+            "total_steps": 3,
+            "timestamp": "2026-05-22T00:00:01+00:00",
+        },
+    ]
+    state = build_workbench_state_from_manifest(
+        tmp_path / "run_pending_webapp",
+        {
+            "run_id": "run_pending_webapp",
+            "research_question": "Short live run",
+            "per_step_records": [],
+            "evidence": [],
+            "findings": [],
+        },
+        partial=True,
+        progress_events=progress_events,
+    )
+    dag_html = _step_dag_html(state, "en")
+
+    assert state["status"] == "running"
+    assert state["steps"][-1]["step_id"] == "01_table_one"
+    assert state["steps"][-1]["status"] == "running"
+    assert "eu-agent-dag-node running" in dag_html
+    assert "Evidence review" in dag_html
+
+
+def test_workbench_step_labels_explain_status_semantics() -> None:
+    assert "NEEDS FIX" in _step_button_label({"label": "Model", "status": "fail", "sub": "ValueError"}, 3, "en")
+    assert "QUEUED" in _step_button_label({"label": "Findings", "status": "pending"}, 8, "en")
+
+    legend_html = _step_legend_html("en")
+    assert "Done" in legend_html
+    assert "Running" in legend_html
+    assert "Queued" in legend_html
+    assert "Needs fix" in legend_html
+    assert "Retrying" in legend_html
 
 
 def test_step_evidence_links_explicit_ids_and_produced_by_step(tmp_path: Path) -> None:
