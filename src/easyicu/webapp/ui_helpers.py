@@ -112,7 +112,7 @@ def render_brand_html(name: str = "EasyICU", sub: str = "ICU 数据分析平台"
         f'<div class="logo">{html.escape(initials)}</div>'
         '<div class="text">'
         f'<span class="name">{html.escape(name)}</span>'
-        f'<span class="sub eu-cn">{html.escape(sub)}</span>'
+        f'<span class="sub">{html.escape(sub)}</span>'
         '</div>'
         '</div>'
     )

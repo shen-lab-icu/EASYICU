@@ -52,9 +52,9 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
     _pat_title = "Patient Overview" if lang == 'en' else "患者综合视图"
     _pat_sub = "Multi-dimensional patient dashboard" if lang == 'en' else "多维度患者仪表盘"
     st.markdown(f'''
-    <div style="margin-bottom:16px">
-        <div style="font-size:1.4rem;font-weight:800;color:#111827">{_pat_title}</div>
-        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{_pat_sub}</div>
+    <div class="eu-subhead">
+        <div class="t">{_pat_title}</div>
+        <div class="s">{_pat_sub}</div>
     </div>
     ''', unsafe_allow_html=True)
 

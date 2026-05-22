@@ -26,9 +26,9 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
     page_title = "Data Quality" if lang == 'en' else "数据质量评估"
     page_sub = "Missing rate analysis, coverage badges & explainable causes" if lang == 'en' else "缺失率分析、覆盖度标识与可解释原因"
     st.markdown(f'''
-    <div style="margin-bottom:20px">
-        <div style="font-size:1.4rem;font-weight:800;color:#111827">{page_title}</div>
-        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{page_sub}</div>
+    <div class="eu-subhead">
+        <div class="t">{page_title}</div>
+        <div class="s">{page_sub}</div>
     </div>
     ''', unsafe_allow_html=True)
 
@@ -271,10 +271,10 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                     orientation='h',
                     color=bin_label,
                     color_discrete_map={
-                        '< 25': '#f59e0b',
-                        '25–50': '#fb923c',
-                        '50–75': '#f97316',
-                        '75–100': '#ef4444',
+                        '< 25': '#6B7280',
+                        '25–50': '#C7902F',
+                        '50–75': '#B5762A',
+                        '75–100': '#BC4A3C',
                     },
                     hover_data=[records_col, patients_col, denom_hover],
                     title='Missingness by concept' if lang == 'en' else '各概念缺失率',

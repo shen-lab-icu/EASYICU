@@ -29,9 +29,9 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
     _hdr_col1, _hdr_col2 = st.columns([3, 1])
     with _hdr_col1:
         st.markdown(f'''
-        <div style="margin-bottom:16px">
-            <div style="font-size:1.4rem;font-weight:800;color:#111827">{_ts_title}</div>
-            <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{_ts_sub}</div>
+        <div class="eu-subhead">
+            <div class="t">{_ts_title}</div>
+            <div class="s">{_ts_sub}</div>
         </div>
         ''', unsafe_allow_html=True)
     with _hdr_col2:

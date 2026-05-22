@@ -56,15 +56,15 @@ def sync_screenshot_mode(st: Any) -> bool:
 def render_runtime_shell_styles(st: Any) -> None:
     """Inject the small dynamic CSS block that depends on session state."""
     screenshot_mode_enabled = bool(st.session_state.get("screenshot_mode", False))
-    sidebar_width = "min(34rem, 36vw)" if not st.session_state.sidebar_expanded else "100vw"
-    sidebar_min_width = "min(32rem, 34vw)" if not st.session_state.sidebar_expanded else "100vw"
+    sidebar_width = "250px" if not st.session_state.sidebar_expanded else "100vw"
+    sidebar_min_width = "250px" if not st.session_state.sidebar_expanded else "100vw"
     sidebar_display = "none" if screenshot_mode_enabled else "block"
     main_display = "block" if screenshot_mode_enabled else ("none" if st.session_state.sidebar_expanded else "block")
     floating_ai_display = "none" if screenshot_mode_enabled else "block"
     screenshot_visibility = "hidden" if screenshot_mode_enabled else "visible"
     expander_display = "none" if screenshot_mode_enabled else "block"
     compact_notice_display = "none" if screenshot_mode_enabled else "block"
-    block_padding_top = "1.1rem" if screenshot_mode_enabled else "2rem"
+    block_padding_top = "0.75rem" if screenshot_mode_enabled else "0"
     block_max_width = "1500px" if screenshot_mode_enabled else "initial"
 
     st.markdown(
@@ -127,20 +127,17 @@ def render_runtime_shell_styles(st: Any) -> None:
     html, body {{
         overflow-y: auto !important;
         height: auto !important;
-        background: #f4f8fc !important;
+        background: var(--bg, #FAFAF7) !important;
     }}
     [data-testid="stAppViewContainer"] {{
         overflow-y: auto !important;
-        background:
-            radial-gradient(circle at 15% -6%, rgba(37, 99, 235, 0.075), transparent 30%),
-            radial-gradient(circle at 92% 4%, rgba(14, 165, 233, 0.08), transparent 34%),
-            linear-gradient(180deg, #f7fbff 0%, #f4f8fc 42%, #f8fafc 100%) !important;
+        background: var(--bg, #FAFAF7) !important;
     }}
     @media (max-width: 1280px) {{
         [data-testid="stSidebar"] {{
-            min-width: min(30rem, 40vw);
-            max-width: min(32rem, 42vw);
-            width: min(32rem, 42vw) !important;
+            min-width: 250px;
+            max-width: 250px;
+            width: 250px !important;
         }}
     }}
     @media (max-width: 900px) {{

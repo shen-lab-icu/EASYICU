@@ -240,16 +240,48 @@ def run_execute_phase(
             revised_plan.model_dump_json(indent=2),
             encoding="utf-8",
         )
-        evidence.register_file(
-            kind="log",
-            description=f"Revised analysis plan (reason={reason}).",
-            source_path=revision_path,
-            evidence_id=f"analysis_plan_revision_{revised_plan.revision}",
-            producer="replanner",
-            generation_mode="llm",
-            prompt_pack_version=prompt_version,
-            metadata={"reason": reason, "llm_signature": llm_signature},
-        )
+        base_id = f"analysis_plan_revision_{revised_plan.revision}"
+        try:
+            evidence.register_file(
+                kind="log",
+                description=f"Revised analysis plan (reason={reason}).",
+                source_path=revision_path,
+                evidence_id=base_id,
+                producer="replanner",
+                generation_mode="llm",
+                prompt_pack_version=prompt_version,
+                metadata={"reason": reason, "llm_signature": llm_signature},
+            )
+        except ValueError:
+            # Resume + replan can legitimately re-emit the same revision number
+            # with different content (the replanner is non-deterministic across
+            # runs), which collides with the prior run's
+            # ``analysis_plan_revision_N`` id. Keep both by versioning the id
+            # with a content digest instead of crashing the resumed run. The
+            # global evidence-id collision guard stays intact for every other
+            # artefact.
+            import hashlib
+
+            digest = hashlib.sha256(
+                revision_path.read_bytes()
+            ).hexdigest()[:8]
+            evidence.register_file(
+                kind="log",
+                description=(
+                    f"Revised analysis plan (reason={reason}; "
+                    f"resume re-revision)."
+                ),
+                source_path=revision_path,
+                evidence_id=f"{base_id}_{digest}",
+                producer="replanner",
+                generation_mode="llm",
+                prompt_pack_version=prompt_version,
+                metadata={
+                    "reason": reason,
+                    "llm_signature": llm_signature,
+                    "resume_reregistration": True,
+                },
+            )
         return revision_path
 
     def _maybe_replan(

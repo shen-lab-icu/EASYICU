@@ -74,9 +74,6 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
     )
     st.markdown(f'<div class="preview-hint-line">{loaded_summary}</div>', unsafe_allow_html=True)
 
-    # 模块选择器 - 🔧 放大标题
-    module_select_label = "Select Module to View" if lang == 'en' else "选择要查看的模块"
-    st.markdown(f'<div style="font-size:1.02rem;font-weight:800;color:#111827;margin:0 0 0.35rem 0;line-height:1.2">📦 {module_select_label}</div>', unsafe_allow_html=True)
     module_options = list(loaded_by_module.keys())
 
     if not module_options:
@@ -84,12 +81,36 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
         st.info(no_module_msg)
         return
 
-    selected_module = st.selectbox(
-        "Select Module",
-        options=module_options,
-        key="data_table_module_select",
-        label_visibility="collapsed"
-    )
+    # Shell-A: the design's left module rail (clickable list) + right preview
+    # pane, replacing the old full-width selectbox. The active module persists
+    # in the same session key the rest of the page reads.
+    if st.session_state.get('data_table_module_select') not in module_options:
+        st.session_state['data_table_module_select'] = module_options[0]
+
+    rail_label = "Modules" if lang == 'en' else "模块"
+    rail_col, preview_col = st.columns([1, 3], gap="medium")
+    with rail_col:
+        st.markdown(
+            f'<div class="eu-rail-label">{rail_label} · {len(module_options)}</div>',
+            unsafe_allow_html=True,
+        )
+        # Bounded, scrollable rail so a long module list doesn't push the
+        # preview table far down the page.
+        rail_box = st.container(height=360, border=False) if len(module_options) > 9 else st.container()
+        with rail_box:
+            for _m in module_options:
+                _n = len(loaded_by_module[_m]['concepts'])
+                _active = _m == st.session_state['data_table_module_select']
+                if st.button(
+                    f"{_m}　{_n}",
+                    key=f"dt_mod_{_m}",
+                    use_container_width=True,
+                    type="primary" if _active else "secondary",
+                ):
+                    st.session_state['data_table_module_select'] = _m
+                    st.rerun()
+
+    selected_module = st.session_state['data_table_module_select']
 
     if selected_module:
         module_meta = loaded_by_module[selected_module]
@@ -97,7 +118,6 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
         module_concepts = module_meta['concepts']
         preview_meta = _build_module_preview_metadata(module_key, selected_module, module_concepts, lang=lang)
 
-        preview_cols = st.columns([2.5, 0.9, 0.9])
         tags_html = "".join(
             f'<span class="module-feature-chip">{html.escape(tag)}</span>'
             for tag in preview_meta['tags']
@@ -105,8 +125,10 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
         if preview_meta['overflow_count']:
             tags_html += f'<span class="module-feature-chip muted">+{preview_meta["overflow_count"]}</span>'
 
-        with preview_cols[0]:
+        with preview_col:
             selected_label = "Selected Module" if lang == 'en' else "当前模块"
+            features_label = "Features" if lang == 'en' else "特征数"
+            patients_label = "Patients" if lang == 'en' else "患者数"
             st.markdown(
                 f'''
                 <div class="module-preview-card">
@@ -114,18 +136,12 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                     <div class="title">{html.escape(selected_module)}</div>
                     <div class="summary">{html.escape(preview_meta["summary"])}</div>
                     <div class="module-feature-chip-row">{tags_html}</div>
+                    <div class="eu-mod-tiles">
+                        <div class="eu-mod-tile"><div class="k">{features_label}</div><div class="v">{len(module_concepts)}</div></div>
+                        <div class="eu-mod-tile"><div class="k">{patients_label}</div><div class="v">{patient_count}</div></div>
+                    </div>
                 </div>
                 ''',
-                unsafe_allow_html=True,
-            )
-        with preview_cols[1]:
-            st.markdown(
-                f'<div class="mini-stat-card"><div class="mini-label">{"Features" if lang == "en" else "特征数"}</div><div class="mini-value">{len(module_concepts)}</div></div>',
-                unsafe_allow_html=True,
-            )
-        with preview_cols[2]:
-            st.markdown(
-                f'<div class="mini-stat-card"><div class="mini-label">{"Patients" if lang == "en" else "患者数"}</div><div class="mini-value">{patient_count}</div></div>',
                 unsafe_allow_html=True,
             )
         st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
@@ -133,7 +149,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
         # 特征选择器（单选或多选合并）- 默认合并全部放第一个
         # 🔧 放大标题
         view_mode_label = "Preview Mode" if lang == 'en' else "预览模式"
-        st.markdown(f'<div style="font-size:1.02rem;font-weight:800;color:#111827;margin:0 0 0.35rem 0;line-height:1.2">👁️ {view_mode_label}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin:8px 0 4px">{view_mode_label}</div>', unsafe_allow_html=True)
         view_modes = ["Merge All (Wide Table)", "Single Feature"] if lang == 'en' else ["合并全部（宽表）", "单个特征"]
 
         view_mode = st.radio("View Mode", view_modes, horizontal=True, key="data_table_view_mode", index=0, label_visibility="collapsed")

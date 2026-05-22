@@ -225,7 +225,20 @@ def _extract_percent_claims_near(text: str, phrase_pattern: str) -> List[float]:
         phrase_pattern + r".{0,80}?([0-9]+(?:\.[0-9]+)?)\s*%",
         flags=re.IGNORECASE | re.DOTALL,
     )
+    # A percentage that introduces a confidence/credible interval (e.g.
+    # "95% CI", "95% confidence interval") is never a prevalence/mortality
+    # value; the interval width and the outcome rate are unrelated. Without
+    # this guard the lazy proximity window happily binds the "95%" from a
+    # "... odds of ICU death ... and a 95% confidence interval ..." sentence
+    # to the "death" phrase and falsely flags a 0.95 prevalence claim.
+    ci_trailer = re.compile(
+        r"\s*(?:CI\b|confidence\s+interval|credible\s+interval)",
+        flags=re.IGNORECASE,
+    )
     for match in pattern.finditer(clean_text):
+        trailer = clean_text[match.end(): match.end() + 32]
+        if ci_trailer.match(trailer):
+            continue
         try:
             value = float(match.group(1)) / 100.0
         except (TypeError, ValueError):

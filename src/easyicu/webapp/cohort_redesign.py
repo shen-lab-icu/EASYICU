@@ -1,20 +1,14 @@
 """Shell-A redesign · Cohort Statistics & Cross-DB Benchmark pages.
 
-Replaces the visual layer of ``cohort_comparison_page`` (and the
-Cross-DB ``render_multidb_distribution_subtab`` body) with the
-inline-SVG, mono-table, shell-A layout matched against the design
-delivered in ``easyicu design/page-cohort-subtabs.jsx`` +
-``cohort-body.jsx``.
+Renders the Cohort Statistics and Cross-DB Benchmark pages with the
+same restrained Shell-A layout as ``easyicu design/page-cohort-subtabs``
+and the matching PowerPoint artboards. The bodies are data-driven from
+the same ``session_state`` keys the legacy pages populate, but they stay
+visually consistent even when only demo/fallback data are available.
 
-The actual data still comes from the same session_state keys the old
-pages write (``dash_demographics``, ``grp_demographics``,
-``loaded_concepts``). When nothing has been loaded the helpers fall
-back to deterministic demo numbers so the page is never blank — this
-mirrors the design preview style.
-
-This module owns only the **render** side. Data loading remains in
-the legacy ``cohort_*_page.py`` modules, which the user can still
-reach via the inline "Configure data" expander we keep at the top.
+The old multi-DB loader is still reachable in a collapsed advanced area
+on the Cross-DB page. That keeps the operational path intact while the
+default page reads like the design canvas instead of a legacy form.
 """
 
 from __future__ import annotations
@@ -92,6 +86,55 @@ def _render_page_header(
         f'<div style="margin-top:4px;color:var(--ink-3);font-size:12.5px">{desc}</div>'
         '</div>'
         f'<div style="display:flex;gap:6px;flex-wrap:wrap">{actions_html}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_agent_gate_strip(lang: str, *, context: str) -> None:
+    """PlanAgent-inspired preflight / evidence gate strip.
+
+    This is intentionally compact: it borrows the useful interaction
+    model from ``agentdesign.pdf`` (input -> checkpoints -> review gate)
+    without turning every analytic page into an agent dashboard.
+    """
+    loaded_concepts = st.session_state.get("loaded_concepts") or {}
+    df = _demographics_df()
+    patient_count = len(df) if df is not None else _mock_params_n() * 25
+    concept_count = len(loaded_concepts) if loaded_concepts else 167
+    signature = f"{context.lower().replace(' ', '_')}:{patient_count}:{concept_count}"
+    rows = [
+        (
+            _T(lang, "Input package", "输入包"),
+            _T(lang, f"{patient_count:,} stays · {concept_count} concepts", f"{patient_count:,} 例 · {concept_count} 概念"),
+            "ok",
+        ),
+        (
+            _T(lang, "Evidence checks", "证据检查"),
+            _T(lang, "coverage + denominators ready", "覆盖率 + 分母已就绪"),
+            "ok",
+        ),
+        (
+            _T(lang, "Draft gate", "写作关口"),
+            _T(lang, "agent drafts only after review", "复核后才进入草稿"),
+            "warn",
+        ),
+    ]
+    cards = []
+    for title, body, tone in rows:
+        cards.append(
+            f'<div class="eu-gate-card {tone}">'
+            f'<div class="k">{title}</div>'
+            f'<div class="v">{body}</div>'
+            '</div>'
+        )
+    st.markdown(
+        '<div class="eu-agent-gate">'
+        '<div class="eu-agent-gate-head">'
+        f'<span class="mono">{_T(lang, "Agent preflight", "Agent 预检")}</span>'
+        f'<span class="mono muted">{signature}</span>'
+        '</div>'
+        f'<div class="eu-agent-gate-grid">{"".join(cards)}</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -473,53 +516,155 @@ def render_cohort_redesign_page(
         lang=lang,
     )
 
-    use_shell_preview = (
-        st.session_state.get("_eu_shell_only")
-        or None in (group_fn, coverage_fn, snapshot_fn, sofa_fn)
-    )
-    if use_shell_preview:
-        df = _demographics_df()
+    _render_agent_gate_strip(lang, context="Cohort statistics")
+
+    # The default body now stays in Shell-A for every subtab. The
+    # delegated legacy renderers remain accepted for compatibility but
+    # are not used unless an old QA flag explicitly asks for them.
+    use_legacy = bool(st.session_state.get("_eu_legacy_cohort_panels"))
+    if use_legacy and None not in (group_fn, coverage_fn, snapshot_fn, sofa_fn):
         tabs_labels = list(_SUBTABS_EN if lang == "en" else _SUBTABS_ZH)
         tabs = st.tabs(tabs_labels)
         with tabs[0]:
-            _render_groups_subtab(df, lang)
+            group_fn(lang)
         with tabs[1]:
-            _render_coverage_subtab(df, lang)
+            coverage_fn(lang)
         with tabs[2]:
-            _render_snapshot_subtab(df, lang)
+            snapshot_fn(lang)
         with tabs[3]:
-            _render_sofa_subtab(df, lang)
+            sofa_fn(lang)
         return
 
-    tabs_labels = (
-        ["👥 Groups", "🧾 Coverage", "🎯 Snapshot", "🧭 SOFA Δ"]
-        if lang == "en" else
-        ["👥 分组", "🧾 覆盖", "🎯 快照", "🧭 SOFA Δ"]
-    )
+    df = _demographics_df()
+    tabs_labels = list(_SUBTABS_EN if lang == "en" else _SUBTABS_ZH)
     tabs = st.tabs(tabs_labels)
     with tabs[0]:
-        group_fn(lang)
+        _render_groups_subtab(df, lang)
     with tabs[1]:
-        coverage_fn(lang)
+        _render_coverage_subtab(df, lang)
     with tabs[2]:
-        snapshot_fn(lang)
+        _render_snapshot_subtab(df, lang)
     with tabs[3]:
-        sofa_fn(lang)
+        _render_sofa_subtab(df, lang)
 
 
 # =====================================================================
 # Cross-DB benchmark
 # =====================================================================
 
+_DB_LABELS = {
+    "miiv": "MIMIC-IV",
+    "mimiciv": "MIMIC-IV",
+    "mimic": "MIMIC-III",
+    "eicu": "eICU-CRD",
+    "aumc": "AmsterdamUMCdb",
+    "hirid": "HiRID",
+    "sic": "SICdb",
+}
+
+
+def _db_label(key: str) -> str:
+    return _DB_LABELS.get(str(key).lower(), str(key).upper())
+
+
+def _crossdb_active_databases(lang: str) -> list[tuple[str, str, bool, bool]]:
+    data = st.session_state.get("multidb_data") or {}
+    if isinstance(data, dict) and data:
+        out: list[tuple[str, str, bool, bool]] = []
+        for idx, (db, frame) in enumerate(data.items()):
+            n_rows = len(frame) if isinstance(frame, pd.DataFrame) else 0
+            out.append((_db_label(str(db)), f"{n_rows:,} records", True, idx == 0))
+        return out
+
+    selected = st.session_state.get("multidb_selected") or ["miiv", "eicu", "aumc"]
+    if isinstance(selected, str):
+        selected = [selected]
+    return [
+        (_db_label(str(db)), _T(lang, "ready for comparison", "可用于对比"), True, i == 0)
+        for i, db in enumerate(list(selected)[:6])
+    ] or [
+        ("MIMIC-IV", "73k stays · 2.2.0", True, True),
+        ("eICU-CRD", "208k stays · 2.0", True, False),
+        ("AmsterdamUMCdb", "23k stays · 1.0.2", True, False),
+    ]
+
+
+def _crossdb_kpi_rows(lang: str) -> tuple[list[str], list[list[str]]]:
+    data = st.session_state.get("multidb_data") or {}
+    if not isinstance(data, dict) or not data:
+        return (
+            [_T(lang, "Metric", "指标"), "MIMIC-IV", "eICU", "AUMC", _T(lang, "Δ range", "Δ 区间")],
+            [
+                [_T(lang, "Patients",     "患者数"),       "2,481",  "12,083", "1,094",  ""],
+                [_T(lang, "Mean age, y",  "平均年龄"),     "63.2",   "64.8",   "62.1",   ""],
+                [_T(lang, "Male, %",      "男性 %"),       "41.0",   "54.2",   "63.4",   "22.4 pp"],
+                [_T(lang, "Mortality, %", "院内死亡 %"),   "18.0",   "14.6",   "20.8",   "6.2 pp"],
+                [_T(lang, "Lactate, med", "乳酸中位数"),   "3.8",    "2.9",    "4.1",    ""],
+                [_T(lang, "Vent, %",      "机械通气 %"),   "52.1",   "38.7",   "70.4",   "31.7 pp"],
+                [_T(lang, "LOS, d med",   "ICU 时长中位"), "4.8",    "3.2",    "5.6",    ""],
+            ],
+        )
+
+    labels = [_db_label(db) for db in data.keys()][:4]
+    rows: list[list[str]] = []
+    metric_specs = [
+        (_T(lang, "Records", "记录数"), lambda df: float(len(df)), "{:,.0f}"),
+    ]
+    candidate_features = st.session_state.get("multidb_concepts") or ["hr", "map", "temp", "lact"]
+    for feature in candidate_features[:5]:
+        metric_specs.append((str(feature), lambda df, f=feature: float(pd.to_numeric(df[f], errors="coerce").median()) if f in df.columns else np.nan, "{:.2f}"))
+
+    for metric, getter, fmt in metric_specs:
+        values: list[float] = []
+        for frame in list(data.values())[:4]:
+            values.append(getter(frame) if isinstance(frame, pd.DataFrame) else np.nan)
+        shown = ["--" if np.isnan(v) else fmt.format(v) for v in values]
+        valid = [v for v in values if not np.isnan(v)]
+        delta = "" if len(valid) < 2 else f"{(max(valid) - min(valid)):.2f}"
+        rows.append([metric, *shown, delta])
+
+    return ([_T(lang, "Metric", "指标"), *labels, _T(lang, "Δ range", "Δ 区间")], rows)
+
+
+def _crossdb_availability_rows(lang: str) -> tuple[tuple[str, ...], list[tuple[str, list[float]]]]:
+    data = st.session_state.get("multidb_data") or {}
+    if isinstance(data, dict) and data:
+        db_items = list(data.items())[:4]
+        columns = tuple(_db_label(db) for db, _ in db_items)
+        concepts = st.session_state.get("multidb_concepts") or ["hr", "sbp", "map", "resp", "temp", "lact"]
+        rows: list[tuple[str, list[float]]] = []
+        for concept in concepts[:9]:
+            vals: list[float] = []
+            for _, frame in db_items:
+                if not isinstance(frame, pd.DataFrame) or concept not in frame.columns or frame.empty:
+                    vals.append(0.0)
+                    continue
+                vals.append(float(pd.to_numeric(frame[concept], errors="coerce").notna().mean()))
+            rows.append((str(concept), vals))
+        return columns, rows
+
+    return (
+        ("MIMIC-IV", "eICU", "AUMC"),
+        [
+            (_T(lang, "Vital signs",     "生命体征"),       [1.0, 1.0, 1.0]),
+            (_T(lang, "Chemistry",       "生化"),           [1.0, 1.0, 1.0]),
+            (_T(lang, "Blood gas",       "血气"),           [1.0, 0.7, 1.0]),
+            (_T(lang, "Lactate",         "乳酸"),           [1.0, 0.6, 1.0]),
+            (_T(lang, "Mech vent",       "机械通气"),       [1.0, 1.0, 1.0]),
+            (_T(lang, "SOFA components", "SOFA 组分"),      [1.0, 1.0, 1.0]),
+            (_T(lang, "Delirium · CAM",  "谵妄 · CAM"),     [0.7, 0.2, 0.4]),
+            (_T(lang, "Microbiology",    "微生物"),         [0.9, 0.3, 0.6]),
+            (_T(lang, "Output · UO",     "出量 · 尿量"),    [1.0, 0.85, 0.95]),
+        ],
+    )
+
 
 def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
     """Shell-A Cross-DB Benchmark page.
 
-    PageHeader chrome from the design canvas; body delegated to the
-    real multi-DB distribution renderer (``multidb_fn``) so the
-    feature-distribution plots are driven by actual loaded data.
-    Falls back to the synthetic shell-A preview when ``multidb_fn``
-    is ``None`` or when ``_eu_shell_only`` is set.
+    PageHeader, benchmark summary, and availability matrix come from the
+    design canvas. The real multi-DB loader / Plotly distribution view is
+    still available in the collapsed advanced panel.
     """
     _render_page_header(
         title_en="Cross-DB benchmark",
@@ -532,30 +677,11 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
         lang=lang,
     )
 
-    if multidb_fn is not None and not st.session_state.get("_eu_shell_only"):
-        multidb_fn(lang)
-        return
+    _render_agent_gate_strip(lang, context="Cross-DB benchmark")
 
-    databases = [
-        ("MIMIC-IV", "73k stays · 2.2.0", True, True),
-        ("eICU-CRD", "208k stays · 2.0", True, False),
-        ("AmsterdamUMCdb", "23k stays · 1.0.2", True, False),
-    ]
-    st.markdown(cc.render_active_databases(databases), unsafe_allow_html=True)
+    st.markdown(cc.render_active_databases(_crossdb_active_databases(lang)), unsafe_allow_html=True)
 
-    kpi_columns = [
-        _T(lang, "Metric", "指标"),
-        "MIMIC-IV", "eICU", "AUMC", _T(lang, "Δ range", "Δ 区间"),
-    ]
-    kpi_rows: list[list[str]] = [
-        [_T(lang, "Patients",     "患者数"),       "2,481",  "12,083", "1,094",  ""],
-        [_T(lang, "Mean age, y",  "平均年龄"),     "63.2",   "64.8",   "62.1",   ""],
-        [_T(lang, "Male, %",      "男性 %"),       "41.0",   "54.2",   "63.4",   "22.4 pp"],
-        [_T(lang, "Mortality, %", "院内死亡 %"),   "18.0",   "14.6",   "20.8",   "6.2 pp"],
-        [_T(lang, "Lactate, med", "乳酸中位数"),   "3.8",    "2.9",    "4.1",    ""],
-        [_T(lang, "Vent, %",      "机械通气 %"),   "52.1",   "38.7",   "70.4",   "31.7 pp"],
-        [_T(lang, "LOS, d med",   "ICU 时长中位"), "4.8",    "3.2",    "5.6",    ""],
-    ]
+    kpi_columns, kpi_rows = _crossdb_kpi_rows(lang)
     st.markdown(
         '<div style="margin-top:14px">'
         + cc.render_mono_table(
@@ -568,25 +694,32 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
         unsafe_allow_html=True,
     )
 
-    availability_rows: list[tuple[str, list[float]]] = [
-        (_T(lang, "Vital signs",     "生命体征"),       [1.0, 1.0, 1.0]),
-        (_T(lang, "Chemistry",       "生化"),           [1.0, 1.0, 1.0]),
-        (_T(lang, "Blood gas",       "血气"),           [1.0, 0.7, 1.0]),
-        (_T(lang, "Lactate",         "乳酸"),           [1.0, 0.6, 1.0]),
-        (_T(lang, "Mech vent",       "机械通气"),       [1.0, 1.0, 1.0]),
-        (_T(lang, "SOFA components", "SOFA 组分"),      [1.0, 1.0, 1.0]),
-        (_T(lang, "Delirium · CAM",  "谵妄 · CAM"),     [0.7, 0.2, 0.4]),
-        (_T(lang, "Microbiology",    "微生物"),         [0.9, 0.3, 0.6]),
-        (_T(lang, "Output · UO",     "出量 · 尿量"),    [1.0, 0.85, 0.95]),
-    ]
+    availability_columns, availability_rows = _crossdb_availability_rows(lang)
     st.markdown(
         '<div class="eu-card" style="padding:14px;margin-top:14px">'
         f'<div style="font-size:13px;font-weight:500;margin-bottom:10px">'
         f'{_T(lang, "Concept availability across databases", "概念在不同数据库的可用性")}</div>'
         + cc.render_availability_matrix(
             availability_rows,
-            columns=("MIMIC-IV", "eICU", "AUMC"),
+            columns=availability_columns,
         )
         + '</div>',
         unsafe_allow_html=True,
     )
+
+    if multidb_fn is not None and not st.session_state.get("_eu_shell_only"):
+        with st.expander(
+            _T(lang, "Load data / detailed distributions", "加载数据 / 详细分布"),
+            expanded=False,
+        ):
+            st.markdown(
+                '<div class="eu-config-note">'
+                + _T(
+                    lang,
+                    "Use this advanced panel to connect real multi-database roots or inspect detailed Plotly distributions. The summary above stays in the unified Shell-A layout.",
+                    "在这里连接真实多数据库根目录或查看详细 Plotly 分布。上方摘要保持统一的 Shell-A 版式。",
+                )
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+            multidb_fn(lang)

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from easyicu.webapp.page_header import render_page_header
-
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to this extracted renderer."""
@@ -28,31 +26,9 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
     figure_panel = st.session_state.get('_figure_target_panel') if screenshot_mode else None
     direct_figure_panel = figure_panel in {'Data Tables', 'Time Series', 'Patient Overview', 'Data Quality'}
 
-    screenshot_title = "📸 Screenshot Mode" if lang == 'en' else "📸 截图模式"
-    screenshot_hint = (
-        "Hide sidebar and AI dock, reduce chart chrome, and apply figure-friendly defaults."
-        if lang == 'en'
-        else "隐藏侧边栏和 AI 浮窗、减少图表工具条，并应用更适合论文截图的默认视图。"
-    )
-
-    if not direct_figure_panel:
-        header_cols = st.columns([3.1, 1.3])
-        with header_cols[0]:
-            render_page_header(
-                get_text('page_quick_viz_title'),
-                get_text('page_quick_viz_subtitle_demo' if entry_mode == 'demo' else 'page_quick_viz_subtitle_real'),
-                icon="📊",
-                kicker=get_text('page_quick_viz_kicker'),
-            )
-        with header_cols[1]:
-            if not _is_screenshot_mode():
-                st.toggle(
-                    screenshot_title,
-                    value=st.session_state.get('screenshot_mode', False),
-                    key='screenshot_mode',
-                    help=screenshot_hint,
-                )
-                st.caption(screenshot_hint)
+    # Shell-A declutter: the topbar breadcrumb + each subtab's own header
+    # already name the page, so there is no separate page header here. The
+    # screenshot-mode toggle was removed at the user's request.
 
     viz_notices = st.session_state.pop('_viz_notices', [])
     for notice in viz_notices[:3]:
@@ -103,15 +79,25 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
     if auto_notice:
         st.success(auto_notice)
 
-    show_data_loader = not (screenshot_mode and data_loaded)
+    show_data_loader = not data_loaded
     if show_data_loader:
-        expander_label = "⚙️ Data Loading Settings" if lang == 'en' else "⚙️ 数据加载设置"
-        with st.expander(expander_label, expanded=not data_loaded):
+        with st.container(key="eu_qv_loader"):
+            st.markdown(
+                '<div class="eu-qv-loader-head">'
+                '<div>'
+                f'<div class="k">{html.escape("Quick Visualization" if lang == "en" else "快速可视化")}</div>'
+                f'<div class="t">{html.escape("Load a review workspace" if lang == "en" else "加载审阅工作区")}</div>'
+                f'<div class="s">{html.escape("Start with exported EasyICU tables or generate a compact demo set; review tabs appear immediately after loading." if lang == "en" else "从已导出的 EasyICU 表格开始，或生成一个紧凑演示集；加载后直接进入审阅子页。")}</div>'
+                '</div>'
+                '<span class="eu-qv-loader-badge">Data Tables · Time Series · Patient · Quality</span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
             allow_demo = entry_mode != 'real'
             source_options = ["exported"] + (["demo"] if allow_demo else [])
             source_labels = {
-                "exported": "📁 Previously Exported Data" if lang == 'en' else "📁 加载之前导出的结果文件",
-                "demo": "🧪 Demo Data" if lang == 'en' else "🧪 模拟数据",
+                "exported": "Previously exported data" if lang == 'en' else "加载之前导出的结果文件",
+                "demo": "Demo data" if lang == 'en' else "模拟数据",
             }
             st.session_state.viz_data_source_mode = _resolve_viz_data_source_mode(
                 current_mode=st.session_state.get('viz_data_source_mode'),
@@ -178,7 +164,7 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
 
                             if selected_files:
                                 if st.button(
-                                    "🔍 Load Data" if lang == 'en' else "🔍 加载数据",
+                                    "Load selected data" if lang == 'en' else "加载所选数据",
                                     type="primary",
                                     use_container_width=True,
                                     key="viz_load_files",
@@ -242,10 +228,10 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                     if lang == 'en'
                     else "将生成约160+个特征，覆盖所有模块（生命体征、实验室、SOFA、脓毒症、AKI等）"
                 )
-                st.caption(f"💡 {feature_hint}")
+                st.caption(feature_hint)
 
                 if st.button(
-                    "🚀 Generate & Load All Demo Data" if lang == 'en' else "🚀 生成并加载全部模拟数据",
+                    "Generate and load demo workspace" if lang == 'en' else "生成并加载演示工作区",
                     type="primary",
                     use_container_width=True,
                     key="viz_load_demo",
@@ -294,7 +280,7 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
         )
         no_data_msg = f"""
         <div class="viz-empty-state">
-            <div class="viz-empty-icon">📊</div>
+            <div class="viz-empty-icon">Data</div>
             <div class="viz-empty-title">{html.escape(empty_title)}</div>
             <div class="viz-empty-subtitle">{html.escape(empty_subtitle)}</div>
         </div>

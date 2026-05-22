@@ -2721,6 +2721,46 @@ def test_manuscript_numeric_auditor_allows_normal_rounding(ra):
     assert findings == []
 
 
+def test_manuscript_numeric_auditor_ignores_ci_percent_near_outcome_phrase(ra):
+    """Regression: '95% confidence interval' must not be read as a 0.95
+    prevalence claim when an outcome phrase ('death'/'mortality') appears
+    earlier in the same sentence.
+
+    This reproduces the false positive that blocked otherwise-valid
+    manuscripts across the gpt-5.4 and gpt-5.5 canonical batches
+    (2026-05-20): the lazy proximity window bound the '95%' from
+    '... odds of ICU death ... and a 95% confidence interval ...' to the
+    'death' phrase and flagged 'prevalence claim 0.95 does not match
+    registered baseline prevalence 0.0373'.
+    """
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "ICU mortality was 3.7% "
+        "[probe](evidence/probe.csv). "
+        "Higher early SOFA-2 severity was associated with higher odds of ICU "
+        "death, with an odds ratio of 1.39 per modeled one-point increase and "
+        "a 95% confidence interval from 1.19 to 1.63 "
+        "[assoc](evidence/assoc.csv).\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "00_probe",
+                "status": "ok",
+                "step_summary": {"statistic:baseline_prevalence": 0.037},
+            }
+        ],
+    )
+
+    messages = [finding.message for finding in findings]
+    assert not any("prevalence claim 0.95" in m for m in messages), messages
+    # The genuine 3.7% mortality claim still matches the registered 0.037 and
+    # must NOT be flagged either.
+    assert not any("prevalence claim" in m for m in messages), messages
+
+
 def test_repair_common_writer_placeholders_prediction_fallbacks(ra, tmp_path: Path):
     from easyicu.research_agent.evidence import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_placeholders
