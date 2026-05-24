@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any
 
 from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
@@ -15,6 +16,19 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
             globals()[name] = value
 
 
+def _render_section_heading(title: str, eyebrow: str | None = None) -> None:
+    eyebrow_html = (
+        f'<span>{html.escape(eyebrow)}</span>'
+        if eyebrow else ""
+    )
+    st.markdown(
+        '<div class="eu-native-section-heading">'
+        f'{eyebrow_html}<b>{html.escape(title)}</b>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None = None):
     """分组对比子标签页 - 带独立数据加载配置"""
     if app_context is not None:
@@ -23,7 +37,10 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
     screenshot_mode = _is_screenshot_mode()
 
     if not screenshot_mode:
-        st.markdown("### 👥 " + ("Group Contrast Table" if lang == 'en' else "组间对照表"))
+        _render_section_heading(
+            "Group Contrast Table" if lang == 'en' else "组间对照表",
+            "Analysis table" if lang == 'en' else "分析表",
+        )
 
     # 获取当前入口模式
     entry_mode = st.session_state.get('entry_mode', 'none')
@@ -243,15 +260,18 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
         _render_compact_divider()
 
         # 对比模式选择
-        st.markdown("#### " + ("🔀 Select Comparison Mode" if lang == 'en' else "🔀 选择对比模式"))
+        _render_section_heading(
+            "Select Comparison Mode" if lang == 'en' else "选择对比模式",
+            "Comparison" if lang == 'en' else "对比",
+        )
 
     compare_options = {
-        'survival': ('💀 Survived vs Deceased', '💀 存活 vs 死亡'),
-        'age': ('👴 Age Groups', '👴 年龄分组'),
-        'gender': ('👫 Male vs Female', '👫 男性 vs 女性'),
-        'los': ('🏥 Short vs Long Stay', '🏥 短住院 vs 长住院'),
-        'sepsis': ('🦠 Sepsis vs Non-sepsis', '🦠 脓毒症 vs 非脓毒症'),
-        'custom': ('🎯 Custom Threshold', '🎯 自定义阈值'),
+        'survival': ('Survived vs Deceased', '存活 vs 死亡'),
+        'age': ('Age Groups', '年龄分组'),
+        'gender': ('Male vs Female', '男性 vs 女性'),
+        'los': ('Short vs Long Stay', '短住院 vs 长住院'),
+        'sepsis': ('Sepsis vs Non-sepsis', '脓毒症 vs 非脓毒症'),
+        'custom': ('Custom Threshold', '自定义阈值'),
     }
 
     if screenshot_mode:
@@ -301,8 +321,8 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
     # 定义所有可用的特征模块
     FEATURE_MODULES = {
         'demographic': {
-            'name_en': '👤 Demographics',
-            'name_zh': '👤 人口统计学',
+            'name_en': 'Demographics',
+            'name_zh': '人口统计学',
             'features': [
                 ('age', 'Age (years)', '年龄 (岁)', 'continuous'),
                 ('gender', 'Male', '男性', 'binary', 'M'),
@@ -314,16 +334,16 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             'default': True
         },
         'outcome': {
-            'name_en': '📈 Outcomes',
-            'name_zh': '📈 结局指标',
+            'name_en': 'Outcomes',
+            'name_zh': '结局指标',
             'features': [
                 ('mortality', 'ICU Mortality', 'ICU死亡率', 'binary_survival'),
             ],
             'default': True
         },
         'vital': {
-            'name_en': '💓 Vital Signs',
-            'name_zh': '💓 生命体征',
+            'name_en': 'Vital Signs',
+            'name_zh': '生命体征',
             'features': [
                 ('hr', 'Heart Rate (bpm)', '心率 (bpm)', 'continuous'),
                 ('sbp', 'Systolic BP (mmHg)', '收缩压 (mmHg)', 'continuous'),
@@ -336,8 +356,8 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             'default': True
         },
         'lab': {
-            'name_en': '🧪 Laboratory',
-            'name_zh': '🧪 实验室检查',
+            'name_en': 'Laboratory',
+            'name_zh': '实验室检查',
             'features': [
                 ('glu', 'Glucose (mg/dL)', '血糖 (mg/dL)', 'continuous'),
                 ('na', 'Sodium (mEq/L)', '钠 (mEq/L)', 'continuous'),
@@ -351,8 +371,8 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             'default': True
         },
         'hematology': {
-            'name_en': '🩸 Hematology',
-            'name_zh': '🩸 血液学',
+            'name_en': 'Hematology',
+            'name_zh': '血液学',
             'features': [
                 ('hgb', 'Hemoglobin (g/dL)', '血红蛋白 (g/dL)', 'continuous'),
                 ('plt', 'Platelets (K/uL)', '血小板 (K/uL)', 'continuous'),
@@ -362,8 +382,8 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             'default': True
         },
         'blood_gas': {
-            'name_en': '🩸 Blood Gas',
-            'name_zh': '🩸 血气分析',
+            'name_en': 'Blood Gas',
+            'name_zh': '血气分析',
             'features': [
                 ('ph', 'pH', 'pH值', 'continuous'),
                 ('po2', 'PaO2 (mmHg)', 'PaO2 (mmHg)', 'continuous'),
@@ -375,8 +395,8 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             'default': True
         },
         'sofa': {
-            'name_en': '🏥 SOFA Scores',
-            'name_zh': '🏥 SOFA评分',
+            'name_en': 'SOFA Scores',
+            'name_zh': 'SOFA评分',
             'features': [
                 ('sofa', 'SOFA Score', 'SOFA评分', 'continuous'),
                 ('sofa_resp', 'SOFA Respiratory', 'SOFA呼吸', 'continuous'),
@@ -426,7 +446,10 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
         _render_compact_divider()
 
         # ========== 特征模块选择 ==========
-        st.markdown("#### " + ("📊 Select Feature Modules" if lang == 'en' else "📊 选择特征模块"))
+        _render_section_heading(
+            "Select Feature Modules" if lang == 'en' else "选择特征模块",
+            "Features" if lang == 'en' else "变量",
+        )
 
         # 模块多选
         selected_modules = st.multiselect(
@@ -713,7 +736,10 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             group2_name = f"{custom_label} ≥ {threshold:g}"
 
         # 分组统计概览
-        st.markdown("#### " + ("📊 Group Overview" if lang == 'en' else "📊 分组概览"))
+        _render_section_heading(
+            "Group Overview" if lang == 'en' else "分组概览",
+            "Summary" if lang == 'en' else "概览",
+        )
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -732,7 +758,10 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
         _render_compact_divider()
 
         # ========== 基线特征对比表 (Table One) ==========
-        st.markdown("#### " + ("📋 Baseline Characteristics Comparison" if lang == 'en' else "📋 基线特征对比表"))
+        _render_section_heading(
+            "Baseline Characteristics Comparison" if lang == 'en' else "基线特征对比表",
+            "Table one" if lang == 'en' else "表一",
+        )
 
         from scipy import stats
 

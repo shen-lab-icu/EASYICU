@@ -113,6 +113,7 @@ from easyicu.webapp.demo_data import (
     _generate_mock_cohort_dashboard_data,
     _generate_mock_demographics,
     _generate_mock_multidb_data,
+    generate_lightweight_demo_data,
     get_mock_params_with_cohort,
 )
 from easyicu.webapp.data_paths import (
@@ -262,11 +263,11 @@ def _build_module_preview_metadata(
 def _get_data_table_page_copy(lang: str = 'en') -> Dict[str, str]:
     if lang == 'en':
         return {
-            'title': "📋 Module Table Preview",
+            'title': "Module Table Preview",
             'description': "Preview loaded tables by module before drilling into feature-level detail.",
         }
     return {
-        'title': "📋 模块数据预览",
+        'title': "模块数据预览",
         'description': "按模块预览已加载数据表，再进入单个特征的细节查看。",
     }
 
@@ -274,11 +275,11 @@ def _get_data_table_page_copy(lang: str = 'en') -> Dict[str, str]:
 def _get_single_feature_preview_copy(feature_name: str, lang: str = 'en') -> Dict[str, str]:
     if lang == 'en':
         return {
-            'title': "🧪 Single Feature Preview",
+            'title': "Single Feature Preview",
             'description': f"Inspect `{feature_name}` with full row-level detail while keeping the preview layout consistent.",
         }
     return {
-        'title': "🧪 单特征预览",
+        'title': "单特征预览",
         'description': f"以与预览页一致的版式查看 `{feature_name}` 的逐行明细。",
     }
 
@@ -454,8 +455,25 @@ def _is_screenshot_mode() -> bool:
 def _apply_screenshot_mode_ui_state(state: dict[str, Any]) -> None:
     """Hide transient chrome that should not appear in figure screenshots."""
     state['_floating_ai_open'] = False
+    state['_sidebar_ai_open'] = False
+    state['_eu_sidebar_settings_open'] = False
+    state['_inline_ai_panel_open'] = False
     if state.get('_scroll_to_tab') == 'ai_assistant':
         state.pop('_scroll_to_tab', None)
+
+
+def _open_embedded_ai_assistant(
+    state: dict[str, Any],
+    question: str | None = None,
+) -> None:
+    """Open the main-workspace AI assistant and optionally queue a prompt."""
+    if question:
+        state['_ai_pending_question'] = question
+    state['llm_enabled'] = True
+    state['_llm_toggle'] = True
+    state['_inline_ai_panel_open'] = True
+    state['_sidebar_ai_open'] = False
+    state['_floating_ai_open'] = False
 
 
 def _resolve_viz_data_source_mode(
@@ -556,12 +574,25 @@ def _append_action_log(state: dict[str, Any], message: str, *, limit: int = 12) 
     state['_eu_action_log'] = log[-limit:]
 
 
+def _real_data_source_ready_for_step1(state: dict[str, Any]) -> bool:
+    """Return whether Real Data Step 1 has a validated local data path."""
+    data_path = str(state.get('data_path') or '').strip()
+    if not data_path or not Path(data_path).exists():
+        return False
+    if not bool(state.get('path_validated')):
+        return False
+    last_validated = str(state.get('last_validated_path') or '').strip()
+    if last_validated and Path(last_validated).expanduser() != Path(data_path).expanduser():
+        return False
+    return True
+
+
 def _prepare_quick_viz_demo_workspace(
     state: dict[str, Any],
     *,
-    generate_data_func=generate_mock_data,
+    generate_data_func=generate_lightweight_demo_data,
 ) -> tuple[int, int]:
-    """Load a complete demo review workspace from the topbar Render action."""
+    """Load the compact demo review workspace from the topbar Render action."""
     params = state.get('mock_params') if isinstance(state.get('mock_params'), dict) else {}
     params = dict(params)
     try:
@@ -569,9 +600,10 @@ def _prepare_quick_viz_demo_workspace(
     except (TypeError, ValueError):
         params['n_patients'] = 50
     try:
-        params['hours'] = int(params.get('hours') or 72)
+        params['hours'] = int(params.get('hours') or 48)
     except (TypeError, ValueError):
-        params['hours'] = 72
+        params['hours'] = 48
+    params['demo_profile'] = 'lite'
 
     generated = generate_data_func(**params)
     if isinstance(generated, tuple):
@@ -602,7 +634,7 @@ def _consume_topbar_run_request(
     ensure_demo_workspace_fn=_ensure_cohort_demo_workspace,
     ensure_real_from_loaded_fn=_ensure_cohort_real_workspace_from_loaded_concepts,
     ensure_real_workspace_fn=_ensure_cohort_real_workspace,
-    generate_data_func=generate_mock_data,
+    generate_data_func=generate_lightweight_demo_data,
 ) -> dict[str, str] | None:
     """Turn the shell topbar primary button into page-specific behavior."""
     request = state.get('_eu_topbar_run_request')
@@ -633,9 +665,9 @@ def _consume_topbar_run_request(
                 generate_data_func=generate_data_func,
             )
             message = (
-                f"Loaded demo review workspace: {n_concepts} concepts, {n_patients} patients."
+                f"Loaded lightweight demo review workspace: {n_concepts} concepts, {n_patients} patients."
                 if is_en else
-                f"已加载演示审阅工作区：{n_concepts} 个概念，{n_patients} 名患者。"
+                f"已加载轻量演示审阅工作区：{n_concepts} 个概念，{n_patients} 名患者。"
             )
         else:
             state['viz_data_source_mode'] = 'exported'
@@ -698,8 +730,8 @@ def _consume_topbar_run_request(
 
     if active_page == 'research_agent':
         if entry_mode == 'demo':
-            state['_ra_view'] = 'summary'
-            message = 'Opened the demo Agent Summary.' if is_en else '已打开演示 Agent 总览。'
+            state['_ra_view'] = 'setup'
+            message = 'Opened the demo Agent guide.' if is_en else '已打开演示 Agent 导览。'
             level = 'success'
         else:
             state['_ra_view'] = 'setup'
@@ -1472,8 +1504,8 @@ def _render_sepsis_ai_button(lang: str) -> None:
                 f"positive_cultures={positive}。同时说明 EasyICU 何时会默认使用基于 ICD 的感染证据，"
                 "以及这与支持的数据库有什么关系。"
             )
-        st.session_state['_ai_pending_question'] = question
-        st.session_state['_floating_ai_open'] = True
+        _open_embedded_ai_assistant(st.session_state, question)
+        st.rerun()
 
 
 
@@ -1814,15 +1846,15 @@ def _render_ai_context_button(question_key: str, context: str = "", concept: str
     """渲染上下文感知的 AI 助手小按钮。点击后将问题发送到全局 AI 助手。"""
     label = get_text(question_key)
     btn_key = f"ai_ctx_{question_key}_{concept}_{hash(context) % 10000}"
-    if st.button(f"🤖 {label}", key=btn_key, help=label):
+    if st.button(label, key=btn_key, help=label):
         full_q = f"{label}"
         if concept:
             full_q += f" (concept: {concept})"
         if context:
             full_q += f" Context: {context}"
-        st.session_state['_ai_pending_question'] = full_q
-        st.session_state['_floating_ai_open'] = True
-        st.toast("💬 Question sent to AI Assistant" if st.session_state.get('language') == 'en' else "💬 问题已发送到 AI 助手")
+        _open_embedded_ai_assistant(st.session_state, full_q)
+        st.toast("Question sent to AI Assistant" if st.session_state.get('language') == 'en' else "问题已发送到 AI 助手")
+        st.rerun()
 
 
 def render_quality_page():
@@ -2292,17 +2324,17 @@ def render_cohort_comparison_page():
     # 因为它对输入有结构性不同的要求（≥2 数据库根目录）。
     if lang == 'en':
         sub_tabs = st.tabs([
-            "👥 Groups",
-            "🧾 Coverage",
-            "🎯 Snapshot",
-            "🧭 SOFA Δ",
+            "Groups",
+            "Coverage",
+            "Snapshot",
+            "SOFA Δ",
         ])
     else:
         sub_tabs = st.tabs([
-            "👥 分组",
-            "🧾 覆盖",
-            "🎯 快照",
-            "🧭 SOFA Δ",
+            "分组",
+            "覆盖",
+            "快照",
+            "SOFA Δ",
         ])
 
     with sub_tabs[0]:
@@ -2630,8 +2662,8 @@ def _ensure_quick_figure_demo_data(state: dict[str, Any], *, lang: str) -> None:
     """Preload compact demo concepts so figure URLs open directly to useful panels."""
     if state.get('loaded_concepts'):
         return
-    state['mock_params'] = {'n_patients': 50, 'hours': 72}
-    mock_data, patient_ids = generate_mock_data(n_patients=50, hours=72)
+    state['mock_params'] = {'n_patients': 50, 'hours': 48, 'demo_profile': 'lite'}
+    mock_data, patient_ids = generate_lightweight_demo_data(n_patients=50, hours=48)
     state['loaded_concepts'] = mock_data
     state['loaded_data_origin'] = 'demo_viz'
     state['patient_ids'] = patient_ids
@@ -2893,7 +2925,7 @@ def _apply_figure_query_preset(state: dict[str, Any], *, lang: str) -> None:
         state['entry_mode'] = 'demo'
         state['use_mock_data'] = True
         state['database'] = 'mock'
-        state['mock_params'] = {'n_patients': 100, 'hours': 72}
+        state['mock_params'] = {'n_patients': 50, 'hours': 48, 'demo_profile': 'lite'}
 
     if section == 'viz':
         _ensure_quick_figure_demo_data(state, lang=lang)
@@ -3216,11 +3248,11 @@ def main():
     _active = st.session_state.get('_active_main_page', 'tutorial')
     _page_labels_for_topbar = {
         'extract':        'Data Extraction' if lang == 'en' else '数据提取',
-        'tutorial':       'Tutorial' if lang == 'en' else '教程',
-        'quick_viz':      'Quick Visualization' if lang == 'en' else '快速可视化',
-        'cohort':         'Cohort Statistics' if lang == 'en' else 'Cohort 统计',
+        'tutorial':       'Data Extraction' if lang == 'en' else '数据提取',
+        'quick_viz':      'Patient Review' if lang == 'en' else '患者审阅',
+        'cohort':         'Cohort Statistics' if lang == 'en' else '队列统计',
         'cross_db':       'Cross-DB Benchmark' if lang == 'en' else '跨库基准',
-        'research_agent': 'Research Agent' if lang == 'en' else '研究 Agent',
+        'research_agent': 'Research Agent' if lang == 'en' else '研究智能体',
     }
     _crumb_label = _page_labels_for_topbar.get(_active, _active)
     _crumbs = ['EasyICU', _crumb_label]
@@ -3274,8 +3306,8 @@ def main():
             _primary_label = 'Export bundle' if lang == 'en' else '导出包'
             _primary_key = "_eu_topbar_confirm_step4"
 
-        _tb_left, _tb_stage, _tb_cancel, _tb_primary = st.columns(
-            [8.2, 1.45, 0.7, 2.15], gap="small"
+        _tb_left, _tb_stage, _tb_ai, _tb_cancel, _tb_primary = st.columns(
+            [7.45, 1.35, 0.68, 0.7, 2.0], gap="small"
         )
         with _tb_left:
             _render_topbar(_crumbs, pills=())
@@ -3286,6 +3318,19 @@ def main():
                 '</div>',
                 unsafe_allow_html=True,
             )
+        with _tb_ai:
+            if st.button(
+                "",
+                key="_eu_topbar_ai_extract",
+                icon=":material/auto_awesome:",
+                help=("Open AI assistant" if lang == "en" else "打开 AI 助手"),
+                use_container_width=True,
+            ):
+                if st.session_state.get("_inline_ai_panel_open"):
+                    st.session_state["_inline_ai_panel_open"] = False
+                else:
+                    _open_embedded_ai_assistant(st.session_state)
+                st.rerun()
         with _tb_cancel:
             if st.button(
                 _secondary_label,
@@ -3309,6 +3354,12 @@ def main():
                 use_container_width=True,
             ):
                 if _primary_key == "_eu_topbar_confirm_step1":
+                    if entry_mode == 'real' and not _real_data_source_ready_for_step1(st.session_state):
+                        st.toast(
+                            ('Validate the real data path before continuing.'
+                             if lang == 'en' else '请先验证真实数据路径，再继续。')
+                        )
+                        return
                     st.session_state.step1_confirmed = True
                     st.rerun()
                 elif _primary_key == "_eu_topbar_confirm_step2":
@@ -3350,47 +3401,53 @@ def main():
             # Tutorial already has explicit entry CTAs in the page body, so
             # the global action buttons are withheld here to avoid duplicate,
             # ambiguous calls to action.
-            _tb_left, _tb_pill = st.columns([7, 5], gap="small")
+            _tb_left, _tb_pill, _tb_ai = st.columns([7, 4.8, 0.8], gap="small")
             with _tb_left:
                 _render_topbar(_crumbs, pills=())
             with _tb_pill:
                 _render_topbar_pills_row()
+            with _tb_ai:
+                if st.button(
+                    "",
+                    key="_eu_topbar_ai_tutorial",
+                    icon=":material/auto_awesome:",
+                    help=("Open AI assistant" if lang == "en" else "打开 AI 助手"),
+                    use_container_width=True,
+                ):
+                    if st.session_state.get("_inline_ai_panel_open"):
+                        st.session_state["_inline_ai_panel_open"] = False
+                    else:
+                        _open_embedded_ai_assistant(st.session_state)
+                    st.rerun()
         else:
             # Shell-A topbar: render breadcrumb / pills / icon buttons /
             # primary action. The breadcrumb + pills are HTML; the buttons
             # stay real ``st.button`` so callbacks survive a rerun.
-            _tb_left, _tb_pill, _tb_hist, _tb_agent, _tb_run = st.columns(
-                [7, 4, 2.2, 2.2, 2.2], gap="small"
+            _tb_left, _tb_pill, _tb_ai, _tb_run = st.columns(
+                [7, 5.3, 0.8, 1.9], gap="small"
             )
             with _tb_left:
                 _render_topbar(_crumbs, pills=())
             with _tb_pill:
                 _render_topbar_pills_row()
-            with _tb_hist:
+            with _tb_ai:
                 if st.button(
-                    ("Activity" if lang == 'en' else "活动"),
-                    key="_eu_topbar_history",
-                    use_container_width=True,
-                    icon=":material/history:",
-                    help=("Show recent activity" if lang == 'en' else "查看近期活动"),
-                ):
-                    st.session_state['_eu_show_history'] = not st.session_state.get('_eu_show_history', False)
-            with _tb_agent:
-                if st.button(
-                    ("Ask Agent" if lang == 'en' else "询问 Agent"),
-                    key="_eu_topbar_agent",
-                    use_container_width=True,
+                    "",
+                    key="_eu_topbar_ai",
                     icon=":material/auto_awesome:",
-                    help=("Open the floating research-agent dock" if lang == 'en' else "打开浮动研究 Agent"),
+                    help=("Open AI assistant" if lang == "en" else "打开 AI 助手"),
+                    use_container_width=True,
                 ):
-                    if not _is_screenshot_mode():
-                        st.session_state['_floating_ai_open'] = True
-                        st.rerun()
+                    if st.session_state.get("_inline_ai_panel_open"):
+                        st.session_state["_inline_ai_panel_open"] = False
+                    else:
+                        _open_embedded_ai_assistant(st.session_state)
+                    st.rerun()
             with _tb_run:
                 _run_label_map = {
                     'quick_viz':      ('Render',    '渲染'),
                     'cohort':         ('Re-run',    '重新运行'),
-                    'cross_db':       ('Compare',   '对比'),
+                    'cross_db':       ('Run',       '运行'),
                     'research_agent': ('Launch',    '启动'),
                 }
                 _run_en, _run_zh = _run_label_map.get(_active, ('▶ Run', '▶ 运行'))
@@ -3430,12 +3487,6 @@ def main():
 
     _render_icd_preview_main_panel(lang)
 
-    _render_research_agent_handoff(
-        "Loaded concepts" if lang == "en" else "已加载概念",
-        lang,
-        key_suffix="global",
-    )
-
     page_registry = build_main_page_registry(get_text)
     page_keys = [page["key"] for page in page_registry]
     page_labels = {page["key"]: page["label"] for page in page_registry}
@@ -3457,9 +3508,18 @@ def main():
     }
     if _nav_request == 'ai_assistant':
         if not _is_screenshot_mode():
-            st.session_state['_floating_ai_open'] = True
+            _open_embedded_ai_assistant(st.session_state)
     elif _nav_request in _nav_page_map:
         st.session_state['_active_main_page'] = _nav_page_map[_nav_request]
+
+    if not _is_screenshot_mode():
+        try:
+            from easyicu.webapp.llm_chat import render_inline_ai_panel
+            render_inline_ai_panel()
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Inline AI assistant failed to render", exc_info=True
+            )
 
     # Tutorial is now the leftmost top tab again so it's discoverable from
     # the main pane (also still reachable via the sidebar "📚 Workflow Help"
@@ -3496,7 +3556,12 @@ def main():
     # the sidebar is on so it doesn't take vertical space.
     with st.container(key="main_nav_bar"):
         st.markdown(
-            '<style>.stApp [class*="st-key-main_nav_bar"]{display:none !important;}</style>',
+            '<style>'
+            '.stApp [class*="st-key-main_nav_bar"]{display:none !important;}'
+            '@media (max-width: 900px){'
+            '.stApp [class*="st-key-main_nav_bar"]{display:block !important;}'
+            '}'
+            '</style>',
             unsafe_allow_html=True,
         )
         st.radio(
@@ -3552,7 +3617,7 @@ def main():
                 if _use_mock:
                     try:
                         with st.spinner(f"Generating preview with {_preview_n} mock patients..." if lang == 'en' else f"正在生成 {_preview_n} 位模拟患者的预览..."):
-                            mock_data, preview_patient_ids = generate_mock_data(n_patients=_preview_n, hours=72)
+                            mock_data, preview_patient_ids = generate_lightweight_demo_data(n_patients=_preview_n, hours=48)
                         if _sel_concepts:
                             mock_data = {k: v for k, v in mock_data.items() if k in _sel_concepts}
                         st.session_state.loaded_concepts = mock_data
@@ -3697,22 +3762,16 @@ def main():
             )
             st.markdown(f'<div class="compact-inline-notice info">{ra_hold_msg}</div>', unsafe_allow_html=True)
         else:
-            # Shell-A redesign: Research Agent now has two views —
-            # "Setup" (the real research_agent module: cohort handoff,
-            # question, plan, run controls, bound outputs) and
-            # "Workbench" (the live 3-column run view from
-            # page-agent-workbench.jsx). A segmented control switches
-            # between them; the workbench reads
-            # st.session_state['_agent_workbench'] when a run streams
-            # into it, else primes the latest local manifest before using
-            # the representative snapshot fallback.
-            _default_ra_view = 'summary' if st.session_state.get('entry_mode') == 'demo' else 'setup'
+            # Shell-A redesign: Research Agent has three stateful views.
+            # Setup is the only page that configures and launches runs.
+            # Workbench and Summary render only a live/imported manifest,
+            # never a synthetic demo queue.
+            _default_ra_view = 'setup'
             _ra_view = st.session_state.get('_ra_view', _default_ra_view)
             _seg_l, _seg_m, _seg_r, _ = st.columns([1.2, 1.35, 1.2, 5.9])
             with _seg_l:
                 if st.button(
-                    ("● Setup" if _ra_view == 'setup' else "Setup") if lang == 'en'
-                    else ("● 配置" if _ra_view == 'setup' else "配置"),
+                    "Setup" if lang == 'en' else "配置",
                     key="_eu_ra_view_setup", use_container_width=True,
                     type="primary" if _ra_view == 'setup' else "secondary",
                 ):
@@ -3720,8 +3779,7 @@ def main():
                     st.rerun()
             with _seg_m:
                 if st.button(
-                    ("● Workbench" if _ra_view == 'workbench' else "Workbench") if lang == 'en'
-                    else ("● 工作台" if _ra_view == 'workbench' else "工作台"),
+                    "Workbench" if lang == 'en' else "工作台",
                     key="_eu_ra_view_workbench", use_container_width=True,
                     type="primary" if _ra_view == 'workbench' else "secondary",
                 ):
@@ -3729,8 +3787,7 @@ def main():
                     st.rerun()
             with _seg_r:
                 if st.button(
-                    ("● Summary" if _ra_view == 'summary' else "Summary") if lang == 'en'
-                    else ("● 总览" if _ra_view == 'summary' else "总览"),
+                    "Summary" if lang == 'en' else "总览",
                     key="_eu_ra_view_summary", use_container_width=True,
                     type="primary" if _ra_view == 'summary' else "secondary",
                 ):
@@ -3744,6 +3801,11 @@ def main():
                 from easyicu.webapp.agent_workbench import render_agent_output_summary
                 render_agent_output_summary(lang)
             else:
+                _render_research_agent_handoff(
+                    "Loaded concepts" if lang == "en" else "已加载概念",
+                    lang,
+                    key_suffix="setup",
+                )
                 try:
                     from easyicu.webapp.research_agent import (
                         render_research_agent_demo_page,
@@ -3851,15 +3913,6 @@ def main():
         )
 
     _render_figure_target_jump_script()
-
-    if not _is_screenshot_mode():
-        try:
-            from easyicu.webapp.llm_chat import render_floating_chat_dock
-            render_floating_chat_dock()
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "Floating chat dock failed to render", exc_info=True
-            )
 
     # Shell-A carries status, navigation, and help affordances in the top bar
     # and sidebar. Suppress the legacy footer row so the design canvas starts

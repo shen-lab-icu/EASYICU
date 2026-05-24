@@ -16,6 +16,14 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
             globals()[name] = value
 
 
+def _plain_display_label(label: str) -> str:
+    """Remove leading decorative symbols from legacy labels."""
+    text = str(label or "").strip()
+    while text and not (text[0].isalnum() or "\u4e00" <= text[0] <= "\u9fff"):
+        text = text[1:].lstrip()
+    return text or str(label or "")
+
+
 def render_timeseries_page(app_context: dict[str, Any] | None = None):
     """渲染时序分析页面。"""
     if app_context is not None:
@@ -205,7 +213,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
 
         with col1:
             # 🔧 FIX: 先选择模块，再选择特征
-            module_label = "📂 Select Module" if lang == 'en' else "📂 选择模块"
+            module_label = "Select Module" if lang == 'en' else "选择模块"
             all_modules_opt = "All Modules" if lang == 'en' else "全部模块"
 
             # 获取模块列表 - 🔧 FIX (2026-02-05): 只显示支持时序分析的模块
@@ -217,7 +225,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                 grp_concepts = CONCEPT_GROUPS_INTERNAL[grp_key]
                 # 检查该模块是否有已加载的概念
                 if any(c in available_concepts for c in grp_concepts):
-                    display_name = CONCEPT_GROUPS_DISPLAY.get(grp_key, grp_key)
+                    display_name = _plain_display_label(CONCEPT_GROUPS_DISPLAY.get(grp_key, grp_key))
                     module_options.append(display_name)
 
             selected_module = st.selectbox(
@@ -234,7 +242,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                 # 找到对应的 group_key
                 selected_grp_key = None
                 for grp_key, display in CONCEPT_GROUPS_DISPLAY.items():
-                    if display == selected_module:
+                    if _plain_display_label(display) == selected_module:
                         selected_grp_key = grp_key
                         break
                 if selected_grp_key:
@@ -243,7 +251,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                 else:
                     filtered_concepts = available_concepts
 
-            concept_label = "📋 Select Concept" if lang == 'en' else "📋 选择 Concept"
+            concept_label = "Select Concept" if lang == 'en' else "选择 Concept"
             concept_help = "Select data type to visualize" if lang == 'en' else "选择要可视化的数据类型"
             selected_concept = st.selectbox(
                 concept_label,
@@ -254,7 +262,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
 
         with col3:
             if st.session_state.patient_ids:
-                patient_label = "👤 Select Patient" if lang == 'en' else "👤 选择患者"
+                patient_label = "Select Patient" if lang == 'en' else "选择患者"
                 patient_id = _patient_selector(
                     patient_ids=st.session_state.patient_ids,
                     state_key="ts_patient",
@@ -269,7 +277,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                 st.warning(no_patient_msg)
 
         with col4:
-            chart_label = "📊 Chart Type" if lang == 'en' else "📊 图表类型"
+            chart_label = "Chart Type" if lang == 'en' else "图表类型"
             line_opt = "Line Chart" if lang == 'en' else "折线图"
             scatter_opt = "Scatter Plot" if lang == 'en' else "散点图"
             area_opt = "Area Chart" if lang == 'en' else "面积图"
@@ -280,7 +288,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
             )
 
         with col5:
-            value_label = "🧪 Value Column" if lang == 'en' else "🧪 数值列"
+            value_label = "Value Column" if lang == 'en' else "数值列"
             concept_df = st.session_state.loaded_concepts.get(selected_concept)
             value_options = _get_concept_numeric_value_columns(concept_df)
             preferred_value_col = _choose_concept_value_column(selected_concept, concept_df) if isinstance(concept_df, pd.DataFrame) else None
@@ -352,7 +360,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                             line_type = "Line Chart" if lang == 'en' else "折线图"
                             scatter_type = "Scatter Plot" if lang == 'en' else "散点图"
                             patient_label = "Patient" if lang == 'en' else "患者"
-                            chart_title = f"📈 {selected_concept.upper()} - {patient_label} {patient_id}"
+                            chart_title = f"{selected_concept.upper()} - {patient_label} {patient_id}"
 
                             if chart_type == line_type:
                                 fig = px.line(
@@ -404,27 +412,27 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
 
                         # 显示统计信息
                         if show_stats:
-                            stat_title = "#### 📊 Statistical Summary" if lang == 'en' else "#### 📊 统计摘要"
+                            stat_title = "#### Statistical Summary" if lang == 'en' else "#### 统计摘要"
                             st.markdown(stat_title)
                             values = patient_df[value_col]
                             if lang == 'en':
                                 stats = [
-                                    ("Min", f"{values.min():.2f}", "📉"),
-                                    ("Max", f"{values.max():.2f}", "📈"),
-                                    ("Mean", f"{values.mean():.2f}", "📊"),
-                                    ("Std Dev", f"{values.std():.2f}", "📐"),
-                                    ("Records", f"{len(values)}", "📝"),
+                                    ("Min", f"{values.min():.2f}"),
+                                    ("Max", f"{values.max():.2f}"),
+                                    ("Mean", f"{values.mean():.2f}"),
+                                    ("Std Dev", f"{values.std():.2f}"),
+                                    ("Records", f"{len(values)}"),
                                 ]
                             else:
                                 stats = [
-                                    ("最小值", f"{values.min():.2f}", "📉"),
-                                    ("最大值", f"{values.max():.2f}", "📈"),
-                                    ("平均值", f"{values.mean():.2f}", "📊"),
-                                    ("标准差", f"{values.std():.2f}", "📐"),
-                                    ("记录数", f"{len(values)}", "📝"),
+                                    ("最小值", f"{values.min():.2f}"),
+                                    ("最大值", f"{values.max():.2f}"),
+                                    ("平均值", f"{values.mean():.2f}"),
+                                    ("标准差", f"{values.std():.2f}"),
+                                    ("记录数", f"{len(values)}"),
                                 ]
                             render_stat_grid(
-                                [StatCard(label=f"{icon} {label}", value=value) for label, value, icon in stats],
+                                [StatCard(label=label, value=value) for label, value in stats],
                                 columns=5,
                                 compact=True,
                             )
@@ -466,7 +474,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
 
         # 数据表格预览
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-        preview_label = "📋 Data Table Preview" if lang == 'en' else "📋 数据表格预览"
+        preview_label = "Data Table Preview" if lang == 'en' else "数据表格预览"
         with st.expander(preview_label, expanded=True):  # 🔧 FIX: 默认展开
             if selected_concept in st.session_state.loaded_concepts:
                 df = st.session_state.loaded_concepts[selected_concept]
@@ -485,7 +493,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
 
         with col1:
             # 🔧 FIX: 先选择模块，再选择特征
-            module_label = "📂 Select Module" if lang == 'en' else "📂 选择模块"
+            module_label = "Select Module" if lang == 'en' else "选择模块"
             all_modules_opt = "All Modules" if lang == 'en' else "全部模块"
 
             # 🔧 FIX (2026-02-05): 只显示支持时序分析的模块（排除静态数据模块）
@@ -496,7 +504,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                     continue
                 grp_concepts = CONCEPT_GROUPS_INTERNAL[grp_key]
                 if any(c in available_concepts for c in grp_concepts):
-                    display_name = CONCEPT_GROUPS_DISPLAY.get(grp_key, grp_key)
+                    display_name = _plain_display_label(CONCEPT_GROUPS_DISPLAY.get(grp_key, grp_key))
                     module_options.append(display_name)
 
             selected_module_multi = st.selectbox(
@@ -512,7 +520,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
             else:
                 selected_grp_key = None
                 for grp_key, display in CONCEPT_GROUPS_DISPLAY.items():
-                    if display == selected_module_multi:
+                    if _plain_display_label(display) == selected_module_multi:
                         selected_grp_key = grp_key
                         break
                 if selected_grp_key:
@@ -521,7 +529,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                 else:
                     filtered_concepts_multi = available_concepts
 
-            concept_label = "📋 Select Concept" if lang == 'en' else "📋 选择 Concept"
+            concept_label = "Select Concept" if lang == 'en' else "选择 Concept"
             selected_concept = st.selectbox(
                 concept_label,
                 options=filtered_concepts_multi if filtered_concepts_multi else available_concepts,
@@ -530,9 +538,9 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
 
         with col3:
             if st.session_state.patient_ids:
-                compare_label = "👥 Select patients to compare (max 5)" if lang == 'en' else "👥 选择要比较的患者 (最多5个)"
+                compare_label = "Select patients to compare (max 5)" if lang == 'en' else "选择要比较的患者 (最多5个)"
                 compare_search = st.text_input(
-                    "🔍 Search Patient IDs" if lang == 'en' else "🔍 搜索患者ID",
+                    "Search Patient IDs" if lang == 'en' else "搜索患者ID",
                     key="ts_compare_search",
                     placeholder="Type to filter..." if lang == 'en' else "输入ID过滤...",
                 )
@@ -556,7 +564,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
             compare_df = st.session_state.loaded_concepts.get(selected_concept)
             compare_value_options = _get_concept_numeric_value_columns(compare_df)
             compare_preferred_value = _choose_concept_value_column(selected_concept, compare_df) if isinstance(compare_df, pd.DataFrame) else None
-            value_label = "🧪 Value Column" if lang == 'en' else "🧪 数值列"
+            value_label = "Value Column" if lang == 'en' else "数值列"
             if len(compare_value_options) > 1:
                 default_index = compare_value_options.index(compare_preferred_value) if compare_preferred_value in compare_value_options else 0
                 compare_value_col = st.selectbox(
@@ -653,9 +661,9 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                             })
 
                     chart_title = (
-                        f"📊 {selected_concept.upper()} Multi-Patient Comparison"
+                        f"{selected_concept.upper()} Multi-Patient Comparison"
                         if lang == 'en'
-                        else f"📊 {selected_concept.upper()} 多患者比较"
+                        else f"{selected_concept.upper()} 多患者比较"
                     )
                     x_axis_label = "Time (hours)" if lang == 'en' else "时间 (小时)"
                     y_suffix = " (Normalized)" if lang == 'en' else " (归一化)"
@@ -674,7 +682,7 @@ def render_timeseries_page(app_context: dict[str, Any] | None = None):
                     st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
 
                     if comparison_stats:
-                        compare_stats_title = "#### 📊 Comparison Statistics" if lang == 'en' else "#### 📊 比较统计"
+                        compare_stats_title = "#### Comparison Statistics" if lang == 'en' else "#### 比较统计"
                         st.markdown(compare_stats_title)
                         _st_dataframe_compat(
                             st,

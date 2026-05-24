@@ -552,9 +552,8 @@ def _get_sofa_reclassification_source(lang: str = 'en', mode: str = 'worst_icu')
 def _render_reclassification_cards(reclass: Dict[str, Any], lang: str = 'en'):
     """Render compact metric cards for SOFA reclassification summaries."""
     metrics = reclass['metrics']
-    cols = st.columns(5)
     cards = [
-        (metrics.get('denominator', metrics['patients']), metrics.get('denominator_label', "Patients" if lang == 'en' else "患者数"), metrics.get('denominator_hint', "paired SOFA" if lang == 'en' else "双SOFA记录"), "#2563eb", "👥"),
+        (metrics.get('denominator', metrics['patients']), metrics.get('denominator_label', "Patients" if lang == 'en' else "患者数"), metrics.get('denominator_hint', "paired SOFA" if lang == 'en' else "双SOFA记录"), "#2563eb", "N"),
         (metrics['discordant_pct'], "Discordant" if lang == 'en' else "重新分层", "SOFA-2 != SOFA-1" if lang == 'en' else "SOFA-2 != SOFA-1", "#ea580c", "⇄"),
         (metrics['up_pct'], "Up-classified" if lang == 'en' else "上调分层", "higher SOFA-2" if lang == 'en' else "SOFA-2更高", "#e11d48", "↑"),
         (metrics['down_pct'], "Down-classified" if lang == 'en' else "下调分层", "lower SOFA-2" if lang == 'en' else "SOFA-2更低", "#0f766e", "↓"),
@@ -566,22 +565,19 @@ def _render_reclassification_cards(reclass: Dict[str, Any], lang: str = 'en'):
           else metrics.get('median_delta_range', "SOFA-2 - SOFA-1").replace('range', '范围')),
          "#475569", "Δ"),
     ]
-    for col, (value, label, hint, color, icon) in zip(cols, cards):
-        with col:
-            st.markdown(
-                f"""
-                <div style="background:#ffffff;border:1px solid #cddbeb;border-left:4px solid {color};
-                            border-radius:16px;padding:11px 13px;min-height:92px;box-shadow:0 8px 24px rgba(15,31,68,.045)">
-                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
-                        <span style="width:24px;height:24px;border-radius:7px;background:{color};color:white;display:inline-flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:900">{icon}</span>
-                        <span style="font-size:.68rem;font-weight:850;color:#60718a;letter-spacing:.07em;text-transform:uppercase">{label}</span>
-                    </div>
-                    <div style="font-size:1.5rem;font-weight:900;line-height:1.05;color:{color};letter-spacing:-.02em">{value}</div>
-                    <div style="font-size:.68rem;color:#60718a;margin-top:4px;font-weight:700">{hint}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    body = []
+    for value, label, hint, color, icon in cards:
+        body.append(
+            f'<div class="eu-cohort-kpi" style="--accent:{color}">'
+            '<div class="kpi-top">'
+            f'<span class="kpi-icon">{icon}</span>'
+            f'<span class="kpi-label">{label}</span>'
+            '</div>'
+            f'<div class="kpi-value accent">{value}</div>'
+            f'<div class="kpi-hint">{hint}</div>'
+            '</div>'
+        )
+    st.markdown('<div class="eu-cohort-kpi-grid">' + "".join(body) + '</div>', unsafe_allow_html=True)
 
 
 def _render_reclassification_snapshot(reclass: Dict[str, Any], lang: str = 'en', key_prefix: str = 'reclass'):

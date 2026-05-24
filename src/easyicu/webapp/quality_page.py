@@ -18,9 +18,9 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
 
 def _render_quality_panel_switcher(lang: str, screenshot_mode: bool = False) -> str:
     panel_options = {
-        "missingness": "📊 Missingness" if lang == 'en' else "📊 缺失分析",
-        "outliers": "🧪 Out-of-Physio" if lang == 'en' else "🧪 生理范围越界",
-        "temporal": "⏱️ Temporal Integrity" if lang == 'en' else "⏱️ 时序完整性",
+        "missingness": "Missingness" if lang == 'en' else "缺失分析",
+        "outliers": "Out-of-Physio" if lang == 'en' else "生理范围越界",
+        "temporal": "Temporal Integrity" if lang == 'en' else "时序完整性",
     }
     state_key = "quality_active_panel"
     if st.session_state.get(state_key) not in panel_options:
@@ -236,9 +236,9 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
             if 'missing_chart_sort_order' not in st.session_state:
                 st.session_state['missing_chart_sort_order'] = 'desc'
             sort_options = {
-                'desc': '📉 Missing Rate (High → Low)' if lang == 'en' else '📉 缺失率 (从高到低)',
-                'asc': '📈 Missing Rate (Low → High)' if lang == 'en' else '📈 缺失率 (从低到高)',
-                'alpha': '🔤 Alphabetical (A → Z)' if lang == 'en' else '🔤 首字母排序 (A → Z)',
+                'desc': 'Missing Rate (High → Low)' if lang == 'en' else '缺失率 (从高到低)',
+                'asc': 'Missing Rate (Low → High)' if lang == 'en' else '缺失率 (从低到高)',
+                'alpha': 'Alphabetical (A → Z)' if lang == 'en' else '首字母排序 (A → Z)',
             }
             sort_order = st.radio(
                 sort_label,
@@ -372,7 +372,7 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                     color=outlier_rate_label,
                     color_continuous_scale=['#dbeafe', '#f59e0b', '#dc2626'],
                     hover_data=[records_col],
-                    title='🧪 Physiologic Range QC' if lang == 'en' else '🧪 生理范围质控',
+                    title='Physiologic Range QC' if lang == 'en' else '生理范围质控',
                 )
                 fig.update_layout(
                     template='plotly_white',
@@ -416,7 +416,7 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                         color=duplicate_rate_label,
                         color_continuous_scale=['#bfdbfe', '#f59e0b', '#dc2626'],
                         hover_data=[records_col],
-                        title='🧬 Duplicate Timestamp Rate' if lang == 'en' else '🧬 重复时间戳比例',
+                        title='Duplicate Timestamp Rate' if lang == 'en' else '重复时间戳比例',
                     )
                     fig_dup.update_layout(
                         template='plotly_white',
@@ -469,7 +469,7 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                                 '_missing_rate': missing_label,
                                 '_iqr_text': iqr_label,
                             },
-                            title='⏱️ Temporal Density vs Duplicate Rate' if lang == 'en' else '⏱️ 时序密度与重复率',
+                            title='Temporal Density vs Duplicate Rate' if lang == 'en' else '时序密度与重复率',
                         )
                         fig_density.update_traces(textposition='top center', textfont=dict(size=11))
                         fig_density.update_layout(
@@ -511,9 +511,9 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                                 '_iqr_text': iqr_label,
                             },
                             title=(
-                                f"⏱️ Top {len(ranked)} concepts by density"
+                                f"Top {len(ranked)} concepts by density"
                                 if lang == 'en'
-                                else f"⏱️ 密度排名前 {len(ranked)} 的概念"
+                                else f"密度排名前 {len(ranked)} 的概念"
                             ),
                         )
                         fig_density.update_layout(
@@ -540,5 +540,5 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                         st.plotly_chart(fig_density, use_container_width=True, config=_get_plotly_chart_config())
 
     if not quality_df.empty and not screenshot_mode:
-        with st.expander(f"📋 {detail_title}", expanded=False):
+        with st.expander(detail_title, expanded=False):
             _render_quality_detail_report()

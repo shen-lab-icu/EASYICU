@@ -17,16 +17,14 @@ def render_page_header(
     """Render a consistent, compact page header inside a main tab."""
     icon_html = f'<span class="app-page-icon">{html.escape(icon)}</span>' if icon else ""
     kicker_html = f'<div class="app-page-kicker">{html.escape(kicker)}</div>' if kicker else ""
-    st.markdown(
-        f"""
-        <div class="app-page-header">
-            {kicker_html}
-            <div class="app-page-title-row">
-                {icon_html}
-                <div class="app-page-title">{html.escape(title)}</div>
-            </div>
-            <div class="app-page-subtitle">{html.escape(subtitle)}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    header_html = (
+        '<div class="app-page-header">'
+        f'{kicker_html}'
+        '<div class="app-page-title-row">'
+        f'{icon_html}'
+        f'<div class="app-page-title">{html.escape(title)}</div>'
+        '</div>'
+        f'<div class="app-page-subtitle">{html.escape(subtitle)}</div>'
+        '</div>'
     )
+    st.markdown(header_html, unsafe_allow_html=True)

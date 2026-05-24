@@ -132,13 +132,28 @@ def _form_submit_button_compat(st_obj: Any, label="Submit", *args, **kwargs):
 
 
 def _plotly_chart_compat(st_obj: Any, figure_or_data, *args, **kwargs):
-    """Keep Plotly-specific width kwargs untouched."""
+    """Render Plotly charts without inheriting Streamlit/browser dark theme."""
     plotly_chart_fn = getattr(
         st_obj,
         "_easyicu_original_plotly_chart",
         st_obj.plotly_chart,
     )
-    return plotly_chart_fn(figure_or_data, *args, **kwargs)
+    kwargs = dict(kwargs)
+    kwargs.setdefault("theme", None)
+    try:
+        figure_or_data.update_layout(
+            template="plotly_white",
+            paper_bgcolor="#FFFFFF",
+            plot_bgcolor="#FFFFFF",
+            font=dict(color="#111827"),
+        )
+    except Exception:
+        pass
+    try:
+        return plotly_chart_fn(figure_or_data, *args, **kwargs)
+    except TypeError:
+        kwargs.pop("theme", None)
+        return plotly_chart_fn(figure_or_data, *args, **kwargs)
 
 
 def apply_streamlit_compat(st: Any) -> None:

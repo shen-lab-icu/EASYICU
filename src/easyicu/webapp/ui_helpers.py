@@ -124,10 +124,14 @@ class ShellNavItem:
     label: str
     icon: str = "bars"
     count: str = ""
+    level: str = "top"
 
 
 def render_nav_item_html(item: ShellNavItem, *, active: bool) -> str:
-    cls = "eu-nav-item active" if active else "eu-nav-item"
+    cls_parts = ["eu-nav-item", f"level-{item.level}"]
+    if active:
+        cls_parts.append("active")
+    cls = " ".join(cls_parts)
     ico = icon(item.icon) or ""
     count_html = f'<span class="count">{html.escape(item.count)}</span>' if item.count else ""
     return (

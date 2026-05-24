@@ -2,15 +2,102 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any
 
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to this extracted renderer."""
-    protected = {'render_cohort_dashboard_subtab', "_install_app_context"}
+    protected = {
+        'render_cohort_dashboard_subtab',
+        "_install_app_context",
+        "_render_section_heading",
+    }
     for name, value in app_context.items():
         if not name.startswith("__") and name not in protected:
             globals()[name] = value
+
+
+def _render_section_heading(title: str, eyebrow: str | None = None) -> None:
+    eyebrow_html = (
+        f'<span>{html.escape(eyebrow)}</span>'
+        if eyebrow else ""
+    )
+    st.markdown(
+        '<div class="eu-native-section-heading">'
+        f'{eyebrow_html}<b>{html.escape(title)}</b>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_chart_heading(title: str, subtitle: str, eyebrow: str | None = None) -> None:
+    eyebrow_html = f'<div class="eyebrow">{html.escape(eyebrow)}</div>' if eyebrow else ""
+    st.markdown(
+        '<div class="eu-chart-heading">'
+        f'{eyebrow_html}'
+        f'<div class="title">{html.escape(title)}</div>'
+        f'<div class="subtitle">{html.escape(subtitle)}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_metric_grid(cards: list[tuple[str, str, str, str, str]], *, accent_value: bool = False) -> None:
+    body = []
+    value_class = "kpi-value accent" if accent_value else "kpi-value"
+    for value, label, hint, accent, icon in cards:
+        body.append(
+            f'<div class="eu-cohort-kpi" style="--accent:{html.escape(accent)}">'
+            '<div class="kpi-top">'
+            f'<span class="kpi-icon">{html.escape(icon)}</span>'
+            f'<span class="kpi-label">{html.escape(label)}</span>'
+            '</div>'
+            f'<div class="{value_class}">{html.escape(str(value))}</div>'
+            f'<div class="kpi-hint">{html.escape(hint)}</div>'
+            '</div>'
+        )
+    st.markdown('<div class="eu-cohort-kpi-grid">' + "".join(body) + '</div>', unsafe_allow_html=True)
+
+
+def _style_readout_figure(fig, *, height: int, margin: dict[str, int] | None = None, legend_y: float = 1.12):
+    fig.update_layout(
+        template='plotly_white',
+        height=height,
+        margin=margin or dict(l=60, r=56, t=42, b=54),
+        paper_bgcolor='#FFFFFF',
+        plot_bgcolor='#FFFFFF',
+        font=dict(size=12, color='#1f2937'),
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=legend_y,
+            xanchor='right',
+            x=1,
+            bgcolor='rgba(255,255,255,0.94)',
+            bordercolor='rgba(203,213,225,0.75)',
+            borderwidth=1,
+            font=dict(size=11),
+        ),
+        hoverlabel=dict(bgcolor='#111827', font_size=12, font_color='#FFFFFF'),
+    )
+    fig.update_xaxes(
+        gridcolor='#e7edf5',
+        zeroline=False,
+        linecolor='#d7e0ea',
+        tickfont=dict(size=11, color='#475569'),
+        title_font=dict(size=12, color='#475569'),
+        automargin=True,
+    )
+    fig.update_yaxes(
+        gridcolor='#e7edf5',
+        zeroline=False,
+        linecolor='#d7e0ea',
+        tickfont=dict(size=11, color='#475569'),
+        title_font=dict(size=12, color='#475569'),
+        automargin=True,
+    )
+    return fig
 
 
 def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None = None):
@@ -19,7 +106,6 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
         _install_app_context(app_context)
     
 
-    import plotly.express as px
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
     screenshot_mode = _is_screenshot_mode()
@@ -31,7 +117,10 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
         "单一队列的临床画像：表型负担、基线分布、严重程度锚点、结局与已加载模块覆盖度。"
     )
     if not screenshot_mode:
-        st.markdown("### 🎯 " + snapshot_title)
+        _render_section_heading(
+            snapshot_title,
+            "Cohort snapshot" if lang == 'en' else "队列快照",
+        )
         st.caption(snapshot_subtitle)
 
     # 获取入口模式
@@ -229,80 +318,72 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
         )
 
         # ========== 顶部指标卡片 ==========
-        st.markdown("#### " + ("📊 Cohort Snapshot Summary" if lang == 'en' else "📊 队列快照摘要"))
-
-        metric_cols = st.columns(6)
-
-        def metric_card(value, label, hint, accent, icon):
-            st.markdown(f"""
-            <div style="background:#ffffff;border:1px solid #cddbeb;border-left:4px solid {accent};
-                        padding:10px 11px;border-radius:16px;color:#0b1f44;min-height:94px;
-                        display:flex;flex-direction:column;justify-content:center;box-shadow:0 8px 24px rgba(15,31,68,.045)">
-                <div style="display:flex;align-items:center;gap:7px;margin-bottom:5px">
-                    <span style="width:24px;height:24px;border-radius:7px;background:{accent};color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.82rem;font-weight:900">{icon}</span>
-                    <span style="font-size:.66rem;font-weight:850;color:#60718a;letter-spacing:.07em;text-transform:uppercase">{label}</span>
-                </div>
-                <div style="font-size:1.55rem;font-weight:900;line-height:1.05;color:#0b1f44;letter-spacing:-.02em">{value}</div>
-                <div style="font-size:.66rem;color:#60718a;margin-top:4px;font-weight:700">{hint}</div>
-            </div>
-            """, unsafe_allow_html=True)
+        _render_section_heading(
+            "Cohort Snapshot Summary" if lang == 'en' else "队列快照摘要",
+            "Summary" if lang == 'en' else "概览",
+        )
 
         metrics = review['metrics']
         card_specs = [
-            (metrics['patients'], "Patients" if lang == 'en' else "患者数", "cohort size" if lang == 'en' else "队列规模", "#2563eb", "👥"),
+            (metrics['patients'], "Patients" if lang == 'en' else "患者数", "cohort size" if lang == 'en' else "队列规模", "#2563eb", "N"),
             (metrics['features'], "Loaded features" if lang == 'en' else "已载入特征", "available signal" if lang == 'en' else "可用信号", "#0891b2", "▦"),
             (metrics['median_sofa'], "Median SOFA" if lang == 'en' else "SOFA中位数", "severity anchor" if lang == 'en' else "严重程度锚点", "#0f766e", "⌁"),
             (metrics['phenotype_burden'], "Top phenotype" if lang == 'en' else "最高表型占比", "max prevalence" if lang == 'en' else "最高患病/干预率", "#7c3aed", "◆"),
             (metrics['mortality'], "Mortality" if lang == 'en' else "死亡率", "outcome check" if lang == 'en' else "结局校验", "#e11d48", "↯"),
             (metrics['median_los'], "Median LOS" if lang == 'en' else "LOS中位数", "resource use" if lang == 'en' else "资源占用", "#475569", "▣"),
         ]
-        with metric_cols[0]:
-            metric_card(*card_specs[0])
-        with metric_cols[1]:
-            metric_card(*card_specs[1])
-        with metric_cols[2]:
-            metric_card(*card_specs[2])
-        with metric_cols[3]:
-            metric_card(*card_specs[3])
-        with metric_cols[4]:
-            metric_card(*card_specs[4])
-        with metric_cols[5]:
-            metric_card(*card_specs[5])
-
-        _render_compact_divider()
+        _render_metric_grid(card_specs)
 
         # ========== 图表行1: 临床表型和严重程度 ==========
-        chart_col1, chart_col2 = st.columns([1, 1.15])
+        chart_col1, chart_col2 = st.columns([1, 1.08], gap="large")
 
         with chart_col1:
-            st.markdown("##### " + ("Clinical Phenotype Prevalence" if lang == 'en' else "临床表型占比"))
+            _render_chart_heading(
+                "Clinical phenotype prevalence" if lang == 'en' else "临床表型占比",
+                "Share of patients carrying each phenotype or support signal." if lang == 'en' else "各临床表型或器官支持信号在当前队列中的占比。",
+                "Phenotype" if lang == 'en' else "表型",
+            )
             phenotype_df = review['phenotype']
             if not phenotype_df.empty:
-                fig = px.bar(
-                    phenotype_df,
-                    x='pct',
-                    y='label',
-                    orientation='h',
-                    text=phenotype_df['pct'].map(lambda x: f"{x:.1f}%"),
-                    color='pct',
-                    color_continuous_scale=['#dbeafe', '#0f766e'],
-                    labels={'pct': "Prevalence (%)" if lang == 'en' else "占比 (%)", 'label': ""},
-                    template='plotly_white',
+                plot_df = phenotype_df.sort_values('pct', ascending=True)
+                colors = ['#dbeafe'] * len(plot_df)
+                if colors:
+                    colors[-1] = '#0f766e'
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Bar(
+                        x=plot_df['pct'],
+                        y=plot_df['label'],
+                        orientation='h',
+                        marker=dict(color=colors, line=dict(color='rgba(15,118,110,0.18)', width=1)),
+                        text=plot_df['pct'].map(lambda x: f"{x:.1f}%"),
+                        textposition='outside',
+                        cliponaxis=False,
+                        hovertemplate='%{y}<br>%{x:.1f}%<extra></extra>',
+                        name="Prevalence" if lang == 'en' else "占比",
+                    )
                 )
-                fig.update_traces(textposition='outside', cliponaxis=False)
-                fig.update_layout(
-                    height=330,
-                    margin=dict(l=10, r=40, t=12, b=30),
-                    coloraxis_showscale=False,
-                    font=dict(size=13, color='#111827'),
+                _style_readout_figure(
+                    fig,
+                    height=380,
+                    margin=dict(l=118, r=76, t=24, b=58),
                 )
-                fig.update_xaxes(range=[0, max(10, float(phenotype_df['pct'].max()) * 1.18)], gridcolor='#e5e7eb')
+                fig.update_layout(showlegend=False)
+                fig.update_xaxes(
+                    title_text="Prevalence (%)" if lang == 'en' else "占比 (%)",
+                    range=[0, max(10, float(plot_df['pct'].max()) * 1.26)],
+                )
+                fig.update_yaxes(title_text="")
                 st.plotly_chart(fig, use_container_width=True, key="dash_phenotype_prevalence", config=_get_plotly_chart_config())
             else:
                 st.warning("No clinical phenotype columns found" if lang == 'en' else "未找到临床表型列")
 
         with chart_col2:
-            st.markdown("##### " + ("SOFA Severity Anchor & Outcome" if lang == 'en' else "SOFA严重程度锚点与结局"))
+            _render_chart_heading(
+                "SOFA severity anchor and outcome" if lang == 'en' else "SOFA严重程度锚点与结局",
+                "Patient count by SOFA band with mortality overlaid on a separate scale." if lang == 'en' else "按 SOFA 分层展示患者数，并在独立刻度上叠加死亡率。",
+                "Severity" if lang == 'en' else "严重程度",
+            )
             severity_df = review['severity']
             if not severity_df.empty and severity_df['patients'].sum() > 0:
                 fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -311,9 +392,11 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                         x=severity_df['sofa_group'].astype(str),
                         y=severity_df['patients'],
                         name="Patients" if lang == 'en' else "患者数",
-                        marker_color='rgba(37, 99, 235, 0.55)',
+                        marker=dict(color='rgba(96, 142, 239, 0.72)', line=dict(color='rgba(37,99,235,0.36)', width=1)),
                         text=severity_df['patients'],
                         textposition='outside',
+                        cliponaxis=False,
+                        hovertemplate='%{x}<br>%{y} patients<extra></extra>' if lang == 'en' else '%{x}<br>%{y} 名患者<extra></extra>',
                     ),
                     secondary_y=False,
                 )
@@ -325,42 +408,45 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                         mode='lines+markers+text',
                         text=severity_df['mortality'].map(lambda x: f"{x:.1f}%"),
                         textposition='top center',
-                        marker_color='#e11d48',
-                        line=dict(width=3),
+                        marker=dict(color='#e11d48', size=7),
+                        line=dict(width=2.6, color='#e11d48'),
+                        cliponaxis=False,
+                        hovertemplate='%{x}<br>%{y:.1f}% mortality<extra></extra>' if lang == 'en' else '%{x}<br>%{y:.1f}% 死亡率<extra></extra>',
                     ),
                     secondary_y=True,
                 )
-                fig.update_layout(
-                    template='plotly_white',
-                    height=330,
-                    margin=dict(l=20, r=20, t=12, b=35),
-                    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
-                    font=dict(size=13, color='#111827'),
+                _style_readout_figure(
+                    fig,
+                    height=380,
+                    margin=dict(l=58, r=70, t=52, b=58),
+                    legend_y=1.14,
                 )
-                fig.update_yaxes(title_text="Patients" if lang == 'en' else "患者数", secondary_y=False, gridcolor='#e5e7eb')
-                fig.update_yaxes(title_text="Mortality %" if lang == 'en' else "死亡率 %", secondary_y=True, range=[0, 100])
+                fig.update_yaxes(
+                    title_text="Patients" if lang == 'en' else "患者数",
+                    secondary_y=False,
+                    range=[0, max(5, float(severity_df['patients'].max()) * 1.28)],
+                )
+                fig.update_yaxes(
+                    title_text="Mortality %" if lang == 'en' else "死亡率 %",
+                    secondary_y=True,
+                    range=[0, 100],
+                    showgrid=False,
+                )
                 fig.update_xaxes(title_text="SOFA group" if lang == 'en' else "SOFA分层")
                 st.plotly_chart(fig, use_container_width=True, key="dash_severity_outcome", config=_get_plotly_chart_config())
             else:
                 st.warning("No SOFA severity column found" if lang == 'en' else "未找到SOFA严重程度列")
 
-        # 图表行 2 被删除（2026-05 Phase C 去重）：
-        #   - Baseline Distributions (Age + LOS days) 移到 Patient Review →
-        #     Patient Overview（避免与个人级 trend 重复）。
-        #   - Data Coverage by Module 移到 Cohort Statistics → Coverage tab
-        #     （那里是 coverage 的主页，避免双份）。
-        # 这里仅保留指向 SOFA Δ 的 1 行 teaser，让 Snapshot 真正变成
-        # "one-page cohort profile" 而不是杂烩。
         reclass = review.get('reclassification') or {}
         if reclass.get('available'):
             discordant_pct = reclass.get('metrics', {}).get('discordant_pct', '')
             teaser_en = (
-                f"Under SOFA-2, {discordant_pct} of patients reclassify — open the "
-                "**SOFA-1 vs SOFA-2** tab for the matrix, organ contributors, and mortality breakdown."
+                f"Under SOFA-2, {discordant_pct} of patients reclassify. "
+                "Open the **SOFA Δ** tab for the matrix, organ contributors, and mortality breakdown."
             )
             teaser_zh = (
-                f"在 SOFA-2 下，共 {discordant_pct} 的患者发生重新分层 —— "
-                "切换到 **SOFA-1 vs SOFA-2** 标签查看重分类矩阵、器官贡献度与死亡率。"
+                f"在 SOFA-2 下，共 {discordant_pct} 的患者发生重新分层。"
+                "请切换到 **SOFA Δ** 标签查看重分类矩阵、器官贡献度与死亡率分解。"
             )
             st.info(teaser_en if lang == 'en' else teaser_zh, icon="🧭")
 

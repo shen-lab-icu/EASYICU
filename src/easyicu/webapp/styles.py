@@ -558,13 +558,11 @@ def render_global_styles(st: Any) -> None:
                 grid-template-columns: 1fr;
             }
         }
-        /* Narrow-viewport notice. The data-dense Plotly grids, multi-column
-           Cohort Analysis panels, and side-by-side metric cards in this app
-           are designed for ≥1024 px screens — Streamlit's default narrow
-           layout overlaps the sidebar onto main content and clips charts.
-           Inject a soft banner instead of pretending it'll work. */
+        /* Narrow-viewport notice. Dense charts and review tables are best on
+           wider screens, but the shell keeps the active page readable and
+           exposes a compact top navigation on phones/tablets. */
         body::before {
-            content: "📱 EasyICU is optimised for screens ≥ 1024 px. Cohort Analysis charts, multi-column metric cards, and the sidebar workflow may clip on narrower viewports. Open in a wider window for the full experience.";
+            content: "Narrow view: EasyICU keeps the current page readable here. Use a ≥1024 px window for the full sidebar workspace and dense chart comparison.";
             display: none;
             position: sticky;
             top: 0;

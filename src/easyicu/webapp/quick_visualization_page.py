@@ -22,15 +22,17 @@ def _load_demo_review_workspace_from_state() -> tuple[int, int]:
         params = dict(st.session_state.get("mock_params") or {})
 
     try:
-        params["n_patients"] = int(params.get("n_patients") or 100)
+        params["n_patients"] = int(params.get("n_patients") or 50)
     except (TypeError, ValueError):
-        params["n_patients"] = 100
+        params["n_patients"] = 50
     try:
-        params["hours"] = int(params.get("hours") or 72)
+        params["hours"] = int(params.get("hours") or 48)
     except (TypeError, ValueError):
-        params["hours"] = 72
+        params["hours"] = 48
+    params["demo_profile"] = "lite"
 
-    mock_data, patient_ids = generate_mock_data(**params)
+    demo_generator = globals().get("generate_lightweight_demo_data", generate_mock_data)
+    mock_data, patient_ids = demo_generator(**params)
     st.session_state.mock_params = params
     st.session_state.loaded_concepts = mock_data
     st.session_state.loaded_data_origin = "demo_viz"
@@ -258,14 +260,14 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
 
             elif current_source == "demo":
                 _viz_demo_title = (
-                    "Generate one complete demo review workspace"
+                    "Generate a lightweight demo review workspace"
                     if lang == 'en' else
-                    "生成完整演示审阅工作区"
+                    "生成轻量演示审阅工作区"
                 )
                 _viz_demo_subtitle = (
-                    "Loads representative tables, time series, patient overview, and quality metrics together for a multi-view review workspace."
+                    "Loads a fast core ICU concept set for tables, trends, patient overview, and quality checks."
                     if lang == 'en' else
-                    "一次性加载代表性表格、时间序列、患者概览和质量指标，用于多视角审阅工作区。"
+                    "加载轻量核心 ICU 概念集，用于表格、趋势、患者概览和质量检查。"
                 )
                 st.markdown(
                     f"""
@@ -283,7 +285,7 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                     n_patients = st.slider(
                         "Number of Patients" if lang == 'en' else "患者数量",
                         10,
-                        200,
+                        120,
                         50,
                         key="viz_demo_patients",
                     )
@@ -291,15 +293,15 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                     hours = st.slider(
                         "Data Duration (hours)" if lang == 'en' else "数据时长(小时)",
                         24,
-                        168,
-                        72,
+                        96,
+                        48,
                         key="viz_demo_hours",
                     )
 
                 feature_hint = (
-                    "Will generate ~160+ features across all modules (Vitals, Labs, SOFA, Sepsis, AKI, etc.)"
+                    "Fast demo profile: core vitals, labs, SOFA/SOFA-2, Sepsis-3, AKI, interventions, demographics, and outcomes."
                     if lang == 'en'
-                    else "将生成约160+个特征，覆盖所有模块（生命体征、实验室、SOFA、脓毒症、AKI等）"
+                    else "轻量演示配置：核心生命体征、实验室、SOFA/SOFA-2、Sepsis-3、AKI、干预、人口学和结局。"
                 )
                 st.caption(feature_hint)
 
@@ -310,12 +312,14 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                     key="viz_load_demo",
                 ):
                     with st.spinner(
-                        "Generating all mock data (~160+ features)..." if lang == 'en' else "正在生成全部模拟数据（约160+特征）..."
+                        "Generating lightweight demo data..." if lang == 'en' else "正在生成轻量演示数据..."
                     ):
                         params = get_mock_params_with_cohort()
                         params['n_patients'] = n_patients
                         params['hours'] = hours
-                        mock_data, patient_ids = generate_mock_data(**params)
+                        params['demo_profile'] = 'lite'
+                        demo_generator = globals().get("generate_lightweight_demo_data", generate_mock_data)
+                        mock_data, patient_ids = demo_generator(**params)
                         st.session_state.loaded_concepts = mock_data
                         st.session_state.loaded_data_origin = 'demo_viz'
                         st.session_state.patient_ids = patient_ids

@@ -76,6 +76,7 @@ examples/
 hl_sepsis_newborn/
 hl_sepsis_newborn_model/
 tools/archived
+tools/legacy/
 output
 
 # Audit / 校验报告产物 - 这些是脚本产出的中间文件，不入库
@@ -86,6 +87,10 @@ recycle_*/
 
 # Local experiments and manuscript/submission tooling
 experiments/
+tools/build_v14_task_cohorts.py
+tools/run_v14_agent_experiments.py
+tools/run_local_qwen30b_v15.sh
+tools/finalize_v15_experiment_audit.py
 tools/build_v15_*publication_package.py
 tools/build_v15_*submission_package.py
 tools/build_v15_manuscript_evidence_package.py
@@ -128,4 +133,3 @@ pilot_runs/
 /robustness_summary.csv
 /step_summary.json
 baselines/_checkouts/
-tools/build_v14_task_cohorts.py

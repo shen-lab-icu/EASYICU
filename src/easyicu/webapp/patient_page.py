@@ -101,13 +101,13 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
             elif cname == 'los_icu':
                 _los = f"{float(v.iloc[0]):.1f}d"
             elif cname == 'death':
-                _mort = "☠️ Yes" if float(v.iloc[0]) == 1 else "✅ No"
+                _mort = "Yes" if float(v.iloc[0]) == 1 else "No"
             elif cname == 'mech_vent' and float(v.iloc[0]) > 0:
-                _supports.append("🌬️ MV")
+                _supports.append("MV")
             elif cname == 'rrt' and float(v.iloc[0]) > 0:
-                _supports.append("🚰 RRT")
+                _supports.append("RRT")
             elif cname in ('norepi_rate', 'epi_rate', 'dopa_rate', 'dobu_rate') and float(v.max()) > 0:
-                _supports.append("💉 Vasopressors")
+                _supports.append("Vasopressors")
 
         _supports = list(set(_supports))
         _supports_str = ", ".join(_supports) if _supports else "—"
@@ -118,7 +118,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
 
         st.markdown(f"""
         <div style="background:linear-gradient(135deg,#f0f9ff,#e0f2fe);border:1px solid #bae6fd;border-radius:14px;padding:16px 20px;margin-bottom:16px">
-            <div style="font-size:1.1rem;font-weight:800;color:#0369a1;margin-bottom:10px">📋 {get_text('patient_summary')} — Patient {pid}</div>
+            <div style="font-size:1.1rem;font-weight:800;color:#0369a1;margin-bottom:10px">{get_text('patient_summary')} — Patient {pid}</div>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px">
                 <div><div style="font-size:.72rem;color:#6b7280;text-transform:uppercase;font-weight:700">{_demo_lbl}</div><div style="font-weight:600">{_sex}, {_age}y</div></div>
                 <div><div style="font-size:.72rem;color:#6b7280;text-transform:uppercase;font-weight:700">{_los_lbl}</div><div style="font-weight:600">{_los}</div></div>
@@ -136,11 +136,11 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
         ''', unsafe_allow_html=True)
 
     # 快速导航按钮
-    first_btn = "⏮️ First" if lang == 'en' else "⏮️ 首位"
-    prev_btn = "⬅️ Previous" if lang == 'en' else "⬅️ 上一位"
-    next_btn = "➡️ Next" if lang == 'en' else "➡️ 下一位"
-    last_btn = "⏭️ Last" if lang == 'en' else "⏭️ 末位"
-    rand_btn = "🎲 Random" if lang == 'en' else "🎲 随机"
+    first_btn = "First" if lang == 'en' else "首位"
+    prev_btn = "Previous" if lang == 'en' else "上一位"
+    next_btn = "Next" if lang == 'en' else "下一位"
+    last_btn = "Last" if lang == 'en' else "末位"
+    rand_btn = "Random" if lang == 'en' else "随机"
     first_help = "Jump to first patient" if lang == 'en' else "跳转到第一位患者"
     prev_help = "Previous patient" if lang == 'en' else "上一位患者"
     next_help = "Next patient" if lang == 'en' else "下一位患者"
@@ -203,7 +203,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
         col1, col2, col3 = st.columns([1, 1, 2])
 
         with col1:
-            pat_id_label = "👤 Patient ID" if lang == 'en' else "👤 患者 ID"
+            pat_id_label = "Patient ID" if lang == 'en' else "患者 ID"
             patient_id = _patient_selector(
                 patient_ids=st.session_state.patient_ids,
                 state_key="patient_view_id",
@@ -214,7 +214,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
             )
 
         with col2:
-            view_label = "📋 View Mode" if lang == 'en' else "📋 显示模式"
+            view_label = "View Mode" if lang == 'en' else "显示模式"
             view_options = ["Dashboard", "Category View", "Data Table"] if lang == 'en' else ["综合仪表盘", "分类视图", "数据表格"]
             view_mode = st.selectbox(
                 view_label,
@@ -244,10 +244,10 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
             <div class="metric-card" style="padding:0.5rem 1rem">
                 <div class="stat-label">{data_label}</div>
                 <div style="display:flex;gap:1rem;font-size:0.9rem">
-                    <span>📊 {n_concepts} total</span>
-                    <span>❤️ {n_vitals} vitals</span>
-                    <span>🧪 {n_labs} labs</span>
-                    <span>📈 {n_scores} scores</span>
+                    <span>{n_concepts} total</span>
+                    <span>{n_vitals} vitals</span>
+                    <span>{n_labs} labs</span>
+                    <span>{n_scores} scores</span>
                 </div>
             </div>
             ''', unsafe_allow_html=True)
@@ -260,7 +260,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
 
         if view_mode == dashboard_mode:
             # 自定义综合仪表盘
-            dash_title = "### 📊 Dashboard" if lang == 'en' else "### 📊 综合仪表盘"
+            dash_title = "### Dashboard" if lang == 'en' else "### 综合仪表盘"
             st.markdown(dash_title)
             if screenshot_mode:
                 dash_focus_note = (
@@ -274,27 +274,104 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                 import plotly.graph_objects as go
                 from plotly.subplots import make_subplots
 
-                # Per-patient vitals trend (HR/MAP/SBP/RESP/SpO2) was
-                # removed (2026-05 Phase C de-dup) because **Time Series →
-                # Clinical Lanes** already plots the same vitals (and
-                # adds clinical threshold annotations like Tachycardia /
-                # Fever / Hypoxemia that this view didn't have). Keep
-                # Patient Overview focused on per-patient *summary*; send
-                # users to Time Series for trend inspection.
-                if not screenshot_mode:
-                    ts_hint_en = (
-                        "Vital-sign trends moved to **Time Series** "
-                        "(Clinical Lanes / Single Patient). They share the "
-                        "same per-patient data plus clinical threshold "
-                        "annotations (Tachycardia, Fever, Hypoxemia…) "
-                        "that this view didn't have."
+                def _patient_trend_frame(concept_name):
+                    frame = _patient_concept_frame(concept_name, patient_id, id_col)
+                    if frame is None:
+                        return None
+                    time_col = None
+                    for candidate in time_candidates:
+                        if candidate in frame.columns:
+                            time_col = candidate
+                            break
+                    if time_col is None:
+                        return None
+                    value_col = concept_name if concept_name in frame.columns else _choose_concept_value_column(concept_name, frame)
+                    if value_col is None or value_col not in frame.columns:
+                        return None
+                    plot_frame = frame[[time_col, value_col]].copy()
+                    plot_frame[value_col] = pd.to_numeric(plot_frame[value_col], errors='coerce')
+                    plot_frame = plot_frame.dropna(subset=[time_col, value_col])
+                    if plot_frame.empty:
+                        return None
+                    try:
+                        plot_frame = plot_frame.sort_values(time_col)
+                    except Exception:
+                        pass
+                    return plot_frame.tail(48), time_col, value_col
+
+                def _render_compact_trend_panel(title, concept_specs):
+                    trend_items = []
+                    for concept_name, display_name, unit in concept_specs:
+                        trend_payload = _patient_trend_frame(concept_name)
+                        if trend_payload is None:
+                            continue
+                        trend_items.append((concept_name, display_name, unit, *trend_payload))
+
+                    if not trend_items:
+                        return
+
+                    st.markdown(f"#### {title}")
+                    visible_items = trend_items[:6]
+                    n_cols = min(3, len(visible_items))
+                    n_rows = (len(visible_items) + n_cols - 1) // n_cols
+                    subplot_titles = [
+                        f"{display_name}{f' ({unit})' if unit else ''}"
+                        for _concept, display_name, unit, _frame, _time_col, _value_col in visible_items
+                    ]
+                    fig = make_subplots(
+                        rows=n_rows,
+                        cols=n_cols,
+                        subplot_titles=subplot_titles,
+                        vertical_spacing=0.18 if n_rows > 1 else 0.12,
+                        horizontal_spacing=0.08,
                     )
-                    ts_hint_zh = (
-                        "生命体征趋势已迁移至 **时间序列**"
-                        "（临床通道 / 单患者视图），并附带 "
-                        "心动过速 / 发热 / 低氧 等临床阈值标注。"
+                    palette = ['#2563eb', '#16a34a', '#dc2626', '#7c3aed', '#ea580c', '#0891b2']
+                    for idx, (concept_name, display_name, _unit, plot_frame, time_col, value_col) in enumerate(visible_items):
+                        row = idx // n_cols + 1
+                        col = idx % n_cols + 1
+                        fig.add_trace(
+                            go.Scatter(
+                                x=plot_frame[time_col],
+                                y=plot_frame[value_col],
+                                mode='lines+markers',
+                                name=display_name,
+                                line=dict(color=palette[idx % len(palette)], width=2),
+                                marker=dict(size=4),
+                                hovertemplate=f"{display_name}: %{{y:.2f}}<extra></extra>",
+                            ),
+                            row=row,
+                            col=col,
+                        )
+
+                    fig.update_layout(
+                        height=240 if n_rows == 1 else 430,
+                        template="plotly_white",
+                        showlegend=False,
+                        margin=dict(l=36, r=14, t=38, b=24),
+                        font=dict(size=12, color='black'),
                     )
-                    st.info(ts_hint_en if lang == 'en' else ts_hint_zh, icon="📈")
+                    fig.update_xaxes(tickfont=dict(size=10, color='black'), showgrid=True)
+                    fig.update_yaxes(tickfont=dict(size=10, color='black'), showgrid=True)
+                    st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
+
+                vital_specs = [
+                    ('hr', 'Heart rate' if lang == 'en' else '心率', 'bpm'),
+                    ('map', 'MAP' if lang == 'en' else '平均动脉压', 'mmHg'),
+                    ('sbp', 'SBP' if lang == 'en' else '收缩压', 'mmHg'),
+                    ('resp', 'Respiratory rate' if lang == 'en' else '呼吸频率', '/min'),
+                    ('temp', 'Temperature' if lang == 'en' else '体温', '°C'),
+                    ('spo2', 'SpO2' if lang == 'en' else '血氧饱和度', '%'),
+                ]
+                lab_specs = [
+                    ('lac', 'Lactate' if lang == 'en' else '乳酸', 'mmol/L'),
+                    ('crea', 'Creatinine' if lang == 'en' else '肌酐', 'mg/dL'),
+                    ('plt', 'Platelets' if lang == 'en' else '血小板', '10^9/L'),
+                    ('wbc', 'WBC' if lang == 'en' else '白细胞', '10^9/L'),
+                    ('hgb', 'Hemoglobin' if lang == 'en' else '血红蛋白', 'g/dL'),
+                    ('bili', 'Bilirubin' if lang == 'en' else '胆红素', 'mg/dL'),
+                ]
+                _render_compact_trend_panel('Vital Signs Snapshot' if lang == 'en' else '生命体征快照', vital_specs)
+                _render_compact_trend_panel('Key Laboratory Snapshot' if lang == 'en' else '关键实验室快照', lab_specs)
 
                 # SOFA 评分趋势
                 if 'sofa' in st.session_state.loaded_concepts:
@@ -309,7 +386,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                                 break
 
                         if len(patient_sofa) > 0 and sofa_time_col and not screenshot_mode:
-                            sofa_trend = "#### 📈 SOFA Score Trend" if lang == 'en' else "#### 📈 SOFA 评分趋势"
+                            sofa_trend = "#### SOFA Score Trend" if lang == 'en' else "#### SOFA 评分趋势"
                             st.markdown(sofa_trend)
 
                             # SOFA 分解堆叠图
@@ -350,7 +427,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                 has_sofa2 = 'sofa2' in st.session_state.loaded_concepts
 
                 if has_sofa1 and has_sofa2:
-                    compare_title = "#### 🔄 SOFA-1 vs SOFA-2 Comparison" if lang == 'en' else "#### 🔄 SOFA-1 与 SOFA-2 对比"
+                    compare_title = "#### SOFA-1 vs SOFA-2 Comparison" if lang == 'en' else "#### SOFA-1 与 SOFA-2 对比"
                     st.markdown(compare_title)
 
                     sofa1_df = st.session_state.loaded_concepts['sofa']
@@ -569,7 +646,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                         st.info(no_compare)
 
                 # Dashboard 快速摘要面板
-                summary_title = "#### 📋 Quick Summary" if lang == 'en' else "#### 📋 快速摘要"
+                summary_title = "#### Quick Summary" if lang == 'en' else "#### 快速摘要"
                 st.markdown(summary_title)
 
                 summary_cols = st.columns(4)
@@ -731,7 +808,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
 
         elif view_mode == category_mode:
             # 生命体征
-            vitals_title = "### ❤️ Vital Signs" if lang == 'en' else "### ❤️ 生命体征"
+            vitals_title = "### Vital Signs" if lang == 'en' else "### 生命体征"
             st.markdown(vitals_title)
             vitals = ['hr', 'map', 'sbp', 'resp', 'temp', 'spo2']
             vitals_data = {k: v for k, v in st.session_state.loaded_concepts.items()
@@ -771,7 +848,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                         if k in sofa_concepts and isinstance(v, pd.DataFrame)}
 
             if sofa_data:
-                sofa_title = "### 📊 SOFA Score" if lang == 'en' else "### 📊 SOFA 评分"
+                sofa_title = "### SOFA Score" if lang == 'en' else "### SOFA 评分"
                 st.markdown(sofa_title)
 
                 for sofa_key, sofa_df in sofa_data.items():
@@ -809,7 +886,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                           if k in sepsis_concepts and isinstance(v, pd.DataFrame)}
 
             if sepsis_data:
-                sepsis_title = "### 🦠 Sepsis-3 Status" if lang == 'en' else "### 🦠 Sepsis-3 诊断"
+                sepsis_title = "### Sepsis-3 Status" if lang == 'en' else "### Sepsis-3 诊断"
                 st.markdown(sepsis_title)
                 cols = st.columns(len(sepsis_data))
                 for i, (concept, df) in enumerate(sepsis_data.items()):
@@ -833,7 +910,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                         if k in labs and isinstance(v, pd.DataFrame)}
 
             if labs_data:
-                labs_title = "### 🧪 Laboratory Tests" if lang == 'en' else "### 🧪 实验室检查"
+                labs_title = "### Laboratory Tests" if lang == 'en' else "### 实验室检查"
                 st.markdown(labs_title)
                 cols = st.columns(min(4, len(labs_data)))
                 for i, (concept, df) in enumerate(labs_data.items()):
@@ -864,7 +941,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                       if k in blood_gas and isinstance(v, pd.DataFrame)}
 
             if bg_data:
-                bg_title = "### 🩸 Blood Gas Analysis" if lang == 'en' else "### 🩸 血气分析"
+                bg_title = "### Blood Gas Analysis" if lang == 'en' else "### 血气分析"
                 st.markdown(bg_title)
                 cols = st.columns(min(4, len(bg_data)))
                 for i, (concept, df) in enumerate(bg_data.items()):
@@ -884,7 +961,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                         if k in vasopressors and isinstance(v, pd.DataFrame)}
 
             if vaso_data:
-                vaso_title = "### 💉 Vasopressors" if lang == 'en' else "### 💉 血管活性药物"
+                vaso_title = "### Vasopressors" if lang == 'en' else "### 血管活性药物"
                 st.markdown(vaso_title)
                 cols = st.columns(min(4, len(vaso_data)))
                 for i, (concept, df) in enumerate(vaso_data.items()):
@@ -993,7 +1070,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                          if k in other_scores and isinstance(v, pd.DataFrame)}
 
             if score_data:
-                score_title = "### 📈 Other Scores" if lang == 'en' else "### 📈 其他评分"
+                score_title = "### Other Scores" if lang == 'en' else "### 其他评分"
                 st.markdown(score_title)
                 cols = st.columns(min(4, len(score_data)))
                 for i, (concept, df) in enumerate(score_data.items()):
@@ -1008,7 +1085,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                             st.metric(label=concept.upper(), value=safe_format_number(patient_df[value_col].iloc[-1], 0))
 
         elif view_mode == table_mode:
-            table_title = "### 📋 Patient Data Table" if lang == 'en' else "### 📋 患者数据表格"
+            table_title = "### Patient Data Table" if lang == 'en' else "### 患者数据表格"
             st.markdown(table_title)
             for concept, df in st.session_state.loaded_concepts.items():
                 if id_col in df.columns:

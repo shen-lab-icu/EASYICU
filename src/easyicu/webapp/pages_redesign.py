@@ -34,6 +34,7 @@ from easyicu.webapp.concept_catalog import (
     CONCEPT_GROUP_NAMES,
     CONCEPT_GROUPS_INTERNAL,
 )
+from easyicu.webapp.demo_data import seed_lightweight_demo_workspace
 
 
 def _T(lang: str, en: str, zh: str) -> str:
@@ -258,7 +259,7 @@ def _render_tutorial_dictionary(lang: str) -> None:
 
 
 # =====================================================================
-# Tutorial page
+# Data extraction page
 # =====================================================================
 
 
@@ -267,7 +268,7 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
         # Hero ------------------------------------------------------
         '<div style="padding:0 4px 8px">'
         f'<div class="mono" style="font-size:11px;color:var(--ink-4);'
-        f'letter-spacing:.06em;text-transform:uppercase">{_T(lang, "Tutorial", "教程")}</div>'
+        f'letter-spacing:.06em;text-transform:uppercase">{_T(lang, "Data extraction", "数据提取")}</div>'
         f'<h1 style="margin:6px 0;font-size:28px;font-weight:500;letter-spacing:-0.02em;color:var(--ink)">'
         f'{_T(lang, "Extract, review, analyze, draft.", "数据抽取 → 审阅 → 分析 → 起草")}</h1>'
         f'<p style="margin:0;color:var(--ink-3);font-size:13.5px;max-width:760px;line-height:1.55">'
@@ -347,10 +348,10 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
             "Automatically generates reproducible mock data. Full cohort-builder, Quick Viz, and Research Agent gallery experience. No tokens, no local data needed.",
             "自动生成可重复的模拟数据。完整体验 cohort builder、Quick Viz、Research Agent 静态画廊。无需 token、无需本地数据。"),
         bullets=[
-            _T(lang, "50–500 simulated patients · 24–168h windows",
-                    "50–500 模拟患者 · 24–168 小时"),
-            _T(lang, "Full demo catalog is ready for review",
-                    "完整演示目录已准备好，可直接审阅"),
+            _T(lang, "50-patient fast review set · 24-96h windows",
+                    "50 例快速审阅集 · 24-96 小时"),
+            _T(lang, "Lightweight review data is ready immediately",
+                    "轻量审阅数据可立即打开"),
             _T(lang, "Research Agent static gallery available",
                     "Research Agent 静态输出画廊可看"),
             _T(lang, "Switching sessions never loses your real work",
@@ -454,7 +455,7 @@ def render_tutorial_redesign_page(lang: str) -> None:
     st.markdown(
         '<div class="eu-tutorial-hero">'
         f'<div class="mono" style="font-size:11px;color:var(--ink-4);'
-        f'letter-spacing:0;text-transform:uppercase">{_T(lang, "Tutorial", "教程")}</div>'
+        f'letter-spacing:0;text-transform:uppercase">{_T(lang, "Data extraction", "数据提取")}</div>'
         f'<h1>{_T(lang, "Extract, review, analyze, draft.", "数据抽取 → 审阅 → 分析 → 起草")}</h1>'
         f'<p>{_T(lang, "Start with demo data, a local database export, or code-only agent drafting. The page is arranged like a workbench: entry actions on the left, workflow and agent gates on the right.", "你可以从演示数据、本地数据库导出或仅代码 agent 起草开始。页面按工作台组织：左侧选择入口，右侧保留流程和 agent 审阅闸门。")}</p>'
         '</div>',
@@ -503,10 +504,10 @@ def render_tutorial_redesign_page(lang: str) -> None:
             "Generate reproducible mock ICU data and walk through extraction, review, visualization, and agent handoff without touching local files.",
             "生成可复现的模拟 ICU 数据，直接走完抽取、审阅、可视化和 agent 交接，不需要接触本地文件。"),
         bullets=[
-            _T(lang, "50-500 simulated patients with 24-168h windows",
-                    "50-500 名模拟患者，24-168 小时时间窗"),
-            _T(lang, "Full demo catalog is ready for review",
-                    "完整演示目录已准备好，可直接审阅"),
+            _T(lang, "50-patient fast review set with 24-96h windows",
+                    "50 例快速审阅集，24-96 小时时间窗"),
+            _T(lang, "Lightweight review data is ready immediately",
+                    "轻量审阅数据可立即打开"),
             _T(lang, "Agent gallery and audit handoff are ready",
                     "Agent 画廊和审计交接可直接查看"),
         ],
@@ -1250,10 +1251,10 @@ def render_entry_redesign_page(lang: str) -> None:
             '<span style="margin-top:6px;width:4px;height:4px;background:var(--ink-4);border-radius:999px;flex:none"></span>'
             f'<span>{b}</span></li>'
             for b in [
-                _T(lang, "50–500 simulated patients · 24–168h windows",
-                        "50–500 模拟患者 · 24–168 小时数据"),
-                _T(lang, "Full module catalog available in demo",
-                        "演示模式可查看完整模块目录"),
+                _T(lang, "50-patient fast review set · 24-96h windows",
+                        "50 例快速审阅集 · 24-96 小时数据"),
+                _T(lang, "Lightweight review dataset opens immediately",
+                        "轻量审阅数据集可立即打开"),
                 _T(lang, "Research Agent static gallery viewable",
                         "Research Agent 静态输出画廊可查看"),
                 _T(lang, "Switch to real data anytime without losing work",
@@ -1310,6 +1311,9 @@ def render_entry_redesign_page(lang: str) -> None:
             st.session_state["entry_mode"] = "demo"
             st.session_state["use_mock_data"] = True
             st.session_state["database"] = "mock"
+            seed_lightweight_demo_workspace(st.session_state, force=True)
+            st.session_state["_active_main_page"] = "quick_viz"
+            st.session_state["quick_viz_active_panel"] = "Time Series"
             st.rerun()
     with col_real:
         st.markdown(real_card, unsafe_allow_html=True)
