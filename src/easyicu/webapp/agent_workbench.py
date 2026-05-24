@@ -11,10 +11,9 @@ live run view —
 Data binding
 ------------
 The workbench reads its state from ``st.session_state['_agent_workbench']``
-when present, and otherwise falls back to a representative snapshot so
-the layout is never empty. Use :func:`build_workbench_state_from_manifest`
-to bind a real research-agent ``manifest.json`` / ``manifest_partial.json``
-into that state.
+only after a live run, imported manifest, or explicit history selection binds
+a real run. Use :func:`build_workbench_state_from_manifest` to bind a real
+research-agent ``manifest.json`` / ``manifest_partial.json`` into that state.
 
 Expected shape of ``_agent_workbench`` (all keys optional)::
 
@@ -714,6 +713,7 @@ def _audit_payload(
         "findings": findings[:10],
         "reproducibility": " · ".join(repro_bits),
         "run_status": run_status.get("status") or ("partial" if partial else "complete"),
+        "review_decision": _read_json(run_dir / "review_decision.json"),
     }
 
 
@@ -836,6 +836,22 @@ def _review_gate_actions_from_audit(audit: dict[str, Any], *, lang: str, is_demo
 
 
 def _review_decisions_from_audit(audit: dict[str, Any], *, lang: str, is_demo: bool = False) -> list[dict[str, str]]:
+    review = audit.get("review_decision") if isinstance(audit.get("review_decision"), dict) else {}
+    if review:
+        decision = str(review.get("decision") or "reviewed")
+        note = str(review.get("note") or review.get("updated_at") or "")
+        tone = "selected"
+        if decision in {"repair_requested", "locked"}:
+            tone = "warning"
+        elif decision == "blocked":
+            tone = "danger"
+        return [
+            {
+                "label": _T(lang, f"Saved: {decision}", f"已保存: {decision}"),
+                "state": tone,
+                "detail": _compact_label(note, max_len=96) or _T(lang, "Local review decision recorded.", "已记录本地审核决定。"),
+            }
+        ]
     counts = audit.get("counts") if isinstance(audit.get("counts"), dict) else {}
     errors = int(counts.get("errors") or 0)
     warnings = int(counts.get("warnings") or 0)
@@ -2409,9 +2425,9 @@ def _latest_real_workbench_state(lang: str) -> dict[str, Any] | None:
 def _resolve_workbench_state(lang: str) -> dict[str, Any]:
     existing = st.session_state.get("_agent_workbench")
     if isinstance(existing, dict) and existing.get("steps"):
+        if existing.get("is_demo"):
+            return {}
         return existing
-    if st.session_state.get("entry_mode") == "demo":
-        return _demo_state(lang)
     return {}
 
 
@@ -2419,16 +2435,37 @@ def prime_agent_workbench_state(lang: str) -> None:
     """Compatibility shim; Workbench no longer auto-opens latest runs."""
     existing = st.session_state.get("_agent_workbench")
     if isinstance(existing, dict) and existing.get("steps"):
+        if existing.get("is_demo"):
+            st.session_state.pop("_agent_workbench", None)
         return
 
 
 def _workbench_empty_html(lang: str) -> str:
+    is_demo = st.session_state.get("entry_mode") == "demo"
+    title = (
+        _T(lang, "Demo guide has no active agent run", "Demo 导览没有当前 Agent run")
+        if is_demo else
+        _T(lang, "No active agent run is open", "尚未打开当前 Agent run")
+    )
+    body = (
+        _T(
+            lang,
+            "Demo Mode explains the Research Agent without creating a fake queue. Switch to Real Data Mode, start a run from Setup, or explicitly open a historical manifest.",
+            "Demo 模式只解释 Research Agent，不再伪造运行队列。请切换到真实数据模式，在配置页启动 run，或明确打开历史 manifest。",
+        )
+        if is_demo else
+        _T(
+            lang,
+            "Start from Setup to configure the question, cohort, and LLM, or explicitly open a historical manifest from the run history. Workbench will not silently load the newest old run.",
+            "请先在配置页设置研究问题、队列和 LLM，或从历史记录中明确打开某个 manifest。工作台不会再自动加载最新旧 run。",
+        )
+    )
     return (
         '<div class="eu-agent-empty">'
         '<div>'
         f'<span class="eu-section-label">{_T(lang, "Project entry", "项目入口")}</span>'
-        f'<h2>{_T(lang, "No active agent run is open", "尚未打开当前 Agent run")}</h2>'
-        f'<p>{_T(lang, "Start from Setup to configure the question, cohort, and LLM, or explicitly open a historical manifest from the run history. Workbench will not silently load the newest old run.", "请先在配置页设置研究问题、队列和 LLM，或从历史记录中明确打开某个 manifest。工作台不会再自动加载最新旧 run。")}</p>'
+        f'<h2>{_esc(title)}</h2>'
+        f'<p>{_esc(body)}</p>'
         '</div>'
         '<div class="eu-agent-empty-grid">'
         '<div>'
@@ -2795,19 +2832,21 @@ def render_agent_workbench(lang: str) -> None:
     c1, c2, c3, c4 = st.columns([7.0, 1.8, 1.8, 1.8])
     with c2:
         if st.button(_T(lang, "View summary", "查看摘要"), key="_eu_wb_summary", use_container_width=True):
-            st.session_state["_eu_wb_action_panel"] = "summary"
+            st.session_state["_ra_view"] = "summary"
+            st.rerun()
     with c3:
-        st.button(
-            _T(lang, "Pause run", "暂停运行"),
-            key="_eu_wb_pause_disabled",
+        if st.button(
+            _T(lang, "Run controls", "运行控制"),
+            key="_eu_wb_run_controls",
             use_container_width=True,
-            disabled=True,
             help=_T(
                 lang,
-                "Pause/cancel is only available inside an active live run. This Workbench is a review surface.",
-                "暂停/取消只在实时运行过程中可用；当前 Workbench 是复核视图。",
+                "Open Setup, where live runs are configured and launched.",
+                "打开配置页；实时 run 在那里配置和启动。",
             ),
-        )
+        ):
+            st.session_state["_ra_view"] = "setup"
+            st.rerun()
     with c4:
         if st.button(
             _T(lang, "Plan contract", "计划契约"),

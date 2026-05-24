@@ -8,19 +8,14 @@ from typing import Callable
 def build_main_page_registry(get_text: Callable[[str], str]) -> list[dict[str, str]]:
     """Return the ordered top-level pages shown in the main tab bar.
 
-    Tab IA (since the 2026-05 Phase A/B redesign, then revised: Tutorial
-    restored as a top tab):
+    Tab IA (2026-05 revision):
 
-    * **Tutorial** is the leftmost top tab again so first-time users can
-      find the data-preparation workflow guide without digging into the
-      sidebar. The page is also still reachable via the sidebar
-      "📚 Workflow Help" button and via ``_scroll_to_tab='tutorial'``
-      nav requests.
-    * **Cross-DB Benchmark** is a top tab because it requires ≥2
-      database roots, structurally different from the other Cohort
-      Statistics panels.
-    * **Cohort Analysis → Cohort Statistics** (rename) shows 4 subtabs
-      (Groups / Coverage / Snapshot / SOFA Δ).
+    * **Data Extraction** is the first page and owns the demo/local/code
+      entry decisions plus the concept dictionary.
+    * **Data Visualization** is represented in the sidebar as a group
+      containing Patient Review, Cohort Statistics, and Cross-DB Benchmark.
+      The hidden fallback radio keeps those pages as routable top-level keys.
+    * **Research Agent** remains a separate analysis/drafting layer.
     """
     return [
         {"key": "tutorial", "label": get_text("home")},

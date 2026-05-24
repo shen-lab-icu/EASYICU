@@ -83,13 +83,13 @@ def enforce_external_llm_opt_in(
     resolved_language = language or st.session_state.get("language", "zh")
     if resolved_language == "en":
         raise AIOptInError(
-            "AI features are disabled. Enable the sidebar toggle "
-            "'Show floating AI assistant' before running an external LLM "
-            "call, or pick the offline MockLLMClient option."
+            "AI features are disabled. Enable AI assistant in the sidebar, "
+            "or tick the per-run external LLM opt-in before launching this "
+            "run. You can also pick the offline MockLLMClient option."
         )
     raise AIOptInError(
-        "AI 功能当前处于关闭状态。请先在侧边栏顶部的 🤖 AI 助手中开启"
-        "「显示悬浮 AI 助手」开关,再运行真实 LLM,或选择离线的 "
+        "AI 功能当前处于关闭状态。请先在侧边栏的 AI 助手设置中启用, "
+        "或勾选本次运行的外部 LLM 调用授权后再启动。也可以选择离线的 "
         "MockLLMClient。"
     )
 

@@ -5,22 +5,32 @@ import json
 import re
 import sys
 import types
+from pathlib import Path
 
 import easyicu
 from easyicu.concept import load_dictionary
 import easyicu.webapp.app as app
 import easyicu.webapp.concept_catalog as concept_catalog
+import easyicu.webapp.cohort_dashboard_page as cohort_dashboard_page
 import easyicu.webapp.cohort_filters as cohort_filters
+import easyicu.webapp.cohort_group_page as cohort_group_page
 import easyicu.webapp.cohort_redesign as cohort_redesign
+import easyicu.webapp.cohort_severity_page as cohort_severity_page
 import easyicu.webapp.cohort_workspace as cohort_workspace
+import easyicu.webapp.demo_data as demo_data
 import easyicu.webapp.data_paths as data_paths
 import easyicu.webapp.data_workflows as data_workflows
 import easyicu.webapp.export_reports as export_reports
 import easyicu.webapp.export_workflow as export_workflow
+import easyicu.webapp.i18n as i18n
+import easyicu.webapp.page_header as page_header
 import easyicu.webapp.pages_redesign as pages_redesign
+import easyicu.webapp.patient_page as patient_page
 import easyicu.webapp.quality_page as quality_page
+import easyicu.webapp.research_agent as research_agent
 import easyicu.webapp.sidebar as sidebar
 import easyicu.webapp.shell_styles as shell_styles
+import easyicu.webapp.sofa_reclassification as sofa_reclassification
 import easyicu.webapp.subprocess_workers as subprocess_workers
 import easyicu.webapp.ui_helpers as ui_helpers
 import pandas as pd
@@ -917,17 +927,41 @@ def test_plotly_compat_keeps_plotly_specific_width_api_untouched(monkeypatch) ->
     class _PlotlyStub:
         def __init__(self) -> None:
             self.kwargs = None
+            self.layout_updates = None
 
-        def plotly_chart(self, _figure, **kwargs):
+        def update_layout(self, **kwargs):
+            self.layout_updates = kwargs
+            return self
+
+        def plotly_chart(self, figure, **kwargs):
+            self.figure = figure
             self.kwargs = kwargs
             return None
 
     streamlit_stub = _PlotlyStub()
     monkeypatch.setattr(app, "st", streamlit_stub)
 
-    app._plotly_chart_compat("figure", use_container_width=True, config={"displaylogo": False})
+    app._plotly_chart_compat(streamlit_stub, use_container_width=True, config={"displaylogo": False})
 
-    assert streamlit_stub.kwargs == {"use_container_width": True, "config": {"displaylogo": False}}
+    assert streamlit_stub.kwargs == {
+        "use_container_width": True,
+        "config": {"displaylogo": False},
+        "theme": None,
+    }
+    assert streamlit_stub.layout_updates == {
+        "template": "plotly_white",
+        "paper_bgcolor": "#FFFFFF",
+        "plot_bgcolor": "#FFFFFF",
+        "font": {"color": "#111827"},
+    }
+
+
+def test_streamlit_theme_is_fixed_to_light_mode() -> None:
+    config_path = Path(app.__file__).resolve().parents[3] / ".streamlit" / "config.toml"
+    theme_config = config_path.read_text(encoding="utf-8")
+
+    assert '[theme]' in theme_config
+    assert 'base = "light"' in theme_config
 
 
 def test_quality_panel_switcher_renders_one_lazy_panel(monkeypatch) -> None:
@@ -976,7 +1010,7 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     css_text = shell_styles._STREAMLIT_OVERRIDES
 
     assert "All 19 modules / 167 features available" not in source_text
-    assert "Full module catalog available in demo" in source_text
+    assert "Lightweight review dataset opens immediately" in source_text
     assert "Use local data folder" in source_text
     assert "try first" in source_text
     assert "_eu_entry_lang_toggle" in source_text
@@ -1008,23 +1042,121 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
         page_source = handle.read()
     with open(cohort_redesign.__file__, encoding="utf-8") as handle:
         cohort_source = handle.read()
+    with open(cohort_group_page.__file__, encoding="utf-8") as handle:
+        cohort_group_source = handle.read()
+    with open(cohort_dashboard_page.__file__, encoding="utf-8") as handle:
+        cohort_dashboard_source = handle.read()
+    with open(cohort_severity_page.__file__, encoding="utf-8") as handle:
+        cohort_severity_source = handle.read()
+    with open(sofa_reclassification.__file__, encoding="utf-8") as handle:
+        sofa_reclassification_source = handle.read()
     with open(app.__file__, encoding="utf-8") as handle:
         app_source = handle.read()
+    with open(i18n.__file__, encoding="utf-8") as handle:
+        i18n_source = handle.read()
+    with open(patient_page.__file__, encoding="utf-8") as handle:
+        patient_source = handle.read()
+    with open(research_agent.__file__, encoding="utf-8") as handle:
+        research_agent_source = handle.read()
+    css_text = shell_styles._STREAMLIT_OVERRIDES
 
     assert "167 features" not in page_source
     assert "10 of 167" not in page_source
     assert "Concept catalog · 19" not in page_source
     assert "try first" in page_source
-    assert "Full demo catalog is ready for review" in page_source
+    assert "Lightweight review data is ready immediately" in page_source
     assert "review concept set" in page_source
     assert "Demo set" in cohort_source
     assert "if _active == 'tutorial':" in app_source
     assert "'tutorial':       ('Run'" not in app_source
+    assert 'key="_eu_topbar_history"' not in app_source
+    assert 'key="_eu_topbar_agent"' not in app_source
+    assert "### 👥" not in cohort_group_source
+    assert "#### 🔀" not in cohort_group_source
+    assert "👤 Demographics" not in cohort_group_source
+    assert "💀 Survived" not in cohort_group_source
+    assert "_render_section_heading" in cohort_group_source
+    assert "eu-native-section-heading" in cohort_group_source
+    assert "### 🎯" not in cohort_dashboard_source
+    assert "📊 Cohort Snapshot Summary" not in cohort_dashboard_source
+    assert "Open the **SOFA Δ** tab for the matrix" in cohort_dashboard_source
+    assert "SOFA-1 vs SOFA-2 Reclassification" not in cohort_dashboard_source
+    assert "dash_reclass_matrix" not in cohort_dashboard_source
+    assert "dash_reclass_organ_contrib" not in cohort_dashboard_source
+    assert "st.columns(6)" not in cohort_dashboard_source
+    assert "_style_readout_figure" in cohort_dashboard_source
+    assert "Clinical phenotype prevalence" in cohort_dashboard_source
+    assert "reclass_matrix" in cohort_severity_source
+    assert "reclass_organ_contrib" in cohort_severity_source
+    assert "_style_reclass_figure" in cohort_severity_source
+    assert "Reclassification matrix" in cohort_severity_source
+    assert "st.columns(5)" not in sofa_reclassification_source
+    assert "eu-cohort-kpi-grid" in sofa_reclassification_source
+    assert "### 🧭" not in cohort_severity_source
+    assert "_render_section_heading" in cohort_dashboard_source
+    assert "_render_section_heading" in cohort_severity_source
+    assert '"👥 Groups"' not in app_source
+    assert '"🎯 Snapshot"' not in app_source
+    assert '"🧭 SOFA Δ"' not in app_source
+    assert 'key_suffix="global"' not in app_source
+    assert '"● Setup"' not in app_source
+    assert '"● Workbench"' not in app_source
+    assert '"● Summary"' not in app_source
+    assert "'review_tables': '📋 Data Tables'" not in i18n_source
+    assert "'review_trends': '📈 Time Series'" not in i18n_source
+    assert "'review_patients': '🏥 Patient Overview'" not in i18n_source
+    assert "'review_quality': '📊 Data Quality'" not in i18n_source
+    assert "'lane_vitals': '❤️ Vital Signs'" not in i18n_source
+    assert "'sub_timeseries': '📈 Time Series'" not in i18n_source
+    assert "'sub_data_quality': '📊 Data Quality'" not in i18n_source
+    assert "'sub_data_table': '📋 数据大表'" not in i18n_source
+    assert "### 📊 Dashboard" not in patient_source
+    assert "#### 📈 SOFA Score Trend" not in patient_source
+    assert "#### 🔄 SOFA-1 vs SOFA-2 Comparison" not in patient_source
+    assert "Vital-sign trends moved" not in patient_source
+    assert "Vital Signs Snapshot" in patient_source
+    assert "_render_compact_trend_panel" in patient_source
+    assert '"👤 Patient ID"' not in patient_source
+    assert '"⏮️ First"' not in patient_source
+    assert 'icon="🧪"' not in research_agent_source
+    assert 'st.button(f"🤖 {label}"' not in app_source
+    assert ".eu-native-section-heading" in css_text
+    assert ".eu-cohort-kpi-grid" in css_text
+    assert ".eu-chart-heading" in css_text
+    assert "grid-template-columns: repeat(auto-fit" in css_text
+    assert '[data-testid="stMetric"]' in css_text
+    assert "font-size: 16px" in css_text
+    assert '[data-baseweb="tag"]' in css_text
+
+
+def test_page_header_renders_html_without_markdown_code_blocks(monkeypatch) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    class _StreamlitStub:
+        @staticmethod
+        def markdown(body: str, unsafe_allow_html: bool = False) -> None:
+            calls.append((body, unsafe_allow_html))
+
+    monkeypatch.setattr(page_header, "st", _StreamlitStub)
+
+    page_header.render_page_header(
+        "EasyICU Research Agent",
+        "Demo Mode is a lightweight preview.",
+        icon="",
+        kicker="Research Agent",
+    )
+
+    assert calls
+    body, unsafe = calls[0]
+    assert unsafe is True
+    assert body.startswith('<div class="app-page-header">')
+    assert "\n        <div" not in body
+    assert '<div class="app-page-title">EasyICU Research Agent</div>' in body
 
 
 def test_tutorial_surfaces_existing_data_dictionary_preview() -> None:
     modules = pages_redesign._tutorial_dictionary_modules("en")
-    html = pages_redesign._tutorial_dictionary_scroll_html(
+    html = pages_redesign._tutorial_dictionary_module_html(
         "en",
         selected_module="vitals",
     )
@@ -1044,26 +1176,17 @@ def test_tutorial_surfaces_existing_data_dictionary_preview() -> None:
     )
 
     total_features = sum(len(module["concepts"]) for module in modules)
-    module_counts: dict[str, int] = {}
-    for block in re.findall(r'<section class="eu-dict-module-block"[^>]*>(.*?)</section>', html):
-        heading = re.search(r"<b>(.*?)</b>.*?<span>(\d+) features</span>", block, re.S)
-        assert heading is not None
-        module_counts[heading.group(1)] = block.count("eu-dict-list-row")
-        assert module_counts[heading.group(1)] == int(heading.group(2))
+    selected_module = next(module for module in modules if module["key"] == "vitals")
 
     assert len(modules) == 19
     assert total_features >= 200
     assert total_features == len(pages_redesign.CONCEPT_DICTIONARY)
-    assert html.count("eu-dict-list-row") == total_features
-    assert len(module_counts) == len(modules)
-    assert module_counts["❤️ Vital Signs"] == 8
-    assert module_counts["💊 Other Medications"] == 49
-    assert module_counts["🎯 Outcome"] == 3
+    assert len(selected_module["concepts"]) == 8
+    assert html.count("eu-dict-list-row") == len(selected_module["concepts"])
     assert html.count('data-active="true"') == 1
-    assert "eu-dict-scroll" in html
-    assert html.index("Vital Signs") < html.index("SOFA-2")
-    assert "norepi_rate" in html
-    assert "SOFA-2 Score" in html
+    assert "eu-dict-module-preview" in html
+    assert "Vital Signs" in html
+    assert "SOFA-2 Score" not in html
     assert "Heart Rate" in html
     assert 'data-selected="true"' not in html
     assert "167" not in html
@@ -1076,17 +1199,14 @@ def test_tutorial_surfaces_existing_data_dictionary_preview() -> None:
     assert "Open selected module -> Concepts" in source_text
     assert "src/easyicu/data/concept-dict.json" in source_text
     assert "st-key-eu_tutorial_dictionary_panel" in css_text
-    assert "min-height: clamp(520px, 56vh, 720px)" in css_text
-    assert ".eu-dict-scroll" in css_text
-    assert "max-height: 390px" in css_text
     assert 'content: "⌄"' in css_text
     assert "width: 40px" in css_text
     assert "font-size: 22px" in css_text
     assert "rgba(216, 246, 248" not in css_text
-    assert '.eu-dict-module-block[data-active="true"]' in css_text
+    assert ".eu-dict-module-heading" in css_text
 
 
-def test_quick_visualization_demo_stays_light_until_render_request(tmp_path, monkeypatch) -> None:
+def test_quick_visualization_demo_entry_autoloads_light_review_workspace(tmp_path, monkeypatch) -> None:
     streamlit_testing = pytest.importorskip("streamlit.testing.v1")
 
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
@@ -1097,16 +1217,14 @@ def test_quick_visualization_demo_stays_light_until_render_request(tmp_path, mon
     at.session_state["language"] = "en"
     at.run(timeout=60)
     at.button(key="_eu_entry_demo").click().run(timeout=60)
-    # Main nav is a st.radio since the tabs→radio refactor: only the active
-    # page renders. Demo Quick Viz should not auto-generate the full review
-    # workspace on navigation; the Render action performs that heavier work.
-    at.session_state["_active_main_page"] = "quick_viz"
-    at.run(timeout=60)
-
-    assert "loaded_concepts" not in at.session_state or len(at.session_state["loaded_concepts"]) == 0
-    assert "viz_load_demo" in {button.key for button in at.button}
+    assert at.session_state["_active_main_page"] == "quick_viz"
+    assert at.session_state["loaded_data_origin"] == "demo_viz"
+    assert at.session_state["mock_params"]["demo_profile"] == "lite"
+    assert 0 < len(at.session_state["loaded_concepts"]) < 90
+    assert len(at.session_state["patient_ids"]) == 50
+    assert "viz_load_demo" not in {button.key for button in at.button}
     markdown_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
-    assert "Generate one complete demo review workspace" in markdown_text
+    assert "Generating lightweight demo data" not in markdown_text
     warning_text = " ".join(getattr(warning, "value", "") for warning in at.warning)
     assert "Dashboard rendering failed" not in warning_text
     assert "time_candidates" not in warning_text
@@ -1124,6 +1242,9 @@ def test_topbar_render_loads_quick_preview_from_demo_mode(tmp_path, monkeypatch)
     at.run(timeout=60)
     at.button(key="_eu_entry_demo").click().run(timeout=60)
     at.session_state["_active_main_page"] = "quick_viz"
+    at.session_state["loaded_concepts"] = {}
+    at.session_state["loaded_data_origin"] = "none"
+    at.session_state["patient_ids"] = []
     at.run(timeout=60)
 
     warning_text = " ".join(getattr(warning, "value", "") for warning in at.warning)
@@ -1134,7 +1255,8 @@ def test_topbar_render_loads_quick_preview_from_demo_mode(tmp_path, monkeypatch)
 
     assert at.session_state["loaded_data_origin"] == "demo_viz"
     assert len(at.session_state["loaded_concepts"]) > 0
-    assert len(at.session_state["patient_ids"]) == 100
+    assert len(at.session_state["loaded_concepts"]) < 90
+    assert len(at.session_state["patient_ids"]) == 50
     success_text = " ".join(getattr(success, "value", "") for success in at.success)
     assert "Loaded demo review workspace" not in success_text
     assert "Demo review workspace loaded automatically" not in success_text
@@ -1264,9 +1386,9 @@ def test_data_table_page_copy_emphasizes_preview_language() -> None:
     english = app._get_data_table_page_copy("en")
     chinese = app._get_data_table_page_copy("zh")
 
-    assert english["title"] == "📋 Module Table Preview"
+    assert english["title"] == "Module Table Preview"
     assert "Preview loaded tables by module" in english["description"]
-    assert chinese["title"] == "📋 模块数据预览"
+    assert chinese["title"] == "模块数据预览"
 
 
 def test_quick_viz_data_table_overlap_guards_are_in_shell_css() -> None:
@@ -1281,9 +1403,9 @@ def test_single_feature_preview_copy_matches_preview_style() -> None:
     english = app._get_single_feature_preview_copy("sofa", "en")
     chinese = app._get_single_feature_preview_copy("sofa", "zh")
 
-    assert english["title"] == "🧪 Single Feature Preview"
+    assert english["title"] == "Single Feature Preview"
     assert "Inspect `sofa`" in english["description"]
-    assert chinese["title"] == "🧪 单特征预览"
+    assert chinese["title"] == "单特征预览"
 
 
 def test_select_timeseries_screenshot_concepts_prefers_representative_clinical_series() -> None:
@@ -1333,6 +1455,15 @@ def test_ensure_cohort_demo_workspace_bootstraps_all_cohort_panels() -> None:
     assert not state["dash_demographics"].empty
     assert set(state["multidb_data"].keys()) == {"miiv", "eicu", "aumc", "hirid", "mimic", "sic"}
     assert state["multidb_concepts"][:4] == ["hr", "sbp", "dbp", "map"]
+
+
+def test_lightweight_demo_data_keeps_review_surface_small() -> None:
+    data, patient_ids = demo_data.generate_lightweight_demo_data(n_patients=50, hours=48)
+
+    assert len(patient_ids) == 50
+    assert 40 <= len(data) < 90
+    assert {"hr", "map", "sofa2", "sep3_sofa2", "aki", "death", "los_icu"} <= set(data)
+    assert sum(len(frame) for frame in data.values()) < 50_000
 
 
 def test_ensure_cohort_real_workspace_syncs_global_review_state(tmp_path, monkeypatch) -> None:
@@ -1449,10 +1580,10 @@ def test_real_cohort_page_keeps_panel_import_paths_visible_before_shared_workspa
     app.render_cohort_comparison_page()
 
     assert streamlit_stub.tabs_labels == [
-        "👥 Groups",
-        "🧾 Coverage",
-        "🎯 Snapshot",
-        "🧭 SOFA Δ",
+        "Groups",
+        "Coverage",
+        "Snapshot",
+        "SOFA Δ",
     ]
     assert rendered_panels == ["groups", "coverage", "snapshot", "sofa"]
 
@@ -1610,13 +1741,32 @@ def test_resolve_viz_data_source_mode_keeps_session_state_valid_without_widget_i
 def test_apply_screenshot_mode_ui_state_closes_floating_ai_and_clears_ai_jump() -> None:
     state = {
         "_floating_ai_open": True,
+        "_sidebar_ai_open": True,
+        "_eu_sidebar_settings_open": True,
+        "_inline_ai_panel_open": True,
         "_scroll_to_tab": "ai_assistant",
     }
 
     app._apply_screenshot_mode_ui_state(state)
 
     assert state["_floating_ai_open"] is False
+    assert state["_sidebar_ai_open"] is False
+    assert state["_eu_sidebar_settings_open"] is False
+    assert state["_inline_ai_panel_open"] is False
     assert "_scroll_to_tab" not in state
+
+
+def test_open_embedded_ai_assistant_targets_main_workspace_panel() -> None:
+    state: dict[str, object] = {"llm_enabled": False, "_floating_ai_open": True}
+
+    app._open_embedded_ai_assistant(state, "How should I configure SOFA?")
+
+    assert state["llm_enabled"] is True
+    assert state["_llm_toggle"] is True
+    assert state["_inline_ai_panel_open"] is True
+    assert state["_sidebar_ai_open"] is False
+    assert state["_floating_ai_open"] is False
+    assert state["_ai_pending_question"] == "How should I configure SOFA?"
 
 
 def test_sync_quick_viz_screenshot_mode_requests_rerun_on_toggle_transition() -> None:
@@ -2213,6 +2363,25 @@ def test_topbar_cohort_action_refreshes_demo_workspace() -> None:
     assert state["cohort_is_demo"] is True
 
 
+def test_real_data_step1_requires_current_validated_path(tmp_path) -> None:
+    data_root = tmp_path / "miiv"
+    data_root.mkdir()
+
+    state = {
+        "entry_mode": "real",
+        "data_path": str(data_root),
+        "path_validated": False,
+    }
+    assert app._real_data_source_ready_for_step1(state) is False
+
+    state["path_validated"] = True
+    state["last_validated_path"] = str(tmp_path / "other")
+    assert app._real_data_source_ready_for_step1(state) is False
+
+    state["last_validated_path"] = str(data_root)
+    assert app._real_data_source_ready_for_step1(state) is True
+
+
 def test_topbar_crossdb_real_action_opens_loader_when_data_missing() -> None:
     state = {
         "_eu_topbar_run_request": {"page": "cross_db"},
@@ -2376,7 +2545,7 @@ def test_crossdb_summary_uses_loaded_data_instead_of_static_design_numbers(monke
     assert "Sepsis-3 mortality benchmark" not in payload
 
 
-def test_topbar_research_agent_demo_action_opens_summary() -> None:
+def test_topbar_research_agent_demo_action_opens_guide() -> None:
     state = {
         "_eu_topbar_run_request": {"page": "research_agent"},
         "entry_mode": "demo",
@@ -2385,8 +2554,8 @@ def test_topbar_research_agent_demo_action_opens_summary() -> None:
     result = app._consume_topbar_run_request(state, "research_agent", "en")
 
     assert result["level"] == "success"
-    assert state["_ra_view"] == "summary"
-    assert "Summary" in result["message"]
+    assert state["_ra_view"] == "setup"
+    assert "guide" in result["message"]
     assert "_eu_topbar_run_request" not in state
 
 
@@ -2424,22 +2593,73 @@ def test_sidebar_context_summary_uses_plain_setup_language(monkeypatch) -> None:
     assert "not a project" not in html
 
 
-def test_sidebar_spacing_and_empty_rail_guide_address_review_comments(monkeypatch) -> None:
+def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> None:
     streamlit_stub = _SessionStateStreamlit({
+        "language": "en",
         "mock_params": {"n_patients": 64},
         "step2_confirmed": False,
         "selected_concepts": [],
     })
     monkeypatch.setattr(sidebar, "st", streamlit_stub)
 
-    guide_html = sidebar._sidebar_next_steps_html("demo", "en")
+    nav_items = sidebar._shell_nav_items("demo")
+    nav_by_key = {item.key: item for item in nav_items}
+
+    assert [item.key for item in nav_items] == [
+        "tutorial",
+        "quick_viz",
+        "cohort",
+        "cross_db",
+        "research_agent",
+    ]
+    assert nav_by_key["tutorial"].label == "Data Extraction"
+    assert nav_by_key["quick_viz"].label == "Patient Review"
+    assert nav_by_key["quick_viz"].level == "child"
+    assert nav_by_key["cohort"].level == "child"
+    assert nav_by_key["cross_db"].level == "child"
+    assert nav_by_key["research_agent"].level == "top"
+
+    assert not hasattr(sidebar, "_sidebar_next_steps_html")
     css_text = shell_styles._STREAMLIT_OVERRIDES
 
-    assert "eu-side-guide" in guide_html
-    assert "Path after setup" in guide_html
-    assert "Start demo" in guide_html
     assert "border-left: 3px solid var(--accent)" in css_text
     assert ".eu-context-label" in css_text
     assert "padding-top: 14px" in css_text
-    assert ".eu-side-guide" in css_text
-    assert "min-height: clamp(280px, 40vh, 500px)" in css_text
+    assert "margin-top: 14px !important" in css_text
+    assert "st-key-eunavrow_tutorial" in css_text
+    assert ".eu-nav-group-label" in css_text
+    assert ".eu-nav-item.level-child" in css_text
+    assert "st-key-eunavrow_visualization" in css_text
+    assert "st-key-eunavchildren_visualization" in css_text
+    assert ".eu-nav-children-title" not in css_text
+    assert "left: calc(100% - 8px)" not in css_text
+    assert "visibility: hidden !important" not in css_text
+    assert "st-key-eunavrow_research_agent" in css_text
+    assert "margin-top: 12px !important" in css_text
+    assert "@media (max-width: 900px)" in css_text
+    assert "display: none !important;" in css_text
+    assert "min-height: 34px !important" in css_text
+    assert "eu-side-guide" not in css_text
+    sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
+    assert "_eu_visualization_nav_open" in sidebar_text
+    assert 'count="3"' not in sidebar_text
+    assert "Choose view" not in sidebar_text
+    assert "_eu_sidebar_settings_open" in sidebar_text
+    assert "_render_sidebar_ai_and_lang()" in sidebar_text
+    assert "render_sidebar_chat_widget" not in sidebar_text
+    assert "_real_data_source_ready()" in sidebar_text
+    assert "Path after setup" not in sidebar_text
+
+    app_text = Path(app.__file__).read_text(encoding="utf-8")
+    llm_text = Path(app.__file__).with_name("llm_chat.py").read_text(encoding="utf-8")
+    ai_optin_text = Path(app.__file__).with_name("ai_optin.py").read_text(encoding="utf-8")
+    assert "render_floating_chat_dock()" not in app_text
+    assert "render_inline_ai_panel()" in app_text
+    assert "_open_embedded_ai_assistant" in app_text
+    assert "_inline_ai_panel_open" in app_text
+    assert "Show floating AI assistant" not in llm_text
+    assert "Show floating AI assistant" not in ai_optin_text
+    assert "per-run external LLM opt-in" in ai_optin_text
+    assert "Use the bottom-right chat button" not in llm_text
+    assert "render_inline_ai_panel" in llm_text
+    assert "st-key-inline_ai_assistant_panel" in llm_text

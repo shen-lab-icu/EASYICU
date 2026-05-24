@@ -156,6 +156,19 @@ def _hide_prefilled_directory_text(input_key: str, mirrored_value: str) -> None:
         st.session_state[input_key] = ""
 
 
+def _real_data_source_ready() -> bool:
+    """Real-data extraction can continue only after the current path validates."""
+    data_path = str(st.session_state.get("data_path") or "").strip()
+    if not data_path or not Path(data_path).exists():
+        return False
+    if not bool(st.session_state.get("path_validated")):
+        return False
+    last_validated = str(st.session_state.get("last_validated_path") or "").strip()
+    if last_validated and Path(last_validated).expanduser() != Path(data_path).expanduser():
+        return False
+    return True
+
+
 def _render_step1_data_source(entry_mode: str) -> None:
     """Render Step 1: data-source configuration.
 
@@ -445,26 +458,26 @@ def _shell_nav_items(entry_mode: str) -> list[ShellNavItem]:
     lang = st.session_state.get("language", "en")
     if lang == "en":
         labels = {
-            "tutorial": "Tutorial",
-            "quick_viz": "Quick Visualization",
+            "tutorial": "Data Extraction",
+            "quick_viz": "Patient Review",
             "cohort": "Cohort Statistics",
             "cross_db": "Cross-DB Benchmark",
             "research_agent": "Research Agent",
         }
     else:
         labels = {
-            "tutorial": "教程",
-            "quick_viz": "快速可视化",
-            "cohort": "Cohort 统计",
+            "tutorial": "数据提取",
+            "quick_viz": "患者审阅",
+            "cohort": "队列统计",
             "cross_db": "跨库基准",
-            "research_agent": "研究 Agent",
+            "research_agent": "研究智能体",
         }
     return [
-        ShellNavItem(key="tutorial",       label=labels["tutorial"],       icon="book"),
-        ShellNavItem(key="quick_viz",      label=labels["quick_viz"],      icon="bars"),
-        ShellNavItem(key="cohort",         label=labels["cohort"],         icon="layers"),
-        ShellNavItem(key="cross_db",       label=labels["cross_db"],       icon="grid"),
-        ShellNavItem(key="research_agent", label=labels["research_agent"], icon="sparkles"),
+        ShellNavItem(key="tutorial",       label=labels["tutorial"],       icon="book", level="top"),
+        ShellNavItem(key="quick_viz",      label=labels["quick_viz"],      icon="bars", level="child"),
+        ShellNavItem(key="cohort",         label=labels["cohort"],         icon="layers", level="child"),
+        ShellNavItem(key="cross_db",       label=labels["cross_db"],       icon="grid", level="child"),
+        ShellNavItem(key="research_agent", label=labels["research_agent"], icon="sparkles", level="top"),
     ]
 
 
@@ -574,46 +587,6 @@ def _context_summary_html(entry_mode: str, lang: str) -> str:
     )
 
 
-def _sidebar_next_steps_html(entry_mode: str, lang: str) -> str:
-    """Return a read-only path guide that uses otherwise empty sidebar space."""
-    if entry_mode == "real":
-        steps = [
-            ("01", "Validate folder" if lang == "en" else "校验目录", "check database layout" if lang == "en" else "检查数据库目录"),
-            ("02", "Review cohort" if lang == "en" else "审阅队列", "confirm filters" if lang == "en" else "确认筛选条件"),
-            ("03", "Analyze locally" if lang == "en" else "本地分析", "visualize or hand off" if lang == "en" else "可视化或交给 Agent"),
-        ]
-    elif entry_mode == "demo":
-        steps = [
-            ("01", "Start demo" if lang == "en" else "开始演示", "opens extraction" if lang == "en" else "进入提取流程"),
-            ("02", "Review cohort" if lang == "en" else "审阅队列", "demo defaults" if lang == "en" else "审阅演示默认值"),
-            ("03", "Export or ask" if lang == "en" else "导出或询问", "tables, code, agent" if lang == "en" else "表格、代码、Agent"),
-        ]
-    else:
-        steps = [
-            ("01", "Choose mode" if lang == "en" else "选择模式", "demo or local data" if lang == "en" else "演示或本地数据"),
-            ("02", "Prepare cohort" if lang == "en" else "准备队列", "filters and variables" if lang == "en" else "筛选队列和变量"),
-            ("03", "Run review" if lang == "en" else "运行审阅", "outputs stay local" if lang == "en" else "输出保留在本机"),
-        ]
-
-    title = "Path after setup" if lang == "en" else "配置后的路径"
-    rows = "".join(
-        '<div class="eu-side-guide-row">'
-        f'<span>{html.escape(num)}</span>'
-        '<div>'
-        f'<b>{html.escape(title_)}</b>'
-        f'<small>{html.escape(note)}</small>'
-        '</div>'
-        '</div>'
-        for num, title_, note in steps
-    )
-    return (
-        '<div class="eu-side-guide">'
-        f'<div class="eu-side-guide-title">{html.escape(title)}</div>'
-        f'{rows}'
-        '</div>'
-    )
-
-
 def _render_shell_recent_cohorts() -> None:
     """Recent or demo cohort list (sidebar shell-A block)."""
     lang = st.session_state.get("language", "en")
@@ -670,22 +643,29 @@ def _render_shell_footer_icons() -> None:
         with cols[0]:
             if st.button("", icon=":material/arrow_back:", key="_eu_footer_back", help=(
                     "Mode selection / 模式选择"
-                    if lang == "en" else "返回模式选择 / Mode selection")):
+                    if lang == "en" else "返回模式选择 / Mode selection"),
+                    use_container_width=True):
                 clear_run_state("all")
                 st.session_state.entry_mode = "none"
                 st.session_state.use_mock_data = False
                 st.rerun()
         with cols[1]:
             if st.button("", icon=":material/help:", key="_eu_footer_help", help=(
-                    "Tutorial" if lang == "en" else "教程")):
+                    "Tutorial" if lang == "en" else "教程"),
+                    use_container_width=True):
                 st.session_state["_active_main_page"] = "tutorial"
                 st.rerun()
         with cols[2]:
-            st.button("", icon=":material/settings:", key="_eu_footer_settings", help=(
-                "Settings" if lang == "en" else "设置"))
+            if st.button("", icon=":material/settings:", key="_eu_footer_settings", help=(
+                "Settings" if lang == "en" else "设置"), use_container_width=True):
+                st.session_state["_eu_sidebar_settings_open"] = not bool(
+                    st.session_state.get("_eu_sidebar_settings_open", False)
+                )
+                st.rerun()
         with cols[3]:
             if st.button("中" if lang == "en" else "EN", icon=":material/language:", key="_eu_footer_lang", help=(
-                    "Toggle 中 / EN" if lang == "en" else "切换 中 / EN")):
+                    "Toggle 中 / EN" if lang == "en" else "切换 中 / EN"),
+                    use_container_width=True):
                 st.session_state["language"] = "zh" if lang == "en" else "en"
                 st.rerun()
         with cols[4]:
@@ -699,8 +679,13 @@ def _render_shell_footer_icons() -> None:
             )
     st.markdown(
         '<style>'
+        '.stApp [data-testid="stSidebar"] [class*="st-key-_eu_footer_"],'
+        '.stApp [data-testid="stSidebar"] [class*="st-key-_eu_footer_"] .stButton{'
+        'width:100% !important;'
+        '}'
         '.stApp [data-testid="stSidebar"] [class*="st-key-_eu_footer_"] .stButton > button,'
         '.stApp [data-testid="stSidebar"] [class*="st-key-_eu_footer_"] button{'
+        'width:100% !important; min-width:40px !important;'
         'min-height:30px !important; height:30px !important; padding:0 !important;'
         'border-radius:var(--r-2) !important;'
         'font-size:12px !important; font-weight:500 !important;'
@@ -717,19 +702,16 @@ def _render_shell_footer_icons() -> None:
 
 
 def _render_shell_primary_nav() -> None:
-    """Sidebar primary nav — every item is a single ``st.button`` styled
-    by ``shell_styles`` to look like the shell-A nav row (icon + label +
-    optional count, active state filled with ``var(--ink)``)."""
+    """Render the three-level product flow: extraction, visualization, agent."""
     entry_mode = st.session_state.get("entry_mode", "none")
-    items = _shell_nav_items(entry_mode)
+    items = {item.key: item for item in _shell_nav_items(entry_mode)}
+    lang = st.session_state.get("language", "en")
     active = st.session_state.get("_active_main_page", "tutorial")
-    visual_active = "cohort" if active == "extract" else active
-    # Each row renders the design's ``eu-nav-item`` HTML (icon + label +
-    # right-aligned count, dark fill when active) with an invisible
-    # full-row ``st.button`` overlaid for routing — this gives the exact
-    # design alignment that a plain text button can't (the count column
-    # stays flush right instead of floating after the label).
-    for item in items:
+    visual_active = "tutorial" if active == "extract" else active
+    visualization_keys = ["quick_viz", "cohort", "cross_db"]
+    visualization_label = "Data Visualization" if lang == "en" else "数据可视化"
+
+    def _render_nav_button(item: ShellNavItem) -> None:
         is_active = item.key == visual_active
         with st.container(key=f"eunavrow_{item.key}"):
             st.markdown(render_nav_item_html(item, active=is_active), unsafe_allow_html=True)
@@ -741,6 +723,37 @@ def _render_shell_primary_nav() -> None:
                 st.session_state["_active_main_page"] = item.key
                 st.session_state["_main_nav_widget"] = item.key
                 st.rerun()
+
+    def _render_visualization_menu() -> None:
+        expanded_key = "_eu_visualization_nav_open"
+        expanded = bool(st.session_state.get(expanded_key)) or visual_active in visualization_keys
+        trigger = ShellNavItem(
+            key="visualization",
+            label=visualization_label,
+            icon="bars",
+            count="⌄" if expanded else "›",
+            level="top",
+        )
+        with st.container(key="eunavrow_visualization"):
+            st.markdown(
+                render_nav_item_html(trigger, active=False),
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                visualization_label,
+                key="euonav_visualization",
+                use_container_width=True,
+            ):
+                st.session_state[expanded_key] = not bool(st.session_state.get(expanded_key))
+                st.rerun()
+        if expanded:
+            with st.container(key="eunavchildren_visualization"):
+                for key in visualization_keys:
+                    _render_nav_button(items[key])
+
+    _render_nav_button(items["tutorial"])
+    _render_visualization_menu()
+    _render_nav_button(items["research_agent"])
 
 
 def _compute_pipeline_steps() -> list[PipelineStep]:
@@ -829,7 +842,6 @@ def _render_shell_context_body() -> None:
     ):
         st.session_state["_active_main_page"] = "extract"
         st.rerun()
-    st.markdown(_sidebar_next_steps_html(entry_mode, lang), unsafe_allow_html=True)
 
 
 def _render_shell_workspace_dock(entry_mode: str) -> None:
@@ -2144,7 +2156,7 @@ def _render_step2_cohort_builder_design() -> bool:
     step1_complete = (
         st.session_state.get('step1_confirmed', False)
         if use_mock else
-        bool(st.session_state.get('data_path')) and Path(st.session_state.data_path).exists()
+        _real_data_source_ready()
     )
     if not step1_complete:
         st.warning("Confirm Step 1 before building the cohort." if lang == "en" else "请先确认第 1 步，再构建队列。")
@@ -2586,6 +2598,8 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
             with st.container(key="eu_sidebar_nav_area"):
                 _render_shell_primary_nav()
             _render_shell_workspace_dock(entry_mode)
+        if st.session_state.get("_eu_sidebar_settings_open", False):
+            _render_sidebar_ai_and_lang()
 
         # Footer icon row (back / help / settings / lang / avatar) — at
         # the very bottom of the sidebar per shell-a-frame.jsx.
@@ -2602,7 +2616,7 @@ def _render_sidebar_ai_and_lang() -> None:
     lang = st.session_state.get("language", "en")
     with st.expander(
         "✦ AI assistant" if lang == "en" else "✦ AI 助手",
-        expanded=False,
+        expanded=bool(st.session_state.get("_eu_sidebar_settings_open", False)),
     ):
         try:
             from easyicu.webapp.llm_chat import render_llm_settings

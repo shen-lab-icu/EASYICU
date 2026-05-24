@@ -45,13 +45,17 @@ Design choices worth documenting:
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import re
+import socket
 import sys
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from urllib.parse import urlparse
 
 import pandas as pd
 import streamlit as st
@@ -690,6 +694,30 @@ def _available_extract_modules() -> Dict[str, List[str]]:
 # ---------------------------------------------------------------------------
 
 
+_LOCAL_LLM_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def _assert_local_llm_endpoint_reachable(base_url: Optional[str], *, timeout: float = 1.0) -> None:
+    """Fail fast when a local OpenAI-compatible endpoint is not listening."""
+    if not base_url:
+        return
+    parsed = urlparse(str(base_url))
+    host = parsed.hostname
+    if not host or host.lower() not in _LOCAL_LLM_HOSTS:
+        return
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    connect_host = "127.0.0.1" if host == "0.0.0.0" else host
+    try:
+        with socket.create_connection((connect_host, int(port)), timeout=timeout):
+            return
+    except OSError as exc:
+        raise RuntimeError(
+            f"Local LLM endpoint is unreachable at {base_url}. Start the local "
+            "API service, update the Base URL, or choose MockLLMClient for an "
+            "offline test run."
+        ) from exc
+
+
 def _resolve_llm(
     handles: Dict[str, Any],
     llm_choice: str,
@@ -725,6 +753,7 @@ def _resolve_llm(
         # finds the key (e.g. OpenAIClient's own env-var fallback).
         env_var = "OPENROUTER_API_KEY" if llm_choice == "OpenRouter" else "OPENAI_API_KEY"
         os.environ[env_var] = api_key
+        _assert_local_llm_endpoint_reachable(base_url)
         kwargs: Dict[str, Any] = dict(model=model, api_key=api_key)
         if base_url:
             kwargs["base_url"] = base_url
@@ -1011,6 +1040,7 @@ def _run_summary_from_manifest(
     evidence = [r for r in manifest.get("evidence", []) if isinstance(r, dict)]
     findings = [f for f in manifest.get("findings", []) if isinstance(f, dict)]
     statuses = [_safe_step_status(r) for r in records]
+    review = _load_review_decision(run_dir)
     return {
         "run_id": str(manifest.get("run_id") or run_dir.name),
         "run_dir": run_dir,
@@ -1027,7 +1057,44 @@ def _run_summary_from_manifest(
         "figure_count": sum(1 for r in evidence if r.get("kind") == "figure"),
         "table_count": sum(1 for r in evidence if r.get("kind") == "table"),
         "manifest_partial": partial,
+        "review_decision": str(review.get("decision") or ""),
+        "review_updated_at": str(review.get("updated_at") or ""),
     }
+
+
+def _review_decision_path(run_dir: Path) -> Path:
+    return Path(run_dir) / "review_decision.json"
+
+
+def _load_review_decision(run_dir: Path) -> Dict[str, Any]:
+    path = _review_decision_path(run_dir)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_review_decision(
+    run_dir: Path,
+    *,
+    decision: str,
+    note: str,
+    manifest: Optional[Dict[str, Any]] = None,
+) -> Path:
+    path = _review_decision_path(run_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "decision": str(decision),
+        "note": str(note or ""),
+        "run_id": str((manifest or {}).get("run_id") or Path(run_dir).name),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "easyicu_web_research_agent",
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
 
 
 def _scan_research_agent_runs(workdir: Path, *, limit: int = 20) -> List[Dict[str, Any]]:
@@ -1569,6 +1636,78 @@ def _render_reproducibility_panel(manifest: Dict[str, Any]) -> None:
             )
 
 
+def _render_review_decision_controls(
+    *,
+    run_dir: Path,
+    manifest: Dict[str, Any],
+    key_prefix: str,
+) -> None:
+    """Persist a local human review decision beside a run manifest."""
+    lang = st.session_state.get("language", "en")
+    is_en = lang == "en"
+    review = _load_review_decision(run_dir)
+    options = [
+        ("approved", "Mark reviewed" if is_en else "标记已复核"),
+        ("repair_requested", "Request repair / rerun" if is_en else "请求修复 / 重跑"),
+        ("locked", "Keep manuscript locked" if is_en else "保持手稿锁定"),
+        ("blocked", "Mark blocked" if is_en else "标记阻塞"),
+    ]
+    current_decision = str(review.get("decision") or "locked")
+    current_index = next((i for i, (value, _label) in enumerate(options) if value == current_decision), 2)
+    safe_key = re.sub(r"[^A-Za-z0-9_]+", "_", key_prefix)
+    with st.expander(
+        "Reviewer decision" if is_en else "人工审核决定",
+        expanded=bool(review),
+    ):
+        if review:
+            st.success(
+                (
+                    f"Current decision: {review.get('decision')} · {review.get('updated_at', '')}"
+                    if is_en else
+                    f"当前决定：{review.get('decision')} · {review.get('updated_at', '')}"
+                )
+            )
+            if review.get("note"):
+                st.caption(str(review.get("note")))
+        decision_label = st.radio(
+            "Decision" if is_en else "审核决定",
+            [label for _value, label in options],
+            index=current_index,
+            horizontal=True,
+            key=f"{safe_key}_review_decision_choice",
+        )
+        decision_value = options[[label for _value, label in options].index(decision_label)][0]
+        note_text = st.text_area(
+            "Review note" if is_en else "审核备注",
+            value=str(review.get("note") or ""),
+            height=76,
+            key=f"{safe_key}_review_decision_note",
+            help=(
+                "This writes a local review_decision.json next to the manifest."
+                if is_en else
+                "会在 manifest 旁写入本地 review_decision.json。"
+            ),
+        )
+        if st.button(
+            "Save review decision" if is_en else "保存审核决定",
+            type="primary",
+            use_container_width=True,
+            key=f"{safe_key}_review_decision_save",
+        ):
+            path = _write_review_decision(
+                run_dir,
+                decision=decision_value,
+                note=note_text,
+                manifest=manifest,
+            )
+            st.success(
+                f"Saved to `{path.name}`."
+                if is_en else
+                f"已保存到 `{path.name}`。"
+            )
+            st.rerun()
+
+
 def _render_run_manifest(
     *,
     run_dir: Path,
@@ -1605,6 +1744,11 @@ def _render_run_manifest(
         st.info(_ra_text("paused_notice"))
 
     _render_reproducibility_panel(manifest)
+    _render_review_decision_controls(
+        run_dir=run_dir,
+        manifest=manifest,
+        key_prefix=f"{key_prefix}_{result.run_id}",
+    )
 
     tab_labels = [
         _ra_text("tab_report"),
@@ -3107,6 +3251,7 @@ def _render_run_history(workdir: Path) -> None:
                 _ra_text("history_figures"): row["figure_count"],
                 _ra_text("history_tables"): row["table_count"],
                 _ra_text("history_findings"): f"{row['finding_errors']}E / {row['finding_warnings']}W",
+                "Review" if st.session_state.get("language", "en") == "en" else "审核": row.get("review_decision") or "not reviewed",
                 _ra_text("history_question"): row["question"][:120],
             }
             for row in rows
@@ -3305,7 +3450,7 @@ def render_research_agent_demo_page() -> None:
     render_page_header(
         _ra_text("header"),
         caption,
-        icon="🧪",
+        icon="",
         kicker=_ra_text("kicker"),
     )
 
@@ -3420,6 +3565,155 @@ def _render_replication_section(*, default_workdir: Path) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+def _template_contract(template_key: Optional[str], *, language: str = "en") -> Dict[str, Any]:
+    """Return expected outputs/checkpoints for the selected clinical template."""
+    is_en = language == "en"
+    defaults = {
+        "label": "Free-form research request" if is_en else "自由研究问题",
+        "expected_outputs": [
+            "analysis plan" if is_en else "分析计划",
+            "evidence manifest" if is_en else "证据清单",
+            "results report" if is_en else "结果报告",
+        ],
+        "checkpoints": [
+            "cohort denominator reported" if is_en else "报告队列分母",
+            "numeric claims have evidence references" if is_en else "数值主张带证据引用",
+            "audit findings gate manuscript drafting" if is_en else "审计发现控制手稿生成",
+        ],
+    }
+    templates: Dict[str, Dict[str, List[str] | str]] = {
+        "prediction": {
+            "label": "Prediction model" if is_en else "预测模型",
+            "expected_outputs": [
+                "cohort summary",
+                "train/test performance table",
+                "calibration and discrimination figure",
+                "feature effects table",
+            ] if is_en else ["队列摘要", "训练/测试性能表", "校准与区分度图", "变量效应表"],
+            "checkpoints": [
+                "explicit train/test or bootstrap design",
+                "AUROC, Brier score, and calibration reported",
+                "missingness and leakage checks completed",
+            ] if is_en else ["明确训练/测试或 bootstrap 设计", "报告 AUROC、Brier 与校准", "完成缺失和泄漏检查"],
+        },
+        "association": {
+            "label": "Association analysis" if is_en else "相关性分析",
+            "expected_outputs": [
+                "cohort and missingness table",
+                "adjusted model table",
+                "odds ratio or effect plot",
+            ] if is_en else ["队列与缺失表", "调整模型表", "OR 或效应图"],
+            "checkpoints": [
+                "exposure, outcome, and covariates named",
+                "denominator and complete-case loss reported",
+                "causal overclaim warnings retained",
+            ] if is_en else ["明确暴露、结局和协变量", "报告分母与完整病例损耗", "保留因果过度解释警告"],
+        },
+        "validation": {
+            "label": "External validation / score benchmarking" if is_en else "外部验证 / 评分比较",
+            "expected_outputs": [
+                "per-database cohort table",
+                "transportability summary",
+                "calibration and discrimination panels",
+            ] if is_en else ["逐数据库队列表", "迁移性摘要", "校准与区分度 panel"],
+            "checkpoints": [
+                "per-database concept availability checked",
+                "same cohort rule applied across databases",
+                "performance heterogeneity reported",
+            ] if is_en else ["检查逐库概念可用性", "跨库应用同一队列规则", "报告性能异质性"],
+        },
+        "data_quality": {
+            "label": "Data-quality / harmonization audit" if is_en else "数据质量 / 映射审计",
+            "expected_outputs": [
+                "coverage table",
+                "missingness figure",
+                "unit/range audit",
+                "source mapping notes",
+            ] if is_en else ["覆盖表", "缺失图", "单位/范围审计", "源映射说明"],
+            "checkpoints": [
+                "out-of-range values flagged",
+                "time alignment checked",
+                "cross-module mapping issues listed",
+            ] if is_en else ["标记越界值", "检查时间对齐", "列出跨模块映射问题"],
+        },
+    }
+    if template_key and template_key in templates:
+        out = dict(defaults)
+        out.update(templates[template_key])
+        return out
+    return defaults
+
+
+def _build_execution_preflight_contract(
+    *,
+    free_question: str,
+    target_outcome: str,
+    cohort: Optional[pd.DataFrame],
+    cohort_label: str,
+    llm_choice: str,
+    model: str,
+    workdir_text: str,
+    stop_after_analysis: bool,
+    force_manuscript: bool,
+    template_key: Optional[str],
+    language: str = "en",
+) -> Dict[str, Any]:
+    question = (free_question or target_outcome or "").strip()
+    try:
+        cohort_rows = len(cohort) if cohort is not None else 0
+    except Exception:
+        cohort_rows = 0
+    try:
+        cohort_cols = [str(c) for c in list(cohort.columns)[:16]] if cohort is not None else []
+    except Exception:
+        cohort_cols = []
+    external_llm = "MockLLMClient" not in str(llm_choice) and "offline" not in str(llm_choice).lower()
+    output_dir = str(Path(workdir_text).expanduser())
+    write_targets = [
+        str(Path(output_dir) / "run_<timestamp>" / "manifest.json"),
+        str(Path(output_dir) / "run_<timestamp>" / "results_report.md"),
+    ]
+    if force_manuscript or not stop_after_analysis:
+        write_targets.append(str(Path(output_dir) / "run_<timestamp>" / "manuscript_scaffold_bound.md"))
+    return {
+        "question": question,
+        "target_outcome": target_outcome or "",
+        "cohort_label": cohort_label or "",
+        "cohort_rows": cohort_rows,
+        "cohort_columns": cohort_cols,
+        "llm_choice": str(llm_choice or "mock"),
+        "model": str(model or "default"),
+        "external_llm": external_llm,
+        "workdir": output_dir,
+        "write_targets": write_targets,
+        "mode": "draft_continuation" if force_manuscript else ("analysis_only" if stop_after_analysis else "analysis_plus_manuscript_gate"),
+        "template_key": template_key or "",
+        "template_contract": _template_contract(template_key, language=language),
+    }
+
+
+def _preflight_signature(contract: Dict[str, Any]) -> str:
+    payload = {
+        key: contract.get(key)
+        for key in (
+            "question",
+            "target_outcome",
+            "cohort_label",
+            "cohort_rows",
+            "cohort_columns",
+            "llm_choice",
+            "model",
+            "external_llm",
+            "workdir",
+            "write_targets",
+            "mode",
+            "template_key",
+        )
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def _render_execution_preflight(
     *,
     free_question: str,
@@ -3431,18 +3725,24 @@ def _render_execution_preflight(
     workdir_text: str,
     stop_after_analysis: bool,
     force_manuscript: bool,
-) -> None:
+) -> bool:
     """Show the human-confirmation contract before a real agent run."""
     lang = st.session_state.get("language", "en")
     is_en = lang == "en"
-    question = (free_question or target_outcome or "").strip()
-    try:
-        cohort_rows = len(cohort) if cohort is not None else 0
-    except Exception:
-        cohort_rows = 0
-    provider = str(llm_choice or "mock")
-    model_label = str(model or "default")
-    output_dir = str(Path(workdir_text).expanduser())
+    template_key = st.session_state.get("research_agent_template_current") or st.session_state.get("research_agent_example_key")
+    contract = _build_execution_preflight_contract(
+        free_question=free_question,
+        target_outcome=target_outcome,
+        cohort=cohort,
+        cohort_label=cohort_label,
+        llm_choice=llm_choice,
+        model=model,
+        workdir_text=workdir_text,
+        stop_after_analysis=stop_after_analysis,
+        force_manuscript=force_manuscript,
+        template_key=str(template_key or ""),
+        language=lang,
+    )
     mode = (
         "Draft continuation" if force_manuscript else
         ("Analysis only" if stop_after_analysis else "Analysis + optional manuscript gate")
@@ -3450,12 +3750,14 @@ def _render_execution_preflight(
         "续写草稿" if force_manuscript else
         ("仅分析" if stop_after_analysis else "分析 + 可选手稿关口")
     )
+    template_contract = contract["template_contract"]
     rows = [
-        ("Request" if is_en else "请求", question or ("not set" if is_en else "未设置")),
-        ("Cohort" if is_en else "队列", f"{cohort_label} · {cohort_rows:,} rows"),
-        ("LLM" if is_en else "模型", f"{provider} · {model_label}"),
-        ("Write path" if is_en else "写入路径", output_dir),
+        ("Request" if is_en else "请求", contract["question"] or ("not set" if is_en else "未设置")),
+        ("Cohort" if is_en else "队列", f"{contract['cohort_label']} · {contract['cohort_rows']:,} rows"),
+        ("LLM" if is_en else "模型", f"{contract['llm_choice']} · {contract['model']}"),
+        ("Write path" if is_en else "写入路径", contract["workdir"]),
         ("Mode" if is_en else "模式", mode),
+        ("Template" if is_en else "模板", str(template_contract["label"])),
     ]
     row_html = "".join(
         '<div class="ra-preflight-row">'
@@ -3471,6 +3773,13 @@ def _render_execution_preflight(
         if is_en else "数值主张继续受证据和校验发现约束。",
         "Manuscript drafting is second-stage unless explicitly requested."
         if is_en else "除非明确请求，手稿写作保持第二阶段。",
+        "External provider will receive the question plus schema/summary context."
+        if (is_en and contract["external_llm"]) else
+        "外部模型会收到研究问题以及 schema/summary 上下文。"
+        if contract["external_llm"] else
+        "Offline mock mode does not send cohort context outside this machine."
+        if is_en else
+        "离线 mock 模式不会把队列上下文发出本机。",
     ]
     check_html = "".join(
         '<div class="ra-preflight-check"><span></span><p>'
@@ -3493,6 +3802,59 @@ def _render_execution_preflight(
         """,
         unsafe_allow_html=True,
     )
+    with st.expander(
+        "Step contract preview" if is_en else "步骤契约预览",
+        expanded=False,
+    ):
+        st.markdown("**Expected outputs**" if is_en else "**预期产物**")
+        st.write(", ".join(map(str, template_contract["expected_outputs"])))
+        st.markdown("**Checkpoints**" if is_en else "**复核点**")
+        st.write(", ".join(map(str, template_contract["checkpoints"])))
+        st.markdown("**File impact**" if is_en else "**文件影响**")
+        for target in contract["write_targets"]:
+            st.caption(f"WRITE `{target}`")
+
+    signature = _preflight_signature(contract)
+    prior_signature = st.session_state.get("research_agent_preflight_signature")
+    if prior_signature != signature:
+        st.session_state["research_agent_preflight_confirmed"] = False
+        st.session_state["research_agent_preflight_signature"] = signature
+    confirmed = bool(st.session_state.get("research_agent_preflight_confirmed"))
+    ack = st.checkbox(
+        (
+            "I reviewed the plan, context disclosure, and file impact."
+            if is_en else
+            "我已复核计划、上下文披露和文件影响。"
+        ),
+        value=bool(st.session_state.get("research_agent_preflight_ack", False)),
+        key="research_agent_preflight_ack",
+    )
+    can_confirm = bool(contract["question"] or force_manuscript) and contract["cohort_rows"] > 0
+    c1, c2 = st.columns([1.2, 1.0])
+    with c1:
+        if st.button(
+            "Confirm plan" if is_en else "确认计划",
+            type="primary",
+            disabled=not ack or not can_confirm,
+            use_container_width=True,
+            key="research_agent_preflight_confirm",
+        ):
+            st.session_state["research_agent_preflight_confirmed"] = True
+            st.session_state["research_agent_preflight_signature"] = signature
+            confirmed = True
+    with c2:
+        if st.button(
+            "Reset confirmation" if is_en else "重置确认",
+            use_container_width=True,
+            key="research_agent_preflight_reset",
+        ):
+            st.session_state["research_agent_preflight_confirmed"] = False
+            confirmed = False
+    if confirmed:
+        st.success("Plan confirmed. The run button is enabled." if is_en else "计划已确认，可以启动运行。")
+    else:
+        st.warning("Confirm the preflight before launching the agent." if is_en else "启动 agent 前请先确认执行前预览。")
+    return confirmed
 
 
 def render_research_agent_page() -> None:
@@ -3500,7 +3862,7 @@ def render_research_agent_page() -> None:
     render_page_header(
         _ra_text("header"),
         _ra_text("subheader"),
-        icon="🧪",
+        icon="",
         kicker=_ra_text("kicker"),
     )
 
@@ -3555,7 +3917,7 @@ def render_research_agent_page() -> None:
     with st.expander(_ra_text("replication_title"), expanded=False):
         _render_replication_section(default_workdir=history_workdir)
 
-    _render_execution_preflight(
+    preflight_confirmed = _render_execution_preflight(
         free_question=free_question,
         target_outcome=target_outcome,
         cohort=cohort,
@@ -3592,12 +3954,13 @@ def render_research_agent_page() -> None:
             )
 
     request_ready = bool(str(free_question or "").strip()) or force_manuscript
-    run_clicked = st.button(
+    run_button_clicked = st.button(
         "▶  " + (_ra_text("draft_button") if force_manuscript else _ra_text("run_button")),
         type="primary",
-        disabled=cohort is None or not request_ready,
+        disabled=cohort is None or not request_ready or not preflight_confirmed,
         use_container_width=True,
-    ) or force_manuscript
+    )
+    run_clicked = run_button_clicked or (force_manuscript and preflight_confirmed)
 
     if cohort is None:
         st.info(_ra_text("select_cohort"))
@@ -3607,6 +3970,13 @@ def render_research_agent_page() -> None:
             "Enter a research request above before launching the agent."
             if _is_en else
             "请先在上方填写研究请求，再启动 agent。"
+        )
+        return
+    if not preflight_confirmed:
+        st.info(
+            "The run is locked until the preflight plan is confirmed."
+            if _is_en else
+            "执行前预览未确认前，运行保持锁定。"
         )
         return
 
@@ -3798,7 +4168,7 @@ def _standalone_main() -> None:
     """Make this module runnable via ``streamlit run …/research_agent.py``."""
     st.set_page_config(
         page_title="EasyICU Research Agent",
-        page_icon="🧪",
+        page_icon=None,
         layout="wide",
     )
     # When run standalone, allow the user to point us at a checkout root

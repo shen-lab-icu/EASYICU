@@ -357,7 +357,7 @@ def _sync_llm_toggle_before_render() -> None:
 
 
 def _apply_floating_ai_toggle(enabled: bool) -> None:
-    """Apply the user-facing Show floating AI assistant toggle."""
+    """Apply the legacy assistant toggle used by older sessions."""
     enabled = bool(enabled)
     st.session_state.llm_enabled = enabled
     st.session_state["_floating_ai_open"] = enabled
@@ -1090,15 +1090,15 @@ def render_llm_settings():
     enabled = bool(st.session_state.llm_enabled)
     status_title = "AI Assistant" if lang == "en" else "AI 助手"
     status_subtitle = (
-        "Floating page-aware chat is ready after enabling."
+        "Embedded guidance for the current EasyICU workflow."
         if lang == "en" else
-        "开启后使用右下角页面感知式浮窗。"
+        "嵌入当前 EasyICU 工作流的页面感知式助手。"
     )
     if enabled and _is_configured():
         status_subtitle = (
-            "Page-aware floating chat is ready."
+            "Embedded chat is ready in this panel."
             if lang == "en" else
-            "页面感知式浮窗已就绪。"
+            "嵌入式聊天已在此面板中就绪。"
         )
     st.markdown(
         f"""
@@ -1115,22 +1115,20 @@ def render_llm_settings():
 
     label = "⚙️ AI settings" if lang == "en" else "⚙️ AI 设置"
     with st.expander(label, expanded=False):
-        # On/off toggle. Keep the full settings collapsed so the sidebar does
-        # not duplicate the main floating assistant UI.
         previous_enabled = bool(st.session_state.llm_enabled)
         enabled = st.toggle(
-            "Show floating AI assistant" if lang == "en" else "显示悬浮 AI 助手",
+            "Enable AI assistant" if lang == "en" else "启用 AI 助手",
             value=previous_enabled,
             key="_llm_toggle",
         )
-        if bool(enabled) != previous_enabled:
-            _apply_floating_ai_toggle(enabled)
-        else:
-            st.session_state.llm_enabled = bool(enabled)
+        st.session_state.llm_enabled = bool(enabled)
+        st.session_state["_floating_ai_open"] = False
+        if enabled:
+            st.session_state["_sidebar_ai_open"] = True
         if not enabled:
-            hint = ("Enable this to reveal the bottom-right page-aware AI chat."
+            hint = ("Enable this to use the AI panel in the main workspace."
                     if lang == "en"
-                    else "开启后会显示右下角页面感知式 AI 对话。")
+                    else "启用后可在主工作区使用 AI 面板。")
             st.caption(hint)
             return
 
@@ -1195,9 +1193,9 @@ def render_llm_settings():
             st.session_state.llm_configured = False
 
         st.caption(
-            "Use the bottom-right chat button to open the page-aware assistant."
+            "Open the AI panel in the main workspace for page-aware guidance."
             if lang == "en" else
-            "请使用右下角聊天按钮打开页面感知式助手。"
+            "请在主工作区打开 AI 面板，以获得页面感知式建议。"
         )
 
 
@@ -1362,20 +1360,92 @@ def _submit_prompt(prompt: str, lang: str, history_container, key_prefix: str = 
 
 
 def render_sidebar_chat_widget():
-    """Render a compact global AI chat box in the sidebar."""
+    """Render a compact embedded AI chat box in the sidebar."""
     _init_chat_state()
     lang = st.session_state.get("language", "en")
     pending_prompt = st.session_state.get("_ai_pending_question")
     expanded = bool(st.session_state.get("_sidebar_ai_open") or pending_prompt)
 
-    title = "💬 AI Chat" if lang == "en" else "💬 AI 对话"
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-welcome {
+            border: 1px solid #d8e2ee;
+            border-left: 3px solid #0e7490;
+            border-radius: 8px;
+            background: #ffffff;
+            padding: 0.78rem 0.82rem;
+            margin: 0.25rem 0 0.55rem;
+            box-shadow: none;
+        }
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-welcome-title {
+            color: #111827;
+            font-size: 0.84rem;
+            font-weight: 800;
+            line-height: 1.25;
+            margin-bottom: 0.28rem;
+        }
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-welcome-subtitle,
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-user-bubble,
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-answer-card {
+            color: #475569;
+            font-size: 0.74rem;
+            line-height: 1.45;
+        }
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-sample {
+            display: grid;
+            gap: 0.38rem;
+            margin: 0.52rem 0;
+        }
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-user-bubble,
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-answer-card,
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-recommendation {
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+            background: #f8fafc;
+            padding: 0.52rem 0.58rem;
+        }
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-recommendation span {
+            display: block;
+            color: #64748b;
+            font-size: 0.62rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.16rem;
+        }
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-recommendation strong,
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .floating-ai-welcome-hint {
+            color: #0f172a;
+            font-size: 0.72rem;
+            line-height: 1.38;
+        }
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel [data-testid="stChatMessageContent"] p,
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel [data-testid="stMarkdownContainer"] p,
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel input,
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel label {
+            font-size: 0.75rem !important;
+            line-height: 1.42;
+        }
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel .stButton > button,
+        [data-testid="stSidebar"] div.st-key-embedded_ai_chat_panel form button {
+            min-height: 32px;
+            border-radius: 7px;
+            font-size: 0.74rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    title = "💬 Embedded chat" if lang == "en" else "💬 嵌入式对话"
     with st.expander(title, expanded=expanded):
         st.session_state["_sidebar_ai_open"] = expanded
         if not st.session_state.llm_enabled:
             st.caption(
-                "Enable AI Assistant above to start chatting."
+                "Enable AI Assistant above to start chatting here."
                 if lang == "en" else
-                "请先在上方开启 AI 助手。"
+                "请先在上方开启 AI 助手，然后在这里对话。"
             )
             return
 
@@ -1387,37 +1457,208 @@ def render_sidebar_chat_widget():
             )
             return
 
-        history_container = st.container(height=320, border=True)
-        with history_container:
-            recent_messages = st.session_state.llm_messages[-6:]
-            for msg_idx, msg in enumerate(recent_messages):
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
-                    if msg["role"] == "assistant" and msg.get("actions"):
-                        _render_nav_actions(msg["actions"], key_prefix=f"_llm_sidebar_{msg_idx}")
-
-            queued_prompt = st.session_state.pop("_ai_pending_question", None)
-            if queued_prompt:
-                st.info(
-                    "Using page context to ask the assistant..."
-                    if lang == "en" else
-                    "正在带着当前页面上下文向 AI 提问..."
-                )
-                _submit_prompt(queued_prompt, lang, history_container, key_prefix="_llm_sidebar")
-
-        with st.form("_sidebar_llm_form", clear_on_submit=True):
-            prompt = st.text_input(
-                "Ask EasyICU AI" if lang == "en" else "向 EasyICU AI 提问",
-                placeholder="Ask about the current workflow..." if lang == "en" else "询问当前流程、概念或报错...",
-                label_visibility="collapsed",
+        with st.container(key="embedded_ai_chat_panel"):
+            _render_compact_chat_panel(
+                lang=lang,
+                panel_key="_llm_sidebar_embedded",
+                history_height=300,
+                show_starters=not bool(pending_prompt),
             )
-            send_clicked = st.form_submit_button(
-                "Send" if lang == "en" else "发送",
+
+
+def render_inline_ai_panel():
+    """Render the non-floating AI assistant as part of the main workspace."""
+    _init_chat_state()
+    lang = st.session_state.get("language", "en")
+    pending_prompt = bool(st.session_state.get("_ai_pending_question"))
+    if pending_prompt:
+        st.session_state["_inline_ai_panel_open"] = True
+        st.session_state["llm_enabled"] = True
+        st.session_state["_llm_toggle"] = True
+    if not st.session_state.get("_inline_ai_panel_open", False):
+        return
+
+    st.session_state["_floating_ai_open"] = False
+    st.markdown(
+        """
+        <style>
+        .stApp div.st-key-inline_ai_assistant_panel {
+            border: 1px solid #d6dee8;
+            border-left: 3px solid #0e7490;
+            border-radius: 8px;
+            background: #ffffff;
+            padding: 0.72rem 0.78rem 0.78rem;
+            margin: 0.72rem 0 1rem;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-header {
+            display: flex;
+            align-items: center;
+            gap: 0.62rem;
+            min-width: 0;
+            padding: 0.04rem 0 0.35rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-avatar {
+            width: 2rem;
+            height: 2rem;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #0f172a;
+            background: #ecfeff;
+            border: 1px solid #a5f3fc;
+            font-size: 1rem;
+            flex: 0 0 auto;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-title {
+            color: #0f172a;
+            font-size: 0.95rem;
+            font-weight: 800;
+            line-height: 1.2;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-subtitle {
+            color: #64748b;
+            font-size: 0.76rem;
+            line-height: 1.35;
+            margin-top: 0.1rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-welcome {
+            border: 1px solid #dbe4ee;
+            border-radius: 8px;
+            background: #f8fafc;
+            padding: 0.8rem 0.88rem;
+            margin-bottom: 0.62rem;
+            box-shadow: none;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-welcome-title {
+            color: #0f172a;
+            font-size: 0.92rem;
+            font-weight: 800;
+            line-height: 1.25;
+            margin-bottom: 0.28rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-welcome-subtitle,
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-user-bubble,
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-answer-card {
+            color: #475569;
+            font-size: 0.82rem;
+            line-height: 1.5;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-sample {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 0.5rem;
+            margin: 0.58rem 0 0.62rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-user-bubble,
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-answer-card,
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-recommendation {
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+            background: #ffffff;
+            padding: 0.58rem 0.64rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-recommendation {
+            grid-column: 1 / -1;
+            display: grid;
+            gap: 0.12rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-recommendation span {
+            color: #64748b;
+            font-size: 0.68rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-recommendation strong,
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-welcome-hint {
+            color: #0f172a;
+            font-size: 0.8rem;
+            line-height: 1.38;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"] p,
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stMarkdownContainer"] p,
+        .stApp div.st-key-inline_ai_assistant_panel input,
+        .stApp div.st-key-inline_ai_assistant_panel label {
+            font-size: 0.84rem !important;
+            line-height: 1.48;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .stButton > button,
+        .stApp div.st-key-inline_ai_assistant_panel form button {
+            min-height: 34px;
+            border-radius: 7px;
+            font-size: 0.8rem;
+        }
+        @media (max-width: 900px) {
+            .stApp div.st-key-inline_ai_assistant_panel .floating-ai-sample {
+                grid-template-columns: 1fr;
+            }
+            .stApp div.st-key-inline_ai_assistant_panel {
+                margin-top: 0.55rem;
+                padding: 0.62rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.container(key="inline_ai_assistant_panel"):
+        left, close_col = st.columns([10, 1], gap="small")
+        with left:
+            title = "AI assistant" if lang == "en" else "AI 助手"
+            subtitle = (
+                "Page-aware guidance embedded in the current workspace."
+                if lang == "en" else
+                "嵌入当前工作区的页面感知式建议。"
+            )
+            st.markdown(
+                f"""
+                <div class="inline-ai-header">
+                    <div class="inline-ai-avatar">AI</div>
+                    <div>
+                        <div class="inline-ai-title">{title}</div>
+                        <div class="inline-ai-subtitle">{subtitle}</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with close_col:
+            if st.button(
+                "",
+                icon=":material/close:",
+                key="_inline_ai_close",
+                help="Close AI panel" if lang == "en" else "关闭 AI 面板",
                 use_container_width=True,
+            ):
+                st.session_state["_inline_ai_panel_open"] = False
+                st.session_state["_ai_pending_question"] = None
+                st.rerun()
+
+        if not st.session_state.get("llm_enabled", False):
+            st.caption(
+                "Enable AI Assistant in sidebar settings, then return here."
+                if lang == "en" else
+                "请先在侧栏设置中启用 AI 助手，然后回到这里。"
             )
-        if send_clicked and prompt.strip():
-            st.session_state["_ai_pending_question"] = prompt.strip()
-            st.rerun()
+            return
+
+        if not _is_configured():
+            st.caption(
+                "Configure provider/API key in sidebar settings first."
+                if lang == "en" else
+                "请先在侧栏设置中配置服务商/API Key。"
+            )
+            return
+
+        _render_compact_chat_panel(
+            lang=lang,
+            panel_key="_llm_inline_workspace",
+            history_height=390,
+            show_starters=not pending_prompt,
+        )
 
 
 def _starter_prompts(lang: str) -> list[str]:

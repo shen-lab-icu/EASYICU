@@ -2,15 +2,85 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any
 
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to this extracted renderer."""
-    protected = {'render_severity_reclassification_subtab', "_install_app_context"}
+    protected = {
+        'render_severity_reclassification_subtab',
+        "_install_app_context",
+        "_render_section_heading",
+    }
     for name, value in app_context.items():
         if not name.startswith("__") and name not in protected:
             globals()[name] = value
+
+
+def _render_section_heading(title: str, eyebrow: str | None = None) -> None:
+    eyebrow_html = (
+        f'<span>{html.escape(eyebrow)}</span>'
+        if eyebrow else ""
+    )
+    st.markdown(
+        '<div class="eu-native-section-heading">'
+        f'{eyebrow_html}<b>{html.escape(title)}</b>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_chart_heading(title: str, subtitle: str, eyebrow: str | None = None) -> None:
+    eyebrow_html = f'<div class="eyebrow">{html.escape(eyebrow)}</div>' if eyebrow else ""
+    st.markdown(
+        '<div class="eu-chart-heading">'
+        f'{eyebrow_html}'
+        f'<div class="title">{html.escape(title)}</div>'
+        f'<div class="subtitle">{html.escape(subtitle)}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _style_reclass_figure(fig, *, height: int, margin: dict[str, int] | None = None, legend_y: float = 1.12):
+    fig.update_layout(
+        template='plotly_white',
+        height=height,
+        margin=margin or dict(l=64, r=58, t=42, b=58),
+        paper_bgcolor='#FFFFFF',
+        plot_bgcolor='#FFFFFF',
+        font=dict(size=12, color='#1f2937'),
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=legend_y,
+            xanchor='right',
+            x=1,
+            bgcolor='rgba(255,255,255,0.94)',
+            bordercolor='rgba(203,213,225,0.75)',
+            borderwidth=1,
+            font=dict(size=11),
+        ),
+        hoverlabel=dict(bgcolor='#111827', font_size=12, font_color='#FFFFFF'),
+    )
+    fig.update_xaxes(
+        gridcolor='#e7edf5',
+        zeroline=False,
+        linecolor='#d7e0ea',
+        tickfont=dict(size=11, color='#475569'),
+        title_font=dict(size=12, color='#475569'),
+        automargin=True,
+    )
+    fig.update_yaxes(
+        gridcolor='#e7edf5',
+        zeroline=False,
+        linecolor='#d7e0ea',
+        tickfont=dict(size=11, color='#475569'),
+        title_font=dict(size=12, color='#475569'),
+        automargin=True,
+    )
+    return fig
 
 
 def render_severity_reclassification_subtab(lang: str, app_context: dict[str, Any] | None = None):
@@ -18,7 +88,6 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
     if app_context is not None:
         _install_app_context(app_context)
     
-    import plotly.express as px
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
     screenshot_mode = _is_screenshot_mode()
@@ -43,7 +112,10 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
         "专门分析 SOFA-1 切换到 SOFA-2 后的重新分层；可选择 ICU 全程最高分、首24小时配对最高分，或同时间点配对。"
     )
     if not screenshot_mode:
-        st.markdown(f"### 🧭 {title}")
+        _render_section_heading(
+            title,
+            "Sensitivity" if lang == 'en' else "敏感性",
+        )
         st.caption(subtitle)
 
     mode_labels = {
@@ -273,40 +345,53 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
     organ = reclass['organ']
     unit_label = reclass['metrics'].get('denominator_label', "Patients" if lang == 'en' else "患者数")
 
-    col1, col2 = st.columns([1, 1.1])
+    col1, col2 = st.columns([1, 1.06], gap="large")
     with col1:
-        st.markdown("##### " + ("Reclassification Matrix" if lang == 'en' else "重新分层矩阵"))
+        _render_chart_heading(
+            "Reclassification matrix" if lang == 'en' else "重新分层矩阵",
+            "Rows are SOFA-1 groups; columns are SOFA-2 groups." if lang == 'en' else "行表示 SOFA-1 分层，列表示 SOFA-2 分层。",
+            "Agreement" if lang == 'en' else "一致性",
+        )
         heatmap = matrix.pivot(index='SOFA-1', columns='SOFA-2', values='patients').fillna(0)
         fig = go.Figure(data=go.Heatmap(
             z=heatmap.values,
             x=heatmap.columns.astype(str),
             y=heatmap.index.astype(str),
-            colorscale='Blues',
+            colorscale=[
+                [0.0, '#f8fbff'],
+                [0.35, '#dbeafe'],
+                [0.7, '#74a9ef'],
+                [1.0, '#0f3f7a'],
+            ],
             text=heatmap.values.astype(int),
             texttemplate="%{text}",
+            textfont=dict(size=12),
             hovertemplate=f"SOFA-1: %{{y}}<br>SOFA-2: %{{x}}<br>{unit_label}: %{{z}}<extra></extra>",
+            colorbar=dict(title=unit_label, thickness=12, len=0.82),
         ))
-        fig.update_layout(
-            template='plotly_white',
-            height=360,
-            margin=dict(l=45, r=20, t=12, b=45),
-            xaxis_title="SOFA-2 group" if lang == 'en' else "SOFA-2分层",
-            yaxis_title="SOFA-1 group" if lang == 'en' else "SOFA-1分层",
-            font=dict(size=13, color='#111827'),
-        )
+        _style_reclass_figure(fig, height=410, margin=dict(l=72, r=58, t=24, b=64))
+        fig.update_layout(showlegend=False)
+        fig.update_xaxes(title_text="SOFA-2 group" if lang == 'en' else "SOFA-2分层")
+        fig.update_yaxes(title_text="SOFA-1 group" if lang == 'en' else "SOFA-1分层")
         st.plotly_chart(fig, use_container_width=True, key="reclass_matrix", config=_get_plotly_chart_config())
 
     with col2:
-        st.markdown("##### " + ("Outcome by Reclassification Group" if lang == 'en' else "重新分层组别与结局"))
+        _render_chart_heading(
+            "Outcome by reclassification group" if lang == 'en' else "重新分层组别与结局",
+            "Patient counts and mortality for up-classified, unchanged, and down-classified groups." if lang == 'en' else "展示上调、不变、下调分层患者数及死亡率。",
+            "Outcome" if lang == 'en' else "结局",
+        )
         fig = make_subplots(specs=[[{"secondary_y": True}]])
         fig.add_trace(
             go.Bar(
                 x=summary['group'],
                 y=summary['patients'],
                 name=unit_label,
-                marker_color='rgba(37, 99, 235, 0.58)',
+                marker=dict(color='rgba(96, 142, 239, 0.72)', line=dict(color='rgba(37,99,235,0.36)', width=1)),
                 text=summary['patients'],
                 textposition='outside',
+                cliponaxis=False,
+                hovertemplate=f"%{{x}}<br>{unit_label}: %{{y}}<extra></extra>",
             ),
             secondary_y=False,
         )
@@ -318,62 +403,113 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
                 mode='lines+markers+text',
                 text=summary['mortality'].map(lambda x: f"{x:.1f}%"),
                 textposition='top center',
-                marker_color='#e11d48',
-                line=dict(width=3),
+                marker=dict(color='#e11d48', size=7),
+                line=dict(width=2.6, color='#e11d48'),
+                cliponaxis=False,
+                hovertemplate='%{x}<br>%{y:.1f}% mortality<extra></extra>' if lang == 'en' else '%{x}<br>%{y:.1f}% 死亡率<extra></extra>',
             ),
             secondary_y=True,
         )
-        fig.update_layout(
-            template='plotly_white',
-            height=360,
-            margin=dict(l=20, r=20, t=12, b=60),
-            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
-            font=dict(size=13, color='#111827'),
+        _style_reclass_figure(
+            fig,
+            height=410,
+            margin=dict(l=58, r=72, t=54, b=74),
+            legend_y=1.14,
         )
-        fig.update_yaxes(title_text=unit_label, secondary_y=False, gridcolor='#e5e7eb')
-        fig.update_yaxes(title_text="Mortality %" if lang == 'en' else "死亡率 %", secondary_y=True, range=[0, 100])
+        fig.update_yaxes(
+            title_text=unit_label,
+            secondary_y=False,
+            range=[0, max(5, float(summary['patients'].max()) * 1.30)],
+        )
+        fig.update_yaxes(
+            title_text="Mortality %" if lang == 'en' else "死亡率 %",
+            secondary_y=True,
+            range=[0, 100],
+            showgrid=False,
+        )
         st.plotly_chart(fig, use_container_width=True, key="reclass_outcome", config=_get_plotly_chart_config())
 
-    col3, col4 = st.columns([1, 1.1])
+    st.markdown('<div class="eu-chart-row-gap"></div>', unsafe_allow_html=True)
+
+    col3, col4 = st.columns([1, 1.06], gap="large")
     with col3:
-        st.markdown("##### " + ("SOFA-2 minus SOFA-1" if lang == 'en' else "SOFA-2 减 SOFA-1"))
-        fig = px.histogram(
-            rows,
-            x='delta',
-            color='group',
-            nbins=17,
-            color_discrete_map={
-                'Up-classified': '#e11d48',
-                'Same': '#64748b',
-                'Down-classified': '#0f766e',
-                '上调分层': '#e11d48',
-                '不变': '#64748b',
-                '下调分层': '#0f766e',
-            },
-            labels={'delta': "SOFA delta" if lang == 'en' else "SOFA差值", 'count': unit_label},
-            template='plotly_white',
+        _render_chart_heading(
+            "SOFA-2 minus SOFA-1" if lang == 'en' else "SOFA-2 减 SOFA-1",
+            "Distribution of paired score differences; zero means unchanged severity band." if lang == 'en' else "配对评分差值分布；零表示严重程度分层未改变。",
+            "Delta" if lang == 'en' else "变化",
         )
+        delta_counts = (
+            rows.groupby(['delta', 'group'], dropna=False)
+            .size()
+            .reset_index(name='count')
+            .sort_values(['delta', 'group'])
+        )
+        fig = go.Figure()
+        color_map = {
+            'Up-classified': '#e11d48',
+            'Same': '#64748b',
+            'Down-classified': '#0f766e',
+            '上调分层': '#e11d48',
+            '不变': '#64748b',
+            '下调分层': '#0f766e',
+        }
+        for group_name in [name for name in color_map if name in set(delta_counts['group'])]:
+            group_df = delta_counts[delta_counts['group'] == group_name]
+            fig.add_trace(
+                go.Bar(
+                    x=group_df['delta'],
+                    y=group_df['count'],
+                    name=group_name,
+                    marker=dict(color=color_map[group_name]),
+                    hovertemplate=f"Delta: %{{x}}<br>{unit_label}: %{{y}}<extra></extra>",
+                )
+            )
         fig.add_vline(x=0, line_color='#111827', line_dash='dash')
-        fig.update_layout(height=330, margin=dict(l=20, r=20, t=12, b=40), font=dict(size=13, color='#111827'), legend_title_text="")
+        _style_reclass_figure(
+            fig,
+            height=360,
+            margin=dict(l=58, r=34, t=54, b=58),
+            legend_y=1.14,
+        )
+        fig.update_layout(barmode='stack', bargap=0.14, legend_title_text="")
+        fig.update_xaxes(title_text="SOFA delta" if lang == 'en' else "SOFA差值")
+        fig.update_yaxes(title_text=unit_label)
         st.plotly_chart(fig, use_container_width=True, key="reclass_delta_hist", config=_get_plotly_chart_config())
 
     with col4:
-        st.markdown("##### " + ("Organ Contributors" if lang == 'en' else "器官评分贡献"))
+        _render_chart_heading(
+            "Organ contributors" if lang == 'en' else "器官评分贡献",
+            "Average absolute contribution of each SOFA component to the score difference." if lang == 'en' else "各 SOFA 器官组成分对评分差值的平均绝对贡献。",
+            "Components" if lang == 'en' else "组成分",
+        )
         if not organ.empty:
-            fig = px.bar(
-                organ,
-                x='mean_abs_delta',
-                y='organ',
-                orientation='h',
-                text='mean_abs_delta',
-                color='mean_delta',
-                color_continuous_scale=['#0f766e', '#f8fafc', '#e11d48'],
-                labels={'mean_abs_delta': "Mean |delta|" if lang == 'en' else "平均|差值|", 'organ': "", 'mean_delta': "Mean delta" if lang == 'en' else "平均差值"},
-                template='plotly_white',
+            organ_plot = organ.sort_values('mean_abs_delta', ascending=True)
+            colors = ['#e11d48' if val > 0 else '#0f766e' if val < 0 else '#64748b' for val in organ_plot['mean_delta']]
+            fig = go.Figure()
+            fig.add_trace(
+                go.Bar(
+                    x=organ_plot['mean_abs_delta'],
+                    y=organ_plot['organ'],
+                    orientation='h',
+                    text=organ_plot['mean_abs_delta'].map(lambda x: f"{x:.2f}"),
+                    textposition='outside',
+                    cliponaxis=False,
+                    marker=dict(color=colors, line=dict(color='rgba(15,31,68,0.10)', width=1)),
+                    hovertemplate='%{y}<br>Mean |delta|: %{x:.2f}<extra></extra>' if lang == 'en' else '%{y}<br>平均|差值|: %{x:.2f}<extra></extra>',
+                    name="Mean |delta|" if lang == 'en' else "平均|差值|",
+                )
             )
-            fig.update_traces(texttemplate="%{text:.2f}", textposition='outside', cliponaxis=False)
-            fig.update_layout(height=330, margin=dict(l=10, r=45, t=12, b=40), font=dict(size=13, color='#111827'))
-            fig.update_xaxes(range=[0, max(0.2, float(organ['mean_abs_delta'].max()) * 1.25)], gridcolor='#e5e7eb')
+            _style_reclass_figure(
+                fig,
+                height=360,
+                margin=dict(l=118, r=76, t=24, b=58),
+            )
+            fig.update_layout(showlegend=False)
+            fig.update_xaxes(
+                title_text="Mean |delta|" if lang == 'en' else "平均|差值|",
+                range=[0, max(0.2, float(organ_plot['mean_abs_delta'].max()) * 1.28)],
+            )
+            fig.update_yaxes(title_text="")
             st.plotly_chart(fig, use_container_width=True, key="reclass_organ_contrib", config=_get_plotly_chart_config())
         else:
             st.info("Organ-level SOFA component columns are not available." if lang == 'en' else "当前数据没有器官级SOFA组成列。")

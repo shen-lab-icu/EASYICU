@@ -11,6 +11,316 @@ import streamlit as st
 from easyicu.webapp.mock_data import generate_mock_data
 
 
+LIGHTWEIGHT_DEMO_PATIENTS = 50
+LIGHTWEIGHT_DEMO_HOURS = 48
+
+
+def generate_lightweight_demo_data(
+    n_patients: int = LIGHTWEIGHT_DEMO_PATIENTS,
+    hours: int = LIGHTWEIGHT_DEMO_HOURS,
+    cohort_filter: dict[str, Any] | None = None,
+    **_ignored: Any,
+) -> tuple[dict[str, pd.DataFrame], list[int]]:
+    """Generate a compact review dataset for the interactive web demo.
+
+    The full mock generator intentionally covers the entire concept catalog.
+    That is useful for export tests, but expensive for a reviewer-facing demo.
+    This lighter path keeps the main ICU review story intact while limiting
+    the number of concepts and rows rendered on each Streamlit rerun.
+    """
+    try:
+        n_patients = int(n_patients)
+    except (TypeError, ValueError):
+        n_patients = LIGHTWEIGHT_DEMO_PATIENTS
+    n_patients = min(max(1, n_patients), 120)
+
+    try:
+        hours = int(hours)
+    except (TypeError, ValueError):
+        hours = LIGHTWEIGHT_DEMO_HOURS
+    hours = min(max(24, hours), 96)
+
+    rng = np.random.default_rng(20260523)
+    pool_n = n_patients * (4 if cohort_filter else 1)
+    pool_n = max(pool_n, n_patients)
+    patient_ids_pool = np.arange(10001, 10001 + pool_n)
+    base_severity = rng.poisson(2.0, pool_n).clip(0, 8)
+    ages = rng.normal(64, 15, pool_n).clip(18, 95)
+    sexes = rng.choice(["M", "F"], pool_n, p=[0.55, 0.45])
+    is_septic = rng.random(pool_n) < np.clip(0.22 + base_severity / 28, 0.08, 0.62)
+    has_aki = rng.random(pool_n) < np.clip(0.16 + base_severity / 32, 0.05, 0.55)
+    has_circ_failure = rng.random(pool_n) < np.clip(0.12 + base_severity / 34, 0.04, 0.48)
+    has_mech_vent = rng.random(pool_n) < np.clip(0.20 + base_severity / 30, 0.08, 0.65)
+    has_rrt = has_aki & (rng.random(pool_n) < np.clip(0.08 + base_severity / 70, 0.02, 0.35))
+    los_hours = rng.lognormal(4.3, 0.7, pool_n).clip(24, 24 * 18)
+    mortality_prob = np.clip(0.05 + base_severity * 0.035 + is_septic * 0.08 + has_rrt * 0.10, 0.03, 0.72)
+    deaths = (rng.random(pool_n) < mortality_prob).astype(int)
+    onset = rng.integers(8, max(9, hours - 8), pool_n)
+    onset = np.where(is_septic, onset, -999)
+
+    meta = pd.DataFrame({
+        "stay_id": patient_ids_pool.astype(int),
+        "age": ages,
+        "sex": sexes,
+        "death": deaths,
+        "los_hours": los_hours,
+        "is_septic": is_septic,
+        "has_aki": has_aki,
+        "has_circ_failure": has_circ_failure,
+        "has_mech_vent": has_mech_vent,
+        "has_rrt": has_rrt,
+        "onset": onset,
+        "severity": base_severity,
+    })
+
+    if cohort_filter:
+        mask = pd.Series(True, index=meta.index)
+        if cohort_filter.get("age_min") is not None:
+            mask &= meta["age"] >= float(cohort_filter["age_min"])
+        if cohort_filter.get("age_max") is not None:
+            mask &= meta["age"] <= float(cohort_filter["age_max"])
+        if cohort_filter.get("gender") is not None:
+            mask &= meta["sex"] == str(cohort_filter["gender"])
+        if cohort_filter.get("survived") is not None:
+            mask &= (meta["death"] == 0) if cohort_filter["survived"] else (meta["death"] == 1)
+        if cohort_filter.get("has_sepsis") is not None:
+            mask &= meta["is_septic"] if cohort_filter["has_sepsis"] else ~meta["is_septic"]
+        disease = cohort_filter.get("disease_cohort")
+        if disease == "sepsis":
+            mask &= meta["is_septic"]
+        elif disease == "aki":
+            mask &= meta["has_aki"]
+        elif disease == "circ_failure":
+            mask &= meta["has_circ_failure"]
+        elif disease == "mech_vent":
+            mask &= meta["has_mech_vent"]
+        elif disease == "rrt":
+            mask &= meta["has_rrt"]
+        if cohort_filter.get("los_min") is not None:
+            mask &= meta["los_hours"] >= float(cohort_filter["los_min"])
+        filtered = meta[mask].copy()
+        if not filtered.empty:
+            meta = filtered
+
+    meta = meta.head(n_patients).copy()
+    patient_ids = meta["stay_id"].astype(int).tolist()
+    records = meta.to_dict("records")
+    data: dict[str, pd.DataFrame] = {}
+    time_points = np.arange(0, hours, 2, dtype=float)
+    time_points_4h = time_points[::2]
+    time_points_6h = time_points[::3]
+
+    def _active(rec: dict[str, Any], t: float) -> bool:
+        return bool(rec["is_septic"]) and t >= float(rec["onset"])
+
+    def _add_static(concept: str, values: list[Any]) -> None:
+        data[concept] = pd.DataFrame({"stay_id": patient_ids, concept: values})
+
+    def _add_series(
+        concept: str,
+        points: np.ndarray,
+        value_fn,
+        *,
+        missing: float = 0.0,
+        integer: bool = False,
+    ) -> None:
+        rows = []
+        for rec in records:
+            for t in points:
+                if missing and rng.random() < missing:
+                    continue
+                value = value_fn(rec, float(t))
+                if integer:
+                    value = int(round(float(value)))
+                rows.append({"stay_id": int(rec["stay_id"]), "time": float(t), concept: value})
+        data[concept] = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["stay_id", "time", concept])
+
+    _add_static("age", meta["age"].round(1).tolist())
+    _add_static("sex", meta["sex"].tolist())
+    _add_static("weight", rng.normal(76, 14, len(meta)).clip(42, 140).round(1).tolist())
+    _add_static("height", rng.normal(169, 10, len(meta)).clip(145, 200).round(1).tolist())
+    bmi = np.array(data["weight"]["weight"]) / (np.array(data["height"]["height"]) / 100) ** 2
+    _add_static("bmi", np.round(bmi, 1).tolist())
+    _add_static("adm", [1] * len(meta))
+    _add_static("death", meta["death"].astype(int).tolist())
+    _add_static("los_icu", (meta["los_hours"] / 24).round(2).tolist())
+    _add_static("los_hosp", (meta["los_hours"] / 24 + rng.uniform(0.4, 7.5, len(meta))).round(2).tolist())
+
+    _add_series("hr", time_points, lambda r, t: float(np.clip(82 + r["severity"] * 2.8 + (16 if _active(r, t) else 0) + rng.normal(0, 5), 42, 165)), missing=0.05)
+    _add_series("map", time_points, lambda r, t: float(np.clip(86 - r["severity"] * 1.7 - (11 if _active(r, t) else 0) + rng.normal(0, 4), 42, 125)), missing=0.05)
+    _add_series("sbp", time_points, lambda r, t: float(np.clip(122 - r["severity"] * 2.2 - (14 if _active(r, t) else 0) + rng.normal(0, 8), 72, 205)), missing=0.06)
+    _add_series("dbp", time_points, lambda r, t: float(np.clip(70 - r["severity"] * 0.9 - (7 if _active(r, t) else 0) + rng.normal(0, 5), 36, 120)), missing=0.06)
+    _add_series("resp", time_points, lambda r, t: float(np.clip(17 + r["severity"] * 0.8 + (5 if _active(r, t) else 0) + rng.normal(0, 2), 8, 42)), missing=0.08)
+    _add_series("temp", time_points_4h, lambda r, t: float(np.clip(36.8 + (0.9 if _active(r, t) else 0) + rng.normal(0, 0.35), 35.2, 41.2)), missing=0.03)
+    _add_series("spo2", time_points, lambda r, t: float(np.clip(97 - r["severity"] * 0.6 - (2 if r["has_mech_vent"] else 0) + rng.normal(0, 1.8), 78, 100)), missing=0.05)
+    data["o2sat"] = data["spo2"].rename(columns={"spo2": "o2sat"}).copy()
+    data["sao2"] = data["spo2"].rename(columns={"spo2": "sao2"}).copy()
+
+    _add_series("crea", time_points_6h, lambda r, t: float(np.clip(0.85 + r["severity"] * 0.09 + (0.45 if r["has_aki"] else 0) + rng.normal(0, 0.15), 0.3, 7.0)), missing=0.04)
+    _add_series("bili", time_points_6h, lambda r, t: float(np.clip(0.7 + r["severity"] * 0.07 + rng.normal(0, 0.25), 0.1, 12.0)), missing=0.08)
+    _add_series("glu", time_points_4h, lambda r, t: float(np.clip(118 + r["severity"] * 6 + rng.normal(0, 25), 45, 420)), missing=0.06)
+    _add_series("lact", time_points_6h, lambda r, t: float(np.clip(1.2 + r["severity"] * 0.18 + (1.7 if _active(r, t) else 0) + rng.normal(0, 0.45), 0.4, 12)), missing=0.12)
+    _add_series("plt", time_points_6h, lambda r, t: float(np.clip(235 - r["severity"] * 12 + rng.normal(0, 35), 25, 620)), missing=0.05)
+    _add_series("wbc", time_points_6h, lambda r, t: float(np.clip(8.5 + r["severity"] * 0.45 + (3.0 if _active(r, t) else 0) + rng.normal(0, 2.5), 0.8, 42)), missing=0.05)
+    _add_series("hgb", time_points_6h, lambda r, t: float(np.clip(11.7 - r["severity"] * 0.12 + rng.normal(0, 1.0), 6.0, 18.5)), missing=0.06)
+    _add_series("na", time_points_6h, lambda r, t: float(np.clip(139 + rng.normal(0, 3.5), 120, 162)), missing=0.06)
+    _add_series("k", time_points_6h, lambda r, t: float(np.clip(4.1 + rng.normal(0, 0.45), 2.3, 7.2)), missing=0.06)
+    _add_series("alb", time_points_6h, lambda r, t: float(np.clip(3.4 - r["severity"] * 0.04 + rng.normal(0, 0.35), 1.3, 5.2)), missing=0.16)
+    _add_series("bun", time_points_6h, lambda r, t: float(np.clip(19 + r["severity"] * 1.7 + rng.normal(0, 6), 4, 150)), missing=0.08)
+    _add_series("inr_pt", time_points_6h, lambda r, t: float(np.clip(1.05 + r["severity"] * 0.025 + rng.normal(0, 0.12), 0.75, 5.0)), missing=0.14)
+
+    _add_series("ph", time_points_6h, lambda r, t: float(np.clip(7.40 - r["severity"] * 0.008 - (0.04 if _active(r, t) else 0) + rng.normal(0, 0.025), 7.05, 7.63)), missing=0.18)
+    _add_series("pco2", time_points_6h, lambda r, t: float(np.clip(39 + r["severity"] * 0.8 + rng.normal(0, 5), 20, 86)), missing=0.18)
+    _add_series("po2", time_points_6h, lambda r, t: float(np.clip(92 - r["severity"] * 2.0 + rng.normal(0, 14), 38, 240)), missing=0.18)
+    _add_series("fio2", time_points_4h, lambda r, t: float(np.clip(28 + r["severity"] * 3.5 + (16 if r["has_mech_vent"] else 0) + rng.normal(0, 5), 21, 100)), missing=0.06)
+    _add_series("pafi", time_points_6h, lambda r, t: float(np.clip(310 - r["severity"] * 18 - (55 if r["has_mech_vent"] else 0) + rng.normal(0, 30), 50, 520)), missing=0.16)
+    _add_series("safi", time_points_6h, lambda r, t: float(np.clip(300 - r["severity"] * 14 - (40 if r["has_mech_vent"] else 0) + rng.normal(0, 28), 70, 500)), missing=0.12)
+
+    score_concepts = ["sofa", "sofa_resp", "sofa_coag", "sofa_liver", "sofa_cardio", "sofa_cns", "sofa_renal",
+                      "sofa2", "sofa2_resp", "sofa2_coag", "sofa2_liver", "sofa2_cardio", "sofa2_cns", "sofa2_renal",
+                      "qsofa", "sirs", "gcs", "mews", "news"]
+    score_rows = {name: [] for name in score_concepts}
+    for rec in records:
+        for t in time_points_6h:
+            sev = float(rec["severity"]) + (2.0 if _active(rec, float(t)) else 0.0)
+            comps = rng.poisson(np.array([0.5, 0.35, 0.25, 0.45, 0.4, 0.45]) + sev * 0.13).clip(0, 4)
+            comps2 = (comps + rng.choice([-1, 0, 1], size=6, p=[0.18, 0.62, 0.20])).clip(0, 4)
+            total = int(comps.sum())
+            total2 = int(comps2.sum())
+            vals = {
+                "sofa": total,
+                "sofa_resp": int(comps[0]),
+                "sofa_coag": int(comps[1]),
+                "sofa_liver": int(comps[2]),
+                "sofa_cardio": int(comps[3]),
+                "sofa_cns": int(comps[4]),
+                "sofa_renal": int(comps[5]),
+                "sofa2": total2,
+                "sofa2_resp": int(comps2[0]),
+                "sofa2_coag": int(comps2[1]),
+                "sofa2_liver": int(comps2[2]),
+                "sofa2_cardio": int(comps2[3]),
+                "sofa2_cns": int(comps2[4]),
+                "sofa2_renal": int(comps2[5]),
+                "qsofa": int(np.clip((sev > 3) + (sev > 5) + (_active(rec, float(t))), 0, 3)),
+                "sirs": int(np.clip(1 + (sev > 2) + (_active(rec, float(t))) + (rng.random() < 0.25), 0, 4)),
+                "gcs": int(np.clip(15 - comps[4] - (1 if rec["has_mech_vent"] else 0), 3, 15)),
+                "mews": int(np.clip(1 + sev // 2, 0, 6)),
+                "news": int(np.clip(2 + sev // 1.5, 0, 9)),
+            }
+            for concept, value in vals.items():
+                score_rows[concept].append({"stay_id": int(rec["stay_id"]), "time": float(t), concept: value})
+    for concept, rows in score_rows.items():
+        data[concept] = pd.DataFrame(rows)
+
+    aki_rows, aki_stage_rows, baseline_rows, uo6_rows, uo12_rows, uo24_rows, urine_rows = [], [], [], [], [], [], []
+    for rec in records:
+        baseline = float(np.clip(0.75 + rng.normal(0, 0.12), 0.45, 1.4))
+        for t in time_points_4h:
+            stage = int(np.clip((1 if rec["has_aki"] else 0) + (1 if _active(rec, float(t)) and rng.random() < 0.35 else 0) + (1 if rec["has_rrt"] else 0), 0, 3))
+            uo_rate = float(np.clip(1.15 - stage * 0.28 + rng.normal(0, 0.10), 0.05, 2.2))
+            urine_ml = float(np.clip(uo_rate * 70 * 4, 0, 900))
+            row_base = {"stay_id": int(rec["stay_id"]), "time": float(t)}
+            aki_rows.append({**row_base, "aki": int(stage > 0)})
+            aki_stage_rows.append({**row_base, "aki_stage": stage})
+            baseline_rows.append({**row_base, "creat_low_past_7day": baseline})
+            uo6_rows.append({**row_base, "uo_rt_6hr": uo_rate})
+            uo12_rows.append({**row_base, "uo_rt_12hr": max(0.04, uo_rate * 0.92)})
+            uo24_rows.append({**row_base, "uo_rt_24hr": max(0.03, uo_rate * 0.84)})
+            urine_rows.append({**row_base, "urine": urine_ml})
+    data["aki"] = pd.DataFrame(aki_rows)
+    data["aki_stage"] = pd.DataFrame(aki_stage_rows)
+    data["creat_low_past_7day"] = pd.DataFrame(baseline_rows)
+    data["uo_rt_6hr"] = pd.DataFrame(uo6_rows)
+    data["uo_rt_12hr"] = pd.DataFrame(uo12_rows)
+    data["uo_rt_24hr"] = pd.DataFrame(uo24_rows)
+    data["urine"] = pd.DataFrame(urine_rows)
+
+    for concept, attr, probability in [
+        ("vent_ind", "has_mech_vent", 1.0),
+        ("mech_vent", "has_mech_vent", 1.0),
+        ("rrt", "has_rrt", 1.0),
+        ("abx", "is_septic", 0.82),
+        ("vaso_ind", "has_circ_failure", 0.76),
+    ]:
+        rows = []
+        for rec in records:
+            active_flag = bool(rec[attr]) and rng.random() < probability
+            start = float(rng.choice(time_points_4h)) if active_flag else hours + 1
+            for t in time_points_4h:
+                if active_flag and t >= start:
+                    rows.append({"stay_id": int(rec["stay_id"]), "time": float(t), concept: 1})
+        data[concept] = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["stay_id", "time", concept])
+    _add_series("norepi_rate", time_points_4h, lambda r, t: float(np.clip((0.06 + r["severity"] * 0.025) if r["has_circ_failure"] and t >= 8 else 0, 0, 1.2)), missing=0.10)
+    data["norepi_equiv"] = data["norepi_rate"].rename(columns={"norepi_rate": "norepi_equiv"}).copy()
+    _add_series("peep", time_points_4h, lambda r, t: float(np.clip(5 + r["severity"] * 0.7 + rng.normal(0, 1.4), 3, 18)), missing=0.25)
+    _add_series("ins", time_points_6h, lambda r, t: float(np.clip(rng.normal(1.8, 1.2), 0, 8)), missing=0.35)
+    _add_series("cort", time_points_6h, lambda r, t: int(_active(r, t) and rng.random() < 0.18), integer=True)
+
+    sep3_rows = {name: [] for name in ["sep3_sofa2", "sep3_sofa1", "susp_inf", "infection_icd", "samp"]}
+    sofa2_lookup = data["sofa2"].set_index(["stay_id", "time"])["sofa2"].to_dict()
+    sofa_lookup = data["sofa"].set_index(["stay_id", "time"])["sofa"].to_dict()
+    for rec in records:
+        samp_time = float(rec["onset"]) if rec["is_septic"] else -999.0
+        for t in time_points_6h:
+            susp = int(rec["is_septic"] and samp_time - 24 <= t <= samp_time + 72)
+            inf = int(rec["is_septic"])
+            s2 = int(sofa2_lookup.get((int(rec["stay_id"]), float(t)), 0))
+            s1 = int(sofa_lookup.get((int(rec["stay_id"]), float(t)), 0))
+            base = {"stay_id": int(rec["stay_id"]), "time": float(t)}
+            sep3_rows["susp_inf"].append({**base, "susp_inf": susp})
+            sep3_rows["infection_icd"].append({**base, "infection_icd": inf})
+            sep3_rows["sep3_sofa2"].append({**base, "sep3_sofa2": int(susp and s2 >= 2)})
+            sep3_rows["sep3_sofa1"].append({**base, "sep3_sofa1": int(susp and s1 >= 2)})
+            if inf and abs(t - samp_time) <= 3:
+                sep3_rows["samp"].append({**base, "samp": 1})
+    for concept, rows in sep3_rows.items():
+        data[concept] = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["stay_id", "time", concept])
+
+    return data, patient_ids
+
+
+def seed_lightweight_demo_workspace(
+    state: dict[str, Any],
+    *,
+    n_patients: int = LIGHTWEIGHT_DEMO_PATIENTS,
+    hours: int = LIGHTWEIGHT_DEMO_HOURS,
+    force: bool = False,
+) -> tuple[int, int]:
+    """Seed the Streamlit session with the compact demo review workspace."""
+    current_params = state.get("mock_params") if isinstance(state.get("mock_params"), dict) else {}
+    if (
+        not force
+        and state.get("loaded_concepts")
+        and state.get("loaded_data_origin") == "demo_viz"
+        and current_params.get("demo_profile") == "lite"
+    ):
+        return len(state.get("loaded_concepts") or {}), len(state.get("patient_ids") or [])
+
+    params = dict(current_params or {})
+    params["n_patients"] = int(n_patients if force else (params.get("n_patients") or n_patients))
+    params["hours"] = int(hours if force else (params.get("hours") or hours))
+    params["demo_profile"] = "lite"
+    data, patient_ids = generate_lightweight_demo_data(
+        n_patients=params["n_patients"],
+        hours=params["hours"],
+        cohort_filter=params.get("cohort_filter"),
+    )
+    state["mock_params"] = params
+    state["loaded_concepts"] = data
+    state["loaded_data_origin"] = "demo_viz"
+    state["patient_ids"] = sorted(patient_ids)
+    state["id_col"] = "stay_id"
+    state["time_col"] = "time"
+    state["selected_concepts"] = list(data.keys())
+    state["trigger_export"] = False
+    state["_exporting_in_progress"] = False
+    state["viz_data_source_mode"] = "demo"
+    for tmp_key in ["_skipped_modules", "_overwrite_modules", "_viz_import_export_auto_trigger"]:
+        state.pop(tmp_key, None)
+    return len(data), len(patient_ids)
+
+
 # ============ 辅助函数：获取完整的 mock_params（包含最新的 cohort_filter） ============
 def get_mock_params_with_cohort():
     """
@@ -21,7 +331,7 @@ def get_mock_params_with_cohort():
 
     此函数确保在调用 generate_mock_data 时使用最新的 cohort_filter。
     """
-    params = st.session_state.get('mock_params', {'n_patients': 100, 'hours': 72}).copy()
+    params = st.session_state.get('mock_params', {'n_patients': LIGHTWEIGHT_DEMO_PATIENTS, 'hours': LIGHTWEIGHT_DEMO_HOURS}).copy()
 
     # 如果启用了队列筛选，添加最新的 cohort_filter
     if st.session_state.get('cohort_enabled', False):
@@ -44,9 +354,9 @@ def _generate_mock_demographics(n_patients: int, lang: str = 'en') -> pd.DataFra
     Returns:
         包含人口统计学数据的DataFrame
     """
-    # 🔧 使用统一的 generate_mock_data 函数生成基础数据
-    # 注意：generate_mock_data 返回 (data_dict, patient_ids) 元组
-    mock_data_tuple = generate_mock_data(n_patients=n_patients, hours=72)
+    # Use the compact demo generator here; cohort panels only need the
+    # review-grade concept subset, not the full 200+ concept catalog.
+    mock_data_tuple = generate_lightweight_demo_data(n_patients=n_patients, hours=48)
     mock_data = mock_data_tuple[0] if isinstance(mock_data_tuple, tuple) else mock_data_tuple
 
     # 提取需要的人口统计学字段
@@ -119,7 +429,7 @@ def _build_mock_group_feature_data(patient_ids: list, concepts: list, id_col: st
     if not patient_ids or not concepts:
         return {}
 
-    mock_data_tuple = generate_mock_data(n_patients=max(len(patient_ids), 10), hours=72)
+    mock_data_tuple = generate_lightweight_demo_data(n_patients=max(len(patient_ids), 10), hours=48)
     mock_data = mock_data_tuple[0] if isinstance(mock_data_tuple, tuple) else mock_data_tuple
 
     age_df = mock_data.get('age', pd.DataFrame(columns=['stay_id']))
@@ -324,7 +634,7 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
 
     result = {}
     for db_name, features in databases.items():
-        n_records_per_feat = np.random.randint(300, 600)
+        n_records_per_feat = np.random.randint(120, 220)
 
         # 生成长格式数据（concept + value）
         rows = []
@@ -483,4 +793,3 @@ def _generate_mock_cohort_dashboard_data(lang: str = 'en', n_patients: int = 500
     })
 
     return df
-

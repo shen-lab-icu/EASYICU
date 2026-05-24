@@ -10,11 +10,20 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_PATH = _REPO_ROOT / "tools" / "run_v14_agent_experiments.py"
-_SPEC = importlib.util.spec_from_file_location("run_v14_agent_experiments", _RUNNER_PATH)
-assert _SPEC is not None and _SPEC.loader is not None
-v14 = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = v14
-_SPEC.loader.exec_module(v14)
+_RUNNER_AVAILABLE = _RUNNER_PATH.exists()
+pytestmark = pytest.mark.skipif(
+    not _RUNNER_AVAILABLE,
+    reason="legacy v14/v15 experiment runner is archived locally",
+)
+
+if _RUNNER_AVAILABLE:
+    _SPEC = importlib.util.spec_from_file_location("run_v14_agent_experiments", _RUNNER_PATH)
+    assert _SPEC is not None and _SPEC.loader is not None
+    v14 = importlib.util.module_from_spec(_SPEC)
+    sys.modules[_SPEC.name] = v14
+    _SPEC.loader.exec_module(v14)
+else:
+    v14 = None
 
 
 def test_v14_task_registry_has_fifteen_real_cohort_tasks():

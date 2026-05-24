@@ -13,6 +13,14 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
             globals()[name] = value
 
 
+def _plain_display_label(label: str) -> str:
+    """Remove leading decorative symbols from legacy module labels."""
+    text = str(label or "").strip()
+    while text and not (text[0].isalnum() or "\u4e00" <= text[0] <= "\u9fff"):
+        text = text[1:].lstrip()
+    return text or str(label or "")
+
+
 def render_data_table_subtab(app_context: dict[str, Any] | None = None):
     """渲染数据大表子模块 - 让用户按模块查看已加载的数据。"""
     if app_context is not None:
@@ -45,7 +53,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
     for group_key, concepts in CONCEPT_GROUPS_INTERNAL.items():
         # 获取显示名称
         display_name = CONCEPT_GROUP_NAMES.get(group_key, (group_key, group_key))
-        group_display = display_name[0] if lang == 'en' else display_name[1]
+        group_display = _plain_display_label(display_name[0] if lang == 'en' else display_name[1])
 
         for c in concepts:
             if c not in concept_to_group_display:
@@ -176,7 +184,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                     </div>
                 </div>
                 <div class="module-glance-panel">
-                    <div class="module-glance-title">📊 {html.escape(glance_title)}</div>
+                    <div class="module-glance-title">{html.escape(glance_title)}</div>
                     <div class="module-glance-note">{html.escape(glance_note)}</div>
                     <div class="module-glance-grid">{glance_cards_html}</div>
                 </div>
@@ -263,7 +271,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                     )
 
                     cols_info_label = "Column Details" if lang == 'en' else "列详情"
-                    with st.expander(f"📊 {cols_info_label}", expanded=False):
+                    with st.expander(cols_info_label, expanded=False):
                         col_info = pd.DataFrame({
                             'Column': df.columns,
                             'Type': [str(df[c].dtype) for c in df.columns],
@@ -324,7 +332,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                     f'''
                     <div class="preview-toolbar">
                         <div class="preview-toolbar-main">
-                            <div class="preview-toolbar-title">🧭 {"Merged Preview Table" if lang == "en" else "合并预览表"}</div>
+                            <div class="preview-toolbar-title">{"Merged Preview Table" if lang == "en" else "合并预览表"}</div>
                             <div class="preview-toolbar-note">{preview_hint}</div>
                         </div>
                     </div>
