@@ -102,6 +102,58 @@ def test_recording_client_forwards_seed_when_inner_accepts_it(ra):
     assert env.calls[0].requested_seed == 1234
 
 
+def test_recording_client_records_top_p_when_caller_sets_it(ra):
+    from easyicu.research_agent.llm import LLMMessage
+
+    observed = {}
+
+    class _WithTopP:
+        name = "with-top-p"
+        _model = "topp-aware"
+
+        def complete(
+            self, messages, *, max_tokens=2048, temperature=0.2, top_p=None
+        ):
+            observed["top_p"] = top_p
+            return "ok"
+
+    env = ra.ReproEnvelope(run_id="run-top-p")
+    recorder = ra.ReproRecordingClient(_WithTopP(), role="planner", envelope=env)
+    recorder.complete(
+        [LLMMessage(role="user", content="x")],
+        max_tokens=16,
+        temperature=0.1,
+        top_p=0.9,
+    )
+    assert observed["top_p"] == 0.9
+    rec = env.calls[0]
+    assert rec.requested_top_p == 0.9
+    payload = rec.to_json()
+    assert payload["requested_top_p"] == 0.9
+
+
+def test_recording_client_records_provider_default_when_top_p_unset(ra):
+    from easyicu.research_agent.llm import LLMMessage
+
+    class _NoTopP:
+        name = "no-top-p"
+        _model = "topp-default"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            return "ok"
+
+    env = ra.ReproEnvelope(run_id="run-top-p-default")
+    recorder = ra.ReproRecordingClient(_NoTopP(), role="coder", envelope=env)
+    # Caller doesn't set top_p, so the envelope must record None to
+    # mean "we did not override the provider default".
+    recorder.complete([LLMMessage(role="user", content="x")])
+    rec = env.calls[0]
+    assert rec.requested_top_p is None
+    summary = env.to_manifest_summary()
+    assert summary["top_p_used_provider_default"] is True
+    assert summary["requested_top_ps"] == []
+
+
 def test_recording_client_degrades_gracefully_for_clients_without_seed(ra):
     from easyicu.research_agent.llm import LLMMessage
 

@@ -4470,7 +4470,10 @@ def _primary_effect_candidate_score(
         score += 10
     if summary.get("error"):
         score -= 20
-    if "bias" in path_text or "vasopressor_selection" in path_text:
+    if "bias" in path_text:
+        # Bias-audit runs are downstream cleanup, not primary-association
+        # candidates; demote them so cross-database run-summary picks the
+        # actual primary-association run for the active question.
         score -= 40
     if preferred_predictor:
         preferred_tokens = _predictor_tokens(preferred_predictor)
@@ -4482,11 +4485,13 @@ def _primary_effect_candidate_score(
             score += 70
         elif preferred_tokens & path_or_blob_tokens:
             score += 40
-        if not (preferred_tokens & {"vaso", "vasopressor", "vasopressors", "norepinephrine"}) and (
-            "vasopressor_selection" in path_text
-            or "vaso" in predictor
-            or "vasopressor" in predictor
-        ):
+        # Demote any candidate whose own predictor / path tokens conflict
+        # with the user's preferred predictor — generic anti-cross-contamination
+        # rule, not specific to vasopressor or any single benchmark case.
+        candidate_predictor_tokens = (
+            _predictor_tokens(predictor) | _predictor_tokens(path_text)
+        )
+        if preferred_tokens and not (preferred_tokens & candidate_predictor_tokens):
             score -= 60
     elif predictor:
         score += 5

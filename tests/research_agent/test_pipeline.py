@@ -763,7 +763,7 @@ def test_mock_planner_maps_clinical_phrases_to_expected_predictors(ra, tmp_path:
         plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
         # The mock planner emits ``04_primary_association`` for plain
         # association questions, but ``_normalise_plan_for_family`` may
-        # consolidate it into a canonical ``02_vasopressor_selection_bias_association``
+        # consolidate it into a canonical ``02_treatment_exposure_bias_association``
         # step when the question matches the bias_audit family (e.g. the
         # vasopressor case). What we actually want to pin is that the
         # primary predictor wired into the association step matches the
@@ -4136,7 +4136,7 @@ def test_advanced_plan_contract_normalizes_bias_audit_steps(ra):
 
     revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
 
-    assert [step.step_id for step in revised.steps] == ["02_vasopressor_selection_bias_association"]
+    assert [step.step_id for step in revised.steps] == ["02_treatment_exposure_bias_association"]
     assert "statistic:primary_or" in revised.steps[0].expected_outputs
     assert "statistic:selection_bias_warning" in revised.steps[0].expected_outputs
     assert findings and findings[0].validator == "plan_contract"

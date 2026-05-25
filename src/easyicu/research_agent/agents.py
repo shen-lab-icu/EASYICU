@@ -248,8 +248,25 @@ class PlannerAgent:
                 ),
             ),
         ]
-        raw = self.llm.complete(messages, max_tokens=4096, temperature=0.2)
-        return self._parse(raw, context)
+        from .structured_retry import call_llm_with_structured_retry
+
+        return call_llm_with_structured_retry(
+            self.llm,
+            messages,
+            parser=lambda raw: self._parse(raw, context),
+            role="planner",
+            max_retries=2,
+            max_tokens=4096,
+            temperature=0.2,
+            format_reminder=(
+                "The JSON must be a single object with keys: "
+                "research_question (string), steps (array of objects "
+                "each with step_id, intent, inputs, expected_outputs, "
+                "method, icu_rule_refs), rationale (string). "
+                "All string values must be plain ASCII or UTF-8 quoted strings; "
+                "do not use special Unicode whitespace inside values."
+            ),
+        )
 
     def _parse(self, raw: str, context: ResearchContext) -> AnalysisPlan:
         text = raw.strip()
@@ -314,8 +331,22 @@ class ReplannerAgent(PlannerAgent):
                 ),
             ),
         ]
-        raw = self.llm.complete(messages, max_tokens=4096, temperature=0.1)
-        revised = self._parse(raw, context)
+        from .structured_retry import call_llm_with_structured_retry
+
+        revised = call_llm_with_structured_retry(
+            self.llm,
+            messages,
+            parser=lambda raw: self._parse(raw, context),
+            role="replanner",
+            max_retries=2,
+            max_tokens=4096,
+            temperature=0.1,
+            format_reminder=(
+                "The JSON must be a single AnalysisPlan object with keys: "
+                "research_question, steps, rationale. Keep completed step_ids "
+                "from the CURRENT PLAN unchanged; only revise the remaining steps."
+            ),
+        )
         if revised.revision <= current_plan.revision:
             revised = revised.model_copy(update={"revision": current_plan.revision + 1})
         return revised
@@ -1120,7 +1151,8 @@ class WriterAgent:
                 "### Statistical analysis\n"
                 "  Model family (logistic regression / Cox / clustering), adjustment set, "
                 "sensitivity analyses (multiple-testing correction, subgroup analysis, "
-                "SOFA-zero stratum audit if applicable).\n"
+                "ICU-rule-specific strata or missingness-pattern audits raised by the "
+                "research context).\n"
                 "### Software and reproducibility\n"
                 "  One sentence: 'Analyses were conducted through the EasyICU research-agent "
                 "pipeline; the full reproducibility envelope (prompt/response SHA-256 hashes, "
@@ -1145,7 +1177,11 @@ class WriterAgent:
                 "### Sensitivity and subgroup analyses\n"
                 "  Multiple-testing result, subgroup heterogeneity, E-value if available.\n"
                 "### ICU-specific quality control\n"
-                "  SOFA-zero stratum finding if applicable, cite {evidence:sofa_strata}.\n"
+                "  Report any ICU-rule-specific finding raised by the research-context "
+                "validators (e.g. a stratum where a derived score collapsed to a "
+                "degenerate value, a missingness pattern that violated an aggregation "
+                "rule). Cite the corresponding registered evidence id. Omit this "
+                "subsection if no such finding was produced.\n"
                 "Target: 400-600 words. Every numeric claim MUST have an {evidence:id} citation."
             ),
             max_tokens=2048,
@@ -1173,8 +1209,11 @@ class WriterAgent:
                 "Write `## Limitations` — one paragraph, 150-250 words. Include at least:\n"
                 "1. Observational design → no causal inference, residual confounding.\n"
                 "2. Single synthetic/database cohort → limited external generalisability.\n"
-                "3. One ICU-specific limitation from the evidence (component missingness in "
-                "SOFA-zero stratum, ordinal-score handling, or time-window assumptions).\n"
+                "3. One ICU-specific limitation drawn from the registered evidence, "
+                "expressed in concept-neutral terms — e.g. component-level missingness "
+                "in a derived-score input, ordinal-score aggregation choice, time-window "
+                "definition. Do not invent an ICU limitation that is not supported by a "
+                "registered audit finding.\n"
                 "4. LLM-in-the-loop limitation (generated code was audited but not manually "
                 "reviewed line-by-line)."
             ),

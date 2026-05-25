@@ -1107,13 +1107,9 @@ class ClinicalConstraintValidator:
             not prediction_like
             and (
                 family in {"causal_inference", "treatment_response", "reinforcement_learning"}
-                or any(term in combined for term in ("target trial", "treatment", "intervention"))
-                or (
-                    "vasopressor" in combined
-                    and any(
-                        term in combined
-                        for term in ("effect", "association", "odds ratio", "target trial", "treatment")
-                    )
+                or any(
+                    term in combined
+                    for term in ("target trial", "treatment", "intervention", "exposure")
                 )
             )
         ):
