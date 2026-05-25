@@ -6,8 +6,10 @@ or end user click through the full ICU-aware research-agent pipeline:
 1. Pick a cohort — upload a parquet/CSV, point at one of the user's
    prior ``extract_database`` outputs in the workspace, or fall back
    to the synthetic SOFA cohort baked into ``examples/``.
-2. Pick a :class:`ClinicalSkill` from the registry (or the canonical
-   "free-form question" mode).
+2. Pick a :class:`ClinicalSkill` (an ICU research-question analysis
+   method — e.g. SOFA-2 vs mortality association, vasopressor target-trial
+   emulation; *not* a generic data-science skill) from the registry, or
+   choose the canonical "free-form question" mode.
 3. Optionally turn on the ICU-aware context (default) or the naive
    ablation arm (T1.4) for live A/B comparison.
 4. Hit *Run* — the page invokes
@@ -2716,8 +2718,10 @@ def _request_examples() -> List[Dict[str, str]]:
             "summary": "Coverage, missingness, units, timing, and cross-database consistency",
             "outcome": "death",
             "prompt": (
-                "Treat this as an ICU data-quality audit first: assess missingness, concept coverage, unit/range issues, temporal "
-                "consistency, and cross-module mapping problems, then generate review-ready tables and figures."
+                "Treat this as an ICU clinical-research data-quality audit first: assess missingness for SOFA/SOFA-2 components, "
+                "lactate and other lab concepts, unit/range issues on vitals, temporal consistency of measurement timestamps, "
+                "and cross-database mapping problems (MIMIC-IV vs eICU vs HiRID etc.), then generate review-ready tables and "
+                "figures for an ICU manuscript."
             ),
         },
     ]
