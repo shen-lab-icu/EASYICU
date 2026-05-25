@@ -1007,7 +1007,7 @@ def test_quality_panel_switcher_renders_one_lazy_panel(monkeypatch) -> None:
 def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     entry_source = pages_redesign.render_entry_redesign_page.__code__.co_consts
     source_text = "\n".join(str(value) for value in entry_source if isinstance(value, str))
-    css_text = shell_styles._STREAMLIT_OVERRIDES
+    css_text = shell_styles._load_shell_overrides_css()
 
     assert "All 19 modules / 167 features available" not in source_text
     assert "Lightweight review dataset opens immediately" in source_text
@@ -1058,7 +1058,7 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
         patient_source = handle.read()
     with open(research_agent.__file__, encoding="utf-8") as handle:
         research_agent_source = handle.read()
-    css_text = shell_styles._STREAMLIT_OVERRIDES
+    css_text = shell_styles._load_shell_overrides_css()
 
     assert "167 features" not in page_source
     assert "10 of 167" not in page_source
@@ -1160,7 +1160,7 @@ def test_tutorial_surfaces_existing_data_dictionary_preview() -> None:
         "en",
         selected_module="vitals",
     )
-    css_text = shell_styles._STREAMLIT_OVERRIDES
+    css_text = shell_styles._load_shell_overrides_css()
     dictionary_source_text = "\n".join(
         str(value)
         for value in pages_redesign._render_tutorial_dictionary.__code__.co_consts
@@ -1392,7 +1392,7 @@ def test_data_table_page_copy_emphasizes_preview_language() -> None:
 
 
 def test_quick_viz_data_table_overlap_guards_are_in_shell_css() -> None:
-    css = shell_styles._STREAMLIT_OVERRIDES
+    css = shell_styles._load_shell_overrides_css()
 
     assert ".dt-page-head" in css
     assert "st-key-dt_preview_mode" in css
@@ -2620,7 +2620,7 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert nav_by_key["research_agent"].level == "top"
 
     assert not hasattr(sidebar, "_sidebar_next_steps_html")
-    css_text = shell_styles._STREAMLIT_OVERRIDES
+    css_text = shell_styles._load_shell_overrides_css()
 
     assert "border-left: 3px solid var(--accent)" in css_text
     assert ".eu-context-label" in css_text
