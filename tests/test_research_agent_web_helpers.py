@@ -13,7 +13,7 @@ from easyicu.webapp.agent_workbench import (
     _result_cards_from_evidence,
     _resolve_workbench_state,
     _step_button_label,
-    _step_dag_html,
+    _step_flow_html,
     _step_legend_html,
     build_workbench_state_from_manifest,
 )
@@ -356,12 +356,12 @@ def test_live_workbench_state_builds_from_progress_events(tmp_path: Path) -> Non
         partial=True,
         progress_events=progress_events,
     )
-    dag_html = _step_dag_html(state, "en")
+    dag_html = _step_flow_html(state, "en")
 
     assert state["status"] == "running"
     assert state["steps"][-1]["step_id"] == "01_table_one"
     assert state["steps"][-1]["status"] == "running"
-    assert "eu-agent-dag-node running" in dag_html
+    assert "eu-agent-flow-node running" in dag_html
     assert "Evidence review" in dag_html
 
 

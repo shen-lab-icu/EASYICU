@@ -440,7 +440,14 @@ def _render_snapshot_subtab(df: pd.DataFrame | None, lang: str) -> None:
 
     chips_strip = "".join(
         f'<span class="eu-chip mono">{c}</span>'
-        for c in ["age 18–120", "los ≥24h", "first stay only", "sepsis-3", "icd A41 R65.20 R65.21"]
+        for c in [
+            "age 18–120",
+            "los ≥24h",
+            "first stay only",
+            "sep3",
+            "susp_inf",
+            _T(lang, "diagnosis-text proxy", "诊断文本代理"),
+        ]
     )
     st.markdown(
         '<div class="eu-card" style="padding:12px 14px;display:flex;align-items:center;'

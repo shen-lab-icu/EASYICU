@@ -3,7 +3,7 @@
 Faithful implementation of ``page-agent-workbench.jsx``: a three-column
 live run view —
 
-* Left   — process mind-map (DAG of steps with status + retry branch)
+* Left   — step sequence (status + retry branch for each pipeline step)
 * Center — live code panel (tabs + auto-patch banner + code + run trace)
 * Right  — result gallery (mini charts) + evidence list
 * Bottom — timeline scrubber across all steps
@@ -613,16 +613,24 @@ def _step_contract_from_record(
 
 
 def _evidence_rows_from_records(evidence: list[dict[str, Any]], *, fallback_label: str) -> list[dict[str, str]]:
-    rows = [
-        {
+    rows: list[dict[str, str]] = []
+    for record in evidence[:12]:
+        sha = str(record.get("sha256") or "")
+        rows.append({
             "label": _evidence_label(record),
             "sub": _evidence_sub(record),
             "tag": _evidence_tag(record),
-        }
-        for record in evidence[:12]
-    ]
+            "sha8": sha[:8] if sha else "",
+            "evidence_id": str(record.get("evidence_id") or ""),
+        })
     if not rows:
-        rows.append({"label": fallback_label, "sub": "no step-specific evidence artifact", "tag": "test"})
+        rows.append({
+            "label": fallback_label,
+            "sub": "no step-specific evidence artifact",
+            "tag": "test",
+            "sha8": "",
+            "evidence_id": "",
+        })
     return rows
 
 
@@ -1708,13 +1716,13 @@ def _render_process_graph_controls(
     return selected_idx
 
 
-def _step_dag_html(state: dict[str, Any], lang: str, *, selected_idx: int = 0) -> str:
+def _step_flow_html(state: dict[str, Any], lang: str, *, selected_idx: int = 0) -> str:
     steps = [s for s in state.get("steps", []) if isinstance(s, dict)]
     if not steps:
         return ""
     nodes = [
         (
-            '<div class="eu-agent-dag-node root">'
+            '<div class="eu-agent-flow-node root">'
             f'<span class="mono">{_T(lang, "INPUT", "输入")}</span>'
             f'<b>{_T(lang, "Question + cohort", "问题 + 队列")}</b>'
             '</div>'
@@ -1727,7 +1735,7 @@ def _step_dag_html(state: dict[str, Any], lang: str, *, selected_idx: int = 0) -
         selected = " selected" if idx == selected_idx else ""
         branch = " branch" if status in {"retry", "fail"} else ""
         nodes.append(
-            f'<div class="eu-agent-dag-node {status}{selected}{branch}">'
+            f'<div class="eu-agent-flow-node {status}{selected}{branch}">'
             f'<span class="mono">{idx + 1:02d} · {_esc(_step_status_label(status, lang))}</span>'
             f'<b>{_esc(label)}</b>'
             f'<small>{_esc(sub)}</small>'
@@ -1735,16 +1743,16 @@ def _step_dag_html(state: dict[str, Any], lang: str, *, selected_idx: int = 0) -
         )
     nodes.append(
         (
-            '<div class="eu-agent-dag-node gate">'
+            '<div class="eu-agent-flow-node gate">'
             f'<span class="mono">{_T(lang, "GATE", "闸门")}</span>'
             f'<b>{_T(lang, "Evidence review", "证据复核")}</b>'
             '</div>'
         )
     )
     return (
-        '<div class="eu-agent-dag-wrap">'
-        '<div class="eu-agent-dag-rail"></div>'
-        '<div class="eu-agent-dag-nodes">'
+        '<div class="eu-agent-flow-wrap">'
+        '<div class="eu-agent-flow-rail"></div>'
+        '<div class="eu-agent-flow-nodes">'
         + "".join(nodes)
         + '</div>'
         '</div>'
@@ -1862,6 +1870,18 @@ def _result_evidence_html(state: dict[str, Any], lang: str) -> str:
     ev_rows = []
     for i, e in enumerate(evidence):
         bg, fg = tag_style.get(e["tag"], ("var(--surface-2)", "var(--ink-3)"))
+        sha8 = str(e.get("sha8") or "")
+        ev_id = str(e.get("evidence_id") or "")
+        prov_bits = []
+        if sha8:
+            prov_bits.append(f"sha:{sha8}")
+        if ev_id:
+            prov_bits.append(ev_id)
+        prov_html = (
+            f'<div class="mono" style="font-size:10px;color:var(--ink-4);'
+            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
+            f'margin-top:2px">{_esc(" · ".join(prov_bits))}</div>'
+        ) if prov_bits else ""
         ev_rows.append(
             f'<div style="padding:8px 12px;display:grid;grid-template-columns:1fr auto;gap:8px;'
             f'align-items:center;{"border-top:1px solid var(--hair);" if i else ""}">'
@@ -1869,6 +1889,7 @@ def _result_evidence_html(state: dict[str, Any], lang: str) -> str:
             f'<div class="mono" style="font-size:11.5px;color:var(--ink);white-space:nowrap;'
             f'overflow:hidden;text-overflow:ellipsis">{_esc(e["label"])}</div>'
             f'<div style="font-size:10.5px;color:var(--ink-4)">{_esc(e["sub"])}</div>'
+            f'{prov_html}'
             '</div>'
             f'<span class="eu-chip mono" style="font-size:9.5px;padding:0 5px;background:{bg};color:{fg}">'
             f'{_esc(e["tag"])}</span>'
@@ -2810,7 +2831,10 @@ def render_agent_workbench(lang: str) -> None:
     active_state = _state_for_selected_step(state, selected_idx)
 
     # Header
+    arm_label = _T(lang, "ICU-aware · default arm", "ICU-aware · 默认实验臂")
     actions = (
+        f'<span class="eu-pill" title="{_esc(_T(lang, "Web UI runs the ICU-aware arm only; the naive ablation is exposed via the CLI --arms flag.", "Web 端只跑 ICU-aware 实验臂；naive 消融需通过 CLI --arms 显式触发。"))}">'
+        f'<span class="dot" style="background:var(--accent)"></span>{_esc(arm_label)}</span>'
         '<span class="eu-pill"><span class="dot eu-pulse" style="background:var(--accent)"></span>'
         f'{_esc(state.get("status_step", ""))}</span>'
     )
@@ -2906,7 +2930,10 @@ def render_agent_live_workbench(lang: str) -> None:
     state.setdefault("source_label", _T(lang, "Live run", "实时运行"))
     selected_idx = _default_selected_step([s for s in state.get("steps", []) if isinstance(s, dict)])
     active_state = _state_for_selected_step(state, selected_idx)
+    arm_label = _T(lang, "ICU-aware · default arm", "ICU-aware · 默认实验臂")
     actions = (
+        f'<span class="eu-pill" title="{_esc(_T(lang, "Web UI runs the ICU-aware arm only; the naive ablation is exposed via the CLI --arms flag.", "Web 端只跑 ICU-aware 实验臂；naive 消融需通过 CLI --arms 显式触发。"))}">'
+        f'<span class="dot" style="background:var(--accent)"></span>{_esc(arm_label)}</span>'
         '<span class="eu-pill"><span class="dot eu-pulse" style="background:var(--accent)"></span>'
         f'{_esc(state.get("status_step", ""))}</span>'
     )
@@ -2932,10 +2959,10 @@ def render_agent_live_workbench(lang: str) -> None:
         st.markdown(
             '<div class="eu-agent-panel" style="padding:14px 16px;min-height:620px;overflow:auto">'
             '<div class="eu-agent-process-head">'
-            f'<b>{_T(lang, "Step DAG", "步骤 DAG")} · {len(steps)} {_T(lang, "nodes", "节点")}</b>'
+            f'<b>{_T(lang, "Step sequence", "步骤流程")} · {len(steps)} {_T(lang, "steps", "步")}</b>'
             f'<span class="mono">{n_ok} ok · {n_retry} retry · {n_run} running</span>'
             '</div>'
-            + _step_dag_html(state, lang, selected_idx=selected_idx)
+            + _step_flow_html(state, lang, selected_idx=selected_idx)
             + '</div>',
             unsafe_allow_html=True,
         )
