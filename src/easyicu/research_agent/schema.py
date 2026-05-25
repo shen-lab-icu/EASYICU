@@ -273,6 +273,30 @@ class UserPreferences(BaseModel):
     extra_notes: Optional[str] = None
 
 
+RESEARCH_CONTEXT_SCHEMA_VERSION = "easyicu.research_context/1"
+
+# Field set that constitutes the immutable schema. A test under
+# ``tests/research_agent/test_research_context_schema.py`` asserts the
+# actual ``ResearchContext.model_fields`` match this set so any silent
+# field rename / addition / removal will fail in CI. Bump
+# ``RESEARCH_CONTEXT_SCHEMA_VERSION`` when intentionally changing the
+# schema and update this list at the same time.
+RESEARCH_CONTEXT_FIELDS: tuple = (
+    "schema_version",
+    "research_question",
+    "cohort",
+    "variables",
+    "time_windows",
+    "temporal_constraints",
+    "target_outcome",
+    "cross_database_validation",
+    "cohort_parquet",
+    "user_preferences",
+    "notes",
+    "created_at",
+)
+
+
 class ResearchContext(BaseModel):
     """Top-level context object handed to the agent.
 
@@ -281,11 +305,17 @@ class ResearchContext(BaseModel):
     see is grounded in the fields below — variable kinds, allowed
     aggregations, time windows, known pitfalls — so that the agent
     cannot confuse an ordinal SOFA component for a continuous lab.
+
+    Frozen as of 2026-05-24. ``model_config = ConfigDict(frozen=True)``
+    blocks downstream code from silently mutating cohort/variables/
+    target_outcome between construction and prompt rendering. Any
+    legitimate change should go through ``model_copy(update={...})``
+    so the diff is auditable.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: str = "easyicu.research_context/1"
+    schema_version: str = RESEARCH_CONTEXT_SCHEMA_VERSION
     research_question: str
     cohort: CohortDescriptor
     variables: List[ConceptDescriptor]

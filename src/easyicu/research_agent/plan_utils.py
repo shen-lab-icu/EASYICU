@@ -200,11 +200,12 @@ def _enforce_advanced_plan_contract(
             "silhouette",
             "mortality_by_cluster",
         )
-        canonical_step_id = "01_trajectory_clustering"
+        canonical_step_id = "01_phenotype_trajectory_clustering"
         canonical_method = "clustering"
         canonical_intent = (
-            "Generate shock-physiology clusters, cluster summaries, post-hoc "
-            "mortality by cluster, validation metrics, and a figure in one "
+            "Generate trajectory clusters over the predictor variables named "
+            "in the research context, with cluster summaries, post-hoc "
+            "outcome rate by cluster, validation metrics and a figure in one "
             "self-contained executable step."
         )
         required_outputs = [
@@ -236,13 +237,14 @@ def _enforce_advanced_plan_contract(
             "odds ratio",
             "or",
         )
-        canonical_step_id = "02_vasopressor_selection_bias_association"
+        canonical_step_id = "02_treatment_exposure_bias_association"
         canonical_method = "bias_audit_association"
         canonical_intent = (
-            "Fit a mortality association model for first-24h vasopressor exposure "
-            "with severity/missingness context; report the primary odds ratio, "
-            "selection-bias or confounding-by-indication warning, missingness profile, "
-            "and avoid causal treatment-effect language."
+            "Fit an outcome association model for the treatment exposure named "
+            "in the research context with severity / missingness covariates; "
+            "report the primary odds ratio, selection-bias or "
+            "confounding-by-indication warning, missingness profile, and avoid "
+            "causal treatment-effect language."
         )
         required_outputs = [
             "statistic:primary_or",

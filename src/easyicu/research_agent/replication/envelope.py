@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 
-ENVELOPE_SCHEMA_VERSION = "easyicu.reproducibility_envelope/1"
+ENVELOPE_SCHEMA_VERSION = "easyicu.reproducibility_envelope/2"
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +154,12 @@ class ReproCallRecord:
     response_sha256: str
     prompt_chars: int
     response_chars: int
+    # Envelope schema /2: requested_top_p records the top_p value the
+    # caller asked for. ``None`` means the caller did not set top_p and
+    # the provider's default applies (typically 1.0 for OpenAI-compatible
+    # APIs). Recorded explicitly so a reviewer can distinguish "we
+    # didn't override top_p" from "top_p value is missing".
+    requested_top_p: Optional[float] = None
     prompt_preview: Optional[str] = None
     response_preview: Optional[str] = None
 
@@ -166,6 +172,7 @@ class ReproCallRecord:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "requested_seed": self.requested_seed,
+            "requested_top_p": self.requested_top_p,
             "prompt_sha256": self.prompt_sha256,
             "response_sha256": self.response_sha256,
             "prompt_chars": self.prompt_chars,
@@ -211,6 +218,7 @@ class ReproEnvelope:
         requested_seed: Optional[int],
         messages: Sequence[Any],
         response: str,
+        requested_top_p: Optional[float] = None,
     ) -> ReproCallRecord:
         prompt_canonical = _canonical_messages(messages)
         prompt_preview: Optional[str] = None
@@ -226,6 +234,7 @@ class ReproEnvelope:
             temperature=float(temperature),
             max_tokens=int(max_tokens),
             requested_seed=int(requested_seed) if requested_seed is not None else None,
+            requested_top_p=float(requested_top_p) if requested_top_p is not None else None,
             prompt_sha256=sha256_text(prompt_canonical),
             response_sha256=sha256_text(response or ""),
             prompt_chars=len(prompt_canonical),
@@ -246,6 +255,8 @@ class ReproEnvelope:
         by_model: Dict[str, Dict[str, Any]] = {}
         temperatures = set()
         seeds = set()
+        top_ps = set()
+        top_p_was_unset = False
         for r in self.calls:
             role_key = r.role or "unrouted"
             rb = by_role.setdefault(
@@ -259,6 +270,10 @@ class ReproEnvelope:
             mb["n_calls"] += 1
             temperatures.add(r.temperature)
             seeds.add(r.requested_seed)
+            if r.requested_top_p is None:
+                top_p_was_unset = True
+            else:
+                top_ps.add(r.requested_top_p)
         summary = {
             "schema_version": ENVELOPE_SCHEMA_VERSION,
             "run_id": self.run_id,
@@ -270,6 +285,8 @@ class ReproEnvelope:
             "requested_seeds": sorted(
                 [s for s in seeds if s is not None]
             ) or [],
+            "requested_top_ps": sorted(top_ps),
+            "top_p_used_provider_default": top_p_was_unset,
             "by_role": by_role,
             "by_model": by_model,
             "env_snapshot": dict(self.env_snapshot),
@@ -340,29 +357,38 @@ class ReproRecordingClient:
         return "unknown"
 
     def _forward_complete(
-        self, messages: Sequence[Any], *, max_tokens: int, temperature: float
+        self,
+        messages: Sequence[Any],
+        *,
+        max_tokens: int,
+        temperature: float,
+        top_p: Optional[float] = None,
     ) -> str:
-        """Call ``inner.complete``, forwarding ``seed=`` if it accepts it."""
+        """Call ``inner.complete``, forwarding ``seed=``/``top_p=`` if accepted."""
         import inspect
 
         try:
             sig = inspect.signature(self._inner.complete)
-            accepts_seed = "seed" in sig.parameters
+            params = sig.parameters
+            accepts_seed = "seed" in params
+            accepts_top_p = "top_p" in params
         except (TypeError, ValueError):
             accepts_seed = False
+            accepts_top_p = False
+        kwargs: Dict[str, Any] = {"max_tokens": max_tokens, "temperature": temperature}
         if accepts_seed and self._seed is not None:
-            return self._inner.complete(
-                messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                seed=self._seed,
-            )
-        return self._inner.complete(
-            messages, max_tokens=max_tokens, temperature=temperature
-        )
+            kwargs["seed"] = self._seed
+        if accepts_top_p and top_p is not None:
+            kwargs["top_p"] = top_p
+        return self._inner.complete(messages, **kwargs)
 
     def complete(
-        self, messages, *, max_tokens: int = 2048, temperature: float = 0.2
+        self,
+        messages,
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        top_p: Optional[float] = None,
     ) -> str:
         # Allow the inner client to reset its own last_usage so
         # composition with ``MeteredClient`` stays accurate.
@@ -371,7 +397,7 @@ class ReproRecordingClient:
         except Exception:
             pass
         response = self._forward_complete(
-            messages, max_tokens=max_tokens, temperature=temperature
+            messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p
         )
         self._envelope.record(
             role=self._role,
@@ -380,6 +406,7 @@ class ReproRecordingClient:
             temperature=float(temperature),
             max_tokens=int(max_tokens),
             requested_seed=self._seed,
+            requested_top_p=top_p,
             messages=messages,
             response=response,
         )

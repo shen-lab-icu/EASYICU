@@ -265,7 +265,8 @@ class OpenAIClient:
                     self._extra_body.setdefault(k, v)
 
     def complete(self, messages: Sequence[LLMMessage], *, max_tokens: int = 2048,
-                 temperature: float = 0.2, seed: Optional[int] = None) -> str:
+                 temperature: float = 0.2, seed: Optional[int] = None,
+                 top_p: Optional[float] = None) -> str:
         chat_messages = [{"role": m.role, "content": m.content} for m in messages]
         create_kwargs: Dict[str, Any] = {
             "model": self._model,
@@ -282,6 +283,12 @@ class OpenAIClient:
             # see user intent even when the provider does not honour
             # it.
             create_kwargs["seed"] = int(seed)
+        # top_p is intentionally optional. When unset we do NOT pass it
+        # to the API so the provider default applies; the envelope
+        # records ``requested_top_p=None`` which a reviewer can read as
+        # "provider default" rather than "unknown".
+        if top_p is not None:
+            create_kwargs["top_p"] = float(top_p)
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
         # Manual back-off for 503 / overloaded errors. The SDK retries
@@ -305,6 +312,8 @@ class OpenAIClient:
                 }
                 if seed is not None:
                     payload["seed"] = int(seed)
+                if top_p is not None:
+                    payload["top_p"] = float(top_p)
                 if self._extra_body:
                     payload.update(self._extra_body)
                 resp = self._local_http_client.post("/chat/completions", json=payload)
@@ -602,17 +611,30 @@ class FallbackLLMClient:
         max_tokens: int = 2048,
         temperature: float = 0.2,
         seed: Optional[int] = None,
+        top_p: Optional[float] = None,
     ) -> str:
         errors: List[str] = []
         last_exc: Optional[Exception] = None
         for client in self._clients:
             try:
-                out = client.complete(
-                    messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    seed=seed,
-                )
+                # Forward top_p only to clients that accept it (OpenAI-
+                # compatible); legacy clients keep their previous
+                # 3-kwarg signature.
+                import inspect as _inspect
+
+                try:
+                    _params = _inspect.signature(client.complete).parameters
+                    _accepts_top_p = "top_p" in _params
+                except (TypeError, ValueError):
+                    _accepts_top_p = False
+                _kwargs: Dict[str, Any] = {
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "seed": seed,
+                }
+                if _accepts_top_p and top_p is not None:
+                    _kwargs["top_p"] = top_p
+                out = client.complete(messages, **_kwargs)
                 self.last_usage = getattr(client, "last_usage", None)
                 self.last_finish_reason = getattr(client, "last_finish_reason", None)
                 self.last_client_name = getattr(
@@ -801,7 +823,7 @@ class LLMRouter:
     # ------------------------------------------------------------------
 
     def complete(self, messages: Sequence["LLMMessage"], *, max_tokens: int = 2048,
-                 temperature: float = 0.2) -> str:
+                 temperature: float = 0.2, top_p: Optional[float] = None) -> str:
         """Route to the default client.
 
         This bridge exists so a router can be passed to legacy code
@@ -813,6 +835,16 @@ class LLMRouter:
                 "LLMRouter.complete() called but no `default` client is "
                 "configured; use ``router.for_role(role).complete(...)`` "
                 "or set ``default=...`` at construction."
+            )
+        import inspect as _inspect
+
+        try:
+            _accepts_top_p = "top_p" in _inspect.signature(self._default.complete).parameters
+        except (TypeError, ValueError):
+            _accepts_top_p = False
+        if _accepts_top_p and top_p is not None:
+            return self._default.complete(
+                messages, max_tokens=max_tokens, temperature=temperature, top_p=top_p
             )
         return self._default.complete(messages, max_tokens=max_tokens, temperature=temperature)
 

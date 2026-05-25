@@ -769,6 +769,8 @@ def _benchmark_pipeline_options(
     max_total_steps: Optional[int],
     disable_replanning: bool,
     max_code_repair_attempts: Optional[int],
+    enable_repro_envelope: bool = True,
+    llm_seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
     if max_total_steps is not None:
@@ -777,6 +779,14 @@ def _benchmark_pipeline_options(
         options["enable_replanning"] = False
     if max_code_repair_attempts is not None:
         options["max_code_repair_attempts"] = int(max_code_repair_attempts)
+    if enable_repro_envelope:
+        # Default ON for bench runs so the per-call envelope
+        # (temperature / requested_top_p / seed / model / prompt+response
+        # SHA256) lands as reproducibility_envelope.json next to each
+        # arm's run_status.json.
+        options["enable_reproducibility_envelope"] = True
+    if llm_seed is not None:
+        options["llm_seed"] = int(llm_seed)
     return options
 
 
@@ -984,6 +994,25 @@ def main() -> int:
         help="Override the per-step generated-code repair attempt budget.",
     )
     parser.add_argument(
+        "--no-repro-envelope",
+        action="store_true",
+        help=(
+            "Disable the LLM reproducibility envelope (O20). The envelope "
+            "is ON by default for bench runs because the manuscript cites "
+            "per-call temperature / seed / top_p / model and SHA256 hashes."
+        ),
+    )
+    parser.add_argument(
+        "--llm-seed",
+        type=int,
+        default=None,
+        help=(
+            "Optional integer seed forwarded to OpenAI-compatible providers "
+            "via the chat-completions `seed` field. Recorded in the "
+            "reproducibility envelope regardless of provider honoring it."
+        ),
+    )
+    parser.add_argument(
         "--ehrflowbench-jsonl",
         default=None,
         help="Optional EHRFlowBench-style JSONL export. Each row may include "
@@ -994,6 +1023,8 @@ def main() -> int:
         max_total_steps=args.max_total_steps,
         disable_replanning=bool(args.disable_replanning),
         max_code_repair_attempts=args.max_code_repair_attempts,
+        enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
+        llm_seed=getattr(args, "llm_seed", None),
     )
 
     if args.ehrflowbench_jsonl:
