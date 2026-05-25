@@ -990,13 +990,13 @@ def render_agent_redesign_page(lang: str) -> None:
             + "".join([
                 '<div style="padding:6px 8px;background:var(--surface-2);border-radius:6px">'
                 f'<div style="font-size:10px;color:var(--ink-4);letter-spacing:.06em;text-transform:uppercase;font-weight:500">{l}</div>'
-                f'<div class="mono" style="font-size:13px;font-weight:500;color:var(--ink)">{v}</div>'
+                f'<div class="mono" style="font-size:13px;font-weight:500;color:{c}">{v}</div>'
                 '</div>'
-                for l, v in [
-                    (_T(lang, "Mean age", "平均年龄"), "63.2 y"),
-                    (_T(lang, "Mortality", "死亡率"), "18.0%"),
-                    ("Sepsis-3", "45.3%"),
-                    (_T(lang, "Mech vent", "机械通气"), "52.1%"),
+                for l, v, c in [
+                    (_T(lang, "Mean age", "平均年龄"), "63.2 y", "var(--ink)"),
+                    (_T(lang, "Mortality", "死亡率"), "18.0%", "var(--bad)"),
+                    ("Sepsis-3", "45.3%", "var(--ink)"),
+                    (_T(lang, "Mech vent", "机械通气"), "52.1%", "var(--ink)"),
                 ]
             ])
             + '</div>'

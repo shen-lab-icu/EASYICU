@@ -83,27 +83,31 @@ def render_entry_page(app_context: dict[str, Any] | None = None):
     .entry-btn-wrap div[data-testid="stButton"] > button:active {
         transform: translateY(-1px) !important;
     }
-    /* 左列 Demo = 轻量导览，视觉上保持 secondary */
+    /* Demo card · accent-soft surface, recommended guided tour
+       (matches easyicu design/page-entry.jsx ModeCardLarge tone="demo"). */
     .entry-btn-wrap.demo-col div[data-testid="stButton"] > button {
-        background: #f5f8fc !important;
-        color: #1f2937 !important;
-        border: 1px solid #d7e2ee !important;
-        box-shadow: 0 4px 20px rgba(15,23,42,0.05) !important;
+        background: var(--accent-soft) !important;
+        color: var(--ink) !important;
+        border: 1px solid var(--accent-border) !important;
+        box-shadow: var(--sh-1) !important;
     }
     .entry-btn-wrap.demo-col div[data-testid="stButton"] > button:hover {
-        background: #eef4fa !important;
-        box-shadow: 0 8px 24px rgba(15,23,42,0.08) !important;
+        background: var(--accent-soft) !important;
+        border-color: var(--accent) !important;
+        box-shadow: var(--sh-2) !important;
     }
-    /* 右列 Real = 主工作流，视觉上作为 primary */
+    /* Real card · neutral surface, prepared-data path
+       (matches easyicu design/page-entry.jsx ModeCardLarge default tone). */
     .entry-btn-wrap.real-col div[data-testid="stButton"] > button {
-        background: var(--gradient-primary) !important;
-        color: white !important;
-        border: 1px solid rgba(255,255,255,0.26) !important;
-        box-shadow: 0 8px 28px rgba(37,99,235,0.18) !important;
+        background: var(--surface) !important;
+        color: var(--ink) !important;
+        border: 1px solid var(--hair) !important;
+        box-shadow: var(--sh-1) !important;
     }
     .entry-btn-wrap.real-col div[data-testid="stButton"] > button:hover {
-        filter: saturate(1.06) brightness(1.03);
-        box-shadow: 0 14px 36px rgba(37,99,235,0.24) !important;
+        background: var(--surface-2) !important;
+        border-color: var(--hair-3) !important;
+        box-shadow: var(--sh-2) !important;
     }
     </style>
     """, unsafe_allow_html=True)

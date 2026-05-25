@@ -16,6 +16,7 @@ All API credentials are stored in session state only — never persisted.
 from __future__ import annotations
 
 import ast
+import html
 import os
 import re
 from datetime import datetime
@@ -1613,12 +1614,34 @@ def render_inline_ai_panel():
                 if lang == "en" else
                 "嵌入当前工作区的页面感知式建议。"
             )
+            provider_key = coerce_public_provider(
+                st.session_state.get("llm_provider", public_default_provider_key())
+            )
+            provider_label = public_provider_defaults(provider_key)[0] or provider_key
+            llm_configured = _is_configured()
+            if not st.session_state.get("llm_enabled", False):
+                status_label = "AI off" if lang == "en" else "AI 已关闭"
+                status_color = "var(--ink-4)"
+            elif not llm_configured:
+                status_label = "key missing" if lang == "en" else "缺少 API key"
+                status_color = "var(--warn)"
+            else:
+                status_label = f"{provider_label} · online"
+                status_color = "var(--ok)"
+            status_pill_html = (
+                f'<span class="eu-pill mono" '
+                f'style="font-size:10px;padding:2px 7px;height:18px;margin-left:8px;'
+                f'background:var(--surface);color:{status_color};'
+                f'border:1px solid var(--hair-2);vertical-align:middle">'
+                f'<span class="dot" style="background:{status_color}"></span>'
+                f'{html.escape(status_label)}</span>'
+            )
             st.markdown(
                 f"""
                 <div class="inline-ai-header">
                     <div class="inline-ai-avatar">AI</div>
                     <div>
-                        <div class="inline-ai-title">{title}</div>
+                        <div class="inline-ai-title">{title}{status_pill_html}</div>
                         <div class="inline-ai-subtitle">{subtitle}</div>
                     </div>
                 </div>
@@ -2270,6 +2293,28 @@ def render_floating_chat_dock():
                 if lang == "en" else
                 "基于当前页面和已选配置给出建议。"
             )
+            provider_key = coerce_public_provider(
+                st.session_state.get("llm_provider", public_default_provider_key())
+            )
+            provider_label = public_provider_defaults(provider_key)[0] or provider_key
+            llm_configured = _is_configured()
+            if not st.session_state.get("llm_enabled", False):
+                status_label = "AI off" if lang == "en" else "AI 已关闭"
+                status_color = "var(--ink-4)"
+            elif not llm_configured:
+                status_label = "key missing" if lang == "en" else "缺少 API key"
+                status_color = "var(--warn)"
+            else:
+                status_label = f"{provider_label} · online"
+                status_color = "var(--ok)"
+            status_pill = (
+                f'<span class="eu-pill mono" '
+                f'style="font-size:10px;padding:2px 7px;height:18px;'
+                f'background:var(--surface);color:{status_color};'
+                f'border:1px solid var(--hair-2)">'
+                f'<span class="dot" style="background:{status_color}"></span>'
+                f'{html.escape(status_label)}</span>'
+            )
             header_cols = st.columns([4.8, 0.8, 0.8, 0.8, 1, 1])
             with header_cols[0]:
                 st.markdown(
@@ -2278,7 +2323,7 @@ def render_floating_chat_dock():
                         <div class="floating-ai-title-row">
                             <span class="floating-ai-avatar">🤖</span>
                             <div>
-                                <div class="floating-ai-title">{dock_title}</div>
+                                <div class="floating-ai-title">{dock_title} {status_pill}</div>
                                 <div class="floating-ai-subtitle">{dock_subtitle}</div>
                             </div>
                         </div>
