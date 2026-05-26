@@ -127,9 +127,9 @@ def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clusterin
 
     # Post-normalisation canonical step ids: prediction collapses to
     # ``01_model_training`` and clustering collapses to
-    # ``01_trajectory_clustering`` (see ``_normalise_plan_for_family``).
+    # ``01_phenotype_trajectory_clustering`` (see ``_normalise_plan_for_family``).
     assert "01_model_training" in first_step_ids, first_step_ids
-    assert "01_trajectory_clustering" in second_step_ids, second_step_ids
+    assert "01_phenotype_trajectory_clustering" in second_step_ids, second_step_ids
 
 
 def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_preferences(ra, tmp_path: Path):

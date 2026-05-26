@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from easyicu.webapp.concept_catalog import COMPOSITE_CONCEPT_OUTPUT_SOURCES
 
 
@@ -87,6 +89,7 @@ def cohort_feature_counts(state) -> dict:
     }
 
 
+@lru_cache(maxsize=1)
 def _dictionary_total_lazy() -> int:
     """Defer the concept-catalog import so this module stays light."""
     try:

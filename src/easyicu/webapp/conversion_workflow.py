@@ -1,8 +1,16 @@
-"""CSV and database conversion workflows for the EasyICU webapp."""
+"""CSV and database conversion workflows for the EasyICU webapp.
+
+Header + source/target panel follow ``easyicu design/page-misc.jsx``
+``PageConvertDialog``: a card-style dialog with a clear source→target
+summary, then progress and per-file status.
+"""
 
 from __future__ import annotations
 
 from typing import Any
+
+from easyicu.webapp.cohort_charts import render_design_page_header
+from easyicu.webapp.design_primitives import render_card_open, render_card_close
 
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
@@ -22,12 +30,35 @@ def render_convert_dialog(app_context: dict[str, Any] | None = None):
     lang = st.session_state.get('language', 'en')
     source_path = st.session_state.get('convert_source_path', '')
 
-    dialog_title = "## 🔄 CSV to Parquet Conversion" if lang == 'en' else "## 🔄 CSV 转换为 Parquet"
-    st.markdown(dialog_title)
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    st.markdown(
+        render_design_page_header(
+            kicker="CONVERT",
+            title_en="CSV → Parquet",
+            title_zh="CSV 转换为 Parquet",
+            desc=(
+                "Convert source files into the prepared Parquet layout the "
+                "extraction APIs read from. Runs in place, validates after."
+                if lang == 'en' else
+                "把源文件就地转为提取 API 读取的 Parquet 布局，转换完成后自动校验。"
+            ),
+            lang=lang,
+        ),
+        unsafe_allow_html=True,
+    )
 
-    source_info = f"📁 Source directory: `{source_path}`" if lang == 'en' else f"📁 源目录: `{source_path}`"
-    st.info(source_info)
+    src_label = "Source" if lang == 'en' else "源目录"
+    st.markdown(
+        render_card_open(padding="12px 14px", extra_style="margin:8px 0 14px") +
+        f'<div class="mono" style="font-size:11px;color:var(--ink-4)">{src_label}</div>'
+        '<div style="display:flex;align-items:center;gap:8px;'
+        'padding:6px 10px;border:1px solid var(--hair-2);background:var(--surface);'
+        'border-radius:6px;margin-top:4px;font-size:12px">'
+        f'<span class="mono" style="color:var(--ink-2);overflow:hidden;'
+        f'text-overflow:ellipsis;white-space:nowrap">{source_path or "—"}</span>'
+        '</div>' +
+        render_card_close(),
+        unsafe_allow_html=True,
+    )
 
     # Parquet 文件就地写入源 CSV 同目录（与提取 API 的数据契约一致）
     overwrite_label = "Overwrite existing Parquet files" if lang == 'en' else "覆盖已存在的Parquet文件"

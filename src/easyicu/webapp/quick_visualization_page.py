@@ -15,6 +15,8 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
 
 def _load_demo_review_workspace_from_state() -> tuple[int, int]:
     """Hydrate Quick Viz on explicit user request."""
+    demo_patients = int(globals().get("LIGHTWEIGHT_DEMO_PATIENTS", 24))
+    demo_hours = int(globals().get("LIGHTWEIGHT_DEMO_HOURS", 24))
     params_getter = globals().get("get_mock_params_with_cohort")
     if callable(params_getter):
         params = dict(params_getter())
@@ -22,13 +24,15 @@ def _load_demo_review_workspace_from_state() -> tuple[int, int]:
         params = dict(st.session_state.get("mock_params") or {})
 
     try:
-        params["n_patients"] = int(params.get("n_patients") or 50)
+        params["n_patients"] = int(params.get("n_patients") or demo_patients)
     except (TypeError, ValueError):
-        params["n_patients"] = 50
+        params["n_patients"] = demo_patients
+    params["n_patients"] = min(max(1, params["n_patients"]), demo_patients)
     try:
-        params["hours"] = int(params.get("hours") or 48)
+        params["hours"] = int(params.get("hours") or demo_hours)
     except (TypeError, ValueError):
-        params["hours"] = 48
+        params["hours"] = demo_hours
+    params["hours"] = min(max(24, params["hours"]), demo_hours)
     params["demo_profile"] = "lite"
 
     demo_generator = globals().get("generate_lightweight_demo_data", generate_mock_data)
@@ -73,10 +77,6 @@ def _render_quick_viz_panel_switcher(lang: str) -> str:
 
     switcher_label = "Review panel" if lang == "en" else "审阅面板"
     with st.container(key="qv_panel_switcher"):
-        st.markdown(
-            f'<div class="inline-control-label">{html.escape(switcher_label)}</div>',
-            unsafe_allow_html=True,
-        )
         active_panel = st.radio(
             switcher_label,
             options=panel_keys,
@@ -259,6 +259,8 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                         st.error("❌ Directory does not exist" if lang == 'en' else "❌ 目录不存在")
 
             elif current_source == "demo":
+                demo_patients = int(globals().get("LIGHTWEIGHT_DEMO_PATIENTS", 24))
+                demo_hours = int(globals().get("LIGHTWEIGHT_DEMO_HOURS", 24))
                 _viz_demo_title = (
                     "Generate a lightweight demo review workspace"
                     if lang == 'en' else
@@ -279,22 +281,26 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                     """,
                     unsafe_allow_html=True,
                 )
+                if int(st.session_state.get("viz_demo_patients", demo_patients) or demo_patients) > 48:
+                    st.session_state["viz_demo_patients"] = demo_patients
+                if int(st.session_state.get("viz_demo_hours", demo_hours) or demo_hours) > 48:
+                    st.session_state["viz_demo_hours"] = demo_hours
 
                 col1, col2 = st.columns(2)
                 with col1:
                     n_patients = st.slider(
                         "Number of Patients" if lang == 'en' else "患者数量",
                         10,
-                        120,
-                        50,
+                        48,
+                        demo_patients,
                         key="viz_demo_patients",
                     )
                 with col2:
                     hours = st.slider(
                         "Data Duration (hours)" if lang == 'en' else "数据时长(小时)",
                         24,
-                        96,
                         48,
+                        demo_hours,
                         key="viz_demo_hours",
                     )
 

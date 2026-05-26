@@ -5,6 +5,8 @@ from __future__ import annotations
 import html
 from typing import Any
 
+from easyicu.webapp.cohort_workspace import _bundle_from_raw_schema, _seed_workspace_state
+
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to this extracted renderer."""
@@ -60,42 +62,65 @@ def _render_metric_grid(cards: list[tuple[str, str, str, str, str]], *, accent_v
     st.markdown('<div class="eu-cohort-kpi-grid">' + "".join(body) + '</div>', unsafe_allow_html=True)
 
 
+SHELL_CHART = {
+    "ink": "#1d2935",
+    "muted": "#65727f",
+    "grid": "#e8e2d8",
+    "axis": "#d9d2c7",
+    "plot": "#fbfaf7",
+    "teal": "#0f766e",
+    "teal_soft": "#d8ece8",
+    "teal_line": "#a9cbc5",
+    "rose": "#9f3a57",
+    "rose_soft": "#f3dbe2",
+}
+
+
 def _style_readout_figure(fig, *, height: int, margin: dict[str, int] | None = None, legend_y: float = 1.12):
     fig.update_layout(
         template='plotly_white',
         height=height,
         margin=margin or dict(l=60, r=56, t=42, b=54),
-        paper_bgcolor='#FFFFFF',
-        plot_bgcolor='#FFFFFF',
-        font=dict(size=12, color='#1f2937'),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor=SHELL_CHART["plot"],
+        font=dict(
+            family='IBM Plex Sans, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            size=12,
+            color=SHELL_CHART["ink"],
+        ),
+        bargap=0.34,
         legend=dict(
             orientation='h',
             yanchor='bottom',
             y=legend_y,
             xanchor='right',
             x=1,
-            bgcolor='rgba(255,255,255,0.94)',
-            bordercolor='rgba(203,213,225,0.75)',
+            bgcolor='rgba(251,250,247,0.96)',
+            bordercolor='rgba(217,210,199,0.88)',
             borderwidth=1,
-            font=dict(size=11),
+            font=dict(size=11, color=SHELL_CHART["ink"]),
         ),
-        hoverlabel=dict(bgcolor='#111827', font_size=12, font_color='#FFFFFF'),
+        hoverlabel=dict(bgcolor='#102a2d', font_size=12, font_color='#FFFFFF'),
     )
     fig.update_xaxes(
-        gridcolor='#e7edf5',
+        gridcolor=SHELL_CHART["grid"],
         zeroline=False,
-        linecolor='#d7e0ea',
-        tickfont=dict(size=11, color='#475569'),
-        title_font=dict(size=12, color='#475569'),
+        linecolor=SHELL_CHART["axis"],
+        tickfont=dict(size=11, color=SHELL_CHART["muted"]),
+        title_font=dict(size=12, color=SHELL_CHART["muted"]),
         automargin=True,
+        ticks="",
+        showline=True,
     )
     fig.update_yaxes(
-        gridcolor='#e7edf5',
+        gridcolor=SHELL_CHART["grid"],
         zeroline=False,
-        linecolor='#d7e0ea',
-        tickfont=dict(size=11, color='#475569'),
-        title_font=dict(size=12, color='#475569'),
+        linecolor=SHELL_CHART["axis"],
+        tickfont=dict(size=11, color=SHELL_CHART["muted"]),
+        title_font=dict(size=12, color=SHELL_CHART["muted"]),
         automargin=True,
+        ticks="",
+        showline=True,
     )
     return fig
 
@@ -110,18 +135,11 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
     from plotly.subplots import make_subplots
     screenshot_mode = _is_screenshot_mode()
 
-    snapshot_title = "Cohort Snapshot" if lang == 'en' else "队列快照"
     snapshot_subtitle = (
         "One-cohort clinical profile: phenotype burden, baseline distribution, severity anchor, outcome, and loaded-module coverage."
         if lang == 'en' else
         "单一队列的临床画像：表型负担、基线分布、严重程度锚点、结局与已加载模块覆盖度。"
     )
-    if not screenshot_mode:
-        _render_section_heading(
-            snapshot_title,
-            "Cohort snapshot" if lang == 'en' else "队列快照",
-        )
-        st.caption(snapshot_subtitle)
 
     # 获取入口模式
     entry_mode = st.session_state.get('entry_mode', 'none')
@@ -226,22 +244,26 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
 
                 if load_btn:
                     try:
-                        from easyicu.patient_filter import PatientFilter
-
-                        with st.spinner("Loading demographics..." if lang == 'en' else "正在加载..."):
-                            pf = PatientFilter(database=selected_db, data_path=full_data_path)
-                            demographics_df = pf._load_demographics()
-
-                            if len(demographics_df) > max_patients:
-                                demographics_df = demographics_df.head(max_patients)
-
-                            st.session_state['dash_demographics'] = demographics_df
-                            st.session_state['dash_loaded_db'] = selected_db
-                            st.session_state['dash_loaded_path'] = full_data_path
-                            st.session_state['dash_is_demo'] = False
-
-                        st.success(f"✅ Loaded {len(demographics_df):,} patients" if lang == 'en' else f"✅ 已加载 {len(demographics_df):,} 名患者")
-                        st.rerun()
+                        with st.spinner(
+                            "Loading snapshot demographics, phenotypes, and SOFA..."
+                            if lang == 'en' else "正在加载快照所需的人口统计、表型与 SOFA..."
+                        ):
+                            ok, msg, bundle = _bundle_from_raw_schema(
+                                selected_db,
+                                data_root_str,
+                                lang=lang,
+                                max_patients=int(max_patients),
+                                load_concepts=True,
+                            )
+                            if not ok or bundle is None:
+                                st.error(f"❌ {msg}")
+                            else:
+                                _seed_workspace_state(st.session_state, bundle)
+                                st.session_state['dash_data_root'] = data_root_str
+                                st.session_state['dash_db_select'] = selected_db
+                                st.session_state['dash_loaded_path'] = bundle.resolved_path or full_data_path
+                                st.success(f"✅ {msg}")
+                                st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
 
@@ -311,6 +333,13 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
     df = st.session_state['dash_demographics']
 
     try:
+        if not screenshot_mode:
+            _render_chart_heading(
+                "Snapshot summary" if lang == 'en' else "快照概览",
+                snapshot_subtitle,
+                "Snapshot" if lang == 'en' else "快照",
+            )
+
         review = _build_cohort_dashboard_review_stats(
             df,
             loaded_concepts=st.session_state.get('loaded_concepts', {}),
@@ -318,11 +347,6 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
         )
 
         # ========== 顶部指标卡片 ==========
-        _render_section_heading(
-            "Cohort Snapshot Summary" if lang == 'en' else "队列快照摘要",
-            "Summary" if lang == 'en' else "概览",
-        )
-
         metrics = review['metrics']
         card_specs = [
             (metrics['patients'], "Patients" if lang == 'en' else "患者数", "cohort size" if lang == 'en' else "队列规模", "#2563eb", "N"),
@@ -346,18 +370,19 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
             phenotype_df = review['phenotype']
             if not phenotype_df.empty:
                 plot_df = phenotype_df.sort_values('pct', ascending=True)
-                colors = ['#dbeafe'] * len(plot_df)
+                colors = [SHELL_CHART["teal_soft"]] * len(plot_df)
                 if colors:
-                    colors[-1] = '#0f766e'
+                    colors[-1] = SHELL_CHART["teal"]
                 fig = go.Figure()
                 fig.add_trace(
                     go.Bar(
                         x=plot_df['pct'],
                         y=plot_df['label'],
                         orientation='h',
-                        marker=dict(color=colors, line=dict(color='rgba(15,118,110,0.18)', width=1)),
+                        marker=dict(color=colors, line=dict(color=SHELL_CHART["teal_line"], width=1)),
                         text=plot_df['pct'].map(lambda x: f"{x:.1f}%"),
                         textposition='outside',
+                        textfont=dict(size=11, color=SHELL_CHART["ink"]),
                         cliponaxis=False,
                         hovertemplate='%{y}<br>%{x:.1f}%<extra></extra>',
                         name="Prevalence" if lang == 'en' else "占比",
@@ -392,9 +417,13 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                         x=severity_df['sofa_group'].astype(str),
                         y=severity_df['patients'],
                         name="Patients" if lang == 'en' else "患者数",
-                        marker=dict(color='rgba(96, 142, 239, 0.72)', line=dict(color='rgba(37,99,235,0.36)', width=1)),
+                        marker=dict(
+                            color='rgba(15,118,110,0.24)',
+                            line=dict(color='rgba(15,118,110,0.54)', width=1),
+                        ),
                         text=severity_df['patients'],
                         textposition='outside',
+                        textfont=dict(size=11, color=SHELL_CHART["ink"]),
                         cliponaxis=False,
                         hovertemplate='%{x}<br>%{y} patients<extra></extra>' if lang == 'en' else '%{x}<br>%{y} 名患者<extra></extra>',
                     ),
@@ -408,8 +437,13 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                         mode='lines+markers+text',
                         text=severity_df['mortality'].map(lambda x: f"{x:.1f}%"),
                         textposition='top center',
-                        marker=dict(color='#e11d48', size=7),
-                        line=dict(width=2.6, color='#e11d48'),
+                        textfont=dict(size=11, color=SHELL_CHART["rose"]),
+                        marker=dict(
+                            color=SHELL_CHART["plot"],
+                            size=8,
+                            line=dict(color=SHELL_CHART["rose"], width=2),
+                        ),
+                        line=dict(width=2.4, color=SHELL_CHART["rose"], shape='spline', smoothing=0.45),
                         cliponaxis=False,
                         hovertemplate='%{x}<br>%{y:.1f}% mortality<extra></extra>' if lang == 'en' else '%{x}<br>%{y:.1f}% 死亡率<extra></extra>',
                     ),
@@ -442,11 +476,11 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
             discordant_pct = reclass.get('metrics', {}).get('discordant_pct', '')
             teaser_en = (
                 f"Under SOFA-2, {discordant_pct} of patients reclassify. "
-                "Open the **SOFA Δ** tab for the matrix, organ contributors, and mortality breakdown."
+                "Open the **SOFA reclassification** panel for the matrix, organ contributors, and mortality breakdown."
             )
             teaser_zh = (
                 f"在 SOFA-2 下，共 {discordant_pct} 的患者发生重新分层。"
-                "请切换到 **SOFA Δ** 标签查看重分类矩阵、器官贡献度与死亡率分解。"
+                "请切换到 **SOFA 重分层** 面板查看重分类矩阵、器官贡献度与死亡率分解。"
             )
             st.info(teaser_en if lang == 'en' else teaser_zh, icon="🧭")
 

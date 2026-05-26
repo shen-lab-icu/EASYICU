@@ -50,6 +50,7 @@ st.markdown("""
         --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.06);
         --border-radius: 16px;
         --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        color-scheme: light;
     }
     
     /* ===== 页面头部样式 ===== */
@@ -100,17 +101,6 @@ st.markdown("""
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
-    }
-    
-    /* 深色模式适配 */
-    @media (prefers-color-scheme: dark) {
-        div[data-testid="stMetric"] {
-            background: linear-gradient(145deg, rgba(30,35,45,0.95), rgba(40,45,55,0.9));
-            border-color: rgba(102, 126, 234, 0.2);
-        }
-        div[data-testid="stMetric"] label {
-            color: #94a3b8 !important;
-        }
     }
     
     /* ===== 标签页美化 ===== */

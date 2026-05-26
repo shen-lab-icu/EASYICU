@@ -18,15 +18,23 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
             globals()[name] = value
 
 
-def _render_section_heading(title: str, eyebrow: str | None = None) -> None:
+def _render_section_heading(
+    title: str,
+    eyebrow: str | None = None,
+    subtitle: str | None = None,
+) -> None:
     eyebrow_html = (
         f'<span>{html.escape(eyebrow)}</span>'
         if eyebrow else ""
     )
+    subtitle_html = (
+        f'<p>{html.escape(subtitle)}</p>'
+        if subtitle else ""
+    )
     st.markdown(
         '<div class="eu-native-section-heading">'
-        f'{eyebrow_html}<b>{html.escape(title)}</b>'
-        '</div>',
+        f'{eyebrow_html}<b>{html.escape(title)}</b>{subtitle_html}'
+        '</div><div class="eu-native-section-heading-after" aria-hidden="true"></div>',
         unsafe_allow_html=True,
     )
 
@@ -43,41 +51,62 @@ def _render_chart_heading(title: str, subtitle: str, eyebrow: str | None = None)
     )
 
 
+RECLASS_CHART = {
+    "ink": "#1d2935",
+    "muted": "#65727f",
+    "grid": "#e8e2d8",
+    "axis": "#d9d2c7",
+    "plot": "#fbfaf7",
+    "teal": "#0f766e",
+    "teal_soft": "#d8ece8",
+    "teal_line": "#a9cbc5",
+    "teal_mid": "#72aaa0",
+    "rose": "#9f3a57",
+    "rose_soft": "#f3dbe2",
+    "slate": "#697684",
+    "slate_soft": "#e4e7ea",
+}
+
+
 def _style_reclass_figure(fig, *, height: int, margin: dict[str, int] | None = None, legend_y: float = 1.12):
     fig.update_layout(
         template='plotly_white',
         height=height,
         margin=margin or dict(l=64, r=58, t=42, b=58),
-        paper_bgcolor='#FFFFFF',
-        plot_bgcolor='#FFFFFF',
-        font=dict(size=12, color='#1f2937'),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor=RECLASS_CHART["plot"],
+        font=dict(
+            family='IBM Plex Sans, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            size=12,
+            color=RECLASS_CHART["ink"],
+        ),
         legend=dict(
             orientation='h',
             yanchor='bottom',
             y=legend_y,
             xanchor='right',
             x=1,
-            bgcolor='rgba(255,255,255,0.94)',
-            bordercolor='rgba(203,213,225,0.75)',
+            bgcolor='rgba(251,250,247,0.96)',
+            bordercolor='rgba(217,210,199,0.88)',
             borderwidth=1,
-            font=dict(size=11),
+            font=dict(size=11, color=RECLASS_CHART["ink"]),
         ),
-        hoverlabel=dict(bgcolor='#111827', font_size=12, font_color='#FFFFFF'),
+        hoverlabel=dict(bgcolor='#102a2d', font_size=12, font_color='#FFFFFF'),
     )
     fig.update_xaxes(
-        gridcolor='#e7edf5',
+        gridcolor=RECLASS_CHART["grid"],
         zeroline=False,
-        linecolor='#d7e0ea',
-        tickfont=dict(size=11, color='#475569'),
-        title_font=dict(size=12, color='#475569'),
+        linecolor=RECLASS_CHART["axis"],
+        tickfont=dict(size=11, color=RECLASS_CHART["muted"]),
+        title_font=dict(size=12, color=RECLASS_CHART["muted"]),
         automargin=True,
     )
     fig.update_yaxes(
-        gridcolor='#e7edf5',
+        gridcolor=RECLASS_CHART["grid"],
         zeroline=False,
-        linecolor='#d7e0ea',
-        tickfont=dict(size=11, color='#475569'),
-        title_font=dict(size=12, color='#475569'),
+        linecolor=RECLASS_CHART["axis"],
+        tickfont=dict(size=11, color=RECLASS_CHART["muted"]),
+        title_font=dict(size=12, color=RECLASS_CHART["muted"]),
         automargin=True,
     )
     return fig
@@ -115,8 +144,8 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
         _render_section_heading(
             title,
             "Sensitivity" if lang == 'en' else "敏感性",
+            subtitle,
         )
-        st.caption(subtitle)
 
     mode_labels = {
         key: cfg['label_en'] if lang == 'en' else cfg['label_zh']
@@ -358,16 +387,23 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
             x=heatmap.columns.astype(str),
             y=heatmap.index.astype(str),
             colorscale=[
-                [0.0, '#f8fbff'],
-                [0.35, '#dbeafe'],
-                [0.7, '#74a9ef'],
-                [1.0, '#0f3f7a'],
+                [0.0, RECLASS_CHART["plot"]],
+                [0.32, RECLASS_CHART["teal_soft"]],
+                [0.72, RECLASS_CHART["teal_mid"]],
+                [1.0, RECLASS_CHART["teal"]],
             ],
             text=heatmap.values.astype(int),
             texttemplate="%{text}",
-            textfont=dict(size=12),
+            textfont=dict(size=12, color=RECLASS_CHART["ink"]),
             hovertemplate=f"SOFA-1: %{{y}}<br>SOFA-2: %{{x}}<br>{unit_label}: %{{z}}<extra></extra>",
-            colorbar=dict(title=unit_label, thickness=12, len=0.82),
+            colorbar=dict(
+                title=unit_label,
+                thickness=10,
+                len=0.76,
+                outlinewidth=0,
+                tickfont=dict(size=11, color=RECLASS_CHART["muted"]),
+                titlefont=dict(size=12, color=RECLASS_CHART["ink"]),
+            ),
         ))
         _style_reclass_figure(fig, height=410, margin=dict(l=72, r=58, t=24, b=64))
         fig.update_layout(showlegend=False)
@@ -387,10 +423,14 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
                 x=summary['group'],
                 y=summary['patients'],
                 name=unit_label,
-                marker=dict(color='rgba(96, 142, 239, 0.72)', line=dict(color='rgba(37,99,235,0.36)', width=1)),
+                marker=dict(
+                    color=RECLASS_CHART["teal_soft"],
+                    line=dict(color=RECLASS_CHART["teal_line"], width=1),
+                ),
                 text=summary['patients'],
                 textposition='outside',
                 cliponaxis=False,
+                textfont=dict(size=12, color=RECLASS_CHART["ink"]),
                 hovertemplate=f"%{{x}}<br>{unit_label}: %{{y}}<extra></extra>",
             ),
             secondary_y=False,
@@ -403,9 +443,10 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
                 mode='lines+markers+text',
                 text=summary['mortality'].map(lambda x: f"{x:.1f}%"),
                 textposition='top center',
-                marker=dict(color='#e11d48', size=7),
-                line=dict(width=2.6, color='#e11d48'),
+                marker=dict(color=RECLASS_CHART["rose"], size=7),
+                line=dict(width=2.4, color=RECLASS_CHART["rose"]),
                 cliponaxis=False,
+                textfont=dict(size=12, color=RECLASS_CHART["rose"]),
                 hovertemplate='%{x}<br>%{y:.1f}% mortality<extra></extra>' if lang == 'en' else '%{x}<br>%{y:.1f}% 死亡率<extra></extra>',
             ),
             secondary_y=True,
@@ -446,12 +487,12 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
         )
         fig = go.Figure()
         color_map = {
-            'Up-classified': '#e11d48',
-            'Same': '#64748b',
-            'Down-classified': '#0f766e',
-            '上调分层': '#e11d48',
-            '不变': '#64748b',
-            '下调分层': '#0f766e',
+            'Up-classified': RECLASS_CHART["rose"],
+            'Same': RECLASS_CHART["slate"],
+            'Down-classified': RECLASS_CHART["teal"],
+            '上调分层': RECLASS_CHART["rose"],
+            '不变': RECLASS_CHART["slate"],
+            '下调分层': RECLASS_CHART["teal"],
         }
         for group_name in [name for name in color_map if name in set(delta_counts['group'])]:
             group_df = delta_counts[delta_counts['group'] == group_name]
@@ -460,11 +501,11 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
                     x=group_df['delta'],
                     y=group_df['count'],
                     name=group_name,
-                    marker=dict(color=color_map[group_name]),
+                    marker=dict(color=color_map[group_name], line=dict(color='rgba(29,41,53,0.12)', width=1)),
                     hovertemplate=f"Delta: %{{x}}<br>{unit_label}: %{{y}}<extra></extra>",
                 )
             )
-        fig.add_vline(x=0, line_color='#111827', line_dash='dash')
+        fig.add_vline(x=0, line_color=RECLASS_CHART["ink"], line_dash='dash', opacity=0.72)
         _style_reclass_figure(
             fig,
             height=360,
@@ -484,7 +525,10 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
         )
         if not organ.empty:
             organ_plot = organ.sort_values('mean_abs_delta', ascending=True)
-            colors = ['#e11d48' if val > 0 else '#0f766e' if val < 0 else '#64748b' for val in organ_plot['mean_delta']]
+            colors = [
+                RECLASS_CHART["rose"] if val > 0 else RECLASS_CHART["teal"] if val < 0 else RECLASS_CHART["slate"]
+                for val in organ_plot['mean_delta']
+            ]
             fig = go.Figure()
             fig.add_trace(
                 go.Bar(
@@ -494,7 +538,8 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
                     text=organ_plot['mean_abs_delta'].map(lambda x: f"{x:.2f}"),
                     textposition='outside',
                     cliponaxis=False,
-                    marker=dict(color=colors, line=dict(color='rgba(15,31,68,0.10)', width=1)),
+                    textfont=dict(size=12, color=RECLASS_CHART["ink"]),
+                    marker=dict(color=colors, line=dict(color='rgba(29,41,53,0.12)', width=1)),
                     hovertemplate='%{y}<br>Mean |delta|: %{x:.2f}<extra></extra>' if lang == 'en' else '%{y}<br>平均|差值|: %{x:.2f}<extra></extra>',
                     name="Mean |delta|" if lang == 'en' else "平均|差值|",
                 )

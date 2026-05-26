@@ -1,4 +1,8 @@
-"""Data dictionary and feature-definition UI helpers."""
+"""Data dictionary and feature-definition UI helpers.
+
+Layout mirrors ``easyicu design/page-misc.jsx`` ``PageDataDict``:
+design header + bilingual subtitle + search field + concept browser.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from easyicu.webapp.cohort_charts import render_design_page_header
 from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
 from easyicu.webapp.components.constants import get_concept_groups
 from easyicu.webapp.concept_catalog import CONCEPT_DESCRIPTIONS, CONCEPT_DICTIONARY
@@ -49,12 +54,22 @@ def render_data_dictionary(app_context: dict[str, Any] | None = None):
 
     lang = st.session_state.get('language', 'en')
 
-    # 双语标题
-    title = "### 📖 Data Dictionary" if lang == 'en' else "### 📖 数据字典"
-    st.markdown(title)
-
-    caption = "Feature abbreviations, English names, Chinese meanings, and units (aligned with module categories)" if lang == 'en' else "每个特征的缩写、英文名称、中文含义及单位（与左侧模块分类一致）"
-    st.caption(caption)
+    n_concepts = sum(len(c) for c in get_concept_groups().values())
+    st.markdown(
+        render_design_page_header(
+            kicker="DATA DICTIONARY",
+            title_en="Data dictionary",
+            title_zh="数据字典",
+            desc=(
+                f"{n_concepts} concepts · abbreviations, full names, units, and "
+                "per-database source mapping."
+                if lang == 'en' else
+                f"{n_concepts} 个 concept · 缩写、全称、单位与按数据库的来源映射。"
+            ),
+            lang=lang,
+        ),
+        unsafe_allow_html=True,
+    )
 
     # 🔍 搜索框
     search_placeholder = "Search by code, name or description... (e.g. hr, heart rate, lactate)" if lang == 'en' else "按代码、名称或描述搜索... (如 hr、heart rate、心率)"

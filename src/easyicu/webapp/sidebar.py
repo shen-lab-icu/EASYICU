@@ -12,6 +12,7 @@ import html
 import os
 
 import streamlit as st
+from easyicu.webapp.concept_catalog import CONCEPT_GROUP_NAMES, CONCEPT_GROUPS_INTERNAL
 from easyicu.webapp.session_state import clear_run_state
 from easyicu.webapp.ui_helpers import (
     PipelineStep,
@@ -20,7 +21,6 @@ from easyicu.webapp.ui_helpers import (
     render_brand_html,
     render_nav_item_html,
     render_pill_html,
-    render_pipeline_block,
 )
 
 
@@ -40,15 +40,22 @@ def _activate_entry_mode(target: str) -> None:
     st.session_state["_active_main_page"] = "extract"
 
 
+def _return_to_entry_home() -> None:
+    """Return to the entry screen and clear run-specific workspace state."""
+    clear_run_state("all")
+    st.session_state.entry_mode = "none"
+    st.session_state.use_mock_data = False
+    st.session_state["_active_main_page"] = "tutorial"
+
+
 def _render_source_mode_tabs(entry_mode: str) -> None:
     """Render the Data source segmented mode control from the design."""
     lang = st.session_state.get("language", "en")
     tabs = [
         ("demo", "Demo", "模拟数据", ":material/science:"),
         ("real", "Real Data", "真实数据", ":material/database:"),
-        ("none", "No Data", "仅生成代码", ":material/draft:"),
     ]
-    cols = st.columns(3, gap="small")
+    cols = st.columns(2, gap="small")
     for col, (target, label_en, label_zh, icon_name) in zip(cols, tabs):
         with col:
             label = label_en if lang == "en" else label_zh
@@ -56,15 +63,8 @@ def _render_source_mode_tabs(entry_mode: str) -> None:
                 label,
                 key=f"_eu_source_mode_{target}",
                 type="primary" if target == entry_mode else "secondary",
-                disabled=target == "none",
                 use_container_width=True,
                 icon=icon_name,
-                help=(
-                    "Code-only mode is surfaced through Research Agent for now."
-                    if target == "none" and lang == "en" else
-                    "仅代码模式目前从 Research Agent 进入。"
-                    if target == "none" else None
-                ),
             ):
                 _activate_entry_mode(target)
                 st.rerun()
@@ -87,8 +87,56 @@ def _render_data_source_page_header(entry_mode: str, *, desc: str) -> None:
         _render_source_mode_tabs(entry_mode)
 
 
+def _demo_module_catalog_html(lang: str) -> str:
+    """Return a compact all-module catalog for the Step 1 demo preview."""
+    title = "All demo feature modules" if lang == "en" else "全部演示特征模块"
+    subtitle = (
+        "These modules will be available in Step 3. Confirm the demo source first, then choose all or a smaller set."
+        if lang == "en"
+        else "这些模块会在第 3 步出现。请先确认演示数据源，然后选择全部或较小的一组。"
+    )
+    rows = []
+    for key, concepts in CONCEPT_GROUPS_INTERNAL.items():
+        en_name, zh_name = CONCEPT_GROUP_NAMES.get(key, (key, key))
+        display_name = en_name if lang == "en" else zh_name
+        examples = ", ".join(concepts[:4])
+        if len(concepts) > 4:
+            examples += ", ..."
+        rows.append(
+            '<div class="eu-module-catalog-row">'
+            f'<b>{html.escape(display_name)}</b>'
+            f'<span>{len(concepts)} {html.escape("features" if lang == "en" else "个变量")}</span>'
+            f'<em>{html.escape(examples)}</em>'
+            '</div>'
+        )
+    return (
+        '<div class="eu-module-catalog">'
+        f'<div class="eu-module-catalog-title">{html.escape(title)}</div>'
+        f'<div class="eu-module-catalog-sub">{html.escape(subtitle)}</div>'
+        '<div class="eu-module-catalog-grid">'
+        f'{"".join(rows)}'
+        '</div>'
+        '</div>'
+    )
+
+
+def _confirm_demo_data_source() -> None:
+    """Confirm Step 1 for demo mode and move to the cohort setup step."""
+    st.session_state.step1_confirmed = True
+
+
+def _confirm_real_data_source() -> None:
+    """Confirm Step 1 for a validated real-data source."""
+    st.session_state.use_mock_data = False
+    st.session_state.step1_confirmed = True
+    st.session_state.step2_confirmed = False
+    st.session_state.step3_confirmed = False
+    st.session_state.export_completed = False
+
+
 def _render_demo_preview_table(n_patients: int, hours: int) -> None:
     """Small deterministic vitals preview mirroring page-data-source.jsx."""
+    lang = st.session_state.get("language", "en")
     sample_rows = [
         (20001, "00:00", 92, 82, 132, 96, 36.8, 18),
         (20001, "01:00", 95, 78, 128, 95, 37.0, 20),
@@ -106,22 +154,48 @@ def _render_demo_preview_table(n_patients: int, hours: int) -> None:
         for row in sample_rows
     )
     headers = "".join(f"<th>{h}</th>" for h in ("stay_id", "time", "hr", "map", "sbp", "spo2", "temp", "resp"))
-    st.markdown(
-        '<div class="eu-source-table-card">'
-        '<div class="table-head">'
-        '<div>'
-        f'<div class="title">{html.escape("Sample preview · vitals module" if st.session_state.get("language", "en") == "en" else "样本预览 · 生命体征模块")}</div>'
-        f'<div class="sub">5 of {n_patients * hours:,} rows</div>'
-        '</div>'
-        f'<span class="eu-mini-button">{html.escape("View all modules" if st.session_state.get("language", "en") == "en" else "查看全部模块")}</span>'
-        '</div>'
-        '<table>'
-        f'<thead><tr>{headers}</tr></thead>'
-        f'<tbody>{row_html}</tbody>'
-        '</table>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    with st.container(key="eu_demo_preview_card"):
+        title_col, action_col = st.columns([1.0, 0.22], gap="small", vertical_alignment="center")
+        with title_col:
+            st.markdown(
+                '<div class="eu-source-table-head-copy">'
+                f'<div class="title">{html.escape("Sample preview · vitals module" if lang == "en" else "样本预览 · 生命体征模块")}</div>'
+                f'<div class="sub">5 of {n_patients * hours:,} rows</div>'
+                '</div>',
+                unsafe_allow_html=True,
+        )
+        with action_col:
+            modules_open = bool(st.session_state.get("_eu_demo_modules_open", False))
+            if st.button(
+                "Hide modules" if modules_open and lang == "en" else
+                "收起模块" if modules_open else
+                "View all modules" if lang == "en" else "查看全部模块",
+                key="eu_demo_modules_toggle",
+                use_container_width=True,
+            ):
+                st.session_state["_eu_demo_modules_open"] = not modules_open
+                st.rerun()
+        if st.session_state.get("_eu_demo_modules_open", False):
+            with st.container(key="eu_demo_module_catalog_panel"):
+                st.markdown(_demo_module_catalog_html(lang), unsafe_allow_html=True)
+                if st.button(
+                    "Continue to cohort setup" if lang == "en" else "继续到队列设置",
+                    key="eu_demo_modules_continue",
+                    type="primary",
+                    use_container_width=True,
+                    icon=":material/chevron_right:",
+                ):
+                    _confirm_demo_data_source()
+                    st.rerun()
+        st.markdown(
+            '<div class="eu-source-table-scroll">'
+            '<table>'
+            f'<thead><tr>{headers}</tr></thead>'
+            f'<tbody>{row_html}</tbody>'
+            '</table>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
@@ -210,10 +284,12 @@ def _render_step1_data_source(entry_mode: str) -> None:
         # 模拟数据参数
         n_patients_label = "Number of Patients" if st.session_state.language == 'en' else "患者数量"
         hours_label = "Data Duration (hours)" if st.session_state.language == 'en' else "数据时长(小时)"
+        demo_patients_default = int(globals().get("LIGHTWEIGHT_DEMO_PATIENTS", 10))
+        demo_hours_default = int(globals().get("LIGHTWEIGHT_DEMO_HOURS", 24))
         if 'demo_mode_patients' not in st.session_state:
-            st.session_state.demo_mode_patients = st.session_state.mock_params.get('n_patients', 100)
+            st.session_state.demo_mode_patients = st.session_state.mock_params.get('n_patients', demo_patients_default)
         if 'demo_mode_hours' not in st.session_state:
-            st.session_state.demo_mode_hours = st.session_state.mock_params.get('hours', 72)
+            st.session_state.demo_mode_hours = st.session_state.mock_params.get('hours', demo_hours_default)
 
         with st.container(key="eu_generation_card"):
             st.markdown(
@@ -225,8 +301,8 @@ def _render_step1_data_source(entry_mode: str) -> None:
             with slider_cols[0]:
                 n_patients = st.slider(
                     n_patients_label,
+                    10,
                     50,
-                    500,
                     key="demo_mode_patients",
                 )
             with slider_cols[1]:
@@ -273,7 +349,7 @@ def _render_step1_data_source(entry_mode: str) -> None:
         _render_demo_preview_table(n_patients, hours)
 
         # ✅ Step 1 确认按钮
-        footer_l, reset_col, confirm_col = st.columns([5, 1, 2.4], gap="small")
+        footer_l, reset_col, confirm_col = st.columns([5, 1.7, 1.7], gap="small")
         with footer_l:
             st.markdown(
                 f'<div class="eu-source-footer-note">{html.escape("Step 1 of 4" if lang == "en" else "第 1 步 / 共 4 步")}</div>',
@@ -281,9 +357,9 @@ def _render_step1_data_source(entry_mode: str) -> None:
             )
         with reset_col:
             if st.button("Reset" if lang == "en" else "重置", use_container_width=True, key="step1_reset_demo"):
-                st.session_state.demo_mode_patients = 100
-                st.session_state.demo_mode_hours = 72
-                st.session_state.mock_params = {"n_patients": 100, "hours": 72}
+                st.session_state.demo_mode_patients = demo_patients_default
+                st.session_state.demo_mode_hours = demo_hours_default
+                st.session_state.mock_params = {"n_patients": demo_patients_default, "hours": demo_hours_default}
                 st.rerun()
         step1_confirm_label = "Confirm data source" if st.session_state.language == 'en' else "确认数据源"
         with confirm_col:
@@ -295,7 +371,7 @@ def _render_step1_data_source(entry_mode: str) -> None:
                 icon=":material/chevron_right:",
             )
         if confirm_clicked:
-            st.session_state.step1_confirmed = True
+            _confirm_demo_data_source()
             st.rerun()
 
     elif entry_mode == 'real':
@@ -400,9 +476,14 @@ def _render_step1_data_source(entry_mode: str) -> None:
                 if validation_result['valid']:
                     st.session_state.data_path = effective_data_path
                     st.session_state.path_validated = True
+                    st.session_state.step1_confirmed = False
+                    st.session_state.step2_confirmed = False
+                    st.session_state.step3_confirmed = False
+                    st.session_state.export_completed = False
                     st.success(validation_result['message'])
                 else:
                     st.session_state.path_validated = False
+                    st.session_state.step1_confirmed = False
                     st.error(validation_result['message'])
                     if validation_result.get('suggestion'):
                         st.info(validation_result['suggestion'])
@@ -452,6 +533,38 @@ def _render_step1_data_source(entry_mode: str) -> None:
             validate_hint = "💡 Click the button above to validate data format" if st.session_state.language == 'en' else "💡 点击上方按钮验证数据格式"
             st.caption(validate_hint)
 
+        real_ready = _real_data_source_ready()
+        footer_l, reset_col, confirm_col = st.columns([5, 1.7, 1.7], gap="small")
+        with footer_l:
+            st.markdown(
+                f'<div class="eu-source-footer-note">{html.escape("Step 1 of 4" if st.session_state.language == "en" else "第 1 步 / 共 4 步")}</div>',
+                unsafe_allow_html=True,
+            )
+        with reset_col:
+            if st.button("Reset" if st.session_state.language == "en" else "重置", use_container_width=True, key="step1_reset_real"):
+                st.session_state.data_path = ""
+                st.session_state.sidebar_data_path_input = ""
+                st.session_state.path_validated = False
+                st.session_state.last_validation = {}
+                st.session_state.last_validated_path = ""
+                st.session_state.step1_confirmed = False
+                st.session_state.step2_confirmed = False
+                st.session_state.step3_confirmed = False
+                st.session_state.export_completed = False
+                st.rerun()
+        with confirm_col:
+            confirm_clicked = st.button(
+                "Confirm data source" if st.session_state.language == "en" else "确认数据源",
+                type="primary",
+                use_container_width=True,
+                key="step1_confirm_real",
+                icon=":material/chevron_right:",
+                disabled=not real_ready,
+            )
+        if confirm_clicked and real_ready:
+            _confirm_real_data_source()
+            st.rerun()
+
 
 def _shell_nav_items(entry_mode: str) -> list[ShellNavItem]:
     """Shell-A primary-nav items, matched to the page_registry."""
@@ -485,54 +598,19 @@ def _render_shell_brand(entry_mode: str) -> None:
     """Brand block at the top of the sidebar."""
     lang = st.session_state.get("language", "en")
     sub = "ICU Research Workspace" if lang == "en" else "ICU 数据研究台"
-    st.markdown(
-        render_brand_html(name="EasyICU", sub=sub, initials="E"),
-        unsafe_allow_html=True,
-    )
-
-
-def _session_summary_html(entry_mode: str, lang: str) -> str:
-    """Return the current session card used by the lower sidebar dock."""
-    params = st.session_state.get("mock_params") or {}
-    n_patients = params.get("n_patients", st.session_state.get("demo_mode_patients", 100))
-    if entry_mode == "demo":
-        mode_pill = render_pill_html("Demo" if lang == "en" else "演示", tone="demo")
-        title = "Demo workspace" if lang == "en" else "演示工作区"
-        meta = (
-            f"Ready demo cohort · {n_patients} patients"
-            if lang == "en" else
-            f"演示队列已就绪 · {n_patients} 例"
+    with st.container(key="eu_brand_home"):
+        st.markdown(
+            render_brand_html(name="EasyICU", sub=sub, initials="E"),
+            unsafe_allow_html=True,
         )
-        row_label = "Mode" if lang == "en" else "模式"
-        row_value = "simulated" if lang == "en" else "模拟"
-    elif entry_mode == "real":
-        mode_pill = render_pill_html("Real" if lang == "en" else "真实", tone="real")
-        db = st.session_state.get("database") or "database"
-        data_path = st.session_state.get("data_path") or ""
-        title = str(db).upper()
-        meta = Path(data_path).name if data_path else ("No path selected" if lang == "en" else "未选择路径")
-        row_label = "Source" if lang == "en" else "来源"
-        row_value = st.session_state.get("cohort_label") or ("local export" if lang == "en" else "本地导出")
-    else:
-        mode_pill = render_pill_html("Setup" if lang == "en" else "配置", tone="neutral")
-        title = "Choose workspace" if lang == "en" else "选择工作区"
-        meta = "Choose Demo or Real Data to begin" if lang == "en" else "选择演示或真实数据开始"
-        row_label = "Next" if lang == "en" else "下一步"
-        row_value = "Demo or real data" if lang == "en" else "演示或真实数据"
-
-    return (
-        '<div class="eu-session-card">'
-        '<div class="eu-session-top">'
-        f'{mode_pill}'
-        f'<span class="eu-session-title">{html.escape(title)}</span>'
-        '</div>'
-        f'<div class="eu-session-meta">{html.escape(meta)}</div>'
-        '<div class="eu-session-row">'
-        f'<span>{html.escape(row_label)}</span>'
-        f'<span>{html.escape(str(row_value))}</span>'
-        '</div>'
-        '</div>'
-    )
+        if entry_mode != "none" and st.button(
+            "Home",
+            key="_eu_brand_home_button",
+            help="Back to home" if lang == "en" else "返回首页",
+            use_container_width=True,
+        ):
+            _return_to_entry_home()
+            st.rerun()
 
 
 def _context_summary_html(entry_mode: str, lang: str) -> str:
@@ -628,7 +706,7 @@ def _render_shell_recent_cohorts() -> None:
 
 
 def _render_shell_footer_icons() -> None:
-    """Sidebar footer — 5 small icon buttons (back / help / settings / lang / avatar).
+    """Sidebar footer — 5 small icon controls (back / help / settings / lang / avatar).
 
     Uses Unicode glyphs instead of inline-SVG data URIs because the latter
     rendered as empty boxes in some Streamlit / Chromium combos.
@@ -645,9 +723,7 @@ def _render_shell_footer_icons() -> None:
                     "Mode selection / 模式选择"
                     if lang == "en" else "返回模式选择 / Mode selection"),
                     use_container_width=True):
-                clear_run_state("all")
-                st.session_state.entry_mode = "none"
-                st.session_state.use_mock_data = False
+                _return_to_entry_home()
                 st.rerun()
         with cols[1]:
             if st.button("", icon=":material/help:", key="_eu_footer_help", help=(
@@ -656,12 +732,14 @@ def _render_shell_footer_icons() -> None:
                 st.session_state["_active_main_page"] = "tutorial"
                 st.rerun()
         with cols[2]:
-            if st.button("", icon=":material/settings:", key="_eu_footer_settings", help=(
-                "Settings" if lang == "en" else "设置"), use_container_width=True):
-                st.session_state["_eu_sidebar_settings_open"] = not bool(
-                    st.session_state.get("_eu_sidebar_settings_open", False)
-                )
-                st.rerun()
+            with st.container(key="_eu_footer_settings"):
+                with st.popover(
+                    "\u00a0",
+                    icon=":material/settings:",
+                    help="Settings" if lang == "en" else "设置",
+                    use_container_width=True,
+                ):
+                    _render_sidebar_settings_panel()
         with cols[3]:
             if st.button("中" if lang == "en" else "EN", icon=":material/language:", key="_eu_footer_lang", help=(
                     "Toggle 中 / EN" if lang == "en" else "切换 中 / EN"),
@@ -672,7 +750,7 @@ def _render_shell_footer_icons() -> None:
             st.markdown(
                 '<div style="height:28px;display:flex;align-items:center;justify-content:center">'
                 '<div style="width:22px;height:22px;border-radius:999px;background:oklch(80% 0.05 70);'
-                'display:flex;align-items:center;justify-content:center;font-size:10.5px;'
+                'display:flex;align-items:center;justify-content:center;font-size:12px;'
                 'font-weight:500;color:var(--ink)">LK</div>'
                 '</div>',
                 unsafe_allow_html=True,
@@ -699,6 +777,72 @@ def _render_shell_footer_icons() -> None:
         '</style>',
         unsafe_allow_html=True,
     )
+
+
+def _render_sidebar_settings_panel() -> None:
+    """Render the actual app settings exposed by the footer gear."""
+    lang = st.session_state.get("language", "en")
+    is_en = lang == "en"
+    title = "Settings" if is_en else "设置"
+    subtitle = (
+        "Used by AI guidance and real research-agent runs."
+        if is_en else
+        "用于 AI 辅助和真实 Research Agent 运行。"
+    )
+    privacy = (
+        "API keys are session-only. EasyICU does not write them to disk."
+        if is_en else
+        "API Key 只保存在当前会话，EasyICU 不会写入本地文件。"
+    )
+    st.markdown(
+        '<div class="eu-settings-panel">'
+        f'<div class="eu-settings-title">{html.escape(title)}</div>'
+        f'<div class="eu-settings-subtitle">{html.escape(subtitle)}</div>'
+        f'<div class="eu-settings-privacy">{html.escape(privacy)}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div class="eu-settings-section-label">'
+        f'{html.escape("Language" if is_en else "语言")}'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    # Sidebar popovers cannot nest st.columns inside the columns row that
+    # hosts the footer icons (Streamlit raises StreamlitAPIException). Stack
+    # the two language buttons sequentially instead.
+    if st.button(
+        "English",
+        key="_eu_settings_lang_en",
+        type="primary" if lang == "en" else "secondary",
+        use_container_width=True,
+    ):
+        st.session_state["language"] = "en"
+        st.rerun()
+    if st.button(
+        "中文",
+        key="_eu_settings_lang_zh",
+        type="primary" if lang == "zh" else "secondary",
+        use_container_width=True,
+    ):
+        st.session_state["language"] = "zh"
+        st.rerun()
+
+    st.markdown(
+        '<div class="eu-settings-section-label">'
+        f'{html.escape("AI / API connection" if is_en else "AI / API 连接")}'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    try:
+        from easyicu.webapp.llm_chat import render_llm_settings
+        render_llm_settings(show_status_card=False, controls_only=True)
+    except Exception as exc:
+        st.caption(
+            ("AI settings are unavailable: " if is_en else "AI 设置暂不可用：")
+            + str(exc)
+        )
 
 
 def _render_shell_primary_nav() -> None:
@@ -820,6 +964,70 @@ def _compute_pipeline_steps() -> list[PipelineStep]:
     ]
 
 
+def _sidebar_extract_step_unlocked(state: dict[str, Any], step: int) -> bool:
+    """Return whether a sidebar pipeline step can be opened."""
+    if step <= 1:
+        return True
+    if step == 2:
+        return bool(state.get("step1_confirmed"))
+    if step == 3:
+        return bool(state.get("step1_confirmed") and state.get("step2_confirmed"))
+    return bool(
+        state.get("step1_confirmed")
+        and state.get("step2_confirmed")
+        and state.get("step3_confirmed")
+    )
+
+
+def _sidebar_set_extract_step_state(state: dict[str, Any], step: int) -> None:
+    """Move the extraction workflow back to an unlocked step."""
+    step = max(1, min(4, int(step)))
+    state["_active_main_page"] = "extract"
+    state["step1_confirmed"] = step > 1
+    state["step2_confirmed"] = step > 2
+    state["step3_confirmed"] = step > 3
+    if step < 4:
+        state["export_completed"] = False
+
+
+def _pipeline_step_html(step: PipelineStep, *, unlocked: bool) -> str:
+    status = step.status
+    dot_inner = _icon("check") if status == "done" else ""
+    click_state = "unlocked" if unlocked else "locked"
+    return (
+        f'<div class="eu-pipe-step {status} {click_state}">'
+        f'<div class="dot">{dot_inner}</div>'
+        '<div class="body">'
+        f'<div class="title">{html.escape(step.title)}</div>'
+        f'<div class="meta">{html.escape(step.meta)}</div>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _render_interactive_pipeline_block(steps: list[PipelineStep]) -> None:
+    lang = st.session_state.get("language", "en")
+    done_n = sum(1 for s in steps if s.status == "done")
+    st.markdown(
+        f'<div class="eu-section-label"><span>{html.escape("Data extraction" if lang == "en" else "数据提取")}</span>'
+        f'<span class="num">{done_n} / {len(steps)}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    for index, step in enumerate(steps, start=1):
+        unlocked = _sidebar_extract_step_unlocked(st.session_state, index)
+        with st.container(key=f"eu_pipeline_step_{step.key}"):
+            st.markdown(_pipeline_step_html(step, unlocked=unlocked), unsafe_allow_html=True)
+            if st.button(
+                ("Open " if lang == "en" else "打开") + step.title,
+                key=f"eu_pipeline_jump_{step.key}",
+                disabled=not unlocked,
+                use_container_width=True,
+            ):
+                _sidebar_set_extract_step_state(st.session_state, index)
+                st.rerun()
+
+
 def _render_shell_context_body() -> None:
     """Render extraction pipeline or compact data context inside the dock.
 
@@ -829,7 +1037,7 @@ def _render_shell_context_body() -> None:
     lang = st.session_state.get("language", "en")
     active = st.session_state.get("_active_main_page", "tutorial")
     if active == "extract":
-        render_pipeline_block(_compute_pipeline_steps())
+        _render_interactive_pipeline_block(_compute_pipeline_steps())
         return
 
     entry_mode = st.session_state.get("entry_mode", "none")
@@ -844,23 +1052,9 @@ def _render_shell_context_body() -> None:
         st.rerun()
 
 
-def _render_shell_workspace_dock(entry_mode: str) -> None:
-    """Lower sidebar dock: current session + data context.
-
-    The design PDFs use the left rail mainly for navigation and put
-    contextual state near the lower part of the rail. Keeping this in a
-    dock avoids the whole sidebar reading as one crowded top stack.
-    """
-    lang = st.session_state.get("language", "en")
+def _render_shell_context_dock(entry_mode: str) -> None:
+    """Lower sidebar dock: extraction progress or compact setup context."""
     with st.container(key="eu_sidebar_dock"):
-        st.markdown(
-            '<div class="eu-section-label eu-workspace-label">'
-            f'<span>{html.escape("Workspace" if lang == "en" else "工作区")}</span>'
-            f'<span class="num">{html.escape("current" if lang == "en" else "当前")}</span>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(_session_summary_html(entry_mode, lang), unsafe_allow_html=True)
         _render_shell_context_body()
 
 
@@ -895,9 +1089,7 @@ def _render_sidebar_top(entry_mode: str) -> None:
     if entry_mode != 'none':
         back_label = "🔙 Back to Mode Selection" if st.session_state.language == 'en' else "🔙 返回模式选择"
         if st.button(back_label, key="back_to_entry", use_container_width=True):
-            clear_run_state("all")
-            st.session_state.entry_mode = 'none'
-            st.session_state.use_mock_data = False
+            _return_to_entry_home()
             st.rerun()
 
         # Workflow help — Tutorial is no longer a top tab (2026-05 Phase A
@@ -1507,6 +1699,8 @@ def _render_step3_concept_selection(concept_groups: dict[str, list[str]]) -> lis
         st.session_state.concept_checkboxes = {}
     if 'selected_groups' not in st.session_state:
         st.session_state.selected_groups = []
+    if not st.session_state.selected_groups and not st.session_state.get("_eu_concept_defaults_seeded"):
+        _reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))
 
     selected_concepts = []
 
@@ -1522,11 +1716,7 @@ def _render_step3_concept_selection(concept_groups: dict[str, list[str]]) -> lis
     with col_all:
         all_label = "ALL" if st.session_state.language == 'en' else "全选"
         if st.button(all_label, key="select_all_groups", use_container_width=True):
-            st.session_state.selected_groups = list(concept_groups.keys())
-            # 自动选中所有概念
-            for grp in concept_groups.keys():
-                for concept in concept_groups.get(grp, []):
-                    st.session_state.concept_checkboxes[concept] = True
+            _reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))
             st.rerun()
 
     with col_select:
@@ -2348,7 +2538,7 @@ def _render_step2_cohort_builder_design() -> bool:
             cf['icd_mode'] = 'include'
             _clear_icd_preview_state()
 
-        footer_l, reset_col, preset_col, confirm_col = st.columns([2.45, 0.72, 1.15, 1.85], gap="small")
+        footer_l, reset_col, preset_col, confirm_col = st.columns([2.2, 1.45, 1.45, 1.45], gap="small")
         with footer_l:
             st.markdown(
                 f'<div class="eu-source-footer-note">{html.escape("Step 2 of 4" if lang == "en" else "第 2 步 / 共 4 步")}</div>',
@@ -2395,6 +2585,23 @@ def _default_concept_groups(concept_groups: dict[str, list[str]]) -> list[str]:
     return defaults or list(concept_groups.keys())[:4]
 
 
+def _all_concept_groups(concept_groups: dict[str, list[str]]) -> list[str]:
+    """Return every concept group in display order."""
+    return list(concept_groups.keys())
+
+
+def _selected_concepts_from_groups(
+    concept_groups: dict[str, list[str]],
+    groups: list[str],
+) -> list[str]:
+    """Collect selected concepts for groups while keeping output deterministic."""
+    selected: list[str] = []
+    for group_name in groups:
+        for concept in concept_groups.get(group_name, []):
+            selected.append(concept)
+    return sorted(set(selected))
+
+
 def _reset_concepts_to_groups(concept_groups: dict[str, list[str]], groups: list[str]) -> None:
     """Sync selected groups and concept checkbox state."""
     st.session_state.selected_groups = [g for g in groups if g in concept_groups]
@@ -2402,6 +2609,11 @@ def _reset_concepts_to_groups(concept_groups: dict[str, list[str]], groups: list
     for group_name in st.session_state.selected_groups:
         for concept in concept_groups.get(group_name, []):
             st.session_state.concept_checkboxes[concept] = True
+    st.session_state.selected_concepts = _selected_concepts_from_groups(
+        concept_groups,
+        st.session_state.selected_groups,
+    )
+    st.session_state["_eu_concept_defaults_seeded"] = True
 
 
 def _collect_selected_concepts(concept_groups: dict[str, list[str]]) -> list[str]:
@@ -2461,8 +2673,7 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
     st.session_state.setdefault("concept_checkboxes", {})
     st.session_state.setdefault("selected_groups", [])
     if not st.session_state.selected_groups and not st.session_state.get("_eu_concept_defaults_seeded"):
-        _reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))
-        st.session_state["_eu_concept_defaults_seeded"] = True
+        _reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))
 
     header_l, header_r = st.columns([1.4, 0.9], gap="large")
     with header_l:
@@ -2474,7 +2685,15 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
             unsafe_allow_html=True,
         )
     with header_r:
-        defaults_col, clear_col = st.columns([1.35, 0.8], gap="small")
+        all_col, defaults_col, clear_col = st.columns([0.75, 1.35, 0.8], gap="small")
+        with all_col:
+            if st.button(
+                "All" if lang == "en" else "全部",
+                key="concept_all_design",
+                use_container_width=True,
+            ):
+                _reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))
+                st.rerun()
         with defaults_col:
             if st.button(
                 "Sensible defaults" if lang == "en" else "推荐默认",
@@ -2553,7 +2772,7 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
 
         selected_concepts = _collect_selected_concepts(concept_groups)
         st.session_state.selected_concepts = selected_concepts
-        footer_l, reset_col, confirm_col = st.columns([4.2, 1.0, 1.65], gap="small")
+        footer_l, reset_col, confirm_col = st.columns([4.2, 1.45, 1.45], gap="small")
         with footer_l:
             st.markdown(
                 f'<div class="eu-source-footer-note">{html.escape("Step 3 of 4" if lang == "en" else "第 3 步 / 共 4 步")}</div>',
@@ -2561,7 +2780,7 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
             )
         with reset_col:
             if st.button("Reset" if lang == "en" else "重置", key="concept_reset_design", use_container_width=True):
-                _reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))
+                _reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))
                 st.rerun()
         with confirm_col:
             if st.button(
@@ -2597,9 +2816,7 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
         if entry_mode != 'none':
             with st.container(key="eu_sidebar_nav_area"):
                 _render_shell_primary_nav()
-            _render_shell_workspace_dock(entry_mode)
-        if st.session_state.get("_eu_sidebar_settings_open", False):
-            _render_sidebar_ai_and_lang()
+            _render_shell_context_dock(entry_mode)
 
         # Footer icon row (back / help / settings / lang / avatar) — at
         # the very bottom of the sidebar per shell-a-frame.jsx.
@@ -2607,22 +2824,13 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
 
 
 def _render_sidebar_ai_and_lang() -> None:
-    """Compact AI-assistant settings + language selector for the rail.
+    """Compatibility wrapper for older sessions that imported this helper.
 
-    The brand / mode pill / app title that ``_render_sidebar_top`` used
-    to draw are now handled by ``_render_shell_brand``; this trimmed
-    version keeps only the still-needed controls.
+    The footer gear now opens a Streamlit popover with the real settings
+    content, but keeping this tiny wrapper avoids breaking external tests
+    or notebooks that referenced the old helper.
     """
-    lang = st.session_state.get("language", "en")
-    with st.expander(
-        "✦ AI assistant" if lang == "en" else "✦ AI 助手",
-        expanded=bool(st.session_state.get("_eu_sidebar_settings_open", False)),
-    ):
-        try:
-            from easyicu.webapp.llm_chat import render_llm_settings
-            render_llm_settings()
-        except Exception:
-            pass
+    _render_sidebar_settings_panel()
 
 
 def render_extract_page(lang: str, app_context: dict[str, Any] | None = None) -> None:

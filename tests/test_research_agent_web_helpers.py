@@ -305,6 +305,35 @@ def test_workbench_does_not_auto_bind_demo_preview(monkeypatch) -> None:
     assert _resolve_workbench_state("en") == {}
 
 
+def test_empty_workbench_removes_ambiguous_open_latest_run_action() -> None:
+    source = Path(wb_page.__file__).read_text(encoding="utf-8")
+
+    assert "Open latest run" not in source
+    assert "打开最近 run" not in source
+    assert "_eu_wb_empty_latest" not in source
+    assert "_latest_real_workbench_state" not in source
+    assert "Open saved runs" in source
+    assert "Open manifest history" not in source
+    assert "打开 manifest 历史" not in source
+    assert "_eu_wb_empty_history" in source
+
+
+def test_empty_workbench_actions_use_responsive_nowrap_buttons() -> None:
+    source = Path(wb_page.__file__).read_text(encoding="utf-8")
+    css = Path(wb_page.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
+
+    assert 'st.container(key=f"eu_wb_empty_actions_{summary}")' in source
+    assert "st.columns(2)" in source
+    assert "st.columns([1.4, 1.75, 6.15])" not in source
+    assert "st-key-eu_wb_empty_actions" in css
+    assert 'class*="st-key-_eu_wb_empty_"' in css
+    assert "max-width: 560px" in css
+    assert "height: 38px" in css
+    assert "white-space: nowrap" in css
+    assert "text-overflow: ellipsis" in css
+    assert "@media (max-width: 560px)" in css
+
+
 def test_real_figure_result_card_uses_bound_artifact_not_placeholder_chart(tmp_path: Path) -> None:
     fig = tmp_path / "figures" / "roc.svg"
     fig.parent.mkdir()

@@ -167,6 +167,17 @@ def _format_context(ctx: ResearchContext) -> str:
             lines.append(f"  - extra_notes: {prefs.extra_notes}")
     if ctx.notes:
         lines.append("User/run notes: " + ctx.notes)
+    # Variable-type method-compatibility self-review checklist (Patch B):
+    # derived from ctx.variables via the generic compatibility matrix in
+    # method_compatibility.py. Appended once so every agent role
+    # (planner / coder / analyzer / writer) sees the same up-front
+    # constraints and the matrix is the single source of truth.
+    from .method_compatibility import render_variable_constraints
+
+    constraints = render_variable_constraints(ctx)
+    if constraints:
+        lines.append("")
+        lines.append(constraints)
     return "\n".join(lines)
 
 
@@ -847,13 +858,38 @@ class RuntimeSupervisor:
 # ---------------------------------------------------------------------------
 
 
+#: Pre-execution forbidden-pattern check is capped at this many repair
+#: rounds so a stubborn LLM can't burn token budget indefinitely. If the
+#: code still violates the matrix after this many repairs, return the
+#: last attempt unchanged — the post-hoc validator in
+#: ``audits/patterns.py`` will halt the run with the same warning and
+#: the violation chain is captured in the audit trail.
+_MAX_PRE_EXEC_COMPATIBILITY_REPAIRS = 2
+
+
 class CoderAgent:
-    """Generates a self-contained Python analysis script for one step."""
+    """Generates a self-contained Python analysis script for one step.
+
+    Patch C (2026-05-25) added a post-codegen, pre-execution
+    forbidden-pattern check: ``run`` scans the freshly written script
+    for matrix violations (e.g. ``MiniBatchKMeans`` over an ordinal
+    SOFA component) and, when a violation is detected, automatically
+    invokes ``repair`` with a structured error message. This makes
+    the agent layer the *first* line of defence; the existing
+    post-hoc validator in ``audits/patterns.py`` remains the second.
+    """
 
     def __init__(self, llm: LLMClient) -> None:
         self.llm = llm
+        self.last_compatibility_violations: List[Dict[str, object]] = []
+        self.last_compatibility_repair_attempts: int = 0
 
     def run(self, *, context: ResearchContext, step: AnalysisStep) -> str:
+        from .method_compatibility import (
+            detect_forbidden_pattern_usage,
+            format_violation_message,
+        )
+
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _CODER_GUIDE),
             LLMMessage(
@@ -879,7 +915,32 @@ class CoderAgent:
             ),
         ]
         raw = self.llm.complete(messages, max_tokens=4096, temperature=0.1)
-        return _strip_code_fence(raw.strip())
+        code = _strip_code_fence(raw.strip())
+
+        # Patch C: post-codegen pre-execution compatibility enforcement.
+        # Loops up to _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS times; each
+        # iteration that still violates the matrix invokes the existing
+        # ``repair`` pathway with the violation message as the
+        # ``run_log`` field, so the coder LLM gets a structured error
+        # in the same shape it already understands. After the budget
+        # is exhausted the bad code is returned unchanged so the
+        # post-hoc validator can record the issue in the audit trail.
+        self.last_compatibility_repair_attempts = 0
+        for attempt in range(1, _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS + 1):
+            violations = detect_forbidden_pattern_usage(code, context)
+            self.last_compatibility_violations = violations
+            if not violations:
+                break
+            err = format_violation_message(violations)
+            self.last_compatibility_repair_attempts = attempt
+            code = self.repair(
+                context=context,
+                step=step,
+                code=code,
+                run_log=err,
+                attempt=attempt,
+            )
+        return code
 
     def repair(
         self,

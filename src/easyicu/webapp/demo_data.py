@@ -11,10 +11,40 @@ import streamlit as st
 from easyicu.webapp.mock_data import generate_mock_data
 
 
-LIGHTWEIGHT_DEMO_PATIENTS = 50
-LIGHTWEIGHT_DEMO_HOURS = 48
+LIGHTWEIGHT_DEMO_PATIENTS = 10
+LIGHTWEIGHT_DEMO_HOURS = 24
+
+COHORT_DEMO_PATIENTS = 10
+COHORT_DEMO_MULTIDB_DATABASES = ("miiv", "eicu", "aumc", "hirid", "mimic", "sic")
+COHORT_DEMO_MULTIDB_CONCEPTS = ("hr", "sbp", "map", "temp", "spo2", "lact")
+COHORT_DEMO_MULTIDB_RECORDS_PER_FEATURE = 24
 
 
+def _stabilize_unfiltered_demo_outcomes(meta: pd.DataFrame) -> pd.DataFrame:
+    """Keep tiny unfiltered demos usable for survived-vs-deceased panels."""
+    if not isinstance(meta, pd.DataFrame) or len(meta) < 4 or "death" not in meta.columns:
+        return meta
+
+    min_each = 2 if len(meta) >= 8 else 1
+    work = meta.copy()
+    deaths = pd.to_numeric(work["death"], errors="coerce").fillna(0).astype(int)
+
+    if int(deaths.sum()) < min_each:
+        needed = min_each - int(deaths.sum())
+        candidates = work.loc[deaths == 0].sort_values(["severity", "age"], ascending=False).head(needed).index
+        work.loc[candidates, "death"] = 1
+        deaths = pd.to_numeric(work["death"], errors="coerce").fillna(0).astype(int)
+
+    survivors = len(work) - int(deaths.sum())
+    if survivors < min_each:
+        needed = min_each - survivors
+        candidates = work.loc[deaths == 1].sort_values(["severity", "age"], ascending=True).head(needed).index
+        work.loc[candidates, "death"] = 0
+
+    return work
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
 def generate_lightweight_demo_data(
     n_patients: int = LIGHTWEIGHT_DEMO_PATIENTS,
     hours: int = LIGHTWEIGHT_DEMO_HOURS,
@@ -103,6 +133,8 @@ def generate_lightweight_demo_data(
             meta = filtered
 
     meta = meta.head(n_patients).copy()
+    if cohort_filter is None:
+        meta = _stabilize_unfiltered_demo_outcomes(meta)
     patient_ids = meta["stay_id"].astype(int).tolist()
     records = meta.to_dict("records")
     data: dict[str, pd.DataFrame] = {}
@@ -342,6 +374,7 @@ def get_mock_params_with_cohort():
     return params
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
 def _generate_mock_demographics(n_patients: int, lang: str = 'en') -> pd.DataFrame:
     """生成模拟的人口统计学数据用于Cohort Comparison演示。
 
@@ -419,6 +452,7 @@ def _generate_mock_demographics(n_patients: int, lang: str = 'en') -> pd.DataFra
     return df[available_cols]
 
 
+@st.cache_data(show_spinner=False, max_entries=128)
 def _build_mock_group_feature_data(patient_ids: list, concepts: list, id_col: str = 'stay_id') -> Dict[str, pd.DataFrame]:
     """Build realistic demo feature data for cohort comparison.
 
@@ -544,7 +578,14 @@ def _build_group_feature_data_from_loaded_concepts(
     return feature_data
 
 
-def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
+@st.cache_data(show_spinner=False, max_entries=64)
+def _generate_mock_multidb_data(
+    lang: str = 'en',
+    *,
+    database_keys: list[str] | tuple[str, ...] | None = None,
+    concepts: list[str] | tuple[str, ...] | None = None,
+    records_per_feature: int = COHORT_DEMO_MULTIDB_RECORDS_PER_FEATURE,
+) -> Dict[str, pd.DataFrame]:
     """生成模拟的多数据库特征分布数据用于演示。
 
     Args:
@@ -632,13 +673,24 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
         },
     }
 
+    selected_dbs = list(database_keys or COHORT_DEMO_MULTIDB_DATABASES)
+    selected_concepts = set(concepts or COHORT_DEMO_MULTIDB_CONCEPTS)
+    try:
+        records_per_feature = max(12, int(records_per_feature))
+    except (TypeError, ValueError):
+        records_per_feature = COHORT_DEMO_MULTIDB_RECORDS_PER_FEATURE
+
     result = {}
     for db_name, features in databases.items():
-        n_records_per_feat = np.random.randint(120, 220)
+        if db_name not in selected_dbs:
+            continue
+        n_records_per_feat = records_per_feature
 
         # 生成长格式数据（concept + value）
         rows = []
         for feat, (mean, std) in features.items():
+            if feat not in selected_concepts:
+                continue
             values = np.random.normal(mean, std, n_records_per_feat)
             # Clip SOFA scores to valid ranges
             if feat == 'sofa2':
@@ -658,6 +710,7 @@ def _generate_mock_multidb_data(lang: str = 'en') -> Dict[str, pd.DataFrame]:
     return result
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
 def _generate_mock_cohort_dashboard_data(lang: str = 'en', n_patients: int = 500) -> pd.DataFrame:
     """生成模拟的队列仪表盘数据用于演示。
 

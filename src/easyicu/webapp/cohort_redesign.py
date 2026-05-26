@@ -6,9 +6,9 @@ and the matching PowerPoint artboards. The bodies are data-driven from
 the same ``session_state`` keys the legacy pages populate, but they stay
 visually consistent even when only demo/fallback data are available.
 
-The old multi-DB loader is still reachable in a collapsed advanced area
-on the Cross-DB page. That keeps the operational path intact while the
-default page reads like the design canvas instead of a legacy form.
+The Cross-DB page renders the multi-database loader / distribution view
+inline by default so the operational path is visible without extra
+expanders or explanatory chrome.
 """
 
 from __future__ import annotations
@@ -316,7 +316,7 @@ def _render_groups_subtab(df: pd.DataFrame | None, lang: str) -> None:
     )
     contrast_rows = _group_contrast_rows(df, lang)
     contrast_table = cc.render_mono_table(
-        title=_T(lang, "Group contrast", "组间对比"),
+        title=_T(lang, "Group contrast", "组间对照"),
         columns=[_T(lang, "Feature", "特征"), _T(lang, "Sepsis", "脓毒症"),
                  _T(lang, "Non", "非"), "p"],
         rows=contrast_rows,
@@ -516,8 +516,8 @@ def _render_sofa_subtab(df: pd.DataFrame | None, lang: str) -> None:
 # =====================================================================
 
 
-_SUBTABS_EN = ("Groups", "Coverage", "Snapshot", "SOFA Δ")
-_SUBTABS_ZH = ("分组", "覆盖", "快照", "SOFA Δ")
+_SUBTABS_EN = ("Group contrast", "Coverage audit", "Cohort profile", "SOFA reclassification")
+_SUBTABS_ZH = ("组间对照", "覆盖审计", "队列画像", "SOFA 重分层")
 
 
 def render_cohort_redesign_page(
@@ -543,8 +543,8 @@ def render_cohort_redesign_page(
         title_en="Sepsis vs Non-sepsis",
         title_zh="脓毒症对照",
         desc=_T(lang,
-            "Group contrast · coverage audit · snapshot · SOFA-Δ",
-            "组间对比 · 覆盖审计 · 队列快照 · SOFA-Δ"),
+            "Group contrast · coverage audit · cohort profile · SOFA reclassification",
+            "组间对照 · 覆盖审计 · 队列画像 · SOFA 重分层"),
         breadcrumb=(
             "WORKSPACE",
             _cohort_name(),
@@ -660,6 +660,52 @@ def _crossdb_loaded_counts() -> tuple[int, int, int]:
     return len(data), row_count, len(concepts)
 
 
+def _clear_demo_crossdb_state_for_real_mode(state: Any) -> bool:
+    """Remove seeded demo Cross-DB frames before rendering a real-data page."""
+    if state.get("entry_mode") == "demo" or not state.get("multidb_is_demo"):
+        return False
+    for key in ("multidb_data", "multidb_concepts", "multidb_is_demo"):
+        state.pop(key, None)
+    return True
+
+
+def _crossdb_source_notice(lang: str) -> str:
+    data = st.session_state.get("multidb_data") or {}
+    is_loaded = isinstance(data, dict) and bool(data)
+    is_demo = bool(st.session_state.get("multidb_is_demo") or st.session_state.get("entry_mode") == "demo")
+
+    if is_loaded and is_demo:
+        title = _T(lang, "Demo simulated data", "演示模拟数据")
+        body = _T(
+            lang,
+            "The summary and matrix below are computed from seeded demo frames, not from a user database.",
+            "下方摘要和矩阵来自内置演示数据计算，不是用户真实数据库结果。",
+        )
+        level = "info"
+    elif is_loaded:
+        title = _T(lang, "Real loaded data", "真实加载数据")
+        body = _T(
+            lang,
+            "The summary and matrix below are computed from the real multi-database frames loaded in this session.",
+            "下方摘要和矩阵由本次会话已加载的真实多数据库数据帧计算得到。",
+        )
+        level = "info"
+    else:
+        title = _T(lang, "Waiting for multi-database input", "等待多库输入")
+        body = _T(
+            lang,
+            "Connect at least two ICU database roots in the loader below before treating this panel as evidence.",
+            "请先在下方加载器连接至少两个 ICU 数据库根目录，再把这里作为证据级对比结果。",
+        )
+        level = "warning"
+
+    return (
+        f'<div class="compact-inline-notice {level} eu-crossdb-source-note">'
+        f'<strong>{title}</strong> · {body}'
+        '</div>'
+    )
+
+
 def _crossdb_concept_nonnull_share(frame: pd.DataFrame, concept: str) -> float:
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return 0.0
@@ -729,7 +775,7 @@ def _crossdb_kpi_rows(lang: str) -> tuple[list[str], list[list[str]]]:
                 [
                     _T(lang, "Cross-database summary", "跨库摘要"),
                     _T(lang, "waiting for ≥2 loaded databases", "等待加载 ≥2 个数据库"),
-                    _T(lang, "Open detailed loader", "打开详细加载器"),
+                    _T(lang, "Details below", "下方详情"),
                 ],
             ],
         )
@@ -796,10 +842,11 @@ def _crossdb_availability_rows(lang: str) -> tuple[tuple[str, ...], list[tuple[s
 def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
     """Shell-A Cross-DB Benchmark page.
 
-    PageHeader, benchmark summary, and availability matrix come from the
-    design canvas. The real multi-DB loader / Plotly distribution view is
-    still available in the collapsed advanced panel.
+    PageHeader, benchmark summary, availability matrix, and the real
+    multi-DB loader / Plotly distribution view render inline.
     """
+    _clear_demo_crossdb_state_for_real_mode(st.session_state)
+
     _render_page_header(
         title_en="Cross-DB benchmark",
         title_zh="跨库基准",
@@ -820,6 +867,8 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
             pass
 
     _render_agent_gate_strip(lang, context="Cross-DB benchmark")
+
+    st.markdown(_crossdb_source_notice(lang), unsafe_allow_html=True)
 
     st.markdown(cc.render_active_databases(_crossdb_active_databases(lang)), unsafe_allow_html=True)
 
@@ -850,45 +899,5 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
     )
 
     if multidb_fn is not None and not st.session_state.get("_eu_shell_only"):
-        advanced_open = bool(st.session_state.get("_eu_crossdb_advanced_open", False))
-        if not advanced_open:
-            st.markdown(
-                '<div class="eu-config-note" style="margin-top:14px">'
-                + _T(
-                    lang,
-                    "Detailed multi-database loading is kept closed so entering this page stays fast.",
-                    "详细多库加载默认关闭，确保进入页面时保持轻量。",
-                )
-                + '</div>',
-                unsafe_allow_html=True,
-            )
-            if st.button(
-                _T(lang, "Open detailed loader", "打开详细加载器"),
-                key="_eu_crossdb_open_advanced",
-                use_container_width=False,
-            ):
-                st.session_state["_eu_crossdb_advanced_open"] = True
-                st.rerun()
-            return
-
-        with st.expander(
-            _T(lang, "Load data / detailed distributions", "加载数据 / 详细分布"),
-            expanded=True,
-        ):
-            st.markdown(
-                '<div class="eu-config-note">'
-                + _T(
-                    lang,
-                    "Use this advanced panel to connect real multi-database roots or inspect detailed Plotly distributions. The summary above stays in the unified Shell-A layout.",
-                    "在这里连接真实多数据库根目录或查看详细 Plotly 分布。上方摘要保持统一的 Shell-A 版式。",
-                )
-                + '</div>',
-                unsafe_allow_html=True,
-            )
-            if st.button(
-                _T(lang, "Hide detailed loader", "隐藏详细加载器"),
-                key="_eu_crossdb_close_advanced",
-            ):
-                st.session_state["_eu_crossdb_advanced_open"] = False
-                st.rerun()
-            multidb_fn(lang)
+        st.markdown('<div class="eu-crossdb-distribution-boundary"></div>', unsafe_allow_html=True)
+        multidb_fn(lang)

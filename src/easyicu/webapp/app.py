@@ -96,7 +96,7 @@ from easyicu.webapp.shell_styles import render_shell_styles
 from easyicu.webapp.i18n import get_text, strip_emoji
 from easyicu.webapp.page_registry import build_main_page_registry
 from easyicu.webapp.page_header import render_page_header
-from easyicu.webapp.session_state import get_state, init_session_state
+from easyicu.webapp.session_state import clear_run_state, get_state, init_session_state
 from easyicu.webapp.services import (
     COLUMN_NORMALIZATION_MAP,
     NORMALIZED_TO_ORIGINAL_MAP,
@@ -108,6 +108,8 @@ from easyicu.webapp.services import (
     normalize_column_name,
 )
 from easyicu.webapp.demo_data import (
+    LIGHTWEIGHT_DEMO_HOURS,
+    LIGHTWEIGHT_DEMO_PATIENTS,
     _build_group_feature_data_from_loaded_concepts,
     _build_mock_group_feature_data,
     _generate_mock_cohort_dashboard_data,
@@ -587,6 +589,90 @@ def _real_data_source_ready_for_step1(state: dict[str, Any]) -> bool:
     return True
 
 
+def _set_extract_step_state(state: dict[str, Any], step: int) -> None:
+    """Navigate the extraction workflow to an already unlocked step."""
+    step = max(1, min(4, int(step)))
+    state['_active_main_page'] = 'extract'
+    state['step1_confirmed'] = step > 1
+    state['step2_confirmed'] = step > 2
+    state['step3_confirmed'] = step > 3
+    if step < 4:
+        state['export_completed'] = False
+
+
+def _extract_step_unlocked(state: dict[str, Any], step: int) -> bool:
+    """Return whether the requested extraction step can be reached from state."""
+    if step <= 1:
+        return True
+    if step == 2:
+        return bool(state.get('step1_confirmed'))
+    if step == 3:
+        return bool(state.get('step1_confirmed') and state.get('step2_confirmed'))
+    return bool(
+        state.get('step1_confirmed')
+        and state.get('step2_confirmed')
+        and state.get('step3_confirmed')
+    )
+
+
+def _switch_extract_entry_mode(state: dict[str, Any], target: str) -> None:
+    """Switch demo/real source mode and reset the extraction workflow."""
+    if target not in {'demo', 'real'}:
+        return
+    state['entry_mode'] = target
+    state['use_mock_data'] = target == 'demo'
+    if target == 'demo':
+        state['database'] = 'mock'
+    for key in ('step1_confirmed', 'step2_confirmed', 'step3_confirmed', 'export_completed'):
+        state[key] = False
+    state['_active_main_page'] = 'extract'
+
+
+def _apply_topbar_breadcrumb_target(state: dict[str, Any], target: str) -> None:
+    """Navigate to a parent destination from a topbar breadcrumb segment."""
+    if target == 'entry':
+        clear_run_state("all")
+        state['entry_mode'] = 'none'
+        state['use_mock_data'] = False
+        state['_active_main_page'] = 'tutorial'
+    elif target == 'data_extraction':
+        state['_active_main_page'] = 'tutorial'
+    elif target == 'extract':
+        state['_active_main_page'] = 'extract'
+    elif target == 'data_visualization':
+        state['_active_main_page'] = 'quick_viz'
+    elif target in {'quick_viz', 'cohort', 'cross_db', 'research_agent'}:
+        state['_active_main_page'] = target
+
+
+def _route_completed_export_to_visualization(
+    state: dict[str, Any],
+    *,
+    request_refresh: bool = False,
+    sync_widget_keys: bool = True,
+) -> None:
+    """Send every completed export path to the first review panel."""
+    state['_active_main_page'] = 'quick_viz'
+    if sync_widget_keys:
+        state['_main_nav_widget'] = 'quick_viz'
+        state['quick_viz_active_panel'] = state.pop('_post_export_target_panel', 'Data Tables')
+    else:
+        state['_post_export_target_panel'] = 'Data Tables'
+    state['_scroll_to_top'] = True
+    if request_refresh:
+        state['_post_export_navigation_pending'] = True
+
+
+def _consume_completed_export_navigation(state: dict[str, Any]) -> bool:
+    """Apply a queued post-export route once and report whether it fired."""
+    if not state.pop('_post_export_navigation_pending', False):
+        return False
+    if not state.get('export_completed'):
+        return False
+    _route_completed_export_to_visualization(state)
+    return True
+
+
 def _prepare_quick_viz_demo_workspace(
     state: dict[str, Any],
     *,
@@ -596,13 +682,15 @@ def _prepare_quick_viz_demo_workspace(
     params = state.get('mock_params') if isinstance(state.get('mock_params'), dict) else {}
     params = dict(params)
     try:
-        params['n_patients'] = int(params.get('n_patients') or 50)
+        params['n_patients'] = int(params.get('n_patients') or LIGHTWEIGHT_DEMO_PATIENTS)
     except (TypeError, ValueError):
-        params['n_patients'] = 50
+        params['n_patients'] = LIGHTWEIGHT_DEMO_PATIENTS
+    params['n_patients'] = min(max(1, params['n_patients']), LIGHTWEIGHT_DEMO_PATIENTS)
     try:
-        params['hours'] = int(params.get('hours') or 48)
+        params['hours'] = int(params.get('hours') or LIGHTWEIGHT_DEMO_HOURS)
     except (TypeError, ValueError):
-        params['hours'] = 48
+        params['hours'] = LIGHTWEIGHT_DEMO_HOURS
+    params['hours'] = min(max(24, params['hours']), LIGHTWEIGHT_DEMO_HOURS)
     params['demo_profile'] = 'lite'
 
     generated = generate_data_func(**params)
@@ -718,11 +806,10 @@ def _consume_topbar_run_request(
             message = 'Cross-DB comparison data is already loaded.' if is_en else '跨库对比数据已加载。'
             level = 'success'
         else:
-            state['_eu_crossdb_advanced_open'] = True
             message = (
-                'Open the loader below and connect at least two database roots.'
+                'The Cross-DB loader is shown below; connect at least two database roots.'
                 if is_en else
-                '请在下方加载器连接至少两个数据库根目录。'
+                '跨库加载器已在下方展示；请连接至少两个数据库根目录。'
             )
             level = 'warning'
         _append_action_log(state, message)
@@ -737,9 +824,9 @@ def _consume_topbar_run_request(
             state['_ra_view'] = 'setup'
             state['_eu_ra_launch_requested'] = True
             message = (
-                'Configure the request, cohort, and LLM provider in Setup before launching a real run.'
+                'Opened Research Agent run controls. Confirm the request, cohort, and LLM provider in Setup before launching.'
                 if is_en else
-                '请先在配置页确认研究问题、队列和 LLM provider，再启动真实 run。'
+                '已打开 Research Agent 运行控制。请在配置页确认研究问题、队列和 LLM provider 后再启动。'
             )
             level = 'info'
         _append_action_log(state, message)
@@ -757,6 +844,25 @@ def _handle_topbar_run_request(active_page: str, lang: str) -> dict[str, str] | 
         except Exception:
             pass
     return result
+
+
+def _topbar_primary_action_label(
+    active_page: str,
+    lang: str,
+    *,
+    entry_mode: str = "none",
+) -> tuple[str, str]:
+    """Return the global topbar action label for the current page."""
+    if active_page == 'research_agent':
+        if entry_mode == 'demo':
+            return ('Agent guide', 'Agent 导览')
+        return ('Run controls', '运行控制')
+    label_map = {
+        'quick_viz': ('Render', '渲染'),
+        'cohort': ('Re-run', '重新运行'),
+        'cross_db': ('Run', '运行'),
+    }
+    return label_map.get(active_page, ('Run', '运行'))
 
 
 FIGURE_TARGET_MAP = {
@@ -1925,9 +2031,9 @@ def _render_compact_divider(top: int = 6, bottom: int = 12):
     """Render a lighter divider with tighter vertical rhythm than st.markdown('---')."""
     st.markdown(
         f"""
-        <div style="height:{top}px"></div>
-        <div style="border-top:1px solid #e2e8f0; opacity:.9;"></div>
-        <div style="height:{bottom}px"></div>
+        <div class="eu-compact-divider" style="--eu-divider-top:{top}px;--eu-divider-bottom:{bottom}px">
+            <span aria-hidden="true"></span>
+        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -2290,8 +2396,8 @@ def render_cohort_comparison_page():
         #   1. A sidebar-validated raw ICU data root (icustays/patients/...)
         #      — feeds all 5 panels including Cross-DB Benchmark.
         #   2. Module exports already loaded via Quick Visualization
-        #      (state['loaded_concepts']) — feeds Group Contrast / Coverage /
-        #      Snapshot / SOFA Δ. Cross-DB still needs ≥2 DBs' raw schema.
+        #      (state['loaded_concepts']) — feeds Group Contrast / Coverage Audit /
+        #      Cohort Profile / SOFA Reclassification. Cross-DB still needs ≥2 DBs' raw schema.
         # Gate only when neither is available; otherwise let the launcher
         # offer the matching one-click prep.
         _real_data_path = _default_real_data_root()
@@ -2320,33 +2426,50 @@ def render_cohort_comparison_page():
             if not screenshot_mode:
                 _render_cohort_real_workspace_status(lang)
 
-    # 子标签页 — Cross-DB Benchmark 已升级为顶 tab（2026-05 Phase B），
-    # 因为它对输入有结构性不同的要求（≥2 数据库根目录）。
-    if lang == 'en':
-        sub_tabs = st.tabs([
-            "Groups",
-            "Coverage",
-            "Snapshot",
-            "SOFA Δ",
-        ])
-    else:
-        sub_tabs = st.tabs([
-            "分组",
-            "覆盖",
-            "快照",
-            "SOFA Δ",
-        ])
+    # Streamlit tabs eagerly execute every tab body on every rerun. These
+    # cohort panels build multiple charts and tables, so a lazy segmented
+    # switcher keeps clicks responsive by rendering only the selected panel.
+    panel_labels = (
+        {
+            "groups": "Group contrast",
+            "coverage": "Coverage audit",
+            "snapshot": "Cohort profile",
+            "sofa": "SOFA reclassification",
+        }
+        if lang == "en"
+        else {
+            "groups": "组间对照",
+            "coverage": "覆盖审计",
+            "snapshot": "队列画像",
+            "sofa": "SOFA 重分层",
+        }
+    )
+    panel_keys = list(panel_labels)
+    panel_state_key = "cohort_active_panel"
+    if st.session_state.get(panel_state_key) not in panel_keys:
+        st.session_state[panel_state_key] = panel_keys[0]
 
-    with sub_tabs[0]:
+    st.markdown(
+        f'<div class="inline-control-label">{html.escape("Cohort panel" if lang == "en" else "队列面板")}</div>',
+        unsafe_allow_html=True,
+    )
+    active_panel = st.radio(
+        "Cohort panel" if lang == "en" else "队列面板",
+        options=panel_keys,
+        format_func=lambda key: panel_labels.get(key, key),
+        horizontal=True,
+        key=panel_state_key,
+        label_visibility="collapsed",
+    )
+    st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
+
+    if active_panel == "groups":
         render_group_comparison_subtab(lang)
-
-    with sub_tabs[1]:
+    elif active_panel == "coverage":
         render_data_coverage_audit_subtab(lang)
-
-    with sub_tabs[2]:
+    elif active_panel == "snapshot":
         render_cohort_dashboard_subtab(lang)
-
-    with sub_tabs[3]:
+    elif active_panel == "sofa":
         render_severity_reclassification_subtab(lang)
 
 
@@ -2391,8 +2514,9 @@ def _render_cohort_real_no_path_guide(lang: str) -> None:
                 "loaded from module exports — those power <b>Quick Visualization</b> "
                 "(tables, time series, patient overview, data quality) and "
                 "<b>Research Agent</b>.<br><br>"
-                "The Cohort Analysis panels (Group Contrast, Coverage, Cross-DB, "
-                "Snapshot, SOFA Δ) read <code>icustays</code> / <code>patients</code> / "
+                "The Cohort Analysis panels (group contrast, coverage audit, "
+                "cross-DB benchmark, cohort profile, and SOFA reclassification) "
+                "read <code>icustays</code> / <code>patients</code> / "
                 "<code>admissions</code> directly, so they require a converted raw "
                 "ICU root. Use <b>🔄 Convert &amp; Setup</b> in the sidebar to "
                 "convert raw CSV/CSV.GZ/tar.gz inputs into the expected layout, "
@@ -2404,7 +2528,7 @@ def _render_cohort_real_no_path_guide(lang: str) -> None:
                 f"你已经从导出模块加载了 <b>{n_concepts} 个概念 × {n_patients} 个患者</b>"
                 "——这些数据可在 <b>Quick Visualization</b>（表格、时间序列、患者概览、"
                 "数据质量）和 <b>Research Agent</b> 中使用。<br><br>"
-                "Cohort Analysis 的各个面板（分组对比、覆盖度、跨库、快照、SOFA Δ）"
+                "Cohort Analysis 的各个面板（组间对照、覆盖审计、跨库基准、队列画像、SOFA 重分层）"
                 "直接读取 <code>icustays</code> / <code>patients</code> / "
                 "<code>admissions</code> 表，因此需要一个已转换的原始 ICU 数据根。"
                 "请在侧边栏使用 <b>🔄 Convert &amp; Setup</b> 把原始 "
@@ -2431,9 +2555,9 @@ def _render_cohort_demo_workspace_status(lang: str) -> None:
     """Render one shared demo status strip for all Cohort Analysis panels."""
     title = "Shared demo cohort workspace" if lang == 'en' else "共享演示队列工作区"
     subtitle = (
-        "Groups, coverage audit, cross-database benchmark, cohort snapshot, and SOFA sensitivity now use the same prepared demo state."
+        "Group contrast, coverage audit, cross-database benchmark, cohort profile, and SOFA reclassification now use the same prepared demo state."
         if lang == 'en' else
-        "分组、覆盖度审计、跨库基准、队列快照和 SOFA 敏感性现在共用同一套演示状态。"
+        "组间对照、覆盖审计、跨库基准、队列画像和 SOFA 重分层现在共用同一套演示状态。"
     )
     status = "Ready for all panels" if lang == 'en' else "所有子板块已就绪"
     st.markdown(
@@ -2453,9 +2577,9 @@ def _render_cohort_demo_workspace_status(lang: str) -> None:
     with st.expander("⚙️ " + ("Shared demo settings" if lang == 'en' else "共享演示设置"), expanded=False):
         n_patients = st.slider(
             "Number of patients" if lang == 'en' else "患者数量",
-            min_value=50,
-            max_value=500,
-            value=int((st.session_state.get('mock_params') or {}).get('n_patients', 100)),
+            min_value=10,
+            max_value=50,
+            value=min(50, max(10, int((st.session_state.get('mock_params') or {}).get('n_patients', LIGHTWEIGHT_DEMO_PATIENTS)))),
             key="cohort_demo_workspace_patients",
         )
         if st.button(
@@ -2472,9 +2596,9 @@ def _render_cohort_demo_workspace_launcher(lang: str) -> None:
     """Render a single shared Cohort Analysis demo generation entry point."""
     title = "Generate one shared cohort demo workspace" if lang == 'en' else "生成一次共享队列演示工作区"
     subtitle = (
-        "This prepares the demo data for Groups, Coverage, Cross-DB, Snapshot, and SOFA Δ together. You will not need to generate data again inside each subpanel."
+        "This prepares demo data for group contrast, coverage audit, cross-DB benchmark, cohort profile, and SOFA reclassification together. You will not need to generate data again inside each subpanel."
         if lang == 'en' else
-        "这会一次性准备分组、覆盖度、跨库、快照和 SOFA Δ 所需的演示数据；之后不需要在每个子板块重复生成。"
+        "这会一次性准备组间对照、覆盖审计、跨库基准、队列画像和 SOFA 重分层所需的演示数据；之后不需要在每个子板块重复生成。"
     )
     st.markdown(
         f'''
@@ -2493,9 +2617,9 @@ def _render_cohort_demo_workspace_launcher(lang: str) -> None:
     with col1:
         n_patients = st.slider(
             "Number of patients" if lang == 'en' else "患者数量",
-            min_value=50,
-            max_value=500,
-            value=int((st.session_state.get('mock_params') or {}).get('n_patients', 100)),
+            min_value=10,
+            max_value=50,
+            value=min(50, max(10, int((st.session_state.get('mock_params') or {}).get('n_patients', LIGHTWEIGHT_DEMO_PATIENTS)))),
             key="cohort_demo_workspace_patients_init",
         )
     with col2:
@@ -2617,6 +2741,11 @@ def _prime_export_completion(export_dir: Path, files: list[str], *, auto_load: b
             'selected_files': selected_files or None,
             'max_patients': max_patients,
         }
+    _route_completed_export_to_visualization(
+        st.session_state,
+        request_refresh=True,
+        sync_widget_keys=False,
+    )
 
 
 # 🔧 FIX Bug 62: Worker functions moved to subprocess_workers.py (separate from app.py)
@@ -2662,8 +2791,15 @@ def _ensure_quick_figure_demo_data(state: dict[str, Any], *, lang: str) -> None:
     """Preload compact demo concepts so figure URLs open directly to useful panels."""
     if state.get('loaded_concepts'):
         return
-    state['mock_params'] = {'n_patients': 50, 'hours': 48, 'demo_profile': 'lite'}
-    mock_data, patient_ids = generate_lightweight_demo_data(n_patients=50, hours=48)
+    state['mock_params'] = {
+        'n_patients': LIGHTWEIGHT_DEMO_PATIENTS,
+        'hours': LIGHTWEIGHT_DEMO_HOURS,
+        'demo_profile': 'lite',
+    }
+    mock_data, patient_ids = generate_lightweight_demo_data(
+        n_patients=LIGHTWEIGHT_DEMO_PATIENTS,
+        hours=LIGHTWEIGHT_DEMO_HOURS,
+    )
     state['loaded_concepts'] = mock_data
     state['loaded_data_origin'] = 'demo_viz'
     state['patient_ids'] = patient_ids
@@ -2713,10 +2849,10 @@ def _render_cohort_real_workspace_launcher(lang: str) -> None:
              else "可选：从当前真实数据准备所有队列面板")
     subtitle = (
         f"Quick preview: load demographics, preview concepts, and SOFA for **{db_label}** from `{data_path}`. "
-        "You can also use the Groups or Snapshot tabs below to load raw databases or exported results as before."
+        "You can also use the group contrast or cohort profile panels below to load raw databases or exported results as before."
         if lang == 'en' else
         f"快速预览：加载 **{db_label}** (`{data_path}`) 的人口统计、预览概念和 SOFA。"
-        "你也可以像以前一样，在下方分组或快照标签里加载原始数据库或已导出的结果。"
+        "你也可以像以前一样，在下方组间对照或队列画像面板里加载原始数据库或已导出的结果。"
     )
     st.markdown(
         f'''
@@ -2787,8 +2923,8 @@ def _render_cohort_real_loaded_exports_launcher(lang: str) -> None:
         title = "Use loaded module exports for Cohort Analysis"
         subtitle = (
             f"Bridge the <b>{n_concepts} concepts × {n_patients} patients</b> already "
-            f"loaded for <b>{db_label}</b> into Group Contrast, Coverage, Cohort Snapshot, "
-            "and SOFA Δ. Cross-DB Benchmark stays gated — it needs raw schema for ≥2 databases."
+            f"loaded for <b>{db_label}</b> into Group Contrast, Coverage Audit, Cohort Profile, "
+            "and SOFA Reclassification. Cross-DB Benchmark stays gated — it needs raw schema for ≥2 databases."
         )
         button_label = "🚀 Build workspace from loaded exports"
         status_chip = "exports shortcut"
@@ -2796,7 +2932,7 @@ def _render_cohort_real_loaded_exports_launcher(lang: str) -> None:
         title = "用已加载的模块导出运行队列分析"
         subtitle = (
             f"将已为 <b>{db_label}</b> 加载的 <b>{n_concepts} 个概念 × {n_patients} 个患者</b>"
-            "桥接到 分组对比、覆盖度、队列快照、SOFA Δ 面板。"
+            "桥接到组间对照、覆盖审计、队列画像、SOFA 重分层面板。"
             "跨库面板仍需要原始 schema（至少两个数据库），保持待解锁。"
         )
         button_label = "🚀 用已加载导出构建工作区"
@@ -2925,7 +3061,11 @@ def _apply_figure_query_preset(state: dict[str, Any], *, lang: str) -> None:
         state['entry_mode'] = 'demo'
         state['use_mock_data'] = True
         state['database'] = 'mock'
-        state['mock_params'] = {'n_patients': 50, 'hours': 48, 'demo_profile': 'lite'}
+        state['mock_params'] = {
+            'n_patients': LIGHTWEIGHT_DEMO_PATIENTS,
+            'hours': LIGHTWEIGHT_DEMO_HOURS,
+            'demo_profile': 'lite',
+        }
 
     if section == 'viz':
         _ensure_quick_figure_demo_data(state, lang=lang)
@@ -2955,10 +3095,10 @@ def _render_figure_target_jump_script() -> None:
             'Patient Overview': '患者',
             'Data Quality': '质量',
             'Group Contrast': '组间对照',
-            'Coverage Audit': '覆盖度',
+            'Coverage Audit': '覆盖审计',
             'Cross-DB Benchmark': '跨库',
-            'Cohort Snapshot': '队列快照',
-            'SOFA-1 vs SOFA-2': 'SOFA-1 vs SOFA-2',
+            'Cohort Snapshot': '队列画像',
+            'SOFA-1 vs SOFA-2': 'SOFA 重分层',
         }.get(panel, panel)
         top_label = '快速可视化' if section == 'viz' else '队列分析'
 
@@ -3241,8 +3381,9 @@ def main():
     default_export_container = st.container()
 
     # ============ Shell-A top bar (breadcrumb + actions) ============
+    _consume_completed_export_navigation(st.session_state)
+
     from easyicu.webapp.ui_helpers import (
-        render_topbar as _render_topbar,
         render_pill_html as _render_pill_html,
     )
     _active = st.session_state.get('_active_main_page', 'tutorial')
@@ -3254,8 +3395,9 @@ def main():
         'cross_db':       'Cross-DB Benchmark' if lang == 'en' else '跨库基准',
         'research_agent': 'Research Agent' if lang == 'en' else '研究智能体',
     }
-    _crumb_label = _page_labels_for_topbar.get(_active, _active)
-    _crumbs = ['EasyICU', _crumb_label]
+    _topbar_home_label = 'Home' if lang == 'en' else '首页'
+    _data_extraction_label = 'Data extraction' if lang == 'en' else '数据提取'
+    _data_visualization_label = 'Data visualization' if lang == 'en' else '数据可视化'
     if _active == 'extract':
         if not st.session_state.get('step1_confirmed'):
             _step_crumb = 'Step 1 · Data source' if lang == 'en' else '第 1 步 · 数据源'
@@ -3266,51 +3408,94 @@ def main():
         else:
             _step_crumb = 'Step 4 · Export' if lang == 'en' else '第 4 步 · 导出'
         _mode_crumb = 'Demo' if entry_mode == 'demo' else ('Real Data' if lang == 'en' else '真实数据')
-        _crumbs = ['Data extraction' if lang == 'en' else '数据提取', _step_crumb, _mode_crumb]
-    _topbar_pills: list[tuple[str, str]] = []
-    _agent_wb_state = st.session_state.get('_agent_workbench')
-    _agent_wb_is_real = (
-        _active == 'research_agent'
-        and st.session_state.get('_ra_view') == 'workbench'
-        and isinstance(_agent_wb_state, dict)
-        and not _agent_wb_state.get('is_demo')
-    )
-    if _agent_wb_is_real:
-        _topbar_pills.append(('Real run manifest' if lang == 'en' else '真实 run manifest', 'real'))
-    elif entry_mode == 'demo':
-        _topbar_pills.append(('Demo · simulated' if lang == 'en' else '演示 · 模拟数据', 'demo'))
-    elif entry_mode == 'real':
-        _topbar_pills.append(('Real data' if lang == 'en' else '真实数据', 'real'))
-    if st.session_state.get('export_completed'):
-        _topbar_pills.append(('Export complete' if lang == 'en' else '导出完成', 'ok'))
+    def _render_topbar_path_nav(
+        items: list[tuple[str, str | None]],
+        *,
+        key: str,
+    ) -> None:
+        visible_items = [(label, target) for label, target in items if label]
+        if not visible_items:
+            return
+        widths: list[float] = []
+        for idx, (label, _) in enumerate(visible_items):
+            widths.append(max(0.24, min(1.05, len(label) / 16)))
+            if idx < len(visible_items) - 1:
+                widths.append(0.04)
+
+        with st.container(key=key):
+            bc_cols = st.columns(widths, gap="small", vertical_alignment="center")
+            col_idx = 0
+            for idx, (label, target) in enumerate(visible_items):
+                with bc_cols[col_idx]:
+                    if target:
+                        if st.button(
+                            label,
+                            key=f"_{key}_{idx}_{target}",
+                            use_container_width=False,
+                            help=("Go to parent path" if lang == "en" else "返回上层路径"),
+                        ):
+                            _apply_topbar_breadcrumb_target(st.session_state, target)
+                            st.rerun()
+                    else:
+                        st.markdown(
+                            f'<span class="eu-bc-current">{html.escape(label)}</span>',
+                            unsafe_allow_html=True,
+                        )
+                col_idx += 1
+                if idx < len(visible_items) - 1:
+                    with bc_cols[col_idx]:
+                        st.markdown('<span class="eu-bc-sep">/</span>', unsafe_allow_html=True)
+                    col_idx += 1
+
+    _topbar_path_items_by_page: dict[str, list[tuple[str, str | None]]] = {
+        'tutorial': [
+            (_topbar_home_label, 'entry'),
+            (_data_extraction_label, None),
+        ],
+        'quick_viz': [
+            (_topbar_home_label, 'entry'),
+            (_data_visualization_label, 'data_visualization'),
+            (_page_labels_for_topbar['quick_viz'], None),
+        ],
+        'cohort': [
+            (_topbar_home_label, 'entry'),
+            (_data_visualization_label, 'data_visualization'),
+            (_page_labels_for_topbar['cohort'], None),
+        ],
+        'cross_db': [
+            (_topbar_home_label, 'entry'),
+            (_data_visualization_label, 'data_visualization'),
+            (_page_labels_for_topbar['cross_db'], None),
+        ],
+        'research_agent': [
+            (_topbar_home_label, 'entry'),
+            (_page_labels_for_topbar['research_agent'], None),
+        ],
+    }
 
     if _active == "extract":
         if not st.session_state.get('step1_confirmed'):
             _stage_label = '1/4  Data source' if lang == 'en' else '1/4  数据源'
-            _secondary_label = 'Cancel' if lang == 'en' else '取消'
-            _primary_label = 'Confirm & continue' if lang == 'en' else '确认并继续'
-            _primary_key = "_eu_topbar_confirm_step1"
         elif not st.session_state.get('step2_confirmed'):
             _stage_label = '2/4  Cohort' if lang == 'en' else '2/4  队列'
-            _secondary_label = 'Back' if lang == 'en' else '返回'
-            _primary_label = 'Confirm cohort' if lang == 'en' else '确认队列'
-            _primary_key = "_eu_topbar_confirm_step2"
         elif not st.session_state.get('step3_confirmed'):
             _stage_label = '3/4  Concepts' if lang == 'en' else '3/4  变量'
-            _secondary_label = 'Back' if lang == 'en' else '返回'
-            _primary_label = 'Confirm selection' if lang == 'en' else '确认选择'
-            _primary_key = "_eu_topbar_confirm_step3"
         else:
             _stage_label = '4/4  Export' if lang == 'en' else '4/4  导出'
-            _secondary_label = 'Back' if lang == 'en' else '返回'
-            _primary_label = 'Export bundle' if lang == 'en' else '导出包'
-            _primary_key = "_eu_topbar_confirm_step4"
 
-        _tb_left, _tb_stage, _tb_ai, _tb_cancel, _tb_primary = st.columns(
-            [7.45, 1.35, 0.68, 0.7, 2.0], gap="small"
+        _tb_left, _tb_stage = st.columns(
+            [8.55, 1.45], gap="small"
         )
         with _tb_left:
-            _render_topbar(_crumbs, pills=())
+            _render_topbar_path_nav(
+                [
+                    (_topbar_home_label, 'entry'),
+                    (_data_extraction_label, 'data_extraction'),
+                    (_step_crumb, None),
+                    (_mode_crumb, None),
+                ],
+                key="eu_extract_breadcrumb_nav",
+            )
         with _tb_stage:
             st.markdown(
                 '<div class="eu-topbar-stage">'
@@ -3318,145 +3503,50 @@ def main():
                 '</div>',
                 unsafe_allow_html=True,
             )
-        with _tb_ai:
-            if st.button(
-                "",
-                key="_eu_topbar_ai_extract",
-                icon=":material/auto_awesome:",
-                help=("Open AI assistant" if lang == "en" else "打开 AI 助手"),
-                use_container_width=True,
-            ):
-                if st.session_state.get("_inline_ai_panel_open"):
-                    st.session_state["_inline_ai_panel_open"] = False
-                else:
-                    _open_embedded_ai_assistant(st.session_state)
-                st.rerun()
-        with _tb_cancel:
-            if st.button(
-                _secondary_label,
-                key="_eu_topbar_cancel",
-                use_container_width=True,
-            ):
-                if not st.session_state.get('step1_confirmed'):
-                    st.session_state["_active_main_page"] = "tutorial"
-                elif not st.session_state.get('step2_confirmed'):
-                    st.session_state.step1_confirmed = False
-                elif not st.session_state.get('step3_confirmed'):
-                    st.session_state.step2_confirmed = False
-                else:
-                    st.session_state.step3_confirmed = False
-                st.rerun()
-        with _tb_primary:
-            if st.button(
-                _primary_label,
-                key=_primary_key,
-                type="primary",
-                use_container_width=True,
-            ):
-                if _primary_key == "_eu_topbar_confirm_step1":
-                    if entry_mode == 'real' and not _real_data_source_ready_for_step1(st.session_state):
-                        st.toast(
-                            ('Validate the real data path before continuing.'
-                             if lang == 'en' else '请先验证真实数据路径，再继续。')
-                        )
-                        return
-                    st.session_state.step1_confirmed = True
-                    st.rerun()
-                elif _primary_key == "_eu_topbar_confirm_step2":
-                    st.session_state.step2_confirmed = True
-                    st.rerun()
-                elif _primary_key == "_eu_topbar_confirm_step3":
-                    if st.session_state.get("selected_concepts"):
-                        st.session_state.step3_confirmed = True
-                        st.rerun()
-                    else:
-                        st.toast(
-                            ('Select at least one concept first.'
-                             if lang == 'en' else '请先至少选择一个变量。')
-                        )
-                else:
-                    st.session_state['_eu_topbar_run_request'] = {
-                        'page': _active,
-                        'requested_at': 'now',
-                    }
-                    st.toast(
-                        ('Use the page controls below to confirm this step.'
-                         if lang == 'en' else '请使用下方页面控件确认此步骤。')
-                    )
     else:
-        def _render_topbar_pills_row() -> None:
-            _auto_pill = _render_pill_html(
-                'Session local' if lang == 'en' else '本地会话',
-                tone='neutral',
-            )
-            _other_pills = " ".join(_render_pill_html(label, tone=tone) for label, tone in _topbar_pills)
-            st.markdown(
-                '<div style="display:flex;gap:6px;justify-content:flex-end;'
-                'align-items:center;padding-top:6px;flex-wrap:wrap">'
-                f'{_auto_pill}{_other_pills}</div>',
-                unsafe_allow_html=True,
-            )
-
         if _active == 'tutorial':
             # Tutorial already has explicit entry CTAs in the page body, so
             # the global action buttons are withheld here to avoid duplicate,
             # ambiguous calls to action.
-            _tb_left, _tb_pill, _tb_ai = st.columns([7, 4.8, 0.8], gap="small")
+            _tb_left = st.container()
             with _tb_left:
-                _render_topbar(_crumbs, pills=())
-            with _tb_pill:
-                _render_topbar_pills_row()
-            with _tb_ai:
-                if st.button(
-                    "",
-                    key="_eu_topbar_ai_tutorial",
-                    icon=":material/auto_awesome:",
-                    help=("Open AI assistant" if lang == "en" else "打开 AI 助手"),
-                    use_container_width=True,
-                ):
-                    if st.session_state.get("_inline_ai_panel_open"):
-                        st.session_state["_inline_ai_panel_open"] = False
-                    else:
-                        _open_embedded_ai_assistant(st.session_state)
-                    st.rerun()
+                _render_topbar_path_nav(
+                    _topbar_path_items_by_page.get(
+                        _active,
+                        [
+                            (_topbar_home_label, 'entry'),
+                            (_page_labels_for_topbar.get(_active, _active), None),
+                        ],
+                    ),
+                    key=f"eu_page_breadcrumb_nav_{_active}",
+                )
         else:
-            # Shell-A topbar: render breadcrumb / pills / icon buttons /
-            # primary action. The breadcrumb + pills are HTML; the buttons
-            # stay real ``st.button`` so callbacks survive a rerun.
-            _tb_left, _tb_pill, _tb_ai, _tb_run = st.columns(
-                [7, 5.3, 0.8, 1.9], gap="small"
+            # Shell-A topbar: parent breadcrumb buttons plus one explicit action.
+            _tb_left, _tb_run = st.columns(
+                [8.6, 1.4], gap="small"
             )
             with _tb_left:
-                _render_topbar(_crumbs, pills=())
-            with _tb_pill:
-                _render_topbar_pills_row()
-            with _tb_ai:
-                if st.button(
-                    "",
-                    key="_eu_topbar_ai",
-                    icon=":material/auto_awesome:",
-                    help=("Open AI assistant" if lang == "en" else "打开 AI 助手"),
-                    use_container_width=True,
-                ):
-                    if st.session_state.get("_inline_ai_panel_open"):
-                        st.session_state["_inline_ai_panel_open"] = False
-                    else:
-                        _open_embedded_ai_assistant(st.session_state)
-                    st.rerun()
+                _render_topbar_path_nav(
+                    _topbar_path_items_by_page.get(
+                        _active,
+                        [
+                            (_topbar_home_label, 'entry'),
+                            (_page_labels_for_topbar.get(_active, _active), None),
+                        ],
+                    ),
+                    key=f"eu_page_breadcrumb_nav_{_active}",
+                )
             with _tb_run:
-                _run_label_map = {
-                    'quick_viz':      ('Render',    '渲染'),
-                    'cohort':         ('Re-run',    '重新运行'),
-                    'cross_db':       ('Run',       '运行'),
-                    'research_agent': ('Launch',    '启动'),
-                }
-                _run_en, _run_zh = _run_label_map.get(_active, ('▶ Run', '▶ 运行'))
+                _run_en, _run_zh = _topbar_primary_action_label(
+                    _active,
+                    lang,
+                    entry_mode=entry_mode,
+                )
                 if st.button(
                     _run_en if lang == 'en' else _run_zh,
                     key="_eu_topbar_run",
                     type="primary",
                     use_container_width=True,
-                    icon=":material/play_arrow:",
                 ):
                     st.session_state['_eu_topbar_run_request'] = {
                         'page': _active,
@@ -3617,7 +3707,11 @@ def main():
                 if _use_mock:
                     try:
                         with st.spinner(f"Generating preview with {_preview_n} mock patients..." if lang == 'en' else f"正在生成 {_preview_n} 位模拟患者的预览..."):
-                            mock_data, preview_patient_ids = generate_lightweight_demo_data(n_patients=_preview_n, hours=48)
+                            preview_n = min(int(_preview_n or LIGHTWEIGHT_DEMO_PATIENTS), LIGHTWEIGHT_DEMO_PATIENTS)
+                            mock_data, preview_patient_ids = generate_lightweight_demo_data(
+                                n_patients=preview_n,
+                                hours=LIGHTWEIGHT_DEMO_HOURS,
+                            )
                         if _sel_concepts:
                             mock_data = {k: v for k, v in mock_data.items() if k in _sel_concepts}
                         st.session_state.loaded_concepts = mock_data
@@ -3806,6 +3900,13 @@ def main():
                     lang,
                     key_suffix="setup",
                 )
+                if st.session_state.get("_eu_ra_resource_focus") == "citation_info":
+                    st.info(
+                        "Citation info opens here because references and evidence links are handled by the Research Agent: "
+                        "numeric claims are tied to evidence references before drafting."
+                        if lang == "en" else
+                        "引用信息在这里打开：Research Agent 负责把数值主张和证据引用绑定，审计通过后再进入起草。"
+                    )
                 try:
                     from easyicu.webapp.research_agent import (
                         render_research_agent_demo_page,
@@ -3888,6 +3989,9 @@ def main():
                 lang = st.session_state.get('language', 'en')
                 st.warning("⚠️ No data to export. Please load data first." if lang == 'en' else "⚠️ 没有可导出的数据，请先加载数据。")
                 st.session_state['_exporting_in_progress'] = False
+            if st.session_state.get('_post_export_navigation_pending'):
+                st.session_state['_active_main_page'] = 'quick_viz'
+                st.rerun()
         except Exception as e:
             import traceback
             lang = st.session_state.get('language', 'en')

@@ -1037,8 +1037,13 @@ def _get_client():
 # UI — Settings panel (rendered inside an expander in the sidebar)
 # ---------------------------------------------------------------------------
 
-def render_llm_settings():
-    """Render LLM configuration controls in the sidebar."""
+def render_llm_settings(
+    *,
+    expanded: bool = False,
+    show_status_card: bool = True,
+    controls_only: bool = False,
+):
+    """Render LLM configuration controls in the sidebar or settings popover."""
     _init_chat_state()
     _sync_llm_toggle_before_render()
     lang = st.session_state.get("language", "en")
@@ -1088,116 +1093,119 @@ def render_llm_settings():
         unsafe_allow_html=True,
     )
 
-    enabled = bool(st.session_state.llm_enabled)
-    status_title = "AI Assistant" if lang == "en" else "AI 助手"
-    status_subtitle = (
-        "Embedded guidance for the current EasyICU workflow."
-        if lang == "en" else
-        "嵌入当前 EasyICU 工作流的页面感知式助手。"
-    )
-    if enabled and _is_configured():
+    if show_status_card:
+        enabled = bool(st.session_state.llm_enabled)
+        status_title = "AI Assistant" if lang == "en" else "AI 助手"
         status_subtitle = (
-            "Embedded chat is ready in this panel."
+            "Embedded guidance for the current EasyICU workflow."
             if lang == "en" else
-            "嵌入式聊天已在此面板中就绪。"
+            "嵌入当前 EasyICU 工作流的页面感知式助手。"
         )
-    st.markdown(
-        f"""
-        <div class="easyicu-ai-sidebar-card">
-            <div class="easyicu-ai-sidebar-avatar">🤖</div>
-            <div>
-                <div class="easyicu-ai-sidebar-title">{status_title}</div>
-                <div class="easyicu-ai-sidebar-subtitle">{status_subtitle}</div>
+        if enabled and _is_configured():
+            status_subtitle = (
+                "Embedded chat is ready in this panel."
+                if lang == "en" else
+                "嵌入式聊天已在此面板中就绪。"
+            )
+        st.markdown(
+            f"""
+            <div class="easyicu-ai-sidebar-card">
+                <div class="easyicu-ai-sidebar-avatar">AI</div>
+                <div>
+                    <div class="easyicu-ai-sidebar-title">{status_title}</div>
+                    <div class="easyicu-ai-sidebar-subtitle">{status_subtitle}</div>
+                </div>
             </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            """,
+            unsafe_allow_html=True,
+        )
 
     label = "⚙️ AI settings" if lang == "en" else "⚙️ AI 设置"
-    with st.expander(label, expanded=False):
-        previous_enabled = bool(st.session_state.llm_enabled)
-        enabled = st.toggle(
-            "Enable AI assistant" if lang == "en" else "启用 AI 助手",
-            value=previous_enabled,
-            key="_llm_toggle",
+    if controls_only:
+        _render_llm_settings_controls(lang)
+    else:
+        with st.expander(label, expanded=expanded):
+            _render_llm_settings_controls(lang)
+
+
+def _render_llm_settings_controls(lang: str) -> None:
+    previous_enabled = bool(st.session_state.llm_enabled)
+    enabled = st.toggle(
+        "Enable AI assistant" if lang == "en" else "启用 AI 助手",
+        value=previous_enabled,
+        key="_llm_toggle",
+    )
+    st.session_state.llm_enabled = bool(enabled)
+    st.session_state["_floating_ai_open"] = False
+    if enabled:
+        st.session_state["_sidebar_ai_open"] = True
+    if not enabled:
+        hint = ("Enable this to use the AI panel in the main workspace."
+                if lang == "en"
+                else "启用后可在主工作区使用 AI 面板。")
+        st.caption(hint)
+        return
+
+    # Provider
+    provider_keys = public_provider_keys()
+    current_provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))
+    idx = provider_keys.index(current_provider) if current_provider in provider_keys else 0
+    provider = st.selectbox(
+        "Provider" if lang == "en" else "服务商",
+        options=provider_keys,
+        index=idx,
+        format_func=lambda k: public_provider_defaults(k)[0],
+        key="_llm_provider_sel",
+    )
+    st.session_state.llm_provider = provider
+
+    p_info = public_provider_defaults(provider)
+    desc = p_info[4] if lang == "en" else p_info[5]
+    st.caption(desc)
+
+    needs_key = _needs_api_key(provider)
+
+    if needs_key:
+        api_key = st.text_input(
+            "API Key",
+            value=st.session_state.llm_api_key,
+            type="password",
+            key="_llm_api_key_inp",
+            placeholder="sk-...",
         )
-        st.session_state.llm_enabled = bool(enabled)
-        st.session_state["_floating_ai_open"] = False
-        if enabled:
-            st.session_state["_sidebar_ai_open"] = True
-        if not enabled:
-            hint = ("Enable this to use the AI panel in the main workspace."
-                    if lang == "en"
-                    else "启用后可在主工作区使用 AI 面板。")
-            st.caption(hint)
-            return
+        st.session_state.llm_api_key = api_key
 
-        # Provider
-        provider_keys = public_provider_keys()
-        current_provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))
-        idx = provider_keys.index(current_provider) if current_provider in provider_keys else 0
-        provider = st.selectbox(
-            "Provider" if lang == "en" else "服务商",
-            options=provider_keys,
-            index=idx,
-            format_func=lambda k: public_provider_defaults(k)[0],
-            key="_llm_provider_sel",
-        )
-        st.session_state.llm_provider = provider
+    _, default_url, default_model, _, _, _ = p_info
+    base_url = st.text_input(
+        "API Base URL",
+        value=st.session_state.llm_base_url or default_url,
+        key="_llm_base_url_inp",
+        help="Leave default for standard providers" if lang == "en"
+             else "标准服务商保持默认即可",
+    )
+    st.session_state.llm_base_url = base_url
 
-        # Provider description
-        p_info = public_provider_defaults(provider)
-        desc = p_info[4] if lang == "en" else p_info[5]
-        st.caption(desc)
+    model = st.text_input(
+        "Model" if lang == "en" else "模型名称",
+        value=st.session_state.llm_model or default_model,
+        key="_llm_model_inp",
+        placeholder=default_model or "model-name",
+    )
+    st.session_state.llm_model = model
 
-        needs_key = _needs_api_key(provider)
+    if _is_configured():
+        st.success("Ready" if lang == 'en' else "已就绪")
+        st.session_state.llm_configured = True
+    else:
+        st.warning("Enter API Key to enable chat"
+                   if lang == 'en' else "请输入 API Key")
+        st.session_state.llm_configured = False
 
-        if needs_key:
-            # API Key (password field)
-            api_key = st.text_input(
-                "API Key",
-                value=st.session_state.llm_api_key,
-                type="password",
-                key="_llm_api_key_inp",
-                placeholder="sk-...",
-            )
-            st.session_state.llm_api_key = api_key
-
-        # Base URL
-        _, default_url, default_model, _, _, _ = p_info
-        base_url = st.text_input(
-            "API Base URL",
-            value=st.session_state.llm_base_url or default_url,
-            key="_llm_base_url_inp",
-            help="Leave default for standard providers" if lang == "en"
-                 else "标准服务商保持默认即可",
-        )
-        st.session_state.llm_base_url = base_url
-
-        # Model
-        model = st.text_input(
-            "Model" if lang == "en" else "模型名称",
-            value=st.session_state.llm_model or default_model,
-            key="_llm_model_inp",
-            placeholder=default_model or "model-name",
-        )
-        st.session_state.llm_model = model
-
-        # Status indicator
-        if _is_configured():
-            st.success("✅ " + ("Ready" if lang == 'en' else "已就绪"))
-            st.session_state.llm_configured = True
-        else:
-            st.warning("⚠️ " + ("Enter API Key to enable chat"
-                                 if lang == 'en' else "请输入 API Key"))
-            st.session_state.llm_configured = False
-
-        st.caption(
-            "Open the AI panel in the main workspace for page-aware guidance."
-            if lang == "en" else
-            "请在主工作区打开 AI 面板，以获得页面感知式建议。"
-        )
+    st.caption(
+        "API keys stay in this browser session only and are never saved by EasyICU."
+        if lang == "en" else
+        "API Key 只保存在当前浏览器会话中，EasyICU 不会写入本地文件。"
+    )
 
 
 def _build_chat_export_text() -> str:
@@ -1875,21 +1883,22 @@ def render_floating_chat_dock():
     if st.session_state.get("_ai_pending_question"):
         st.session_state["_floating_ai_open"] = True
 
+    # Defaults match easyicu design/page-ai-chat.jsx: 420 × 780 panel.
     size_presets = {
         "s": {
-            "panel_width": "clamp(320px, 28vw, 500px)",
-            "panel_max_height": "min(72vh, 680px)",
-            "history_height": 300,
+            "panel_width": "clamp(320px, 28vw, 380px)",
+            "panel_max_height": "min(72vh, 640px)",
+            "history_height": 280,
         },
         "m": {
-            "panel_width": "clamp(360px, 34vw, 620px)",
-            "panel_max_height": "min(84vh, 860px)",
-            "history_height": 390,
+            "panel_width": "420px",
+            "panel_max_height": "min(86vh, 780px)",
+            "history_height": 420,
         },
         "l": {
-            "panel_width": "clamp(460px, 44vw, 860px)",
-            "panel_max_height": "min(92vh, 1100px)",
-            "history_height": 620,
+            "panel_width": "clamp(460px, 38vw, 640px)",
+            "panel_max_height": "min(92vh, 960px)",
+            "history_height": 560,
         },
     }
     size_key = st.session_state.get("_floating_ai_size", "m")
@@ -1957,19 +1966,19 @@ def render_floating_chat_dock():
             animation: easyicuLauncherPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
         }
 
-        /* Notification badge on the launcher button */
+        /* Notification badge on the launcher button — design token bad. */
         div.st-key-floating_ai_launcher .ai-notif-badge {
             position: absolute;
             top: -4px; right: 2px;
-            min-width: 20px; height: 20px;
-            border-radius: 10px;
-            background: #ef4444;
+            min-width: 18px; height: 18px;
+            border-radius: 9px;
+            background: var(--bad, #b54f3e);
             color: #fff;
-            font-size: 0.72rem;
-            font-weight: 700;
+            font-size: 10.5px;
+            font-weight: 500;
             display: flex; align-items: center; justify-content: center;
             padding: 0 5px;
-            box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
+            box-shadow: var(--sh-1, 0 1px 3px rgba(14,17,22,0.15));
             animation: easyicuBadgeBounce 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
             z-index: 99999;
             pointer-events: none;
@@ -1983,160 +1992,164 @@ def render_floating_chat_dock():
             min-width: var(--easyicu-ai-launcher-size);
             height: var(--easyicu-ai-launcher-size);
             border-radius: 999px;
-            border: 1px solid rgba(251, 146, 60, 0.32);
-            background: linear-gradient(135deg, #fb923c 0%, #f97316 48%, #2563eb 100%);
-            color: #ffffff;
-            font-size: clamp(1.12rem, 1vw + 0.88rem, 1.55rem);
-            box-shadow: 0 18px 44px rgba(249, 115, 22, 0.28);
+            border: 1px solid var(--ink);
+            background: var(--ink) !important;
+            color: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
+            font-size: clamp(1.05rem, 0.8vw + 0.9rem, 1.35rem);
+            box-shadow: var(--sh-3, 0 18px 44px rgba(14,17,22,0.18));
         }
 
 
+        /* Floating panel — page-ai-chat.jsx 420×780 surface card. */
         div.st-key-floating_ai_panel {
             right: clamp(12px, 1.25vw, 20px);
             bottom: clamp(12px, 1.25vw, 20px);
             width: min(var(--easyicu-ai-panel-width), calc(100vw - 24px));
             max-width: calc(100vw - 24px);
             max-height: var(--easyicu-ai-panel-max-height);
-            border-radius: 16px;
-            border: 1px solid #cbdff2;
-            background:
-                radial-gradient(circle at 100% 0%, rgba(251, 146, 60, 0.13), transparent 34%),
-                linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(247, 250, 255, 0.99));
-            box-shadow: 0 24px 58px rgba(15, 23, 42, 0.2);
-            backdrop-filter: blur(14px);
-            padding: 0.48rem 0.5rem 0.56rem 0.5rem;
+            border-radius: 14px;
+            border: 1px solid var(--hair-2);
+            background: var(--surface);
+            box-shadow: var(--sh-3, 0 24px 58px rgba(14, 17, 22, 0.16));
+            backdrop-filter: none;
+            padding: 0;
             overflow-x: hidden;
             overflow-y: auto;
-            animation: easyicuPanelSlideIn 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+            animation: easyicuPanelSlideIn 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+            color: var(--ink);
         }
 
         div.st-key-floating_ai_panel .floating-ai-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0.18rem 0.12rem 0.36rem 0.12rem;
+            padding: 12px 14px 8px;
+            border-bottom: 1px solid var(--hair);
         }
 
         div.st-key-floating_ai_panel .floating-ai-title-row {
             display: flex;
             align-items: center;
-            gap: 0.55rem;
+            gap: 10px;
         }
 
         div.st-key-floating_ai_panel .floating-ai-avatar {
-            width: 2.1rem;
-            height: 2.1rem;
-            border-radius: 999px;
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            color: #ffffff;
-            background: linear-gradient(135deg, #fb923c 0%, #f97316 72%, #ea580c 100%);
-            box-shadow: 0 10px 20px rgba(249, 115, 22, 0.24);
-            font-size: 1.05rem;
+            color: var(--accent-ink);
+            background: var(--accent-soft);
+            border: 1px solid var(--accent-border);
+            box-shadow: none;
+            font-size: 14px;
             flex: 0 0 auto;
         }
 
         div.st-key-floating_ai_panel .floating-ai-title {
-            font-size: var(--easyicu-ai-title-size);
-            font-weight: 900;
-            color: #0f172a;
-            letter-spacing: -0.02em;
+            font-size: 13.5px;
+            font-weight: 500;
+            color: var(--ink);
+            letter-spacing: 0;
         }
 
         div.st-key-floating_ai_panel .floating-ai-subtitle {
-            font-size: var(--easyicu-ai-subtitle-size);
-            color: #64748b;
-            margin-top: 0.04rem;
-            line-height: 1.45;
+            font-size: 10.5px;
+            color: var(--ink-4);
+            margin-top: 2px;
+            line-height: 1.35;
         }
 
         div.st-key-floating_ai_panel .floating-ai-welcome {
-            background:
-                radial-gradient(circle at top right, rgba(251, 146, 60, 0.13), transparent 28%),
-                linear-gradient(135deg, rgba(255,255,255,0.98), rgba(248,250,252,0.98));
-            border: 1px solid #d5e3f3;
-            border-left: 4px solid #fb923c;
-            border-radius: 15px;
-            padding: 0.95rem 1rem;
-            margin-bottom: 0.75rem;
-            box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+            background: var(--accent-soft);
+            border: 1px solid var(--accent-border);
+            border-left: 3px solid var(--accent);
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            box-shadow: none;
+            color: var(--accent-ink);
         }
 
         div.st-key-floating_ai_panel .floating-ai-welcome-title {
-            font-size: clamp(0.9rem, 0.24vw + 0.84rem, 1rem);
-            font-weight: 800;
-            color: #0f172a;
-            margin-bottom: 0.3rem;
+            font-size: 12.5px;
+            font-weight: 500;
+            color: var(--ink);
+            margin-bottom: 4px;
         }
 
         div.st-key-floating_ai_panel .floating-ai-welcome-subtitle {
-            font-size: var(--easyicu-ai-body-size);
-            line-height: 1.6;
-            color: #334155;
-            margin-bottom: 0.55rem;
+            font-size: 11.5px;
+            line-height: 1.5;
+            color: var(--ink-2);
+            margin-bottom: 8px;
         }
 
         div.st-key-floating_ai_panel .floating-ai-sample {
             display: grid;
-            gap: 0.52rem;
-            margin: 0.58rem 0 0.72rem;
+            gap: 6px;
+            margin: 6px 0 8px;
         }
 
+        /* page-ai-chat user bubble: ink fill, white text */
         div.st-key-floating_ai_panel .floating-ai-user-bubble {
             justify-self: end;
-            max-width: 88%;
-            color: #0f172a;
-            background: #eaf3ff;
-            border: 1px solid #bfdbfe;
-            border-radius: 16px 16px 4px 16px;
-            padding: 0.56rem 0.72rem;
-            font-size: var(--easyicu-ai-body-size);
-            line-height: 1.45;
-            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.08);
+            max-width: 85%;
+            color: #fff;
+            background: var(--ink);
+            border: 1px solid var(--ink);
+            border-radius: 10px;
+            padding: 8px 12px;
+            font-size: 12.5px;
+            line-height: 1.55;
+            box-shadow: none;
         }
 
+        /* page-ai-chat agent bubble: surface, hair border */
         div.st-key-floating_ai_panel .floating-ai-answer-card {
-            color: #0f172a;
-            background: #ffffff;
-            border: 1px solid #dbeafe;
-            border-radius: 16px 16px 16px 4px;
-            padding: 0.62rem 0.76rem;
-            font-size: var(--easyicu-ai-body-size);
+            color: var(--ink);
+            background: var(--surface);
+            border: 1px solid var(--hair);
+            border-radius: 10px;
+            padding: 8px 12px;
+            font-size: 12.5px;
             line-height: 1.55;
-            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.045);
+            box-shadow: none;
         }
 
         div.st-key-floating_ai_panel .floating-ai-recommendation {
             display: grid;
-            gap: 0.18rem;
-            color: #1e3a8a;
-            background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
-            border: 1px solid #bfdbfe;
-            border-radius: 14px;
-            padding: 0.58rem 0.7rem;
-            font-size: clamp(0.72rem, 0.12vw + 0.69rem, 0.8rem);
+            gap: 2px;
+            color: var(--ink-2);
+            background: var(--surface-2);
+            border: 1px solid var(--hair);
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 11px;
         }
 
         div.st-key-floating_ai_panel .floating-ai-recommendation span {
-            color: #64748b;
-            font-size: 0.66rem;
-            font-weight: 900;
+            color: var(--ink-4);
+            font-size: 9.5px;
+            font-weight: 500;
             text-transform: uppercase;
-            letter-spacing: 0.09em;
+            letter-spacing: 0.06em;
         }
 
         div.st-key-floating_ai_panel .floating-ai-recommendation strong {
-            color: #0f172a;
-            font-weight: 800;
+            color: var(--ink);
+            font-weight: 500;
             line-height: 1.42;
         }
 
         div.st-key-floating_ai_panel .floating-ai-welcome-hint {
-            font-size: clamp(0.68rem, 0.12vw + 0.65rem, 0.76rem);
-            color: #2563eb;
-            font-weight: 700;
-            letter-spacing: 0.02em;
+            font-size: 10px;
+            color: var(--accent-ink);
+            font-weight: 500;
+            letter-spacing: 0.04em;
             text-transform: uppercase;
         }
 
@@ -2149,18 +2162,18 @@ def render_floating_chat_dock():
         }
 
         div.st-key-floating_ai_panel [data-testid="stChatMessageContent"] {
-            border-radius: 18px;
-            padding: 0.78rem 0.95rem;
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.98));
-            border: 1px solid rgba(148, 163, 184, 0.16);
-            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
+            border-radius: 10px;
+            padding: 8px 12px;
+            background: var(--surface);
+            border: 1px solid var(--hair);
+            box-shadow: none;
         }
 
         div.st-key-floating_ai_panel [data-testid="stChatMessageContent"] p,
         div.st-key-floating_ai_panel [data-testid="stChatMessageContent"] li {
-            font-size: var(--easyicu-ai-body-size);
-            line-height: 1.64;
-            color: #0f172a;
+            font-size: 12.5px;
+            line-height: 1.55;
+            color: var(--ink);
         }
 
         div.st-key-floating_ai_panel [data-testid="stChatMessageContent"] ul,
@@ -2171,25 +2184,30 @@ def render_floating_chat_dock():
         }
 
         div.st-key-floating_ai_panel .stButton > button {
-            border-radius: 14px;
-            min-height: var(--easyicu-ai-button-size);
-            font-size: clamp(0.8rem, 0.12vw + 0.77rem, 0.9rem);
-            padding-top: 0.38rem;
-            padding-bottom: 0.38rem;
-            border-color: #cbdff2 !important;
-            color: #1f3b63 !important;
-            background: linear-gradient(180deg, #ffffff 0%, #f5f9ff 100%) !important;
+            border-radius: 6px;
+            min-height: 28px;
+            font-size: 11.5px;
+            padding: 4px 10px;
+            border: 1px solid var(--hair-2) !important;
+            color: var(--ink) !important;
+            -webkit-text-fill-color: var(--ink) !important;
+            background: var(--surface) !important;
+            box-shadow: none !important;
+        }
+        div.st-key-floating_ai_panel .stButton > button:hover {
+            background: var(--surface-2) !important;
+            border-color: var(--hair-3) !important;
         }
 
         div.st-key-floating_ai_panel .stButton > button[kind="primary"],
         div.st-key-floating_ai_panel .stButton > button[data-testid="stBaseButton-primary"],
         div.st-key-floating_ai_panel form button,
-        div.st-key-floating_ai_panel div[data-testid="stFormSubmitButton"] button,
-        div.st-key-floating_ai_panel .stButton > button:hover {
+        div.st-key-floating_ai_panel div[data-testid="stFormSubmitButton"] button {
             color: #ffffff !important;
-            border-color: #1d7ef2 !important;
-            background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%) !important;
-            box-shadow: 0 8px 20px rgba(37, 99, 235, 0.18);
+            -webkit-text-fill-color: #ffffff !important;
+            border: 1px solid var(--ink) !important;
+            background: var(--ink) !important;
+            box-shadow: none !important;
         }
 
         div.st-key-floating_ai_panel .stButton > button[kind="primary"] *,
@@ -2321,7 +2339,7 @@ def render_floating_chat_dock():
                     f'''
                     <div class="floating-ai-header">
                         <div class="floating-ai-title-row">
-                            <span class="floating-ai-avatar">🤖</span>
+                            <span class="floating-ai-avatar" aria-label="AI assistant">✦</span>
                             <div>
                                 <div class="floating-ai-title">{dock_title} {status_pill}</div>
                                 <div class="floating-ai-subtitle">{dock_subtitle}</div>

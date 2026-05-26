@@ -31,6 +31,10 @@ import pandas as pd
 from easyicu.webapp.cohort_filters import _get_sepsis_runtime_options
 from easyicu.webapp.data_paths import _default_real_database, _default_real_data_root, find_database_path
 from easyicu.webapp.demo_data import (
+    COHORT_DEMO_MULTIDB_CONCEPTS,
+    COHORT_DEMO_MULTIDB_DATABASES,
+    COHORT_DEMO_MULTIDB_RECORDS_PER_FEATURE,
+    COHORT_DEMO_PATIENTS,
     _generate_mock_cohort_dashboard_data,
     _generate_mock_demographics,
     _generate_mock_multidb_data,
@@ -142,7 +146,7 @@ def _seed_workspace_state(state: dict[str, Any], bundle: ConceptBundle) -> None:
     state['loaded_data_origin'] = bundle.loaded_data_origin or bundle.origin
 
 
-COHORT_DEMO_MULTIDB_CONCEPTS = [
+COHORT_FULL_DEMO_MULTIDB_CONCEPTS = [
     'hr', 'sbp', 'dbp', 'map', 'temp', 'resp', 'spo2',
     'glu', 'na', 'k', 'crea', 'bili', 'lact',
     'hgb', 'plt', 'wbc',
@@ -178,12 +182,12 @@ def _ensure_cohort_demo_workspace(
     mock_params = state.get('mock_params') if isinstance(state.get('mock_params'), dict) else {}
     state['mock_params'] = mock_params
 
-    patient_count = n_patients if n_patients is not None else mock_params.get('n_patients', 100)
+    patient_count = n_patients if n_patients is not None else mock_params.get('n_patients', COHORT_DEMO_PATIENTS)
     try:
         patient_count = int(patient_count)
     except (TypeError, ValueError):
-        patient_count = 100
-    patient_count = max(1, patient_count)
+        patient_count = COHORT_DEMO_PATIENTS
+    patient_count = min(max(1, patient_count), COHORT_DEMO_PATIENTS)
     mock_params['n_patients'] = patient_count
 
     if force or not (state.get('grp_is_demo') and isinstance(state.get('grp_demographics'), pd.DataFrame)):
@@ -193,7 +197,12 @@ def _ensure_cohort_demo_workspace(
         state.pop('grp_feature_data', None)
 
     if force or not (state.get('multidb_is_demo') and state.get('multidb_data')):
-        state['multidb_data'] = _generate_mock_multidb_data(lang)
+        state['multidb_data'] = _generate_mock_multidb_data(
+            lang,
+            database_keys=COHORT_DEMO_MULTIDB_DATABASES,
+            concepts=COHORT_DEMO_MULTIDB_CONCEPTS,
+            records_per_feature=COHORT_DEMO_MULTIDB_RECORDS_PER_FEATURE,
+        )
         state['multidb_concepts'] = list(COHORT_DEMO_MULTIDB_CONCEPTS)
         state['multidb_is_demo'] = True
 

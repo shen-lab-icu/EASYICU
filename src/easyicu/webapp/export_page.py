@@ -1,10 +1,23 @@
-"""Export page rendering for the EasyICU Streamlit app."""
+"""Export page rendering for the EasyICU Streamlit app.
+
+Layout mirrors ``easyicu design/page-misc.jsx`` ``PageExport``: design
+header + bundle config card + estimated cost row + manifest preview
+column. Interactive widgets are kept as real Streamlit widgets so the
+download buttons keep working.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
 from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
+from easyicu.webapp.cohort_charts import render_design_page_header
+from easyicu.webapp.design_primitives import (
+    render_bullet_list,
+    render_card_open,
+    render_card_close,
+    render_mono_preview,
+)
 
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
@@ -16,28 +29,44 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
 
 
 def render_export_page(app_context: dict[str, Any] | None = None):
-    """渲染数据导出页面。"""
+    """渲染数据导出页面 — Shell-A page-misc Export layout."""
     if app_context is not None:
         _install_app_context(app_context)
-    
+
     lang = st.session_state.get('language', 'en')
-    _exp_title = "Data Export" if lang == 'en' else "数据导出"
-    _exp_sub = "Download data in CSV, Parquet, or Excel" if lang == 'en' else "以CSV、Parquet或Excel格式下载数据"
-    st.markdown(f'''
-    <div style="margin-bottom:16px">
-        <div style="font-size:1.4rem;font-weight:800;color:#111827">{_exp_title}</div>
-        <div style="font-size:.88rem;color:#9ca3af;margin-top:2px">{_exp_sub}</div>
-    </div>
-    ''', unsafe_allow_html=True)
+
+    st.markdown(
+        render_design_page_header(
+            kicker="EXPORT BUNDLE",
+            title_en="Export bundle",
+            title_zh="数据导出",
+            desc=(
+                "Save the current workspace as a reproducible bundle — "
+                "CSV / Parquet / Excel with manifest and cohort signature."
+                if lang == 'en' else
+                "把当前工作区保存为可复现的数据包 — CSV / Parquet / Excel,附带 manifest 与 cohort signature。"
+            ),
+            lang=lang,
+        ),
+        unsafe_allow_html=True,
+    )
 
     if len(st.session_state.loaded_concepts) == 0:
         _msg = "Load data to enable export." if lang == 'en' else "请先加载数据以启用导出。"
-        st.markdown(f'''
-        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:28px;text-align:center;margin:20px 0">
-            <div style="font-size:2rem;margin-bottom:10px">💾</div>
-            <div style="font-weight:600;color:#111827">{_msg}</div>
-        </div>
-        ''', unsafe_allow_html=True)
+        _hint = (
+            "Open the sidebar Extract panel and load at least one concept."
+            if lang == 'en' else
+            "请在左侧 Extract 面板加载至少一个 concept。"
+        )
+        st.markdown(
+            render_card_open(padding="28px 32px", extra_style="margin:20px 0;text-align:center")
+            + '<div style="font-size:13px;color:var(--ink-2);font-weight:500">'
+            + _msg + '</div>'
+            + '<div style="font-size:11.5px;color:var(--ink-4);margin-top:6px">'
+            + _hint + '</div>'
+            + render_card_close(),
+            unsafe_allow_html=True,
+        )
         return
 
     # 快速导出面板
@@ -275,26 +304,85 @@ def render_export_page(app_context: dict[str, Any] | None = None):
     est_size = total_rows * total_cols * 10 / 1024
     size_str = f"{est_size:.0f} KB" if est_size < 1024 else f"{est_size/1024:.1f} MB"
 
-    st.markdown(f'''
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(8px,.4rem + .4vw,16px);margin-bottom:16px">
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;text-align:center">
-            <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">Concepts</div>
-            <div style="font-weight:700;color:#6366f1;font-size:1.4rem;margin-top:6px">{len(concepts_to_export)}</div>
-        </div>
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;text-align:center">
-            <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{total_records_label}</div>
-            <div style="font-weight:700;color:#111827;font-size:1.4rem;margin-top:6px">{total_rows:,}</div>
-        </div>
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;text-align:center">
-            <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{est_size_label}</div>
-            <div style="font-weight:700;color:#111827;font-size:1.2rem;margin-top:6px">{size_str}</div>
-        </div>
-        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;text-align:center">
-            <div style="font-size:.72rem;color:#9ca3af;text-transform:uppercase;letter-spacing:.5px">{format_label_2}</div>
-            <div style="font-weight:700;color:#111827;font-size:1.2rem;margin-top:6px">{export_format}</div>
-        </div>
-    </div>
-    ''', unsafe_allow_html=True)
+    stat_cards = []
+    for label, value in (
+        ("Concepts", str(len(concepts_to_export))),
+        (total_records_label, f"{total_rows:,}"),
+        (est_size_label, size_str),
+        (format_label_2, export_format),
+    ):
+        stat_cards.append(
+            '<div class="eu-stat" style="border:1px solid var(--hair);'
+            'border-left:2px solid var(--ink-3);border-radius:var(--r-2);'
+            'background:var(--surface);padding:10px 12px">'
+            f'<div class="label">{label}</div>'
+            f'<div class="val">{value}</div>'
+            '</div>'
+        )
+    st.markdown(
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);'
+        'gap:10px;margin:12px 0 16px">' + "".join(stat_cards) + '</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Manifest-style reproducibility preview — mirrors page-misc.jsx
+    # "What this bundle reproduces" right column.
+    if total_rows > 0:
+        import json as _exp_json
+        manifest_text = _exp_json.dumps(
+            {
+                "schema_version": "0.9.3",
+                "database": st.session_state.get("database", "miiv"),
+                "concepts": list(concepts_to_export),
+                "n_records": total_rows,
+                "cohort_signature": str(
+                    hash(tuple(sorted(concepts_to_export))) & 0xFFFFFFFF
+                ),
+                "format": export_format,
+                "merge_mode": "merged" if merge_mode in ("Merge Into One", "合并为一个文件") else "separate",
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        bundle_title = (
+            "Bundle preview" if lang == 'en' else "数据包预览"
+        )
+        bundle_items = (
+            [
+                "Concept selection (modules and features)",
+                "Database and cohort filter context",
+                "Format and merge layout",
+                "Reproducible signature for cross-machine replay",
+            ]
+            if lang == 'en' else
+            [
+                "Concept 选择（模块与特征）",
+                "数据库与队列筛选上下文",
+                "导出格式与合并方式",
+                "跨机器重放的 cohort signature",
+            ]
+        )
+        col_left, col_right = st.columns([1.2, 1])
+        with col_left:
+            st.markdown(
+                render_card_open(padding="14px") +
+                f'<div style="font-size:12.5px;font-weight:500;margin-bottom:8px">{bundle_title}'
+                f' <span class="mono" style="color:var(--ink-4);font-weight:400;margin-left:6px">_manifest.json</span></div>' +
+                render_mono_preview(text=manifest_text, dark=True, height_px=220) +
+                render_card_close(),
+                unsafe_allow_html=True,
+            )
+        with col_right:
+            reproduce_title = (
+                "What this bundle reproduces" if lang == 'en' else "此数据包可复现的内容"
+            )
+            st.markdown(
+                render_card_open(padding="14px") +
+                f'<div style="font-size:12.5px;font-weight:500;margin-bottom:6px">{reproduce_title}</div>' +
+                render_bullet_list(bundle_items) +
+                render_card_close(),
+                unsafe_allow_html=True,
+            )
 
     # 数据预览表格
     if concepts_to_export:

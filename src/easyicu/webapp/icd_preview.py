@@ -1,4 +1,9 @@
-"""ICD match preview helpers for the EasyICU Streamlit app."""
+"""ICD match preview helpers for the EasyICU Streamlit app.
+
+Match section header follows ``easyicu design/page-misc.jsx`` style:
+small kicker + bilingual title + right-side action, then per-direction
+match cards.
+"""
 
 from __future__ import annotations
 
@@ -49,12 +54,24 @@ def _render_icd_preview_main_panel(lang: str) -> None:
     if not active_previews:
         return
 
-    title = "🧾 ICD Match Preview" if lang == 'en' else "🧾 ICD 匹配预览"
+    title_en = "ICD match preview"
+    title_zh = "ICD 匹配预览"
+    title = title_zh if lang == 'zh' else title_en
     header_cols = st.columns([6, 1.4])
     with header_cols[0]:
-        st.markdown(f"#### {title}")
+        st.markdown(
+            '<div style="display:flex;align-items:flex-end;gap:12px;margin:6px 0 10px">'
+            '<div>'
+            '<div class="mono" style="font-size:10.5px;color:var(--ink-4);'
+            'letter-spacing:0.06em;text-transform:uppercase">ICD MATCH</div>'
+            f'<div style="font-size:15px;font-weight:500;color:var(--ink);margin-top:2px">'
+            f'{title}</div>'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
     with header_cols[1]:
-        clear_label = "🧹 Clear Preview" if lang == 'en' else "🧹 清除预览"
+        clear_label = "Clear preview" if lang == 'en' else "清除预览"
         if st.button(clear_label, key="clear_icd_preview_main", use_container_width=True):
             _clear_icd_preview_state()
             st.rerun()
