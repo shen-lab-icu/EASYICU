@@ -644,7 +644,7 @@ def render_design_page_header(
     """
     title = title_zh if lang == "zh" else title_en
     return (
-        '<div style="margin-bottom:6px">'
+        '<div class="eu-design-page-header">'
         f'<div class="mono" style="font-size:11px;color:var(--ink-4);'
         f'letter-spacing:0.06em;text-transform:uppercase">{_esc(kicker)}</div>'
         '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-top:6px">'

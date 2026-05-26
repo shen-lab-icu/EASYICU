@@ -80,11 +80,61 @@ _TERMINAL_FAIL = {
 }
 
 
-def _read_json(path: Path) -> dict[str, Any]:
+def _file_fingerprint(path: Path) -> tuple[str, int, int]:
+    """Cheap (path, mtime_ns, size) tuple — used to key cached reads.
+
+    Returns zero-mtime/size on stat failure so the cache stays valid
+    when the file is missing (caller's read will fail and return {}).
+    """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        s = path.stat()
+        return (str(path), s.st_mtime_ns, s.st_size)
+    except OSError:
+        return (str(path), 0, 0)
+
+
+@st.cache_data(show_spinner=False, max_entries=512)
+def _cached_read_json(fingerprint: tuple[str, int, int]) -> dict[str, Any]:
+    """JSON manifest cache keyed by mtime+size. Cleared automatically when files change."""
+    path_str, _mtime, _size = fingerprint
+    try:
+        return json.loads(Path(path_str).read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    return _cached_read_json(_file_fingerprint(path))
+
+
+@st.cache_data(show_spinner=False, max_entries=256)
+def _cached_truncated_text(fingerprint: tuple[str, int, int], *, limit: int = 7000) -> str:
+    """Cached text-file read for the Code-tab snippet lookup."""
+    path_str, _mtime, _size = fingerprint
+    if not path_str:
+        return ""
+    try:
+        return Path(path_str).read_text(encoding="utf-8")[:limit]
+    except OSError:
+        return ""
+
+
+@st.cache_data(show_spinner=False, max_entries=128)
+def _cached_artifact_bytes(fingerprint: tuple[str, int, int]) -> bytes:
+    """Result-download byte cache keyed by mtime+size.
+
+    Before this, every Streamlit rerun re-read each result artifact from
+    disk to build the `st.download_button(data=…)` payload — that made
+    the Workbench feel sluggish on every click. The cache key is the
+    file fingerprint so an edited artifact invalidates automatically.
+    """
+    path_str, _mtime, _size = fingerprint
+    if not path_str:
+        return b""
+    try:
+        return Path(path_str).read_bytes()
+    except OSError:
+        return b""
 
 
 def _compact_label(value: object, *, max_len: int = 72) -> str:
@@ -229,8 +279,14 @@ def _artifact_path_for_preview(run_dir: Path | None, record: dict[str, Any]) -> 
     return path if path.is_absolute() else ((run_dir / path) if run_dir else path)
 
 
-def _figure_file_preview_html(path: Path | None) -> str:
-    if path is None or not path.exists() or not path.is_file():
+@st.cache_data(show_spinner=False, max_entries=256)
+def _cached_figure_preview_html(fingerprint: tuple[str, int, int], name: str) -> str:
+    """Render the preview HTML once per (path, mtime, size); cheap on rerun."""
+    path_str, _mtime, _size = fingerprint
+    if not path_str:
+        return ""
+    path = Path(path_str)
+    if not path.exists() or not path.is_file():
         return ""
     suffix = path.suffix.lower()
     try:
@@ -249,12 +305,18 @@ def _figure_file_preview_html(path: Path | None) -> str:
             data = base64.b64encode(path.read_bytes()[:4_000_000]).decode("ascii")
             return (
                 '<div class="eu-result-artifact-preview real">'
-                f'<img src="data:{mime};base64,{data}" alt="{_esc(path.name)}" />'
+                f'<img src="data:{mime};base64,{data}" alt="{_esc(name)}" />'
                 '</div>'
             )
     except Exception:
         return ""
     return ""
+
+
+def _figure_file_preview_html(path: Path | None) -> str:
+    if path is None or not path.exists() or not path.is_file():
+        return ""
+    return _cached_figure_preview_html(_file_fingerprint(path), path.name)
 
 
 def _artifact_slot_html(kind: str, *, lang: str, real: bool) -> str:
@@ -314,7 +376,7 @@ def _code_from_evidence(run_dir: Path, evidence: list[dict[str, Any]]) -> tuple[
         path = run_dir / str(rel)
         if path.exists() and path.is_file():
             try:
-                return path.read_text(encoding="utf-8")[:7000], str(rel)
+                return _cached_truncated_text(_file_fingerprint(path)), str(rel)
             except Exception:
                 continue
     return None
@@ -1694,6 +1756,11 @@ def _render_process_graph_controls(
         '</div>',
         unsafe_allow_html=True,
     )
+    # Visual DAG narrative from page-agent-workbench.jsx — read-only,
+    # the button rail below still drives selection.
+    minimap_html = _process_minimap_svg_html(steps, lang)
+    if minimap_html:
+        st.markdown(minimap_html, unsafe_allow_html=True)
     st.markdown(_step_legend_html(lang), unsafe_allow_html=True)
 
     if steps:
@@ -1779,7 +1846,7 @@ def _live_code_html(state: dict[str, Any], lang: str) -> str:
     autopatch_html = ""
     if autopatch:
         autopatch_html = (
-            '<div style="margin:10px 14px 0;padding:10px 12px;border-radius:8px;'
+            '<div style="margin:10px 14px 0;padding:10px 12px;border-radius:var(--r-2);'
             'background:var(--warn-soft);border:1px solid oklch(86% 0.05 75);'
             'display:flex;align-items:flex-start;gap:10px;font-size:12px;color:oklch(30% 0.10 75)">'
             '<span style="margin-top:1px">✦</span>'
@@ -1797,7 +1864,7 @@ def _live_code_html(state: dict[str, Any], lang: str) -> str:
     gutter = "".join(f'<div style="line-height:18px">{i + 1}</div>' for i in range(len(code_lines)))
     code_html = "".join(
         '<div style="line-height:18px;min-height:18px;white-space:pre">'
-        f'{_esc(line) if line else "&nbsp;"}'
+        f'{_highlight_python_html(line) if line else "&nbsp;"}'
         '</div>'
         for line in code_lines
     )
@@ -1831,7 +1898,7 @@ def _live_code_html(state: dict[str, Any], lang: str) -> str:
         + code_html
         + '</div></div>'
         '<div class="mono" style="flex:none;margin-top:10px;background:var(--ink);color:#E8E6DD;'
-        'border-radius:8px;padding:10px 12px;font-size:11px;line-height:1.55;max-height:130px;overflow:auto">'
+        'border-radius:var(--r-3);padding:10px 12px;font-size:11px;line-height:1.55;max-height:130px;overflow:auto">'
         + trace_html
         + '</div></div></div>'
     )
@@ -1883,8 +1950,10 @@ def _result_evidence_html(state: dict[str, Any], lang: str) -> str:
             f'margin-top:2px">{_esc(" · ".join(prov_bits))}</div>'
         ) if prov_bits else ""
         ev_rows.append(
-            f'<div style="padding:8px 12px;display:grid;grid-template-columns:1fr auto;gap:8px;'
+            f'<div style="padding:8px 12px;display:grid;grid-template-columns:20px 1fr auto;gap:8px;'
             f'align-items:center;{"border-top:1px solid var(--hair);" if i else ""}">'
+            f'<span style="color:var(--ink-3);display:flex;align-items:center;justify-content:center">'
+            f'{_evidence_icon_svg(e["tag"])}</span>'
             '<div style="min-width:0">'
             f'<div class="mono" style="font-size:11.5px;color:var(--ink);white-space:nowrap;'
             f'overflow:hidden;text-overflow:ellipsis">{_esc(e["label"])}</div>'
@@ -2367,82 +2436,6 @@ def render_agent_output_summary(lang: str) -> None:
     st.markdown(_output_summary_html(state, lang), unsafe_allow_html=True)
 
 
-def _manifest_path_for_run(run_dir: Path) -> Path | None:
-    final_path = run_dir / "manifest.json"
-    partial_path = run_dir / "manifest_partial.json"
-    if final_path.exists():
-        return final_path
-    if partial_path.exists():
-        return partial_path
-    return None
-
-
-def _recent_manifest_paths_from_root(root: Path, *, limit: int = 80) -> list[Path]:
-    if not root.exists():
-        return []
-    paths: list[Path] = []
-    if root.name.startswith("run_"):
-        direct = _manifest_path_for_run(root)
-        if direct is not None:
-            return [direct]
-    try:
-        for path in root.rglob("manifest.json"):
-            if path.parent.name.startswith("run_"):
-                paths.append(path)
-        for path in root.rglob("manifest_partial.json"):
-            if path.parent.name.startswith("run_") and not (path.parent / "manifest.json").exists():
-                paths.append(path)
-    except Exception:
-        return []
-    paths = sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
-    return paths[:limit]
-
-
-def _candidate_manifest_paths() -> list[Path]:
-    cwd = Path.cwd()
-    roots: list[Path] = []
-    workdir = st.session_state.get("research_agent_workdir")
-    if workdir:
-        roots.append(Path(str(workdir)).expanduser())
-    roots.extend([
-        cwd / "research_output" / "webapp",
-        cwd / "research_output",
-        cwd / "pilot_runs",
-        cwd.parent / "easyicu写作" / "00_当前投稿_20260516" / "v19_benchmark_runs",
-    ])
-    seen: set[str] = set()
-    paths: list[Path] = []
-    for root in roots:
-        for path in _recent_manifest_paths_from_root(root):
-            key = str(path.resolve())
-            if key not in seen:
-                seen.add(key)
-                paths.append(path)
-    return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
-
-
-def _latest_real_workbench_state(lang: str) -> dict[str, Any] | None:
-    for manifest_path in _candidate_manifest_paths()[:60]:
-        manifest = _read_json(manifest_path)
-        if not manifest:
-            continue
-        run_dir = manifest_path.parent
-        try:
-            state = build_workbench_state_from_manifest(
-                run_dir,
-                manifest,
-                lang=lang,
-                partial=manifest_path.name == "manifest_partial.json",
-            )
-        except Exception:
-            continue
-        st.session_state["_agent_workbench_source_run_dir"] = str(run_dir)
-        state["source_label"] = _T(lang, "Real manifest", "真实 manifest")
-        state["is_demo"] = False
-        return state
-    return None
-
-
 def _resolve_workbench_state(lang: str) -> dict[str, Any]:
     existing = st.session_state.get("_agent_workbench")
     if isinstance(existing, dict) and existing.get("steps"):
@@ -2495,7 +2488,7 @@ def _workbench_empty_html(lang: str) -> str:
         '</div>'
         '<div>'
         f'<b>{_T(lang, "2. Run or import", "2. 运行或导入")}</b>'
-        f'<small>{_T(lang, "Launch a real run or open an existing manifest", "启动真实 run 或打开已有 manifest")}</small>'
+        f'<small>{_T(lang, "Launch a real analysis or choose a saved run", "启动真实分析，或选择已有历史运行")}</small>'
         '</div>'
         '<div>'
         f'<b>{_T(lang, "3. Review", "3. 复核")}</b>'
@@ -2514,34 +2507,26 @@ def _render_workbench_empty_state(lang: str, *, summary: bool = False) -> None:
             title_zh=_T(lang, "Agent project workspace", "Agent 项目工作区"),
             desc=_T(
                 lang,
-                "Choose a research request, cohort, and run manifest before reviewing agent outputs.",
-                "先选择研究请求、队列和 run manifest，再复核 agent 输出。",
+                "Choose a research question, cohort, and saved run before reviewing agent outputs.",
+                "先选择研究问题、队列和历史运行，再复核 agent 输出。",
             ),
-            right_html=f'<span class="eu-pill">{_T(lang, "No active run", "无当前 run")}</span>',
+            right_html=f'<span class="eu-pill">{_T(lang, "No active run", "暂无运行")}</span>',
             lang=lang,
         ),
         unsafe_allow_html=True,
     )
     st.markdown(_workbench_empty_html(lang), unsafe_allow_html=True)
-    c1, c2, c3, _ = st.columns([1.4, 1.55, 1.4, 5.0])
-    with c1:
-        if st.button(_T(lang, "Configure new run", "配置新 run"), key=f"_eu_wb_empty_setup_{summary}", type="primary", use_container_width=True):
-            st.session_state["_ra_view"] = "setup"
-            st.rerun()
-    with c2:
-        if st.button(_T(lang, "Open run history", "打开历史记录"), key=f"_eu_wb_empty_history_{summary}", use_container_width=True):
-            st.session_state["_ra_view"] = "setup"
-            st.session_state["_research_agent_expand_history"] = True
-            st.rerun()
-    with c3:
-        if st.button(_T(lang, "Open latest run", "打开最近 run"), key=f"_eu_wb_empty_latest_{summary}", use_container_width=True):
-            latest = _latest_real_workbench_state(lang)
-            if latest:
-                st.session_state["_agent_workbench"] = latest
-                st.session_state["_agent_workbench_is_active_selection"] = True
-                st.session_state["_ra_view"] = "summary" if summary else "workbench"
+    with st.container(key=f"eu_wb_empty_actions_{summary}"):
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button(_T(lang, "Configure new analysis", "配置新分析"), key=f"_eu_wb_empty_setup_{summary}", type="primary", use_container_width=True):
+                st.session_state["_ra_view"] = "setup"
                 st.rerun()
-            st.warning(_T(lang, "No local run manifest found.", "没有找到本地 run manifest。"))
+        with c2:
+            if st.button(_T(lang, "Open saved runs", "查看历史运行"), key=f"_eu_wb_empty_history_{summary}", use_container_width=True):
+                st.session_state["_ra_view"] = "setup"
+                st.session_state["_research_agent_expand_history"] = True
+                st.rerun()
 
 
 def _step_contract_html(state: dict[str, Any], lang: str) -> str:
@@ -2815,6 +2800,695 @@ def _review_gate_html(state: dict[str, Any], lang: str) -> str:
 
 
 # ---------------------------------------------------------------------
+# Real interactive helpers — promote decorative HTML to working callbacks
+# (2026-05-25 wired-vs-decorative audit fix for items 1-5).
+# ---------------------------------------------------------------------
+
+def _live_code_only_html(state: dict[str, Any], lang: str) -> str:
+    """Code + autopatch + line gutter. Used by the Code tab."""
+    autopatch = state.get("autopatch")
+    autopatch_html = ""
+    if autopatch:
+        autopatch_html = (
+            '<div style="margin:8px 0 10px;padding:8px 10px;border-radius:var(--r-2);'
+            'background:var(--warn-soft);border:1px solid oklch(86% 0.05 75);'
+            'display:flex;align-items:flex-start;gap:10px;font-size:12px;color:oklch(30% 0.10 75)">'
+            '<span style="margin-top:1px">✦</span>'
+            '<div style="flex:1">'
+            f'<div style="font-weight:500">{_esc(autopatch.get("ago", ""))}</div>'
+            '<div style="margin-top:2px">'
+            f'<span class="mono" style="color:var(--bad);text-decoration:line-through">{_esc(autopatch.get("from", ""))}</span>'
+            ' → '
+            f'<span class="mono" style="color:var(--ok)">{_esc(autopatch.get("to", ""))}</span>'
+            '</div></div></div>'
+        )
+    code = state.get("code", "") or ""
+    code_lines = code.split("\n")
+    gutter = "".join(f'<div style="line-height:18px">{i + 1}</div>' for i in range(len(code_lines)))
+    code_html = "".join(
+        '<div style="line-height:18px;min-height:18px;white-space:pre">'
+        f'{_highlight_python_html(line) if line else "&nbsp;"}'
+        '</div>'
+        for line in code_lines
+    )
+    return (
+        '<div style="padding:8px 12px">'
+        + autopatch_html
+        + '<div style="display:flex;overflow:auto;max-height:520px">'
+        '<div class="mono" style="flex:none;width:32px;padding:4px 6px 4px 4px;font-size:11px;'
+        'color:var(--ink-4);text-align:right;border-right:1px solid var(--hair)">'
+        + gutter
+        + '</div>'
+        '<div class="mono" style="margin:0;padding:4px 12px;flex:1;min-width:0;font-size:11.5px;'
+        'line-height:18px;background:transparent;color:var(--ink);overflow:visible">'
+        + code_html
+        + '</div></div></div>'
+    )
+
+
+def _live_trace_block_html(trace: list, lang: str, *, level_filter: set | None = None) -> str:
+    trace_color = {"ok": "#B8D7A3", "info": "#9BD2F4", "warn": "#FFC580", "err": "#F4A6A6"}
+    rows = []
+    for t in trace or []:
+        if level_filter and t.get("level") not in level_filter:
+            continue
+        rows.append(
+            f'<div><span style="color:#7A8A99">{_esc(t.get("t", ""))}</span>  '
+            f'<span style="color:{trace_color.get(t.get("level", "ok"), "#B8D7A3")}">'
+            f'[{_esc(t.get("level", "ok"))}]</span>  '
+            f'{_esc(t.get("msg", ""))}</div>'
+        )
+    if not rows:
+        empty = _T(lang, "No log entries.", "暂无日志。")
+        return (
+            '<div class="mono" style="padding:12px;background:var(--ink);color:var(--ink-4);'
+            'border-radius:var(--r-3);font-size:11px;text-align:center">'
+            f'{_esc(empty)}</div>'
+        )
+    return (
+        '<div class="mono" style="margin:8px 12px;background:var(--ink);color:#E8E6DD;'
+        'border-radius:var(--r-3);padding:10px 12px;font-size:11px;line-height:1.55;'
+        'max-height:520px;overflow:auto">'
+        + "".join(rows)
+        + '</div>'
+    )
+
+
+def _live_history_block_html(full_state: dict[str, Any], lang: str) -> str:
+    steps = [s for s in full_state.get("steps", []) if isinstance(s, dict)]
+    if not steps:
+        return (
+            '<div style="padding:16px;color:var(--ink-4);font-size:12px;text-align:center">'
+            f'{_esc(_T(lang, "No steps recorded yet.", "尚未记录步骤。"))}</div>'
+        )
+    rows = []
+    for i, s in enumerate(steps):
+        status = str(s.get("status") or "pending")
+        rows.append(
+            '<div style="display:grid;grid-template-columns:34px 1fr auto;gap:10px;'
+            'align-items:center;padding:8px 12px;border-top:'
+            + ("1px solid var(--hair)" if i else "0")
+            + '">'
+            f'<span class="mono" style="font-size:11px;color:var(--ink-4)">{i + 1:02d}</span>'
+            f'<div style="min-width:0">'
+            f'<div style="font-size:12px;font-weight:500;color:var(--ink);'
+            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+            f'{_esc(_compact_label(s.get("label") or s.get("step_id") or f"step {i + 1}"))}</div>'
+            f'<div class="mono" style="font-size:10.5px;color:var(--ink-4)">{_esc(s.get("sub", ""))}</div>'
+            '</div>'
+            f'<span class="mono" style="font-size:10.5px;color:var(--ink-3)">{_esc(_step_status_label(status, lang))}</span>'
+            '</div>'
+        )
+    return '<div style="padding:0">' + "".join(rows) + '</div>'
+
+
+# ---------------------------------------------------------------------
+# Visual-fidelity helpers (2026-05-26)
+#
+# Three small helpers that close the remaining design gaps vs.
+# page-agent-workbench.jsx without changing any wired behavior:
+#   _process_minimap_svg_html : retry-branch DAG mini-map (left column)
+#   _highlight_python_html    : oklch-tokenised code lines (center column)
+#   _evidence_icon_svg        : 13×13 tag icons for the right column list
+# ---------------------------------------------------------------------
+
+_MINIMAP_STATUS_COLOR = {
+    "ok": "var(--ink)",
+    "fail": "var(--bad)",
+    "retry": "var(--warn)",
+    "running": "var(--accent)",
+    "pending": "var(--ink-4)",
+}
+
+
+def _process_minimap_svg_html(steps: list[dict[str, Any]], lang: str) -> str:
+    """Compact read-only DAG of step statuses with a retry-branch curve.
+
+    The left column's button rail still drives selection. This panel sits
+    above it and brings back the .jsx visual narrative — a vertical spine
+    with status dots, and dashed Bezier curves whenever a ``fail`` step is
+    immediately followed by a ``retry`` / ``running`` / ``ok`` recovery
+    (the typical auto-patch arc).
+    """
+    if not steps:
+        return ""
+    # Cap render to keep the panel a fixed visual size; the button rail
+    # below still handles the full list.
+    visible = steps[:12]
+    n = len(visible)
+    top = 14
+    spacing = 22
+    height = top + spacing * (n - 1) + 28 if n else 60
+    spine_x = 22
+    dots = []
+    branches = []
+    labels = []
+    for i, s in enumerate(visible):
+        status = str(s.get("status") or "pending")
+        color = _MINIMAP_STATUS_COLOR.get(status, "var(--ink-4)")
+        y = top + i * spacing
+        # connector segment (skip first)
+        if i > 0:
+            prev_status = str(visible[i - 1].get("status") or "pending")
+            # Solid for normal flow, dashed if previous was a failed step
+            # being recovered.
+            dashed = prev_status == "fail" and status in {"retry", "running", "ok"}
+            if dashed:
+                # Curved retry branch: spine → offset → spine
+                branches.append(
+                    f'<path d="M {spine_x} {y - spacing} '
+                    f'C {spine_x + 26} {y - spacing + 4}, '
+                    f'{spine_x + 26} {y - 4}, {spine_x} {y}" '
+                    f'stroke="var(--warn)" stroke-width="1.2" fill="none" '
+                    f'stroke-dasharray="3 3" />'
+                )
+            else:
+                branches.append(
+                    f'<line x1="{spine_x}" y1="{y - spacing + 6}" '
+                    f'x2="{spine_x}" y2="{y - 6}" '
+                    f'stroke="var(--hair-2)" stroke-width="1" />'
+                )
+        # status dot
+        pulse_cls = ' class="eu-pulse"' if status == "running" else ""
+        dots.append(
+            f'<circle cx="{spine_x}" cy="{y}" r="4.5" '
+            f'fill="{"transparent" if status == "pending" else color}" '
+            f'stroke="{color}" stroke-width="1.2"{pulse_cls} />'
+        )
+        # inline checkmark / × / ↻ glyph on filled dots
+        if status == "ok":
+            dots.append(
+                f'<path d="M {spine_x - 2.4} {y} L {spine_x - 0.4} {y + 2} '
+                f'L {spine_x + 2.6} {y - 2.2}" stroke="#fff" stroke-width="1.2" '
+                f'fill="none" stroke-linecap="round" stroke-linejoin="round" />'
+            )
+        elif status == "fail":
+            dots.append(
+                f'<path d="M {spine_x - 2.2} {y - 2.2} L {spine_x + 2.2} {y + 2.2} '
+                f'M {spine_x + 2.2} {y - 2.2} L {spine_x - 2.2} {y + 2.2}" '
+                f'stroke="#fff" stroke-width="1.2" />'
+            )
+        elif status == "retry":
+            dots.append(
+                f'<text x="{spine_x}" y="{y + 2.4}" font-size="7" fill="#fff" '
+                f'text-anchor="middle" font-family="var(--font-mono)">↻</text>'
+            )
+        # short label to the right
+        raw_label = s.get("label") or s.get("step_id") or f"step {i + 1}"
+        label = _compact_label(raw_label, max_len=22)
+        active_weight = 500 if status in {"running", "fail"} else 400
+        labels.append(
+            f'<text x="{spine_x + 12}" y="{y + 3}" font-size="9.5" '
+            f'fill="var(--ink-2)" font-family="var(--font-sans)" '
+            f'font-weight="{active_weight}">'
+            f'{_esc(label)}</text>'
+        )
+    overflow_note = ""
+    if len(steps) > n:
+        overflow_note = (
+            f'<text x="{spine_x + 12}" y="{top + spacing * n + 6}" '
+            f'font-size="9" fill="var(--ink-4)" font-family="var(--font-mono)">'
+            f'+ {len(steps) - n} more</text>'
+        )
+        height += 16
+    title = _T(lang, "Pipeline map", "流水线视图")
+    sub = _T(lang, "retry arcs · auto-patch", "重试分支 · 自动修复")
+    return (
+        '<div class="eu-agent-minimap" '
+        'style="padding:8px 10px 6px;margin-bottom:6px;'
+        'background:var(--surface);border:1px solid var(--hair);'
+        'border-radius:var(--r-2)">'
+        '<div style="display:flex;justify-content:space-between;'
+        'align-items:baseline;margin-bottom:2px">'
+        f'<div class="mono" style="font-size:10px;color:var(--ink-4);'
+        f'letter-spacing:0.06em;text-transform:uppercase">{_esc(title)}</div>'
+        f'<div class="mono" style="font-size:9.5px;color:var(--ink-4)">{_esc(sub)}</div>'
+        '</div>'
+        f'<svg width="100%" height="{height}" viewBox="0 0 240 {height}" '
+        'preserveAspectRatio="xMinYMin meet" style="display:block">'
+        + "".join(branches)
+        + "".join(dots)
+        + "".join(labels)
+        + overflow_note
+        + '</svg>'
+        '</div>'
+    )
+
+
+# Python syntax highlighting -----------------------------------------------
+# Re-creates the .jsx Tok colors. Single-line regex tokenizer; deliberately
+# minimal (we just want visual differentiation, not a full lexer).
+
+_PY_KEYWORDS = {
+    "and", "as", "assert", "async", "await", "break", "class", "continue",
+    "def", "del", "elif", "else", "except", "finally", "for", "from",
+    "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or",
+    "pass", "raise", "return", "try", "while", "with", "yield", "True",
+    "False", "None",
+}
+_PY_BUILTINS = {
+    "len", "range", "print", "int", "float", "str", "list", "dict", "set",
+    "tuple", "open", "enumerate", "zip", "map", "filter", "sorted", "min",
+    "max", "sum", "abs", "round", "bool", "isinstance", "type",
+}
+# Color tokens — match the .jsx oklch constants exactly.
+_TOK_C_KEY = "oklch(75% 0.10 80)"
+_TOK_C_STR = "oklch(75% 0.10 145)"
+_TOK_C_FN = "oklch(75% 0.10 220)"
+_TOK_C_NUM = "oklch(80% 0.08 30)"
+_TOK_C_CMT = "oklch(60% 0.02 240)"
+
+# One alternation regex with named groups; first match wins.
+_PY_TOKEN_RE = re.compile(
+    r"(?P<cmt>\#[^\n]*)"
+    r"|(?P<str>(?:[rRbBuUfF]{0,2})(?:'''.*?'''|\"\"\".*?\"\"\"|'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"))"
+    r"|(?P<num>\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)"
+    r"|(?P<id>[A-Za-z_][A-Za-z_0-9]*)",
+    re.DOTALL,
+)
+
+
+def _highlight_python_html(line: str) -> str:
+    """Tokenize one line of Python and return color-spanned HTML.
+
+    Strings that span lines (triple-quoted blocks) will only highlight
+    correctly inside the line where the opener / closer appears; this is
+    a deliberate trade-off to keep the renderer line-stateless.
+    """
+    if not line:
+        return "&nbsp;"
+    out: list[str] = []
+    pos = 0
+    for m in _PY_TOKEN_RE.finditer(line):
+        if m.start() > pos:
+            out.append(_esc(line[pos:m.start()]))
+        kind = m.lastgroup
+        text = m.group()
+        if kind == "cmt":
+            out.append(f'<span style="color:{_TOK_C_CMT};font-style:italic">{_esc(text)}</span>')
+        elif kind == "str":
+            out.append(f'<span style="color:{_TOK_C_STR}">{_esc(text)}</span>')
+        elif kind == "num":
+            out.append(f'<span style="color:{_TOK_C_NUM}">{_esc(text)}</span>')
+        elif kind == "id":
+            if text in _PY_KEYWORDS:
+                out.append(f'<span style="color:{_TOK_C_KEY};font-weight:500">{_esc(text)}</span>')
+            elif text in _PY_BUILTINS:
+                out.append(f'<span style="color:{_TOK_C_FN}">{_esc(text)}</span>')
+            else:
+                # peek next non-space char for "(" → function-call-ish
+                tail = line[m.end():m.end() + 2]
+                if tail.lstrip().startswith("("):
+                    out.append(f'<span style="color:{_TOK_C_FN}">{_esc(text)}</span>')
+                else:
+                    out.append(_esc(text))
+        else:  # pragma: no cover
+            out.append(_esc(text))
+        pos = m.end()
+    if pos < len(line):
+        out.append(_esc(line[pos:]))
+    return "".join(out)
+
+
+# Evidence-row icons --------------------------------------------------------
+# 13×13 inline SVGs keyed by ``tag``. The 20px column hosting them was the
+# strongest type-recognition signal in the .jsx mock; bringing it back keeps
+# the list scannable even after rows pile up.
+
+def _evidence_icon_svg(tag: str) -> str:
+    paths = {
+        "data": (
+            '<ellipse cx="6.5" cy="3" rx="5" ry="1.6" />'
+            '<path d="M 1.5 3 V 7 C 1.5 7.9 3.7 8.6 6.5 8.6 C 9.3 8.6 11.5 7.9 11.5 7 V 3" />'
+            '<path d="M 1.5 7 V 10 C 1.5 10.9 3.7 11.6 6.5 11.6 C 9.3 11.6 11.5 10.9 11.5 10 V 7" />'
+        ),
+        "paper": (
+            '<path d="M 6.5 1.5 L 6.5 7" />'
+            '<ellipse cx="6.5" cy="7.5" rx="2.6" ry="1.4" />'
+            '<path d="M 3.9 7.5 L 3.9 10 C 3.9 10.7 5 11.3 6.5 11.3 C 8 11.3 9.1 10.7 9.1 10 L 9.1 7.5" />'
+        ),
+        "code": (
+            '<rect x="1.5" y="2" width="10" height="3" rx="0.6" />'
+            '<rect x="1.5" y="5.5" width="10" height="3" rx="0.6" />'
+            '<rect x="1.5" y="9" width="10" height="2" rx="0.6" />'
+        ),
+        "test": (
+            '<line x1="2" y1="11" x2="2" y2="7" />'
+            '<line x1="5" y1="11" x2="5" y2="4" />'
+            '<line x1="8" y1="11" x2="8" y2="6" />'
+            '<line x1="11" y1="11" x2="11" y2="2" />'
+        ),
+        "fix": (
+            '<path d="M 2 11 L 6 7 L 5 6 L 9 2 L 11 4 L 7 8 L 6 7" />'
+            '<circle cx="3" cy="10" r="0.8" />'
+        ),
+        "paper_": (
+            '<rect x="2.5" y="1.5" width="7.5" height="10" rx="0.8" />'
+            '<line x1="4" y1="4" x2="8.5" y2="4" />'
+            '<line x1="4" y1="6" x2="8.5" y2="6" />'
+            '<line x1="4" y1="8" x2="7" y2="8" />'
+        ),
+    }
+    # fall back to file-glyph for unknown tags
+    fallback = (
+        '<path d="M 3 1.5 H 7.5 L 10 4 V 11.5 H 3 Z" />'
+        '<path d="M 7.5 1.5 V 4 H 10" />'
+    )
+    body = paths.get(tag, fallback)
+    return (
+        f'<svg width="13" height="13" viewBox="0 0 13 13" fill="none" '
+        f'stroke="currentColor" stroke-width="1" stroke-linecap="round" '
+        f'stroke-linejoin="round" aria-hidden="true">{body}</svg>'
+    )
+
+
+def _render_code_panel_tabs(active_state: dict[str, Any], full_state: dict[str, Any], lang: str) -> None:
+    """Replace the static 4-tab HTML strip in _live_code_html with real st.tabs.
+
+    Item 2 of the workbench wiring audit (2026-05-25).
+    """
+    trace = active_state.get("trace") or []
+    err_trace = [t for t in trace if t.get("level") in {"err", "warn"}]
+    steps = [s for s in full_state.get("steps", []) if isinstance(s, dict)]
+    tab_labels = [
+        f"{_T(lang, 'Code', '代码')}",
+        f"{_T(lang, 'Output', '输出')} · {len(trace)}",
+        f"{_T(lang, 'Errors', '错误')} · {len(err_trace)}",
+        f"{_T(lang, 'History', '历史')} · {len(steps)}",
+    ]
+    tabs = st.tabs(tab_labels)
+    with tabs[0]:
+        st.markdown(_live_code_only_html(active_state, lang), unsafe_allow_html=True)
+    with tabs[1]:
+        st.markdown(_live_trace_block_html(trace, lang), unsafe_allow_html=True)
+    with tabs[2]:
+        st.markdown(
+            _live_trace_block_html(trace, lang, level_filter={"err", "warn"}),
+            unsafe_allow_html=True,
+        )
+    with tabs[3]:
+        st.markdown(_live_history_block_html(full_state, lang), unsafe_allow_html=True)
+
+
+def _render_evidence_drilldown(
+    active_state: dict[str, Any],
+    lang: str,
+    *,
+    key_suffix: str = "",
+) -> None:
+    """Item 1: real Open / Copy / Show-SHA actions for the right-column evidence.
+
+    The evidence list is still rendered as design-fidelity HTML above; this
+    helper sits below it so users can actually inspect what each row points
+    to. Selection persists in session_state per step so re-runs do not
+    reset the choice.
+    """
+    evidence = [e for e in active_state.get("evidence", []) if isinstance(e, dict)]
+    if not evidence:
+        return
+    step_id = str(active_state.get("step_id") or active_state.get("run_id") or "wb")
+    select_state_key = f"_eu_wb_evidence_pick_{step_id}_{key_suffix}"
+    options = list(range(len(evidence)))
+    labels = [
+        f"{i + 1:02d} · {(e.get('label') or e.get('tag') or 'evidence')[:48]}"
+        for i, e in enumerate(evidence)
+    ]
+    st.markdown(
+        '<div class="eu-section-label" style="padding:0;margin:10px 0 4px">'
+        f'{_esc(_T(lang, "Inspect evidence", "查看证据"))}</div>',
+        unsafe_allow_html=True,
+    )
+    picked = st.selectbox(
+        _T(lang, "Evidence row", "证据行"),
+        options=options,
+        format_func=lambda i: labels[i],
+        key=select_state_key,
+        label_visibility="collapsed",
+    )
+    rec = evidence[picked] if 0 <= picked < len(evidence) else {}
+    raw_path = (
+        rec.get("relative_path")
+        or rec.get("path")
+        or rec.get("artifact_path")
+        or rec.get("file")
+        or ""
+    )
+    sha = str(rec.get("sha256") or rec.get("sha8") or "")
+    ev_id = str(rec.get("evidence_id") or "")
+
+    # path display + copy (st.code adds a built-in copy button)
+    if raw_path:
+        st.code(str(raw_path), language="text")
+    else:
+        st.caption(_T(lang, "No path on this evidence record.", "该证据未携带文件路径。"))
+
+    cols = st.columns([1, 1, 1.2])
+    with cols[0]:
+        if st.button(
+            _T(lang, "Open in run_dir", "在 run_dir 打开"),
+            key=f"_eu_wb_ev_open_{step_id}_{key_suffix}",
+            use_container_width=True,
+            disabled=not raw_path,
+        ):
+            import subprocess, sys, os
+            target = str(raw_path)
+            run_dir = active_state.get("run_dir")
+            if run_dir and not os.path.isabs(target):
+                target = os.path.join(str(run_dir), target)
+            try:
+                if sys.platform == "darwin":
+                    subprocess.run(["open", target], check=False)
+                elif sys.platform.startswith("linux"):
+                    subprocess.run(["xdg-open", target], check=False)
+                elif sys.platform == "win32":
+                    os.startfile(target)  # type: ignore[attr-defined]
+                st.toast(_T(lang, "Opened.", "已打开。"))
+            except Exception as exc:  # pragma: no cover - desktop only
+                st.warning(f"open failed: {exc}")
+    with cols[1]:
+        if st.button(
+            _T(lang, "Show full SHA", "查看完整 SHA"),
+            key=f"_eu_wb_ev_sha_{step_id}_{key_suffix}",
+            use_container_width=True,
+            disabled=not sha,
+        ):
+            st.session_state[f"_eu_wb_ev_sha_show_{step_id}_{key_suffix}"] = True
+    with cols[2]:
+        if st.button(
+            _T(lang, "Copy evidence_id", "复制 evidence_id"),
+            key=f"_eu_wb_ev_id_{step_id}_{key_suffix}",
+            use_container_width=True,
+            disabled=not ev_id,
+        ):
+            st.session_state[f"_eu_wb_ev_id_show_{step_id}_{key_suffix}"] = True
+
+    if st.session_state.get(f"_eu_wb_ev_sha_show_{step_id}_{key_suffix}"):
+        st.code(sha, language="text")
+    if st.session_state.get(f"_eu_wb_ev_id_show_{step_id}_{key_suffix}"):
+        st.code(ev_id, language="text")
+
+
+def _render_result_downloads(active_state: dict[str, Any], lang: str) -> None:
+    """Item 5: per-result download buttons (figure / CSV / artifact).
+
+    The HTML tile grid stays for design fidelity; this row makes the
+    artifacts actually accessible.
+    """
+    results = [r for r in active_state.get("results", []) if isinstance(r, dict)]
+    if not results:
+        return
+    run_dir = active_state.get("run_dir")
+    run_dir_path = Path(str(run_dir)) if run_dir else None
+    rows_emitted = False
+    st.markdown(
+        '<div class="eu-section-label" style="padding:0;margin:14px 0 4px">'
+        f'{_esc(_T(lang, "Download results", "下载结果"))}</div>',
+        unsafe_allow_html=True,
+    )
+    for i, r in enumerate(results):
+        raw_path = (
+            r.get("artifact_path")
+            or r.get("path")
+            or r.get("relative_path")
+            or r.get("file")
+            or ""
+        )
+        if not raw_path:
+            continue
+        path = Path(str(raw_path))
+        if not path.is_absolute() and run_dir_path is not None:
+            path = run_dir_path / path
+        if not path.exists() or not path.is_file():
+            continue
+        suffix = path.suffix.lower()
+        mime = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".svg": "image/svg+xml",
+            ".pdf": "application/pdf",
+            ".tiff": "image/tiff",
+            ".csv": "text/csv",
+            ".tsv": "text/tab-separated-values",
+            ".json": "application/json",
+            ".parquet": "application/octet-stream",
+            ".md": "text/markdown",
+        }.get(suffix, "application/octet-stream")
+        try:
+            data = _cached_artifact_bytes(_file_fingerprint(path))
+        except Exception:
+            continue
+        if not data:
+            continue
+        title = r.get("title") or r.get("kind") or path.name
+        cols = st.columns([3, 1.4])
+        with cols[0]:
+            st.markdown(
+                f'<div style="font-size:12px;color:var(--ink);font-weight:500">{_esc(title)}</div>'
+                f'<div class="mono" style="font-size:10.5px;color:var(--ink-4);'
+                f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{_esc(path.name)}'
+                f' · {len(data) / 1024:.1f} KB</div>',
+                unsafe_allow_html=True,
+            )
+        with cols[1]:
+            st.download_button(
+                _T(lang, "Download", "下载"),
+                data=data,
+                file_name=path.name,
+                mime=mime,
+                key=f"_eu_wb_dl_{i}_{path.name}",
+                use_container_width=True,
+            )
+        rows_emitted = True
+    if not rows_emitted:
+        st.caption(
+            _T(lang, "Results carry no local file paths (demo or unresolved).",
+              "结果未携带本地路径（demo 或尚未落盘）。")
+        )
+
+
+def _render_timeline_jump(state: dict[str, Any], lang: str, select_key: str) -> None:
+    """Item 3: jump-to-step segmented radio below the timeline / state track."""
+    steps = [s for s in state.get("steps", []) if isinstance(s, dict)]
+    if len(steps) < 2:
+        return
+    options = list(range(len(steps)))
+    current = int(st.session_state.get(select_key, 0) or 0)
+    if current >= len(steps):
+        current = 0
+
+    def _label(i: int) -> str:
+        s = steps[i]
+        return f"{i + 1:02d}·{_compact_label(s.get('label') or s.get('step_id') or f'step {i + 1}', max_len=14)}"
+
+    st.markdown(
+        '<div class="eu-section-label" style="padding:0;margin:14px 0 4px">'
+        f'{_esc(_T(lang, "Jump to step", "跳到步骤"))}</div>',
+        unsafe_allow_html=True,
+    )
+    picked = st.radio(
+        _T(lang, "Step", "步骤"),
+        options=options,
+        format_func=_label,
+        index=current,
+        horizontal=True,
+        key=f"_eu_wb_timeline_jump_{select_key}",
+        label_visibility="collapsed",
+    )
+    if picked != current:
+        _set_selected_step(select_key, int(picked))
+        st.rerun()
+
+
+def _render_audit_actions(state: dict[str, Any], lang: str, select_key: str) -> None:
+    """Item 4: per-finding Open-step + Mark-reviewed actions."""
+    audit = state.get("audit")
+    if not isinstance(audit, dict):
+        return
+    findings = [f for f in (audit.get("findings") or []) if isinstance(f, dict)]
+    if not findings:
+        return
+    acked_key = "_eu_wb_findings_acked"
+    acked = set(st.session_state.get(acked_key) or [])
+    steps = [s for s in state.get("steps", []) if isinstance(s, dict)]
+    step_id_to_idx = {
+        str(s.get("step_id") or s.get("id") or ""): i
+        for i, s in enumerate(steps)
+        if (s.get("step_id") or s.get("id"))
+    }
+
+    st.markdown(
+        '<div class="eu-section-label" style="padding:0;margin:16px 0 4px">'
+        f'{_esc(_T(lang, "Triage findings", "处理校验发现"))}</div>',
+        unsafe_allow_html=True,
+    )
+    rerun_needed = False
+    for idx, finding in enumerate(findings[:12]):
+        fid = (
+            str(finding.get("id"))
+            if finding.get("id")
+            else f"{finding.get('validator', '?')}|{finding.get('message', '')[:40]}"
+        )
+        is_acked = fid in acked
+        sev = str(finding.get("severity") or "info").lower()
+        sev_color = {
+            "error": "var(--bad)",
+            "err": "var(--bad)",
+            "warning": "var(--warn)",
+            "warn": "var(--warn)",
+            "info": "var(--info)",
+        }.get(sev, "var(--ink-3)")
+        cols = st.columns([0.06, 3.2, 1.1, 1.4])
+        with cols[0]:
+            st.markdown(
+                f'<div style="width:6px;height:6px;border-radius:50%;background:{sev_color};'
+                f'margin-top:14px;opacity:{0.4 if is_acked else 1}"></div>',
+                unsafe_allow_html=True,
+            )
+        with cols[1]:
+            opacity = 0.5 if is_acked else 1.0
+            st.markdown(
+                f'<div style="opacity:{opacity}">'
+                f'<div class="mono" style="font-size:11.5px;color:var(--ink);font-weight:500">'
+                f'{_esc(finding.get("validator", "?"))}</div>'
+                f'<div style="font-size:11.5px;color:var(--ink-2);line-height:1.45">'
+                f'{_esc(finding.get("message", ""))}</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        target_step = str(finding.get("step_id") or finding.get("step") or "")
+        target_idx = step_id_to_idx.get(target_step) if target_step else None
+        with cols[2]:
+            if st.button(
+                _T(lang, "Open step", "打开步骤"),
+                key=f"_eu_wb_finding_open_{idx}_{fid[:32]}",
+                use_container_width=True,
+                disabled=target_idx is None,
+            ):
+                _set_selected_step(select_key, int(target_idx))
+                rerun_needed = True
+        with cols[3]:
+            label = (
+                _T(lang, "Unmark", "取消标记")
+                if is_acked
+                else _T(lang, "Mark reviewed", "标记已查阅")
+            )
+            if st.button(
+                label,
+                key=f"_eu_wb_finding_ack_{idx}_{fid[:32]}",
+                use_container_width=True,
+            ):
+                if is_acked:
+                    acked.discard(fid)
+                else:
+                    acked.add(fid)
+                st.session_state[acked_key] = list(acked)
+                rerun_needed = True
+    if rerun_needed:
+        st.rerun()
+
+
+# ---------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------
 
@@ -2896,28 +3570,34 @@ def render_agent_workbench(lang: str) -> None:
             )
     active_state = _state_for_selected_step(state, selected_idx)
     with col_c:
-        st.markdown(
-            '<div class="eu-agent-panel" style="padding:0;overflow:hidden;height:620px">'
-            + _live_code_html(active_state, lang)
-            + '</div>',
-            unsafe_allow_html=True,
-        )
+        # Item 2 of the workbench wire-up audit: real st.tabs instead of
+        # the decorative 4-tab <div> strip that lived inside _live_code_html.
+        with st.container(border=True):
+            _render_code_panel_tabs(active_state, state, lang)
     with col_r:
         st.markdown(
-            '<div class="eu-agent-panel" style="padding:0;overflow:hidden;height:620px">'
+            '<div class="eu-agent-panel" style="padding:0;overflow:hidden;max-height:620px;overflow-y:auto">'
             + _result_evidence_html(active_state, lang)
             + '</div>',
             unsafe_allow_html=True,
         )
+        # Items 1 + 5: real drill-down actions for the right-column cards.
+        _render_evidence_drilldown(active_state, lang, key_suffix=str(selected_idx))
+        _render_result_downloads(active_state, lang)
 
-    # Timeline scrubber
+    # Timeline scrubber + Item 3: jump-to-step radio so the timeline is
+    # navigable, not just a visual playhead.
     st.markdown(
         '<div class="eu-agent-timeline" style="margin-top:18px">' + _state_track_html(state, lang) + '</div>',
         unsafe_allow_html=True,
     )
+    _render_timeline_jump(state, lang, select_key)
+
     audit_html = _audit_review_html(state, lang)
     if audit_html:
         st.markdown(audit_html, unsafe_allow_html=True)
+        # Item 4: real Open-step + Mark-reviewed actions per finding.
+        _render_audit_actions(state, lang, select_key)
 
 
 def render_agent_live_workbench(lang: str) -> None:

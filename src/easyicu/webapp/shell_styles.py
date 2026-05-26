@@ -84,6 +84,13 @@ def render_shell_styles(st: Any) -> None:
     throw "Cannot set properties of undefined (directiveAttributes)"
     and drop ALL the styles. The per-rerun cost is just the cached
     token read + three small emits.
+
+    NOTE: do **not** gate this with a session_state flag. Streamlit
+    only keeps DOM elements that were re-emitted on the current rerun;
+    skipping the markdown calls dropped the entire shell CSS from the
+    page on the second rerun (everything went unstyled). The framework
+    already dedupes identical content on the wire, so the bandwidth
+    cost is small and *not* worth re-introducing the regression.
     """
     st.markdown(_FONTS_LINK, unsafe_allow_html=True)
     tokens = _load_tokens_css()

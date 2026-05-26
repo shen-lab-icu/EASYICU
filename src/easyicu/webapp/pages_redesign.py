@@ -23,6 +23,7 @@ data loading and side effects continue to live in the legacy
 from __future__ import annotations
 
 import html
+from collections.abc import MutableMapping
 from typing import Any, Sequence
 
 import streamlit as st
@@ -34,7 +35,6 @@ from easyicu.webapp.concept_catalog import (
     CONCEPT_GROUP_NAMES,
     CONCEPT_GROUPS_INTERNAL,
 )
-from easyicu.webapp.demo_data import seed_lightweight_demo_workspace
 
 
 def _T(lang: str, en: str, zh: str) -> str:
@@ -116,22 +116,131 @@ def _tutorial_agent_card(lang: str) -> str:
     )
 
 
-def _tutorial_resources_card(lang: str) -> str:
-    resources = [
-        _T(lang, "Sample cohorts", "样例队列"),
-        _T(lang, "Concept catalog", "概念目录"),
-        _T(lang, "Citation info", "引用信息"),
+def _apply_demo_defaults_for_tutorial(state: MutableMapping[str, Any]) -> None:
+    """Install the compact demo defaults used by tutorial jump actions."""
+    state["entry_mode"] = "demo"
+    state["use_mock_data"] = True
+    state["database"] = "mock"
+    state["mock_params"] = {
+        "n_patients": 10,
+        "hours": 24,
+        "demo_profile": "lite",
+    }
+    state.setdefault("loaded_concepts", {})
+    state.setdefault("loaded_data_origin", "none")
+    state.setdefault("patient_ids", [])
+
+
+def _route_to_extract_entry_mode(
+    state: MutableMapping[str, Any],
+    target: str,
+) -> None:
+    """Enter extraction from a mode CTA without carrying stale run state."""
+    if target not in {"demo", "real"}:
+        return
+
+    previous_database = state.get("database")
+    state["entry_mode"] = target
+    state["use_mock_data"] = target == "demo"
+
+    if target == "demo":
+        state["database"] = "mock"
+        state["mock_params"] = {
+            "n_patients": 10,
+            "hours": 24,
+            "demo_profile": "lite",
+        }
+    else:
+        valid_real_databases = {"miiv", "eicu", "aumc", "hirid", "mimic", "sic"}
+        if previous_database not in valid_real_databases:
+            state["database"] = "miiv"
+            state["path_validated"] = False
+            state.pop("last_validated_path", None)
+
+    for key in ("step1_confirmed", "step2_confirmed", "step3_confirmed", "export_completed"):
+        state[key] = False
+    state["trigger_export"] = False
+    state["_exporting_in_progress"] = False
+    state["loaded_concepts"] = {}
+    state["loaded_data_origin"] = "none"
+    state["patient_ids"] = []
+    state["all_patient_count"] = 0
+    state["selected_patient"] = None
+    state["selected_concepts"] = []
+    state.pop("quick_viz_active_panel", None)
+    state.pop("_preview_requested", None)
+    state.pop("_viz_import_export_auto_trigger", None)
+    state.pop("_scroll_to_tab", None)
+    state["_active_main_page"] = "extract"
+
+
+def _selected_tutorial_module_concepts(state: MutableMapping[str, Any]) -> list[str]:
+    selected_module = state.get("_eu_tutorial_dict_module")
+    if selected_module not in CONCEPT_GROUPS_INTERNAL:
+        selected_module = next(iter(CONCEPT_GROUPS_INTERNAL), "")
+    return [
+        name
+        for name in CONCEPT_GROUPS_INTERNAL.get(str(selected_module), [])
+        if name in CONCEPT_DICTIONARY
     ]
-    rows = "".join(
-        f'<div class="eu-resource-row"><span>{_esc(item)}</span><i></i></div>'
-        for item in resources
-    )
-    return (
-        '<div class="eu-rail-card">'
-        f'<div class="eu-rail-title">{_T(lang, "Resources", "资源")}</div>'
-        f'<div class="eu-resource-list">{rows}</div>'
-        '</div>'
-    )
+
+
+def _apply_tutorial_resource_action(
+    state: MutableMapping[str, Any],
+    target: str,
+) -> None:
+    """Route tutorial resource buttons to real app destinations."""
+    if target == "sample_cohorts":
+        _apply_demo_defaults_for_tutorial(state)
+        state["_active_main_page"] = "cohort"
+        state["_eu_topbar_run_request"] = {
+            "page": "cohort",
+            "requested_at": "tutorial_resource_sample_cohorts",
+        }
+        return
+
+    if target == "concept_catalog":
+        if state.get("entry_mode") == "none":
+            _apply_demo_defaults_for_tutorial(state)
+        state["step1_confirmed"] = True
+        state["step2_confirmed"] = True
+        state["step3_confirmed"] = False
+        module_concepts = _selected_tutorial_module_concepts(state)
+        if module_concepts:
+            state["selected_concepts"] = module_concepts
+        state["_active_main_page"] = "extract"
+        return
+
+    if target == "citation_info":
+        if state.get("entry_mode") == "none":
+            _apply_demo_defaults_for_tutorial(state)
+        state["_active_main_page"] = "research_agent"
+        state["_ra_view"] = "setup"
+        state["_eu_ra_resource_focus"] = "citation_info"
+        return
+
+    raise ValueError(f"Unknown tutorial resource target: {target}")
+
+
+def _render_tutorial_resources_card(lang: str) -> None:
+    resources = [
+        ("sample_cohorts", _T(lang, "Sample cohorts", "样例队列")),
+        ("concept_catalog", _T(lang, "Concept catalog", "概念目录")),
+        ("citation_info", _T(lang, "Citation info", "引用信息")),
+    ]
+    with st.container(key="eu_tutorial_resources_card"):
+        st.markdown(
+            f'<div class="eu-rail-title">{_T(lang, "Resources", "资源")}</div>',
+            unsafe_allow_html=True,
+        )
+        for target, label in resources:
+            if st.button(
+                f"{label}  ›",
+                key=f"_eu_tutorial_resource_{target}",
+                use_container_width=True,
+            ):
+                _apply_tutorial_resource_action(st.session_state, target)
+                st.rerun()
 
 
 def _dictionary_module_label(module_key: str, lang: str) -> str:
@@ -348,8 +457,8 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
             "Automatically generates reproducible mock data. Full cohort-builder, Quick Viz, and Research Agent gallery experience. No tokens, no local data needed.",
             "自动生成可重复的模拟数据。完整体验 cohort builder、Quick Viz、Research Agent 静态画廊。无需 token、无需本地数据。"),
         bullets=[
-            _T(lang, "50-patient fast review set · 24-96h windows",
-                    "50 例快速审阅集 · 24-96 小时"),
+            _T(lang, "10-patient fast review set · 24h default",
+                    "10 例快速审阅集 · 默认 24 小时"),
             _T(lang, "Lightweight review data is ready immediately",
                     "轻量审阅数据可立即打开"),
             _T(lang, "Research Agent static gallery available",
@@ -411,18 +520,13 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
         if st.button(_T(lang, "Start demo → Extract", "开始演示 → 提取"),
                      key="_eu_tutorial_demo", type="primary",
                      use_container_width=True):
-            st.session_state["entry_mode"] = "demo"
-            st.session_state["use_mock_data"] = True
-            st.session_state["database"] = "mock"
-            st.session_state["_active_main_page"] = "extract"
+            _route_to_extract_entry_mode(st.session_state, "demo")
             st.rerun()
     with cols[1]:
         if st.button(_T(lang, "Configure data path → Extract", "配置数据路径 → 提取"),
                      key="_eu_tutorial_real",
                      use_container_width=True):
-            st.session_state["entry_mode"] = "real"
-            st.session_state["use_mock_data"] = False
-            st.session_state["_active_main_page"] = "extract"
+            _route_to_extract_entry_mode(st.session_state, "real")
             st.rerun()
     with cols[2]:
         if st.button(_T(lang, "Skip data → Agent", "跳过数据 → Agent"),
@@ -504,8 +608,8 @@ def render_tutorial_redesign_page(lang: str) -> None:
             "Generate reproducible mock ICU data and walk through extraction, review, visualization, and agent handoff without touching local files.",
             "生成可复现的模拟 ICU 数据，直接走完抽取、审阅、可视化和 agent 交接，不需要接触本地文件。"),
         bullets=[
-            _T(lang, "50-patient fast review set with 24-96h windows",
-                    "50 例快速审阅集，24-96 小时时间窗"),
+            _T(lang, "10-patient fast review set with a 24h default window",
+                    "10 例快速审阅集，默认 24 小时时间窗"),
             _T(lang, "Lightweight review data is ready immediately",
                     "轻量审阅数据可立即打开"),
             _T(lang, "Agent gallery and audit handoff are ready",
@@ -549,10 +653,7 @@ def render_tutorial_redesign_page(lang: str) -> None:
         if st.button(_T(lang, "Start demo -> Extract", "开始演示 -> 提取"),
                      key="_eu_tutorial_demo", type="primary",
                      use_container_width=True):
-            st.session_state["entry_mode"] = "demo"
-            st.session_state["use_mock_data"] = True
-            st.session_state["database"] = "mock"
-            st.session_state["_active_main_page"] = "extract"
+            _route_to_extract_entry_mode(st.session_state, "demo")
             st.rerun()
 
         secondary_left, secondary_right = st.columns(2, gap="medium")
@@ -561,9 +662,7 @@ def render_tutorial_redesign_page(lang: str) -> None:
             if st.button(_T(lang, "Configure data path -> Extract", "配置数据路径 -> 提取"),
                          key="_eu_tutorial_real",
                          use_container_width=True):
-                st.session_state["entry_mode"] = "real"
-                st.session_state["use_mock_data"] = False
-                st.session_state["_active_main_page"] = "extract"
+                _route_to_extract_entry_mode(st.session_state, "real")
                 st.rerun()
         with secondary_right:
             st.markdown(nodata_card, unsafe_allow_html=True)
@@ -600,10 +699,10 @@ def render_tutorial_redesign_page(lang: str) -> None:
     with rail_col:
         st.markdown(
             _tutorial_flow_card(steps, lang)
-            + _tutorial_agent_card(lang)
-            + _tutorial_resources_card(lang),
+            + _tutorial_agent_card(lang),
             unsafe_allow_html=True,
         )
+        _render_tutorial_resources_card(lang)
 
 
 # =====================================================================
@@ -643,7 +742,7 @@ def _render_qv_data_tables(lang: str) -> None:
                 "Inspect exported data by module. Merge All shows the wide table; Single Feature shows the long table.",
                 "按模块查看导出的数据。Merge All 显示宽表;Single Feature 显示单变量长表。"),
             right_html=(
-                f'<span class="eu-pill mono">{_T(lang, "demo catalog · 50 patients", "演示目录 · 50 例")}</span>'
+                f'<span class="eu-pill mono">{_T(lang, "demo catalog · 10 patients", "演示目录 · 10 例")}</span>'
             ),
         ),
         unsafe_allow_html=True,
@@ -1251,10 +1350,10 @@ def render_entry_redesign_page(lang: str) -> None:
             '<span style="margin-top:6px;width:4px;height:4px;background:var(--ink-4);border-radius:999px;flex:none"></span>'
             f'<span>{b}</span></li>'
             for b in [
-                _T(lang, "50-patient fast review set · 24-96h windows",
-                        "50 例快速审阅集 · 24-96 小时数据"),
-                _T(lang, "Lightweight review dataset opens immediately",
-                        "轻量审阅数据集可立即打开"),
+                _T(lang, "10-patient fast review set · 24h default",
+                        "10 例快速审阅集 · 默认 24 小时数据"),
+                _T(lang, "Start at data extraction, then open review panels when ready",
+                        "先进入数据提取，再按需打开审阅面板"),
                 _T(lang, "Research Agent static gallery viewable",
                         "Research Agent 静态输出画廊可查看"),
                 _T(lang, "Switch to real data anytime without losing work",
@@ -1308,19 +1407,13 @@ def render_entry_redesign_page(lang: str) -> None:
         st.markdown(demo_card, unsafe_allow_html=True)
         if st.button(_T(lang, "Start demo →", "开始演示 →"),
                      key="_eu_entry_demo", type="primary", use_container_width=True):
-            st.session_state["entry_mode"] = "demo"
-            st.session_state["use_mock_data"] = True
-            st.session_state["database"] = "mock"
-            seed_lightweight_demo_workspace(st.session_state, force=True)
-            st.session_state["_active_main_page"] = "quick_viz"
-            st.session_state["quick_viz_active_panel"] = "Time Series"
+            _route_to_extract_entry_mode(st.session_state, "demo")
             st.rerun()
     with col_real:
         st.markdown(real_card, unsafe_allow_html=True)
         if st.button(_T(lang, "Use local data folder →", "使用本地数据目录 →"),
                      key="_eu_entry_real", use_container_width=True):
-            st.session_state["entry_mode"] = "real"
-            st.session_state["use_mock_data"] = False
+            _route_to_extract_entry_mode(st.session_state, "real")
             st.rerun()
 
     # Code-only is a real third action, but visually stays secondary.

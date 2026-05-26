@@ -6,6 +6,38 @@ import html
 from typing import Any
 
 from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
+from easyicu.webapp.concept_catalog import (
+    CONCEPT_DICTIONARY,
+    CONCEPT_GROUP_NAMES,
+    CONCEPT_GROUPS_INTERNAL,
+)
+
+
+COHORT_GROUP_DEFAULT_MODULES = (
+    "demographics",
+    "outcome",
+    "vitals",
+    "sepsis3_sofa2",
+)
+
+COHORT_GROUP_BASE_MODULES = {"demographics", "outcome"}
+
+COHORT_GROUP_LEGACY_HEAVY_DEFAULT_MODULES = (
+    "demographics",
+    "outcome",
+    "vitals",
+    "chemistry",
+    "hematology",
+    "blood_gas",
+    "sofa2_score",
+)
+
+COHORT_GROUP_LEGACY_MODULE_MAP = {
+    "demographic": "demographics",
+    "vital": "vitals",
+    "lab": "chemistry",
+    "sofa": "sofa2_score",
+}
 
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
@@ -24,9 +56,101 @@ def _render_section_heading(title: str, eyebrow: str | None = None) -> None:
     st.markdown(
         '<div class="eu-native-section-heading">'
         f'{eyebrow_html}<b>{html.escape(title)}</b>'
-        '</div>',
+        '</div><div class="eu-native-section-heading-after" aria-hidden="true"></div>',
         unsafe_allow_html=True,
     )
+
+
+def _clean_module_label(label: str) -> str:
+    parts = str(label).split(" ", 1)
+    if len(parts) == 2 and not parts[0].isalnum():
+        return parts[1]
+    return str(label)
+
+
+def _concept_display_labels(concept: str) -> tuple[str, str]:
+    concept_meta = CONCEPT_DICTIONARY.get(concept)
+    if not concept_meta:
+        return concept, concept
+    en_name, zh_name, unit = concept_meta
+    if unit and str(unit).lower() not in {"boolean", "datetime"}:
+        return f"{en_name} ({unit})", f"{zh_name} ({unit})"
+    return en_name, zh_name
+
+
+def _concept_feature_type(concept: str) -> str:
+    unit = str(CONCEPT_DICTIONARY.get(concept, ("", "", ""))[2]).lower()
+    if unit == "boolean":
+        return "binary"
+    if unit == "datetime" or concept in {"sex", "adm", "ecmo_indication"}:
+        return "categorical"
+    return "continuous"
+
+
+def _build_cohort_feature_modules(lang: str) -> dict[str, dict[str, Any]]:
+    modules: dict[str, dict[str, Any]] = {}
+    for module_key, concepts in CONCEPT_GROUPS_INTERNAL.items():
+        en_name, zh_name = CONCEPT_GROUP_NAMES.get(module_key, (module_key, module_key))
+        if module_key == "demographics":
+            features = [
+                ("age", "Age (years)", "年龄 (岁)", "continuous"),
+                ("gender", "Male", "男性", "binary", "M"),
+                ("weight", "Weight (kg)", "体重 (kg)", "continuous"),
+                ("height", "Height (cm)", "身高 (cm)", "continuous"),
+                ("bmi", "BMI", "BMI", "continuous"),
+                ("los_days", "ICU LOS (days)", "ICU住院时长 (天)", "continuous"),
+                ("first_icu_stay", "First ICU Stay", "首次ICU入住", "binary", True),
+            ]
+        elif module_key == "outcome":
+            features = [
+                ("mortality", "ICU Mortality", "ICU死亡率", "binary_survival"),
+            ]
+        else:
+            features = []
+            for concept in concepts:
+                label_en, label_zh = _concept_display_labels(concept)
+                features.append((concept, label_en, label_zh, _concept_feature_type(concept)))
+        modules[module_key] = {
+            "name_en": _clean_module_label(en_name),
+            "name_zh": _clean_module_label(zh_name),
+            "features": features,
+            "default": module_key in COHORT_GROUP_DEFAULT_MODULES,
+        }
+    return modules
+
+
+def _normalize_cohort_feature_modules(
+    selected_modules: list[str] | tuple[str, ...] | None,
+    feature_modules: dict[str, dict[str, Any]],
+) -> list[str]:
+    normalized: list[str] = []
+    for module_key in selected_modules or []:
+        canonical = COHORT_GROUP_LEGACY_MODULE_MAP.get(module_key, module_key)
+        if canonical in feature_modules and canonical not in normalized:
+            normalized.append(canonical)
+    return normalized
+
+
+def _cohort_default_feature_modules(feature_modules: dict[str, dict[str, Any]]) -> list[str]:
+    """Return the lightweight demo-first module defaults that are present."""
+    return [module for module in COHORT_GROUP_DEFAULT_MODULES if module in feature_modules]
+
+
+def _cohort_feature_load_concepts(
+    selected_modules: list[str] | tuple[str, ...] | None,
+    feature_modules: dict[str, dict[str, Any]],
+) -> list[str]:
+    concepts_to_load: list[str] = []
+    for module_key in selected_modules or []:
+        if module_key in COHORT_GROUP_BASE_MODULES:
+            continue
+        module_info = feature_modules.get(module_key)
+        if not module_info:
+            continue
+        for feature_info in module_info.get("features", []):
+            if feature_info:
+                concepts_to_load.append(feature_info[0])
+    return list(dict.fromkeys(concepts_to_load))
 
 
 def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None = None):
@@ -283,7 +407,8 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             options=list(compare_options.keys()),
             format_func=lambda x: compare_options[x][0] if lang == 'en' else compare_options[x][1],
             horizontal=True,
-            key="group_comp_mode"
+            key="group_comp_mode",
+            label_visibility="collapsed",
         )
 
     # 根据模式显示额外配置
@@ -318,97 +443,10 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
         )
         st.caption(custom_note)
 
-    # 定义所有可用的特征模块
-    FEATURE_MODULES = {
-        'demographic': {
-            'name_en': 'Demographics',
-            'name_zh': '人口统计学',
-            'features': [
-                ('age', 'Age (years)', '年龄 (岁)', 'continuous'),
-                ('gender', 'Male', '男性', 'binary', 'M'),
-                ('weight', 'Weight (kg)', '体重 (kg)', 'continuous'),
-                ('height', 'Height (cm)', '身高 (cm)', 'continuous'),
-                ('los_days', 'ICU LOS (days)', 'ICU住院时长 (天)', 'continuous'),
-                ('first_icu_stay', 'First ICU Stay', '首次ICU入住', 'binary', True),
-            ],
-            'default': True
-        },
-        'outcome': {
-            'name_en': 'Outcomes',
-            'name_zh': '结局指标',
-            'features': [
-                ('mortality', 'ICU Mortality', 'ICU死亡率', 'binary_survival'),
-            ],
-            'default': True
-        },
-        'vital': {
-            'name_en': 'Vital Signs',
-            'name_zh': '生命体征',
-            'features': [
-                ('hr', 'Heart Rate (bpm)', '心率 (bpm)', 'continuous'),
-                ('sbp', 'Systolic BP (mmHg)', '收缩压 (mmHg)', 'continuous'),
-                ('dbp', 'Diastolic BP (mmHg)', '舒张压 (mmHg)', 'continuous'),
-                ('map', 'Mean Arterial Pressure (mmHg)', '平均动脉压 (mmHg)', 'continuous'),
-                ('resp', 'Respiratory Rate', '呼吸频率', 'continuous'),
-                ('temp', 'Temperature (°C)', '体温 (°C)', 'continuous'),
-                ('o2sat', 'SpO2 (%)', '血氧饱和度 (%)', 'continuous'),
-            ],
-            'default': True
-        },
-        'lab': {
-            'name_en': 'Laboratory',
-            'name_zh': '实验室检查',
-            'features': [
-                ('glu', 'Glucose (mg/dL)', '血糖 (mg/dL)', 'continuous'),
-                ('na', 'Sodium (mEq/L)', '钠 (mEq/L)', 'continuous'),
-                ('k', 'Potassium (mEq/L)', '钾 (mEq/L)', 'continuous'),
-                ('crea', 'Creatinine (mg/dL)', '肌酐 (mg/dL)', 'continuous'),
-                ('bili', 'Bilirubin (mg/dL)', '胆红素 (mg/dL)', 'continuous'),
-                ('lact', 'Lactate (mmol/L)', '乳酸 (mmol/L)', 'continuous'),
-                ('alb', 'Albumin (g/dL)', '白蛋白 (g/dL)', 'continuous'),
-                ('bun', 'BUN (mg/dL)', '尿素氮 (mg/dL)', 'continuous'),
-            ],
-            'default': True
-        },
-        'hematology': {
-            'name_en': 'Hematology',
-            'name_zh': '血液学',
-            'features': [
-                ('hgb', 'Hemoglobin (g/dL)', '血红蛋白 (g/dL)', 'continuous'),
-                ('plt', 'Platelets (K/uL)', '血小板 (K/uL)', 'continuous'),
-                ('wbc', 'WBC (K/uL)', '白细胞 (K/uL)', 'continuous'),
-                ('inr_pt', 'INR', 'INR', 'continuous'),
-            ],
-            'default': True
-        },
-        'blood_gas': {
-            'name_en': 'Blood Gas',
-            'name_zh': '血气分析',
-            'features': [
-                ('ph', 'pH', 'pH值', 'continuous'),
-                ('po2', 'PaO2 (mmHg)', 'PaO2 (mmHg)', 'continuous'),
-                ('pco2', 'PaCO2 (mmHg)', 'PaCO2 (mmHg)', 'continuous'),
-                ('fio2', 'FiO2 (%)', 'FiO2 (%)', 'continuous'),
-                ('pafi', 'P/F Ratio', 'P/F比值', 'continuous'),
-                ('safi', 'S/F Ratio', 'S/F比值', 'continuous'),
-            ],
-            'default': True
-        },
-        'sofa': {
-            'name_en': 'SOFA Scores',
-            'name_zh': 'SOFA评分',
-            'features': [
-                ('sofa', 'SOFA Score', 'SOFA评分', 'continuous'),
-                ('sofa_resp', 'SOFA Respiratory', 'SOFA呼吸', 'continuous'),
-                ('sofa_coag', 'SOFA Coagulation', 'SOFA凝血', 'continuous'),
-                ('sofa_liver', 'SOFA Liver', 'SOFA肝脏', 'continuous'),
-                ('sofa_cardio', 'SOFA Cardiovascular', 'SOFA心血管', 'continuous'),
-                ('sofa_cns', 'SOFA CNS', 'SOFA神经', 'continuous'),
-                ('sofa_renal', 'SOFA Renal', 'SOFA肾脏', 'continuous'),
-            ],
-            'default': True
-        },
-    }
+    # Use the shared 19-module catalog here so Cohort Statistics exposes the
+    # same complete feature universe as Data Extraction, while keeping a
+    # lightweight default selection for first render.
+    FEATURE_MODULES = _build_cohort_feature_modules(lang)
 
     def _merge_feature_frame(target_df: pd.DataFrame, concept_name: str, feat_df: pd.DataFrame) -> pd.DataFrame:
         """Merge one concept-level feature frame into the cohort table with a unified ID column."""
@@ -439,10 +477,18 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             return '-'
         return f"{value:.2f} {_smd_severity_tag(float(value), lang)}"
 
-    default_modules = [k for k, v in FEATURE_MODULES.items() if v.get('default', False)]
+    default_modules = _cohort_default_feature_modules(FEATURE_MODULES)
     if screenshot_mode:
-        selected_modules = [m for m in ['demographic', 'outcome', 'vital', 'lab', 'sofa'] if m in FEATURE_MODULES]
+        selected_modules = default_modules
     else:
+        previous_modules = st.session_state.get("grp_feature_modules")
+        if isinstance(previous_modules, list):
+            normalized_modules = _normalize_cohort_feature_modules(previous_modules, FEATURE_MODULES)
+            if tuple(normalized_modules) == COHORT_GROUP_LEGACY_HEAVY_DEFAULT_MODULES:
+                normalized_modules = default_modules
+            if normalized_modules != previous_modules:
+                st.session_state["grp_feature_modules"] = normalized_modules
+
         _render_compact_divider()
 
         # ========== 特征模块选择 ==========
@@ -458,17 +504,14 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             default=default_modules,
             format_func=lambda x: FEATURE_MODULES[x]['name_en'] if lang == 'en' else FEATURE_MODULES[x]['name_zh'],
             key="grp_feature_modules",
+            label_visibility="collapsed",
             help="Click to add/remove modules. All available modules are listed above."
                  if lang == 'en' else "点击可添加或移除模块，上方列出了所有可用模块"
         )
 
     # 显示将要加载的特征
     if selected_modules:
-        concepts_to_load = []
-        for mod in selected_modules:
-            if mod not in ['demographic', 'outcome']:  # 这些从 demographics 表获取
-                for feat in FEATURE_MODULES[mod]['features']:
-                    concepts_to_load.append(feat[0])
+        concepts_to_load = _cohort_feature_load_concepts(selected_modules, FEATURE_MODULES)
 
         if concepts_to_load and not screenshot_mode:
             with st.expander("🔬 " + (f"Features to load: {len(concepts_to_load)}" if lang == 'en' else f"待加载特征: {len(concepts_to_load)}个"), expanded=False):
@@ -524,11 +567,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
         base_df = base_df.dropna(subset=[id_col]).copy()
         base_df[id_col] = base_df[id_col].astype(int)
 
-        concepts_to_load = []
-        for mod in selected_modules:
-            if mod not in ['demographic', 'outcome']:
-                for feat in FEATURE_MODULES[mod]['features']:
-                    concepts_to_load.append(feat[0])
+        concepts_to_load = _cohort_feature_load_concepts(selected_modules, FEATURE_MODULES)
 
         grouping_concepts_required: list[str] = []
         custom_var = st.session_state.get('group_comp_custom_feature')
@@ -855,7 +894,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                 is_first_in_module = False
 
                 # 处理不同类型的特征
-                if mod_key == 'demographic':
+                if mod_key == 'demographics':
                     if feat_key == 'age' and 'age' in group1_df.columns:
                         table_data.append({
                             'Module': module_display,

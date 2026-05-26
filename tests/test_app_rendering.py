@@ -14,6 +14,8 @@ import easyicu.webapp.concept_catalog as concept_catalog
 import easyicu.webapp.cohort_dashboard_page as cohort_dashboard_page
 import easyicu.webapp.cohort_filters as cohort_filters
 import easyicu.webapp.cohort_group_page as cohort_group_page
+import easyicu.webapp.cohort_charts as cohort_charts
+import easyicu.webapp.cohort_multidb_page as cohort_multidb_page
 import easyicu.webapp.cohort_redesign as cohort_redesign
 import easyicu.webapp.cohort_severity_page as cohort_severity_page
 import easyicu.webapp.cohort_workspace as cohort_workspace
@@ -27,6 +29,7 @@ import easyicu.webapp.page_header as page_header
 import easyicu.webapp.pages_redesign as pages_redesign
 import easyicu.webapp.patient_page as patient_page
 import easyicu.webapp.quality_page as quality_page
+import easyicu.webapp.quick_visualization_page as quick_visualization_page
 import easyicu.webapp.research_agent as research_agent
 import easyicu.webapp.sidebar as sidebar
 import easyicu.webapp.shell_styles as shell_styles
@@ -53,6 +56,160 @@ def test_quick_preview_prefers_lightweight_concepts_when_all_features_selected()
     preview = data_workflows._select_quick_preview_concepts(selected, limit=5)
 
     assert preview == ["hr", "map", "temp", "spo2", "sofa2"]
+
+
+def test_cohort_group_feature_modules_offer_full_catalog_with_light_defaults() -> None:
+    modules = cohort_group_page._build_cohort_feature_modules("en")
+
+    assert list(modules) == list(concept_catalog.CONCEPT_GROUPS_INTERNAL)
+    assert len(modules) == 19
+    assert set(cohort_group_page.COHORT_GROUP_DEFAULT_MODULES) < set(modules)
+    assert len(cohort_group_page.COHORT_GROUP_DEFAULT_MODULES) < len(modules)
+    assert cohort_group_page._cohort_default_feature_modules(modules) == [
+        "demographics",
+        "outcome",
+        "vitals",
+        "sepsis3_sofa2",
+    ]
+    assert cohort_group_page._cohort_feature_load_concepts(
+        cohort_group_page._cohort_default_feature_modules(modules),
+        modules,
+    ) == ["hr", "map", "sbp", "dbp", "pulse_pressure", "temp", "spo2", "resp", "sep3_sofa2"]
+    assert len(
+        cohort_group_page._cohort_feature_load_concepts(
+            cohort_group_page._cohort_default_feature_modules(modules),
+            modules,
+        )
+    ) <= 10
+    assert len(
+        cohort_group_page._cohort_feature_load_concepts(
+            cohort_group_page.COHORT_GROUP_LEGACY_HEAVY_DEFAULT_MODULES,
+            modules,
+        )
+    ) > 50
+    assert modules["respiratory"]["features"]
+    assert modules["ventilator"]["features"]
+    assert modules["vasopressors"]["features"]
+    assert modules["medications"]["features"]
+    assert modules["renal"]["features"]
+    assert modules["neurological"]["features"]
+    assert modules["circulatory"]["features"]
+    assert modules["other_scores"]["features"]
+
+    assert cohort_group_page._normalize_cohort_feature_modules(
+        ["demographic", "lab", "vital", "sofa", "renal"],
+        modules,
+    ) == ["demographics", "chemistry", "vitals", "sofa2_score", "renal"]
+
+
+def test_sofa_delta_intro_uses_stable_heading_block() -> None:
+    source = Path(cohort_severity_page.__file__).read_text(encoding="utf-8")
+    helper = source[
+        source.index("def _render_section_heading"):
+        source.index("def _render_chart_heading")
+    ]
+    render_block = source[
+        source.index("title = \"SOFA-1 vs SOFA-2 Definition Sensitivity\""):
+        source.index("mode_labels = {")
+    ]
+
+    assert "subtitle: str | None = None" in helper
+    assert "<p>{html.escape(subtitle)}</p>" in helper
+    assert "eu-native-section-heading-after" in helper
+    assert "aria-hidden=\"true\"" in helper
+    assert "subtitle," in render_block
+    assert "st.caption(subtitle)" not in render_block
+
+
+def test_concept_selection_helpers_select_all_by_default(monkeypatch) -> None:
+    concept_groups = {
+        "Vitals": ["hr", "map"],
+        "Labs": ["lactate"],
+        "Scores": ["sofa2", "sofa2_resp"],
+    }
+    state = _AttrSessionState()
+    monkeypatch.setattr(sidebar, "st", _SessionStateStreamlit(state))
+
+    sidebar._reset_concepts_to_groups(concept_groups, sidebar._all_concept_groups(concept_groups))
+
+    assert state["selected_groups"] == ["Vitals", "Labs", "Scores"]
+    assert state["selected_concepts"] == ["hr", "lactate", "map", "sofa2", "sofa2_resp"]
+    assert state["concept_checkboxes"] == {
+        "hr": True,
+        "map": True,
+        "lactate": True,
+        "sofa2": True,
+        "sofa2_resp": True,
+    }
+    assert state["_eu_concept_defaults_seeded"] is True
+
+
+def test_concept_selection_design_exposes_all_action() -> None:
+    source = Path(sidebar.__file__).read_text(encoding="utf-8")
+
+    assert 'key="concept_all_design"' in source
+    assert '"All" if lang == "en" else "全部"' in source
+    assert "_all_concept_groups(concept_groups)" in source
+
+
+def test_concept_selected_feature_chips_stay_readable() -> None:
+    css_text = shell_styles._load_shell_overrides_css()
+    chip_match = re.search(
+        r"\.stApp \.eu-concept-chip,\n\.stApp \.eu-concept-more \{(?P<body>.*?)\n\}",
+        css_text,
+        re.S,
+    )
+    more_matches = re.findall(
+        r"\.stApp \.eu-concept-more \{(?P<body>.*?)\n\}",
+        css_text,
+        re.S,
+    )
+    assert chip_match is not None
+    assert more_matches
+    chip_css = chip_match.group("body")
+    more_css = more_matches[-1]
+
+    assert "background: var(--ink)" not in chip_css
+    assert "background: #eef6f7 !important" in chip_css
+    assert "color: #18343a !important" in chip_css
+    assert "-webkit-text-fill-color: #18343a !important" in chip_css
+    assert "font-size: 12px" in chip_css
+    assert "min-height: 22px" in chip_css
+    assert "font-weight: 600" in chip_css
+    assert "background: #ffffff !important" in more_css
+    assert "-webkit-text-fill-color: var(--ink-3) !important" in more_css
+
+
+def test_concept_checkbox_and_selection_states_do_not_use_black_token_fills() -> None:
+    css_text = shell_styles._load_shell_overrides_css()
+
+    checkbox_code_block = re.search(
+        r"\.stApp label\[data-baseweb=\"checkbox\"\] code,\n"
+        r"\.stApp \.stCheckbox \[data-baseweb=\"checkbox\"\] code,\n"
+        r"\.stApp \.stCheckbox code \{(?P<body>.*?)\n\}",
+        css_text,
+        re.S,
+    )
+    cohort_chip_block = re.search(r"\.eu-cohort-chip \{(?P<body>.*?)\n\}", css_text, re.S)
+    concept_module_block = re.search(
+        r"\.stApp \[class\*=\"st-key-concept_module_card_\"\] button\[kind=\"primary\"\],\n"
+        r"\.stApp \[class\*=\"st-key-concept_module_card_\"\] \[data-testid=\"stBaseButton-primary\"\] \{(?P<body>.*?)\n\}",
+        css_text,
+        re.S,
+    )
+
+    assert checkbox_code_block is not None
+    assert cohort_chip_block is not None
+    assert concept_module_block is not None
+    assert "background: transparent !important" in checkbox_code_block.group("body")
+    assert "background: #eef6f7" in cohort_chip_block.group("body")
+    assert "color: #18343a" in cohort_chip_block.group("body")
+    assert "font-size: 12px" in cohort_chip_block.group("body")
+    assert "min-height: 22px" in cohort_chip_block.group("body")
+    assert "background: var(--ink)" not in cohort_chip_block.group("body")
+    assert "background: var(--accent-soft) !important" in concept_module_block.group("body")
+    assert "color: var(--accent-ink) !important" in concept_module_block.group("body")
+    assert "background: var(--ink)" not in concept_module_block.group("body")
 
 
 def test_terminate_process_tree_terminates_descendants(monkeypatch) -> None:
@@ -209,6 +366,17 @@ class _SessionStateStreamlit:
         self.session_state = session_state
 
 
+class _AttrSessionState(dict):
+    def __getattr__(self, item):
+        try:
+            return self[item]
+        except KeyError as exc:
+            raise AttributeError(item) from exc
+
+    def __setattr__(self, key, value) -> None:
+        self[key] = value
+
+
 class _FakeColumn:
     def __enter__(self):
         return self
@@ -251,6 +419,164 @@ def test_directory_input_does_not_redeclare_widget_value_for_existing_state(monk
 
     assert result == "/tmp/export"
     assert "value" not in streamlit_stub.text_input_kwargs
+
+
+def test_directory_browser_uses_inline_controlled_panel() -> None:
+    source = Path(data_paths.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "@st.dialog" not in source
+    assert "server-browser-inline-title" in source
+    assert "native dialog \"X\" has no dismissal callback" in source
+    assert ".stApp .server-browser-inline-title" in css_text
+    assert ".stApp .server-browser-path" in css_text
+
+
+def test_directory_browser_buttons_reopen_before_streamlit_guard(monkeypatch, tmp_path) -> None:
+    child_dir = tmp_path / "child"
+    child_dir.mkdir()
+
+    class _DirectoryBrowserStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "language": "en",
+                "test_browse_open": True,
+                "test_browse_cwd": str(child_dir),
+            }
+            self.button_kwargs = {}
+
+        def caption(self, *_args, **_kwargs) -> None:
+            pass
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def columns(self, spec, **_kwargs):
+            return [_FakeColumn() for _ in spec]
+
+        def button(self, _label, **kwargs) -> bool:
+            self.button_kwargs[kwargs["key"]] = kwargs
+            return False
+
+        def checkbox(self, *_args, **_kwargs) -> bool:
+            return False
+
+        def text_input(self, _label, **kwargs) -> str:
+            return str(self.session_state.get(kwargs["key"], ""))
+
+        def container(self, *_args, **_kwargs):
+            return _FakeColumn()
+
+        def error(self, *_args, **_kwargs) -> None:
+            pass
+
+    streamlit_stub = _DirectoryBrowserStreamlit()
+    monkeypatch.setattr(data_paths, "st", streamlit_stub)
+
+    data_paths._render_directory_browser_dialog(
+        input_key="test_path",
+        button_key="test_browse",
+        value=str(child_dir),
+    )
+
+    assert streamlit_stub.session_state["test_browse_open"] is False
+
+    up_kwargs = streamlit_stub.button_kwargs["test_browse_dlg_up"]
+    up_kwargs["on_click"](*up_kwargs["args"])
+    assert streamlit_stub.session_state["test_browse_open"] is True
+    assert streamlit_stub.session_state["test_browse_cwd"] == str(tmp_path)
+
+    streamlit_stub.session_state["test_browse_open"] = False
+    select_kwargs = streamlit_stub.button_kwargs["test_browse_dlg_select"]
+    select_kwargs["on_click"](*select_kwargs["args"])
+    assert streamlit_stub.session_state["test_path__pending_value"] == str(child_dir)
+    assert streamlit_stub.session_state["test_browse_open"] is False
+
+
+def test_directory_browser_passive_rerun_clears_open_flag(monkeypatch, tmp_path) -> None:
+    class _DirectoryBrowserStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "language": "en",
+                "test_browse_open": True,
+                "test_browse_cwd": str(tmp_path),
+            }
+
+        def caption(self, *_args, **_kwargs) -> None:
+            pass
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def columns(self, spec, **_kwargs):
+            return [_FakeColumn() for _ in spec]
+
+        def button(self, *_args, **_kwargs) -> bool:
+            return False
+
+        def checkbox(self, *_args, **_kwargs) -> bool:
+            return False
+
+        def text_input(self, _label, **kwargs) -> str:
+            return str(self.session_state.get(kwargs["key"], ""))
+
+        def container(self, *_args, **_kwargs):
+            return _FakeColumn()
+
+        def error(self, *_args, **_kwargs) -> None:
+            pass
+
+    streamlit_stub = _DirectoryBrowserStreamlit()
+    monkeypatch.setattr(data_paths, "st", streamlit_stub)
+
+    data_paths._render_directory_browser_dialog(
+        input_key="test_path",
+        button_key="test_browse",
+        value=str(tmp_path),
+    )
+
+    assert streamlit_stub.session_state["test_browse_open"] is False
+
+
+def test_directory_browser_navigation_keeps_dialog_open(monkeypatch, tmp_path) -> None:
+    class _RerunRequested(RuntimeError):
+        pass
+
+    class _DirectoryBrowserStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "language": "en",
+                "test_browse_open": True,
+                "test_browse_cwd": str(tmp_path),
+            }
+
+        def caption(self, *_args, **_kwargs) -> None:
+            pass
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def columns(self, spec, **_kwargs):
+            return [_FakeColumn() for _ in spec]
+
+        def button(self, _label, **kwargs) -> bool:
+            return kwargs.get("key") == "test_browse_dlg_up"
+
+        def rerun(self) -> None:
+            raise _RerunRequested()
+
+    streamlit_stub = _DirectoryBrowserStreamlit()
+    monkeypatch.setattr(data_paths, "st", streamlit_stub)
+
+    with pytest.raises(_RerunRequested):
+        data_paths._render_directory_browser_dialog(
+            input_key="test_path",
+            button_key="test_browse",
+            value=str(tmp_path),
+        )
+
+    assert streamlit_stub.session_state["test_browse_open"] is True
+    assert streamlit_stub.session_state["test_browse_cwd"] == str(tmp_path.parent)
 
 
 def test_export_path_default_reseeds_empty_without_overwriting_custom(monkeypatch) -> None:
@@ -959,9 +1285,18 @@ def test_plotly_compat_keeps_plotly_specific_width_api_untouched(monkeypatch) ->
 def test_streamlit_theme_is_fixed_to_light_mode() -> None:
     config_path = Path(app.__file__).resolve().parents[3] / ".streamlit" / "config.toml"
     theme_config = config_path.read_text(encoding="utf-8")
+    shell_css = shell_styles._load_shell_overrides_css()
+    legacy_dashboard_css = (Path(app.__file__).parent / "visualizations" / "cohort_dashboard.py").read_text(
+        encoding="utf-8"
+    )
 
     assert '[theme]' in theme_config
     assert 'base = "light"' in theme_config
+    assert "color-scheme: light !important" in shell_css
+    assert 'div[data-baseweb="popover"]' in shell_css
+    assert 'div[data-baseweb="menu"]' in shell_css
+    assert 'div[role="listbox"]' in shell_css
+    assert "prefers-color-scheme: dark" not in legacy_dashboard_css
 
 
 def test_quality_panel_switcher_renders_one_lazy_panel(monkeypatch) -> None:
@@ -1010,7 +1345,8 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     css_text = shell_styles._load_shell_overrides_css()
 
     assert "All 19 modules / 167 features available" not in source_text
-    assert "Lightweight review dataset opens immediately" in source_text
+    assert "Lightweight review dataset opens immediately" not in source_text
+    assert "Start at data extraction, then open review panels when ready" in source_text
     assert "Use local data folder" in source_text
     assert "try first" in source_text
     assert "_eu_entry_lang_toggle" in source_text
@@ -1034,7 +1370,61 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "st-key-_eu_entry_demo" in css_text
     assert "st-key-_eu_entry_real" in css_text
     assert "st-key-_eu_entry_nodata" in css_text
+    base_kicker_css = css_text[
+        css_text.index(".stApp .eu-start-kicker {"):
+        css_text.index(".stApp .eu-start-card.primary .eu-start-kicker")
+    ]
+    assert "font-size: 16px" in base_kicker_css
+    assert "font-weight: 700" in base_kicker_css
+    assert "text-transform: none" in base_kicker_css
+    assert ".eu-start-card.primary .eu-start-kicker" in css_text
+    primary_kicker_css = css_text[
+        css_text.index(".stApp .eu-start-card.primary .eu-start-kicker {"):
+        css_text.index(".stApp .eu-start-head h3")
+    ]
+    assert "font-size: 17px" in primary_kicker_css
+    assert "font-weight: 760" in primary_kicker_css
+    assert "text-transform: none" in primary_kicker_css
+    assert "border: 1px solid var(--accent-border)" in primary_kicker_css
+    assert ".stApp .eu-start-head h3" in css_text
+    assert "font-size: 18px !important" in css_text
+    assert "font-size: 21px !important" in css_text
+    assert ".stApp .eu-rail-title" in css_text
+    assert "font-size: 14.5px" in css_text
+    assert ".stApp .eu-flow-title" in css_text
+    assert "font-size: 13.8px" in css_text
+    assert "st-key-_eu_tutorial_resource_" in css_text
+    assert "st-key-eu_tutorial_resources_card" in css_text
+    assert "font-size: 13px" in css_text
     assert "margin-top: -49px" not in css_text
+
+
+def test_demo_preview_view_all_modules_expands_inline_with_continue_action() -> None:
+    sidebar_source = Path(sidebar.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert '<span class="eu-mini-button">' not in sidebar_source
+    assert "eu_demo_modules_toggle" in sidebar_source
+    assert "eu_demo_module_catalog_panel" in sidebar_source
+    assert "eu_demo_modules_continue" in sidebar_source
+    assert "_confirm_demo_data_source()" in sidebar_source
+    assert "View all modules" in sidebar_source
+    assert "Hide modules" in sidebar_source
+    assert "Continue to cohort setup" in sidebar_source
+    assert "查看全部模块" in sidebar_source
+    assert "_demo_module_catalog_html" in sidebar_source
+
+    catalog_html = sidebar._demo_module_catalog_html("en")
+    assert "All demo feature modules" in catalog_html
+    assert "These modules will be available in Step 3" in catalog_html
+    assert "⭐ SOFA-2 Scores" in catalog_html
+    assert catalog_html.count("eu-module-catalog-row") == len(concept_catalog.CONCEPT_GROUPS_INTERNAL)
+
+    assert "st-key-eu_demo_preview_card" in css_text
+    assert "st-key-eu_demo_module_catalog_panel" in css_text
+    assert "st-key-eu_demo_modules_continue" in css_text
+    assert "-webkit-text-fill-color: var(--ink) !important" in css_text
+    assert ".eu-module-catalog-grid" in css_text
 
 
 def test_main_shell_copy_hides_internal_feature_counts() -> None:
@@ -1056,8 +1446,12 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
         i18n_source = handle.read()
     with open(patient_page.__file__, encoding="utf-8") as handle:
         patient_source = handle.read()
+    with open(quick_visualization_page.__file__, encoding="utf-8") as handle:
+        quick_visualization_source = handle.read()
     with open(research_agent.__file__, encoding="utf-8") as handle:
         research_agent_source = handle.read()
+    with open(ui_helpers.__file__, encoding="utf-8") as handle:
+        ui_helpers_source = handle.read()
     css_text = shell_styles._load_shell_overrides_css()
 
     assert "167 features" not in page_source
@@ -1071,15 +1465,95 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
     assert "'tutorial':       ('Run'" not in app_source
     assert 'key="_eu_topbar_history"' not in app_source
     assert 'key="_eu_topbar_agent"' not in app_source
+    assert "_render_topbar_path_nav" in app_source
+    assert "_apply_topbar_breadcrumb_target" in app_source
+    assert 'key="eu_extract_breadcrumb_nav"' in app_source
+    assert 'key=f"eu_page_breadcrumb_nav_{_active}"' in app_source
+    assert "_set_extract_step_state" in app_source
+    assert "_switch_extract_entry_mode" in app_source
+    assert "[8.55, 1.45]" in app_source
+    assert "[8.35, 1.45, 0.7]" not in app_source
+    assert "_eu_topbar_cancel" not in app_source
+    assert "_eu_topbar_confirm_step" not in app_source
+    assert "_eu_topbar_ai_extract" not in app_source
+    assert "_eu_topbar_ai_tutorial" not in app_source
+    assert "_eu_topbar_ai" not in app_source
+    assert "Confirm & continue" not in app_source
+    assert "[7.45, 1.35, 0.68, 0.7, 2.0]" not in app_source
+    assert "[6.7, 1.25, 0.65, 0.95, 2.25]" not in app_source
+    topbar_source = app_source[
+        app_source.index("# ============ Shell-A top bar"):
+        app_source.index("    _render_global_status_strip")
+    ]
+    assert "_render_extract_breadcrumb_nav" not in topbar_source
+    assert "st.popover(" not in topbar_source
+    assert "_eu_bc_step_" not in topbar_source
+    assert "_eu_bc_mode_" not in topbar_source
+    assert "Global command palette" not in topbar_source
+    assert "eu-bc-search" not in topbar_source
+    assert "include_search" not in topbar_source
+    assert "Session local" not in topbar_source
+    assert "Demo · simulated" not in topbar_source
+    assert "auto_awesome" not in topbar_source
+    assert "play_arrow" not in topbar_source
+    assert "_render_topbar_pills_row" not in topbar_source
+    assert "Global command palette" not in ui_helpers_source
+    assert "eu-kbd-hint" not in ui_helpers_source
+    assert "Search<span" not in ui_helpers_source
+    assert "⌘K" not in ui_helpers_source
+    assert "use_container_width=False" in topbar_source
     assert "### 👥" not in cohort_group_source
     assert "#### 🔀" not in cohort_group_source
     assert "👤 Demographics" not in cohort_group_source
     assert "💀 Survived" not in cohort_group_source
     assert "_render_section_heading" in cohort_group_source
     assert "eu-native-section-heading" in cohort_group_source
+    assert "eu-native-section-heading-after" in cohort_group_source
+    assert "eu-compact-divider" in app_source
     assert "### 🎯" not in cohort_dashboard_source
     assert "📊 Cohort Snapshot Summary" not in cohort_dashboard_source
-    assert "Open the **SOFA Δ** tab for the matrix" in cohort_dashboard_source
+    assert "Cohort Snapshot Summary" not in cohort_dashboard_source
+    assert "st.caption(snapshot_subtitle)" not in cohort_dashboard_source
+    assert "Snapshot summary" in cohort_dashboard_source
+    assert cohort_dashboard_source.index("if 'dash_demographics' not in st.session_state:") < cohort_dashboard_source.index('"Snapshot summary"')
+    chart_theme_block = cohort_dashboard_source[
+        cohort_dashboard_source.index("SHELL_CHART = {"):
+        cohort_dashboard_source.index("def _style_readout_figure")
+    ]
+    phenotype_chart_block = cohort_dashboard_source[
+        cohort_dashboard_source.index("phenotype_df = review['phenotype']"):
+        cohort_dashboard_source.index("with chart_col2:")
+    ]
+    severity_chart_block = cohort_dashboard_source[
+        cohort_dashboard_source.index("severity_df = review['severity']"):
+        cohort_dashboard_source.index('st.warning("No SOFA severity column found"')
+    ]
+    assert '"plot": "#fbfaf7"' in chart_theme_block
+    assert '"teal": "#0f766e"' in chart_theme_block
+    assert '"rose": "#9f3a57"' in chart_theme_block
+    assert "paper_bgcolor='rgba(0,0,0,0)'" in cohort_dashboard_source
+    assert "plot_bgcolor=SHELL_CHART[\"plot\"]" in cohort_dashboard_source
+    assert "SHELL_CHART[\"teal_soft\"]" in phenotype_chart_block
+    assert "SHELL_CHART[\"teal\"]" in phenotype_chart_block
+    assert "#dbeafe" not in phenotype_chart_block
+    assert "rgba(96, 142, 239" not in severity_chart_block
+    assert "SHELL_CHART[\"rose\"]" in severity_chart_block
+    compare_mode_block = cohort_group_source[
+        cohort_group_source.index("compare_mode = st.radio("):
+        cohort_group_source.index("    # 根据模式显示额外配置")
+    ]
+    feature_modules_block = cohort_group_source[
+        cohort_group_source.index("selected_modules = st.multiselect("):
+        cohort_group_source.index("    # 显示将要加载的特征")
+    ]
+    assert 'label_visibility="collapsed"' in compare_mode_block
+    assert 'label_visibility="collapsed"' in feature_modules_block
+    assert "FEATURE_MODULES = _build_cohort_feature_modules(lang)" in cohort_group_source
+    assert "CONCEPT_GROUPS_INTERNAL" in cohort_group_source
+    assert "COHORT_GROUP_DEFAULT_MODULES" in cohort_group_source
+    assert "COHORT_GROUP_LEGACY_MODULE_MAP" in cohort_group_source
+    assert "COHORT_GROUP_BASE_MODULES" in cohort_group_source
+    assert "Open the **SOFA reclassification** panel for the matrix" in cohort_dashboard_source
     assert "SOFA-1 vs SOFA-2 Reclassification" not in cohort_dashboard_source
     assert "dash_reclass_matrix" not in cohort_dashboard_source
     assert "dash_reclass_organ_contrib" not in cohort_dashboard_source
@@ -1089,12 +1563,32 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
     assert "reclass_matrix" in cohort_severity_source
     assert "reclass_organ_contrib" in cohort_severity_source
     assert "_style_reclass_figure" in cohort_severity_source
+    reclass_chart_block = cohort_severity_source[
+        cohort_severity_source.index("RECLASS_CHART = {"):
+        cohort_severity_source.index("def _style_reclass_figure")
+    ]
+    reclass_style_block = cohort_severity_source[
+        cohort_severity_source.index("def _style_reclass_figure"):
+        cohort_severity_source.index("def render_severity_reclassification_subtab")
+    ]
+    assert '"plot": "#fbfaf7"' in reclass_chart_block
+    assert '"teal": "#0f766e"' in reclass_chart_block
+    assert '"rose": "#9f3a57"' in reclass_chart_block
+    assert "paper_bgcolor='rgba(0,0,0,0)'" in reclass_style_block
+    assert 'plot_bgcolor=RECLASS_CHART["plot"]' in reclass_style_block
+    assert "RECLASS_CHART[\"teal_soft\"]" in cohort_severity_source
+    assert "RECLASS_CHART[\"rose\"]" in cohort_severity_source
+    assert "#dbeafe" not in cohort_severity_source
+    assert "#e11d48" not in cohort_severity_source
+    assert "rgba(96, 142, 239" not in cohort_severity_source
     assert "Reclassification matrix" in cohort_severity_source
     assert "st.columns(5)" not in sofa_reclassification_source
     assert "eu-cohort-kpi-grid" in sofa_reclassification_source
     assert "### 🧭" not in cohort_severity_source
     assert "_render_section_heading" in cohort_dashboard_source
     assert "_render_section_heading" in cohort_severity_source
+    assert "eu-native-section-heading-after" in cohort_severity_source
+    assert "st.caption(subtitle)" not in cohort_severity_source
     assert '"👥 Groups"' not in app_source
     assert '"🎯 Snapshot"' not in app_source
     assert '"🧭 SOFA Δ"' not in app_source
@@ -1118,12 +1612,146 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
     assert "_render_compact_trend_panel" in patient_source
     assert '"👤 Patient ID"' not in patient_source
     assert '"⏮️ First"' not in patient_source
+    qv_switcher_source = quick_visualization_source[
+        quick_visualization_source.index("def _render_quick_viz_panel_switcher"):
+        quick_visualization_source.index("def render_quick_visualization_page")
+    ]
+    assert "inline-control-label" not in qv_switcher_source
     assert 'icon="🧪"' not in research_agent_source
     assert 'st.button(f"🤖 {label}"' not in app_source
     assert ".eu-native-section-heading" in css_text
+    assert ".eu-native-section-heading-after" in css_text
+    assert ".eu-native-section-heading p" in css_text
+    assert "min-height: 26px" in css_text
+    assert "margin-bottom: 10px" in css_text
+    assert ".eu-compact-divider" in css_text
+    native_heading_css = css_text[
+        css_text.index(".stApp .eu-native-section-heading {"):
+        css_text.index(".stApp .eu-native-section-heading:first-child")
+    ]
+    assert "margin: 18px 0 0" in native_heading_css
+    assert "box-sizing: border-box" in native_heading_css
     assert ".eu-cohort-kpi-grid" in css_text
     assert ".eu-chart-heading" in css_text
+    chart_heading_css = css_text[
+        css_text.index(".stApp .eu-chart-heading {"):
+        css_text.index(".stApp .eu-chart-row-gap")
+    ]
+    assert "font-size: 12.5px" in chart_heading_css
+    assert "font-size: 17px" in chart_heading_css
+    assert "font-size: 12.8px" in chart_heading_css
+    assert "font-size: 10px" not in chart_heading_css
     assert "grid-template-columns: repeat(auto-fit" in css_text
+    assert 'st-key-qv_panel_switcher' in css_text
+    assert ".stApp .inline-control-label" in css_text
+    inline_label_css = css_text[
+        css_text.index(".stApp .inline-control-label {"):
+        css_text.index(".stApp .subtle-preview-note")
+    ]
+    assert "display: block !important" in inline_label_css
+    assert "margin: 0 0 8px !important" in inline_label_css
+    qv_switcher_css = css_text[
+        css_text.index('.stApp [class*="st-key-qv_panel_switcher"] {'):
+        css_text.index('.stApp [class*="st-key-qv_panel_switcher"] [data-testid="stVerticalBlock"]')
+    ]
+    assert "padding: 0 0 16px !important" in qv_switcher_css
+    assert "display: none !important" in qv_switcher_css
+    assert "grid-template-columns: repeat(4, minmax(128px, 1fr))" in css_text
+    assert "label:has(input:checked) *" in css_text
+    assert "-webkit-text-fill-color: #fff" in css_text
+    assert ".eu-topbar-stage" in css_text
+    topbar_stage_css = css_text[
+        css_text.index(".eu-topbar-stage {"): css_text.index(".eu-topbar-stage .eu-pill")
+    ]
+    assert "position: static" in topbar_stage_css
+    assert "position: fixed" not in topbar_stage_css
+    assert "right: 390px" not in topbar_stage_css
+    assert "top: 21px" not in topbar_stage_css
+    assert "st-key-eu_extract_breadcrumb_nav" in css_text
+    assert "st-key-eu_page_breadcrumb_nav_" in css_text
+    assert ".eu-bc-current" in css_text
+    assert ".eu-bc-popover-title" not in css_text
+    assert ".eu-bc-search" not in css_text
+    breadcrumb_root_css = css_text[
+        css_text.index('.stApp [class*="st-key-eu_extract_breadcrumb_nav"],'):
+        css_text.index('.stApp [class*="st-key-eu_extract_breadcrumb_nav"] [data-testid="stHorizontalBlock"]')
+    ]
+    assert "min-height: 38px !important" in breadcrumb_root_css
+    assert "align-items: flex-start !important" in breadcrumb_root_css
+    assert "justify-content: flex-start !important" in breadcrumb_root_css
+    assert "text-align: left !important" in breadcrumb_root_css
+    breadcrumb_row_css = css_text[
+        css_text.index('.stApp [class*="st-key-eu_extract_breadcrumb_nav"] [data-testid="stHorizontalBlock"],'):
+        css_text.index('.stApp [class*="st-key-eu_extract_breadcrumb_nav"] [data-testid="stColumn"],')
+    ]
+    assert "display: inline-flex !important" in breadcrumb_row_css
+    assert "flex: 0 0 auto !important" in breadcrumb_row_css
+    assert "justify-content: flex-start !important" in breadcrumb_row_css
+    assert "align-self: flex-start !important" in breadcrumb_row_css
+    assert "width: auto !important" in breadcrumb_row_css
+    breadcrumb_column_css = css_text[
+        css_text.index('.stApp [class*="st-key-eu_extract_breadcrumb_nav"] [data-testid="stColumn"],'):
+        css_text.index('.stApp [class*="st-key-eu_extract_breadcrumb_nav"] .stButton,')
+    ]
+    assert "flex: 0 0 auto !important" in breadcrumb_column_css
+    assert "width: auto !important" in breadcrumb_column_css
+    breadcrumb_button_css = css_text[
+        css_text.index('.stApp [class*="st-key-eu_extract_breadcrumb_nav"] .stButton > button,'):
+        css_text.index('.stApp [class*="st-key-eu_extract_breadcrumb_nav"] .stButton > button:hover,')
+    ]
+    assert "width: auto !important" in breadcrumb_button_css
+    assert "border: 0 !important" in breadcrumb_button_css
+    assert "font-size: 13px !important" in breadcrumb_button_css
+    assert "line-height: 22px !important" in breadcrumb_button_css
+    breadcrumb_current_css = css_text[
+        css_text.index(".eu-bc-current {"):
+        css_text.index(".eu-bc-sep {")
+    ]
+    assert "font-size: 13px !important" in breadcrumb_current_css
+    assert "font-weight: 500 !important" in breadcrumb_current_css
+    breadcrumb_sep_css = css_text[
+        css_text.index(".eu-bc-sep {"):
+        css_text.index(".eu-topbar-stage {")
+    ]
+    assert "font-size: 13px !important" in breadcrumb_sep_css
+    assert "font-weight: 500 !important" in breadcrumb_sep_css
+    readability_floor_css = css_text[
+        css_text.index("/* Global readability floor"):
+        css_text.index('.stApp [data-testid="stMetricLabel"],')
+    ]
+    assert "--eu-readable-min: 12px" in css_text
+    assert 'font-size: max(var(--eu-readable-min), 1em) !important' in readability_floor_css
+    assert ".inline-control-label" in readability_floor_css
+    assert ".viz-demo-load-kicker" in readability_floor_css
+    assert ".eu-entry-brand-sub" in readability_floor_css
+    assert ".eu-entry-next-head span" in readability_floor_css
+    assert '[data-testid="stSidebar"] p' in readability_floor_css
+    metric_floor_css = css_text[css_text.index('.stApp [data-testid="stMetricLabel"],'):]
+    assert "font-size: var(--eu-readable-min) !important" in metric_floor_css
+    assert (
+        ".stApp .eu-entry-brand-sub,\n"
+        ".stApp .eu-entry-version {\n"
+        "  font-size: 12px;"
+    ) in css_text
+    entry_next_head_css = css_text[
+        css_text.index(".stApp .eu-entry-next-head span {"):
+        css_text.index(".stApp .eu-entry-next-head b {")
+    ]
+    assert "font-size: 12px" in entry_next_head_css
+    final_breadcrumb_css = css_text[
+        css_text.rindex('.stApp [class*="st-key-eu_extract_breadcrumb_nav"] .stButton > button,'):
+    ]
+    assert css_text.index("/* Global readability floor") < css_text.rindex(
+        '.stApp [class*="st-key-eu_extract_breadcrumb_nav"] .stButton > button,'
+    )
+    assert '.stApp [class*="st-key-eu_extract_breadcrumb_nav"] .stButton > button *' in final_breadcrumb_css
+    assert '.stApp [class*="st-key-eu_extract_breadcrumb_nav"] button *' in final_breadcrumb_css
+    assert "line-height: 22px !important" in final_breadcrumb_css
+    pill_css = css_text[css_text.index(".eu-pill {"): css_text.index(".eu-pill .dot")]
+    assert "font-size: 12px" in pill_css
+    assert "height: 24px" in pill_css
+    assert "st-key-_eu_topbar_cancel" not in css_text
+    assert "st-key-_eu_topbar_confirm_" not in css_text
     assert '[data-testid="stMetric"]' in css_text
     assert "font-size: 16px" in css_text
     assert '[data-baseweb="tag"]' in css_text
@@ -1152,6 +1780,59 @@ def test_page_header_renders_html_without_markdown_code_blocks(monkeypatch) -> N
     assert body.startswith('<div class="app-page-header">')
     assert "\n        <div" not in body
     assert '<div class="app-page-title">EasyICU Research Agent</div>' in body
+
+
+def test_ui_topbar_helper_does_not_render_fake_search_placeholder(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _StreamlitStub:
+        @staticmethod
+        def html(body: str) -> None:
+            calls.append(body)
+
+    monkeypatch.setattr(ui_helpers, "st", _StreamlitStub)
+
+    ui_helpers.render_topbar(
+        ["Home", "Research Agent"],
+        pills=[("Demo · simulated", "demo")],
+    )
+
+    assert calls
+    body = calls[0]
+    assert "Search" not in body
+    assert "⌘K" not in body
+    assert "eu-kbd-hint" not in body
+    assert "Global command palette" not in body
+    assert "Demo · simulated" in body
+
+
+def test_design_page_header_spacing_prevents_summary_overlap() -> None:
+    body = cohort_charts.render_design_page_header(
+        kicker="Research Agent",
+        title_en="Characterise whether high lactate, low mean arterial pressure, and vaso...",
+        title_zh="研究智能体",
+        desc="Analysis-first output summary. Manuscript drafting remains gated by evidence review.",
+        lang="en",
+    )
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert body.startswith('<div class="eu-design-page-header">')
+    assert "eu-design-page-header-spacer" not in body
+    assert 'style="margin-bottom:6px"' not in body
+    assert ".stApp .eu-design-page-header" in css_text
+    header_css = css_text[
+        css_text.index(".stApp .eu-design-page-header {"):
+        css_text.index(".stApp .app-page-kicker")
+    ]
+    assert "clear: both !important" in header_css
+    assert "margin: 0 0 18px !important" in header_css
+    assert "eu-design-page-header-spacer" not in css_text
+    summary_css = css_text[
+        css_text.index(".eu-summary-page {"):
+        css_text.index(".eu-summary-demo-note")
+    ]
+    assert "clear: both" in summary_css
+    assert "margin-top: 16px" in summary_css
 
 
 def test_tutorial_surfaces_existing_data_dictionary_preview() -> None:
@@ -1199,6 +1880,21 @@ def test_tutorial_surfaces_existing_data_dictionary_preview() -> None:
     assert "Open selected module -> Concepts" in source_text
     assert "src/easyicu/data/concept-dict.json" in source_text
     assert "st-key-eu_tutorial_dictionary_panel" in css_text
+    dict_kicker_css = css_text[
+        css_text.index(".stApp .eu-dict-kicker {"):
+        css_text.index(".stApp .eu-dict-head h3")
+    ]
+    assert "font-size: 15px" in dict_kicker_css
+    assert "font-weight: 720" in dict_kicker_css
+    assert "text-transform: none" in dict_kicker_css
+    assert "letter-spacing: 0" in dict_kicker_css
+    dict_title_css = css_text[
+        css_text.index(".stApp .eu-dict-head h3 {"):
+        css_text.index(".stApp .eu-dict-head p")
+    ]
+    assert "font-size: 20px !important" in dict_title_css
+    assert "font-weight: 650 !important" in dict_title_css
+    assert "line-height: 1.24 !important" in dict_title_css
     assert 'content: "⌄"' in css_text
     assert "width: 40px" in css_text
     assert "font-size: 22px" in css_text
@@ -1206,7 +1902,51 @@ def test_tutorial_surfaces_existing_data_dictionary_preview() -> None:
     assert ".eu-dict-module-heading" in css_text
 
 
-def test_quick_visualization_demo_entry_autoloads_light_review_workspace(tmp_path, monkeypatch) -> None:
+def test_tutorial_resource_buttons_route_to_real_destinations() -> None:
+    page_source = Path(pages_redesign.__file__).read_text(encoding="utf-8")
+    app_source = Path(app.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "_render_tutorial_resources_card(lang)" in page_source
+    assert "_apply_tutorial_resource_action(st.session_state, target)" in page_source
+    assert "key=f\"_eu_tutorial_resource_{target}\"" in page_source
+    assert "eu-resource-row" not in page_source
+    assert "st-key-_eu_tutorial_resource_" in css_text
+    assert "_eu_ra_resource_focus" in app_source
+    assert "numeric claims are tied to evidence references" in app_source
+
+    sample_state = {"entry_mode": "demo"}
+    pages_redesign._apply_tutorial_resource_action(sample_state, "sample_cohorts")
+    assert sample_state["entry_mode"] == "demo"
+    assert sample_state["use_mock_data"] is True
+    assert sample_state["database"] == "mock"
+    assert sample_state["_active_main_page"] == "cohort"
+    assert sample_state["_eu_topbar_run_request"] == {
+        "page": "cohort",
+        "requested_at": "tutorial_resource_sample_cohorts",
+    }
+
+    concept_state = {"entry_mode": "none", "_eu_tutorial_dict_module": "vitals"}
+    pages_redesign._apply_tutorial_resource_action(concept_state, "concept_catalog")
+    assert concept_state["entry_mode"] == "demo"
+    assert concept_state["step1_confirmed"] is True
+    assert concept_state["step2_confirmed"] is True
+    assert concept_state["step3_confirmed"] is False
+    assert concept_state["_active_main_page"] == "extract"
+    assert concept_state["selected_concepts"] == [
+        name
+        for name in pages_redesign.CONCEPT_GROUPS_INTERNAL["vitals"]
+        if name in pages_redesign.CONCEPT_DICTIONARY
+    ]
+
+    citation_state = {"entry_mode": "demo"}
+    pages_redesign._apply_tutorial_resource_action(citation_state, "citation_info")
+    assert citation_state["_active_main_page"] == "research_agent"
+    assert citation_state["_ra_view"] == "setup"
+    assert citation_state["_eu_ra_resource_focus"] == "citation_info"
+
+
+def test_demo_entry_routes_to_data_extraction_before_visualization(tmp_path, monkeypatch) -> None:
     streamlit_testing = pytest.importorskip("streamlit.testing.v1")
 
     monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
@@ -1217,12 +1957,15 @@ def test_quick_visualization_demo_entry_autoloads_light_review_workspace(tmp_pat
     at.session_state["language"] = "en"
     at.run(timeout=60)
     at.button(key="_eu_entry_demo").click().run(timeout=60)
-    assert at.session_state["_active_main_page"] == "quick_viz"
-    assert at.session_state["loaded_data_origin"] == "demo_viz"
-    assert at.session_state["mock_params"]["demo_profile"] == "lite"
-    assert 0 < len(at.session_state["loaded_concepts"]) < 90
-    assert len(at.session_state["patient_ids"]) == 50
-    assert "viz_load_demo" not in {button.key for button in at.button}
+    assert at.session_state["_active_main_page"] == "extract"
+    assert at.session_state["entry_mode"] == "demo"
+    assert at.session_state["use_mock_data"] is True
+    assert at.session_state["database"] == "mock"
+    assert at.session_state["mock_params"]["n_patients"] == demo_data.LIGHTWEIGHT_DEMO_PATIENTS
+    assert at.session_state["mock_params"]["hours"] == demo_data.LIGHTWEIGHT_DEMO_HOURS
+    assert at.session_state["loaded_data_origin"] == "none"
+    assert at.session_state["loaded_concepts"] == {}
+    assert at.session_state["patient_ids"] == []
     markdown_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
     assert "Generating lightweight demo data" not in markdown_text
     warning_text = " ".join(getattr(warning, "value", "") for warning in at.warning)
@@ -1256,7 +1999,7 @@ def test_topbar_render_loads_quick_preview_from_demo_mode(tmp_path, monkeypatch)
     assert at.session_state["loaded_data_origin"] == "demo_viz"
     assert len(at.session_state["loaded_concepts"]) > 0
     assert len(at.session_state["loaded_concepts"]) < 90
-    assert len(at.session_state["patient_ids"]) == 50
+    assert len(at.session_state["patient_ids"]) == demo_data.LIGHTWEIGHT_DEMO_PATIENTS
     success_text = " ".join(getattr(success, "value", "") for success in at.success)
     assert "Loaded demo review workspace" not in success_text
     assert "Demo review workspace loaded automatically" not in success_text
@@ -1451,10 +2194,12 @@ def test_ensure_cohort_demo_workspace_bootstraps_all_cohort_panels() -> None:
     assert state["dash_is_demo"] is True
     assert state["multidb_is_demo"] is True
     assert state["cohort_is_demo"] is True
-    assert len(state["grp_demographics"]) == 25
+    assert len(state["grp_demographics"]) == demo_data.COHORT_DEMO_PATIENTS
     assert not state["dash_demographics"].empty
-    assert set(state["multidb_data"].keys()) == {"miiv", "eicu", "aumc", "hirid", "mimic", "sic"}
-    assert state["multidb_concepts"][:4] == ["hr", "sbp", "dbp", "map"]
+    assert set(state["multidb_data"].keys()) == set(demo_data.COHORT_DEMO_MULTIDB_DATABASES)
+    assert len(state["multidb_data"]) == 6
+    assert state["multidb_concepts"] == ["hr", "sbp", "map", "temp", "spo2", "lact"]
+    assert all(len(frame) <= 6 * demo_data.COHORT_DEMO_MULTIDB_RECORDS_PER_FEATURE for frame in state["multidb_data"].values())
 
 
 def test_lightweight_demo_data_keeps_review_surface_small() -> None:
@@ -1464,6 +2209,28 @@ def test_lightweight_demo_data_keeps_review_surface_small() -> None:
     assert 40 <= len(data) < 90
     assert {"hr", "map", "sofa2", "sep3_sofa2", "aki", "death", "los_icu"} <= set(data)
     assert sum(len(frame) for frame in data.values()) < 50_000
+    assert hasattr(demo_data.generate_lightweight_demo_data, "clear")
+    assert hasattr(demo_data._generate_mock_multidb_data, "clear")
+
+
+def test_lightweight_demo_data_keeps_default_group_contrast_comparable() -> None:
+    data, patient_ids = demo_data.generate_lightweight_demo_data(n_patients=10, hours=48)
+
+    deaths = data["death"]["death"].astype(int)
+
+    assert len(patient_ids) == 10
+    assert int(deaths.sum()) >= 2
+    assert int((deaths == 0).sum()) >= 2
+
+
+def test_cohort_demo_workspace_default_group_contrast_has_both_groups() -> None:
+    state: dict[str, object] = {}
+
+    app._ensure_cohort_demo_workspace(state, lang="en", force=True)
+
+    survived = state["grp_demographics"]["survived"].astype(int)
+    assert int((survived == 1).sum()) >= 2
+    assert int((survived == 0).sum()) >= 2
 
 
 def test_ensure_cohort_real_workspace_syncs_global_review_state(tmp_path, monkeypatch) -> None:
@@ -1531,6 +2298,51 @@ def test_ensure_cohort_real_workspace_syncs_global_review_state(tmp_path, monkey
     assert set(state["loaded_concepts"]) == {"hr", "sofa"}
 
 
+def test_snapshot_real_loader_seeds_concepts_not_demographics_only() -> None:
+    with open(cohort_dashboard_page.__file__, encoding="utf-8") as handle:
+        source = handle.read()
+
+    raw_loader_block = source[
+        source.index('elif dash_src == "raw":'):
+        source.index('elif dash_src == "exported":')
+    ]
+
+    assert "_bundle_from_raw_schema(" in raw_loader_block
+    assert "load_concepts=True" in raw_loader_block
+    assert "_seed_workspace_state(st.session_state, bundle)" in raw_loader_block
+    assert "PatientFilter(database=selected_db" not in raw_loader_block
+    assert "正在加载快照所需的人口统计、表型与 SOFA" in raw_loader_block
+
+
+def test_cohort_dashboard_review_stats_uses_loaded_concepts_for_real_snapshot() -> None:
+    cohort = pd.DataFrame(
+        {
+            "stay_id": [10, 11, 12],
+            "age": [64, 72, 81],
+            "death": [0, 1, 1],
+            "los_icu": [2.0, 4.0, 6.0],
+        }
+    )
+    loaded_concepts = {
+        "sofa": pd.DataFrame({"stay_id": [10, 11, 12], "sofa": [2, 7, 10]}),
+        "aki": pd.DataFrame({"stay_id": [10, 11, 12], "aki": [0, 1, 1]}),
+        "mech_vent": pd.DataFrame({"stay_id": [10, 11, 12], "mech_vent": [0, 1, 1]}),
+        "abx": pd.DataFrame({"stay_id": [10, 11, 12], "abx": [1, 1, 0]}),
+    }
+
+    review = app._build_cohort_dashboard_review_stats(
+        cohort,
+        loaded_concepts=loaded_concepts,
+        lang="en",
+    )
+
+    assert review["metrics"]["median_sofa"] == "7.0"
+    assert review["metrics"]["phenotype_burden"] != "NA"
+    assert not review["phenotype"].empty
+    assert int(review["severity"]["patients"].sum()) == 3
+    assert int(review["coverage"]["features"].sum()) == len(loaded_concepts)
+
+
 def test_real_cohort_page_keeps_panel_import_paths_visible_before_shared_workspace(
     tmp_path, monkeypatch
 ) -> None:
@@ -1543,8 +2355,12 @@ def test_real_cohort_page_keeps_panel_import_paths_visible_before_shared_workspa
 
     class _FakeStreamlit:
         def __init__(self) -> None:
-            self.session_state = {"language": "en", "entry_mode": "real"}
-            self.tabs_labels: list[str] = []
+            self.session_state = {
+                "language": "en",
+                "entry_mode": "real",
+                "cohort_active_panel": "coverage",
+            }
+            self.radio_labels: list[str] = []
 
         def markdown(self, *_args, **_kwargs) -> None:
             pass
@@ -1561,9 +2377,10 @@ def test_real_cohort_page_keeps_panel_import_paths_visible_before_shared_workspa
         def columns(self, spec):
             return [_FakePanel() for _ in spec]
 
-        def tabs(self, labels):
-            self.tabs_labels = labels
-            return [_FakePanel() for _ in labels]
+        def radio(self, _label, *, options, key, format_func=None, **_kwargs):
+            assert options == ["groups", "coverage", "snapshot", "sofa"]
+            self.radio_labels = [format_func(option) for option in options]
+            return self.session_state[key]
 
     streamlit_stub = _FakeStreamlit()
     rendered_panels: list[str] = []
@@ -1579,13 +2396,13 @@ def test_real_cohort_page_keeps_panel_import_paths_visible_before_shared_workspa
 
     app.render_cohort_comparison_page()
 
-    assert streamlit_stub.tabs_labels == [
-        "Groups",
-        "Coverage",
-        "Snapshot",
-        "SOFA Δ",
+    assert streamlit_stub.radio_labels == [
+        "Group contrast",
+        "Coverage audit",
+        "Cohort profile",
+        "SOFA reclassification",
     ]
-    assert rendered_panels == ["groups", "coverage", "snapshot", "sofa"]
+    assert rendered_panels == ["coverage"]
 
 
 def test_real_cohort_page_gates_sub_tabs_when_no_data_path_validated(monkeypatch) -> None:
@@ -1599,7 +2416,7 @@ def test_real_cohort_page_gates_sub_tabs_when_no_data_path_validated(monkeypatch
     class _FakeStreamlit:
         def __init__(self) -> None:
             self.session_state = {"language": "en", "entry_mode": "real"}
-            self.tabs_called = False
+            self.radio_called = False
 
         def markdown(self, *_args, **_kwargs) -> None:
             pass
@@ -1613,9 +2430,9 @@ def test_real_cohort_page_gates_sub_tabs_when_no_data_path_validated(monkeypatch
         def columns(self, spec):
             return [_FakePanel() for _ in spec]
 
-        def tabs(self, labels):
-            self.tabs_called = True
-            return [_FakePanel() for _ in labels]
+        def radio(self, *_args, **_kwargs):
+            self.radio_called = True
+            return "groups"
 
     streamlit_stub = _FakeStreamlit()
     rendered_panels: list[str] = []
@@ -1632,7 +2449,7 @@ def test_real_cohort_page_gates_sub_tabs_when_no_data_path_validated(monkeypatch
 
     app.render_cohort_comparison_page()
 
-    assert streamlit_stub.tabs_called is False
+    assert streamlit_stub.radio_called is False
     assert rendered_panels == []
 
 
@@ -2382,6 +3199,205 @@ def test_real_data_step1_requires_current_validated_path(tmp_path) -> None:
     assert app._real_data_source_ready_for_step1(state) is True
 
 
+def test_real_entry_cta_resets_demo_progress_and_database() -> None:
+    state = {
+        "entry_mode": "demo",
+        "use_mock_data": True,
+        "database": "mock",
+        "path_validated": True,
+        "last_validated_path": "/tmp/demo",
+        "step1_confirmed": True,
+        "step2_confirmed": True,
+        "step3_confirmed": True,
+        "export_completed": True,
+        "trigger_export": True,
+        "_exporting_in_progress": True,
+        "loaded_concepts": {"hr": object()},
+        "loaded_data_origin": "demo_viz",
+        "patient_ids": [10001],
+        "all_patient_count": 1,
+        "selected_patient": 10001,
+        "selected_concepts": ["hr"],
+        "quick_viz_active_panel": "Time Series",
+        "_active_main_page": "quick_viz",
+    }
+
+    pages_redesign._route_to_extract_entry_mode(state, "real")
+
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["database"] == "miiv"
+    assert state["path_validated"] is False
+    assert "last_validated_path" not in state
+    assert state["step1_confirmed"] is False
+    assert state["step2_confirmed"] is False
+    assert state["step3_confirmed"] is False
+    assert state["export_completed"] is False
+    assert state["trigger_export"] is False
+    assert state["_exporting_in_progress"] is False
+    assert state["loaded_concepts"] == {}
+    assert state["loaded_data_origin"] == "none"
+    assert state["patient_ids"] == []
+    assert state["all_patient_count"] == 0
+    assert state["selected_patient"] is None
+    assert state["selected_concepts"] == []
+    assert "quick_viz_active_panel" not in state
+    assert state["_active_main_page"] == "extract"
+
+
+def test_topbar_breadcrumb_targets_navigate_to_parent_paths(monkeypatch) -> None:
+    state = {
+        "_active_main_page": "quick_viz",
+        "entry_mode": "demo",
+        "use_mock_data": True,
+        "database": "mock",
+        "loaded_concepts": {"hr": object()},
+        "patient_ids": [10001],
+        "step1_confirmed": True,
+        "step2_confirmed": True,
+        "step3_confirmed": True,
+        "export_completed": True,
+    }
+    clear_calls: list[str] = []
+
+    monkeypatch.setattr(app, "clear_run_state", lambda scope="all": clear_calls.append(scope))
+
+    app._apply_topbar_breadcrumb_target(state, "data_visualization")
+    assert state["_active_main_page"] == "quick_viz"
+
+    app._apply_topbar_breadcrumb_target(state, "cohort")
+    assert state["_active_main_page"] == "cohort"
+
+    app._apply_topbar_breadcrumb_target(state, "data_extraction")
+    assert state["_active_main_page"] == "tutorial"
+
+    app._apply_topbar_breadcrumb_target(state, "entry")
+    assert clear_calls == ["all"]
+    assert state["entry_mode"] == "none"
+    assert state["use_mock_data"] is False
+    assert state["_active_main_page"] == "tutorial"
+
+
+def test_extract_workflow_helpers_keep_state_consistent() -> None:
+    state = {
+        "_active_main_page": "quick_viz",
+        "entry_mode": "demo",
+        "use_mock_data": True,
+        "database": "mock",
+        "step1_confirmed": True,
+        "step2_confirmed": True,
+        "step3_confirmed": True,
+        "export_completed": True,
+    }
+
+    assert app._extract_step_unlocked(state, 4) is True
+
+    app._set_extract_step_state(state, 2)
+    assert state["_active_main_page"] == "extract"
+    assert state["step1_confirmed"] is True
+    assert state["step2_confirmed"] is False
+    assert state["step3_confirmed"] is False
+    assert state["export_completed"] is False
+    assert app._extract_step_unlocked(state, 3) is False
+
+    app._switch_extract_entry_mode(state, "real")
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["step1_confirmed"] is False
+    assert state["step2_confirmed"] is False
+    assert state["_active_main_page"] == "extract"
+
+    app._switch_extract_entry_mode(state, "demo")
+    assert state["entry_mode"] == "demo"
+    assert state["use_mock_data"] is True
+    assert state["database"] == "mock"
+
+
+def test_export_completion_routes_to_visualization_data_tables(monkeypatch, tmp_path) -> None:
+    state = _AttrSessionState({"viz_max_patients": 10})
+    monkeypatch.setattr(app, "st", _SessionStateStreamlit(state))
+    exported_files = [
+        str(tmp_path / "vitals_hr_map.parquet"),
+        str(tmp_path / "labs_creatinine.parquet"),
+    ]
+
+    app._prime_export_completion(tmp_path, exported_files, auto_load=True)
+
+    assert state["export_completed"] is True
+    assert state["trigger_export"] is False
+    assert state["_exporting_in_progress"] is False
+    assert state["last_export_dir"] == str(tmp_path)
+    assert state["viz_export_path"] == str(tmp_path)
+    assert state["viz_data_source_mode"] == "exported"
+    assert state["_prefer_exported_viz"] is True
+    assert state["_active_main_page"] == "quick_viz"
+    assert state["_post_export_navigation_pending"] is True
+    assert state["_post_export_target_panel"] == "Data Tables"
+    assert "_main_nav_widget" not in state
+    assert "quick_viz_active_panel" not in state
+    assert state["_viz_auto_load_export"] == {
+        "path": str(tmp_path),
+        "selected_files": ["vitals_hr_map", "labs_creatinine"],
+        "max_patients": 10,
+    }
+
+
+def test_completed_export_navigation_pending_is_consumed_once() -> None:
+    state = {
+        "export_completed": True,
+        "_post_export_navigation_pending": True,
+        "_post_export_target_panel": "Data Tables",
+        "_active_main_page": "extract",
+    }
+
+    assert app._consume_completed_export_navigation(state) is True
+    assert state["_active_main_page"] == "quick_viz"
+    assert state["_main_nav_widget"] == "quick_viz"
+    assert state["quick_viz_active_panel"] == "Data Tables"
+    assert "_post_export_navigation_pending" not in state
+    assert "_post_export_target_panel" not in state
+    assert app._consume_completed_export_navigation(state) is False
+
+
+def test_sidebar_pipeline_steps_are_sequential_click_targets() -> None:
+    source = Path(sidebar.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+    state = {
+        "_active_main_page": "quick_viz",
+        "step1_confirmed": False,
+        "step2_confirmed": False,
+        "step3_confirmed": False,
+        "export_completed": False,
+    }
+
+    assert sidebar._sidebar_extract_step_unlocked(state, 1) is True
+    assert sidebar._sidebar_extract_step_unlocked(state, 2) is False
+    assert sidebar._sidebar_extract_step_unlocked(state, 3) is False
+    assert sidebar._sidebar_extract_step_unlocked(state, 4) is False
+
+    state["step1_confirmed"] = True
+    assert sidebar._sidebar_extract_step_unlocked(state, 2) is True
+    assert sidebar._sidebar_extract_step_unlocked(state, 3) is False
+
+    state["step2_confirmed"] = True
+    state["step3_confirmed"] = True
+    state["export_completed"] = True
+    sidebar._sidebar_set_extract_step_state(state, 2)
+
+    assert state["_active_main_page"] == "extract"
+    assert state["step1_confirmed"] is True
+    assert state["step2_confirmed"] is False
+    assert state["step3_confirmed"] is False
+    assert state["export_completed"] is False
+    assert "eu_pipeline_step_" in source
+    assert "eu_pipeline_jump_" in source
+    assert "_sidebar_extract_step_unlocked" in source
+    assert "_sidebar_set_extract_step_state" in source
+    assert "[class*=\"st-key-eu_pipeline_step_\"] .stButton" in css_text
+    assert "opacity: 0 !important" in css_text
+    assert ".eu-pipe-step.locked" in css_text
+
+
 def test_topbar_crossdb_real_action_opens_loader_when_data_missing() -> None:
     state = {
         "_eu_topbar_run_request": {"page": "cross_db"},
@@ -2391,35 +3407,27 @@ def test_topbar_crossdb_real_action_opens_loader_when_data_missing() -> None:
     result = app._consume_topbar_run_request(state, "cross_db", "en")
 
     assert result["level"] == "warning"
-    assert state["_eu_crossdb_advanced_open"] is True
+    assert "_eu_crossdb_advanced_open" not in state
+    assert "shown below" in result["message"]
     assert "_eu_topbar_run_request" not in state
 
 
-def test_crossdb_page_does_not_render_advanced_loader_until_opened(monkeypatch) -> None:
-    class _FakePanel:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
+def test_crossdb_page_renders_detailed_loader_by_default(monkeypatch) -> None:
     class _FakeStreamlit:
         def __init__(self, session_state) -> None:
             self.session_state = session_state
             self.button_labels: list[str] = []
+            self.markdown_calls: list[str] = []
 
-        def markdown(self, *_args, **_kwargs) -> None:
-            pass
+        def markdown(self, body, *_args, **_kwargs) -> None:
+            self.markdown_calls.append(str(body))
 
         def button(self, label, **_kwargs) -> bool:
             self.button_labels.append(label)
             return False
 
-        def expander(self, *_args, **_kwargs):
-            return _FakePanel()
-
         def rerun(self) -> None:
-            raise AssertionError("rerun should not be called without a click")
+            raise AssertionError("rerun should not be called")
 
     rendered: list[str] = []
     streamlit_stub = _FakeStreamlit({"language": "en", "entry_mode": "demo"})
@@ -2430,22 +3438,115 @@ def test_crossdb_page_does_not_render_advanced_loader_until_opened(monkeypatch) 
         multidb_fn=lambda _lang: rendered.append("loader"),
     )
 
-    assert rendered == []
-    assert "Open detailed loader" in streamlit_stub.button_labels
+    assert rendered == ["loader"]
+    assert streamlit_stub.button_labels == []
+    page_source = "\n".join(streamlit_stub.markdown_calls)
+    assert "Open detailed loader" not in page_source
+    assert "Hide detailed loader" not in page_source
+    assert "Load data / detailed distributions" not in page_source
+    assert "Connect real multi-database roots here" not in page_source
+    assert "Use this advanced panel" not in page_source
+    assert "详细加载器" not in page_source
+    assert "加载数据 / 详细分布" not in page_source
+
+
+def test_crossdb_distribution_section_has_spacing_guard() -> None:
+    redesign_source = Path(cohort_redesign.__file__).read_text(encoding="utf-8")
+    multidb_source = Path(cohort_multidb_page.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "eu-crossdb-distribution-boundary" in redesign_source
+    assert "eu-crossdb-distribution-heading" in multidb_source
+    assert "📈 {title}" not in multidb_source
+    assert ".stApp .eu-crossdb-distribution-boundary" in css_text
+    assert ".stApp .eu-crossdb-distribution-heading" in css_text
+    assert "clear: both" in css_text
+    assert "min-height: 24px" in css_text
+    assert "list(data.items())[:4]" not in multidb_source
+    assert "list(data.items())[:6]" in multidb_source
+
+
+def test_crossdb_real_mode_clears_seeded_demo_frames() -> None:
+    state = {
+        "entry_mode": "real",
+        "multidb_data": {"miiv": pd.DataFrame({"hr": [80]})},
+        "multidb_concepts": ["hr"],
+        "multidb_is_demo": True,
+    }
+
+    assert cohort_redesign._clear_demo_crossdb_state_for_real_mode(state) is True
+
+    assert "multidb_data" not in state
+    assert "multidb_concepts" not in state
+    assert "multidb_is_demo" not in state
+
+    real_state = {
+        "entry_mode": "real",
+        "multidb_data": {"miiv": pd.DataFrame({"hr": [80]})},
+        "multidb_concepts": ["hr"],
+        "multidb_is_demo": False,
+    }
+
+    assert cohort_redesign._clear_demo_crossdb_state_for_real_mode(real_state) is False
+    assert "multidb_data" in real_state
+    assert real_state["multidb_is_demo"] is False
+
+
+def test_crossdb_demo_workspace_keeps_six_database_story(monkeypatch) -> None:
+    state = {"entry_mode": "demo"}
+    app._ensure_cohort_demo_workspace(state, lang="en")
+    monkeypatch.setattr(cohort_redesign, "st", _SessionStateStreamlit(state))
+
+    cards = cohort_redesign._crossdb_active_databases("en")
+    columns, rows = cohort_redesign._crossdb_kpi_rows("en")
+
+    assert [card[0] for card in cards] == [
+        "MIMIC-IV",
+        "eICU-CRD",
+        "AmsterdamUMCdb",
+        "HiRID",
+        "MIMIC-III",
+        "SICdb",
+    ]
+    assert all("demo rows" in card[1] for card in cards)
+    assert columns == [
+        "Metric",
+        "MIMIC-IV",
+        "eICU-CRD",
+        "AmsterdamUMCdb",
+        "HiRID",
+        "MIMIC-III",
+        "SICdb",
+        "Δ range",
+    ]
+    assert rows[0][1:-1] == ["144", "144", "144", "144", "144", "144"]
+
+
+def test_crossdb_page_labels_demo_source_before_summary(monkeypatch) -> None:
+    class _FakeStreamlit:
+        def __init__(self, session_state) -> None:
+            self.session_state = session_state
+            self.markdown_calls: list[str] = []
+
+        def markdown(self, body, *_args, **_kwargs) -> None:
+            self.markdown_calls.append(str(body))
 
     streamlit_stub = _FakeStreamlit({
         "language": "en",
         "entry_mode": "demo",
-        "_eu_crossdb_advanced_open": True,
+        "multidb_is_demo": True,
+        "multidb_data": {"miiv": pd.DataFrame({"hr": [80, 90]})},
+        "multidb_concepts": ["hr"],
+        "_eu_shell_only": True,
     })
     monkeypatch.setattr(cohort_redesign, "st", streamlit_stub)
 
-    cohort_redesign.render_cross_db_redesign_page(
-        "en",
-        multidb_fn=lambda _lang: rendered.append("loader"),
-    )
+    cohort_redesign.render_cross_db_redesign_page("en", multidb_fn=lambda _lang: None)
 
-    assert rendered == ["loader"]
+    page_source = "\n".join(streamlit_stub.markdown_calls)
+    assert "Demo simulated data" in page_source
+    assert "not from a user database" in page_source
+    assert "Loaded cross-database distribution summary" in page_source
 
 
 def test_cohort_redesign_defaults_to_real_panel_body(monkeypatch) -> None:
@@ -2456,12 +3557,14 @@ def test_cohort_redesign_defaults_to_real_panel_body(monkeypatch) -> None:
                 "cohort_active_panel": "coverage",
             }
             self.markdown_calls: list[str] = []
+            self.radio_labels: list[str] = []
 
         def markdown(self, body, *_args, **_kwargs) -> None:
             self.markdown_calls.append(str(body))
 
-        def radio(self, _label, *, options, key, **_kwargs):
+        def radio(self, _label, *, options, key, format_func=None, **_kwargs):
             assert options == ["groups", "coverage", "snapshot", "sofa"]
+            self.radio_labels = [format_func(option) for option in options]
             return self.session_state[key]
 
     streamlit_stub = _FakeStreamlit()
@@ -2477,6 +3580,12 @@ def test_cohort_redesign_defaults_to_real_panel_body(monkeypatch) -> None:
     )
 
     assert rendered == ["coverage"]
+    assert streamlit_stub.radio_labels == [
+        "Group contrast",
+        "Coverage audit",
+        "Cohort profile",
+        "SOFA reclassification",
+    ]
 
 
 def test_cohort_redesign_shell_only_keeps_design_preview_available(monkeypatch) -> None:
@@ -2488,12 +3597,14 @@ def test_cohort_redesign_shell_only_keeps_design_preview_available(monkeypatch) 
                 "_eu_shell_only": True,
             }
             self.markdown_calls: list[str] = []
+            self.radio_labels: list[str] = []
 
         def markdown(self, body, *_args, **_kwargs) -> None:
             self.markdown_calls.append(str(body))
 
-        def radio(self, _label, *, options, key, **_kwargs):
+        def radio(self, _label, *, options, key, format_func=None, **_kwargs):
             assert options == ["groups", "coverage", "snapshot", "sofa"]
+            self.radio_labels = [format_func(option) for option in options]
             return self.session_state[key]
 
     streamlit_stub = _FakeStreamlit()
@@ -2509,6 +3620,12 @@ def test_cohort_redesign_shell_only_keeps_design_preview_available(monkeypatch) 
     )
 
     assert rendered == []
+    assert streamlit_stub.radio_labels == [
+        "Group contrast",
+        "Coverage audit",
+        "Cohort profile",
+        "SOFA reclassification",
+    ]
     assert any("Mortality by SOFA quartile" in body for body in streamlit_stub.markdown_calls)
 
 
@@ -2559,20 +3676,85 @@ def test_topbar_research_agent_demo_action_opens_guide() -> None:
     assert "_eu_topbar_run_request" not in state
 
 
-def test_sidebar_session_summary_returns_html_without_none_leak(monkeypatch) -> None:
-    streamlit_stub = _SessionStateStreamlit({
-        "mock_params": {"n_patients": 42},
-        "demo_mode_patients": 42,
+def test_topbar_research_agent_action_uses_run_controls_not_fake_launch() -> None:
+    assert app._topbar_primary_action_label("research_agent", "en", entry_mode="demo") == (
+        "Agent guide",
+        "Agent 导览",
+    )
+    assert app._topbar_primary_action_label("research_agent", "zh", entry_mode="real") == (
+        "Run controls",
+        "运行控制",
+    )
+
+    state = {
+        "_eu_topbar_run_request": {"page": "research_agent"},
+        "entry_mode": "real",
+    }
+
+    result = app._consume_topbar_run_request(state, "research_agent", "en")
+
+    assert result["level"] == "info"
+    assert state["_ra_view"] == "setup"
+    assert state["_eu_ra_launch_requested"] is True
+    assert "run controls" in result["message"]
+    assert "_eu_topbar_run_request" not in state
+
+
+def test_sidebar_brand_home_button_returns_to_entry(monkeypatch) -> None:
+    class _AttrState(dict):
+        def __getattr__(self, key):
+            try:
+                return self[key]
+            except KeyError as exc:
+                raise AttributeError(key) from exc
+
+        def __setattr__(self, key, value):
+            self[key] = value
+
+    state = _AttrState({
+        "entry_mode": "demo",
+        "use_mock_data": True,
+        "_active_main_page": "cohort",
     })
+    streamlit_stub = _SessionStateStreamlit(state)
+    clear_calls: list[str] = []
+
     monkeypatch.setattr(sidebar, "st", streamlit_stub)
+    monkeypatch.setattr(sidebar, "clear_run_state", lambda scope="all": clear_calls.append(scope))
 
-    html = sidebar._session_summary_html("demo", "en")
+    sidebar._return_to_entry_home()
 
-    assert html.startswith('<div class="eu-session-card">')
-    assert "Ready demo cohort · 42 patients" in html
-    assert "simulated" in html
-    assert ">None<" not in html
-    assert "not an active project" not in html
+    assert clear_calls == ["all"]
+    assert state["entry_mode"] == "none"
+    assert state["use_mock_data"] is False
+    assert state["_active_main_page"] == "tutorial"
+
+    sidebar_source = Path(sidebar.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+    assert 'key="_eu_brand_home_button"' in sidebar_source
+    assert "_return_to_entry_home()" in sidebar_source
+    assert "st-key-eu_brand_home" in css_text
+    assert "st-key-_eu_brand_home_button" in css_text
+    assert "cursor: pointer !important" in css_text
+    assert "line-height: 0 !important" in css_text
+    assert "-webkit-text-fill-color: transparent !important" in css_text
+    assert 'st-key-_eu_brand_home_button"] button:focus-visible' in css_text
+    assert 'st-key-_eu_brand_home_button"] button:active' in css_text
+    assert 'st-key-_eu_brand_home_button"] button::before' in css_text
+    assert "background-color: transparent !important" in css_text
+    assert "outline: none !important" in css_text
+
+
+def test_sidebar_workspace_session_card_is_removed_from_extract_shell() -> None:
+    sidebar_source = Path(sidebar.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert not hasattr(sidebar, "_session_summary_html")
+    assert "eu-session-card" not in sidebar_source
+    assert "Demo workspace" not in sidebar_source
+    assert "Ready demo cohort" not in sidebar_source
+    assert "eu-workspace-label" not in sidebar_source
+    assert ".eu-session-card" not in css_text
 
 
 def test_sidebar_context_summary_uses_plain_setup_language(monkeypatch) -> None:
@@ -2622,8 +3804,9 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert not hasattr(sidebar, "_sidebar_next_steps_html")
     css_text = shell_styles._load_shell_overrides_css()
 
-    assert "border-left: 3px solid var(--accent)" in css_text
     assert ".eu-context-label" in css_text
+    assert ".eu-context-card" in css_text
+    assert "background: transparent;" in css_text
     assert "padding-top: 14px" in css_text
     assert "margin-top: 14px !important" in css_text
     assert "st-key-eunavrow_tutorial" in css_text
@@ -2644,8 +3827,9 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert "_eu_visualization_nav_open" in sidebar_text
     assert 'count="3"' not in sidebar_text
     assert "Choose view" not in sidebar_text
-    assert "_eu_sidebar_settings_open" in sidebar_text
-    assert "_render_sidebar_ai_and_lang()" in sidebar_text
+    assert "st.popover" in sidebar_text
+    assert "_render_sidebar_settings_panel()" in sidebar_text
+    assert "API Key 只保存在当前会话" in sidebar_text
     assert "render_sidebar_chat_widget" not in sidebar_text
     assert "_real_data_source_ready()" in sidebar_text
     assert "Path after setup" not in sidebar_text
@@ -2663,3 +3847,85 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert "Use the bottom-right chat button" not in llm_text
     assert "render_inline_ai_panel" in llm_text
     assert "st-key-inline_ai_assistant_panel" in llm_text
+
+
+def test_sidebar_settings_gear_opens_real_settings_popover() -> None:
+    sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
+    llm_text = Path(sidebar.__file__).with_name("llm_chat.py").read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+    footer_source = sidebar_text[
+        sidebar_text.index("def _render_shell_footer_icons"):
+        sidebar_text.index("def _render_sidebar_settings_panel")
+    ]
+
+    assert 'key="_eu_footer_settings"' in sidebar_text
+    assert "st.popover" in sidebar_text
+    assert "_render_sidebar_settings_panel" in sidebar_text
+    assert "render_llm_settings(show_status_card=False, controls_only=True)" in sidebar_text
+    assert "EasyICU 不会写入本地文件" in sidebar_text
+    assert "font-size:12px" in footer_source
+    assert "font-size:10.5px" not in footer_source
+    assert "controls_only: bool = False" in llm_text
+    assert "API keys stay in this browser session only" in llm_text
+    assert ".eu-settings-panel" in css_text
+    assert ".eu-settings-privacy" in css_text
+
+
+def test_step1_source_mode_tabs_only_show_actionable_modes() -> None:
+    sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
+    mode_tabs_source = sidebar_text[
+        sidebar_text.index("def _render_source_mode_tabs"):
+        sidebar_text.index("def _render_data_source_page_header")
+    ]
+
+    assert '("demo", "Demo", "模拟数据", ":material/science:")' in mode_tabs_source
+    assert '("real", "Real Data", "真实数据", ":material/database:")' in mode_tabs_source
+    assert "st.columns(2, gap=\"small\")" in mode_tabs_source
+    assert "_eu_source_mode_none" not in mode_tabs_source
+    assert "No Data" not in mode_tabs_source
+    assert "仅生成代码" not in mode_tabs_source
+    assert "disabled=target == \"none\"" not in mode_tabs_source
+    assert "Code-only mode is surfaced through Research Agent" not in mode_tabs_source
+
+
+def test_extract_footer_action_buttons_use_equal_columns() -> None:
+    sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "st.columns([5, 1.7, 1.7], gap=\"small\")" in sidebar_text
+    assert "st.columns([2.2, 1.45, 1.45, 1.45], gap=\"small\")" in sidebar_text
+    assert "st.columns([4.2, 1.45, 1.45], gap=\"small\")" in sidebar_text
+    assert 'key="step1_reset_real"' in sidebar_text
+    assert 'key="step1_confirm_real"' in sidebar_text
+    assert "disabled=not real_ready" in sidebar_text
+    assert "_confirm_real_data_source()" in sidebar_text
+    assert "st.columns([5, 1, 2.4], gap=\"small\")" not in sidebar_text
+    assert "st.columns([2.45, 0.72, 1.15, 1.85], gap=\"small\")" not in sidebar_text
+    assert "st.columns([4.2, 1.0, 1.65], gap=\"small\")" not in sidebar_text
+    assert 'class*="st-key-step1_reset_demo"' in css_text
+    assert 'class*="st-key-step1_confirm_demo"' in css_text
+    assert 'class*="st-key-step1_reset_real"' in css_text
+    assert 'class*="st-key-step1_confirm_real"' in css_text
+    assert 'class*="st-key-step2_confirm_design"' in css_text
+    assert 'class*="st-key-step3_confirm_design"' in css_text
+    assert "height: 45px !important" in css_text
+
+
+def test_large_desktop_density_keeps_sidebar_readable() -> None:
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "@media (min-width: 1500px)" in css_text
+    large_density_css = css_text[
+        css_text.index("/* Large desktop comfort density."):
+        css_text.index("/* Tablet (901-1100px)")
+    ]
+    assert "--eu-sidebar-w: 280px" in large_density_css
+    assert "max-width: 1840px !important" in large_density_css
+    assert "font-size: 15px;" in large_density_css
+    assert "font-size: 14.5px !important" in large_density_css
+    assert "font-size: 13.8px !important" in large_density_css
+    assert "font-size: 12.8px" in large_density_css
+    assert "width: 18px !important" in large_density_css
+    assert "padding-left: 44px !important" in large_density_css
+    assert "padding-right: 44px !important" in large_density_css
+    assert "vw" not in large_density_css

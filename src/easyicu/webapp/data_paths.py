@@ -106,7 +106,32 @@ def _closest_existing_dir(path_str: str, fallback: str = "") -> Path:
     return path
 
 
-@st.dialog("Browse Server Folders / 浏览服务器目录", width="large")
+def _keep_directory_browser_open(browser_open_key: str) -> None:
+    st.session_state[browser_open_key] = True
+
+
+def _set_directory_browser_cwd(
+    browser_open_key: str,
+    browser_cwd_key: str,
+    target_dir: str,
+) -> None:
+    st.session_state[browser_open_key] = True
+    st.session_state[browser_cwd_key] = target_dir
+
+
+def _select_directory_browser_cwd(
+    browser_open_key: str,
+    pending_input_key: str,
+    target_dir: str,
+) -> None:
+    st.session_state[pending_input_key] = target_dir
+    st.session_state[browser_open_key] = False
+
+
+def _close_directory_browser(browser_open_key: str) -> None:
+    st.session_state[browser_open_key] = False
+
+
 def _render_directory_browser_dialog(
     *,
     input_key: str,
@@ -121,6 +146,11 @@ def _render_directory_browser_dialog(
     browser_new_folder_key = f"{button_key}_new_folder"
     pending_input_key = f"{input_key}__pending_value"
 
+    # Streamlit 1.45's native dialog "X" has no dismissal callback. Render the
+    # browser as an inline, app-controlled panel and keep the open flag one-shot:
+    # passive reruns close it, while in-panel navigation explicitly reopens it.
+    st.session_state[browser_open_key] = False
+
     current_dir = _closest_existing_dir(
         st.session_state.get(browser_cwd_key, ""),
         st.session_state.get(input_key, value or ""),
@@ -133,10 +163,19 @@ def _render_directory_browser_dialog(
     if browser_new_folder_key not in st.session_state:
         st.session_state[browser_new_folder_key] = ""
 
+    panel_title = (
+        "Browse server folders"
+        if lang == "en" else
+        "浏览服务器目录"
+    )
     header_hint = (
         "Choose a folder on the server running EasyICU."
         if lang == "en" else
         "选择运行 EasyICU 的服务器上的目录。"
+    )
+    st.markdown(
+        f'<div class="server-browser-inline-title">{panel_title}</div>',
+        unsafe_allow_html=True,
     )
     st.caption(header_hint)
     st.markdown(f'<div class="server-browser-path">{current_dir}</div>', unsafe_allow_html=True)
@@ -144,23 +183,50 @@ def _render_directory_browser_dialog(
     nav_cols = st.columns([1, 1, 1.4, 1.4])
     with nav_cols[0]:
         up_label = "⬆ Up" if lang == "en" else "⬆ 上级"
-        if st.button(up_label, key=f"{button_key}_dlg_up", use_container_width=True):
-            st.session_state[browser_cwd_key] = str(current_dir.parent if current_dir != current_dir.parent else current_dir)
+        up_target = str(current_dir.parent if current_dir != current_dir.parent else current_dir)
+        if st.button(
+            up_label,
+            key=f"{button_key}_dlg_up",
+            use_container_width=True,
+            on_click=_set_directory_browser_cwd,
+            args=(browser_open_key, browser_cwd_key, up_target),
+        ):
+            st.session_state[browser_open_key] = True
+            st.session_state[browser_cwd_key] = up_target
             st.rerun()
     with nav_cols[1]:
         home_label = "🏠 Home" if lang == "en" else "🏠 主目录"
-        if st.button(home_label, key=f"{button_key}_dlg_home", use_container_width=True):
+        if st.button(
+            home_label,
+            key=f"{button_key}_dlg_home",
+            use_container_width=True,
+            on_click=_set_directory_browser_cwd,
+            args=(browser_open_key, browser_cwd_key, str(Path.home())),
+        ):
+            st.session_state[browser_open_key] = True
             st.session_state[browser_cwd_key] = str(Path.home())
             st.rerun()
     with nav_cols[2]:
         select_label = "✅ Use This Folder" if lang == "en" else "✅ 使用当前目录"
-        if st.button(select_label, key=f"{button_key}_dlg_select", use_container_width=True):
+        if st.button(
+            select_label,
+            key=f"{button_key}_dlg_select",
+            use_container_width=True,
+            on_click=_select_directory_browser_cwd,
+            args=(browser_open_key, pending_input_key, str(current_dir)),
+        ):
             st.session_state[pending_input_key] = str(current_dir)
             st.session_state[browser_open_key] = False
             st.rerun()
     with nav_cols[3]:
         close_label = "✕ Close" if lang == "en" else "✕ 关闭"
-        if st.button(close_label, key=f"{button_key}_dlg_close", use_container_width=True):
+        if st.button(
+            close_label,
+            key=f"{button_key}_dlg_close",
+            use_container_width=True,
+            on_click=_close_directory_browser,
+            args=(browser_open_key,),
+        ):
             st.session_state[browser_open_key] = False
             st.rerun()
 
@@ -169,6 +235,8 @@ def _render_directory_browser_dialog(
         st.checkbox(
             "Show hidden folders" if lang == "en" else "显示隐藏目录",
             key=browser_show_hidden_key,
+            on_change=_keep_directory_browser_open,
+            args=(browser_open_key,),
             help="Hidden folders starting with '.' are hidden by default." if lang == "en" else "默认隐藏以 . 开头的目录。",
         )
     with tools_col2:
@@ -179,10 +247,18 @@ def _render_directory_browser_dialog(
                 key=browser_new_folder_key,
                 placeholder="e.g. exports_20260415" if lang == "en" else "例如 exports_20260415",
                 label_visibility="collapsed",
+                on_change=_keep_directory_browser_open,
+                args=(browser_open_key,),
             )
         with create_cols[1]:
             create_label = "📁 Create" if lang == "en" else "📁 创建"
-            if st.button(create_label, key=f"{button_key}_dlg_create", use_container_width=True):
+            if st.button(
+                create_label,
+                key=f"{button_key}_dlg_create",
+                use_container_width=True,
+                on_click=_keep_directory_browser_open,
+                args=(browser_open_key,),
+            ):
                 new_folder_name = str(st.session_state.get(browser_new_folder_key, "")).strip()
                 if not new_folder_name:
                     st.warning("Please enter a folder name first." if lang == "en" else "请先输入文件夹名称。")
@@ -192,6 +268,7 @@ def _render_directory_browser_dialog(
                     try:
                         target_dir = current_dir / new_folder_name
                         target_dir.mkdir(parents=False, exist_ok=False)
+                        st.session_state[browser_open_key] = True
                         st.session_state[browser_cwd_key] = str(target_dir)
                         st.session_state[pending_input_key] = str(target_dir)
                         st.session_state[browser_new_folder_key] = ""
@@ -206,6 +283,8 @@ def _render_directory_browser_dialog(
         "Directory Filter" if lang == "en" else "目录筛选",
         key=browser_filter_key,
         placeholder="Filter subfolders..." if lang == "en" else "筛选子目录...",
+        on_change=_keep_directory_browser_open,
+        args=(browser_open_key,),
     )
     dir_filter = st.session_state.get(browser_filter_key, "").strip().lower()
     show_hidden = bool(st.session_state.get(browser_show_hidden_key, False))
@@ -234,7 +313,10 @@ def _render_directory_browser_dialog(
                     f"📁 {subdir.name}",
                     key=f"{button_key}_dlg_dir_{hash(str(subdir))}",
                     use_container_width=True,
+                    on_click=_set_directory_browser_cwd,
+                    args=(browser_open_key, browser_cwd_key, str(subdir)),
                 ):
+                    st.session_state[browser_open_key] = True
                     st.session_state[browser_cwd_key] = str(subdir)
                     st.rerun()
             if len(subdirs) > len(shown_subdirs):
@@ -298,7 +380,8 @@ def _directory_input(
             st.rerun()
 
     if st.session_state.get(browser_open_key, False):
-        _render_directory_browser_dialog(input_key=input_key, button_key=button_key, value=value)
+        with st.container(border=True):
+            _render_directory_browser_dialog(input_key=input_key, button_key=button_key, value=value)
 
     return typed_value
 

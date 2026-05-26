@@ -939,7 +939,25 @@ _RA_DEBUG_KINDS = {"log", "code"}
 
 def _read_json_file(path: Path) -> Dict[str, Any]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        s = path.stat()
+        fingerprint = (str(path), s.st_mtime_ns, s.st_size)
+    except OSError:
+        return {}
+    return _cached_read_json_file(fingerprint)
+
+
+@st.cache_data(show_spinner=False, max_entries=256)
+def _cached_read_json_file(fingerprint: Tuple[str, int, int]) -> Dict[str, Any]:
+    """Cache JSON manifest reads keyed by (path, mtime_ns, size).
+
+    Run history + workbench resolve manifest data on every Streamlit
+    rerun. Without this cache, every click in the Research Agent page
+    re-parses every ``manifest.json`` in the workdir — perceptibly slow
+    once a workdir holds more than a couple of runs.
+    """
+    path_str, _mtime, _size = fingerprint
+    try:
+        data = json.loads(Path(path_str).read_text(encoding="utf-8"))
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
@@ -3869,6 +3887,12 @@ def render_research_agent_page() -> None:
         icon="",
         kicker=_ra_text("kicker"),
     )
+    if st.session_state.pop("_eu_ra_launch_requested", False):
+        st.info(
+            "Run controls are below. Confirm the research request, cohort, model provider, and preflight plan before launching."
+            if st.session_state.get("language", "en") == "en" else
+            "运行控制在下方。启动前请先确认研究请求、队列、模型提供方和执行前预览。"
+        )
 
     try:
         handles = _import_agent_layer()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from pathlib import Path
 from typing import Any
 
@@ -32,9 +33,9 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
     )
     if not screenshot_mode:
         st.markdown(f"""
-        <div style="margin-bottom:14px">
-            <div style="font-size:1.15rem;font-weight:850;color:#0b1f44">📈 {title}</div>
-            <div style="font-size:.86rem;color:#60718a;margin-top:2px">{subtitle}</div>
+        <div class="eu-crossdb-distribution-heading">
+            <div class="eu-crossdb-distribution-title">{html.escape(title)}</div>
+            <div class="eu-crossdb-distribution-subtitle">{html.escape(subtitle)}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -236,6 +237,16 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
     if 'multidb_data' in st.session_state and st.session_state.get('multidb_data'):
         data = st.session_state['multidb_data']
         concepts = st.session_state.get('multidb_concepts', ['hr', 'sbp', 'temp', 'resp'])
+        is_demo_preview = bool(st.session_state.get('multidb_is_demo')) or entry_mode == 'demo'
+        if is_demo_preview:
+            concepts = [concept for concept in concepts if concept in {'hr', 'sbp', 'map', 'temp', 'spo2', 'lact'}][:6]
+            trimmed_data = {}
+            for db, df in list(data.items())[:6]:
+                if hasattr(df, "loc") and 'concept' in getattr(df, "columns", []):
+                    trimmed_data[db] = df.loc[df['concept'].isin(concepts)].head(320).copy()
+                else:
+                    trimmed_data[db] = df
+            data = trimmed_data
         if screenshot_mode:
             # Paper figures need the distribution signal, not an exhaustive grid.
             screenshot_priority = ['hr', 'sbp', 'map', 'resp', 'temp', 'spo2', 'crea', 'lact']
@@ -259,6 +270,12 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
             # Demo模式使用默认路径
             _data_root = st.session_state.get('multidb_data_root', os.environ.get('EASYICU_DATA_PATH', ''))
             mdd = MultiDatabaseDistribution(data_root=_data_root, language=lang)
+            if is_demo_preview and not screenshot_mode:
+                st.caption(
+                    "Demo preview uses a compact sample so the page opens quickly; real data mode keeps the full selectable comparison."
+                    if lang == 'en' else
+                    "演示预览只加载紧凑样本，保证页面快速打开；真实数据模式仍保留完整可选对比。"
+                )
 
             # 网格图
             n_cols = min(4, len(concepts))
@@ -286,6 +303,8 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
             st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
 
             if screenshot_mode:
+                return
+            if is_demo_preview:
                 return
 
             # 单特征详细对比

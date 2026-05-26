@@ -194,17 +194,10 @@ def render_topbar(
         if not is_last:
             crumbs.append('<span class="sep">/</span>')
     pills_html = " ".join(render_pill_html(label, tone=tone) for label, tone in pills)
-    kbd_hint = (
-        '<span class="eu-kbd-hint" title="Global command palette — coming soon" '
-        'aria-disabled="true" '
-        'style="display:inline-flex;align-items:center;gap:6px;'
-        'font-size:11px;color:var(--ink-4);user-select:none">'
-        'Search<span class="eu-kbd">⌘K</span></span>'
-    )
     body = (
         '<div class="eu-topbar">'
         f'<div class="bc">{"".join(crumbs)}</div>'
-        f'<div class="right">{kbd_hint}{pills_html}</div>'
+        f'<div class="right">{pills_html}</div>'
         '</div>'
     )
     _render_html(body, container=container)

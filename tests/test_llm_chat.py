@@ -133,7 +133,7 @@ def test_verification_parser_ignores_model_reasoning_prefix() -> None:
     assert parsed["corrected_answer"] == "Ready."
 
 
-def test_enabling_floating_ai_toggle_opens_panel_immediately(monkeypatch) -> None:
+def test_enabling_ai_toggle_keeps_legacy_floating_panel_closed(monkeypatch) -> None:
     fake_streamlit = _FakeStreamlit(
         {
             "language": "en",
@@ -150,7 +150,8 @@ def test_enabling_floating_ai_toggle_opens_panel_immediately(monkeypatch) -> Non
     llm_chat.render_llm_settings()
 
     assert fake_streamlit.session_state["llm_enabled"] is True
-    assert fake_streamlit.session_state["_floating_ai_open"] is True
+    assert fake_streamlit.session_state["_floating_ai_open"] is False
+    assert fake_streamlit.session_state["_sidebar_ai_open"] is True
     assert fake_streamlit.session_state["llm_provider"] == "easyicu_hosted"
     assert fake_streamlit.session_state["llm_configured"] is True
 
