@@ -128,14 +128,19 @@ external cohort is actually available.
 
 ## Quick start
 
+The pipeline now requires an explicit `llm=` client — there is no silent
+mock fallback. The examples below use `OpenAIClient`; for tests / CI and
+ablation baselines, swap in `MockLLMClient` (see
+[Testing / CI](#testing--ci) below).
+
 ### Free-form research question
 
 ```python
-from easyicu.research_agent import ResearchAgentPipeline, MockLLMClient
+from easyicu.research_agent import OpenAIClient, ResearchAgentPipeline
 
 pipeline = ResearchAgentPipeline(
     workdir="./research_output",
-    llm=MockLLMClient(),  # tests/demo only; pass a real client for research runs
+    llm=OpenAIClient(model="gpt-4o-mini"),
 )
 result = pipeline.run(
     question="Is admission SOFA-2 score associated with ICU mortality?",
@@ -152,13 +157,16 @@ print(result.manuscript_path)
 ### Pre-canned ClinicalSkill
 
 ```python
-from easyicu.research_agent import ResearchAgentPipeline, MockLLMClient, list_skills
+from easyicu.research_agent import OpenAIClient, ResearchAgentPipeline, list_skills
 
 print([s.key for s in list_skills()])
 # → ['sofa_mortality', 'aki_kdigo_mortality',
 #    'vaso_exposure_mortality', 'lactate_trajectory_mortality']
 
-pipeline = ResearchAgentPipeline(workdir="./research_output", llm=MockLLMClient())
+pipeline = ResearchAgentPipeline(
+    workdir="./research_output",
+    llm=OpenAIClient(model="gpt-4o-mini"),
+)
 result = pipeline.run(
     skill="sofa_mortality",                 # short-circuits the planner
     cohort="path/to/cohort.parquet",
@@ -174,7 +182,7 @@ result = pipeline.run(
 from easyicu.research_agent import (
     CohortInputSpec,
     ExperimentSpec,
-    MockLLMClient,
+    OpenAIClient,
     ResearchAgentPipeline,
     RuntimeSpec,
 )
@@ -191,7 +199,10 @@ spec = ExperimentSpec(
     runtime=RuntimeSpec(workdir="./research_output", stop_after_analysis=True),
 )
 
-pipeline = ResearchAgentPipeline(workdir=spec.runtime.workdir, llm=MockLLMClient())
+pipeline = ResearchAgentPipeline(
+    workdir=spec.runtime.workdir,
+    llm=OpenAIClient(model="gpt-4o-mini"),
+)
 result = pipeline.run_from_spec(spec)
 print(result.manifest_path)
 ```
@@ -233,18 +244,33 @@ available:
 python -m easyicu.research_agent.mcp_server --transport sse --port 8765
 ```
 
-The pipeline runs offline by default with the deterministic
-:class:`MockLLMClient` (useful for tests, CI and a baseline for paper
-ablations). Pass a real LLM client to enable richer planning and
-prose:
+### Testing / CI
+
+`ResearchAgentPipeline.run()` requires an explicit `llm=` client and no
+longer silently falls back to a mock — see `pipeline.py` for the runtime
+check. The deterministic :class:`MockLLMClient` is intended for three
+specific situations:
+
+- unit / integration tests that should not hit a network,
+- CI smoke runs where reproducibility matters more than prose quality,
+- the **naive arm** of the paper ablation, which intentionally exercises
+  the same orchestrator without the EasyICU context layer.
 
 ```python
-from easyicu.research_agent import OpenAIClient
+from easyicu.research_agent import MockLLMClient, ResearchAgentPipeline
 pipeline = ResearchAgentPipeline(
     workdir="./research_output",
-    llm=OpenAIClient(model="gpt-4o-mini"),
+    llm=MockLLMClient(),
 )
 ```
+
+Tests that hit a real LLM provider should be marked
+`@pytest.mark.needs_real_llm` (declared in `pytest.ini`); they are
+skipped by default and only run with `pytest --run-real-llm` plus a
+matching API key in the environment (`OPENAI_API_KEY`,
+`OPENROUTER_API_KEY`, or `ANTHROPIC_API_KEY`). This keeps real-provider
+costs opt-in and makes "passes only under mock" testing visible in CI
+reports rather than hidden as a green test.
 
 For a cheap OpenRouter smoke run:
 
