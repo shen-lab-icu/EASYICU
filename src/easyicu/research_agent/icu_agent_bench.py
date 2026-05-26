@@ -1,33 +1,45 @@
-"""Typed ICUAgentBench scaffolding for benchmark/evaluation runs.
+"""Typed scaffolding for the EasyICU agent **evaluation protocol**.
 
 ================================================================================
-PROTOTYPE — NOT A PUBLISHED BENCHMARK
+INTERNAL EVALUATION PROTOCOL — NOT A PUBLISHED BENCHMARK
 ================================================================================
-ICUAgentBench is an **internal prototype** evaluation framework. It is NOT a
-frozen, externally validated, or peer-reviewed benchmark.
+This module supports the EasyICU research agent's **internal evaluation
+protocol** (see ``02_npj_Digital_Medicine/tier_evaluation_protocol_20260527.md``).
+It is **not** a community benchmark and the manuscript does not describe it
+that way. The historical class name ``ICUAgentBench`` is retained only for
+backwards compatibility with on-disk task JSON, existing run directories, and
+downstream test fixtures; references in code or paper-facing text should call
+this the **EasyICU evaluation protocol** or **evaluation scaffold**.
 
-DO NOT cite this module (or its task IDs) in manuscripts, posters, or grant
-applications as if it were an established benchmark. The default suite contains
-exactly **one** partially frozen task (``synthetic_cohort_anomaly_audit``) with
-a checkable gold answer; all other tasks are descriptive specifications still
-awaiting frozen gold answers, adjudication rules, and an external runner.
+Specifically:
 
-When ICUAgentBench is ready for public/paper-facing use, this banner will be
-removed and a versioned task-suite manifest will be added to the repo. Until
-then, the WriterAgent / ManuscriptAgent must not surface bench results as
-benchmark scores — describe runs as "internal prototype evaluation" only.
+* The default suite contains exactly **one** partially frozen task
+  (``synthetic_cohort_anomaly_audit``) with a checkable gold answer; all
+  other tasks are descriptive specifications, not adjudicated benchmark
+  items.
+* No external adjudication, peer-reviewed task curation, or frozen public
+  task-suite manifest exists yet.
+* The protocol is layered (Tier 1 = deterministic checks, Tier 2 = LLM-jury
+  process audit, Tier 3 = clinician spot-check). Only Tier 1 has been
+  executed for the present submission; Tier 2 and Tier 3 are outlined in
+  the Supplementary Methods but not run.
+
+DO NOT cite this module's outputs as "benchmark scores" in manuscripts,
+posters, or grant applications. WriterAgent / ManuscriptAgent must surface
+results as ``Tier 1 deterministic-gate outcomes`` of the EasyICU evaluation
+protocol, not as benchmark scores.
+
+When (and only when) an external, peer-reviewed, frozen task suite is added
+with adjudicated gold answers, this banner will be revised and the
+``ICUAgentBench`` class names may be deprecated in favour of explicitly
+``EvaluationProtocol*`` naming.
 ================================================================================
-
-The current EASYICU benchmark runner grew organically from internal rule and
-analysis tasks. This module adds a formal, reusable schema layer so future
-paper-facing evaluation can talk about a stable ICUAgentBench task suite
-instead of ad hoc JSON blobs.
 
 The grading layer (``grade_bench_task`` + ``aggregate_bench_report``) is
 deliberately a **pure-function** layer that does *not* depend on the
-pipeline, agents, or LLM. This keeps the benchmark machinery exercisable
-from unit tests against deterministic fixtures, and lets the same
-grader be reused by an external runner when it lands.
+pipeline, agents, or LLM. This keeps the protocol machinery exercisable
+from unit tests against deterministic fixtures, and lets the same grader
+be reused by an external runner if one is added in the future.
 """
 
 from __future__ import annotations

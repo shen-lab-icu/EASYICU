@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import html
+from pathlib import Path
 from typing import Any
+
+
+_EXPORT_TABLE_SUFFIXES = {".csv", ".parquet", ".xlsx"}
 
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
@@ -48,6 +53,133 @@ def _load_demo_review_workspace_from_state() -> tuple[int, int]:
     st.session_state["_exporting_in_progress"] = False
     st.session_state.viz_data_source_mode = "demo"
     return len(mock_data), len(st.session_state.patient_ids)
+
+
+def _quick_viz_export_file_count(path: str | Path) -> int:
+    """Count table files that Quick Visualization can load from a folder."""
+    try:
+        folder = Path(path).expanduser()
+        if not folder.exists() or not folder.is_dir():
+            return 0
+        return sum(
+            1
+            for child in folder.iterdir()
+            if child.is_file() and child.suffix.lower() in _EXPORT_TABLE_SUFFIXES
+        )
+    except OSError:
+        return 0
+
+
+def _quick_viz_export_candidates(state: dict[str, Any], *, limit: int = 4) -> list[dict[str, Any]]:
+    """Return remembered or discoverable export folders for the review loader."""
+    seen: set[str] = set()
+    candidates: list[dict[str, Any]] = []
+
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0
+
+    def _add(path_value: object, source: str) -> None:
+        if not path_value:
+            return
+        path = Path(str(path_value)).expanduser()
+        key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        file_count = _quick_viz_export_file_count(path)
+        if file_count <= 0:
+            return
+        candidates.append({
+            "path": key,
+            "source": source,
+            "file_count": file_count,
+            "mtime": _mtime(path),
+        })
+
+    _add(state.get("viz_confirmed_path"), "confirmed")
+    _add(state.get("last_export_dir"), "last")
+    _add(state.get("last_export_full_dir"), "last")
+    _add(state.get("viz_export_path"), "current")
+    _add(state.get("export_path"), "default")
+
+    roots = [
+        state.get("export_path"),
+        str(Path.home() / "easyicu_export"),
+    ]
+    for root_value in roots:
+        if not root_value:
+            continue
+        root = Path(str(root_value)).expanduser()
+        if not root.exists() or not root.is_dir():
+            continue
+        _add(root, "default")
+        try:
+            child_dirs = [child for child in root.iterdir() if child.is_dir()]
+        except OSError:
+            continue
+        for child in sorted(child_dirs, key=_mtime, reverse=True):
+            _add(child, "found")
+
+    candidates.sort(key=lambda item: (item["source"] not in {"confirmed", "last"}, -item["mtime"]))
+    return candidates[:limit]
+
+
+def _apply_quick_viz_export_candidate(state: dict[str, Any], path: str) -> None:
+    """Fill the exported-data path controls from a recovered candidate."""
+    state["viz_export_path"] = path
+    state["viz_export_path_input"] = path
+    state["viz_data_source_mode"] = "exported"
+    state["_prefer_exported_viz"] = False
+
+
+def _render_quick_viz_export_path_recovery(lang: str) -> None:
+    candidates = _quick_viz_export_candidates(st.session_state)
+    default_export_root = str(Path(st.session_state.get("export_path") or Path.home() / "easyicu_export").expanduser())
+    is_en = lang == "en"
+    title = "Not sure where the export is?" if is_en else "不确定之前导出到哪里了？"
+    subtitle = (
+        "Use a remembered export folder below, or browse the default EasyICU export root. This scans local folders only; EasyICU does not upload export history to GitHub."
+        if is_en else
+        "可以直接使用下方记住的导出目录，或从默认 EasyICU 导出根目录开始找。这里只扫描本机目录；EasyICU 不会把导出历史上传到 GitHub。"
+    )
+    st.markdown(
+        '<div class="eu-qv-export-recovery">'
+        f'<div class="eu-qv-export-recovery-title">{html.escape(title)}</div>'
+        f'<div class="eu-qv-export-recovery-subtitle">{html.escape(subtitle)}</div>'
+        f'<code>{html.escape(default_export_root)}</code>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if candidates:
+        for idx, candidate in enumerate(candidates[:3]):
+            path = str(candidate["path"])
+            folder_name = Path(path).name or path
+            source = str(candidate["source"])
+            if source in {"confirmed", "last"}:
+                prefix = "Use last export" if is_en else "使用上次导出"
+            elif source == "default":
+                prefix = "Use default folder" if is_en else "使用默认目录"
+            else:
+                prefix = "Use recent folder" if is_en else "使用最近目录"
+            file_word = "files" if is_en else "个文件"
+            label = f"{prefix}: {folder_name} · {candidate['file_count']} {file_word}"
+            if st.button(label, key=f"viz_use_export_candidate_{idx}", use_container_width=True, help=path):
+                _apply_quick_viz_export_candidate(st.session_state, path)
+                st.rerun()
+    else:
+        fallback_label = "Start from default export folder" if is_en else "从默认导出目录开始"
+        if st.button(
+            fallback_label,
+            key="viz_use_default_export_root",
+            use_container_width=True,
+            help=default_export_root,
+        ):
+            _apply_quick_viz_export_candidate(st.session_state, default_export_root)
+            st.rerun()
 
 
 def _quick_viz_panel_options(lang: str) -> list[tuple[str, str]]:
@@ -189,6 +321,7 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
             )
 
             if current_source == "exported":
+                _render_quick_viz_export_path_recovery(lang)
                 export_path = _directory_input(
                     "Folder Containing Exported Data Files" if lang == 'en' else "存放导出结果文件的文件夹",
                     value=st.session_state.get('viz_export_path') or recent_export_path,

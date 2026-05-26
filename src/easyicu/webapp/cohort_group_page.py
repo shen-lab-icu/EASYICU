@@ -475,7 +475,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
     def _format_smd_value(value: Optional[float]) -> str:
         if value is None or pd.isna(value):
             return '-'
-        return f"{value:.2f} {_smd_severity_tag(float(value), lang)}"
+        return f"{value:.2f}"
 
     default_modules = _cohort_default_feature_modules(FEATURE_MODULES)
     if screenshot_mode:
@@ -1038,11 +1038,13 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             stats_note = """**Statistical Methods:**
 - Continuous variables: Mean ± SD (Median [IQR]), Mann-Whitney U test, SMD with pooled SD
 - Categorical variables: n (%), Chi-square test, binary SMD with pooled proportion
-- SMD flags: 🟠 |SMD| > 0.10, 🔴 |SMD| > 0.25
+- SMD is reported as a numeric effect-size distance; |SMD| > 0.10 suggests imbalance and |SMD| > 0.25 suggests stronger imbalance
+- Small groups (min n < 10) make SMD unstable, so interpret the numeric values cautiously
 - p < 0.05 considered statistically significant""" if lang == 'en' else """**统计方法说明：**
 - 连续变量：Mean ± SD (Median [IQR])，Mann-Whitney U 检验，SMD 使用合并标准差
 - 分类变量：n (%)，卡方检验，二分类 SMD 使用合并比例
-- SMD 标记：🟠 |SMD| > 0.10，🔴 |SMD| > 0.25
+- SMD 仅作为数值效应量距离展示；|SMD| > 0.10 提示不平衡，|SMD| > 0.25 常被视为较大不平衡
+- 小样本（任一组 n < 10）会让 SMD 不稳定，应谨慎解释数值
 - p < 0.05 认为具有统计学显著性"""
             st.caption(stats_note)
 

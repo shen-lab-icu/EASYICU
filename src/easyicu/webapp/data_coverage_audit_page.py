@@ -418,24 +418,49 @@ def render_data_coverage_audit_subtab(lang: str, app_context: dict[str, Any] | N
             zmin=0,
             zmax=100,
             colorscale=[
-                [0.0, '#fff7ed'],
-                [0.45, '#dbeafe'],
-                [0.72, '#bbf7d0'],
-                [1.0, '#059669'],
+                [0.0, '#fff8ed'],
+                [0.45, '#f3f6f7'],
+                [0.72, '#dceff1'],
+                [1.0, '#8fbfc7'],
             ],
             hovertemplate="%{y}<br>%{x}: %{z:.1f}%<extra></extra>",
-            colorbar=dict(title='% coverage' if lang == 'en' else '覆盖度 %', thickness=12),
+            colorbar=dict(
+                title='Coverage' if lang == 'en' else '覆盖度',
+                thickness=10,
+                outlinewidth=0,
+                tickfont=dict(size=11, color='#6B7280'),
+                titlefont=dict(size=11, color='#6B7280'),
+            ),
+            xgap=4,
+            ygap=4,
+            textfont=dict(size=11, color='#2E3338'),
         ))
         fig.update_layout(
             template='plotly_white',
-            height=385 if screenshot_mode else 430,
-            margin=dict(l=18, r=18, t=10, b=18),
-            font=dict(size=12, color='#0b1f44'),
-            paper_bgcolor='rgba(0,0,0,0)',
+            height=360 if screenshot_mode else 396,
+            margin=dict(l=126, r=22, t=12, b=22),
+            font=dict(family='IBM Plex Sans, IBM Plex Sans SC, sans-serif', size=12, color='#2E3338'),
+            paper_bgcolor='#FFFFFF',
             plot_bgcolor='#ffffff',
+            hoverlabel=dict(bgcolor='#FFFFFF', bordercolor='#DCDAD2', font=dict(color='#0E1116', size=12)),
         )
-        fig.update_xaxes(side='top')
-        st.plotly_chart(fig, use_container_width=True, key="audit_coverage_heatmap", config=_get_plotly_chart_config())
+        fig.update_xaxes(
+            side='top',
+            showgrid=False,
+            zeroline=False,
+            ticks='',
+            tickfont=dict(size=11, color='#6B7280'),
+            title=None,
+        )
+        fig.update_yaxes(
+            showgrid=False,
+            zeroline=False,
+            ticks='',
+            tickfont=dict(size=11, color='#2E3338'),
+            title=None,
+        )
+        chart_config = {**_get_plotly_chart_config(), "displayModeBar": False}
+        st.plotly_chart(fig, use_container_width=True, key="audit_coverage_heatmap", config=chart_config)
 
     with right_col:
         st.markdown(

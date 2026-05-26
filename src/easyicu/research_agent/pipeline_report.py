@@ -132,6 +132,177 @@ def _publication_figure_bundle_ready(
     }
 
 
+_STEP_ID_IN_MESSAGE_PATTERNS = (
+    # Matches the in-message tokens written by every pipeline_execute
+    # ValidationFinding site that references a specific step. See
+    # ``_step_id_referenced_in_finding`` for the full taxonomy.
+    re.compile(r"\bfor step\s+([A-Za-z0-9_./-]+)"),
+    re.compile(r"\bstep\s+([A-Za-z0-9_./-]+)\s+(?:was|failed|skipped|blocked)"),
+)
+
+
+def _step_id_referenced_in_finding(finding: ValidationFinding) -> Optional[str]:
+    """Return the step_id a finding ties to, if any.
+
+    Priority order:
+
+    1. ``finding.detail["step_id"]`` (preferred — set by new
+       step-tied finding sites going forward).
+    2. Regex scan of ``finding.message`` for the canonical
+       ``"for step <id>"`` / ``"step <id> failed"`` phrasings used
+       across :mod:`pipeline_execute`. This catches the existing
+       ~14 historical ValidationFinding sites without requiring a
+       sweeping rewrite at every emit point.
+
+    Returns ``None`` when no step_id reference is found, which means
+    the finding is global (e.g. "no manuscript generated") and should
+    NOT be superseded by per-step success.
+    """
+    if finding.detail and isinstance(finding.detail.get("step_id"), str):
+        return finding.detail["step_id"]
+    message = finding.message or ""
+    for pattern in _STEP_ID_IN_MESSAGE_PATTERNS:
+        m = pattern.search(message)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _successful_step_ids(per_step_records: Sequence[Dict[str, Any]]) -> set:
+    """Step ids whose FINAL recorded status was ``"ok"``.
+
+    Used to identify findings that have been *superseded* by a
+    successful retry / resume / deterministic-fallback / replanned
+    re-execution. The general rule: if a step ultimately finished
+    cleanly, its earlier failure findings (e.g. a 502 from the
+    original pre-resume invocation) should not count against the
+    final readiness gates — they remain in the manifest for the
+    audit trail but are not treated as errors at the report stage.
+    """
+    return {
+        str(rec.get("step_id"))
+        for rec in per_step_records
+        if isinstance(rec, dict)
+        and rec.get("status") == "ok"
+        and rec.get("step_id")
+    }
+
+
+def _step_ids_in_records(per_step_records: Sequence[Dict[str, Any]]) -> set:
+    """Every step_id that has any per_step_record entry (ok or not).
+
+    A finding whose referenced step_id is NOT in this set must
+    come from a step that was *replanned away* — i.e. the replanner
+    dropped the failing step and substituted a different step that
+    later ran instead. The original failure is no longer part of
+    the plan-of-record and shouldn't drag the readiness gate down
+    when the final-plan execution otherwise completed cleanly. This
+    is the third recognised supersession axis (see
+    :func:`_partition_findings_by_supersession`).
+    """
+    return {
+        str(rec.get("step_id"))
+        for rec in per_step_records
+        if isinstance(rec, dict) and rec.get("step_id")
+    }
+
+
+_GATE_STATE_SUPERSESSION_PATTERNS = (
+    # Common "we skipped X because gate Y did not pass" / "X was not
+    # produced because Y failed" findings emitted when a gate was
+    # transiently False during the run. If the gate is now True at
+    # report time, the finding is stale and should not count.
+    (
+        "manuscript_gate",
+        "execution gate did not pass",
+        "execution_complete",
+    ),
+    (
+        "manuscript_gate",
+        "manuscript generation skipped",
+        "execution_complete",
+    ),
+)
+
+
+def _is_gate_state_superseded(
+    finding: ValidationFinding,
+    *,
+    gate_state: Dict[str, bool],
+) -> bool:
+    """True when the finding documents a transient gate-state failure
+    that the latest gate snapshot has now resolved.
+
+    For example, ``manuscript_gate`` emits a finding when the writer
+    refuses to draft a manuscript because the execution gate was False
+    at that moment. If the writer later runs successfully on resume
+    and execution_complete becomes True, the original "skipped because
+    execution gate did not pass" message is stale: nothing skipped in
+    the *final* state of the run.
+    """
+    validator = finding.validator or ""
+    message = (finding.message or "").lower()
+    for v_match, msg_substr, gate_key in _GATE_STATE_SUPERSESSION_PATTERNS:
+        if v_match == validator and msg_substr.lower() in message:
+            if gate_state.get(gate_key):
+                return True
+    return False
+
+
+def _partition_findings_by_supersession(
+    findings: Sequence[ValidationFinding],
+    *,
+    success_step_ids: set,
+    known_step_ids: Optional[set] = None,
+    gate_state: Optional[Dict[str, bool]] = None,
+) -> tuple[List[ValidationFinding], List[ValidationFinding]]:
+    """Split findings into (active, superseded).
+
+    A finding is *superseded* when one of:
+
+    1. It carries a step_id reference (via ``detail.step_id`` or a
+       recognised message pattern) and that step_id is in
+       ``success_step_ids`` — the step ultimately succeeded so its
+       earlier failure findings are stale.
+    2. It references a step_id that is no longer in the plan-of-
+       record (i.e. not in ``known_step_ids``). This is the
+       "replanned away" axis: the replanner dropped the failing
+       step and the substitute step ran instead. The original
+       failure is detached from the final plan and shouldn't count
+       against the final gate. ``known_step_ids`` is the union of
+       every step_id present in ``per_step_records`` (ok or not).
+       When ``known_step_ids`` is None, this axis is skipped.
+    3. It documents a transient gate-state failure (e.g.,
+       ``manuscript_gate`` complaining the execution gate had not
+       passed) and the corresponding gate is now True in
+       ``gate_state``.
+
+    The classification is purely deterministic — same inputs always
+    yield the same partition. The superseded set is returned
+    alongside the active set so the manifest can record both for
+    audit traceability.
+    """
+    gate_state = gate_state or {}
+    active: List[ValidationFinding] = []
+    superseded: List[ValidationFinding] = []
+    for f in findings:
+        sid = _step_id_referenced_in_finding(f)
+        if sid:
+            if sid in success_step_ids:
+                superseded.append(f)
+                continue
+            if known_step_ids is not None and sid not in known_step_ids:
+                # Step was replanned away — its failure is no longer
+                # part of the plan-of-record.
+                superseded.append(f)
+                continue
+        if _is_gate_state_superseded(f, gate_state=gate_state):
+            superseded.append(f)
+            continue
+        active.append(f)
+    return active, superseded
+
+
 def _compute_readiness_gates(
     *,
     plan: Optional[AnalysisPlan],
@@ -150,19 +321,40 @@ def _compute_readiness_gates(
         except Exception:
             manuscript_text = ""
     missing_evidence_count = _count_missing_evidence_markers(manuscript_text)
+    # General supersession rule: if a step eventually succeeded
+    # (status="ok" in per_step_records), any earlier ValidationFinding
+    # tied to that step_id (e.g. the original 502 / coder_failed
+    # finding from before a successful resume) should not count
+    # toward the readiness gates. The full finding list is preserved
+    # in the manifest so the audit trail still shows the failure +
+    # recovery sequence.
+    success_step_ids = _successful_step_ids(per_step_records)
+    known_step_ids = _step_ids_in_records(per_step_records)
+    # Compute current gate state once so the gate-state supersession
+    # rule sees the final values, not the transient mid-run snapshot
+    # the finding was emitted under.
+    current_gate_state: Dict[str, bool] = {
+        "execution_complete": bool(execution.get("execution_complete")),
+    }
+    active_findings, superseded_findings = _partition_findings_by_supersession(
+        findings,
+        success_step_ids=success_step_ids,
+        known_step_ids=known_step_ids,
+        gate_state=current_gate_state,
+    )
     numeric_errors = [
         f.message
-        for f in findings
+        for f in active_findings
         if f.severity == "error" and f.validator == "manuscript_numeric_auditor"
     ]
     evidence_errors = [
         f.message
-        for f in findings
+        for f in active_findings
         if f.severity == "error" and f.validator in {"evidence_bound_writer", "critic_agent"}
     ]
     non_manuscript_errors = [
         f.message
-        for f in findings
+        for f in active_findings
         if f.severity == "error"
         and f.validator
         not in {
@@ -202,6 +394,16 @@ def _compute_readiness_gates(
         "numeric_errors": numeric_errors,
         "evidence_errors": evidence_errors,
         "analysis_errors": non_manuscript_errors,
+        # Audit-trail surface for the supersession rule (see
+        # _partition_findings_by_supersession). Reviewers can inspect
+        # which findings the readiness gate ignored because the
+        # underlying step ultimately succeeded.
+        "superseded_error_count": sum(1 for f in superseded_findings if f.severity == "error"),
+        "superseded_errors": [
+            {"validator": f.validator, "message": f.message}
+            for f in superseded_findings
+            if f.severity == "error"
+        ],
         **publication,
     }
 

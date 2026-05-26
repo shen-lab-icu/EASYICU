@@ -381,7 +381,7 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
         f'<h1 style="margin:6px 0;font-size:28px;font-weight:500;letter-spacing:-0.02em;color:var(--ink)">'
         f'{_T(lang, "Extract, review, analyze, draft.", "数据抽取 → 审阅 → 分析 → 起草")}</h1>'
         f'<p style="margin:0;color:var(--ink-3);font-size:13.5px;max-width:760px;line-height:1.55">'
-        f'{_T(lang, "EasyICU is a local-first ICU research workspace. The four steps below cover the core data-preparation flow — once complete you can move into the analysis modules or hand the cohort off to the Research Agent.", "EasyICU 是一套本地优先的 ICU 数据研究工作台。下面四步是核心数据准备流程,完成后即可进入分析模块或交给 Research Agent。")}'
+        f'{_T(lang, "EasyICU is a local-first ICU research workspace. The four steps below cover the core data-preparation flow — once complete you can move into the analysis modules or hand the cohort off to the Research Agent.", "EasyICU 是一套本地优先的 ICU 数据研究工作台。下面四步是核心数据准备流程，完成后即可进入分析模块或交给研究智能体。")}'
         '</p></div>',
         unsafe_allow_html=True,
     )
@@ -425,7 +425,7 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
             "label_zh": _T(lang, "分析", "分析"),
             "desc": _T(lang,
                 "Quick Visualization, Cohort Statistics, Cross-DB Benchmark — or hand off to the Research Agent.",
-                "Quick Visualization、Cohort Statistics、Cross-DB Benchmark,或交给 Research Agent 自动产出。"),
+                "患者审阅、队列统计、跨数据库对比，或交给研究智能体自动产出。"),
             "sub": _T(lang, "4 surfaces", "4 个面板"),
         },
     ]
@@ -455,14 +455,14 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
         badge_html=badge_recommended,
         desc=_T(lang,
             "Automatically generates reproducible mock data. Full cohort-builder, Quick Viz, and Research Agent gallery experience. No tokens, no local data needed.",
-            "自动生成可重复的模拟数据。完整体验 cohort builder、Quick Viz、Research Agent 静态画廊。无需 token、无需本地数据。"),
+            "自动生成可重复的模拟数据。完整体验队列构建、患者审阅和研究智能体静态画廊。无需令牌、无需本地数据。"),
         bullets=[
             _T(lang, "10-patient fast review set · 24h default",
                     "10 例快速审阅集 · 默认 24 小时"),
             _T(lang, "Lightweight review data is ready immediately",
                     "轻量审阅数据可立即打开"),
             _T(lang, "Research Agent static gallery available",
-                    "Research Agent 静态输出画廊可看"),
+                    "研究智能体静态输出画廊可查看"),
             _T(lang, "Switching sessions never loses your real work",
                     "会话切换不会丢失你的真实工作"),
         ],
@@ -484,9 +484,9 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
             _T(lang, "Auto path detection + one-click CSV → parquet",
                     "路径自动检测 + 一键 CSV → parquet 转换"),
             _T(lang, "Module-folder mode reuses prior exports",
-                    "Module-folder mode 支持复用之前的导出"),
+                    "模块文件夹模式支持复用之前的导出"),
             _T(lang, "Cross-DB Benchmark can connect ≥ 2 databases",
-                    "Cross-DB Benchmark 可同时连接 ≥ 2 个库"),
+                    "跨数据库对比可同时连接 ≥ 2 个数据库"),
         ],
         cta_label=_T(lang, "Configure data path", "配置数据路径"),
     )
@@ -498,7 +498,7 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
         badge_html="",
         desc=_T(lang,
             "No data yet? Let the Research Agent generate a reusable code skeleton first; plug in real data later.",
-            "还没有数据?让 Research Agent 先生成可复用的代码骨架,稍后再接入真实数据。"),
+            "还没有数据？先让研究智能体生成可复用的代码骨架，稍后再接入真实数据。"),
         bullets=[
             _T(lang, "Generate cohort.py / analysis.py", "生成 cohort.py / analysis.py"),
             _T(lang, "Methods section draft", "Methods 段草稿"),
@@ -588,7 +588,7 @@ def render_tutorial_redesign_page(lang: str) -> None:
         {
             "number": "4",
             "label": _T(lang, "Analysis", "分析"),
-            "desc": _T(lang, "Review, compare databases, or hand off to the agent.", "审阅、跨库比较或交给 agent。"),
+            "desc": _T(lang, "Review, compare databases, or hand off to the agent.", "审阅、比较多个数据库，或交给研究智能体。"),
             "sub": _T(lang, "4 views", "4 视图"),
         },
     ]
@@ -635,7 +635,7 @@ def render_tutorial_redesign_page(lang: str) -> None:
         subtitle=_T(lang, "Draft first", "先起草代码"),
         desc=_T(lang,
             "Let the Research Agent prepare a reusable analysis skeleton before data are available.",
-            "还没有数据时，先让 Research Agent 准备可复用的分析代码骨架。"),
+            "还没有数据时，先让研究智能体准备可复用的分析代码骨架。"),
         bullets=[
             _T(lang, "Generate cohort.py / analysis.py", "生成 cohort.py / analysis.py"),
             _T(lang, "Create a methods-section draft", "生成 Methods 段草稿"),
@@ -656,21 +656,22 @@ def render_tutorial_redesign_page(lang: str) -> None:
             _route_to_extract_entry_mode(st.session_state, "demo")
             st.rerun()
 
-        secondary_left, secondary_right = st.columns(2, gap="medium")
-        with secondary_left:
-            st.markdown(real_card, unsafe_allow_html=True)
-            if st.button(_T(lang, "Configure data path -> Extract", "配置数据路径 -> 提取"),
-                         key="_eu_tutorial_real",
-                         use_container_width=True):
-                _route_to_extract_entry_mode(st.session_state, "real")
-                st.rerun()
-        with secondary_right:
-            st.markdown(nodata_card, unsafe_allow_html=True)
-            if st.button(_T(lang, "Skip data -> Agent", "跳过数据 -> Agent"),
-                         key="_eu_tutorial_nodata",
-                         use_container_width=True):
-                st.session_state["_active_main_page"] = "research_agent"
-                st.rerun()
+        with st.container(key="eu_tutorial_secondary_starts"):
+            secondary_left, secondary_right = st.columns(2, gap="medium")
+            with secondary_left:
+                st.markdown(real_card, unsafe_allow_html=True)
+                if st.button(_T(lang, "Configure data path -> Extract", "配置数据路径 -> 提取"),
+                             key="_eu_tutorial_real",
+                             use_container_width=True):
+                    _route_to_extract_entry_mode(st.session_state, "real")
+                    st.rerun()
+            with secondary_right:
+                st.markdown(nodata_card, unsafe_allow_html=True)
+                if st.button(_T(lang, "Skip data -> Agent", "跳过数据 -> Agent"),
+                             key="_eu_tutorial_nodata",
+                             use_container_width=True):
+                    st.session_state["_active_main_page"] = "research_agent"
+                    st.rerun()
 
         _render_tutorial_dictionary(lang)
         if st.button(
@@ -735,7 +736,7 @@ def _quick_viz_modules(lang: str) -> list[tuple[str, int, bool]]:
 def _render_qv_data_tables(lang: str) -> None:
     st.markdown(
         cc.render_design_page_header(
-            kicker=_T(lang, "Quick Visualization · 快速可视化", "快速可视化 · Quick Visualization"),
+            kicker=_T(lang, "Quick Visualization · 快速可视化", "快速可视化"),
             title_en=_T(lang, "Module table preview", "Module table preview"),
             title_zh=_T(lang, "模块表预览", "模块表预览"),
             desc=_T(lang,
@@ -766,7 +767,7 @@ def _render_qv_data_tables(lang: str) -> None:
             '<div>'
             f'<div style="font-size:14px;font-weight:500">{_T(lang, "Vital Signs", "生命体征")}'
             f' <span class="eu-cn" style="color:var(--ink-3);font-weight:400;margin-left:6px">'
-            f'{_T(lang, "生命体征", "Vital signs")}</span></div>'
+            f'{_T(lang, "Vital signs", "生命体征")}</span></div>'
             f'<div style="font-size:12px;color:var(--ink-3)">'
             f'{_T(lang, "Core bedside measurements aligned to a compact longitudinal preview.", "床旁核心测量,对齐成紧凑的纵向预览。")}'
             '</div></div></div>'
@@ -1061,7 +1062,7 @@ def render_agent_redesign_page(lang: str) -> None:
     )
     st.markdown(
         cc.render_design_page_header(
-            kicker=_T(lang, "Research Agent · 研究代理", "研究代理 · Research Agent"),
+            kicker=_T(lang, "Research Agent · 研究智能体", "研究智能体"),
             title_en=_T(lang, "Sepsis mortality predictors", "Sepsis mortality predictors"),
             title_zh=_T(lang, "脓毒症死亡预测因子", "脓毒症死亡预测因子"),
             desc=_T(lang,
@@ -1114,7 +1115,7 @@ def render_agent_redesign_page(lang: str) -> None:
             '<div>'
             f'<div style="font-size:13px;font-weight:500">{_T(lang, "Research question", "研究问题")}'
             f' <span class="eu-cn" style="color:var(--ink-3);font-weight:400;margin-left:6px">'
-            f'{_T(lang, "研究问题", "Research question")}</span></div>'
+            f'{_T(lang, "Research question", "研究问题")}</span></div>'
             f'<div style="font-size:11.5px;color:var(--ink-4)">'
             f'{_T(lang, "One sentence. The agent drafts a plan first; you confirm before any LLM call.", "一句话。Agent 会先给出计划,你确认后才会进行 LLM 调用。")}</div>'
             '</div>'
@@ -1225,7 +1226,7 @@ def render_agent_redesign_page(lang: str) -> None:
         '<div style="flex:1">'
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
         f'<span style="font-size:13px;font-weight:500;color:oklch(35% 0.12 75)">{_T(lang, "Findings", "主要发现")}'
-        f' <span class="eu-cn" style="font-weight:400;margin-left:6px">{_T(lang, "主要发现", "Findings")}</span></span>'
+        f' <span class="eu-cn" style="font-weight:400;margin-left:6px">{_T(lang, "Findings", "主要发现")}</span></span>'
         f'<span class="eu-pill" style="background:var(--surface)">{_T(lang, "auto-drafted · review needed", "自动起草 · 需审阅")}</span>'
         '</div>'
         f'<div style="font-size:12.5px;color:oklch(28% 0.10 75);line-height:1.55">'
@@ -1252,7 +1253,7 @@ def render_agent_redesign_page(lang: str) -> None:
         f'{_T(lang, "Review gate", "审阅闸门")}</span>'
         '<div style="flex:1">'
         f'<div style="font-size:13px;font-weight:500">{_T(lang, "Analysis ready. Generate manuscript draft?", "分析就绪,是否生成稿件草稿?")} '
-        f'<span class="eu-cn" style="color:var(--ink-3);font-weight:400">{_T(lang, "分析就绪,是否生成稿件草稿?", "Analysis ready · draft manuscript?")}</span></div>'
+        f'<span class="eu-cn" style="color:var(--ink-3);font-weight:400">{_T(lang, "Analysis ready · draft manuscript?", "分析就绪，是否生成稿件草稿？")}</span></div>'
         f'<div style="font-size:11.5px;color:var(--ink-3)">'
         f'{_T(lang, "Manuscript drafting is intentionally a second-stage action. Confirm findings above before drafting.", "起稿是刻意设置为第二阶段动作,请先确认上面的发现再继续。")}</div>'
         '</div></div>',
@@ -1316,7 +1317,7 @@ def render_entry_redesign_page(lang: str) -> None:
         f'<h1 style="margin:12px 0 8px;font-size:38px;font-weight:500;letter-spacing:-0.025em;color:var(--ink)">'
         f'{_T(lang, "Extract. Review. Analyze. Draft.", "数据抽取 · 审阅 · 分析 · 起草")}</h1>'
         f'<div class="eu-cn" style="font-size:15px;color:var(--ink-3)">'
-        f'{_T(lang, "数据抽取 · 审阅 · 分析 · 起草 — 一站完成", "Extract · Review · Analyze · Draft — all in one place")}</div>'
+        f'{_T(lang, "Extract · Review · Analyze · Draft — all in one place", "数据抽取 · 审阅 · 分析 · 起草，一站完成")}</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1336,13 +1337,13 @@ def render_entry_redesign_page(lang: str) -> None:
         '<path d="M9 3h6"/><path d="M10 3v6L4 20a1 1 0 0 0 .9 1.5h14.2A1 1 0 0 0 20 20l-6-11V3"/></svg></div>'
         '<div>'
         f'<div style="font-size:18px;font-weight:500;letter-spacing:-0.01em">{_T(lang, "Demo Mode", "演示模式")}</div>'
-        f'<div class="eu-cn" style="font-size:12px;color:var(--ink-3)">{_T(lang, "演示模式", "Demo Mode")}</div>'
+        f'<div class="eu-cn" style="font-size:12px;color:var(--ink-3)">{_T(lang, "Demo Mode", "演示模式")}</div>'
         '</div>'
         f'<span class="eu-pill" style="margin-left:auto;background:var(--surface)">'
         f'{_T(lang, "try first", "新手先试")}</span>'
         '</div>'
         f'<p style="margin:0;font-size:13.5px;color:var(--ink-2);line-height:1.55">'
-        f'{_T(lang, "Best for a first run: experience the full workflow with reproducible mock ICU data. No tokens, no local data, no outbound calls.", "首次使用建议先体验演示模式：用可复现的模拟 ICU 数据走完整流程。无 token、无本地数据、无外部连接。")}'
+        f'{_T(lang, "Best for a first run: experience the full workflow with reproducible mock ICU data. No tokens, no local data, no outbound calls.", "首次使用建议先体验演示模式：用可复现的模拟 ICU 数据走完整流程。无需令牌、无需本地数据、无外部连接。")}'
         '</p>'
         '<ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px">'
         + "".join([
@@ -1355,7 +1356,7 @@ def render_entry_redesign_page(lang: str) -> None:
                 _T(lang, "Start at data extraction, then open review panels when ready",
                         "先进入数据提取，再按需打开审阅面板"),
                 _T(lang, "Research Agent static gallery viewable",
-                        "Research Agent 静态输出画廊可查看"),
+                        "研究智能体静态输出画廊可查看"),
                 _T(lang, "Switch to real data anytime without losing work",
                         "随时可切换到真实数据,不丢工作"),
             ]
@@ -1375,7 +1376,7 @@ def render_entry_redesign_page(lang: str) -> None:
         '<path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6"/></svg></div>'
         '<div>'
         f'<div style="font-size:18px;font-weight:500;letter-spacing:-0.01em">{_T(lang, "Real Data", "真实数据")}</div>'
-        f'<div class="eu-cn" style="font-size:12px;color:var(--ink-3)">{_T(lang, "真实数据", "Real Data")}</div>'
+        f'<div class="eu-cn" style="font-size:12px;color:var(--ink-3)">{_T(lang, "Real Data", "真实数据")}</div>'
         '</div>'
         '<span class="eu-pill ok" style="margin-left:auto"><span class="dot"></span>local-only</span>'
         '</div>'
@@ -1393,9 +1394,9 @@ def render_entry_redesign_page(lang: str) -> None:
                 _T(lang, "Choose a local export folder; EasyICU detects known layouts",
                         "选择本地导出目录；EasyICU 自动识别常见结构"),
                 _T(lang, "Module-folder mode reuses prior exports",
-                        "Module-folder mode 可复用之前的导出"),
+                        "模块文件夹模式可复用之前的导出"),
                 _T(lang, "Cross-DB Benchmark connects ≥2 databases",
-                        "Cross-DB Benchmark 同时连接 ≥ 2 个库"),
+                        "跨数据库对比可同时连接 ≥ 2 个数据库"),
             ]
         ])
         + '</ul></div>'
@@ -1431,9 +1432,9 @@ def render_entry_redesign_page(lang: str) -> None:
                 '<div style="flex:1">'
                 f'<div style="font-size:13px;font-weight:500">{_T(lang, "No data yet?", "还没有数据?")}'
                 f' <span class="eu-cn" style="color:var(--ink-3);font-weight:400;margin-left:6px">'
-                f'{_T(lang, "还没有数据?", "No data yet?")}</span></div>'
+                f'{_T(lang, "No data yet?", "还没有数据？")}</span></div>'
                 f'<div style="font-size:12px;color:var(--ink-3)">'
-                f'{_T(lang, "Let the Research Agent generate a reusable code skeleton, then plug data in later.", "让 Research Agent 先生成可复用代码骨架，稍后再接入真实数据。")}</div>'
+                f'{_T(lang, "Let the Research Agent generate a reusable code skeleton, then plug data in later.", "让研究智能体先生成可复用代码骨架，稍后再接入真实数据。")}</div>'
                 '</div></div>',
                 unsafe_allow_html=True,
             )

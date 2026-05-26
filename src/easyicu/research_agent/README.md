@@ -35,18 +35,26 @@ The runtime now makes a four-layer design explicit:
 - **Layer 1 — ICU Data Foundation**: unified concept abstraction, cohort provenance, deterministic temporal semantics, and ICU episode resolution.
 - **Layer 2 — Safe Analytical Runtime**: evidence store, audit log, validators, execution replay, and workflow graph artifacts.
 - **Layer 3 — Agent Orchestration**: planner / replanner / coder / analyzer / writer coordinated through a runtime supervisor pattern.
-- **Layer 4 — Scientific Discovery**: a pre-plan hypothesis blueprint that distills literature, feasibility, self-critique and ICU domain gates before the planner executes, without weakening the safety contract of Layers 1–2.
+- **Layer 4 — Candidate Hypothesis Ranking**: a pre-plan hypothesis blueprint that distills literature, feasibility, self-critique and ICU domain gates before the planner executes, ranking candidate research questions for human curation. It is **not** an autonomous scientific-discovery system; it is a ranking module whose outputs are filtered by humans and constrained by Layers 1–2.
 
-Current scope note: the Scientific Discovery layer is bounded. It now
-creates an auditable `hypothesis_blueprint.json` before planning, but
-it should not yet be described as a complete CellVoyager-style
-autonomous notebook scientist.
+Current scope note: Layer 4 is bounded. It produces an auditable
+`hypothesis_blueprint.json` before planning, ranking candidates by
+coverage / novelty / gate-pass weights, but it should not be described
+as "Scientific Discovery" in paper-facing text. In manuscripts use
+"candidate hypothesis ranking, human-curated".
 
-Current benchmark note: ICUAgentBench is presently a **prototype
-evaluation framework / planned benchmark suite**. The typed task schema,
-metrics, and runner hooks are in place, but a frozen public benchmark
-release with gold answers and adjudicated scoring should be described as
-future work.
+Current evaluation-protocol note: the historical name **"ICUAgentBench"**
+is retained for code and on-disk compatibility, but in the manuscript
+this module is described as the **EasyICU evaluation protocol** (an
+internal evaluation scaffold), not as a benchmark. The protocol is
+layered: Tier 1 deterministic checks, Tier 2 frontier-LLM jury for
+process / writing quality, Tier 3 clinician spot-check for clinical
+plausibility. **Only Tier 1 is executed in the current submission**;
+Tier 2 and Tier 3 are outlined in the Supplementary Methods
+(`02_npj_Digital_Medicine/tier_evaluation_protocol_20260527.md`) and
+will be added in the revision response if reviewers request them. No
+"gold answers", "benchmark scores", or "scientific discovery" claims
+should be surfaced through this module in paper-facing text.
 
 ```
 question + cohort  ────────────►  optional: ClinicalSkill

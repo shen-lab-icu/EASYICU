@@ -49,6 +49,7 @@ from __future__ import annotations
 import html
 import hashlib
 import json
+import os
 import re
 import socket
 import sys
@@ -56,7 +57,7 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, MutableMapping, Optional, Sequence, Set, Tuple
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -675,6 +676,33 @@ def _default_module_selection(labels: Sequence[str]) -> List[str]:
     return list(labels)
 
 
+_RAW_EXTRACT_MODULES_KEY = "research_agent_extract_modules"
+_LEGACY_RAW_EXTRACT_DEFAULT_MODULES = (
+    "demographics",
+    "outcome",
+    "sofa2_score",
+    "sepsis3_sofa2",
+    "vitals",
+    "blood_gas",
+)
+
+
+def _default_extract_module_selection(modules: Dict[str, List[str]]) -> List[str]:
+    # Research-agent runs are context hungry: default to a complete export and
+    # let advanced users narrow the module list deliberately.
+    return list(modules.keys())
+
+
+def _migrate_legacy_extract_module_selection(
+    state: MutableMapping[str, Any],
+    modules: Dict[str, List[str]],
+) -> None:
+    current = state.get(_RAW_EXTRACT_MODULES_KEY)
+    legacy_default = [module for module in _LEGACY_RAW_EXTRACT_DEFAULT_MODULES if module in modules]
+    if legacy_default and isinstance(current, (list, tuple)) and list(current) == legacy_default:
+        state[_RAW_EXTRACT_MODULES_KEY] = _default_extract_module_selection(modules)
+
+
 def _available_extract_modules() -> Dict[str, List[str]]:
     try:
         from easyicu.api import EXTRACT_MODULES  # type: ignore
@@ -887,36 +915,55 @@ def _run_pipeline(
     notes: Optional[str] = None,
     stop_after_analysis: bool = False,
     resume_run_id: Optional[str] = None,
+    audit_relax_probe: bool = False,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ):
-    """Invoke the pipeline; return the :class:`PipelineResult`."""
-    pipeline = handles["ResearchAgentPipeline"](
-        workdir=workdir,
-        llm=llm,
-        disable_icu_context=disable_icu_context,
-        enable_deterministic_planner_fallback=True,
-        enable_deterministic_code_fallback=True,
-    )
-    kwargs: Dict[str, Any] = dict(
-        cohort=cohort,
-        cohort_name="webapp_cohort",
-        database="webapp",
-    )
-    if skill_key:
-        kwargs["skill"] = skill_key
-    if question:
-        kwargs["question"] = question
-    if target_outcome:
-        kwargs["target_outcome"] = target_outcome
-    if notes:
-        kwargs["notes"] = notes
-    if user_preferences:
-        kwargs["user_preferences"] = user_preferences
-    if resume_run_id:
-        kwargs["resume_run_id"] = resume_run_id
-    kwargs["stop_after_analysis"] = stop_after_analysis
-    kwargs["progress_callback"] = progress_callback
-    return pipeline.run(**kwargs)
+    """Invoke the pipeline; return the :class:`PipelineResult`.
+
+    ``audit_relax_probe`` is a per-run override of
+    ``EASYICU_AUDIT_RELAX_PROBE`` — when True, the probe-stage of the
+    concept-usage auditor downgrades reporting-practice violations from
+    block to warning. Used by the webapp resume editor as a documented
+    ablation; the strict default is preserved across the process by
+    restoring the prior env var value after the run.
+    """
+    prior_relax = os.environ.get("EASYICU_AUDIT_RELAX_PROBE")
+    if audit_relax_probe:
+        os.environ["EASYICU_AUDIT_RELAX_PROBE"] = "1"
+    try:
+        pipeline = handles["ResearchAgentPipeline"](
+            workdir=workdir,
+            llm=llm,
+            disable_icu_context=disable_icu_context,
+            enable_deterministic_planner_fallback=True,
+            enable_deterministic_code_fallback=True,
+        )
+        kwargs: Dict[str, Any] = dict(
+            cohort=cohort,
+            cohort_name="webapp_cohort",
+            database="webapp",
+        )
+        if skill_key:
+            kwargs["skill"] = skill_key
+        if question:
+            kwargs["question"] = question
+        if target_outcome:
+            kwargs["target_outcome"] = target_outcome
+        if notes:
+            kwargs["notes"] = notes
+        if user_preferences:
+            kwargs["user_preferences"] = user_preferences
+        if resume_run_id:
+            kwargs["resume_run_id"] = resume_run_id
+        kwargs["stop_after_analysis"] = stop_after_analysis
+        kwargs["progress_callback"] = progress_callback
+        return pipeline.run(**kwargs)
+    finally:
+        if audit_relax_probe:
+            if prior_relax is None:
+                os.environ.pop("EASYICU_AUDIT_RELAX_PROBE", None)
+            else:
+                os.environ["EASYICU_AUDIT_RELAX_PROBE"] = prior_relax
 
 
 # ---------------------------------------------------------------------------
@@ -1953,6 +2000,43 @@ def _stay_level_from_loaded_concepts(
 _DB_TAG_CANDIDATES = ('miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic')
 
 
+def _normalized_db_tag(tag: str) -> str:
+    return str(tag or '').strip().lower()
+
+
+def _duplicate_db_tags(chosen: Sequence[Tuple[str, Path]]) -> List[str]:
+    counts: Dict[str, int] = {}
+    for tag, _folder in chosen:
+        norm = _normalized_db_tag(tag)
+        if not norm:
+            continue
+        counts[norm] = counts.get(norm, 0) + 1
+    return sorted(tag for tag, count in counts.items() if count > 1)
+
+
+def _has_min_distinct_db_tags(chosen: Sequence[Tuple[str, Path]], min_count: int = 2) -> bool:
+    tags = {_normalized_db_tag(tag) for tag, _folder in chosen if _normalized_db_tag(tag)}
+    return len(tags) >= min_count
+
+
+def _multi_db_label_tags(cohort_label: str) -> List[str]:
+    label = str(cohort_label or "")
+    if not label.startswith("multi_db:"):
+        return []
+    raw_tags = label.split(":", 1)[1]
+    return [_normalized_db_tag(tag) for tag in raw_tags.split(",") if _normalized_db_tag(tag)]
+
+
+def _multi_db_label_is_distinct(cohort_label: str) -> bool:
+    tags = _multi_db_label_tags(cohort_label)
+    return not tags or len(set(tags)) >= 2 and len(set(tags)) == len(tags)
+
+
+def _clear_research_agent_preflight_confirmation() -> None:
+    st.session_state["research_agent_preflight_confirmed"] = False
+    st.session_state["research_agent_preflight_ack"] = False
+
+
 def _infer_db_tag_from_folder(folder: Path) -> str:
     """Guess the database tag from an EasyICU module-export folder name.
 
@@ -2032,6 +2116,15 @@ def _render_db_exports_multipicker(
         with cols[1]:
             st.caption(f'`{folder}`')
         chosen.append((tag, folder))
+    if min_selected >= 2:
+        duplicate_tags = _duplicate_db_tags(chosen)
+        if duplicate_tags or (len(chosen) >= 2 and not _has_min_distinct_db_tags(chosen, min_count=2)):
+            st.error(_ra_text(
+                'multi_db_duplicate_tags',
+                tags=', '.join(duplicate_tags) if duplicate_tags else ', '.join(d for d, _ in chosen),
+            ))
+            _clear_research_agent_preflight_confirmation()
+            return []
     return chosen
 
 
@@ -2047,9 +2140,17 @@ def _build_multi_db_cohort() -> Tuple[Optional[pd.DataFrame], str]:
     if len(chosen) < 2:
         st.info(_ra_text('multi_db_need_two'))
         return None, ''
+    duplicate_tags = _duplicate_db_tags(chosen)
+    if duplicate_tags or not _has_min_distinct_db_tags(chosen, min_count=2):
+        st.error(_ra_text(
+            'multi_db_duplicate_tags',
+            tags=', '.join(duplicate_tags) if duplicate_tags else ', '.join(d for d, _ in chosen),
+        ))
+        return None, ''
 
     frames: List[pd.DataFrame] = []
     per_db_summary: List[str] = []
+    loaded_db_tags: List[str] = []
     for db_tag, folder in chosen:
         module_files = _list_module_parquets(folder)
         if not module_files:
@@ -2079,19 +2180,24 @@ def _build_multi_db_cohort() -> Tuple[Optional[pd.DataFrame], str]:
         sub = sub.copy()
         sub.insert(0, 'database', db_tag)
         frames.append(sub)
+        loaded_db_tags.append(_normalized_db_tag(db_tag))
         per_db_summary.append(f'{db_tag}={len(sub):,}')
 
     if not frames:
         st.error('No databases could be loaded; check the warnings above.')
         return None, ''
+    loaded_unique_tags = sorted({tag for tag in loaded_db_tags if tag})
+    if len(loaded_unique_tags) < 2:
+        st.error(_ra_text('multi_db_loaded_need_distinct'))
+        return None, ''
 
     cohort = pd.concat(frames, axis=0, ignore_index=True, sort=False)
     st.success(_ra_text(
-        'multi_db_built', rows=len(cohort), dbs=len(frames),
+        'multi_db_built', rows=len(cohort), dbs=len(loaded_unique_tags),
         per_db=', '.join(per_db_summary),
     ))
     st.dataframe(cohort.head(8), use_container_width=True, hide_index=True)
-    return cohort, f'multi_db:{",".join(d for d, _ in chosen)}'
+    return cohort, f'multi_db:{",".join(loaded_unique_tags)}'
 
 
 def _section_cohort_picker(
@@ -2447,15 +2553,13 @@ def _section_cohort_picker(
             placeholder=_placeholder_path("easyicu_export"),
         )
         output_dir = output_dir or default_output_dir
-        default_modules = [
-            m for m in ["demographics", "outcome", "sofa2_score", "sepsis3_sofa2", "vitals", "blood_gas"]
-            if m in modules
-        ]
+        default_modules = _default_extract_module_selection(modules)
+        _migrate_legacy_extract_module_selection(st.session_state, modules)
         picked_modules = st.multiselect(
             _ra_text("modules_extract"),
             list(modules.keys()),
             default=default_modules,
-            key="research_agent_extract_modules",
+            key=_RAW_EXTRACT_MODULES_KEY,
         )
         max_patients = st.selectbox(
             _ra_text("patient_limit"),
@@ -2487,6 +2591,7 @@ def _section_cohort_picker(
             st.session_state.trigger_export = True
             st.session_state.export_completed = False
             st.session_state["_exporting_in_progress"] = True
+            st.session_state["_active_main_page"] = "tutorial"
             st.session_state["_scroll_to_tab"] = "export_progress"
             st.success(_ra_text("export_queued"))
             st.rerun()
@@ -3248,12 +3353,12 @@ def _render_run_history(workdir: Path) -> None:
         history_loaded = bool(st.session_state.get("_research_agent_history_loaded")) or expand_history
         if not history_loaded:
             st.caption(
-                "History is loaded on demand so Setup stays responsive."
+                "Local run history is loaded on demand from this workdir only; it is not uploaded to GitHub."
                 if st.session_state.get("language", "en") == "en" else
-                "历史记录按需加载，避免配置页初始渲染变慢。"
+                "本机运行历史只会按需从当前工作目录读取；不会上传到 GitHub。"
             )
             if st.button(
-                "Load recent runs" if st.session_state.get("language", "en") == "en" else "加载最近 run",
+                "Load local recent runs" if st.session_state.get("language", "en") == "en" else "加载本机最近 run",
                 key="research_agent_history_load",
                 use_container_width=True,
             ):
@@ -3310,6 +3415,12 @@ def _render_run_history(workdir: Path) -> None:
                 )
                 st.session_state["_ra_view"] = "workbench"
                 st.rerun()
+            _render_resume_panel(
+                run_dir=selected_run["run_dir"],
+                manifest=manifest,
+                row=selected_run,
+                key_prefix=f"research_agent_history_resume_{safe_run_id}",
+            )
             with st.expander(
                 "Detailed report and artefacts" if st.session_state.get("language", "en") == "en" else "详细报告与产物",
                 expanded=False,
@@ -3320,6 +3431,171 @@ def _render_run_history(workdir: Path) -> None:
                     manifest_path=manifest_path,
                     key_prefix=f"research_agent_history_{selected_run['run_id']}",
                 )
+
+
+def _render_resume_panel(
+    *,
+    run_dir: Path,
+    manifest: Dict[str, Any],
+    row: Dict[str, Any],
+    key_prefix: str,
+) -> None:
+    """Editor letting the user resume a non-complete run with new guidance.
+
+    Surfaces:
+      * a summary of completed vs failed/blocked steps (so the user knows
+        what will be reused vs replanned);
+      * a free-form notes field that is appended to ``notes`` for the
+        planner / coder agents on the re-run;
+      * a toggle for ``EASYICU_AUDIT_RELAX_PROBE`` so the user can opt
+        into the documented ablation (probe-stage block → warning) when
+        the prior run was halted by ``blocked_by_concept_audit``;
+      * a "Force manuscript" shortcut (reuses the existing
+        ``force_manuscript`` flag) — useful when analysis is complete but
+        the writer step needs to re-run after a manual evidence fix.
+
+    The panel only stashes session_state and switches to the Setup view;
+    the existing kickoff path picks up ``research_agent_resume_run_id``
+    and invokes ``_run_pipeline`` with the resume kwargs.
+    """
+    is_en = st.session_state.get("language", "en") == "en"
+    records = [r for r in manifest.get("per_step_records", []) if isinstance(r, dict)]
+    findings = [f for f in manifest.get("findings", []) if isinstance(f, dict)]
+
+    def _step_status(rec: Dict[str, Any]) -> str:
+        return str(rec.get("status") or rec.get("step_status") or "unknown")
+
+    completed = [
+        r for r in records
+        if _step_status(r) in {"ok", "complete", "success", "completed"}
+    ]
+    failed = [
+        r for r in records
+        if any(tok in _step_status(r) for tok in ("fail", "error", "blocked", "skipped"))
+    ]
+    status_label = "manuscript_ready" if (manifest.get("status") == "manuscript_ready") else (
+        "diagnostic_only" if (row.get("step_ok", 0) == 0 and len(failed) >= 1)
+        else ("analysis_only" if row.get("manifest_partial") else "complete")
+    )
+    can_resume = status_label != "manuscript_ready"
+    has_concept_audit_block = any(
+        "blocked_by_concept_audit" in _step_status(r) for r in failed
+    )
+
+    audit_warnings = [
+        f for f in findings
+        if str(f.get("severity") or "") in {"warning", "error"}
+    ]
+
+    with st.expander(_ra_text("resume_section"), expanded=can_resume):
+        st.caption(_ra_text("resume_intro"))
+        info_cols = st.columns([1, 1, 1])
+        info_cols[0].metric(_ra_text("resume_status"), status_label)
+        info_cols[1].metric(_ra_text("resume_completed_steps"), len(completed))
+        info_cols[2].metric(_ra_text("resume_failed_steps"), len(failed))
+
+        if failed:
+            with st.expander(_ra_text("resume_failed_steps"), expanded=False):
+                for rec in failed[:20]:
+                    sid = rec.get("step_id") or rec.get("id") or "?"
+                    status = _step_status(rec)
+                    msg = (
+                        rec.get("error_message")
+                        or rec.get("message")
+                        or (rec.get("error") or {}).get("message", "")
+                        if isinstance(rec.get("error"), dict)
+                        else rec.get("error", "")
+                    )
+                    line = f"- `{sid}` · **{status}**"
+                    if msg:
+                        line += f" — {str(msg)[:240]}"
+                    st.markdown(line)
+
+        if audit_warnings:
+            with st.expander(_ra_text("resume_findings_summary"), expanded=False):
+                for f in audit_warnings[:15]:
+                    sev = str(f.get("severity") or "info")
+                    code = f.get("code") or f.get("validator") or "audit"
+                    msg = f.get("message") or ""
+                    badge = _FINDING_BADGE.get(sev, "🔵")
+                    st.markdown(f"{badge} `{code}` — {str(msg)[:280]}")
+
+        relax_default = bool(has_concept_audit_block)
+        relax_probe = st.checkbox(
+            _ra_text("resume_relax_probe_label"),
+            value=relax_default,
+            key=f"{key_prefix}_relax_probe",
+            help=_ra_text("resume_relax_probe_help"),
+        )
+        if relax_probe:
+            st.warning(_ra_text("resume_relaxed_active"))
+
+        # Pre-fill helpful guidance based on the failure pattern. Users
+        # see this and can edit before submitting.
+        if has_concept_audit_block:
+            default_notes = (
+                "The previous run was blocked by the concept-usage auditor. "
+                "Avoid reporting mean/std on SOFA-family component or total scores; "
+                "use median + IQR for distribution descriptions and use the "
+                "SOFA score as an ordinal/categorical covariate in any model."
+                if is_en else
+                "上次运行被 concept-usage auditor 拦截。不要对 SOFA 系列（总分或分项）"
+                "汇报 mean/std；分布请改用中位数 + IQR；在任何建模里把 SOFA 当作"
+                "有序变量或分类协变量处理。"
+            )
+        else:
+            default_notes = ""
+
+        notes_state_key = f"{key_prefix}_notes"
+        if notes_state_key not in st.session_state:
+            st.session_state[notes_state_key] = default_notes
+        extra_notes = st.text_area(
+            _ra_text("resume_notes_label"),
+            value=st.session_state[notes_state_key],
+            placeholder=_ra_text("resume_notes_hint"),
+            key=notes_state_key,
+            height=140,
+        )
+
+        run_id = str(manifest.get("run_id") or row.get("run_id") or run_dir.name)
+        action_cols = st.columns([2, 2])
+        if action_cols[0].button(
+            _ra_text("resume_button"),
+            key=f"{key_prefix}_btn_resume",
+            type="primary",
+            use_container_width=True,
+            disabled=not can_resume,
+        ):
+            st.session_state["research_agent_resume_run_id"] = run_id
+            st.session_state["research_agent_force_manuscript"] = False
+            st.session_state["research_agent_resume_mode"] = "continue"
+            st.session_state["research_agent_resume_notes"] = extra_notes
+            st.session_state["research_agent_resume_relax_probe"] = bool(relax_probe)
+            # Seed the question from the prior manifest so the user
+            # doesn't have to retype it. They can still edit it on the
+            # Setup page before clicking Run.
+            prior_question = str(manifest.get("research_question") or row.get("question") or "").strip()
+            if prior_question:
+                st.session_state["research_agent_question"] = prior_question
+            st.session_state["_ra_view"] = "setup"
+            st.session_state["_research_agent_expand_history"] = False
+            st.rerun()
+
+        if action_cols[1].button(
+            _ra_text("resume_force_manuscript"),
+            key=f"{key_prefix}_btn_force_ms",
+            use_container_width=True,
+            help=_ra_text("resume_force_manuscript_help"),
+            disabled=not can_resume,
+        ):
+            st.session_state["research_agent_resume_run_id"] = run_id
+            st.session_state["research_agent_force_manuscript"] = True
+            st.session_state["research_agent_resume_mode"] = "force_manuscript"
+            st.session_state["research_agent_resume_notes"] = ""
+            st.session_state["research_agent_resume_relax_probe"] = False
+            st.session_state["_ra_view"] = "setup"
+            st.session_state["_research_agent_expand_history"] = False
+            st.rerun()
 
 
 def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
@@ -3925,14 +4201,53 @@ def render_research_agent_page() -> None:
     question_hint = free_question
     with st.expander(f"3 · {_step_titles[2]}", expanded=True):
         cohort, cohort_label = _section_cohort_picker(research_question=question_hint)
+    if cohort is not None and not _multi_db_label_is_distinct(cohort_label):
+        tags = _multi_db_label_tags(cohort_label)
+        duplicate_tags = sorted({tag for tag in tags if tags.count(tag) > 1})
+        st.error(_ra_text(
+            "multi_db_duplicate_tags",
+            tags=', '.join(duplicate_tags) if duplicate_tags else ', '.join(tags),
+        ))
+        _clear_research_agent_preflight_confirmation()
+        cohort = None
+        cohort_label = ""
     with st.expander(f"4 · {_step_titles[3]}", expanded=False):
         llm_choice, api_key, model, base_url, extra_headers = _section_llm_picker(handles)
     with st.expander(f"5 · {_step_titles[4]} ({_optional_label})", expanded=False):
         disable_icu_context, workdir_text, stop_after_analysis = _section_options()
     resume_run_id = st.session_state.get("research_agent_resume_run_id")
     force_manuscript = bool(st.session_state.get("research_agent_force_manuscript"))
+    resume_mode = str(st.session_state.get("research_agent_resume_mode") or "")
+    resume_notes = str(st.session_state.get("research_agent_resume_notes") or "")
+    resume_relax_probe = bool(st.session_state.get("research_agent_resume_relax_probe"))
     if force_manuscript:
         stop_after_analysis = False
+
+    # Surface a banner so the user knows the next "Run" click is a
+    # resume, not a fresh run, and remembers the toggles they picked
+    # in the history panel.
+    if resume_run_id and resume_mode == "continue":
+        banner_msg = (
+            f"Resuming run `{resume_run_id}` from checkpoint. "
+            "Completed steps will be reused; the planner replans the rest."
+        ) if _is_en else (
+            f"将从 checkpoint 继续运行 `{resume_run_id}`。已完成步骤会复用，"
+            "planner 会重新规划剩余步骤。"
+        )
+        st.info(banner_msg)
+        if resume_relax_probe:
+            st.warning(_ra_text("resume_relaxed_active"))
+        clear_cols = st.columns([1, 4])
+        if clear_cols[0].button(
+            "Cancel resume" if _is_en else "取消继续",
+            key="research_agent_cancel_resume",
+        ):
+            st.session_state.pop("research_agent_resume_run_id", None)
+            st.session_state.pop("research_agent_force_manuscript", None)
+            st.session_state.pop("research_agent_resume_mode", None)
+            st.session_state.pop("research_agent_resume_notes", None)
+            st.session_state.pop("research_agent_resume_relax_probe", None)
+            st.rerun()
 
     st.divider()
     history_workdir = Path(workdir_text).expanduser().resolve()
@@ -3974,7 +4289,7 @@ def render_research_agent_page() -> None:
         )
         if enable_for_run:
             st.session_state["llm_enabled"] = True
-            st.session_state["_llm_toggle"] = True
+            st.session_state["_llm_toggle_sync_pending"] = True
             st.info(
                 "External LLM calls are enabled for this session."
                 if _is_en else
@@ -4137,6 +4452,26 @@ def render_research_agent_page() -> None:
             )
         _render_live_workbench_snapshot()
 
+    # Build the effective notes by appending the resume guidance the
+    # user wrote in the history-panel editor, so the planner / coder see
+    # it on the next iteration without overwriting any methods notes the
+    # user already wrote.
+    effective_notes = method_notes or ""
+    if resume_notes and resume_mode == "continue":
+        marker = (
+            "\n\n[resume guidance — added during resume from "
+            f"{resume_run_id}]\n"
+        )
+        effective_notes = (effective_notes + marker + resume_notes).strip()
+
+    # The resume_run_id should be honoured in BOTH force_manuscript mode
+    # (existing behaviour: skip analysis, rebuild manuscript) AND
+    # continue mode (new behaviour: pick up the checkpoint and replan
+    # the rest). The pipeline itself decides what to reuse via
+    # ``per_step_records`` in the prior partial manifest.
+    effective_resume = resume_run_id if (force_manuscript or resume_mode == "continue") else None
+    effective_relax_probe = bool(resume_relax_probe) and resume_mode == "continue"
+
     try:
         with st.spinner(_ra_text("spinner")):
             result = _run_pipeline(
@@ -4149,9 +4484,10 @@ def render_research_agent_page() -> None:
                 llm=llm,
                 disable_icu_context=disable_icu_context,
                 user_preferences=user_preferences,
-                notes=method_notes,
+                notes=effective_notes,
                 stop_after_analysis=stop_after_analysis,
-                resume_run_id=resume_run_id if force_manuscript else None,
+                resume_run_id=effective_resume,
+                audit_relax_probe=effective_relax_probe,
                 progress_callback=_on_progress,
             )
     except Exception as exc:
@@ -4162,9 +4498,12 @@ def render_research_agent_page() -> None:
     progress.empty()
     progress_bar.empty()
     live_workbench.empty()
-    if force_manuscript:
+    if force_manuscript or resume_mode == "continue":
         st.session_state.pop("research_agent_resume_run_id", None)
         st.session_state.pop("research_agent_force_manuscript", None)
+        st.session_state.pop("research_agent_resume_mode", None)
+        st.session_state.pop("research_agent_resume_notes", None)
+        st.session_state.pop("research_agent_resume_relax_probe", None)
 
     st.session_state["research_agent_last_result"] = {
         "run_id": result.run_id,

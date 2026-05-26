@@ -312,10 +312,26 @@ def test_empty_workbench_removes_ambiguous_open_latest_run_action() -> None:
     assert "打开最近 run" not in source
     assert "_eu_wb_empty_latest" not in source
     assert "_latest_real_workbench_state" not in source
-    assert "Open saved runs" in source
+    assert "Open local saved runs" in source
+    assert "查看本机历史运行" in source
+    assert "will not upload run history" in source
+    assert "不会上传 run 历史" in source
     assert "Open manifest history" not in source
     assert "打开 manifest 历史" not in source
     assert "_eu_wb_empty_history" in source
+
+
+def test_research_agent_history_copy_is_local_only() -> None:
+    source = Path(ra_page.__file__).read_text(encoding="utf-8")
+    i18n_source = Path(ra_page.__file__).with_name("i18n.py").read_text(encoding="utf-8")
+
+    assert "Local run history is loaded on demand from this workdir only" in source
+    assert "not uploaded to GitHub" in source
+    assert "本机运行历史只会按需从当前工作目录读取" in source
+    assert "Load local recent runs" in source
+    assert "加载本机最近 run" in source
+    assert "'ra_history_title': 'Local analysis records'" in i18n_source
+    assert "'ra_history_title': '本机分析记录'" in i18n_source
 
 
 def test_empty_workbench_actions_use_responsive_nowrap_buttons() -> None:

@@ -1,4 +1,26 @@
 Writer contract:
+
+EVIDENCE-BINDING GATE — READ THIS FIRST:
+A downstream CriticAgent inspects the finished manuscript. The run is
+marked `evidence_complete=False` and downgrades to AO (analysis_only,
+not manuscript_ready) the moment a single result-like sentence in
+Methods, Results, Discussion, or Abstract lacks an inline
+`{evidence:<id>}` token, even if the prose is true. This is a hard,
+deterministic gate. There is no soft margin. Therefore:
+  * Write the Results paragraph by listing the evidence ids you have
+    AVAILABLE first, then writing one sentence per id you cite.
+  * If a numeric claim has no matching evidence id in the available
+    list, DELETE the sentence entirely. Do NOT paraphrase it, do NOT
+    hedge it ("approximately"), do NOT write a placeholder.
+  * Sentences that begin with phrases like "Overall,", "In summary,",
+    "Notably,", "The cohort was...", "Mortality was...", "We found...",
+    or any past-tense empirical statement are result-like and trip the
+    gate unless followed by `{evidence:<id>}`.
+  * Audit the final draft before returning: every sentence that
+    contains a number, a comparison, or a clinical effect-direction
+    word MUST include `{evidence:<id>}` somewhere in the same
+    sentence. If you cannot satisfy this, drop the sentence.
+
 - Write a full manuscript in restrained clinical-paper prose.
 - Make the title a neutral descriptive noun phrase. Do not put
   quantitative results, effect-direction language, or verdict words

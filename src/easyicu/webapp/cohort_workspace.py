@@ -171,6 +171,46 @@ def _cohort_demo_workspace_ready(state: dict[str, Any]) -> bool:
     )
 
 
+def _stabilize_demo_group_demographics(demographics: pd.DataFrame) -> pd.DataFrame:
+    """Keep tiny persisted demo cohorts usable for survived/deceased splits."""
+    if (
+        not isinstance(demographics, pd.DataFrame)
+        or demographics.empty
+        or len(demographics) < 4
+        or 'survived' not in demographics.columns
+    ):
+        return demographics
+
+    min_each = 2 if len(demographics) >= 8 else 1
+    work = demographics.copy()
+    survived = pd.to_numeric(work['survived'], errors='coerce').fillna(1).astype(int).clip(0, 1)
+    work['survived'] = survived
+
+    deceased_count = int((work['survived'] == 0).sum())
+    if deceased_count < min_each:
+        needed = min_each - deceased_count
+        sort_cols = [col for col in ('sofa_max', 'age') if col in work.columns]
+        candidates = work.loc[work['survived'] == 1]
+        if sort_cols:
+            candidates = candidates.sort_values(sort_cols, ascending=[False] * len(sort_cols))
+        work.loc[candidates.head(needed).index, 'survived'] = 0
+
+    survivor_count = int((work['survived'] == 1).sum())
+    if survivor_count < min_each:
+        needed = min_each - survivor_count
+        sort_cols = [col for col in ('sofa_max', 'age') if col in work.columns]
+        candidates = work.loc[work['survived'] == 0]
+        if sort_cols:
+            candidates = candidates.sort_values(sort_cols, ascending=[True] * len(sort_cols))
+        work.loc[candidates.head(needed).index, 'survived'] = 1
+
+    if 'death' in work.columns:
+        work['death'] = 1 - work['survived']
+    if 'mortality' in work.columns:
+        work['mortality'] = work['survived'] == 0
+    return work
+
+
 def _ensure_cohort_demo_workspace(
     state: dict[str, Any],
     *,
@@ -195,6 +235,9 @@ def _ensure_cohort_demo_workspace(
         state['grp_loaded_db'] = 'demo'
         state['grp_is_demo'] = True
         state.pop('grp_feature_data', None)
+
+    if state.get('grp_is_demo') and isinstance(state.get('grp_demographics'), pd.DataFrame):
+        state['grp_demographics'] = _stabilize_demo_group_demographics(state['grp_demographics'])
 
     if force or not (state.get('multidb_is_demo') and state.get('multidb_data')):
         state['multidb_data'] = _generate_mock_multidb_data(

@@ -441,10 +441,74 @@ class EvidenceStore:
         generation_mode: Optional[str],
         prompt_pack_version: Optional[str],
         metadata: Optional[Dict[str, Any]],
+        on_sha_change: str = "raise",
     ) -> EvidenceRecord:
+        """Register an evidence record on disk.
+
+        ``on_sha_change`` controls what happens when the supplied
+        ``evidence_id`` already exists with a *different* sha256:
+
+        * ``"raise"`` (default) — keep the existing strict behavior;
+          collisions raise ``ValueError``. This protects against
+          accidental overwrites in normal pipeline operation.
+        * ``"new_id"`` — register the new content under a derived id
+          (``{evidence_id}_v{n}`` where ``n`` is the smallest integer
+          that yields a free id, starting at 2). The original record
+          keeps its id and its alias bindings; the new record is added
+          to the store so its content remains auditable. Used by the
+          resume path for transient envelopes / cost summaries that
+          legitimately differ between the original run and the
+          resumption (different per-call timestamps, model versions,
+          etc.).
+        * ``"keep_existing"`` — the new file is dropped (left on disk
+          as-is) and the existing record is returned unchanged. Use
+          this when the first-registered content is authoritative.
+        """
+        if on_sha_change not in {"raise", "new_id", "keep_existing"}:
+            raise ValueError(
+                f"Unknown on_sha_change mode: {on_sha_change!r}. "
+                "Expected one of: raise, new_id, keep_existing."
+            )
         existing = self._record_by_id(evidence_id)
         if existing is not None:
             if existing.sha256 != sha256:
+                if on_sha_change == "keep_existing":
+                    for alias in aliases or []:
+                        self._add_alias(alias, evidence_id)
+                    self._save()
+                    return existing
+                if on_sha_change == "new_id":
+                    # Find the next free suffix so multiple resumes
+                    # accumulate without ever colliding.
+                    suffix_n = 2
+                    while self._record_by_id(f"{evidence_id}_v{suffix_n}") is not None:
+                        suffix_n += 1
+                    new_id = f"{evidence_id}_v{suffix_n}"
+                    record = EvidenceRecord(
+                        evidence_id=new_id,
+                        kind=kind,  # type: ignore[arg-type]
+                        description=description,
+                        relative_path=str(target.relative_to(self.root)),
+                        sha256=sha256,
+                        produced_by_step=produced_by_step,
+                        inputs=list(inputs or []),
+                        script_evidence_id=script_evidence_id,
+                        producer=producer,
+                        generation_mode=generation_mode,
+                        prompt_pack_version=prompt_pack_version,
+                        metadata={**dict(metadata or {}), "resume_supersedes": evidence_id},
+                        created_at=datetime.now(timezone.utc),
+                    )
+                    self._records.append(record)
+                    # Bind the basename alias to the NEW id so the
+                    # second-write file is still discoverable on disk;
+                    # the original evidence_id alias keeps pointing at
+                    # the original record (it is the canonical citation
+                    # target for the run).
+                    self._add_alias(_target_basename_stem(target, new_id), new_id)
+                    self._add_alias(new_id, new_id)
+                    self._save()
+                    return record
                 raise ValueError(
                     f"Evidence id collision for {evidence_id}: "
                     f"existing sha256={existing.sha256[:8]} new sha256={sha256[:8]}"
@@ -495,6 +559,7 @@ class EvidenceStore:
         generation_mode: Optional[str] = None,
         prompt_pack_version: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        on_sha_change: str = "raise",
     ) -> EvidenceRecord:
         if not source_path.exists():
             raise FileNotFoundError(f"Cannot register missing file: {source_path}")
@@ -525,6 +590,7 @@ class EvidenceStore:
                 generation_mode=generation_mode,
                 prompt_pack_version=prompt_pack_version,
                 metadata=metadata,
+                on_sha_change=on_sha_change,
             )
 
     def register_text(

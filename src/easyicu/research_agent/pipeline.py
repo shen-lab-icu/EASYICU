@@ -2322,6 +2322,11 @@ class ResearchAgentPipeline:
                 evidence_id="cost_records",
                 producer="pipeline",
                 generation_mode="system",
+                # Resume legitimately appends new cost records, so the
+                # JSON sha changes between original and resumption; the
+                # original record stays canonical, the new one lands
+                # alongside as ``cost_records_v2`` for the audit trail.
+                on_sha_change="new_id",
             )
             evidence.register_file(
                 kind="log",
@@ -2330,12 +2335,22 @@ class ResearchAgentPipeline:
                 evidence_id="cost_summary",
                 producer="pipeline",
                 generation_mode="system",
+                on_sha_change="new_id",
             )
 
         reproducibility_summary: Optional[Dict[str, Any]] = None
         if plan_result.repro_envelope is not None:
             envelope_path = run_dir / "reproducibility_envelope.json"
             plan_result.repro_envelope.to_disk(envelope_path)
+            # The envelope captures per-call prompt/response shas,
+            # timestamps, and the env snapshot. On a resumed run the
+            # content legitimately differs from the original (new
+            # per-call records for the steps we re-executed), so a sha
+            # collision is expected. Use ``on_sha_change="new_id"`` so
+            # the original envelope keeps its canonical evidence id
+            # (still resolvable for citations) and the resume's
+            # envelope lands beside it as ``..._v2`` for auditability,
+            # instead of crashing the whole run.
             evidence.register_file(
                 kind="log",
                 description=(
@@ -2347,6 +2362,7 @@ class ResearchAgentPipeline:
                 evidence_id="reproducibility_envelope",
                 producer="pipeline",
                 generation_mode="system",
+                on_sha_change="new_id",
             )
             reproducibility_summary = plan_result.repro_envelope.to_manifest_summary()
 

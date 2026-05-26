@@ -390,12 +390,18 @@ div[role="listbox"] li {
   background: transparent !important;
   color: var(--ink-2) !important;
 }
-.stApp label[data-baseweb="checkbox"]:has(input[aria-checked="true"]) > div:first-child {
-  background: var(--ink) !important;
-  border-color: var(--ink) !important;
+.stApp label[data-baseweb="checkbox"],
+.stApp .stCheckbox label,
+.stApp .stCheckbox [data-baseweb="checkbox"] {
+  background: transparent !important;
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+  opacity: 1 !important;
 }
 .stApp label[data-baseweb="checkbox"] p,
-.stApp .stCheckbox [data-baseweb="checkbox"] p {
+.stApp .stCheckbox [data-baseweb="checkbox"] p,
+.stApp label[data-baseweb="checkbox"] span,
+.stApp .stCheckbox [data-baseweb="checkbox"] span {
   white-space: nowrap !important;
   background: transparent !important;
   color: var(--ink-2) !important;
@@ -661,6 +667,51 @@ div[role="listbox"] li {
 }
 .stApp .eu-chart-row-gap {
   height: 14px;
+}
+.stApp .audit-panel-title {
+  color: var(--ink) !important;
+  font-size: 16px !important;
+  font-weight: 650 !important;
+  line-height: 1.25 !important;
+  gap: 8px !important;
+  margin: 12px 0 8px !important;
+  letter-spacing: 0 !important;
+}
+.stApp .audit-panel-letter {
+  width: 24px !important;
+  height: 24px !important;
+  border-radius: var(--r-2) !important;
+  background: var(--accent-soft) !important;
+  border: 1px solid var(--accent-border) !important;
+  color: var(--accent-ink) !important;
+  -webkit-text-fill-color: var(--accent-ink) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+}
+.stApp .audit-summary-card,
+.stApp .audit-flow-step {
+  border-color: var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  box-shadow: var(--sh-1) !important;
+  background: var(--surface) !important;
+}
+.stApp .audit-summary-label,
+.stApp .audit-flow-label {
+  color: var(--ink-3) !important;
+  font-size: 11.5px !important;
+  font-weight: 650 !important;
+  letter-spacing: 0 !important;
+}
+.stApp .audit-summary-value,
+.stApp .audit-flow-value {
+  color: #0b1f44 !important;
+  -webkit-text-fill-color: #0b1f44 !important;
+  font-size: 22px !important;
+  font-weight: 650 !important;
+  letter-spacing: 0 !important;
+}
+.stApp .audit-flow-step:not(:last-child)::after {
+  color: var(--accent) !important;
 }
 .stApp [data-testid="stMain"] [data-testid="stRadio"] {
   margin: 4px 0 10px !important;
@@ -1298,25 +1349,58 @@ div[role="listbox"] li {
 .eu-pipe-step .meta { font-size: 11px; color: var(--ink-4); font-family: var(--font-mono); }
 
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] {
-  position: relative !important;
+  margin: 1px 8px !important;
 }
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton {
-  position: absolute !important;
-  inset: 0 8px !important;
-  z-index: 3 !important;
   margin: 0 !important;
 }
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton > button {
   width: 100% !important;
-  height: 100% !important;
-  min-height: 100% !important;
-  padding: 0 !important;
+  min-height: 42px !important;
+  justify-content: flex-start !important;
+  align-items: flex-start !important;
+  padding: 6px 8px !important;
   border: 0 !important;
-  opacity: 0 !important;
+  border-radius: var(--r-2) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--ink-2) !important;
+  text-align: left !important;
   cursor: pointer !important;
 }
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton > button:hover {
+  background: var(--surface-2) !important;
+  color: var(--ink) !important;
+}
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton > button:disabled {
+  background: transparent !important;
+  color: var(--ink-4) !important;
   cursor: not-allowed !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton > button p {
+  margin: 0 !important;
+  white-space: pre-line !important;
+  text-align: left !important;
+  line-height: 1.22 !important;
+  font-size: 12.5px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton > button code {
+  padding: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_active_"] .stButton > button {
+  background: var(--surface-2) !important;
+  color: var(--ink) !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_done_"] .stButton > button {
+  color: var(--ink) !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_locked_"] {
+  opacity: 0.68;
 }
 
 .eu-sidebar-footer-rule {
@@ -4619,6 +4703,17 @@ div[role="listbox"] li {
 .eu-export-module-strip em {
   color: var(--ink-3);
 }
+.stApp [class*="st-key-eu_export_footer_actions"] {
+  clear: both;
+  margin-top: 30px !important;
+  padding-top: 8px !important;
+}
+.stApp [class*="st-key-eu_export_footer_actions"] > [data-testid="stVerticalBlock"] {
+  gap: 0.42rem !important;
+}
+.stApp [class*="st-key-eu_export_footer_actions"] [data-testid="stHorizontalBlock"] {
+  align-items: center !important;
+}
 .eu-performance-strip {
   margin-top: 14px;
   border: 1px solid var(--hair);
@@ -5129,6 +5224,30 @@ div[role="listbox"] li {
   margin: 0;
   min-width: 0;
 }
+.stApp [class*="st-key-eu_tutorial_secondary_starts"] {
+  margin-top: 16px;
+}
+.stApp [class*="st-key-eu_tutorial_secondary_starts"] [data-testid="stHorizontalBlock"] {
+  align-items: stretch !important;
+}
+.stApp [class*="st-key-eu_tutorial_secondary_starts"] [data-testid="column"] {
+  display: flex !important;
+}
+.stApp [class*="st-key-eu_tutorial_secondary_starts"] [data-testid="column"] > div,
+.stApp [class*="st-key-eu_tutorial_secondary_starts"] [data-testid="column"] [data-testid="stVerticalBlock"] {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+.stApp [class*="st-key-eu_tutorial_secondary_starts"] .eu-start-card {
+  flex: 1 1 auto;
+  min-height: 224px;
+}
+.stApp [class*="st-key-eu_tutorial_secondary_starts"] [class*="st-key-_eu_tutorial_real"],
+.stApp [class*="st-key-eu_tutorial_secondary_starts"] [class*="st-key-_eu_tutorial_nodata"] {
+  margin-top: auto !important;
+}
 .stApp [class*="st-key-eu_tutorial_dictionary_panel"] {
   margin-top: 24px;
   padding: 18px;
@@ -5526,6 +5645,58 @@ div[role="listbox"] li {
   color: var(--ink-3);
   font-family: var(--font-mono);
   font-size: 10.5px;
+}
+.stApp .eu-qv-export-recovery {
+  margin: 2px 0 4px;
+  padding: 11px 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+}
+.stApp .eu-qv-export-recovery-title {
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.stApp .eu-qv-export-recovery-subtitle {
+  margin-top: 3px;
+  color: var(--ink-3);
+  font-size: 12.4px;
+  line-height: 1.42;
+}
+.stApp .eu-qv-export-recovery code {
+  display: inline-block;
+  margin-top: 7px;
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-1);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+.stApp [class*="st-key-viz_use_export_candidate_"] button,
+.stApp [class*="st-key-viz_use_default_export_root"] button {
+  justify-content: flex-start !important;
+  min-height: 34px !important;
+  border-color: var(--accent-border) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+  -webkit-text-fill-color: var(--accent-ink) !important;
+  font-size: 12.8px !important;
+  font-weight: 700 !important;
+  text-align: left !important;
+}
+.stApp [class*="st-key-viz_use_export_candidate_"] button *,
+.stApp [class*="st-key-viz_use_default_export_root"] button * {
+  color: var(--accent-ink) !important;
+  -webkit-text-fill-color: var(--accent-ink) !important;
 }
 .stApp .viz-demo-load-card {
   margin: 0 !important;
@@ -6700,4 +6871,33 @@ div[role="listbox"] li {
 .stApp .server-browser-inline-title + [data-testid="stCaptionContainer"] *,
 .stApp .server-browser-path + [data-testid="stHorizontalBlock"] * {
   font-size: var(--eu-readable-min) !important;
+}
+
+/* Step 1 path validation is an emphasized secondary action. The final
+   confirmation button remains the only dark primary CTA on this step. */
+.stApp [data-testid="stElementContainer"][class*="st-key-validate_path"] [data-testid="stButton"] > button[data-testid="stBaseButton-secondary"],
+.stApp [data-testid="stElementContainer"][class*="st-key-validate_path"] [data-testid="stButton"] > button[kind="secondary"],
+.stApp [class*="st-key-validate_path"] button {
+  min-height: 36px !important;
+  border: 1px solid var(--accent-border) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+  -webkit-text-fill-color: var(--accent-ink) !important;
+  font-weight: 700 !important;
+  box-shadow: none !important;
+}
+.stApp [data-testid="stElementContainer"][class*="st-key-validate_path"] [data-testid="stButton"] > button[data-testid="stBaseButton-secondary"]:hover,
+.stApp [data-testid="stElementContainer"][class*="st-key-validate_path"] [data-testid="stButton"] > button[kind="secondary"]:hover,
+.stApp [class*="st-key-validate_path"] button:hover {
+  border-color: var(--accent) !important;
+  background: color-mix(in oklch, var(--accent-soft) 72%, white) !important;
+  color: var(--accent-ink) !important;
+  -webkit-text-fill-color: var(--accent-ink) !important;
+}
+.stApp [data-testid="stElementContainer"][class*="st-key-validate_path"] [data-testid="stButton"] > button[data-testid="stBaseButton-secondary"] *,
+.stApp [data-testid="stElementContainer"][class*="st-key-validate_path"] [data-testid="stButton"] > button[kind="secondary"] *,
+.stApp [class*="st-key-validate_path"] button *,
+.stApp [class*="st-key-validate_path"] button:hover * {
+  color: var(--accent-ink) !important;
+  -webkit-text-fill-color: var(--accent-ink) !important;
 }

@@ -40,12 +40,14 @@ def _demographics_df() -> pd.DataFrame | None:
     return None
 
 
-def _cohort_name() -> str:
+def _cohort_name(lang: str = "en") -> str:
     """A short cohort name used in the breadcrumb / snapshot card."""
     label = st.session_state.get("cohort_label")
     if label:
         return str(label)
-    return "Demo cohort" if st.session_state.get("entry_mode") == "demo" else "Current cohort"
+    if st.session_state.get("entry_mode") == "demo":
+        return _T(lang, "Demo cohort", "演示队列")
+    return _T(lang, "Current cohort", "当前队列")
 
 
 def _mock_params_n() -> int:
@@ -546,9 +548,9 @@ def render_cohort_redesign_page(
             "Group contrast · coverage audit · cohort profile · SOFA reclassification",
             "组间对照 · 覆盖审计 · 队列画像 · SOFA 重分层"),
         breadcrumb=(
-            "WORKSPACE",
-            _cohort_name(),
-            _T(lang, "Cohort statistics", "Cohort 统计"),
+            _T(lang, "Workspace", "工作区"),
+            _cohort_name(lang),
+            _T(lang, "Cohort statistics", "队列统计"),
         ),
         lang=lang,
     )
@@ -660,6 +662,13 @@ def _crossdb_loaded_counts() -> tuple[int, int, int]:
     return len(data), row_count, len(concepts)
 
 
+def _crossdb_loaded_database_count() -> int:
+    data = st.session_state.get("multidb_data") or {}
+    if not isinstance(data, dict):
+        return 0
+    return sum(1 for frame in data.values() if isinstance(frame, pd.DataFrame) and not frame.empty)
+
+
 def _clear_demo_crossdb_state_for_real_mode(state: Any) -> bool:
     """Remove seeded demo Cross-DB frames before rendering a real-data page."""
     if state.get("entry_mode") == "demo" or not state.get("multidb_is_demo"):
@@ -674,7 +683,17 @@ def _crossdb_source_notice(lang: str) -> str:
     is_loaded = isinstance(data, dict) and bool(data)
     is_demo = bool(st.session_state.get("multidb_is_demo") or st.session_state.get("entry_mode") == "demo")
 
-    if is_loaded and is_demo:
+    loaded_db_count = _crossdb_loaded_database_count()
+
+    if is_loaded and loaded_db_count < 2 and not is_demo:
+        title = _T(lang, "Need another database", "还需要另一个数据库")
+        body = _T(
+            lang,
+            "Only one database frame is loaded, so EasyICU will not render cross-database evidence yet.",
+            "当前只加载到一个数据库数据帧，因此 EasyICU 暂不生成跨数据库证据结果。",
+        )
+        level = "warning"
+    elif is_loaded and is_demo:
         title = _T(lang, "Demo simulated data", "演示模拟数据")
         body = _T(
             lang,
@@ -691,7 +710,7 @@ def _crossdb_source_notice(lang: str) -> str:
         )
         level = "info"
     else:
-        title = _T(lang, "Waiting for multi-database input", "等待多库输入")
+        title = _T(lang, "Waiting for multi-database input", "等待多个数据库输入")
         body = _T(
             lang,
             "Connect at least two ICU database roots in the loader below before treating this panel as evidence.",
@@ -739,7 +758,12 @@ def _crossdb_active_databases(lang: str) -> list[tuple[str, str, bool, bool]]:
     if isinstance(data, dict) and data:
         is_demo = bool(st.session_state.get("multidb_is_demo") or st.session_state.get("entry_mode") == "demo")
         out: list[tuple[str, str, bool, bool]] = []
-        for idx, (db, frame) in enumerate(data.items()):
+        loaded_items = [
+            (db, frame)
+            for db, frame in data.items()
+            if isinstance(frame, pd.DataFrame) and not frame.empty
+        ]
+        for idx, (db, frame) in enumerate(loaded_items):
             n_rows = _crossdb_frame_row_count(frame)
             n_patients = _crossdb_frame_patient_count(frame)
             if is_demo:
@@ -753,34 +777,28 @@ def _crossdb_active_databases(lang: str) -> list[tuple[str, str, bool, bool]]:
             out.append((_db_label(str(db)), detail, True, idx == 0))
         return out
 
-    selected = st.session_state.get("multidb_selected") or ["miiv", "eicu", "aumc"]
-    if isinstance(selected, str):
-        selected = [selected]
-    return [
-        (_db_label(str(db)), _T(lang, "ready for comparison", "可用于对比"), True, i == 0)
-        for i, db in enumerate(list(selected)[:6])
-    ] or [
-        ("MIMIC-IV", "73k stays · 2.2.0", True, True),
-        ("eICU-CRD", "208k stays · 2.0", True, False),
-        ("AmsterdamUMCdb", "23k stays · 1.0.2", True, False),
-    ]
+    return []
 
 
 def _crossdb_kpi_rows(lang: str) -> tuple[list[str], list[list[str]]]:
     data = st.session_state.get("multidb_data") or {}
-    if not isinstance(data, dict) or not data:
+    if not isinstance(data, dict) or _crossdb_loaded_database_count() < 2:
         return (
             [_T(lang, "Metric", "指标"), _T(lang, "Status", "状态"), _T(lang, "Source", "来源")],
             [
                 [
-                    _T(lang, "Cross-database summary", "跨库摘要"),
+                    _T(lang, "Cross-database summary", "跨数据库摘要"),
                     _T(lang, "waiting for ≥2 loaded databases", "等待加载 ≥2 个数据库"),
                     _T(lang, "Details below", "下方详情"),
                 ],
             ],
         )
 
-    items = list(data.items())[:6]
+    items = [
+        (db, frame)
+        for db, frame in data.items()
+        if isinstance(frame, pd.DataFrame) and not frame.empty
+    ][:6]
     labels = [_db_label(db) for db, _ in items]
     rows: list[list[str]] = []
 
@@ -809,8 +827,12 @@ def _crossdb_kpi_rows(lang: str) -> tuple[list[str], list[list[str]]]:
 
 def _crossdb_availability_rows(lang: str) -> tuple[tuple[str, ...], list[tuple[str, list[float]]]]:
     data = st.session_state.get("multidb_data") or {}
-    if isinstance(data, dict) and data:
-        db_items = list(data.items())[:6]
+    if isinstance(data, dict) and _crossdb_loaded_database_count() >= 2:
+        db_items = [
+            (db, frame)
+            for db, frame in data.items()
+            if isinstance(frame, pd.DataFrame) and not frame.empty
+        ][:6]
         columns = tuple(_db_label(db) for db, _ in db_items)
         configured = [str(c) for c in (st.session_state.get("multidb_concepts") or [])]
         available = []
@@ -823,20 +845,7 @@ def _crossdb_availability_rows(lang: str) -> tuple[tuple[str, ...], list[tuple[s
             rows.append((str(concept), vals))
         return columns, rows
 
-    return (
-        ("MIMIC-IV", "eICU", "AUMC"),
-        [
-            (_T(lang, "Vital signs",     "生命体征"),       [1.0, 1.0, 1.0]),
-            (_T(lang, "Chemistry",       "生化"),           [1.0, 1.0, 1.0]),
-            (_T(lang, "Blood gas",       "血气"),           [1.0, 0.7, 1.0]),
-            (_T(lang, "Lactate",         "乳酸"),           [1.0, 0.6, 1.0]),
-            (_T(lang, "Mech vent",       "机械通气"),       [1.0, 1.0, 1.0]),
-            (_T(lang, "SOFA components", "SOFA 组分"),      [1.0, 1.0, 1.0]),
-            (_T(lang, "Delirium · CAM",  "谵妄 · CAM"),     [0.7, 0.2, 0.4]),
-            (_T(lang, "Microbiology",    "微生物"),         [0.9, 0.3, 0.6]),
-            (_T(lang, "Output · UO",     "出量 · 尿量"),    [1.0, 0.85, 0.95]),
-        ],
-    )
+    return (), []
 
 
 def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
@@ -849,12 +858,15 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
 
     _render_page_header(
         title_en="Cross-DB benchmark",
-        title_zh="跨库基准",
+        title_zh="跨数据库对比",
         desc=_T(lang,
             "Same cohort definition compared across ≥2 ICU databases.",
-            "同一队列定义在 ≥2 个 ICU 数据库间的可比指标。"),
-        breadcrumb=("WORKSPACE", _cohort_name(),
-                    _T(lang, "Cross-DB benchmark", "跨库基准")),
+            "用同一队列定义比较两个及以上 ICU 数据库的特征分布。"),
+        breadcrumb=(
+            _T(lang, "Workspace", "工作区"),
+            _cohort_name(lang),
+            _T(lang, "Cross-DB benchmark", "跨数据库对比"),
+        ),
         lang=lang,
     )
 
@@ -866,18 +878,35 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
         except Exception:
             pass
 
-    _render_agent_gate_strip(lang, context="Cross-DB benchmark")
-
     st.markdown(_crossdb_source_notice(lang), unsafe_allow_html=True)
 
-    st.markdown(cc.render_active_databases(_crossdb_active_databases(lang)), unsafe_allow_html=True)
+    active_databases = _crossdb_active_databases(lang)
+    if active_databases:
+        st.markdown(cc.render_active_databases(active_databases, lang=lang), unsafe_allow_html=True)
+    else:
+        st.markdown(
+            '<div class="eu-card" style="padding:14px">'
+            f'<div style="font-size:12.5px;font-weight:500">'
+            f'{_T(lang, "No database loaded yet", "尚未加载数据库")}</div>'
+            f'<div style="margin-top:6px;font-size:12px;color:var(--ink-3)">'
+            f'{_T(lang, "Use the loader below to connect at least two database roots; EasyICU will only render comparison cards after real frames are loaded.", "请使用下方加载器连接至少两个数据库根目录；只有真实数据帧加载成功后，EasyICU 才会展示对比卡片。")}'
+            '</div></div>',
+            unsafe_allow_html=True,
+        )
 
     kpi_columns, kpi_rows = _crossdb_kpi_rows(lang)
+    has_comparison_data = _crossdb_loaded_database_count() >= 2
+    summary_title = (
+        _T(lang, "Loaded cross-database distribution summary",
+           "已加载的跨数据库分布摘要")
+        if has_comparison_data else
+        _T(lang, "Cross-database summary pending",
+           "跨数据库摘要待生成")
+    )
     st.markdown(
         '<div style="margin-top:14px">'
         + cc.render_mono_table(
-            title=_T(lang, "Loaded cross-database distribution summary",
-                     "已加载跨库分布摘要"),
+            title=summary_title,
             columns=kpi_columns,
             rows=kpi_rows,
         )
@@ -886,17 +915,28 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
     )
 
     availability_columns, availability_rows = _crossdb_availability_rows(lang)
-    st.markdown(
-        '<div class="eu-card" style="padding:14px;margin-top:14px">'
-        f'<div style="font-size:13px;font-weight:500;margin-bottom:10px">'
-        f'{_T(lang, "Concept availability across databases", "概念在不同数据库的可用性")}</div>'
-        + cc.render_availability_matrix(
-            availability_rows,
-            columns=availability_columns,
+    if availability_rows:
+        st.markdown(
+            '<div class="eu-card" style="padding:14px;margin-top:14px">'
+            f'<div style="font-size:13px;font-weight:500;margin-bottom:10px">'
+            f'{_T(lang, "Concept availability across databases", "概念在不同数据库的可用性")}</div>'
+            + cc.render_availability_matrix(
+                availability_rows,
+                columns=availability_columns,
+            )
+            + '</div>',
+            unsafe_allow_html=True,
         )
-        + '</div>',
-        unsafe_allow_html=True,
-    )
+    else:
+        st.markdown(
+            '<div class="eu-card" style="padding:14px;margin-top:14px">'
+            f'<div style="font-size:13px;font-weight:500">'
+            f'{_T(lang, "Concept availability matrix not generated", "概念可用性矩阵尚未生成")}</div>'
+            f'<div style="margin-top:6px;font-size:12px;color:var(--ink-3)">'
+            f'{_T(lang, "The matrix is computed only after loaded database frames are available; no placeholder percentages are shown.", "该矩阵只会在数据库数据帧加载成功后计算；这里不再展示占位百分比。")}'
+            '</div></div>',
+            unsafe_allow_html=True,
+        )
 
     if multidb_fn is not None and not st.session_state.get("_eu_shell_only"):
         st.markdown('<div class="eu-crossdb-distribution-boundary"></div>', unsafe_allow_html=True)

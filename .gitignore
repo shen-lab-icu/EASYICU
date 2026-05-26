@@ -85,6 +85,15 @@ research_output/
 recycle_*/
 **/recycle_*/
 
+# Local user histories and private app outputs - never upload to GitHub
+/easyicu_export/
+/exports_*/
+/agent_runs/
+/easyicu_agent_runs/
+/run_history/
+/.easyicu/
+*.easyicu-history.json
+
 # Local experiments and manuscript/submission tooling
 experiments/
 tools/build_v14_task_cohorts.py

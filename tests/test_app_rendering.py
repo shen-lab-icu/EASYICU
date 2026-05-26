@@ -5,6 +5,7 @@ import json
 import re
 import sys
 import types
+from datetime import date
 from pathlib import Path
 
 import easyicu
@@ -19,6 +20,7 @@ import easyicu.webapp.cohort_multidb_page as cohort_multidb_page
 import easyicu.webapp.cohort_redesign as cohort_redesign
 import easyicu.webapp.cohort_severity_page as cohort_severity_page
 import easyicu.webapp.cohort_workspace as cohort_workspace
+import easyicu.webapp.data_coverage_audit_page as data_coverage_audit_page
 import easyicu.webapp.demo_data as demo_data
 import easyicu.webapp.data_paths as data_paths
 import easyicu.webapp.data_workflows as data_workflows
@@ -33,6 +35,7 @@ import easyicu.webapp.quick_visualization_page as quick_visualization_page
 import easyicu.webapp.research_agent as research_agent
 import easyicu.webapp.sidebar as sidebar
 import easyicu.webapp.shell_styles as shell_styles
+import easyicu.webapp.styles as styles
 import easyicu.webapp.sofa_reclassification as sofa_reclassification
 import easyicu.webapp.subprocess_workers as subprocess_workers
 import easyicu.webapp.ui_helpers as ui_helpers
@@ -190,6 +193,13 @@ def test_concept_checkbox_and_selection_states_do_not_use_black_token_fills() ->
         css_text,
         re.S,
     )
+    checkbox_label_block = re.search(
+        r"\.stApp label\[data-baseweb=\"checkbox\"\],\n"
+        r"\.stApp \.stCheckbox label,\n"
+        r"\.stApp \.stCheckbox \[data-baseweb=\"checkbox\"\] \{(?P<body>.*?)\n\}",
+        css_text,
+        re.S,
+    )
     cohort_chip_block = re.search(r"\.eu-cohort-chip \{(?P<body>.*?)\n\}", css_text, re.S)
     concept_module_block = re.search(
         r"\.stApp \[class\*=\"st-key-concept_module_card_\"\] button\[kind=\"primary\"\],\n"
@@ -199,9 +209,14 @@ def test_concept_checkbox_and_selection_states_do_not_use_black_token_fills() ->
     )
 
     assert checkbox_code_block is not None
+    assert checkbox_label_block is not None
     assert cohort_chip_block is not None
     assert concept_module_block is not None
     assert "background: transparent !important" in checkbox_code_block.group("body")
+    assert "background: transparent !important" in checkbox_label_block.group("body")
+    assert "-webkit-text-fill-color: var(--ink-2) !important" in checkbox_label_block.group("body")
+    assert 'label[data-baseweb="checkbox"]:has(input[aria-checked="true"]) > div:first-child' not in css_text
+    assert '.stApp label[data-baseweb="checkbox"] span' in css_text
     assert "background: #eef6f7" in cohort_chip_block.group("body")
     assert "color: #18343a" in cohort_chip_block.group("body")
     assert "font-size: 12px" in cohort_chip_block.group("body")
@@ -432,6 +447,27 @@ def test_directory_browser_uses_inline_controlled_panel() -> None:
     assert ".stApp .server-browser-path" in css_text
 
 
+def test_directory_browser_create_tools_do_not_nest_columns() -> None:
+    source = Path(data_paths.__file__).read_text(encoding="utf-8")
+    browser_source = source[
+        source.index("def _render_directory_browser_dialog"):
+        source.index("def _directory_input")
+    ]
+
+    assert "create_cols = st.columns" not in browser_source
+    assert "tools_col1, tools_col2, tools_col3 = st.columns([1.4, 2.4, 1])" in browser_source
+
+
+def test_directory_browser_new_folder_placeholder_uses_current_date() -> None:
+    source = Path(data_paths.__file__).read_text(encoding="utf-8")
+
+    assert data_paths._example_export_folder_name(date(2026, 5, 26)) == "exports_20260526"
+    assert data_paths._new_folder_name_placeholder("en", date(2026, 5, 26)) == "e.g. exports_20260526"
+    assert data_paths._new_folder_name_placeholder("zh", date(2026, 5, 26)) == "例如 exports_20260526"
+    assert "exports_20260415" not in source
+    assert "placeholder=_new_folder_name_placeholder(lang)" in source
+
+
 def test_directory_browser_buttons_reopen_before_streamlit_guard(monkeypatch, tmp_path) -> None:
     child_dir = tmp_path / "child"
     child_dir.mkdir()
@@ -493,6 +529,62 @@ def test_directory_browser_buttons_reopen_before_streamlit_guard(monkeypatch, tm
     assert streamlit_stub.session_state["test_browse_open"] is False
 
 
+def test_directory_browser_directory_click_prefills_input_candidate(monkeypatch, tmp_path) -> None:
+    database_dir = tmp_path / "databases"
+    database_dir.mkdir()
+
+    class _DirectoryBrowserStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "language": "en",
+                "test_browse_open": True,
+                "test_browse_cwd": str(tmp_path),
+            }
+            self.buttons_by_label = {}
+
+        def caption(self, *_args, **_kwargs) -> None:
+            pass
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def columns(self, spec, **_kwargs):
+            count = spec if isinstance(spec, int) else len(spec)
+            return [_FakeColumn() for _ in range(count)]
+
+        def button(self, label, **kwargs) -> bool:
+            self.buttons_by_label[label] = kwargs
+            return False
+
+        def checkbox(self, *_args, **_kwargs) -> bool:
+            return False
+
+        def text_input(self, _label, **kwargs) -> str:
+            return str(self.session_state.get(kwargs["key"], ""))
+
+        def container(self, *_args, **_kwargs):
+            return _FakeColumn()
+
+        def error(self, *_args, **_kwargs) -> None:
+            pass
+
+    streamlit_stub = _DirectoryBrowserStreamlit()
+    monkeypatch.setattr(data_paths, "st", streamlit_stub)
+
+    data_paths._render_directory_browser_dialog(
+        input_key="test_path",
+        button_key="test_browse",
+        value="",
+    )
+
+    dir_kwargs = streamlit_stub.buttons_by_label["📁 databases"]
+    dir_kwargs["on_click"](*dir_kwargs["args"])
+
+    assert streamlit_stub.session_state["test_browse_open"] is True
+    assert streamlit_stub.session_state["test_browse_cwd"] == str(database_dir)
+    assert streamlit_stub.session_state["test_path__pending_value"] == str(database_dir)
+
+
 def test_directory_browser_passive_rerun_clears_open_flag(monkeypatch, tmp_path) -> None:
     class _DirectoryBrowserStreamlit:
         def __init__(self) -> None:
@@ -539,9 +631,6 @@ def test_directory_browser_passive_rerun_clears_open_flag(monkeypatch, tmp_path)
 
 
 def test_directory_browser_navigation_keeps_dialog_open(monkeypatch, tmp_path) -> None:
-    class _RerunRequested(RuntimeError):
-        pass
-
     class _DirectoryBrowserStreamlit:
         def __init__(self) -> None:
             self.session_state = {
@@ -549,6 +638,7 @@ def test_directory_browser_navigation_keeps_dialog_open(monkeypatch, tmp_path) -
                 "test_browse_open": True,
                 "test_browse_cwd": str(tmp_path),
             }
+            self.clicked_up = False
 
         def caption(self, *_args, **_kwargs) -> None:
             pass
@@ -560,20 +650,32 @@ def test_directory_browser_navigation_keeps_dialog_open(monkeypatch, tmp_path) -
             return [_FakeColumn() for _ in spec]
 
         def button(self, _label, **kwargs) -> bool:
-            return kwargs.get("key") == "test_browse_dlg_up"
+            if kwargs.get("key") == "test_browse_dlg_up" and not self.clicked_up:
+                self.clicked_up = True
+                kwargs["on_click"](*kwargs["args"])
+                return True
+            return False
 
-        def rerun(self) -> None:
-            raise _RerunRequested()
+        def checkbox(self, *_args, **_kwargs) -> bool:
+            return False
+
+        def text_input(self, _label, **kwargs) -> str:
+            return str(self.session_state.get(kwargs["key"], ""))
+
+        def container(self, *_args, **_kwargs):
+            return _FakeColumn()
+
+        def error(self, *_args, **_kwargs) -> None:
+            pass
 
     streamlit_stub = _DirectoryBrowserStreamlit()
     monkeypatch.setattr(data_paths, "st", streamlit_stub)
 
-    with pytest.raises(_RerunRequested):
-        data_paths._render_directory_browser_dialog(
-            input_key="test_path",
-            button_key="test_browse",
-            value=str(tmp_path),
-        )
+    data_paths._render_directory_browser_dialog(
+        input_key="test_path",
+        button_key="test_browse",
+        value=str(tmp_path),
+    )
 
     assert streamlit_stub.session_state["test_browse_open"] is True
     assert streamlit_stub.session_state["test_browse_cwd"] == str(tmp_path.parent)
@@ -1299,6 +1401,40 @@ def test_streamlit_theme_is_fixed_to_light_mode() -> None:
     assert "prefers-color-scheme: dark" not in legacy_dashboard_css
 
 
+def test_coverage_audit_heatmap_uses_shell_style_and_hides_modebar() -> None:
+    source = Path(data_coverage_audit_page.__file__).read_text(encoding="utf-8")
+    shell_css = shell_styles._load_shell_overrides_css()
+    global_css = Path(styles.__file__).read_text(encoding="utf-8")
+    heatmap_source = source[
+        source.index("fig = go.Figure(data=go.Heatmap("):
+        source.index('key="audit_coverage_heatmap"')
+    ]
+    audit_css = shell_css[
+        shell_css.index(".stApp .audit-panel-title {"):
+        shell_css.index('.stApp [data-testid="stMain"] [data-testid="stRadio"]')
+    ]
+    global_audit_css = global_css[
+        global_css.index("        .audit-panel-title {"):
+        global_css.index("        .audit-denominator-note {")
+    ]
+
+    assert "xgap=4" in heatmap_source
+    assert "ygap=4" in heatmap_source
+    assert '"displayModeBar": False' in heatmap_source
+    assert "paper_bgcolor='#FFFFFF'" in heatmap_source
+    assert "font=dict(family='IBM Plex Sans" in heatmap_source
+    assert "'#8fbfc7'" in heatmap_source
+    assert "'#059669'" not in heatmap_source
+    assert "background: var(--accent-soft)" in audit_css
+    assert "border-color: var(--hair-2)" in audit_css
+    assert "font-size: 16px" in audit_css
+    assert "var(--figure-navy)" not in audit_css
+    assert "background: var(--accent-soft)" in global_audit_css
+    assert "border: 1px solid var(--accent-border)" in global_audit_css
+    assert "background: var(--figure-navy)" not in global_audit_css
+    assert "var(--figure-orange)" not in global_audit_css
+
+
 def test_quality_panel_switcher_renders_one_lazy_panel(monkeypatch) -> None:
     class _Panel:
         def __enter__(self):
@@ -1397,6 +1533,23 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "st-key-eu_tutorial_resources_card" in css_text
     assert "font-size: 13px" in css_text
     assert "margin-top: -49px" not in css_text
+
+
+def test_tutorial_secondary_start_cards_are_equal_height() -> None:
+    page_source = Path(pages_redesign.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert 'key="eu_tutorial_secondary_starts"' in page_source
+    assert 'secondary_left, secondary_right = st.columns(2, gap="medium")' in page_source
+
+    secondary_css = css_text[
+        css_text.index('.stApp [class*="st-key-eu_tutorial_secondary_starts"] {'):
+        css_text.index('.stApp [class*="st-key-eu_tutorial_dictionary_panel"] {')
+    ]
+    assert 'align-items: stretch !important' in secondary_css
+    assert 'height: 100% !important' in secondary_css
+    assert 'min-height: 224px' in secondary_css
+    assert 'margin-top: auto !important' in secondary_css
 
 
 def test_demo_preview_view_all_modules_expands_inline_with_continue_action() -> None:
@@ -2025,6 +2178,28 @@ def test_real_data_mode_requires_data_path_before_validation(tmp_path, monkeypat
     assert any(error.value == "❌ Please enter data path" for error in at.error)
 
 
+def test_validate_data_path_is_accent_secondary_action() -> None:
+    source = Path(sidebar.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+    validate_source = source[
+        source.index("# 验证按钮"):
+        source.index("elif not Path(effective_data_path).exists():")
+    ]
+    validate_css = css_text[
+        css_text.index('.stApp [class*="st-key-validate_path"] button {'):
+        css_text.index("/* -------------------------------------------------------------------------- */", css_text.index('.stApp [class*="st-key-validate_path"] button {'))
+        if "/* -------------------------------------------------------------------------- */" in css_text[css_text.index('.stApp [class*="st-key-validate_path"] button {'):]
+        else len(css_text)
+    ]
+
+    assert 'key="validate_path"' in validate_source
+    assert 'type="primary"' not in validate_source
+    assert "validate_spacer, validate_action = st.columns([5, 1.8], gap=\"small\")" in validate_source
+    assert "background: var(--accent-soft)" in validate_css
+    assert "color: var(--accent-ink)" in validate_css
+    assert "stBaseButton-primary" not in validate_css
+
+
 def test_module_preview_metadata_highlights_renal_story() -> None:
     preview = app._build_module_preview_metadata(
         module_key="renal",
@@ -2231,6 +2406,31 @@ def test_cohort_demo_workspace_default_group_contrast_has_both_groups() -> None:
     survived = state["grp_demographics"]["survived"].astype(int)
     assert int((survived == 1).sum()) >= 2
     assert int((survived == 0).sum()) >= 2
+
+
+def test_existing_tiny_demo_group_contrast_repairs_degenerate_survival_split() -> None:
+    state: dict[str, object] = {
+        "mock_params": {"n_patients": 10},
+        "grp_is_demo": True,
+        "grp_demographics": pd.DataFrame(
+            {
+                "stay_id": range(10001, 10011),
+                "age": [45, 52, 60, 66, 72, 80, 58, 69, 75, 83],
+                "gender": ["M", "F"] * 5,
+                "survived": [1] * 10,
+                "death": [0] * 10,
+                "sofa_max": [1, 2, 3, 4, 12, 10, 3, 8, 9, 11],
+            }
+        ),
+    }
+
+    app._ensure_cohort_demo_workspace(state, lang="en")
+
+    survived = state["grp_demographics"]["survived"].astype(int)
+    death = state["grp_demographics"]["death"].astype(int)
+    assert int((survived == 1).sum()) >= 2
+    assert int((survived == 0).sum()) >= 2
+    assert death.tolist() == (1 - survived).tolist()
 
 
 def test_ensure_cohort_real_workspace_syncs_global_review_state(tmp_path, monkeypatch) -> None:
@@ -2555,6 +2755,70 @@ def test_resolve_viz_data_source_mode_keeps_session_state_valid_without_widget_i
     ) == "exported"
 
 
+def test_quick_viz_export_recovery_finds_recent_export_folders(tmp_path) -> None:
+    last_export = tmp_path / "external_export"
+    last_export.mkdir()
+    (last_export / "vitals.parquet").write_text("stub", encoding="utf-8")
+
+    default_root = tmp_path / "easyicu_export"
+    default_root.mkdir()
+    recent_child = default_root / "exports_20260526"
+    recent_child.mkdir()
+    (recent_child / "labs.csv").write_text("stub", encoding="utf-8")
+    empty_child = default_root / "empty"
+    empty_child.mkdir()
+
+    state = {
+        "last_export_dir": str(last_export),
+        "export_path": str(default_root),
+    }
+
+    candidates = quick_visualization_page._quick_viz_export_candidates(state, limit=6)
+    candidate_paths = [item["path"] for item in candidates]
+
+    assert candidate_paths[0] == str(last_export)
+    assert str(recent_child) in candidate_paths
+    assert str(empty_child) not in candidate_paths
+    assert {item["path"]: item["file_count"] for item in candidates}[str(last_export)] == 1
+
+    quick_visualization_page._apply_quick_viz_export_candidate(state, str(recent_child))
+    assert state["viz_export_path"] == str(recent_child)
+    assert state["viz_export_path_input"] == str(recent_child)
+    assert state["viz_data_source_mode"] == "exported"
+
+
+def test_quick_viz_loader_surfaces_export_path_recovery_controls() -> None:
+    source = Path(quick_visualization_page.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "_render_quick_viz_export_path_recovery(lang)" in source
+    assert "Not sure where the export is?" in source
+    assert "local folders only" in source
+    assert "does not upload export history to GitHub" in source
+    assert "不会把导出历史上传到 GitHub" in source
+    assert "viz_use_export_candidate_" in source
+    assert "viz_use_default_export_root" in source
+    assert ".eu-qv-export-recovery" in css_text
+    assert "st-key-viz_use_export_candidate_" in css_text
+
+
+def test_local_user_history_outputs_are_gitignored() -> None:
+    repo_root = Path(easyicu.__file__).parents[2]
+    gitignore = (repo_root / ".gitignore").read_text(encoding="utf-8")
+
+    assert "Local user histories and private app outputs" in gitignore
+    for pattern in [
+        "/easyicu_export/",
+        "/exports_*/",
+        "/agent_runs/",
+        "/easyicu_agent_runs/",
+        "/run_history/",
+        "/.easyicu/",
+        "*.easyicu-history.json",
+    ]:
+        assert pattern in gitignore
+
+
 def test_apply_screenshot_mode_ui_state_closes_floating_ai_and_clears_ai_jump() -> None:
     state = {
         "_floating_ai_open": True,
@@ -2584,6 +2848,119 @@ def test_open_embedded_ai_assistant_targets_main_workspace_panel() -> None:
     assert state["_sidebar_ai_open"] is False
     assert state["_floating_ai_open"] is False
     assert state["_ai_pending_question"] == "How should I configure SOFA?"
+
+
+def test_research_agent_external_llm_opt_in_defers_sidebar_toggle_sync() -> None:
+    source = Path(research_agent.__file__).read_text(encoding="utf-8")
+    opt_in_source = source[
+        source.index("external_llm_selected ="):
+        source.index("request_ready =")
+    ]
+
+    assert 'st.session_state["llm_enabled"] = True' in opt_in_source
+    assert 'st.session_state["_llm_toggle_sync_pending"] = True' in opt_in_source
+    assert 'st.session_state["_llm_toggle"] = True' not in opt_in_source
+
+
+def test_research_agent_raw_extract_defaults_to_all_modules_and_hands_off() -> None:
+    modules = {
+        "demographics": ["age"],
+        "outcome": ["death"],
+        "sofa2_score": ["sofa2"],
+        "sepsis3_sofa2": ["sep3_sofa2"],
+        "vitals": ["hr"],
+        "blood_gas": ["ph"],
+        "renal": ["crea"],
+    }
+
+    assert research_agent._default_extract_module_selection(modules) == list(modules)
+
+    legacy_state = {
+        "research_agent_extract_modules": [
+            "demographics",
+            "outcome",
+            "sofa2_score",
+            "sepsis3_sofa2",
+            "vitals",
+            "blood_gas",
+        ]
+    }
+    research_agent._migrate_legacy_extract_module_selection(legacy_state, modules)
+    assert legacy_state["research_agent_extract_modules"] == list(modules)
+
+    manual_subset = {"research_agent_extract_modules": ["demographics", "vitals"]}
+    research_agent._migrate_legacy_extract_module_selection(manual_subset, modules)
+    assert manual_subset["research_agent_extract_modules"] == ["demographics", "vitals"]
+
+    source = Path(research_agent.__file__).read_text(encoding="utf-8")
+    raw_extract_source = source[
+        source.index("if source == source_no_data:"):
+        source.index("    # Cross-DB cohort builder")
+    ]
+    assert "_default_extract_module_selection(modules)" in raw_extract_source
+    assert "_migrate_legacy_extract_module_selection(st.session_state, modules)" in raw_extract_source
+    assert 'st.session_state["_active_main_page"] = "tutorial"' in raw_extract_source
+    assert 'st.session_state["_scroll_to_tab"] = "export_progress"' in raw_extract_source
+
+
+def test_research_agent_raw_extract_copy_explains_handoff_and_full_default() -> None:
+    en = i18n.TEXTS["en"]
+    zh = i18n.TEXTS["zh"]
+
+    assert "All available modules are selected by default" in en["ra_no_data_info"]
+    assert "Data Extraction" in en["ra_no_data_info"]
+    assert en["ra_start_export"] == "Open Data Extraction with these settings"
+    assert "Opening Data Extraction" in en["ra_export_queued"]
+
+    assert "默认选择全部可用模块" in zh["ra_no_data_info"]
+    assert "数据提取" in zh["ra_no_data_info"]
+    assert zh["ra_start_export"] == "用这些设置打开数据提取"
+    assert "打开导出流程" in zh["ra_export_queued"]
+
+
+def test_research_agent_crossdb_requires_distinct_database_tags() -> None:
+    duplicate_exports = [
+        ("miiv", Path("/tmp/easyicu_export/miiv_20260427")),
+        ("miiv", Path("/tmp/easyicu_export/miiv_20260502")),
+    ]
+    distinct_exports = [
+        ("miiv", Path("/tmp/easyicu_export/miiv_20260427")),
+        ("eicu", Path("/tmp/easyicu_export/eicu_20260502")),
+    ]
+
+    assert research_agent._duplicate_db_tags(duplicate_exports) == ["miiv"]
+    assert research_agent._has_min_distinct_db_tags(duplicate_exports, min_count=2) is False
+    assert research_agent._multi_db_label_is_distinct("multi_db:miiv,miiv") is False
+    assert research_agent._multi_db_label_is_distinct("multi_db:miiv") is False
+    assert research_agent._duplicate_db_tags(distinct_exports) == []
+    assert research_agent._has_min_distinct_db_tags(distinct_exports, min_count=2) is True
+    assert research_agent._multi_db_label_is_distinct("multi_db:eicu,miiv") is True
+
+    en = i18n.TEXTS["en"]
+    zh = i18n.TEXTS["zh"]
+    assert "different database tag" in en["ra_multi_db_duplicate_tags"]
+    assert "不同数据库标签" in zh["ra_multi_db_duplicate_tags"]
+
+    source = Path(research_agent.__file__).read_text(encoding="utf-8")
+    picker_source = source[
+        source.index("def _render_db_exports_multipicker"):
+        source.index("def _build_multi_db_cohort")
+    ]
+    build_source = source[
+        source.index("def _build_multi_db_cohort"):
+        source.index("def _section_cohort_picker")
+    ]
+    page_source = source[
+        source.index("def render_research_agent_page"):
+        source.index("external_llm_selected =", source.index("def render_research_agent_page"))
+    ]
+    assert "_duplicate_db_tags(chosen)" in picker_source
+    assert "_clear_research_agent_preflight_confirmation()" in picker_source
+    assert "_duplicate_db_tags(chosen)" in build_source
+    assert "_has_min_distinct_db_tags(chosen, min_count=2)" in build_source
+    assert "loaded_unique_tags" in build_source
+    assert "multi_db_loaded_need_distinct" in build_source
+    assert "_multi_db_label_is_distinct(cohort_label)" in page_source
 
 
 def test_sync_quick_viz_screenshot_mode_requests_rerun_on_toggle_transition() -> None:
@@ -2812,6 +3189,29 @@ def test_compute_smd_binary_uses_pooled_proportion() -> None:
     smd = app._compute_smd_binary(pd.Series([1, 1, 0, 0]), pd.Series([1, 0, 0, 0]))
 
     assert smd == pytest.approx(0.5164, abs=1e-4)
+
+
+def test_smd_severity_tag_keeps_threshold_semantics_for_non_table_use() -> None:
+    assert app._smd_severity_tag(1.25, "en") == "🔴 large"
+    assert app._smd_severity_tag(0.18, "en") == "🟠 mild"
+    assert app._smd_severity_tag(0.05, "en") == "🟢 balanced"
+
+
+def test_cohort_group_table_reports_numeric_smd_without_inline_labels() -> None:
+    source = Path(cohort_group_page.__file__).read_text(encoding="utf-8")
+    format_smd_source = source[
+        source.index("def _format_smd_value"):
+        source.index("default_modules = _cohort_default_feature_modules")
+    ]
+
+    assert "min n < 10" in source
+    assert "SMD is reported as a numeric effect-size distance" in source
+    assert "stronger imbalance" in source
+    assert "often treated as large" not in source
+    assert 'return f"{value:.2f}"' in format_smd_source
+    assert "_smd_severity_tag" not in format_smd_source
+    assert "_smd_min_group_n" not in source
+    assert "⚪ small n" not in source
 
 
 def test_build_group_feature_data_from_loaded_concepts_reuses_loaded_demo_frames() -> None:
@@ -3314,7 +3714,10 @@ def test_extract_workflow_helpers_keep_state_consistent() -> None:
 
 
 def test_export_completion_routes_to_visualization_data_tables(monkeypatch, tmp_path) -> None:
-    state = _AttrSessionState({"viz_max_patients": 10})
+    state = _AttrSessionState({
+        "viz_max_patients": 10,
+        "_post_export_guidance_dismissed": True,
+    })
     monkeypatch.setattr(app, "st", _SessionStateStreamlit(state))
     exported_files = [
         str(tmp_path / "vitals_hr_map.parquet"),
@@ -3335,11 +3738,78 @@ def test_export_completion_routes_to_visualization_data_tables(monkeypatch, tmp_
     assert state["_post_export_target_panel"] == "Data Tables"
     assert "_main_nav_widget" not in state
     assert "quick_viz_active_panel" not in state
+    assert "_post_export_guidance_dismissed" not in state
     assert state["_viz_auto_load_export"] == {
         "path": str(tmp_path),
         "selected_files": ["vitals_hr_map", "labs_creatinine"],
         "max_patients": 10,
     }
+
+
+def test_post_export_next_step_actions_route_to_real_destinations(tmp_path) -> None:
+    export_dir = str(tmp_path / "easyicu_export")
+    state = {
+        "export_completed": True,
+        "last_export_dir": export_dir,
+        "_post_export_navigation_pending": True,
+        "quick_viz_active_panel": "Time Series",
+    }
+
+    app._apply_post_export_next_step(state, "review", lang="en")
+    assert state["_active_main_page"] == "quick_viz"
+    assert state["_main_nav_widget"] == "quick_viz"
+    assert state["quick_viz_active_panel"] == "Data Tables"
+    assert state["_scroll_to_top"] is True
+    assert state["_post_export_guidance_dismissed"] is True
+    assert "_post_export_navigation_pending" not in state
+
+    agent_state = {
+        "export_completed": True,
+        "last_export_dir": export_dir,
+    }
+    app._apply_post_export_next_step(agent_state, "agent", lang="zh")
+    assert agent_state["_active_main_page"] == "research_agent"
+    assert agent_state["_main_nav_widget"] == "research_agent"
+    assert agent_state["_ra_view"] == "setup"
+    assert agent_state["research_agent_module_dir_text"] == export_dir
+    assert agent_state["research_agent_cohort_source"] == "选择 EasyICU 模块导出文件夹"
+
+    cohort_state = {"export_completed": True}
+    app._apply_post_export_next_step(cohort_state, "cohort", lang="en")
+    assert cohort_state["_active_main_page"] == "cohort"
+    assert cohort_state["_main_nav_widget"] == "cohort"
+
+
+def test_post_export_guidance_copy_exposes_visualization_and_agent_actions() -> None:
+    app_source = Path(app.__file__).read_text(encoding="utf-8")
+    sidebar_source = Path(sidebar.__file__).read_text(encoding="utf-8")
+
+    assert "_render_post_export_guidance(" in app_source
+    assert "_post_export_open_review" in app_source
+    assert "_post_export_open_agent" in app_source
+    assert "Review tables" in app_source
+    assert "Research Agent" in app_source
+    assert "post_export_completed_open_review" in sidebar_source
+    assert "post_export_completed_open_agent" in sidebar_source
+
+
+def test_export_in_progress_uses_quiet_wait_mode_before_main_body() -> None:
+    app_source = Path(app.__file__).read_text(encoding="utf-8")
+    quiet_block = app_source[
+        app_source.index("default_export_container = st.container()"):
+        app_source.index("# ============ Shell-A top bar")
+    ]
+    helper_source = app_source[
+        app_source.index("def _handle_sidebar_export_trigger"):
+        app_source.index("def _get_pyarrow_version")
+    ]
+
+    assert "if export_in_progress:" in quiet_block
+    assert "_handle_sidebar_export_trigger(default_export_container)" in quiet_block
+    assert "return" in quiet_block
+    assert "render_tutorial_redesign_page(lang)" not in quiet_block
+    assert "tabs[0].click()" not in helper_source
+    assert "不再切回 Tutorial 正文" in helper_source
 
 
 def test_completed_export_navigation_pending_is_consumed_once() -> None:
@@ -3393,9 +3863,15 @@ def test_sidebar_pipeline_steps_are_sequential_click_targets() -> None:
     assert "eu_pipeline_jump_" in source
     assert "_sidebar_extract_step_unlocked" in source
     assert "_sidebar_set_extract_step_state" in source
+    pipeline_css = css_text[
+        css_text.index("[class*=\"st-key-eu_pipeline_step_\"]"):
+        css_text.index(".eu-sidebar-footer-rule")
+    ]
     assert "[class*=\"st-key-eu_pipeline_step_\"] .stButton" in css_text
-    assert "opacity: 0 !important" in css_text
-    assert ".eu-pipe-step.locked" in css_text
+    assert "st-key-eu_pipeline_step_active_" in css_text
+    assert "st-key-eu_pipeline_step_locked_" in css_text
+    assert "white-space: pre-line !important" in css_text
+    assert "opacity: 0 !important" not in pipeline_css
 
 
 def test_topbar_crossdb_real_action_opens_loader_when_data_missing() -> None:
@@ -3448,6 +3924,135 @@ def test_crossdb_page_renders_detailed_loader_by_default(monkeypatch) -> None:
     assert "Use this advanced panel" not in page_source
     assert "详细加载器" not in page_source
     assert "加载数据 / 详细分布" not in page_source
+    assert "eu-agent-gate" not in page_source
+    assert "Agent preflight" not in page_source
+    assert '_render_agent_gate_strip(lang, context="Cross-DB benchmark")' not in Path(cohort_redesign.__file__).read_text(encoding="utf-8")
+
+
+def test_crossdb_chinese_copy_uses_natural_product_labels(monkeypatch) -> None:
+    class _FakeStreamlit:
+        def __init__(self, session_state) -> None:
+            self.session_state = session_state
+            self.markdown_calls: list[str] = []
+
+        def markdown(self, body, *_args, **_kwargs) -> None:
+            self.markdown_calls.append(str(body))
+
+    streamlit_stub = _FakeStreamlit({
+        "language": "zh",
+        "entry_mode": "demo",
+        "multidb_is_demo": True,
+        "multidb_data": {"miiv": pd.DataFrame({"stay_id": [1, 2], "hr": [80, 90]})},
+        "multidb_concepts": ["hr"],
+        "_eu_shell_only": True,
+    })
+    monkeypatch.setattr(cohort_redesign, "st", streamlit_stub)
+
+    cohort_redesign.render_cross_db_redesign_page("zh", multidb_fn=lambda _lang: None)
+
+    page_source = "\n".join(streamlit_stub.markdown_calls)
+    assert "跨数据库对比" in page_source
+    assert "工作区" in page_source
+    assert "演示队列" in page_source
+    assert "已选择数据库" in page_source
+    assert "就绪" in page_source
+    assert "跨库基准" not in page_source
+    assert "跨库分布基准" not in page_source
+    assert "WORKSPACE" not in page_source
+    assert "CURRENT COHORT" not in page_source
+    assert "ACTIVE DATABASES" not in page_source
+    assert ">ready<" not in page_source
+
+    source_bundle = "\n".join(
+        Path(path).read_text(encoding="utf-8")
+        for path in [
+            cohort_redesign.__file__,
+            cohort_multidb_page.__file__,
+            i18n.__file__,
+            sidebar.__file__,
+            pages_redesign.__file__,
+            app.__file__,
+        ]
+    )
+    assert "跨库基准" not in source_bundle
+    assert "跨库分布基准" not in source_bundle
+
+
+def test_crossdb_unloaded_state_does_not_show_fabricated_results(monkeypatch) -> None:
+    class _FakeStreamlit:
+        def __init__(self, session_state) -> None:
+            self.session_state = session_state
+            self.markdown_calls: list[str] = []
+
+        def markdown(self, body, *_args, **_kwargs) -> None:
+            self.markdown_calls.append(str(body))
+
+    streamlit_stub = _FakeStreamlit({
+        "language": "zh",
+        "entry_mode": "real",
+        "multidb_selected": ["miiv", "eicu", "aumc"],
+        "_eu_shell_only": True,
+    })
+    monkeypatch.setattr(cohort_redesign, "st", streamlit_stub)
+
+    cohort_redesign.render_cross_db_redesign_page("zh", multidb_fn=lambda _lang: None)
+
+    page_source = "\n".join(streamlit_stub.markdown_calls)
+    assert "尚未加载数据库" in page_source
+    assert "跨数据库摘要待生成" in page_source
+    assert "概念可用性矩阵尚未生成" in page_source
+    assert "占位百分比" in page_source
+    assert "ACTIVE DATABASES" not in page_source
+    assert "MIMIC-IV</div>" not in page_source
+    assert "eICU-CRD" not in page_source
+    assert "AmsterdamUMCdb" not in page_source
+    assert "可用于对比" not in page_source
+    assert "70%" not in page_source
+    assert "90%" not in page_source
+    assert "20%" not in page_source
+
+
+def test_crossdb_single_loaded_database_is_not_treated_as_comparison(monkeypatch) -> None:
+    class _FakeStreamlit:
+        def __init__(self, session_state) -> None:
+            self.session_state = session_state
+            self.markdown_calls: list[str] = []
+
+        def markdown(self, body, *_args, **_kwargs) -> None:
+            self.markdown_calls.append(str(body))
+
+    streamlit_stub = _FakeStreamlit({
+        "language": "zh",
+        "entry_mode": "real",
+        "multidb_data": {"miiv": pd.DataFrame({"stay_id": [1, 2], "hr": [80, 90]})},
+        "multidb_concepts": ["hr"],
+        "multidb_is_demo": False,
+        "_eu_shell_only": True,
+    })
+    monkeypatch.setattr(cohort_redesign, "st", streamlit_stub)
+
+    cohort_redesign.render_cross_db_redesign_page("zh", multidb_fn=lambda _lang: None)
+
+    page_source = "\n".join(streamlit_stub.markdown_calls)
+    assert "还需要另一个数据库" in page_source
+    assert "跨数据库摘要待生成" in page_source
+    assert "概念可用性矩阵尚未生成" in page_source
+    assert "已加载的跨数据库分布摘要" not in page_source
+    assert "概念在不同数据库的可用性" not in page_source
+    assert "70%" not in page_source
+    assert "90%" not in page_source
+    assert "20%" not in page_source
+
+
+def test_crossdb_loader_avoids_streamlit_app_import_side_effects() -> None:
+    viz_source = Path(easyicu.__file__).with_name("cohort_visualization.py").read_text(encoding="utf-8")
+    multidb_source = Path(cohort_multidb_page.__file__).read_text(encoding="utf-8")
+
+    assert "from easyicu.webapp.app import find_database_path" not in viz_source
+    assert "from easyicu.webapp.data_paths import find_database_path" in viz_source
+    assert "len(selected_dbs or []) < 2" in multidb_source
+    assert "Loaded fewer than two databases" in multidb_source
+    assert "st.session_state.pop('multidb_data'" in multidb_source
 
 
 def test_crossdb_distribution_section_has_spacing_guard() -> None:
@@ -3535,7 +4140,10 @@ def test_crossdb_page_labels_demo_source_before_summary(monkeypatch) -> None:
         "language": "en",
         "entry_mode": "demo",
         "multidb_is_demo": True,
-        "multidb_data": {"miiv": pd.DataFrame({"hr": [80, 90]})},
+        "multidb_data": {
+            "miiv": pd.DataFrame({"hr": [80, 90]}),
+            "eicu": pd.DataFrame({"hr": [82, 92]}),
+        },
         "multidb_concepts": ["hr"],
         "_eu_shell_only": True,
     })
@@ -3909,6 +4517,137 @@ def test_extract_footer_action_buttons_use_equal_columns() -> None:
     assert 'class*="st-key-step2_confirm_design"' in css_text
     assert 'class*="st-key-step3_confirm_design"' in css_text
     assert "height: 45px !important" in css_text
+
+
+def test_step4_export_footer_actions_have_overlap_guard() -> None:
+    sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert 'key="eu_export_footer_actions"' in sidebar_text
+    assert 'class*="st-key-eu_export_footer_actions"' in css_text
+    export_footer_css = css_text[
+        css_text.index('.stApp [class*="st-key-eu_export_footer_actions"] {'):
+        css_text.index(".eu-performance-strip {")
+    ]
+
+    assert "clear: both" in export_footer_css
+    assert "margin-top: 30px !important" in export_footer_css
+    assert "align-items: center !important" in export_footer_css
+
+
+def test_step2_reset_defers_cohort_enabled_until_next_render(monkeypatch) -> None:
+    class _RerunRequested(Exception):
+        pass
+
+    class _GuardedSessionState(_AttrSessionState):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            object.__setattr__(self, "_locked_widget_keys", set())
+
+        def lock_widget_key(self, key: str) -> None:
+            self._locked_widget_keys.add(key)
+
+        def clear_widget_locks(self) -> None:
+            self._locked_widget_keys.clear()
+
+        def __setitem__(self, key, value) -> None:
+            if key in self._locked_widget_keys:
+                raise AssertionError(f"{key} was modified after widget instantiation")
+            super().__setitem__(key, value)
+
+    class _Step2ResetStreamlit:
+        def __init__(self) -> None:
+            self.session_state = _GuardedSessionState(
+                {
+                    "language": "en",
+                    "entry_mode": "real",
+                    "use_mock_data": False,
+                    "database": "miiv",
+                    "cohort_enabled": True,
+                    "cohort_age_min_design": 65,
+                    "cohort_icd_include_query_design": "A41",
+                    "cohort_filter": {
+                        "age_min": 65,
+                        "age_max": None,
+                        "first_icu_stay": None,
+                        "los_min": None,
+                        "los_max": None,
+                        "gender": None,
+                        "survived": None,
+                        "has_sepsis": True,
+                        "disease_cohort": "sepsis",
+                        "icd_query": "A41",
+                        "icd_include_query": "A41",
+                        "icd_exclude_query": "",
+                        "icd_mode": "include",
+                    },
+                }
+            )
+
+        def columns(self, spec, **_kwargs):
+            count = spec if isinstance(spec, int) else len(spec)
+            return [_FakeColumn() for _ in range(count)]
+
+        def container(self, **_kwargs):
+            return _FakeColumn()
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def warning(self, *_args, **_kwargs) -> None:
+            pass
+
+        def caption(self, *_args, **_kwargs) -> None:
+            pass
+
+        def toggle(self, *_args, key, **_kwargs) -> bool:
+            self.session_state.lock_widget_key(key)
+            return bool(self.session_state.get(key, False))
+
+        def number_input(self, *_args, **kwargs) -> int:
+            return kwargs["value"]
+
+        def selectbox(self, *_args, options, index=0, **_kwargs):
+            return options[index]
+
+        def text_input(self, *_args, **kwargs) -> str:
+            return str(kwargs.get("value", ""))
+
+        def button(self, *_args, **kwargs) -> bool:
+            return kwargs.get("key") == "cohort_builder_reset"
+
+        def rerun(self) -> None:
+            raise _RerunRequested
+
+    streamlit_stub = _Step2ResetStreamlit()
+    monkeypatch.setattr(sidebar, "st", streamlit_stub)
+    monkeypatch.setattr(sidebar, "_real_data_source_ready", lambda: True)
+    monkeypatch.setattr(sidebar, "_get_supported_disease_cohorts", lambda _db: ["none", "sepsis"], raising=False)
+    monkeypatch.setattr(sidebar, "_supports_icd_filter", lambda _db: True, raising=False)
+    monkeypatch.setattr(sidebar, "DISEASE_COHORT_CONFIG", {"sepsis": {"label_en": "Sepsis-3"}}, raising=False)
+    monkeypatch.setattr(
+        sidebar,
+        "_clear_icd_preview_state",
+        lambda: streamlit_stub.session_state.__setitem__("_icd_preview_cleared", True),
+        raising=False,
+    )
+
+    with pytest.raises(_RerunRequested):
+        sidebar._render_step2_cohort_builder_design()
+
+    assert streamlit_stub.session_state[sidebar._STEP2_RESET_PENDING_KEY] is True
+    assert streamlit_stub.session_state["cohort_enabled"] is True
+
+    streamlit_stub.session_state.clear_widget_locks()
+    sidebar._ensure_step2_state_defaults()
+
+    assert sidebar._STEP2_RESET_PENDING_KEY not in streamlit_stub.session_state
+    assert streamlit_stub.session_state["cohort_enabled"] is False
+    assert "cohort_age_min_design" not in streamlit_stub.session_state
+    assert "cohort_icd_include_query_design" not in streamlit_stub.session_state
+    assert streamlit_stub.session_state["cohort_filter"]["age_min"] is None
+    assert streamlit_stub.session_state["cohort_filter"]["disease_cohort"] == "none"
+    assert streamlit_stub.session_state["_icd_preview_cleared"] is True
 
 
 def test_large_desktop_density_keeps_sidebar_readable() -> None:
