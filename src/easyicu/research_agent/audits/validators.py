@@ -142,13 +142,60 @@ class CohortAuditor:
 
 
 _FORBIDDEN_AGG_PATTERNS_BY_KIND = {
-    # role + agg method => human-readable message
-    ("ordinal_score", "mean"): "Taking mean() of an ordinal SOFA component is a category error; aggregate by max within window.",
-    ("ordinal_score", "std"):  "std() of an ordinal SOFA component is meaningless; report a level distribution instead.",
-    ("composite_score", "mean"): "Total SOFA is a sum of 0–4 components; treat as ordinal/integer-count, not continuous (use max-within-window or report distribution).",
-    ("composite_score", "std"):  "std() of a composite ordinal score is misleading; prefer median (IQR) or distribution table.",
-    ("ordinal_score_gcs", "mean"): "GCS is ordinal; report worst (min) or representative (last/first), not mean.",
+    # (role, agg method) => human-readable message.
+    # Messages are phrased as conservative reporting-practice violations,
+    # not as absolute mathematical errors: for bounded ordinal clinical
+    # scores, median/IQR or level-distribution summaries are preferred
+    # over mean/SD for manuscript-facing reporting. The same column may
+    # legitimately enter a regression or Cox model as a linear covariate;
+    # this auditor covers reporting/aggregation misuse only, not model
+    # specification choices.
+    ("ordinal_score", "mean"): "Mean of an ordinal SOFA component may be misleading; for manuscript-facing summaries prefer max-within-window or a level distribution.",
+    ("ordinal_score", "std"):  "Standard deviation of an ordinal SOFA component is rarely interpretable; prefer a level distribution.",
+    ("composite_score", "mean"): "Mean of a composite ordinal score (total SOFA = sum of 0–4 components) is a reporting-practice violation for bounded integer clinical scores; for manuscript-facing summaries prefer max-within-window, median (IQR) or a level distribution.",
+    ("composite_score", "std"):  "Standard deviation of a composite ordinal score may be misleading; prefer median (IQR) or a level distribution.",
+    ("ordinal_score_gcs", "mean"): "GCS is ordinal; for manuscript-facing summaries prefer worst (min) or a representative (last / first) value rather than mean.",
 }
+
+
+# Stage-aware severity hook (added 2026-05-26).
+#
+# Default behaviour preserves the strict fail-closed benchmark: every
+# matched pattern produces a severity="error" finding regardless of step
+# stage. Setting EASYICU_AUDIT_RELAX_PROBE=1 downgrades matches to
+# severity="warning" when the step is recognised as descriptive / probe /
+# exploratory, while keeping severity="error" for primary-analysis,
+# manuscript and final-report stages. This hook exists so that a future
+# supplementary ablation can compare strict vs stage-calibrated audit
+# policies on the same benchmark without re-running unrelated logic.
+_PROBE_STAGE_TOKENS = (
+    "probe", "descriptive", "exploratory", "qc", "summary",
+    "missingness_audit", "score_qc",
+)
+_BLOCKING_STAGE_TOKENS = (
+    "primary_", "manuscript", "final_report", "publication", "evidence_binding",
+)
+
+
+def _forbidden_agg_severity(step: Optional["AnalysisStep"]) -> str:
+    """Return 'error' (block) or 'warning' for a forbidden-agg pattern.
+
+    Strict (default): always returns 'error'.
+    Relaxed (EASYICU_AUDIT_RELAX_PROBE=1): returns 'warning' when the
+    step id contains a probe/descriptive token and 'error' when it
+    contains a primary-analysis or manuscript token.
+    """
+    import os
+    if os.environ.get("EASYICU_AUDIT_RELAX_PROBE") != "1":
+        return "error"
+    sid = (getattr(step, "step_id", "") or "").lower()
+    for tok in _BLOCKING_STAGE_TOKENS:
+        if tok in sid:
+            return "error"
+    for tok in _PROBE_STAGE_TOKENS:
+        if tok in sid:
+            return "warning"
+    return "error"
 
 
 class ConceptUsageAuditor:
@@ -199,14 +246,14 @@ class ConceptUsageAuditor:
             key = (role_key, fn)
             if key in _FORBIDDEN_AGG_PATTERNS_BY_KIND:
                 findings.append(ValidationFinding(
-                    validator=self.name, severity="error",
+                    validator=self.name, severity=_forbidden_agg_severity(step),
                     message=_FORBIDDEN_AGG_PATTERNS_BY_KIND[key],
                     detail={"column": col, "function": fn, "step_id": step.step_id if step else None},
                 ))
                 return
             if v.name.lower() == "gcs" and fn == "mean":
                 findings.append(ValidationFinding(
-                    validator=self.name, severity="error",
+                    validator=self.name, severity=_forbidden_agg_severity(step),
                     message=_FORBIDDEN_AGG_PATTERNS_BY_KIND[("ordinal_score_gcs", "mean")],
                     detail={"column": col, "function": fn},
                 ))
@@ -300,7 +347,7 @@ class ConceptUsageAuditor:
             if key in _FORBIDDEN_AGG_PATTERNS_BY_KIND:
                 findings.append(ValidationFinding(
                     validator=self.name,
-                    severity="error",
+                    severity=_forbidden_agg_severity(step),
                     message=_FORBIDDEN_AGG_PATTERNS_BY_KIND[key],
                     detail={"column": col, "function": fn, "fallback": "regex"},
                 ))

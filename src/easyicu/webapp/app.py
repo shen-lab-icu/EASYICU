@@ -663,6 +663,118 @@ def _route_completed_export_to_visualization(
         state['_post_export_navigation_pending'] = True
 
 
+def _apply_post_export_next_step(
+    state: dict[str, Any],
+    target: str,
+    *,
+    lang: str = "en",
+) -> None:
+    """Route the post-export guidance buttons to real downstream pages."""
+    state["_post_export_guidance_dismissed"] = True
+    state.pop("_post_export_navigation_pending", None)
+
+    if target == "review":
+        state["_active_main_page"] = "quick_viz"
+        state["_main_nav_widget"] = "quick_viz"
+        state["quick_viz_active_panel"] = "Data Tables"
+        state["_scroll_to_top"] = True
+        return
+
+    if target == "cohort":
+        state["_active_main_page"] = "cohort"
+        state["_main_nav_widget"] = "cohort"
+        state["_scroll_to_top"] = True
+        return
+
+    if target == "agent":
+        state["_active_main_page"] = "research_agent"
+        state["_main_nav_widget"] = "research_agent"
+        state["_ra_view"] = "setup"
+        state["_scroll_to_top"] = True
+        export_dir = str(state.get("last_export_dir") or state.get("export_path") or "")
+        if export_dir:
+            state["research_agent_module_dir_text"] = export_dir
+        state["research_agent_cohort_source"] = (
+            "选择 EasyICU 模块导出文件夹"
+            if lang == "zh"
+            else "Pick an EasyICU module export folder"
+        )
+        return
+
+    if target == "dismiss":
+        return
+
+    raise ValueError(f"Unknown post-export next step: {target}")
+
+
+def _render_post_export_guidance(
+    active_page: str,
+    lang: str,
+    *,
+    export_in_progress: bool,
+) -> None:
+    """Show explicit downstream choices once a local export finishes."""
+    if export_in_progress:
+        return
+    if not st.session_state.get("export_completed", False):
+        return
+    if st.session_state.get("_post_export_guidance_dismissed", False):
+        return
+    if active_page not in {"quick_viz", "cohort", "research_agent", "tutorial"}:
+        return
+
+    message = (
+        "Export complete. Next, review the loaded tables, run cohort statistics, or use this export as the Research Agent cohort source."
+        if lang == "en"
+        else "提取已完成。下一步可以先审阅导出表、做队列统计，或把这个导出文件夹交给研究智能体。"
+    )
+    st.markdown(
+        f'<div class="compact-inline-notice info">{html.escape(message)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    review_label = "Review tables" if lang == "en" else "查看导出表格"
+    cohort_label = "Cohort stats" if lang == "en" else "队列统计"
+    agent_label = "Research Agent" if lang == "en" else "研究智能体"
+    dismiss_label = "Dismiss" if lang == "en" else "收起"
+    cols = st.columns([1.1, 1.1, 1.1, 0.8], gap="small")
+    with cols[0]:
+        if st.button(
+            review_label,
+            key="_post_export_open_review",
+            use_container_width=True,
+            icon=":material/table_view:",
+        ):
+            _apply_post_export_next_step(st.session_state, "review", lang=lang)
+            st.rerun()
+    with cols[1]:
+        if st.button(
+            cohort_label,
+            key="_post_export_open_cohort",
+            use_container_width=True,
+            icon=":material/query_stats:",
+        ):
+            _apply_post_export_next_step(st.session_state, "cohort", lang=lang)
+            st.rerun()
+    with cols[2]:
+        if st.button(
+            agent_label,
+            key="_post_export_open_agent",
+            use_container_width=True,
+            icon=":material/auto_awesome:",
+        ):
+            _apply_post_export_next_step(st.session_state, "agent", lang=lang)
+            st.rerun()
+    with cols[3]:
+        if st.button(
+            dismiss_label,
+            key="_post_export_dismiss",
+            use_container_width=True,
+        ):
+            _apply_post_export_next_step(st.session_state, "dismiss", lang=lang)
+            st.rerun()
+
+
 def _consume_completed_export_navigation(state: dict[str, Any]) -> bool:
     """Apply a queued post-export route once and report whether it fired."""
     if not state.pop('_post_export_navigation_pending', False):
@@ -778,7 +890,7 @@ def _consume_topbar_run_request(
             message = detail if detail else (
                 'Built Cohort Statistics workspace from loaded exports.'
                 if is_en else
-                '已从加载的导出数据构建 Cohort Statistics 工作区。'
+                '已从加载的导出数据构建队列统计工作区。'
             )
             level = 'success' if ok else 'warning'
         else:
@@ -800,16 +912,16 @@ def _consume_topbar_run_request(
     if active_page == 'cross_db':
         if entry_mode == 'demo':
             ensure_demo_workspace_fn(state, lang=lang, force=True)
-            message = 'Demo Cross-DB benchmark data refreshed.' if is_en else '已刷新演示跨库基准数据。'
+            message = 'Demo Cross-DB benchmark data refreshed.' if is_en else '已刷新演示跨数据库对比数据。'
             level = 'success'
         elif state.get('multidb_data'):
-            message = 'Cross-DB comparison data is already loaded.' if is_en else '跨库对比数据已加载。'
+            message = 'Cross-DB comparison data is already loaded.' if is_en else '跨数据库对比数据已加载。'
             level = 'success'
         else:
             message = (
                 'The Cross-DB loader is shown below; connect at least two database roots.'
                 if is_en else
-                '跨库加载器已在下方展示；请连接至少两个数据库根目录。'
+                '跨数据库加载器已在下方展示；请连接至少两个数据库根目录。'
             )
             level = 'warning'
         _append_action_log(state, message)
@@ -826,7 +938,7 @@ def _consume_topbar_run_request(
             message = (
                 'Opened Research Agent run controls. Confirm the request, cohort, and LLM provider in Setup before launching.'
                 if is_en else
-                '已打开 Research Agent 运行控制。请在配置页确认研究问题、队列和 LLM provider 后再启动。'
+                '已打开研究智能体运行控制。请在配置页确认研究问题、队列和模型服务后再启动。'
             )
             level = 'info'
         _append_action_log(state, message)
@@ -1720,6 +1832,88 @@ def render_extract_page(lang: str):
     return _impl(lang, globals())
 
 
+def _handle_sidebar_export_trigger(default_export_container) -> bool:
+    """Run a queued sidebar export and keep the main page quiet while it runs."""
+    if not st.session_state.get('trigger_export', False):
+        return False
+
+    st.session_state.trigger_export = False
+    # 🔧 FIX: 添加 try-except 防止白屏崩溃
+    try:
+        # 导出中只定位进度区域，不再切回 Tutorial 正文，避免进度条下方继续渲染首页卡片。
+        js_scroll_to_export = '''
+        <script>
+            (function() {
+                function scrollToExportProgress() {
+                    var doc = window.parent.document;
+                    var anchor = doc.getElementById('export-progress');
+                    if (anchor) {
+                        anchor.scrollIntoView({behavior: 'smooth', block: 'start'});
+                        return true;
+                    }
+                    var headings = Array.from(doc.querySelectorAll('h1, h2, h3, div, p, span'));
+                    var target = headings.find(function(node) {
+                        var text = (node.innerText || node.textContent || '').trim();
+                        return text === '📤 Export Progress' || text === '📤 导出进度';
+                    });
+                    if (target) {
+                        target.scrollIntoView({behavior: 'smooth', block: 'start'});
+                        return true;
+                    }
+                    return false;
+                }
+
+                setTimeout(scrollToExportProgress, 100);
+                setTimeout(scrollToExportProgress, 600);
+                setTimeout(scrollToExportProgress, 1400);
+            })();
+        </script>
+        '''
+        st.components.v1.html(js_scroll_to_export, height=0)
+
+        # 仅对真正的“已导出文件导入模式”自动回填 selected_concepts；Preview 不应触发该逻辑。
+        if (
+            not st.session_state.get('selected_concepts')
+            and st.session_state.get('loaded_data_origin') == 'exported_files'
+        ):
+            loaded_concepts = st.session_state.get('loaded_concepts', {})
+            if loaded_concepts:
+                st.session_state.selected_concepts = list(loaded_concepts.keys())
+
+        # 🔧 只有在有选择的概念时才执行导出
+        if st.session_state.get('selected_concepts'):
+            # Preview 后触发正式导出时，避免复用旧 tab 内的容器对象，直接使用当前 rerun 的安全容器
+            preview_like_origins = {'preview', 'quick_preview'}
+            if st.session_state.get('loaded_data_origin') in preview_like_origins:
+                export_container = default_export_container
+            else:
+                export_container = st.session_state.get('_export_progress_container', default_export_container)
+            with export_container:
+                execute_sidebar_export()
+        else:
+            # 没有可导出的数据
+            lang = st.session_state.get('language', 'en')
+            warning_msg = (
+                "⚠️ No features selected. Please select features in Step 3 before exporting."
+                if lang == 'en'
+                else "⚠️ 未选择特征。请先在步骤 3 选择要导出的特征。"
+            )
+            st.warning(warning_msg)
+            st.session_state['_exporting_in_progress'] = False
+
+        if st.session_state.get('_post_export_navigation_pending'):
+            st.session_state['_active_main_page'] = 'quick_viz'
+            st.rerun()
+    except Exception as e:
+        st.session_state['_exporting_in_progress'] = False
+        err_msg = f"❌ Export failed: {str(e)}"
+        st.error(err_msg)
+        import traceback
+        with st.expander("Error details" if st.session_state.get('language', 'en') == 'en' else "错误详情"):
+            st.code(traceback.format_exc())
+    return True
+
+
 
 
 def _get_pyarrow_version() -> str | None:
@@ -2526,9 +2720,9 @@ def _render_cohort_real_no_path_guide(lang: str) -> None:
             title = "队列分析需要原始数据库 schema"
             desc = (
                 f"你已经从导出模块加载了 <b>{n_concepts} 个概念 × {n_patients} 个患者</b>"
-                "——这些数据可在 <b>Quick Visualization</b>（表格、时间序列、患者概览、"
-                "数据质量）和 <b>Research Agent</b> 中使用。<br><br>"
-                "Cohort Analysis 的各个面板（组间对照、覆盖审计、跨库基准、队列画像、SOFA 重分层）"
+                "——这些数据可在 <b>快速可视化</b>（表格、时间序列、患者概览、"
+                "数据质量）和 <b>研究智能体</b> 中使用。<br><br>"
+                "队列分析的各个面板（组间对照、覆盖审计、跨数据库对比、队列画像、SOFA 重分层）"
                 "直接读取 <code>icustays</code> / <code>patients</code> / "
                 "<code>admissions</code> 表，因此需要一个已转换的原始 ICU 数据根。"
                 "请在侧边栏使用 <b>🔄 Convert &amp; Setup</b> 把原始 "
@@ -2557,7 +2751,7 @@ def _render_cohort_demo_workspace_status(lang: str) -> None:
     subtitle = (
         "Group contrast, coverage audit, cross-database benchmark, cohort profile, and SOFA reclassification now use the same prepared demo state."
         if lang == 'en' else
-        "组间对照、覆盖审计、跨库基准、队列画像和 SOFA 重分层现在共用同一套演示状态。"
+        "组间对照、覆盖审计、跨数据库对比、队列画像和 SOFA 重分层现在共用同一套演示状态。"
     )
     status = "Ready for all panels" if lang == 'en' else "所有子板块已就绪"
     st.markdown(
@@ -2598,7 +2792,7 @@ def _render_cohort_demo_workspace_launcher(lang: str) -> None:
     subtitle = (
         "This prepares demo data for group contrast, coverage audit, cross-DB benchmark, cohort profile, and SOFA reclassification together. You will not need to generate data again inside each subpanel."
         if lang == 'en' else
-        "这会一次性准备组间对照、覆盖审计、跨库基准、队列画像和 SOFA 重分层所需的演示数据；之后不需要在每个子板块重复生成。"
+        "这会一次性准备组间对照、覆盖审计、跨数据库对比、队列画像和 SOFA 重分层所需的演示数据；之后不需要在每个子板块重复生成。"
     )
     st.markdown(
         f'''
@@ -2731,6 +2925,7 @@ def _prime_export_completion(export_dir: Path, files: list[str], *, auto_load: b
     st.session_state.viz_confirmed_path = str(export_dir)
     st.session_state._prefer_exported_viz = True
     st.session_state._viz_export_path_version = st.session_state.get('_viz_export_path_version', 0) + 1
+    st.session_state.pop('_post_export_guidance_dismissed', None)
 
     if auto_load:
         selected_files = list(dict.fromkeys(Path(path).stem for path in files if path))
@@ -2933,7 +3128,7 @@ def _render_cohort_real_loaded_exports_launcher(lang: str) -> None:
         subtitle = (
             f"将已为 <b>{db_label}</b> 加载的 <b>{n_concepts} 个概念 × {n_patients} 个患者</b>"
             "桥接到组间对照、覆盖审计、队列画像、SOFA 重分层面板。"
-            "跨库面板仍需要原始 schema（至少两个数据库），保持待解锁。"
+            "跨数据库对比面板仍需要原始 schema（至少两个数据库），保持待解锁。"
         )
         button_label = "🚀 用已加载导出构建工作区"
         status_chip = "导出快捷"
@@ -2995,7 +3190,7 @@ def _render_cohort_real_workspace_status(lang: str) -> None:
             "Cross-DB Benchmark stays gated (needs raw schema for ≥2 DBs)."
             if lang == 'en' else
             f"已从导出文件桥接 {n:,} 名患者、{n_concepts} 个概念。"
-            "跨库面板仍待解锁（需要至少两个数据库的原始 schema）。"
+            "跨数据库对比面板仍待解锁（需要至少两个数据库的原始 schema）。"
         )
     else:
         title = f"Shared real-data workspace — {db_label}" if lang == 'en' else f"共享真实数据工作区 — {db_label}"
@@ -3096,7 +3291,7 @@ def _render_figure_target_jump_script() -> None:
             'Data Quality': '质量',
             'Group Contrast': '组间对照',
             'Coverage Audit': '覆盖审计',
-            'Cross-DB Benchmark': '跨库',
+            'Cross-DB Benchmark': '多库',
             'Cohort Snapshot': '队列画像',
             'SOFA-1 vs SOFA-2': 'SOFA 重分层',
         }.get(panel, panel)
@@ -3380,6 +3575,17 @@ def main():
     # （实际导出在渲染 Home 页面后执行，确保 container 已创建）
     default_export_container = st.container()
 
+    if export_in_progress:
+        if not _handle_sidebar_export_trigger(default_export_container):
+            with default_export_container:
+                st.markdown(
+                    '<div class="compact-inline-notice info">'
+                    + ("⏳ Export in progress. Keep this tab open." if lang == 'en' else "⏳ 正在导出，请保持此页面打开。")
+                    + '</div>',
+                    unsafe_allow_html=True,
+                )
+        return
+
     # ============ Shell-A top bar (breadcrumb + actions) ============
     _consume_completed_export_navigation(st.session_state)
 
@@ -3392,7 +3598,7 @@ def main():
         'tutorial':       'Data Extraction' if lang == 'en' else '数据提取',
         'quick_viz':      'Patient Review' if lang == 'en' else '患者审阅',
         'cohort':         'Cohort Statistics' if lang == 'en' else '队列统计',
-        'cross_db':       'Cross-DB Benchmark' if lang == 'en' else '跨库基准',
+        'cross_db':       'Cross-DB Benchmark' if lang == 'en' else '跨数据库对比',
         'research_agent': 'Research Agent' if lang == 'en' else '研究智能体',
     }
     _topbar_home_label = 'Home' if lang == 'en' else '首页'
@@ -3668,6 +3874,12 @@ def main():
     if _topbar_result and st.session_state.get('_active_main_page') != active_page:
         active_page = st.session_state.get('_active_main_page', active_page)
 
+    _render_post_export_guidance(
+        active_page,
+        lang,
+        export_in_progress=export_in_progress,
+    )
+
     if active_page == "extract":
         # Shell-A redesign: the data-extraction workflow (steps 1-4)
         # relocated from the sidebar into a main-area page, reached via
@@ -3830,7 +4042,7 @@ def main():
             xdb_hold_msg = (
                 "⏳ Export in progress. Cross-DB benchmark is paused until extraction finishes."
                 if lang == 'en' else
-                "⏳ 正在导出。提取完成前，跨库基准面板暂停加载。"
+                "⏳ 正在导出。提取完成前，跨数据库对比面板暂停加载。"
             )
             st.markdown(f'<div class="compact-inline-notice info">{xdb_hold_msg}</div>', unsafe_allow_html=True)
         else:
@@ -3922,88 +4134,7 @@ def main():
                     ))
                     st.caption(get_text("ra_optional_deps_hint"))
 
-    # 🔧 处理侧边栏触发的导出（在标签页渲染后执行，确保 Guide: Complete 中的 container 已创建）
-    if st.session_state.get('trigger_export', False):
-        st.session_state.trigger_export = False
-        # 🔧 FIX: 添加 try-except 防止白屏崩溃
-        try:
-            # 🔧 FIX: 使用 JavaScript 切换到 Tutorial 标签页并定位到导出进度
-            js_switch_to_tutorial = '''
-            <script>
-                (function() {
-                    function scrollToExportProgress() {
-                        var doc = window.parent.document;
-                        var anchor = doc.getElementById('export-progress');
-                        if (anchor) {
-                            anchor.scrollIntoView({behavior: 'smooth', block: 'start'});
-                            return true;
-                        }
-                        var headings = Array.from(doc.querySelectorAll('h1, h2, h3, div, p, span'));
-                        var target = headings.find(function(node) {
-                            var text = (node.innerText || node.textContent || '').trim();
-                            return text === '📤 Export Progress' || text === '📤 导出进度';
-                        });
-                        if (target) {
-                            target.scrollIntoView({behavior: 'smooth', block: 'start'});
-                            return true;
-                        }
-                        return false;
-                    }
-
-                    // 点击第一个标签页 (Tutorial)
-                    setTimeout(function() {
-                        var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
-                        if (tabs && tabs.length >= 1) {
-                            tabs[0].click();
-                            setTimeout(scrollToExportProgress, 100);
-                            setTimeout(scrollToExportProgress, 600);
-                            setTimeout(scrollToExportProgress, 1400);
-                        }
-                    }, 100);
-                })();
-            </script>
-            '''
-            st.components.v1.html(js_switch_to_tutorial, height=0)
-
-            # 仅对真正的“已导出文件导入模式”自动回填 selected_concepts；Preview 不应触发该逻辑。
-            if (
-                not st.session_state.get('selected_concepts')
-                and st.session_state.get('loaded_data_origin') == 'exported_files'
-            ):
-                loaded_concepts = st.session_state.get('loaded_concepts', {})
-                if loaded_concepts:
-                    st.session_state.selected_concepts = list(loaded_concepts.keys())
-
-            # 🔧 只有在有选择的概念时才执行导出
-            if st.session_state.get('selected_concepts'):
-                # Preview 后触发正式导出时，避免复用旧 tab 内的容器对象，直接使用当前 rerun 的安全容器
-                preview_like_origins = {'preview', 'quick_preview'}
-                if st.session_state.get('loaded_data_origin') in preview_like_origins:
-                    export_container = default_export_container
-                else:
-                    export_container = st.session_state.get('_export_progress_container', default_export_container)
-                with export_container:
-                    execute_sidebar_export()
-            else:
-                # 没有可导出的数据
-                lang = st.session_state.get('language', 'en')
-                st.warning("⚠️ No data to export. Please load data first." if lang == 'en' else "⚠️ 没有可导出的数据，请先加载数据。")
-                st.session_state['_exporting_in_progress'] = False
-            if st.session_state.get('_post_export_navigation_pending'):
-                st.session_state['_active_main_page'] = 'quick_viz'
-                st.rerun()
-        except Exception as e:
-            import traceback
-            lang = st.session_state.get('language', 'en')
-            # 🔧 FIX: 打印详细错误堆栈便于调试
-            error_detail = traceback.format_exc()
-            print(f"[ERROR] Export failed with exception:\n{error_detail}")
-            st.session_state['_exporting_in_progress'] = False
-            if lang == 'en':
-                st.error(f"❌ Export failed: {e}")
-            else:
-                st.error(f"❌ 导出失败: {e}")
-            st.session_state['_exporting_in_progress'] = False
+    _handle_sidebar_export_trigger(default_export_container)
 
     # Page navigation now happens via the segmented_control above. Only the
     # scroll-to-top request still needs a small script — and this one does not

@@ -26,6 +26,19 @@ from easyicu.webapp.ui_helpers import (
 
 _PROTECTED_CONTEXT_NAMES = {"render_sidebar", "render_extract_page", "_install_app_context"}
 
+_STEP2_RESET_PENDING_KEY = "_step2_cohort_builder_reset_pending"
+_STEP2_WIDGET_KEYS = (
+    "cohort_enabled",
+    "cohort_age_min_design",
+    "cohort_age_max_design",
+    "cohort_first_icu_design",
+    "cohort_los_min_design",
+    "cohort_gender_design",
+    "cohort_survival_design",
+    "cohort_icd_include_query_design",
+    "cohort_icd_exclude_query_design",
+)
+
 
 def _activate_entry_mode(target: str) -> None:
     """Switch the workspace mode while keeping the shell on extraction."""
@@ -203,6 +216,43 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
     for name, value in app_context.items():
         if not name.startswith("__") and name not in _PROTECTED_CONTEXT_NAMES:
             globals()[name] = value
+
+
+def _apply_sidebar_post_export_next_step(target: str, *, lang: str) -> None:
+    """Route completed-export CTA buttons, using app helper when available."""
+    app_helper = globals().get("_apply_post_export_next_step")
+    if callable(app_helper):
+        app_helper(st.session_state, target, lang=lang)
+        return
+
+    st.session_state["_post_export_guidance_dismissed"] = True
+    st.session_state.pop("_post_export_navigation_pending", None)
+    if target == "review":
+        st.session_state["_active_main_page"] = "quick_viz"
+        st.session_state["_main_nav_widget"] = "quick_viz"
+        st.session_state["quick_viz_active_panel"] = "Data Tables"
+        st.session_state["_scroll_to_top"] = True
+    elif target == "cohort":
+        st.session_state["_active_main_page"] = "cohort"
+        st.session_state["_main_nav_widget"] = "cohort"
+        st.session_state["_scroll_to_top"] = True
+    elif target == "agent":
+        st.session_state["_active_main_page"] = "research_agent"
+        st.session_state["_main_nav_widget"] = "research_agent"
+        st.session_state["_ra_view"] = "setup"
+        st.session_state["_scroll_to_top"] = True
+        export_dir = str(st.session_state.get("last_export_dir") or st.session_state.get("export_path") or "")
+        if export_dir:
+            st.session_state["research_agent_module_dir_text"] = export_dir
+        st.session_state["research_agent_cohort_source"] = (
+            "选择 EasyICU 模块导出文件夹"
+            if lang == "zh"
+            else "Pick an EasyICU module export folder"
+        )
+    elif target == "dismiss":
+        return
+    else:
+        raise ValueError(f"Unknown post-export next step: {target}")
 
 
 def _ensure_default_directory_input_value(
@@ -460,31 +510,33 @@ def _render_step1_data_source(entry_mode: str) -> None:
 
         # 验证按钮
         validate_btn = "🔍 Validate Data Path" if st.session_state.language == 'en' else "🔍 验证数据路径"
-        if st.button(validate_btn, use_container_width=True, key="validate_path"):
-            if not effective_data_path:
-                err_msg = "❌ Please enter data path" if st.session_state.language == 'en' else "❌ 请输入数据路径"
-                st.error(err_msg)
-            elif not Path(effective_data_path).exists():
-                err_msg = "❌ Path does not exist" if st.session_state.language == 'en' else "❌ 路径不存在"
-                st.error(err_msg)
-            else:
-                # 检查数据库所需文件
-                validation_result = validate_database_path(effective_data_path, database)
-                st.session_state.last_validation = validation_result
-                st.session_state.last_validated_path = effective_data_path
-
-                if validation_result['valid']:
-                    st.session_state.data_path = effective_data_path
-                    st.session_state.path_validated = True
-                    st.session_state.step1_confirmed = False
-                    st.session_state.step2_confirmed = False
-                    st.session_state.step3_confirmed = False
-                    st.session_state.export_completed = False
-                    st.success(validation_result['message'])
+        validate_spacer, validate_action = st.columns([5, 1.8], gap="small")
+        with validate_action:
+            if st.button(validate_btn, use_container_width=True, key="validate_path"):
+                if not effective_data_path:
+                    err_msg = "❌ Please enter data path" if st.session_state.language == 'en' else "❌ 请输入数据路径"
+                    st.error(err_msg)
+                elif not Path(effective_data_path).exists():
+                    err_msg = "❌ Path does not exist" if st.session_state.language == 'en' else "❌ 路径不存在"
+                    st.error(err_msg)
                 else:
-                    st.session_state.path_validated = False
-                    st.session_state.step1_confirmed = False
-                    st.error(validation_result['message'])
+                    # 检查数据库所需文件
+                    validation_result = validate_database_path(effective_data_path, database)
+                    st.session_state.last_validation = validation_result
+                    st.session_state.last_validated_path = effective_data_path
+
+                    if validation_result['valid']:
+                        st.session_state.data_path = effective_data_path
+                        st.session_state.path_validated = True
+                        st.session_state.step1_confirmed = False
+                        st.session_state.step2_confirmed = False
+                        st.session_state.step3_confirmed = False
+                        st.session_state.export_completed = False
+                        st.success(validation_result['message'])
+                    else:
+                        st.session_state.path_validated = False
+                        st.session_state.step1_confirmed = False
+                        st.error(validation_result['message'])
                     if validation_result.get('suggestion'):
                         st.info(validation_result['suggestion'])
 
@@ -582,7 +634,7 @@ def _shell_nav_items(entry_mode: str) -> list[ShellNavItem]:
             "tutorial": "数据提取",
             "quick_viz": "患者审阅",
             "cohort": "队列统计",
-            "cross_db": "跨库基准",
+            "cross_db": "跨数据库对比",
             "research_agent": "研究智能体",
         }
     return [
@@ -787,7 +839,7 @@ def _render_sidebar_settings_panel() -> None:
     subtitle = (
         "Used by AI guidance and real research-agent runs."
         if is_en else
-        "用于 AI 辅助和真实 Research Agent 运行。"
+        "用于 AI 辅助和真实研究智能体运行。"
     )
     privacy = (
         "API keys are session-only. EasyICU does not write them to disk."
@@ -1005,6 +1057,11 @@ def _pipeline_step_html(step: PipelineStep, *, unlocked: bool) -> str:
     )
 
 
+def _pipeline_step_button_label(step: PipelineStep) -> str:
+    """Return a compact two-line label for a clickable sidebar step."""
+    return f"**{step.title}**\n`{step.meta}`" if step.meta else f"**{step.title}**"
+
+
 def _render_interactive_pipeline_block(steps: list[PipelineStep]) -> None:
     lang = st.session_state.get("language", "en")
     done_n = sum(1 for s in steps if s.status == "done")
@@ -1016,12 +1073,25 @@ def _render_interactive_pipeline_block(steps: list[PipelineStep]) -> None:
 
     for index, step in enumerate(steps, start=1):
         unlocked = _sidebar_extract_step_unlocked(st.session_state, index)
-        with st.container(key=f"eu_pipeline_step_{step.key}"):
-            st.markdown(_pipeline_step_html(step, unlocked=unlocked), unsafe_allow_html=True)
+        state_key = "unlocked" if unlocked else "locked"
+        step_icon = {
+            "done": ":material/check_circle:",
+            "active": ":material/radio_button_checked:",
+        }.get(step.status, ":material/radio_button_unchecked:")
+        help_text = (
+            ("Open this completed step" if step.status == "done" else "Open this step")
+            if lang == "en" else
+            ("返回修改这一步" if step.status == "done" else "打开这一步")
+        ) if unlocked else (
+            "Complete the previous steps first" if lang == "en" else "请先完成前面的步骤"
+        )
+        with st.container(key=f"eu_pipeline_step_{step.status}_{state_key}_{step.key}"):
             if st.button(
-                ("Open " if lang == "en" else "打开") + step.title,
+                _pipeline_step_button_label(step),
                 key=f"eu_pipeline_jump_{step.key}",
                 disabled=not unlocked,
+                icon=step_icon,
+                help=help_text,
                 use_container_width=True,
             ):
                 _sidebar_set_extract_step_state(st.session_state, index)
@@ -1190,6 +1260,45 @@ def _render_export_completed_panel() -> bool:
                     cohort_info += f"\n\n排除原因: {reasons}"
         st.info(cohort_info)
 
+    lang = st.session_state.get("language", "en")
+    next_msg = (
+        "Next, review the exported tables, run cohort statistics, or use this folder as the Research Agent cohort source."
+        if lang == "en"
+        else "下一步可以审阅导出表、做队列统计，或把这个文件夹作为研究智能体的队列来源。"
+    )
+    st.markdown(
+        f'<div class="compact-inline-notice info">{html.escape(next_msg)}</div>',
+        unsafe_allow_html=True,
+    )
+    next_cols = st.columns(3, gap="small")
+    with next_cols[0]:
+        if st.button(
+            "Review tables" if lang == "en" else "查看表格",
+            key="post_export_completed_open_review",
+            use_container_width=True,
+            icon=":material/table_view:",
+        ):
+            _apply_sidebar_post_export_next_step("review", lang=lang)
+            st.rerun()
+    with next_cols[1]:
+        if st.button(
+            "Cohort stats" if lang == "en" else "队列统计",
+            key="post_export_completed_open_cohort",
+            use_container_width=True,
+            icon=":material/query_stats:",
+        ):
+            _apply_sidebar_post_export_next_step("cohort", lang=lang)
+            st.rerun()
+    with next_cols[2]:
+        if st.button(
+            "Research Agent" if lang == "en" else "研究智能体",
+            key="post_export_completed_open_agent",
+            use_container_width=True,
+            icon=":material/auto_awesome:",
+        ):
+            _apply_sidebar_post_export_next_step("agent", lang=lang)
+            st.rerun()
+
     st.markdown("---")
 
     # 重新提取按钮
@@ -1211,6 +1320,7 @@ def _render_export_completed_panel() -> bool:
         st.session_state.patient_ids = []
         st.session_state.all_patient_count = 0
         st.session_state.pop('_viz_auto_load_export', None)
+        st.session_state.pop('_post_export_guidance_dismissed', None)
         st.session_state.pop('_export_success_result', None)
         # 🔧 FIX (2026-02-15): 清除 easyicu 内部缓存，避免上次提取的数据影响新提取
         try:
@@ -2099,28 +2209,29 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
             "⏳ 导出已经开始。EasyICU 正在从源数据库重新提取数据，不会直接复用刚才的预览样本。"
         )
         st.info(export_pending_msg)
-    st.markdown(
-        f'<div class="eu-source-footer-note">{html.escape("Step 4 of 4" if lang == "en" else "第 4 步 / 共 4 步")}</div>',
-        unsafe_allow_html=True,
-    )
-    footer_left, footer_mid, footer_right = st.columns([1, 0.9, 1.05], gap="small")
-    with footer_mid:
-        if st.button(get_text('sanity_back'), use_container_width=True, key="sanity_back_btn"):
-            st.session_state.step3_confirmed = False
-            st.rerun()
-    with footer_right:
-        if st.button(
-            get_text('sanity_confirm') if can_export else export_btn,
-            type="primary",
-            use_container_width=True,
-            key="final_export_btn",
-            disabled=not can_export,
-        ):
-            st.session_state.trigger_export = True
-            st.session_state.export_completed = False
-            st.session_state['_exporting_in_progress'] = True
-            st.session_state['_scroll_to_tab'] = 'export_progress'
-            st.rerun()
+    with st.container(key="eu_export_footer_actions"):
+        st.markdown(
+            f'<div class="eu-source-footer-note">{html.escape("Step 4 of 4" if lang == "en" else "第 4 步 / 共 4 步")}</div>',
+            unsafe_allow_html=True,
+        )
+        footer_left, footer_mid, footer_right = st.columns([1, 0.9, 1.05], gap="small")
+        with footer_mid:
+            if st.button(get_text('sanity_back'), use_container_width=True, key="sanity_back_btn"):
+                st.session_state.step3_confirmed = False
+                st.rerun()
+        with footer_right:
+            if st.button(
+                get_text('sanity_confirm') if can_export else export_btn,
+                type="primary",
+                use_container_width=True,
+                key="final_export_btn",
+                disabled=not can_export,
+            ):
+                st.session_state.trigger_export = True
+                st.session_state.export_completed = False
+                st.session_state['_exporting_in_progress'] = True
+                st.session_state['_scroll_to_tab'] = 'export_progress'
+                st.rerun()
     if not can_export:
         missing = []
         if not selected_concepts:
@@ -2176,6 +2287,8 @@ def _render_system_resource_panel() -> None:
 
 def _ensure_step2_state_defaults() -> None:
     """Initialize cohort-builder state without overwriting existing choices."""
+    _apply_pending_step2_reset()
+
     if 'cohort_filter' not in st.session_state:
         st.session_state.cohort_filter = {
             'age_min': None,
@@ -2209,6 +2322,19 @@ def _ensure_step2_state_defaults() -> None:
         st.session_state.cohort_enabled = st.session_state.get("entry_mode") == "demo"
     if 'filtered_patient_count' not in st.session_state:
         st.session_state.filtered_patient_count = None
+
+
+def _apply_pending_step2_reset() -> None:
+    """Apply a queued Step 2 reset before Step 2 widgets are rendered."""
+    if st.session_state.pop(_STEP2_RESET_PENDING_KEY, False):
+        st.session_state.pop('cohort_filter', None)
+        for widget_key in _STEP2_WIDGET_KEYS:
+            st.session_state.pop(widget_key, None)
+        st.session_state.cohort_enabled = st.session_state.get("entry_mode") == "demo"
+        st.session_state.filtered_patient_count = None
+        clear_icd_preview = globals().get("_clear_icd_preview_state")
+        if callable(clear_icd_preview):
+            clear_icd_preview()
 
 
 def _step2_filter_chips(lang: str) -> list[str]:
@@ -2546,8 +2672,7 @@ def _render_step2_cohort_builder_design() -> bool:
             )
         with reset_col:
             if st.button("Reset" if lang == "en" else "重置", key="cohort_builder_reset", use_container_width=True):
-                st.session_state.pop('cohort_filter', None)
-                st.session_state.cohort_enabled = st.session_state.get("entry_mode") == "demo"
+                st.session_state[_STEP2_RESET_PENDING_KEY] = True
                 st.rerun()
         with preset_col:
             if st.button("Save preset" if lang == "en" else "保存预设", key="cohort_builder_save_preset", use_container_width=True):
@@ -2809,6 +2934,7 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
 
     # 获取当前模式
     entry_mode = st.session_state.get('entry_mode', 'none')
+    _apply_pending_step2_reset()
 
     with st.sidebar:
         # === Shell-A header: brand, workspace switcher, search, nav, pipeline ===

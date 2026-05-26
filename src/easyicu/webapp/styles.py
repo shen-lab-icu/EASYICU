@@ -3060,22 +3060,23 @@ def render_global_styles(st: Any) -> None:
             display: flex;
             align-items: center;
             gap: 0.55rem;
-            color: var(--figure-navy);
+            color: var(--ink);
             font-size: 1rem;
-            font-weight: 850;
+            font-weight: 650;
             margin-bottom: 0.65rem;
         }
 
         .audit-panel-letter {
             width: 24px;
             height: 24px;
-            border-radius: 7px;
-            background: var(--figure-navy);
-            color: #ffffff;
+            border-radius: var(--r-2);
+            background: var(--accent-soft);
+            border: 1px solid var(--accent-border);
+            color: var(--accent-ink);
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            font-weight: 900;
+            font-weight: 700;
             font-size: 0.76rem;
             line-height: 1;
         }
@@ -3089,27 +3090,27 @@ def render_global_styles(st: Any) -> None:
 
         .audit-summary-card {
             background: #ffffff;
-            border: 1px solid var(--figure-line);
-            border-radius: 14px;
+            border: 1px solid var(--hair-2);
+            border-radius: var(--r-3);
             padding: 0.78rem 0.85rem;
-            box-shadow: 0 6px 18px rgba(15, 31, 68, 0.04);
+            box-shadow: var(--sh-1);
         }
 
         .audit-summary-label {
-            color: var(--figure-muted);
-            font-size: 0.68rem;
-            font-weight: 850;
-            letter-spacing: 0.075em;
+            color: var(--ink-3);
+            font-size: 0.72rem;
+            font-weight: 650;
+            letter-spacing: 0;
             text-transform: uppercase;
             margin-bottom: 0.18rem;
         }
 
         .audit-summary-value {
-            color: var(--figure-navy);
+            color: #0b1f44;
             font-size: 1.35rem;
-            font-weight: 900;
+            font-weight: 650;
             line-height: 1.1;
-            letter-spacing: -0.02em;
+            letter-spacing: 0;
         }
 
         .audit-flow {
@@ -3120,13 +3121,14 @@ def render_global_styles(st: Any) -> None:
         }
 
         .audit-flow-step {
-            border: 1px solid var(--figure-line);
-            border-radius: 13px;
+            border: 1px solid var(--hair-2);
+            border-radius: var(--r-3);
             background: #ffffff;
             padding: 0.58rem 0.75rem;
             text-align: center;
-            color: var(--figure-navy);
+            color: var(--ink);
             position: relative;
+            box-shadow: var(--sh-1);
         }
 
         .audit-flow-step:not(:last-child)::after {
@@ -3135,21 +3137,21 @@ def render_global_styles(st: Any) -> None:
             left: 50%;
             bottom: -0.72rem;
             transform: translateX(-50%);
-            color: var(--figure-orange);
+            color: var(--accent);
             font-weight: 900;
             font-size: 0.85rem;
         }
 
         .audit-flow-label {
             font-size: 0.72rem;
-            font-weight: 800;
-            color: #53657c;
+            font-weight: 650;
+            color: var(--ink-3);
         }
 
         .audit-flow-value {
             font-size: 1.08rem;
-            font-weight: 900;
-            letter-spacing: -0.02em;
+            font-weight: 650;
+            letter-spacing: 0;
         }
 
         .audit-flow-excluded {

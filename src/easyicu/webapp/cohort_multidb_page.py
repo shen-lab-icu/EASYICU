@@ -25,11 +25,11 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
     import plotly.graph_objects as go
     screenshot_mode = _is_screenshot_mode()
 
-    title = "Cross-Database Benchmark" if lang == 'en' else "跨库分布基准"
+    title = "Cross-Database Benchmark" if lang == 'en' else "跨数据库分布对比"
     subtitle = (
         "Comparison of harmonized feature distributions across ICU databases; kept separate from the cohort audit."
         if lang == 'en' else
-        "跨 ICU 数据库标准化特征分布对照；与队列审计保持分工。"
+        "比较多个 ICU 数据库中标准化特征的分布；与队列统计保持分工。"
     )
     if not screenshot_mode:
         st.markdown(f"""
@@ -107,7 +107,7 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
                 st.info(base)
             else:
                 base = (
-                    f"💡 **跨库面板用于对比多个数据库。** 你加载的模块导出只覆盖 "
+                    f"💡 **跨数据库对比需要至少两个数据库。** 你加载的模块导出只覆盖 "
                     f"**{db_label_for_msg or '单个数据库'}**，因此还需要其它数据库根目录。"
                     "请在下方 **ICU 数据根目录** 中填入包含 "
                     "**≥2 个数据库子目录**（如 `mimiciv/`、`eicu/`、`aumc/`）的文件夹，"
@@ -215,23 +215,52 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
 
         _render_compact_divider()
 
-        if load_btn and selected_dbs and selected_features:
-            try:
-                from easyicu.cohort_visualization import MultiDatabaseDistribution
+        if load_btn:
+            if len(selected_dbs or []) < 2:
+                st.session_state.pop('multidb_data', None)
+                st.session_state.pop('multidb_concepts', None)
+                st.session_state.pop('multidb_is_demo', None)
+                st.warning(
+                    "Select at least two databases before loading a cross-database comparison."
+                    if lang == 'en' else
+                    "请至少选择两个数据库后再加载跨数据库对比。"
+                )
+            elif not selected_features:
+                st.warning(
+                    "Select at least one feature before loading."
+                    if lang == 'en' else
+                    "请至少选择一个特征后再加载。"
+                )
+            else:
+                try:
+                    from easyicu.cohort_visualization import MultiDatabaseDistribution
 
-                with st.spinner("Loading data from databases..." if lang == 'en' else "正在从数据库加载数据..."):
-                    mdd = MultiDatabaseDistribution(data_root=data_root, language=lang)
-                    data = mdd.load_feature_data(
-                        concepts=selected_features,
-                        databases=selected_dbs,
-                        max_patients=max_patients,
-                    )
-                    st.session_state['multidb_data'] = data
-                    st.session_state['multidb_concepts'] = selected_features
-                    st.session_state['multidb_is_demo'] = False
-            except Exception as e:
-                st.error(f"Error loading data: {e}")
-                return
+                    with st.spinner("Loading data from databases..." if lang == 'en' else "正在从数据库加载数据..."):
+                        mdd = MultiDatabaseDistribution(data_root=data_root, language=lang)
+                        data = mdd.load_feature_data(
+                            concepts=selected_features,
+                            databases=selected_dbs,
+                            max_patients=max_patients,
+                        )
+                    if len(data or {}) < 2:
+                        st.session_state.pop('multidb_data', None)
+                        st.session_state.pop('multidb_concepts', None)
+                        st.session_state.pop('multidb_is_demo', None)
+                        st.warning(
+                            "Loaded fewer than two databases. Check that ICU Data Root contains separate folders for the selected databases."
+                            if lang == 'en' else
+                            "实际加载到的数据库少于两个。请检查 ICU 数据根目录是否包含所选数据库各自的子文件夹。"
+                        )
+                    else:
+                        st.session_state['multidb_data'] = data
+                        st.session_state['multidb_concepts'] = selected_features
+                        st.session_state['multidb_is_demo'] = False
+                except Exception as e:
+                    st.session_state.pop('multidb_data', None)
+                    st.session_state.pop('multidb_concepts', None)
+                    st.session_state.pop('multidb_is_demo', None)
+                    st.error(f"Error loading data: {e}")
+                    return
 
     # 显示结果
     if 'multidb_data' in st.session_state and st.session_state.get('multidb_data'):

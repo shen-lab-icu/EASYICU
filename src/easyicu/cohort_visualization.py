@@ -979,7 +979,7 @@ class MultiDatabaseDistribution:
     def _get_db_path(self, db: str) -> Path:
         """获取数据库路径，使用智能路径检测"""
         try:
-            from easyicu.webapp.app import find_database_path
+            from easyicu.webapp.data_paths import find_database_path
             result = find_database_path(str(self.data_root), db)
             return Path(result)
         except ImportError:

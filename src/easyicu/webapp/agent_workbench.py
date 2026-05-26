@@ -11,9 +11,10 @@ live run view —
 Data binding
 ------------
 The workbench reads its state from ``st.session_state['_agent_workbench']``
-only after a live run, imported manifest, or explicit history selection binds
-a real run. Use :func:`build_workbench_state_from_manifest` to bind a real
-research-agent ``manifest.json`` / ``manifest_partial.json`` into that state.
+only after a live run, imported manifest, or explicit local history selection
+binds a real run. Use :func:`build_workbench_state_from_manifest` to bind a
+real research-agent ``manifest.json`` / ``manifest_partial.json`` into that
+state.
 
 Expected shape of ``_agent_workbench`` (all keys optional)::
 
@@ -1279,7 +1280,7 @@ def build_workbench_state_from_manifest(
     return {
         "run_id": run_id,
         "run_dir": str(run_path),
-        "title": question or _T(lang, "Research Agent run", "Research Agent 运行"),
+        "title": question or _T(lang, "Research Agent run", "研究智能体运行"),
         "subtitle": " · ".join(subtitle_bits),
         "subtitle_short": f"{len(evidence)} evidence · {errors}E/{warnings}W",
         "status": status,
@@ -2420,9 +2421,9 @@ def render_agent_output_summary(lang: str) -> None:
     state.setdefault("source_label", _T(lang, "Real manifest", "真实 manifest") if not state.get("is_demo") else _T(lang, "Sample workflow", "示例流程"))
     st.markdown(
         cc.render_design_page_header(
-            kicker=_T(lang, "Research Agent", "研究代理"),
+            kicker=_T(lang, "Research Agent", "研究智能体"),
             title_en=state.get("title", "Research Agent"),
-            title_zh=state.get("title", "研究 Agent"),
+            title_zh=state.get("title", "研究智能体"),
             desc=_T(
                 lang,
                 "Analysis-first output summary. Manuscript drafting remains gated by evidence review.",
@@ -2457,21 +2458,21 @@ def prime_agent_workbench_state(lang: str) -> None:
 def _workbench_empty_html(lang: str) -> str:
     is_demo = st.session_state.get("entry_mode") == "demo"
     title = (
-        _T(lang, "Demo guide has no active agent run", "Demo 导览没有当前 Agent run")
+        _T(lang, "Demo guide has no active agent run", "演示导览没有当前智能体运行")
         if is_demo else
-        _T(lang, "No active agent run is open", "尚未打开当前 Agent run")
+        _T(lang, "No active agent run is open", "尚未打开当前智能体运行")
     )
     body = (
         _T(
             lang,
-            "Demo Mode explains the Research Agent without creating a fake queue. Switch to Real Data Mode, start a run from Setup, or explicitly open a historical manifest.",
-            "Demo 模式只解释 Research Agent，不再伪造运行队列。请切换到真实数据模式，在配置页启动 run，或明确打开历史 manifest。",
+            "Demo Mode explains the Research Agent without creating a fake queue. Switch to Real Data Mode, start a run from Setup, or explicitly open a local saved manifest.",
+            "演示模式只解释研究智能体，不再伪造运行队列。请切换到真实数据模式，在配置页启动运行，或明确打开本机保存的 manifest。",
         )
         if is_demo else
         _T(
             lang,
-            "Start from Setup to configure the question, cohort, and LLM, or explicitly open a historical manifest from the run history. Workbench will not silently load the newest old run.",
-            "请先在配置页设置研究问题、队列和 LLM，或从历史记录中明确打开某个 manifest。工作台不会再自动加载最新旧 run。",
+            "Start from Setup to configure the question, cohort, and LLM, or explicitly open a local saved manifest from this machine. Workbench will not upload run history or silently load the newest old run.",
+            "请先在配置页设置研究问题、队列和 LLM，或从本机保存的历史记录中明确打开某个 manifest。工作台不会上传 run 历史，也不会再自动加载最新旧 run。",
         )
     )
     return (
@@ -2488,7 +2489,7 @@ def _workbench_empty_html(lang: str) -> str:
         '</div>'
         '<div>'
         f'<b>{_T(lang, "2. Run or import", "2. 运行或导入")}</b>'
-        f'<small>{_T(lang, "Launch a real analysis or choose a saved run", "启动真实分析，或选择已有历史运行")}</small>'
+        f'<small>{_T(lang, "Launch a real analysis or choose a local saved run", "启动真实分析，或选择本机历史运行")}</small>'
         '</div>'
         '<div>'
         f'<b>{_T(lang, "3. Review", "3. 复核")}</b>'
@@ -2502,13 +2503,13 @@ def _workbench_empty_html(lang: str) -> str:
 def _render_workbench_empty_state(lang: str, *, summary: bool = False) -> None:
     st.markdown(
         cc.render_design_page_header(
-            kicker=_T(lang, "Research Agent", "研究代理"),
-            title_en=_T(lang, "Agent project workspace", "Agent 项目工作区"),
-            title_zh=_T(lang, "Agent project workspace", "Agent 项目工作区"),
+            kicker=_T(lang, "Research Agent", "研究智能体"),
+            title_en=_T(lang, "Agent project workspace", "Agent project workspace"),
+            title_zh=_T(lang, "Agent project workspace", "智能体项目工作区"),
             desc=_T(
                 lang,
-                "Choose a research question, cohort, and saved run before reviewing agent outputs.",
-                "先选择研究问题、队列和历史运行，再复核 agent 输出。",
+                "Choose a research question, cohort, and local saved run before reviewing agent outputs.",
+                "先选择研究问题、队列和本机历史运行，再复核智能体输出。",
             ),
             right_html=f'<span class="eu-pill">{_T(lang, "No active run", "暂无运行")}</span>',
             lang=lang,
@@ -2523,7 +2524,7 @@ def _render_workbench_empty_state(lang: str, *, summary: bool = False) -> None:
                 st.session_state["_ra_view"] = "setup"
                 st.rerun()
         with c2:
-            if st.button(_T(lang, "Open saved runs", "查看历史运行"), key=f"_eu_wb_empty_history_{summary}", use_container_width=True):
+            if st.button(_T(lang, "Open local saved runs", "查看本机历史运行"), key=f"_eu_wb_empty_history_{summary}", use_container_width=True):
                 st.session_state["_ra_view"] = "setup"
                 st.session_state["_research_agent_expand_history"] = True
                 st.rerun()
@@ -3516,7 +3517,7 @@ def render_agent_workbench(lang: str) -> None:
         cc.render_design_page_header(
             kicker=_T(lang, "Agent workbench", "实时工作台"),
             title_en=state.get("title", "Research Agent"),
-            title_zh=state.get("title", "研究 Agent"),
+            title_zh=state.get("title", "研究智能体"),
             desc=state.get("subtitle", ""),
             right_html=actions,
             lang=lang,
@@ -3621,7 +3622,7 @@ def render_agent_live_workbench(lang: str) -> None:
         cc.render_design_page_header(
             kicker=_T(lang, "Live Workbench", "实时工作台"),
             title_en=state.get("title", "Research Agent"),
-            title_zh=state.get("title", "研究 Agent"),
+            title_zh=state.get("title", "研究智能体"),
             desc=state.get("subtitle", ""),
             right_html=actions,
             lang=lang,

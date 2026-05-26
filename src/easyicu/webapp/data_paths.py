@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import date
 from pathlib import Path
 
 import streamlit as st
@@ -114,9 +115,12 @@ def _set_directory_browser_cwd(
     browser_open_key: str,
     browser_cwd_key: str,
     target_dir: str,
+    pending_input_key: str | None = None,
 ) -> None:
     st.session_state[browser_open_key] = True
     st.session_state[browser_cwd_key] = target_dir
+    if pending_input_key:
+        st.session_state[pending_input_key] = target_dir
 
 
 def _select_directory_browser_cwd(
@@ -130,6 +134,16 @@ def _select_directory_browser_cwd(
 
 def _close_directory_browser(browser_open_key: str) -> None:
     st.session_state[browser_open_key] = False
+
+
+def _example_export_folder_name(today: date | None = None) -> str:
+    current = today or date.today()
+    return f"exports_{current:%Y%m%d}"
+
+
+def _new_folder_name_placeholder(lang: str, today: date | None = None) -> str:
+    example = _example_export_folder_name(today)
+    return f"e.g. {example}" if lang == "en" else f"例如 {example}"
 
 
 def _render_directory_browser_dialog(
@@ -184,53 +198,42 @@ def _render_directory_browser_dialog(
     with nav_cols[0]:
         up_label = "⬆ Up" if lang == "en" else "⬆ 上级"
         up_target = str(current_dir.parent if current_dir != current_dir.parent else current_dir)
-        if st.button(
+        st.button(
             up_label,
             key=f"{button_key}_dlg_up",
             use_container_width=True,
             on_click=_set_directory_browser_cwd,
             args=(browser_open_key, browser_cwd_key, up_target),
-        ):
-            st.session_state[browser_open_key] = True
-            st.session_state[browser_cwd_key] = up_target
-            st.rerun()
+        )
     with nav_cols[1]:
         home_label = "🏠 Home" if lang == "en" else "🏠 主目录"
-        if st.button(
+        st.button(
             home_label,
             key=f"{button_key}_dlg_home",
             use_container_width=True,
             on_click=_set_directory_browser_cwd,
             args=(browser_open_key, browser_cwd_key, str(Path.home())),
-        ):
-            st.session_state[browser_open_key] = True
-            st.session_state[browser_cwd_key] = str(Path.home())
-            st.rerun()
+        )
     with nav_cols[2]:
         select_label = "✅ Use This Folder" if lang == "en" else "✅ 使用当前目录"
-        if st.button(
+        st.button(
             select_label,
             key=f"{button_key}_dlg_select",
             use_container_width=True,
             on_click=_select_directory_browser_cwd,
             args=(browser_open_key, pending_input_key, str(current_dir)),
-        ):
-            st.session_state[pending_input_key] = str(current_dir)
-            st.session_state[browser_open_key] = False
-            st.rerun()
+        )
     with nav_cols[3]:
         close_label = "✕ Close" if lang == "en" else "✕ 关闭"
-        if st.button(
+        st.button(
             close_label,
             key=f"{button_key}_dlg_close",
             use_container_width=True,
             on_click=_close_directory_browser,
             args=(browser_open_key,),
-        ):
-            st.session_state[browser_open_key] = False
-            st.rerun()
+        )
 
-    tools_col1, tools_col2 = st.columns([1.4, 2.2])
+    tools_col1, tools_col2, tools_col3 = st.columns([1.4, 2.4, 1])
     with tools_col1:
         st.checkbox(
             "Show hidden folders" if lang == "en" else "显示隐藏目录",
@@ -240,44 +243,42 @@ def _render_directory_browser_dialog(
             help="Hidden folders starting with '.' are hidden by default." if lang == "en" else "默认隐藏以 . 开头的目录。",
         )
     with tools_col2:
-        create_cols = st.columns([2.4, 1])
-        with create_cols[0]:
-            st.text_input(
-                "New folder name" if lang == "en" else "新建文件夹名称",
-                key=browser_new_folder_key,
-                placeholder="e.g. exports_20260415" if lang == "en" else "例如 exports_20260415",
-                label_visibility="collapsed",
-                on_change=_keep_directory_browser_open,
-                args=(browser_open_key,),
-            )
-        with create_cols[1]:
-            create_label = "📁 Create" if lang == "en" else "📁 创建"
-            if st.button(
-                create_label,
-                key=f"{button_key}_dlg_create",
-                use_container_width=True,
-                on_click=_keep_directory_browser_open,
-                args=(browser_open_key,),
-            ):
-                new_folder_name = str(st.session_state.get(browser_new_folder_key, "")).strip()
-                if not new_folder_name:
-                    st.warning("Please enter a folder name first." if lang == "en" else "请先输入文件夹名称。")
-                elif any(sep in new_folder_name for sep in ('/', '\\')) or new_folder_name in {'.', '..'}:
-                    st.warning("Folder name cannot contain path separators." if lang == "en" else "文件夹名称不能包含路径分隔符。")
-                else:
-                    try:
-                        target_dir = current_dir / new_folder_name
-                        target_dir.mkdir(parents=False, exist_ok=False)
-                        st.session_state[browser_open_key] = True
-                        st.session_state[browser_cwd_key] = str(target_dir)
-                        st.session_state[pending_input_key] = str(target_dir)
-                        st.session_state[browser_new_folder_key] = ""
-                        st.success(f"Created folder: {new_folder_name}" if lang == "en" else f"已创建文件夹：{new_folder_name}")
-                        st.rerun()
-                    except FileExistsError:
-                        st.warning(f"Folder already exists: {new_folder_name}" if lang == "en" else f"文件夹已存在：{new_folder_name}")
-                    except Exception as exc:
-                        st.error(f"Create folder failed: {exc}" if lang == "en" else f"创建文件夹失败：{exc}")
+        st.text_input(
+            "New folder name" if lang == "en" else "新建文件夹名称",
+            key=browser_new_folder_key,
+            placeholder=_new_folder_name_placeholder(lang),
+            label_visibility="collapsed",
+            on_change=_keep_directory_browser_open,
+            args=(browser_open_key,),
+        )
+    with tools_col3:
+        create_label = "📁 Create" if lang == "en" else "📁 创建"
+        if st.button(
+            create_label,
+            key=f"{button_key}_dlg_create",
+            use_container_width=True,
+            on_click=_keep_directory_browser_open,
+            args=(browser_open_key,),
+        ):
+            new_folder_name = str(st.session_state.get(browser_new_folder_key, "")).strip()
+            if not new_folder_name:
+                st.warning("Please enter a folder name first." if lang == "en" else "请先输入文件夹名称。")
+            elif any(sep in new_folder_name for sep in ('/', '\\')) or new_folder_name in {'.', '..'}:
+                st.warning("Folder name cannot contain path separators." if lang == "en" else "文件夹名称不能包含路径分隔符。")
+            else:
+                try:
+                    target_dir = current_dir / new_folder_name
+                    target_dir.mkdir(parents=False, exist_ok=False)
+                    st.session_state[browser_open_key] = True
+                    st.session_state[browser_cwd_key] = str(target_dir)
+                    st.session_state[pending_input_key] = str(target_dir)
+                    st.session_state[browser_new_folder_key] = ""
+                    st.success(f"Created folder: {new_folder_name}" if lang == "en" else f"已创建文件夹：{new_folder_name}")
+                    st.rerun()
+                except FileExistsError:
+                    st.warning(f"Folder already exists: {new_folder_name}" if lang == "en" else f"文件夹已存在：{new_folder_name}")
+                except Exception as exc:
+                    st.error(f"Create folder failed: {exc}" if lang == "en" else f"创建文件夹失败：{exc}")
 
     st.text_input(
         "Directory Filter" if lang == "en" else "目录筛选",
@@ -314,10 +315,11 @@ def _render_directory_browser_dialog(
                     key=f"{button_key}_dlg_dir_{hash(str(subdir))}",
                     use_container_width=True,
                     on_click=_set_directory_browser_cwd,
-                    args=(browser_open_key, browser_cwd_key, str(subdir)),
+                    args=(browser_open_key, browser_cwd_key, str(subdir), pending_input_key),
                 ):
                     st.session_state[browser_open_key] = True
                     st.session_state[browser_cwd_key] = str(subdir)
+                    st.session_state[pending_input_key] = str(subdir)
                     st.rerun()
             if len(subdirs) > len(shown_subdirs):
                 more_msg = (

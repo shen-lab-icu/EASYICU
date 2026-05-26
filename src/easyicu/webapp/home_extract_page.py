@@ -367,7 +367,7 @@ def _render_complete_guide(lang: str) -> None:
             (
                 _pick(lang, "Group Contrast Table: subgroup balance and tests.", "组间对照表：亚组平衡与统计检验。"),
                 _pick(lang, "Coverage Audit: module coverage and eligibility flow.", "覆盖度审计：模块覆盖度与纳排流程。"),
-                _pick(lang, "Cross-DB Benchmark: harmonized feature shifts.", "跨库基准：标准化特征的数据库差异。"),
+                _pick(lang, "Cross-DB Benchmark: harmonized feature shifts.", "跨数据库对比：标准化特征的数据库差异。"),
                 _pick(lang, "Cohort Snapshot: phenotype and outcome profile.", "队列快照：表型与结局画像。"),
                 _pick(lang, "SOFA-1 vs SOFA-2: definition-driven reclassification.", "SOFA-1 vs SOFA-2：定义变化导致的重新分层。"),
             ),

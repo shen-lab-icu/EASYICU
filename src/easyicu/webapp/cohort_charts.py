@@ -551,6 +551,8 @@ def render_reclassification_table(
 
 def render_active_databases(
     databases: Sequence[tuple[str, str, bool, bool]],
+    *,
+    lang: str = "en",
 ) -> str:
     """Active-database cards for the Cross-DB benchmark.
 
@@ -563,7 +565,11 @@ def render_active_databases(
         border = ("1.5px solid var(--ink)" if is_primary
                   else "1px solid var(--hair)")
         pill_class = "eu-pill ok" if ok else "eu-pill warn"
-        pill_label = "ready" if ok else "missing"
+        pill_label = (
+            ("ready" if ok else "missing")
+            if lang == "en" else
+            ("就绪" if ok else "缺失")
+        )
         cards.append(
             f'<div style="flex:1;padding:10px 12px;border:{border};'
             f'border-radius:8px;background:var(--surface);display:flex;'
@@ -586,10 +592,15 @@ def render_active_databases(
             f'<span class="dot"></span>{_esc(pill_label)}</span>'
             '</div>'
         )
+    section_label = (
+        f"Active databases · {len(databases)} active"
+        if lang == "en" else
+        f"已选择数据库 · {len(databases)} 个已就绪"
+    )
     return (
         '<div class="eu-card" style="padding:12px 14px">'
         f'<div class="eu-section-label" style="padding:0;margin-bottom:8px">'
-        f'<span>Active databases · {len(databases)} active</span></div>'
+        f'<span>{_esc(section_label)}</span></div>'
         f'<div style="display:flex;gap:8px;flex-wrap:wrap">'
         + "".join(cards)
         + '</div></div>'
