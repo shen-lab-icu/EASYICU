@@ -11,9 +11,10 @@ agent.
 from __future__ import annotations
 
 import json
-from typing import List
+from typing import List, Literal
 
 import pytest
+from pydantic import BaseModel
 
 from easyicu.research_agent.llm import LLMMessage
 from easyicu.research_agent.structured_retry import (
@@ -140,6 +141,30 @@ def test_structured_retry_handles_value_error_from_parser():
     feedback = client.calls[1][-1].content
     assert "ValueError" in feedback
     assert "missing required_key" in feedback
+
+
+def test_structured_retry_feedback_includes_validation_error_detail():
+    """Schema errors fed to retry should include field and bad value details."""
+
+    class Payload(BaseModel):
+        concept_id: Literal["sofa"]
+
+    client = _ScriptedClient(
+        ['{"concept_id": "sofa2_admission"}', '{"concept_id": "sofa"}']
+    )
+    out = call_llm_with_structured_retry(
+        client,
+        [LLMMessage(role="user", content="give json")],
+        parser=lambda raw: Payload.model_validate_json(raw),
+        role="planner",
+        max_retries=1,
+    )
+    assert out.concept_id == "sofa"
+    assert len(client.calls) == 2
+    feedback = client.calls[1][-1].content
+    assert "ValidationError" in feedback
+    assert "concept_id" in feedback
+    assert "sofa2_admission" in feedback
 
 
 def test_structured_retry_does_not_mutate_original_messages():
