@@ -342,6 +342,7 @@ def _run_one_arm(
     llm,
     pipeline_options: Optional[Dict[str, Any]] = None,
     reuse_existing: bool = False,
+    force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
 
@@ -365,6 +366,7 @@ def _run_one_arm(
         target_outcome=item.target_outcome,
         inclusion_criteria=item.inclusion_criteria,
         resume_run_id=resume_run_id,
+        force_writer_probe=bool(force_writer_probe),
     )
     elapsed = time.monotonic() - started
     score = _score_arm(run_dir=Path(result.workdir), item=item, label=label)
@@ -381,6 +383,7 @@ def _run_one_item(
     arms: Sequence[str],
     pipeline_options: Optional[Dict[str, Any]] = None,
     verbose: bool = True,
+    force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     if verbose:
         print(f"\n=== {item.key} — {item.name} ===")
@@ -398,6 +401,7 @@ def _run_one_item(
             label="naive",
             llm=llm,
             pipeline_options=pipeline_options,
+            force_writer_probe=force_writer_probe,
         )
     if "aware" in selected:
         aware = _run_one_arm(
@@ -408,6 +412,7 @@ def _run_one_item(
             label="aware",
             llm=llm,
             pipeline_options=pipeline_options,
+            force_writer_probe=force_writer_probe,
         )
     payload = {
         "item_key": item.key,
@@ -454,6 +459,7 @@ def _run_one_item_with_reuse(
     pipeline_options: Optional[Dict[str, Any]],
     reuse_existing: bool,
     verbose: bool = True,
+    force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     if verbose:
         print(f"\n=== {item.key} — {item.name} ===")
@@ -482,6 +488,7 @@ def _run_one_item_with_reuse(
             label="naive",
             llm=llm,
             pipeline_options=pipeline_options,
+            force_writer_probe=force_writer_probe,
         )
     if "aware" in selected and not _arm_was_run(aware):
         aware = _run_one_arm(
@@ -492,6 +499,7 @@ def _run_one_item_with_reuse(
             label="aware",
             llm=llm,
             pipeline_options=pipeline_options,
+            force_writer_probe=force_writer_probe,
         )
 
     payload = {
@@ -875,6 +883,7 @@ def _run_suite(
     request_timeout: float = 180.0,
     reuse_existing: bool = False,
     case_registration: Optional[Dict[str, Any]] = None,
+    force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     selected_arms = _normalize_arms(arms)
     llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
@@ -894,6 +903,7 @@ def _run_suite(
                 arms=selected_arms,
                 pipeline_options=pipeline_options,
                 reuse_existing=reuse_existing,
+                force_writer_probe=force_writer_probe,
                 verbose=verbose,
             )
         )
@@ -907,6 +917,7 @@ def _run_suite(
         "model": model,
         "arms": selected_arms,
         "case_registration": case_registration,
+        "force_writer_probe": bool(force_writer_probe),
         "pipeline_options": dict(pipeline_options or {}),
         "items": [it.key for it in items],
         "scores": scores,
@@ -1135,6 +1146,14 @@ def main() -> int:
         help="Optional EHRFlowBench-style JSONL export. Each row may include "
         "key, question, cohort_path, target_outcome, expected_or_direction.",
     )
+    parser.add_argument(
+        "--force-writer-probe",
+        action="store_true",
+        help=(
+            "Diagnostic engineering use only: force writer output even when "
+            "the execution gate fails. Do NOT use for archival benchmarks."
+        ),
+    )
     args = parser.parse_args()
     case_registration = _register_case_patterns(args.case)
     submission_profile = (
@@ -1171,6 +1190,7 @@ def main() -> int:
             model=ehrflow_model,
             request_timeout=float(args.request_timeout),
             reuse_existing=bool(args.reuse_existing),
+            force_writer_probe=bool(args.force_writer_probe),
         )
 
     all_items = list(
@@ -1215,6 +1235,7 @@ def main() -> int:
             request_timeout=float(args.request_timeout),
             reuse_existing=bool(args.reuse_existing),
             case_registration=case_registration,
+            force_writer_probe=bool(args.force_writer_probe),
         )
         all_runs.append(payload)
         totals = payload["totals"]
@@ -1289,6 +1310,7 @@ def _run_ehrflowbench_jsonl(
     model: str = "mock",
     request_timeout: float = 180.0,
     reuse_existing: bool = False,
+    force_writer_probe: bool = False,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     from types import SimpleNamespace
@@ -1384,6 +1406,7 @@ def _run_ehrflowbench_jsonl(
                 model=model,
                 request_timeout=request_timeout,
                 reuse_existing=reuse_existing,
+                force_writer_probe=force_writer_probe,
             )
             scores.append(score)
         except Exception as exc:  # noqa: BLE001 — keep batch alive on 502/etc.
@@ -1403,6 +1426,7 @@ def _run_ehrflowbench_jsonl(
         "seed": seed,
         "arms": _normalize_arms(arms),
         "pipeline_options": dict(pipeline_options or {}),
+        "force_writer_probe": bool(force_writer_probe),
         "scores": scores,
         "pending": pending,
         "totals": totals,
@@ -1446,6 +1470,7 @@ def _run_one_item_from_cohort(
     model: str = "mock",
     request_timeout: float = 180.0,
     reuse_existing: bool = False,
+    force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     llm = _make_llm(
         provider=provider, model=model, request_timeout=request_timeout
@@ -1464,6 +1489,7 @@ def _run_one_item_from_cohort(
             llm=llm,
             pipeline_options=pipeline_options,
             reuse_existing=reuse_existing,
+            force_writer_probe=force_writer_probe,
         )
     if "aware" in selected:
         aware = _run_one_arm(
@@ -1475,6 +1501,7 @@ def _run_one_item_from_cohort(
             llm=llm,
             pipeline_options=pipeline_options,
             reuse_existing=reuse_existing,
+            force_writer_probe=force_writer_probe,
         )
     payload = {
         "item_key": item.key,

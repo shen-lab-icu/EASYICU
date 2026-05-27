@@ -791,6 +791,8 @@ class AnalysisManifest(BaseModel):
     side_findings_path: Optional[str] = None
     side_findings_sha: Optional[str] = None
     side_findings_count: int = 0
+    writer_probe_mode: bool = False
+    writer_probe_failed_steps: List[str] = Field(default_factory=list)
     report_path: Optional[str] = None
     manuscript_path: Optional[str] = None
     audit_log_path: Optional[str] = None

@@ -63,6 +63,34 @@ from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 from .pdf_render import render_pdf_for_run
 
 
+def _failed_step_labels_from_execution_gate(
+    execution_gate: Dict[str, Any],
+) -> Tuple[str, ...]:
+    """Return human-readable failed/missing step labels for probe banners."""
+    labels: List[str] = []
+    for step_id in execution_gate.get("missing_steps") or []:
+        labels.append(f"{step_id} (missing)")
+    for item in execution_gate.get("failed_steps") or []:
+        if isinstance(item, dict):
+            step_id = item.get("step_id") or "unknown"
+            status = item.get("status") or "failed"
+            labels.append(f"{step_id} ({status})")
+        else:
+            labels.append(str(item))
+    return tuple(labels)
+
+
+def _writer_probe_banner(failed_steps: Sequence[str]) -> str:
+    failed_text = ", ".join(failed_steps) if failed_steps else "unknown"
+    return (
+        "> ⚠️ DIAGNOSTIC PROBE ONLY — execution gate did not pass.\n"
+        "> This draft was forced through for engineering triage. It is NOT\n"
+        "> a reproducible analytic result, MUST NOT be cited, and SHOULD NOT\n"
+        "> be used as a manuscript scaffold for publication.\n"
+        f"> Failed steps: {failed_text}"
+    )
+
+
 def run_write_phase(
     pipeline,
     *,
@@ -75,6 +103,7 @@ def run_write_phase(
     manuscript_authors: Optional[Sequence[str]],
     run_language: str,
     emit_progress: Callable[..., None],
+    force_writer_probe: bool = False,
 ) -> _WritePhaseResult:
     """Draft manuscript-facing outputs after analysis is complete."""
     context = plan_result.context
@@ -91,30 +120,56 @@ def run_write_phase(
         plan=execute_result.plan,
         per_step_records=per_step_records,
     )
+    writer_probe_mode = (
+        bool(force_writer_probe) and not execution_gate["execution_complete"]
+    )
+    writer_probe_failed_steps = _failed_step_labels_from_execution_gate(
+        execution_gate
+    )
     if not execution_gate["execution_complete"]:
-        findings.append(
-            ValidationFinding(
-                validator="manuscript_gate",
-                severity="error",
-                message=(
-                    "Formal manuscript generation skipped because the execution "
-                    "gate did not pass. Review author_review_note.md and the "
-                    "diagnostic artefacts before rerunning."
-                ),
-                detail=execution_gate,
+        if writer_probe_mode:
+            findings.append(
+                ValidationFinding(
+                    validator="manuscript_gate",
+                    severity="warning",
+                    message=(
+                        "Diagnostic writer probe forced manuscript drafting even "
+                        "though the execution gate did not pass. This output is "
+                        "for engineering triage only and must not be cited."
+                    ),
+                    detail={
+                        **execution_gate,
+                        "writer_probe_mode": True,
+                        "writer_probe_failed_steps": list(
+                            writer_probe_failed_steps
+                        ),
+                    },
+                )
             )
-        )
-        bound_path = run_dir / "manuscript_scaffold_bound.md"
-        bound_path.write_text(
-            "# Manuscript scaffold not generated\n\n"
-            "Strict fail-closed policy blocked manuscript drafting because "
-            "one or more required analysis steps did not complete successfully.\n\n"
-            "Review `author_review_note.md`, `run_status.json`, "
-            "`evidence_audit.json`, `numeric_audit.json`, and "
-            "`claim_ledger.csv` for the diagnostic record.\n",
-            encoding="utf-8",
-        )
-        return _WritePhaseResult(literature=None, bound_path=bound_path)
+        else:
+            findings.append(
+                ValidationFinding(
+                    validator="manuscript_gate",
+                    severity="error",
+                    message=(
+                        "Formal manuscript generation skipped because the execution "
+                        "gate did not pass. Review author_review_note.md and the "
+                        "diagnostic artefacts before rerunning."
+                    ),
+                    detail=execution_gate,
+                )
+            )
+            bound_path = run_dir / "manuscript_scaffold_bound.md"
+            bound_path.write_text(
+                "# Manuscript scaffold not generated\n\n"
+                "Strict fail-closed policy blocked manuscript drafting because "
+                "one or more required analysis steps did not complete successfully.\n\n"
+                "Review `author_review_note.md`, `run_status.json`, "
+                "`evidence_audit.json`, `numeric_audit.json`, and "
+                "`claim_ledger.csv` for the diagnostic record.\n",
+                encoding="utf-8",
+            )
+            return _WritePhaseResult(literature=None, bound_path=bound_path)
 
     if stop_after_analysis:
         emit_progress(
@@ -494,16 +549,38 @@ def run_write_phase(
         evidence=evidence,
         enforcement_mode=pipeline._evidence_enforcement_mode,
     )
-    bound_path = run_dir / "manuscript_scaffold_bound.md"
+    bound_evidence_id = (
+        "manuscript_scaffold_writer_probe"
+        if writer_probe_mode
+        else "manuscript_scaffold_bound"
+    )
+    bound_path = run_dir / (
+        "manuscript_scaffold_writer_probe.md"
+        if writer_probe_mode
+        else "manuscript_scaffold_bound.md"
+    )
+    if writer_probe_mode:
+        bound = _writer_probe_banner(writer_probe_failed_steps) + "\n\n" + bound
     bound_path.write_text(bound, encoding="utf-8")
-    if evidence.get("manuscript_scaffold_bound") is None:
+    if evidence.get(bound_evidence_id) is None:
         evidence.register_file(
             kind="log",
-            description="Manuscript scaffold with evidence ids resolved to file links + sha256.",
+            description=(
+                "Diagnostic writer-probe manuscript scaffold forced past "
+                "a failed execution gate."
+                if writer_probe_mode
+                else "Manuscript scaffold with evidence ids resolved to file links + sha256."
+            ),
             source_path=bound_path,
-            evidence_id="manuscript_scaffold_bound",
+            evidence_id=bound_evidence_id,
             producer="pipeline",
             generation_mode="system",
+            metadata={
+                "writer_probe_mode": bool(writer_probe_mode),
+                "writer_probe_failed_steps": list(writer_probe_failed_steps),
+            }
+            if writer_probe_mode
+            else None,
         )
     if demoted_missing_ids:
         unfiltered_path = run_dir / "manuscript_scaffold_bound_unfiltered.md"
@@ -1041,4 +1118,6 @@ def run_write_phase(
         bound_path=bound_path,
         manuscript_packet=manuscript_packet,
         manuscript_critique=manuscript_critique,
+        writer_probe_mode=writer_probe_mode,
+        writer_probe_failed_steps=tuple(writer_probe_failed_steps),
     )

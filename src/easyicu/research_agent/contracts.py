@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from .cohort_schema import CohortDefinition, ConceptPredicate, TimeWindow
 from .evidence import NumericClaim
@@ -83,6 +83,8 @@ class _WritePhaseResult:
     bound_path: Path
     manuscript_packet: Optional[ManuscriptDraftPacket] = None
     manuscript_critique: Optional[CritiqueReport] = None
+    writer_probe_mode: bool = False
+    writer_probe_failed_steps: Tuple[str, ...] = ()
 
 
 __all__ = [

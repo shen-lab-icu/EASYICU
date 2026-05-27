@@ -430,6 +430,14 @@ def _parse_args() -> argparse.Namespace:
         default="npj_dm/20260527",
         help="Versioned submission profile ref forwarded in --case mode.",
     )
+    parser.add_argument(
+        "--force-writer-probe",
+        action="store_true",
+        help=(
+            "Diagnostic engineering use only: force writer output even when "
+            "the execution gate fails. Do NOT use for archival pilots."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -470,6 +478,8 @@ def _run_case_benchmark_delegate(args: argparse.Namespace) -> int:
         cmd.extend(["--max-total-steps", str(int(args.max_total_steps))])
     if args.submission_profile:
         cmd.extend(["--submission-profile", "--profile", str(args.profile)])
+    if args.force_writer_probe:
+        cmd.append("--force-writer-probe")
     print("[delegate] " + " ".join(shlex.quote(part) for part in cmd))
     completed = subprocess.run(cmd, cwd=REPO_ROOT, check=False)
     return int(completed.returncode)
@@ -525,6 +535,7 @@ def main() -> int:
             cohort_name=f"{args.database}_pilot_{len(cohort)}",
             database=args.database,
             target_outcome="death",
+            force_writer_probe=bool(args.force_writer_probe),
         )
     except Exception:
         print("[run] Pipeline raised — see traceback. Pilot driver still "
@@ -567,6 +578,7 @@ def main() -> int:
             "manuscript_path": str(result.manuscript_path),
             "manifest_path": str(result.manifest_path),
             "enforcement_mode": args.enforcement,
+            "writer_probe_mode": bool(args.force_writer_probe),
             "database": args.database,
             "question": args.question,
         }, indent=2),
