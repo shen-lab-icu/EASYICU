@@ -27,14 +27,20 @@ next agent / human picks up what to fix in Step 2.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import os
 import shlex
+import signal
 import subprocess
 import sys
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+from types import FrameType
+from typing import Any
+import uuid
 
 import pandas as pd
 
@@ -72,6 +78,193 @@ DB_ID_COLS = {
     "aumc": "admissionid",
     "sic": "CaseID",
 }
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _truncate(text: str | None, limit: int) -> str | None:
+    if text is None:
+        return None
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 15)] + "...<truncated>"
+
+
+class PilotExitRecorder:
+    """Always-on terminal-status capture for real-LLM pilot runs.
+
+    The research pipeline writes rich final artefacts only when it reaches
+    finalise. This recorder sits one layer above it so interrupted pilots
+    still leave a small, parseable breadcrumb in ``pilot_exit_status.json``.
+    """
+
+    schema_version = "easyicu.pilot_exit/1"
+
+    def __init__(self) -> None:
+        self.run_dir: Path | None = None
+        self.run_id: str | None = None
+        self.started_at = time.monotonic()
+        self.exit_kind: str | None = None
+        self.exit_signal: int | None = None
+        self.exit_code: int | None = None
+        self.exception_class: str | None = None
+        self.exception_message: str | None = None
+        self.traceback_tail: str | None = None
+        self._registered = False
+        self._dumping = False
+
+    def configure(self, *, run_dir: Path, run_id: str) -> None:
+        self.run_dir = Path(run_dir)
+        self.run_id = str(run_id)
+        try:
+            self.run_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+    def install(self) -> None:
+        if self._registered:
+            return
+        atexit.register(self.dump)
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, self._handle_signal)
+            except Exception:
+                pass
+        self._registered = True
+
+    def mark_normal(self, exit_code: int = 0) -> None:
+        if self.exit_kind is None:
+            self.exit_kind = "normal"
+            self.exit_code = int(exit_code)
+
+    def mark_exception(self, exc: BaseException) -> None:
+        self.exit_kind = "exception"
+        self.exit_code = 1
+        self.exception_class = type(exc).__name__
+        self.exception_message = _truncate(str(exc), 500)
+        self.traceback_tail = _truncate(
+            "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            ),
+            2000,
+        )
+
+    def _handle_signal(self, signum: int, frame: FrameType | None) -> None:
+        del frame
+        self.exit_kind = "signal"
+        self.exit_signal = int(signum)
+        self.exit_code = 128 + int(signum)
+        self.dump()
+        raise SystemExit(self.exit_code)
+
+    def _last_audit_event(self) -> dict[str, Any] | None:
+        if self.run_dir is None:
+            return None
+        path = self.run_dir / "audit_log.jsonl"
+        try:
+            lines = [
+                line
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except Exception:
+            return None
+        for raw in reversed(lines):
+            try:
+                value = json.loads(raw)
+            except Exception:
+                continue
+            if isinstance(value, dict):
+                return value
+        return None
+
+    def _completed_step_count(self) -> int | None:
+        if self.run_dir is None:
+            return None
+        path = self.run_dir / "audit_log.jsonl"
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except Exception:
+            return None
+        count = 0
+        for raw in lines:
+            try:
+                value = json.loads(raw)
+            except Exception:
+                continue
+            if (
+                isinstance(value, dict)
+                and value.get("phase") == "step"
+                and value.get("status") == "complete"
+            ):
+                count += 1
+        return count
+
+    def _evidence_count(self) -> int | None:
+        if self.run_dir is None:
+            return None
+        path = self.run_dir / "evidence" / "evidence_index.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if isinstance(payload, dict):
+            return len(payload)
+        if isinstance(payload, list):
+            return len(payload)
+        return None
+
+    def _payload(self) -> dict[str, Any]:
+        last_event = self._last_audit_event()
+        return {
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
+            "exit_kind": self.exit_kind or "atexit",
+            "exit_signal": self.exit_signal,
+            "exit_code": self.exit_code,
+            "exception_class": self.exception_class,
+            "exception_message": self.exception_message,
+            "traceback_tail": self.traceback_tail,
+            "last_audit_event": last_event,
+            "last_step_id": (
+                last_event.get("step_id") if isinstance(last_event, dict) else None
+            ),
+            "last_phase": (
+                last_event.get("phase") if isinstance(last_event, dict) else None
+            ),
+            "wall_seconds_elapsed": round(time.monotonic() - self.started_at, 3),
+            "completed_step_count_observed": self._completed_step_count(),
+            "evidence_records_observed": self._evidence_count(),
+            "captured_at": _utc_now(),
+        }
+
+    def dump(self) -> None:
+        if self._dumping or self.run_dir is None:
+            return
+        self._dumping = True
+        try:
+            path = self.run_dir / "pilot_exit_status.json"
+            payload = self._payload()
+            path.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            try:
+                print(
+                    "[pilot-exit] failed to write pilot_exit_status.json: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+            except Exception:
+                pass
+        finally:
+            self._dumping = False
+
+
+_EXIT_RECORDER = PilotExitRecorder()
 
 
 def _load_env_local() -> None:
@@ -438,7 +631,40 @@ def _parse_args() -> argparse.Namespace:
             "the execution gate fails. Do NOT use for archival pilots."
         ),
     )
+    parser.add_argument(
+        "--_test-exit-status-run-dir",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--_test-exit-status-mode",
+        choices=["normal", "sleep", "exception"],
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args()
+
+
+def _run_exit_status_test_mode(args: argparse.Namespace) -> int:
+    """Hidden test-only harness for exit-status capture."""
+
+    run_dir = Path(args._test_exit_status_run_dir)
+    _EXIT_RECORDER.configure(run_dir=run_dir, run_id=run_dir.name)
+    _EXIT_RECORDER.install()
+    if args._test_exit_status_mode == "normal":
+        _EXIT_RECORDER.mark_normal(0)
+        return 0
+    if args._test_exit_status_mode == "sleep":
+        while True:
+            time.sleep(1)
+    if args._test_exit_status_mode == "exception":
+        try:
+            raise RuntimeError("synthetic pilot failure for exit-status test")
+        except RuntimeError as exc:
+            _EXIT_RECORDER.mark_exception(exc)
+            _EXIT_RECORDER.dump()
+            return 1
+    raise AssertionError("unreachable exit-status test mode")
 
 
 def _run_case_benchmark_delegate(args: argparse.Namespace) -> int:
@@ -489,8 +715,23 @@ def main() -> int:
     args = _parse_args()
 
     _load_env_local()
+    if args._test_exit_status_mode:
+        return _run_exit_status_test_mode(args)
     if args.case:
-        return _run_case_benchmark_delegate(args)
+        out_root = Path(args.out_root) if args.out_root else PILOT_OUT / "bench_case"
+        _EXIT_RECORDER.configure(
+            run_dir=out_root,
+            run_id=f"case_{args.case}",
+        )
+        _EXIT_RECORDER.install()
+        try:
+            exit_code = _run_case_benchmark_delegate(args)
+        except Exception as exc:
+            _EXIT_RECORDER.mark_exception(exc)
+            _EXIT_RECORDER.dump()
+            raise
+        _EXIT_RECORDER.mark_normal(exit_code)
+        return exit_code
 
     print(f"[env] OPENROUTER_API_KEY set: {'OPENROUTER_API_KEY' in os.environ}")
     print(f"[env] Model: {args.model or os.environ.get('EASYICU_HOSTED_DEFAULT_MODEL', FREE_MODEL_FALLBACK[0])}")
@@ -514,6 +755,15 @@ def main() -> int:
     llm, chosen_model = _build_llm(args.model)
 
     PILOT_OUT.mkdir(parents=True, exist_ok=True)
+    run_id = (
+        "run_"
+        + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        + "_"
+        + uuid.uuid4().hex[:6]
+    )
+    run_dir = PILOT_OUT / run_id
+    _EXIT_RECORDER.configure(run_dir=run_dir, run_id=run_id)
+    _EXIT_RECORDER.install()
 
     from easyicu.research_agent import ResearchAgentPipeline
 
@@ -535,9 +785,12 @@ def main() -> int:
             cohort_name=f"{args.database}_pilot_{len(cohort)}",
             database=args.database,
             target_outcome="death",
+            resume_run_id=run_id,
             force_writer_probe=bool(args.force_writer_probe),
         )
-    except Exception:
+    except Exception as exc:
+        _EXIT_RECORDER.mark_exception(exc)
+        _EXIT_RECORDER.dump()
         print("[run] Pipeline raised — see traceback. Pilot driver still "
               "exits 1 so CI / wrapping scripts can detect failure.",
               file=sys.stderr)
@@ -585,6 +838,7 @@ def main() -> int:
         encoding="utf-8",
     )
     print(f"[run] pilot_summary.json at {summary_path}")
+    _EXIT_RECORDER.mark_normal(0)
     return 0
 
 
