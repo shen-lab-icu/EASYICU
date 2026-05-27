@@ -29,6 +29,18 @@ from typing import Any, Dict, Literal, Optional
 # schema module.
 UNIVERSAL_ANCHORS = frozenset({"icu_admit", "hospital_admit", "index_time"})
 TimeAnchor = str
+ALLOWED_CTAS_AGGREGATIONS = (
+    "max",
+    "min",
+    "mean",
+    "median",
+    "last",
+    "first",
+    "any",
+    "all",
+    "count",
+    "sum",
+)
 Aggregation = Literal[
     "max",
     "min",
@@ -499,6 +511,7 @@ def _offset_to_json(value: float) -> float | str:
 
 
 __all__ = [
+    "ALLOWED_CTAS_AGGREGATIONS",
     "COHORT_LOCK_FILENAME",
     "CohortDefinition",
     "CohortDataError",

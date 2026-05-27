@@ -119,6 +119,19 @@ def test_structured_retry_max_retries_zero_means_single_call():
     assert len(client.calls) == 1, "max_retries=0 should call exactly once"
 
 
+def test_structured_retry_four_retries_means_five_total_attempts():
+    client = _ScriptedClient(["bad-1", "bad-2", "bad-3", "bad-4", "bad-5"])
+    with pytest.raises(StructuredResponseFailure):
+        call_llm_with_structured_retry(
+            client,
+            [LLMMessage(role="user", content="x")],
+            parser=lambda raw: json.loads(raw),
+            role="planner",
+            max_retries=4,
+        )
+    assert len(client.calls) == 5
+
+
 def test_structured_retry_handles_value_error_from_parser():
     """Parser may raise any exception — wrapper catches them all and feeds back."""
 
