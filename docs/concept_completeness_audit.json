@@ -1,0 +1,5834 @@
+{
+  "_metadata": {
+    "generated_at": "2026-05-27T15:33:36",
+    "concepts_audited": 10,
+    "dbs": [
+      "miiv",
+      "mimic",
+      "hirid",
+      "sic"
+    ],
+    "purpose": "Per-concept \u00d7 per-DB completeness audit: search raw DB dictionaries for synonyms of each concept's description and compare to current concept-dict.json mapping. Flags MISSING (raw items not mapped), EXTRA (mapped IDs not in raw dict), BOTH, or OK."
+  },
+  "concepts": {
+    "cvp": {
+      "description": "central venous pressure",
+      "category": "vitals",
+      "per_db": {
+        "miiv": {
+          "mapped_ids": [
+            220074
+          ],
+          "found_in_dict_n": 3,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [],
+          "status": "OK"
+        },
+        "mimic": {
+          "mapped_ids": [
+            113,
+            1103,
+            220074
+          ],
+          "found_in_dict_n": 9,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [],
+          "status": "OK"
+        },
+        "hirid": {
+          "mapped_ids": [
+            700,
+            960,
+            15001441
+          ],
+          "found_in_dict_n": 3,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [],
+          "status": "OK"
+        },
+        "sic": {
+          "mapped_ids": [
+            2018
+          ],
+          "found_in_dict_n": 1,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [],
+          "status": "OK"
+        }
+      }
+    },
+    "map": {
+      "description": "mean arterial pressure",
+      "category": "vitals",
+      "per_db": {
+        "miiv": {
+          "mapped_ids": [
+            220052,
+            220181,
+            225312
+          ],
+          "found_in_dict_n": 8,
+          "missing_ids": [
+            226765,
+            226766,
+            226771,
+            226772,
+            226775,
+            226776,
+            227023,
+            227024
+          ],
+          "extra_mapped_not_in_dict": [
+            220052,
+            220181,
+            225312
+          ],
+          "status": "BOTH",
+          "missing_with_labels": [
+            [
+              226765,
+              "MapApacheIIScore",
+              "chartevents"
+            ],
+            [
+              226766,
+              "MapApacheIIValue",
+              "chartevents"
+            ],
+            [
+              226771,
+              "PotassiumApacheIIScore",
+              "chartevents"
+            ],
+            [
+              226772,
+              "PotassiumApacheIIValue",
+              "chartevents"
+            ],
+            [
+              226775,
+              "SodiumApacheIIScore",
+              "chartevents"
+            ],
+            [
+              226776,
+              "SodiumApacheIIValue",
+              "chartevents"
+            ],
+            [
+              227023,
+              "MAP_ApacheIV",
+              "chartevents"
+            ],
+            [
+              227024,
+              "MapScore_ApacheIV",
+              "chartevents"
+            ]
+          ]
+        },
+        "mimic": {
+          "mapped_ids": [
+            52,
+            443,
+            456,
+            6072,
+            220052,
+            220181,
+            225312
+          ],
+          "found_in_dict_n": 44,
+          "missing_ids": [
+            283,
+            284,
+            285,
+            286,
+            287,
+            288,
+            289,
+            290,
+            438,
+            672,
+            1199,
+            1321,
+            2309,
+            2353,
+            2369,
+            2522,
+            2544,
+            2770,
+            2974,
+            3067,
+            5680,
+            5804,
+            6399,
+            6579,
+            6605,
+            41381,
+            41383,
+            41810,
+            44511,
+            44515,
+            44528,
+            44856,
+            44873,
+            44919,
+            226765,
+            226766,
+            226771,
+            226772,
+            226775,
+            226776,
+            227023,
+            227024
+          ],
+          "extra_mapped_not_in_dict": [
+            52,
+            443,
+            456,
+            6072,
+            220052,
+            220181,
+            225312
+          ],
+          "status": "BOTH",
+          "missing_with_labels": [
+            [
+              1199,
+              "HFO MAP",
+              "chartevents"
+            ],
+            [
+              283,
+              "INV#1 WaveformAppear",
+              "chartevents"
+            ],
+            [
+              284,
+              "INV#2 WaveformAppear",
+              "chartevents"
+            ],
+            [
+              285,
+              "INV#3 WaveformAppear",
+              "chartevents"
+            ],
+            [
+              286,
+              "INV#4 WaveformAppear",
+              "chartevents"
+            ],
+            [
+              287,
+              "INV#5 WaveformAppear",
+              "chartevents"
+            ],
+            [
+              288,
+              "INV#6 WaveformAppear",
+              "chartevents"
+            ],
+            [
+              289,
+              "INV#7 WaveformAppear",
+              "chartevents"
+            ],
+            [
+              290,
+              "INV#8 WaveformAppear",
+              "chartevents"
+            ],
+            [
+              438,
+              "MAP",
+              "chartevents"
+            ],
+            [
+              1321,
+              "map",
+              "chartevents"
+            ],
+            [
+              672,
+              "TCPCV-MAP",
+              "chartevents"
+            ],
+            [
+              3067,
+              "FEM MAP",
+              "chartevents"
+            ],
+            [
+              5680,
+              "RADIAL MAP",
+              "chartevents"
+            ],
+            [
+              5804,
+              "sheath MAP",
+              "chartevents"
+            ],
+            [
+              2309,
+              "FEM ALINE MAP",
+              "chartevents"
+            ],
+            [
+              2353,
+              "R FEM MAP",
+              "chartevents"
+            ],
+            [
+              2369,
+              "fem map",
+              "chartevents"
+            ],
+            [
+              2522,
+              "HFO-MAP",
+              "chartevents"
+            ],
+            [
+              2544,
+              "FEM ART MAP",
+              "chartevents"
+            ],
+            [
+              2770,
+              "left radial MAP",
+              "chartevents"
+            ],
+            [
+              2974,
+              "FEM LINE MAP",
+              "chartevents"
+            ],
+            [
+              6399,
+              "ART MAP",
+              "chartevents"
+            ],
+            [
+              6579,
+              "IR Sheath MAP",
+              "chartevents"
+            ],
+            [
+              6605,
+              "Fem sheath MAP",
+              "chartevents"
+            ],
+            [
+              41381,
+              "PLASMAPHERESIS",
+              "inputevents_cv"
+            ],
+            [
+              41383,
+              "PLASMAPHORESIS",
+              "inputevents_cv"
+            ],
+            [
+              41810,
+              "plasmaphoresis",
+              "inputevents_cv"
+            ],
+            [
+              44919,
+              "Plasmaphoresis",
+              "inputevents_cv"
+            ],
+            [
+              44511,
+              "Plasmapheresis",
+              "inputevents_cv"
+            ],
+            [
+              44515,
+              "PLASMAPHERESIS IN",
+              "inputevents_cv"
+            ],
+            [
+              44528,
+              "plasmapheresis",
+              "inputevents_cv"
+            ],
+            [
+              44856,
+              "plasmaphersis",
+              "inputevents_cv"
+            ],
+            [
+              44873,
+              "plasmapharesis",
+              "inputevents_cv"
+            ],
+            [
+              227023,
+              "MAP_ApacheIV",
+              "chartevents"
+            ],
+            [
+              227024,
+              "MapScore_ApacheIV",
+              "chartevents"
+            ],
+            [
+              226765,
+              "MapApacheIIScore",
+              "chartevents"
+            ],
+            [
+              226766,
+              "MapApacheIIValue",
+              "chartevents"
+            ],
+            [
+              226771,
+              "PotassiumApacheIIScore",
+              "chartevents"
+            ],
+            [
+              226772,
+              "PotassiumApacheIIValue",
+              "chartevents"
+            ],
+            [
+              226775,
+              "SodiumApacheIIScore",
+              "chartevents"
+            ],
+            [
+              226776,
+              "SodiumApacheIIValue",
+              "chartevents"
+            ]
+          ]
+        },
+        "hirid": {
+          "mapped_ids": [
+            110,
+            610
+          ],
+          "found_in_dict_n": 2,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [],
+          "status": "OK"
+        },
+        "sic": {
+          "mapped_ids": [
+            703,
+            706
+          ],
+          "found_in_dict_n": 4,
+          "missing_ids": [
+            511,
+            556
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              511,
+              "Maprotilin (ZL)",
+              "data_float_h"
+            ],
+            [
+              556,
+              "TreponemaPallidum(Lues)-AK (ZL)",
+              "data_float_h"
+            ]
+          ]
+        }
+      }
+    },
+    "sbp": {
+      "description": "systolic blood pressure",
+      "category": "vitals",
+      "per_db": {
+        "miiv": {
+          "mapped_ids": [
+            220050,
+            220179
+          ],
+          "found_in_dict_n": 1,
+          "missing_ids": [
+            230154
+          ],
+          "extra_mapped_not_in_dict": [
+            220050,
+            220179
+          ],
+          "status": "BOTH",
+          "missing_with_labels": [
+            [
+              230154,
+              "CFS-SBP",
+              "chartevents"
+            ]
+          ]
+        },
+        "mimic": {
+          "mapped_ids": [
+            51,
+            455,
+            6701,
+            220050,
+            220179
+          ],
+          "found_in_dict_n": 0,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [
+            51,
+            455,
+            6701,
+            220050,
+            220179
+          ],
+          "status": "EXTRA"
+        },
+        "hirid": {
+          "mapped_ids": [
+            100
+          ],
+          "found_in_dict_n": 0,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [
+            100
+          ],
+          "status": "EXTRA"
+        },
+        "sic": {
+          "mapped_ids": [
+            701,
+            704
+          ],
+          "found_in_dict_n": 3,
+          "missing_ids": [
+            2275
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              2275,
+              "PAPSystolic",
+              "data_float_h"
+            ]
+          ]
+        }
+      }
+    },
+    "dbp": {
+      "description": "diastolic blood pressure",
+      "category": "vitals",
+      "per_db": {
+        "miiv": {
+          "mapped_ids": [
+            220051,
+            220180
+          ],
+          "found_in_dict_n": 0,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [
+            220051,
+            220180
+          ],
+          "status": "EXTRA"
+        },
+        "mimic": {
+          "mapped_ids": [
+            8368,
+            8441,
+            8555,
+            220051,
+            220180
+          ],
+          "found_in_dict_n": 0,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [
+            8368,
+            8441,
+            8555,
+            220051,
+            220180
+          ],
+          "status": "EXTRA"
+        },
+        "hirid": {
+          "mapped_ids": [
+            120
+          ],
+          "found_in_dict_n": 0,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [
+            120
+          ],
+          "status": "EXTRA"
+        },
+        "sic": {
+          "mapped_ids": [
+            702,
+            705
+          ],
+          "found_in_dict_n": 3,
+          "missing_ids": [
+            2276
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              2276,
+              "PAPDiastolic",
+              "data_float_h"
+            ]
+          ]
+        }
+      }
+    },
+    "hr": {
+      "description": "heart rate",
+      "category": "vitals",
+      "per_db": {
+        "miiv": {
+          "mapped_ids": [
+            220045
+          ],
+          "found_in_dict_n": 68,
+          "missing_ids": [
+            220370,
+            220478,
+            220479,
+            220560,
+            221004,
+            221289,
+            221749,
+            221906,
+            223761,
+            223764,
+            223765,
+            223958,
+            223960,
+            224366,
+            224647,
+            224721,
+            224748,
+            224752,
+            224754,
+            224801,
+            224804,
+            225686,
+            225845,
+            225866,
+            225922,
+            226005,
+            226161,
+            226162,
+            226164,
+            226564,
+            226565,
+            226746,
+            226747,
+            226750,
+            226763,
+            226764,
+            227003,
+            227004,
+            227018,
+            227019,
+            227056,
+            227465,
+            227469,
+            227858,
+            227864,
+            227870,
+            227916,
+            227923,
+            227930,
+            228024,
+            228034,
+            228044,
+            228116,
+            229372,
+            229374,
+            229385,
+            229617,
+            229630,
+            229631,
+            229632,
+            229789,
+            230037,
+            230051,
+            230058,
+            230152
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              220370,
+              "Chromium (ingr)",
+              "ingredientevents"
+            ],
+            [
+              220478,
+              "Threonine",
+              "ingredientevents"
+            ],
+            [
+              220479,
+              "Thryptophan",
+              "ingredientevents"
+            ],
+            [
+              220560,
+              "ZProthrombin time",
+              "chartevents"
+            ],
+            [
+              221004,
+              "Thrombocyte suspension",
+              "inputevents"
+            ],
+            [
+              221289,
+              "Epinephrine",
+              "inputevents"
+            ],
+            [
+              221749,
+              "Phenylephrine",
+              "inputevents"
+            ],
+            [
+              221906,
+              "Norepinephrine",
+              "inputevents"
+            ],
+            [
+              223761,
+              "Temperature Fahrenheit",
+              "chartevents"
+            ],
+            [
+              223764,
+              "Orthostatic HR lying",
+              "chartevents"
+            ],
+            [
+              223765,
+              "Orthostatic HR sitting",
+              "chartevents"
+            ],
+            [
+              223958,
+              "Temporary Venticular Sens Threshold mV",
+              "chartevents"
+            ],
+            [
+              223960,
+              "Temporary Venticular Stim Threshold mA",
+              "chartevents"
+            ],
+            [
+              224366,
+              "Epidural Infusion Rate (mL/hr)",
+              "chartevents"
+            ],
+            [
+              224647,
+              "Orthostatic HR standing",
+              "chartevents"
+            ],
+            [
+              224721,
+              "HR > 140",
+              "chartevents"
+            ],
+            [
+              224748,
+              "Cont Neb - Dose (mg/hr/drug)",
+              "chartevents"
+            ],
+            [
+              224752,
+              "Temporary Atrial Sens Threshold mV",
+              "chartevents"
+            ],
+            [
+              224754,
+              "Temporary Atrial Stim Threshold mA",
+              "chartevents"
+            ],
+            [
+              224801,
+              "AV Fistula R Thrill",
+              "chartevents"
+            ],
+            [
+              224804,
+              "AV Fistula L Thrill",
+              "chartevents"
+            ],
+            [
+              225686,
+              "ZThrombin",
+              "chartevents"
+            ],
+            [
+              225845,
+              "Azithromycin",
+              "inputevents"
+            ],
+            [
+              225866,
+              "Erythromycin",
+              "inputevents"
+            ],
+            [
+              225922,
+              "Nephramine",
+              "inputevents"
+            ],
+            [
+              226005,
+              "Sterile field maintained throughout procedure (CVL)",
+              "chartevents"
+            ],
+            [
+              226161,
+              "Sterile field maintained throughout procedure (PICC)",
+              "chartevents"
+            ],
+            [
+              226162,
+              "Sterile field maintained throughout procedure (PA line)",
+              "chartevents"
+            ],
+            [
+              226164,
+              "Sterile field maintained throughout procedure (A-Line)",
+              "chartevents"
+            ],
+            [
+              226564,
+              "R Nephrostomy",
+              "outputevents"
+            ],
+            [
+              226565,
+              "L Nephrostomy",
+              "outputevents"
+            ],
+            [
+              226746,
+              "ApacheII chronic health",
+              "chartevents"
+            ],
+            [
+              226747,
+              "APACHEII-Chronic health points",
+              "chartevents"
+            ],
+            [
+              226750,
+              "Chronic Dilaysis",
+              "chartevents"
+            ],
+            [
+              226763,
+              "HrApacheIIScore",
+              "chartevents"
+            ],
+            [
+              226764,
+              "HrApacheIIValue",
+              "chartevents"
+            ],
+            [
+              227003,
+              "Chronic health on admission",
+              "chartevents"
+            ],
+            [
+              227004,
+              "ChronicScore_ApacheIV",
+              "chartevents"
+            ],
+            [
+              227018,
+              "HR_ApacheIV",
+              "chartevents"
+            ],
+            [
+              227019,
+              "HrScore_ApacheIV",
+              "chartevents"
+            ],
+            [
+              227056,
+              "Thrombolytic therapy",
+              "chartevents"
+            ],
+            [
+              227465,
+              "Prothrombin time",
+              "chartevents"
+            ],
+            [
+              227469,
+              "Thrombin",
+              "chartevents"
+            ],
+            [
+              227858,
+              "Rest HR - Aerobic Capacity",
+              "chartevents"
+            ],
+            [
+              227864,
+              "Activity HR - Aerobic Capacity",
+              "chartevents"
+            ],
+            [
+              227870,
+              "Recovery HR - Aerobic Capacity",
+              "chartevents"
+            ],
+            [
+              227916,
+              "Rest HR -  Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227923,
+              "Activity HR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227930,
+              "Recovery HR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              228024,
+              "Sterile field maintained throughout procedure (A-Line)",
+              "chartevents"
+            ],
+            [
+              228034,
+              "Sterile field maintained throughout procedure (CVL)",
+              "chartevents"
+            ],
+            [
+              228044,
+              "Sterile field maintained throughout procedure (PICC)",
+              "chartevents"
+            ],
+            [
+              228116,
+              "Sterile field maintained throughout procedure (PA line)",
+              "chartevents"
+            ],
+            [
+              229372,
+              "AT ( Antithrombin funct)",
+              "chartevents"
+            ],
+            [
+              229374,
+              "AT (Antithrombin funct)",
+              "chartevents"
+            ],
+            [
+              229385,
+              "Shoulder Shrug",
+              "chartevents"
+            ],
+            [
+              229617,
+              "Epinephrine.",
+              "inputevents"
+            ],
+            [
+              229630,
+              "Phenylephrine (50/250)",
+              "inputevents"
+            ],
+            [
+              229631,
+              "Phenylephrine (200/250)_OLD_1",
+              "inputevents"
+            ],
+            [
+              229632,
+              "Phenylephrine (200/250)",
+              "inputevents"
+            ],
+            [
+              229789,
+              "Phenylephrine (Intubation)",
+              "chartevents"
+            ],
+            [
+              230037,
+              "HR per min",
+              "chartevents"
+            ],
+            [
+              230051,
+              "PNC-1 Infusion Rate (mL/hr)",
+              "chartevents"
+            ],
+            [
+              230058,
+              "PNC-2 Infusion Rate (mL/hr)",
+              "chartevents"
+            ],
+            [
+              230152,
+              "CFS-HR",
+              "chartevents"
+            ]
+          ]
+        },
+        "mimic": {
+          "mapped_ids": [
+            211,
+            220045
+          ],
+          "found_in_dict_n": 412,
+          "missing_ids": [
+            57,
+            146,
+            481,
+            483,
+            485,
+            493,
+            611,
+            718,
+            844,
+            964,
+            1097,
+            1106,
+            1213,
+            1226,
+            1331,
+            1339,
+            1485,
+            1517,
+            1537,
+            1554,
+            1586,
+            1587,
+            1597,
+            1598,
+            1605,
+            1677,
+            1695,
+            1696,
+            1705,
+            1707,
+            1710,
+            1711,
+            1715,
+            1717,
+            1744,
+            1819,
+            1826,
+            1853,
+            1876,
+            1888,
+            1949,
+            1970,
+            2101,
+            2137,
+            2141,
+            2161,
+            2164,
+            2166,
+            2188,
+            2274,
+            2283,
+            2287,
+            2296,
+            2297,
+            2301,
+            2334,
+            2344,
+            2349,
+            2355,
+            2359,
+            2373,
+            2390,
+            2418,
+            2449,
+            2460,
+            2461,
+            2464,
+            2467,
+            2468,
+            2478,
+            2481,
+            2482,
+            2487,
+            2498,
+            2499,
+            2509,
+            2517,
+            2547,
+            2548,
+            2556,
+            2561,
+            2565,
+            2573,
+            2577,
+            2593,
+            2605,
+            2622,
+            2628,
+            2655,
+            2656,
+            2661,
+            2667,
+            2672,
+            2679,
+            2684,
+            2694,
+            2705,
+            2706,
+            2755,
+            2757,
+            2764,
+            2804,
+            2806,
+            2809,
+            2861,
+            2869,
+            2874,
+            2876,
+            2946,
+            2947,
+            2959,
+            2960,
+            2964,
+            2983,
+            2989,
+            3001,
+            3005,
+            3010,
+            3044,
+            3099,
+            3112,
+            3120,
+            3134,
+            3147,
+            3148,
+            3192,
+            3250,
+            3257,
+            3269,
+            3270,
+            3277,
+            3281,
+            3412,
+            3488,
+            3494,
+            4417,
+            4448,
+            4514,
+            4566,
+            4684,
+            4799,
+            4928,
+            4972,
+            5141,
+            5273,
+            5461,
+            5556,
+            5587,
+            5588,
+            5656,
+            5658,
+            5682,
+            5699,
+            5728,
+            5750,
+            5752,
+            5761,
+            5763,
+            5768,
+            5783,
+            5789,
+            5790,
+            5800,
+            5843,
+            5892,
+            5966,
+            5972,
+            5988,
+            6021,
+            6027,
+            6104,
+            6217,
+            6285,
+            6294,
+            6309,
+            6352,
+            6395,
+            6414,
+            6423,
+            6429,
+            6512,
+            6536,
+            6541,
+            6573,
+            6616,
+            6635,
+            6651,
+            6690,
+            6741,
+            6782,
+            6806,
+            6846,
+            6930,
+            6964,
+            6969,
+            7002,
+            7061,
+            7107,
+            7112,
+            7132,
+            7158,
+            7193,
+            7194,
+            7210,
+            7221,
+            7245,
+            7272,
+            7341,
+            7425,
+            7435,
+            7439,
+            7568,
+            7654,
+            7730,
+            7743,
+            7757,
+            7809,
+            7822,
+            7862,
+            7863,
+            7865,
+            7875,
+            7928,
+            7958,
+            7998,
+            8025,
+            8126,
+            8169,
+            8262,
+            8285,
+            8289,
+            8307,
+            8370,
+            8483,
+            8496,
+            8497,
+            30044,
+            30119,
+            30127,
+            30128,
+            30309,
+            40056,
+            40057,
+            40582,
+            40796,
+            41002,
+            41111,
+            41177,
+            41184,
+            41189,
+            41247,
+            41525,
+            41797,
+            41839,
+            41868,
+            41962,
+            42044,
+            42051,
+            42062,
+            42089,
+            42174,
+            42246,
+            42291,
+            42309,
+            42310,
+            42325,
+            42334,
+            42337,
+            42342,
+            42343,
+            42358,
+            42407,
+            42422,
+            42563,
+            42564,
+            42565,
+            42577,
+            42608,
+            42669,
+            42700,
+            42706,
+            42709,
+            42802,
+            42811,
+            42965,
+            43018,
+            43042,
+            43076,
+            43125,
+            43171,
+            43173,
+            43333,
+            43355,
+            43365,
+            43366,
+            43372,
+            43373,
+            43374,
+            43379,
+            43380,
+            43381,
+            43431,
+            43445,
+            43472,
+            43521,
+            43522,
+            43526,
+            43548,
+            43576,
+            43589,
+            43638,
+            43639,
+            43653,
+            43654,
+            43811,
+            43812,
+            43856,
+            44324,
+            44331,
+            44379,
+            44415,
+            44500,
+            44529,
+            44605,
+            44653,
+            44676,
+            44713,
+            44759,
+            44846,
+            44934,
+            45004,
+            45021,
+            45149,
+            45208,
+            45304,
+            45872,
+            46174,
+            46203,
+            46522,
+            46543,
+            46561,
+            46565,
+            46603,
+            46732,
+            70002,
+            70004,
+            70074,
+            70075,
+            80182,
+            80281,
+            80284,
+            80301,
+            90006,
+            220560,
+            221004,
+            221289,
+            221749,
+            221906,
+            223761,
+            223764,
+            223765,
+            223958,
+            223960,
+            224366,
+            224647,
+            224721,
+            224748,
+            224752,
+            224754,
+            224801,
+            224804,
+            225686,
+            225845,
+            225866,
+            225922,
+            226005,
+            226161,
+            226162,
+            226164,
+            226564,
+            226565,
+            226746,
+            226747,
+            226750,
+            226763,
+            226764,
+            227003,
+            227004,
+            227018,
+            227019,
+            227056,
+            227465,
+            227469,
+            227688,
+            227858,
+            227864,
+            227870,
+            227916,
+            227923,
+            227930,
+            228024,
+            228034,
+            228044,
+            228116
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              964,
+              "THAM CC/HR",
+              "chartevents"
+            ],
+            [
+              1097,
+              "Pantoprazole  mg/hr",
+              "chartevents"
+            ],
+            [
+              1106,
+              "Meperidine mg/hr",
+              "chartevents"
+            ],
+            [
+              611,
+              "Replace Rate ml/hr",
+              "chartevents"
+            ],
+            [
+              57,
+              "Atrial Pacemaker Threshold [Unit]",
+              "chartevents"
+            ],
+            [
+              146,
+              "Dialysate Flow ml/hr",
+              "chartevents"
+            ],
+            [
+              481,
+              "Orthostat HR sitting",
+              "chartevents"
+            ],
+            [
+              483,
+              "OrthostatHR standing",
+              "chartevents"
+            ],
+            [
+              485,
+              "Orthostatic HR lying",
+              "chartevents"
+            ],
+            [
+              493,
+              "PCA 1 Hr Limit (mg)",
+              "chartevents"
+            ],
+            [
+              844,
+              "Thrombin (16-21)",
+              "chartevents"
+            ],
+            [
+              5461,
+              "phenylephrine drops",
+              "chartevents"
+            ],
+            [
+              5556,
+              "TPA mg/hr",
+              "chartevents"
+            ],
+            [
+              5587,
+              "CYCLOSPORIN --MG/HR",
+              "chartevents"
+            ],
+            [
+              5588,
+              "cyclosporin 3mg/hr",
+              "chartevents"
+            ],
+            [
+              7862,
+              "Nephrostomy Tube LLQ",
+              "chartevents"
+            ],
+            [
+              7863,
+              "Mag Sulfate    mg/hr",
+              "chartevents"
+            ],
+            [
+              7865,
+              "mag sulfate gm/hr",
+              "chartevents"
+            ],
+            [
+              7875,
+              "umbi hrenia",
+              "chartevents"
+            ],
+            [
+              7928,
+              "glucagon mg/hr",
+              "chartevents"
+            ],
+            [
+              7958,
+              "Amiodorone mg/hr",
+              "chartevents"
+            ],
+            [
+              7998,
+              "Versed mg/kg/hr",
+              "chartevents"
+            ],
+            [
+              8025,
+              "Panpropazole mg/hr",
+              "chartevents"
+            ],
+            [
+              4566,
+              "oral thrush",
+              "chartevents"
+            ],
+            [
+              4684,
+              "Synthroid",
+              "chartevents"
+            ],
+            [
+              4799,
+              "synthroid",
+              "chartevents"
+            ],
+            [
+              1213,
+              "shoulder shrug r/l",
+              "chartevents"
+            ],
+            [
+              1226,
+              "Pantoprazole mg/hr",
+              "chartevents"
+            ],
+            [
+              1331,
+              "Protonix mg/hr",
+              "chartevents"
+            ],
+            [
+              1339,
+              "bed rotation q2hrs.",
+              "chartevents"
+            ],
+            [
+              4417,
+              "Erythro eye oint",
+              "chartevents"
+            ],
+            [
+              4448,
+              "Erythropoetin SQ",
+              "chartevents"
+            ],
+            [
+              4514,
+              "Chromosomes",
+              "chartevents"
+            ],
+            [
+              718,
+              "Ventricular Pacemaker Threshold [Unit]",
+              "chartevents"
+            ],
+            [
+              3099,
+              "T3 CC/HR",
+              "chartevents"
+            ],
+            [
+              3112,
+              "epinephrine mcg/min",
+              "chartevents"
+            ],
+            [
+              3120,
+              "L AVF-BRUIT/THRILL",
+              "chartevents"
+            ],
+            [
+              3134,
+              "solumed mg/kg/hr",
+              "chartevents"
+            ],
+            [
+              3147,
+              "TPA #2 mg/hr",
+              "chartevents"
+            ],
+            [
+              3148,
+              "TPA#1 mg/hr",
+              "chartevents"
+            ],
+            [
+              3192,
+              "BUMEX MG/HR",
+              "chartevents"
+            ],
+            [
+              3250,
+              "Nephrostomy tube",
+              "chartevents"
+            ],
+            [
+              3257,
+              "XIGRIS @ 1.66 MG/HR",
+              "chartevents"
+            ],
+            [
+              3269,
+              "XIGRIS MG/HR",
+              "chartevents"
+            ],
+            [
+              3270,
+              "aprotinin ml/hr",
+              "chartevents"
+            ],
+            [
+              3277,
+              "NICARDIPINE--MG/HR",
+              "chartevents"
+            ],
+            [
+              3281,
+              "Xigres mg/hr",
+              "chartevents"
+            ],
+            [
+              3412,
+              "Erythromycin Oint.",
+              "chartevents"
+            ],
+            [
+              3488,
+              "Lipid Change Q 12 hr",
+              "chartevents"
+            ],
+            [
+              3494,
+              "Lowest Heart Rate",
+              "chartevents"
+            ],
+            [
+              1705,
+              "Vent Sens Thresh mV",
+              "chartevents"
+            ],
+            [
+              1707,
+              "Vent Stim Thresh mA",
+              "chartevents"
+            ],
+            [
+              1710,
+              "zzz Stim Thresh mA [Unit]",
+              "chartevents"
+            ],
+            [
+              1711,
+              "zzzt Stim Thresh mA [Unit]",
+              "chartevents"
+            ],
+            [
+              1715,
+              "Nicardipine mg/hr",
+              "chartevents"
+            ],
+            [
+              1717,
+              "tPA            mg/hr",
+              "chartevents"
+            ],
+            [
+              1744,
+              "R NEPHROSTOMY",
+              "chartevents"
+            ],
+            [
+              1819,
+              "Protonix ml/hr",
+              "chartevents"
+            ],
+            [
+              1826,
+              "lepirudin  mg/hr",
+              "chartevents"
+            ],
+            [
+              1853,
+              "protonix mg/hr",
+              "chartevents"
+            ],
+            [
+              1876,
+              "PROTONIX MG/HR",
+              "chartevents"
+            ],
+            [
+              1888,
+              "pitressin u/hr",
+              "chartevents"
+            ],
+            [
+              1949,
+              "famotidine mg/hr",
+              "chartevents"
+            ],
+            [
+              1970,
+              "magnesium 2gm/hr",
+              "chartevents"
+            ],
+            [
+              8126,
+              "Thrill",
+              "chartevents"
+            ],
+            [
+              6021,
+              "(R) nephrostomy",
+              "chartevents"
+            ],
+            [
+              6027,
+              "thrush",
+              "chartevents"
+            ],
+            [
+              4928,
+              "Neo-Synephrine gtts",
+              "chartevents"
+            ],
+            [
+              5656,
+              "phenylephrine",
+              "chartevents"
+            ],
+            [
+              5658,
+              "Erythromycin Oint",
+              "chartevents"
+            ],
+            [
+              5682,
+              "Neosynephrine gtts",
+              "chartevents"
+            ],
+            [
+              5699,
+              "CHROMOSOMES",
+              "chartevents"
+            ],
+            [
+              5728,
+              "Solumedrol  mg/kg/hr",
+              "chartevents"
+            ],
+            [
+              5750,
+              "24hr Lytes&Bili",
+              "chartevents"
+            ],
+            [
+              5752,
+              "Epinephrin",
+              "chartevents"
+            ],
+            [
+              5761,
+              "Chromosomal analysis",
+              "chartevents"
+            ],
+            [
+              5763,
+              "NGT NS FLUSH Q/4HR",
+              "chartevents"
+            ],
+            [
+              5768,
+              "Left nephro. tube",
+              "chartevents"
+            ],
+            [
+              5783,
+              "aprotinen cc/hr",
+              "chartevents"
+            ],
+            [
+              5789,
+              "RT. AVF BRUIT/THRILL",
+              "chartevents"
+            ],
+            [
+              5790,
+              "Cyclosporine mg/hr",
+              "chartevents"
+            ],
+            [
+              5800,
+              "mushroom catheter",
+              "chartevents"
+            ],
+            [
+              5843,
+              "Neosynephrine drops",
+              "chartevents"
+            ],
+            [
+              5892,
+              "tpa mg/hr",
+              "chartevents"
+            ],
+            [
+              5966,
+              "Continuous EEG q1hr",
+              "chartevents"
+            ],
+            [
+              5972,
+              "fetal heartrate",
+              "chartevents"
+            ],
+            [
+              5988,
+              "AV Fistula Thrill",
+              "chartevents"
+            ],
+            [
+              5273,
+              "Erythropoetin",
+              "chartevents"
+            ],
+            [
+              1485,
+              "Bivalirudin mg/kg/hr",
+              "chartevents"
+            ],
+            [
+              1517,
+              "Readmit <48 hrs",
+              "chartevents"
+            ],
+            [
+              1537,
+              "Thrombin",
+              "chartevents"
+            ],
+            [
+              1554,
+              "nephr. tubes irrig.",
+              "chartevents"
+            ],
+            [
+              1586,
+              "Xigris mcg/kg/hr",
+              "chartevents"
+            ],
+            [
+              1587,
+              "xigris mg/hr",
+              "chartevents"
+            ],
+            [
+              1597,
+              "Flolan chart cc/hr",
+              "chartevents"
+            ],
+            [
+              1598,
+              "Flovan chart as cchr",
+              "chartevents"
+            ],
+            [
+              1605,
+              "METHYLPRED 450MG/HR",
+              "chartevents"
+            ],
+            [
+              1677,
+              "Altepase mg/hr",
+              "chartevents"
+            ],
+            [
+              1695,
+              "Atr Sens Thresh mV",
+              "chartevents"
+            ],
+            [
+              1696,
+              "Atr Stim Thresh mA",
+              "chartevents"
+            ],
+            [
+              2101,
+              "nicardipine mg/hr",
+              "chartevents"
+            ],
+            [
+              2137,
+              "Nephrostomy Drain",
+              "chartevents"
+            ],
+            [
+              2141,
+              "Glucagon mg/hr",
+              "chartevents"
+            ],
+            [
+              2161,
+              "aprotinin cc/hr",
+              "chartevents"
+            ],
+            [
+              2164,
+              "NIMBEX MG/KG/HR",
+              "chartevents"
+            ],
+            [
+              2166,
+              "PRECEDEX MCG/KG/HR",
+              "chartevents"
+            ],
+            [
+              2188,
+              "precedex mcg/kg/hr",
+              "chartevents"
+            ],
+            [
+              2274,
+              "APROTININ U/HR",
+              "chartevents"
+            ],
+            [
+              2283,
+              "PRECEDEX MG/K/HR",
+              "chartevents"
+            ],
+            [
+              2287,
+              "APROTININ CC/HR",
+              "chartevents"
+            ],
+            [
+              2296,
+              "Precedex (mcg/kg/hr)",
+              "chartevents"
+            ],
+            [
+              2297,
+              "Aggrastat cc/hr",
+              "chartevents"
+            ],
+            [
+              2301,
+              "CIS/CURIUM MG/KG/HR",
+              "chartevents"
+            ],
+            [
+              2334,
+              "vasopressin u/hr",
+              "chartevents"
+            ],
+            [
+              2344,
+              "TPA MG/HR",
+              "chartevents"
+            ],
+            [
+              2349,
+              "APROTONIN U/HR",
+              "chartevents"
+            ],
+            [
+              2355,
+              "solumedrol mg/kg/hr",
+              "chartevents"
+            ],
+            [
+              2359,
+              "thrill/bruit",
+              "chartevents"
+            ],
+            [
+              2373,
+              "APROTININ ML/HR",
+              "chartevents"
+            ],
+            [
+              2390,
+              "cisatracurium mg/hr",
+              "chartevents"
+            ],
+            [
+              2418,
+              "CARIPORIDE 20MG/HR",
+              "chartevents"
+            ],
+            [
+              2449,
+              "LT. AVF BRUIT/THRILL",
+              "chartevents"
+            ],
+            [
+              2460,
+              "CARIPORIDE ML/HR",
+              "chartevents"
+            ],
+            [
+              2461,
+              "APROTANIN ML/HR",
+              "chartevents"
+            ],
+            [
+              2464,
+              "epidural ml/hr",
+              "chartevents"
+            ],
+            [
+              2467,
+              "DEXTROSE GM/HR",
+              "chartevents"
+            ],
+            [
+              2468,
+              "NAHCO3- MEQ/HR",
+              "chartevents"
+            ],
+            [
+              2478,
+              "Amiodarone mg/hr",
+              "chartevents"
+            ],
+            [
+              2481,
+              "Amicar cc/hr",
+              "chartevents"
+            ],
+            [
+              2482,
+              "SOLUMEDROL  MG/KG/HR",
+              "chartevents"
+            ],
+            [
+              2487,
+              "carioride cc/hr",
+              "chartevents"
+            ],
+            [
+              2498,
+              "CARIPORIDE CC/HR",
+              "chartevents"
+            ],
+            [
+              2499,
+              "AV THRILL",
+              "chartevents"
+            ],
+            [
+              2509,
+              "APROTONIN CC/HR",
+              "chartevents"
+            ],
+            [
+              2517,
+              "Cisatracu mg/kg/hr",
+              "chartevents"
+            ],
+            [
+              2547,
+              "Precedex mcg/kg/hr",
+              "chartevents"
+            ],
+            [
+              2548,
+              "nimbex mg/kg/hr",
+              "chartevents"
+            ],
+            [
+              2556,
+              "Cisatra.  MG/KG/HR",
+              "chartevents"
+            ],
+            [
+              2561,
+              "VASOPRESSIN U/HR",
+              "chartevents"
+            ],
+            [
+              2565,
+              "Bruit/Thrill",
+              "chartevents"
+            ],
+            [
+              2573,
+              "cistra  mgm/kg/hr",
+              "chartevents"
+            ],
+            [
+              2577,
+              "CARIIPORIDE ML/HR",
+              "chartevents"
+            ],
+            [
+              2593,
+              "PENTOBARB DRIP MG/HR",
+              "chartevents"
+            ],
+            [
+              2605,
+              "CARAIPORIDE CC/HR",
+              "chartevents"
+            ],
+            [
+              2622,
+              "CA GLUC GM/HR",
+              "chartevents"
+            ],
+            [
+              2628,
+              "bivalirudin mg/hr",
+              "chartevents"
+            ],
+            [
+              2655,
+              "ALCOHOL 10%DRIP G/HR",
+              "chartevents"
+            ],
+            [
+              2656,
+              "SOLUMEDROL MG/KG/HR",
+              "chartevents"
+            ],
+            [
+              2661,
+              "ALCOHOL 5% DRIP G/HR",
+              "chartevents"
+            ],
+            [
+              2667,
+              "alteplase mg/hr",
+              "chartevents"
+            ],
+            [
+              2672,
+              "fentanyl mg/hr",
+              "chartevents"
+            ],
+            [
+              2679,
+              "PENTOBARBITAL MG/HR",
+              "chartevents"
+            ],
+            [
+              2684,
+              "Cisat mcg/kg/hr",
+              "chartevents"
+            ],
+            [
+              2694,
+              "LEPIRUDIN MG/HR",
+              "chartevents"
+            ],
+            [
+              2705,
+              "TPA - left   mg/hr",
+              "chartevents"
+            ],
+            [
+              2706,
+              "TPA -right mg/hr",
+              "chartevents"
+            ],
+            [
+              2755,
+              "XIGRIS CC/HR",
+              "chartevents"
+            ],
+            [
+              2757,
+              "KETAMINE MG/HR",
+              "chartevents"
+            ],
+            [
+              2764,
+              "Aprotinin cc/hr",
+              "chartevents"
+            ],
+            [
+              2804,
+              "10% alcohol/ cc/hr",
+              "chartevents"
+            ],
+            [
+              2806,
+              "ALCOHOL GTT ML/HR",
+              "chartevents"
+            ],
+            [
+              2809,
+              "xigris mcg/kg/hr",
+              "chartevents"
+            ],
+            [
+              2861,
+              "TPA mg/HR",
+              "chartevents"
+            ],
+            [
+              2869,
+              "PORK INSULIN U/HR",
+              "chartevents"
+            ],
+            [
+              2874,
+              "lepirudin mg/kg/hr",
+              "chartevents"
+            ],
+            [
+              2876,
+              "10% ALCOHOL CC/HR",
+              "chartevents"
+            ],
+            [
+              2946,
+              "APPROTININ CC/HR",
+              "chartevents"
+            ],
+            [
+              2947,
+              "approtinin cc/hr",
+              "chartevents"
+            ],
+            [
+              2959,
+              "Solumedrolmg/kg/hr",
+              "chartevents"
+            ],
+            [
+              2960,
+              "lepirudin mgs/kg/hr",
+              "chartevents"
+            ],
+            [
+              2964,
+              "left AV thrill/bruit",
+              "chartevents"
+            ],
+            [
+              2983,
+              "solumedrol mg/hr",
+              "chartevents"
+            ],
+            [
+              2989,
+              "APOTININ CC/HR",
+              "chartevents"
+            ],
+            [
+              3001,
+              "Solumedrol mg/kg/hr",
+              "chartevents"
+            ],
+            [
+              3005,
+              "Aprotiinin ml/hr",
+              "chartevents"
+            ],
+            [
+              3010,
+              "Integrellin cc/hr",
+              "chartevents"
+            ],
+            [
+              6104,
+              "Chromosomal study",
+              "chartevents"
+            ],
+            [
+              6217,
+              "phenylephrine nasal",
+              "chartevents"
+            ],
+            [
+              4972,
+              "erythromycin",
+              "chartevents"
+            ],
+            [
+              5141,
+              "Erythromycin oint",
+              "chartevents"
+            ],
+            [
+              3044,
+              "10% ETOH CC/HR",
+              "chartevents"
+            ],
+            [
+              8169,
+              "Amicar mg/hr",
+              "chartevents"
+            ],
+            [
+              8262,
+              "ketamine mg/hr",
+              "chartevents"
+            ],
+            [
+              8285,
+              "TPA            mg/hr",
+              "chartevents"
+            ],
+            [
+              8289,
+              "Mucomyst       mg/hr",
+              "chartevents"
+            ],
+            [
+              8307,
+              "Left neprhrostomy",
+              "chartevents"
+            ],
+            [
+              6285,
+              "right nephrost irrig",
+              "chartevents"
+            ],
+            [
+              6294,
+              "FETAL HR BY L&D RN",
+              "chartevents"
+            ],
+            [
+              6309,
+              "24hr Caregiver",
+              "chartevents"
+            ],
+            [
+              6352,
+              "fentanyl mcg/hr",
+              "chartevents"
+            ],
+            [
+              6395,
+              "Phenylephrine gtts",
+              "chartevents"
+            ],
+            [
+              7002,
+              "LUE fistula thrill",
+              "chartevents"
+            ],
+            [
+              7061,
+              "left nephrostomy",
+              "chartevents"
+            ],
+            [
+              7107,
+              "Acetylcysteine mg/hr",
+              "chartevents"
+            ],
+            [
+              7112,
+              "PAPAVERINE MG/HR",
+              "chartevents"
+            ],
+            [
+              7132,
+              "mucomyst mg/kg/hr",
+              "chartevents"
+            ],
+            [
+              7158,
+              "AMIODARONE CC/HR",
+              "chartevents"
+            ],
+            [
+              7193,
+              "NEPHRO TUBE",
+              "chartevents"
+            ],
+            [
+              7194,
+              "NEPHROTUBE COLOR",
+              "chartevents"
+            ],
+            [
+              7210,
+              "Phenylephrine nose s",
+              "chartevents"
+            ],
+            [
+              7221,
+              "Protonix       mg/hr",
+              "chartevents"
+            ],
+            [
+              7245,
+              "CALCIUM GLUC ML/HR",
+              "chartevents"
+            ],
+            [
+              7272,
+              "Solu-Medrol Mg/Kg/Hr",
+              "chartevents"
+            ],
+            [
+              7341,
+              "Vasopressin  u/hr",
+              "chartevents"
+            ],
+            [
+              7425,
+              "Solu-medrol mg/hr",
+              "chartevents"
+            ],
+            [
+              7435,
+              "Cyclosporine   mg/hr",
+              "chartevents"
+            ],
+            [
+              7439,
+              "walking hr",
+              "chartevents"
+            ],
+            [
+              40582,
+              "Meperidine cc/hr",
+              "inputevents_cv"
+            ],
+            [
+              30119,
+              "Epinephrine-k",
+              "inputevents_cv"
+            ],
+            [
+              30127,
+              "Neosynephrine",
+              "inputevents_cv"
+            ],
+            [
+              7568,
+              "L arm: thrill/bruit",
+              "chartevents"
+            ],
+            [
+              7654,
+              "mucomyst mg/hr",
+              "chartevents"
+            ],
+            [
+              7730,
+              "RT AV thrill/bruit",
+              "chartevents"
+            ],
+            [
+              7743,
+              "ACETYLCYSTEINE MG/HR",
+              "chartevents"
+            ],
+            [
+              7757,
+              "NARCAN MG/HR",
+              "chartevents"
+            ],
+            [
+              7809,
+              "Bumetandime mg/hr",
+              "chartevents"
+            ],
+            [
+              7822,
+              "genta irrig cc/hr",
+              "chartevents"
+            ],
+            [
+              8370,
+              "Atrial Pacemaker Threshold [Value]",
+              "chartevents"
+            ],
+            [
+              8483,
+              "Ventricular Pacemaker Threshold [Value]",
+              "chartevents"
+            ],
+            [
+              8496,
+              "zzz Stim Thresh mA [Value]",
+              "chartevents"
+            ],
+            [
+              8497,
+              "zzzt Stim Thresh mA [Value]",
+              "chartevents"
+            ],
+            [
+              6414,
+              "Nephrostomy",
+              "chartevents"
+            ],
+            [
+              6423,
+              "Octreotide mcg/hr",
+              "chartevents"
+            ],
+            [
+              6429,
+              "Glucagon       mg/hr",
+              "chartevents"
+            ],
+            [
+              6512,
+              "Phenylephrine gtt",
+              "chartevents"
+            ],
+            [
+              6536,
+              "Erythromycin",
+              "chartevents"
+            ],
+            [
+              6541,
+              "methadone mg /hr",
+              "chartevents"
+            ],
+            [
+              6573,
+              "MgSO4          mg/hr",
+              "chartevents"
+            ],
+            [
+              6616,
+              "Pantoprazole   mg/hr",
+              "chartevents"
+            ],
+            [
+              6635,
+              "Aprotinin ml/hr",
+              "chartevents"
+            ],
+            [
+              6651,
+              "ca gluc ml/hr",
+              "chartevents"
+            ],
+            [
+              6690,
+              "phenylephrine gtts",
+              "chartevents"
+            ],
+            [
+              6741,
+              "pantoprazole mgm/hr",
+              "chartevents"
+            ],
+            [
+              6782,
+              "nephrostomy",
+              "chartevents"
+            ],
+            [
+              6806,
+              "Mucomyst mg/hr",
+              "chartevents"
+            ],
+            [
+              6846,
+              "Primo study cc/hr",
+              "chartevents"
+            ],
+            [
+              6930,
+              "STUDY DRUG CC/HR",
+              "chartevents"
+            ],
+            [
+              6964,
+              "Epidural ml/hr",
+              "chartevents"
+            ],
+            [
+              6969,
+              "APROTININ  ML/HR",
+              "chartevents"
+            ],
+            [
+              41525,
+              "PROTONIX MG/HR",
+              "inputevents_cv"
+            ],
+            [
+              41247,
+              "nephrostomy flush",
+              "outputevents"
+            ],
+            [
+              41868,
+              "Drain Out #1 Rt Nephrostomy",
+              "outputevents"
+            ],
+            [
+              41962,
+              "PRECEDEX CC/HR",
+              "inputevents_cv"
+            ],
+            [
+              41002,
+              "TPA .5mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              41111,
+              "METHYLPRED 450MG/HR",
+              "inputevents_cv"
+            ],
+            [
+              41177,
+              "Nephrostomy drain",
+              "outputevents"
+            ],
+            [
+              41184,
+              "Drain Out #1 Lt Nephrostomy",
+              "outputevents"
+            ],
+            [
+              41189,
+              "Nicardipine mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              42291,
+              "NIMBEX CC/HR",
+              "inputevents_cv"
+            ],
+            [
+              42309,
+              "CISATRA CC/HR",
+              "inputevents_cv"
+            ],
+            [
+              42310,
+              "cisatricurium cc/hr",
+              "inputevents_cv"
+            ],
+            [
+              42325,
+              "CARIPORIDE CC/HR",
+              "inputevents_cv"
+            ],
+            [
+              42334,
+              "APRTININ CC/HR",
+              "inputevents_cv"
+            ],
+            [
+              42337,
+              "NAHCO3- CC/HR",
+              "inputevents_cv"
+            ],
+            [
+              42342,
+              "Amiodarone mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              42343,
+              "CARIPORIDE ML/HR",
+              "inputevents_cv"
+            ],
+            [
+              42407,
+              "Precedex mcg/kg/hr",
+              "inputevents_cv"
+            ],
+            [
+              42422,
+              "SOLUMEDROL DRIPMG/HR",
+              "inputevents_cv"
+            ],
+            [
+              42564,
+              "ALCOHOL 10%DRIP G/HR",
+              "inputevents_cv"
+            ],
+            [
+              42565,
+              "TROMETHAMINE CC/HR",
+              "inputevents_cv"
+            ],
+            [
+              42608,
+              "Cisat mcg/kg/hr",
+              "inputevents_cv"
+            ],
+            [
+              42669,
+              "KETAMINE MG/HR",
+              "inputevents_cv"
+            ],
+            [
+              42706,
+              "k phos over 6hrs.",
+              "inputevents_cv"
+            ],
+            [
+              42709,
+              "ALCOHOL GTT ML/HR",
+              "inputevents_cv"
+            ],
+            [
+              43171,
+              "URINE CC/KG/HR",
+              "outputevents"
+            ],
+            [
+              43173,
+              "urinecc/kg/hr",
+              "outputevents"
+            ],
+            [
+              30309,
+              "Epinephrine Drip",
+              "inputevents_cv"
+            ],
+            [
+              30044,
+              "Epinephrine",
+              "inputevents_cv"
+            ],
+            [
+              30128,
+              "Neosynephrine-k",
+              "inputevents_cv"
+            ],
+            [
+              41797,
+              "protonix gtt cc/hr",
+              "inputevents_cv"
+            ],
+            [
+              41839,
+              "Drain Out #2 Rt Nephrostomy",
+              "outputevents"
+            ],
+            [
+              42044,
+              "aprotinin cc/hr",
+              "inputevents_cv"
+            ],
+            [
+              42051,
+              "AMPHOTERCIN CC HR",
+              "inputevents_cv"
+            ],
+            [
+              42062,
+              "Precedex (mcg/kg/hr)",
+              "inputevents_cv"
+            ],
+            [
+              42174,
+              "nimbex cc/hr",
+              "inputevents_cv"
+            ],
+            [
+              40796,
+              "Protonix mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              40056,
+              "Urine Out Lt Nephrostomy",
+              "outputevents"
+            ],
+            [
+              44713,
+              "free water q6hrs",
+              "inputevents_cv"
+            ],
+            [
+              43355,
+              "urine/k/hr",
+              "outputevents"
+            ],
+            [
+              43365,
+              "urine output/kg/hr",
+              "outputevents"
+            ],
+            [
+              43366,
+              "ur.cc/kg/hr",
+              "inputevents_cv"
+            ],
+            [
+              43372,
+              "24hr urine output",
+              "outputevents"
+            ],
+            [
+              43373,
+              "urine cc/kg/hr",
+              "outputevents"
+            ],
+            [
+              43374,
+              "URINE CC?KG?HR",
+              "outputevents"
+            ],
+            [
+              43379,
+              "URINECC/KG/HR",
+              "outputevents"
+            ],
+            [
+              43380,
+              "urine outpt cc/kg/hr",
+              "outputevents"
+            ],
+            [
+              43381,
+              "cc/kg/hr",
+              "inputevents_cv"
+            ],
+            [
+              43431,
+              "Urine cc/k/hr",
+              "outputevents"
+            ],
+            [
+              43472,
+              "ur/kg/hr",
+              "inputevents_cv"
+            ],
+            [
+              43522,
+              "Urine cc/kg/hr",
+              "outputevents"
+            ],
+            [
+              43526,
+              "ur/cc/kg/hr",
+              "inputevents_cv"
+            ],
+            [
+              42246,
+              "CISATRICARIUM CC/HR",
+              "inputevents_cv"
+            ],
+            [
+              44605,
+              "mushroom cath",
+              "inputevents_cv"
+            ],
+            [
+              44653,
+              "OCTREOTIDE MCG/HR",
+              "inputevents_cv"
+            ],
+            [
+              44676,
+              "Drain Out #2 Lt Nephrostomy",
+              "outputevents"
+            ],
+            [
+              44934,
+              "mushroom catheter",
+              "inputevents_cv"
+            ],
+            [
+              45021,
+              "Mushroom cath",
+              "inputevents_cv"
+            ],
+            [
+              42802,
+              "VASOPRESSIN  CC/HR.",
+              "inputevents_cv"
+            ],
+            [
+              42811,
+              "Aprotinin cc/hr",
+              "inputevents_cv"
+            ],
+            [
+              42965,
+              "xigris mcg/kg/hr",
+              "inputevents_cv"
+            ],
+            [
+              43018,
+              "magnesium 1gm/hr",
+              "inputevents_cv"
+            ],
+            [
+              43042,
+              "(R)Nephrostomy flush",
+              "outputevents"
+            ],
+            [
+              43076,
+              "h2o flush q 8hr",
+              "inputevents_cv"
+            ],
+            [
+              44324,
+              "cyclosporin 2mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              44331,
+              "cyclosporin 4mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              44415,
+              "urcc/kg/hr",
+              "inputevents_cv"
+            ],
+            [
+              44500,
+              "Rituximab 50mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              44529,
+              "Primo study cc/hr",
+              "inputevents_cv"
+            ],
+            [
+              43856,
+              "urine cc/k/ghr",
+              "outputevents"
+            ],
+            [
+              45208,
+              "NS thru portal cath",
+              "inputevents_cv"
+            ],
+            [
+              45304,
+              "Urine output cc/k/hr",
+              "outputevents"
+            ],
+            [
+              46522,
+              "Pantoprazole 8mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              46565,
+              "pantoprazole mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              46603,
+              "Sodium Citrate ml/hr",
+              "inputevents_cv"
+            ],
+            [
+              40057,
+              "Urine Out Rt Nephrostomy",
+              "outputevents"
+            ],
+            [
+              44846,
+              "nephrost tube flush",
+              "outputevents"
+            ],
+            [
+              43576,
+              "24hr Urine cc/kg/hr",
+              "outputevents"
+            ],
+            [
+              43589,
+              "urine cc/k/hr",
+              "outputevents"
+            ],
+            [
+              43639,
+              "UR.cc/kg/hr",
+              "inputevents_cv"
+            ],
+            [
+              43653,
+              "ostomy cc/kg/hr",
+              "outputevents"
+            ],
+            [
+              43811,
+              "urine out: cc/k/hr",
+              "outputevents"
+            ],
+            [
+              43812,
+              "urine out:cc/k/hr",
+              "outputevents"
+            ],
+            [
+              46174,
+              "Protonix gtt 8mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              46543,
+              "Acetylcysteine mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              46561,
+              "TPA MG/HR",
+              "inputevents_cv"
+            ],
+            [
+              46732,
+              "LT NEPHROSTOMY TUBE.",
+              "outputevents"
+            ],
+            [
+              46203,
+              "pantoprazole 8mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              45872,
+              "tpa cc/hr",
+              "inputevents_cv"
+            ],
+            [
+              42563,
+              "SOLUMEDROL MG/KG/HR",
+              "inputevents_cv"
+            ],
+            [
+              42577,
+              "ALCOHOL 5% DRIP G/HR",
+              "inputevents_cv"
+            ],
+            [
+              42700,
+              "R NEPHROSTOMY TUBE",
+              "outputevents"
+            ],
+            [
+              43125,
+              "xigris cc/hr",
+              "inputevents_cv"
+            ],
+            [
+              44379,
+              "Mushroom catheter",
+              "inputevents_cv"
+            ],
+            [
+              42089,
+              "K PHOS OVER 6 HRS",
+              "inputevents_cv"
+            ],
+            [
+              43333,
+              "urine cc's/k/hr",
+              "outputevents"
+            ],
+            [
+              43445,
+              "stool cc/kg/hr",
+              "outputevents"
+            ],
+            [
+              221289,
+              "Epinephrine",
+              "inputevents_mv"
+            ],
+            [
+              45149,
+              "phresis intake",
+              "inputevents_cv"
+            ],
+            [
+              45004,
+              "PROTONIX 8MG/HR",
+              "inputevents_cv"
+            ],
+            [
+              44759,
+              "protonix gtt 8mg/hr",
+              "inputevents_cv"
+            ],
+            [
+              43638,
+              "urine output cc/k/hr",
+              "outputevents"
+            ],
+            [
+              43654,
+              "urine o/p cc/kg/hr",
+              "outputevents"
+            ],
+            [
+              43521,
+              "ml/kg/hr",
+              "inputevents_cv"
+            ],
+            [
+              43548,
+              "ur cc/kg/hr",
+              "inputevents_cv"
+            ],
+            [
+              42358,
+              "k phos over 6hrs",
+              "inputevents_cv"
+            ],
+            [
+              221004,
+              "Thrombocyte suspension",
+              "inputevents_mv"
+            ],
+            [
+              227056,
+              "Thrombolytic therapy",
+              "chartevents"
+            ],
+            [
+              221749,
+              "Phenylephrine",
+              "inputevents_mv"
+            ],
+            [
+              221906,
+              "Norepinephrine",
+              "inputevents_mv"
+            ],
+            [
+              227003,
+              "Chronic health on admission",
+              "chartevents"
+            ],
+            [
+              227004,
+              "ChronicScore_ApacheIV",
+              "chartevents"
+            ],
+            [
+              227018,
+              "HR_ApacheIV",
+              "chartevents"
+            ],
+            [
+              227019,
+              "HrScore_ApacheIV",
+              "chartevents"
+            ],
+            [
+              225866,
+              "Erythromycin",
+              "inputevents_mv"
+            ],
+            [
+              223958,
+              "Temporary Venticular Sens Threshold mV",
+              "chartevents"
+            ],
+            [
+              223960,
+              "Temporary Venticular Stim Threshold mA",
+              "chartevents"
+            ],
+            [
+              224366,
+              "Epidural Infusion Rate (mL/hr)",
+              "chartevents"
+            ],
+            [
+              225845,
+              "Azithromycin",
+              "inputevents_mv"
+            ],
+            [
+              227465,
+              "Prothrombin time",
+              "chartevents"
+            ],
+            [
+              227469,
+              "Thrombin",
+              "chartevents"
+            ],
+            [
+              225686,
+              "ZThrombin",
+              "chartevents"
+            ],
+            [
+              70002,
+              "THROAT FOR STREP",
+              "microbiologyevents"
+            ],
+            [
+              70004,
+              "ARTHROPOD",
+              "microbiologyevents"
+            ],
+            [
+              70074,
+              "THROAT",
+              "microbiologyevents"
+            ],
+            [
+              70075,
+              "THROAT CULTURE",
+              "microbiologyevents"
+            ],
+            [
+              224721,
+              "HR > 140",
+              "chartevents"
+            ],
+            [
+              224748,
+              "Cont Neb - Dose (mg/hr/drug)",
+              "chartevents"
+            ],
+            [
+              224752,
+              "Temporary Atrial Sens Threshold mV",
+              "chartevents"
+            ],
+            [
+              224754,
+              "Temporary Atrial Stim Threshold mA",
+              "chartevents"
+            ],
+            [
+              80182,
+              "OCHROBACTRUM ANTHROPI",
+              "microbiologyevents"
+            ],
+            [
+              226162,
+              "Sterile field maintained throughout procedure (PA line)",
+              "chartevents"
+            ],
+            [
+              226164,
+              "Sterile field maintained throughout procedure (A-Line)",
+              "chartevents"
+            ],
+            [
+              226005,
+              "Sterile field maintained throughout procedure (CVL)",
+              "chartevents"
+            ],
+            [
+              228024,
+              "Sterile field maintained throughout procedure (A-Line)",
+              "chartevents"
+            ],
+            [
+              228034,
+              "Sterile field maintained throughout procedure (CVL)",
+              "chartevents"
+            ],
+            [
+              227916,
+              "Rest HR -  Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227923,
+              "Activity HR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227688,
+              "Smoking Cessation Info Offered through BIDMC Inpatient Guide",
+              "chartevents"
+            ],
+            [
+              224647,
+              "Orthostatic HR standing",
+              "chartevents"
+            ],
+            [
+              226161,
+              "Sterile field maintained throughout procedure (PICC)",
+              "chartevents"
+            ],
+            [
+              220560,
+              "ZProthrombin time",
+              "chartevents"
+            ],
+            [
+              224801,
+              "AV Fistula R Thrill",
+              "chartevents"
+            ],
+            [
+              224804,
+              "AV Fistula L Thrill",
+              "chartevents"
+            ],
+            [
+              225922,
+              "Nephramine",
+              "inputevents_mv"
+            ],
+            [
+              227930,
+              "Recovery HR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227858,
+              "Rest HR - Aerobic Capacity",
+              "chartevents"
+            ],
+            [
+              227864,
+              "Activity HR - Aerobic Capacity",
+              "chartevents"
+            ],
+            [
+              227870,
+              "Recovery HR - Aerobic Capacity",
+              "chartevents"
+            ],
+            [
+              80281,
+              "BACILLUS SPECIES; NOT ANTHRACIS",
+              "microbiologyevents"
+            ],
+            [
+              80284,
+              "ACHROMOBACTER (ALCALIGENES) XYLOSOXIDANS SS DENTRIFICANS",
+              "microbiologyevents"
+            ],
+            [
+              80301,
+              "CHRYSEOBACTERIUM MENINGOSEPTICUM",
+              "microbiologyevents"
+            ],
+            [
+              90006,
+              "ERYTHROMYCIN",
+              "microbiologyevents"
+            ],
+            [
+              226564,
+              "R Nephrostomy",
+              "outputevents"
+            ],
+            [
+              226565,
+              "L Nephrostomy",
+              "outputevents"
+            ],
+            [
+              226763,
+              "HrApacheIIScore",
+              "chartevents"
+            ],
+            [
+              226764,
+              "HrApacheIIValue",
+              "chartevents"
+            ],
+            [
+              228116,
+              "Sterile field maintained throughout procedure (PA line)",
+              "chartevents"
+            ],
+            [
+              228044,
+              "Sterile field maintained throughout procedure (PICC)",
+              "chartevents"
+            ],
+            [
+              223761,
+              "Temperature Fahrenheit",
+              "chartevents"
+            ],
+            [
+              223764,
+              "Orthostatic HR lying",
+              "chartevents"
+            ],
+            [
+              223765,
+              "Orthostatic HR sitting",
+              "chartevents"
+            ],
+            [
+              226746,
+              "ApacheII chronic health",
+              "chartevents"
+            ],
+            [
+              226747,
+              "APACHEII-Chronic health points",
+              "chartevents"
+            ],
+            [
+              226750,
+              "Chronic Dilaysis",
+              "chartevents"
+            ]
+          ]
+        },
+        "hirid": {
+          "mapped_ids": [
+            200
+          ],
+          "found_in_dict_n": 4,
+          "missing_ids": [
+            1000791,
+            24000666,
+            24000668
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              24000666,
+              "Prothrombin activity actual/normal in Platelet poor plasma by Coagulation assay",
+              "Observation"
+            ],
+            [
+              24000668,
+              "Erythrocyte sedimentation rate",
+              "Observation"
+            ],
+            [
+              1000791,
+              "Erythrocin Inf Lsg",
+              "Pharma"
+            ]
+          ]
+        },
+        "sic": {
+          "mapped_ids": [
+            708
+          ],
+          "found_in_dict_n": 43,
+          "missing_ids": [
+            173,
+            237,
+            242,
+            243,
+            246,
+            314,
+            315,
+            316,
+            596,
+            597,
+            598,
+            599,
+            600,
+            601,
+            602,
+            603,
+            604,
+            647,
+            648,
+            707,
+            724,
+            733,
+            734,
+            772,
+            773,
+            1431,
+            1449,
+            1502,
+            1562,
+            1593,
+            1607,
+            1738,
+            1772,
+            1913,
+            2046,
+            2048,
+            2088,
+            2124,
+            2143,
+            2144,
+            2181,
+            2225
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              173,
+              "Antithrombin III (ZL)",
+              "data_float_h"
+            ],
+            [
+              237,
+              "Prothrombingehalt (ZL)",
+              "data_float_h"
+            ],
+            [
+              242,
+              "Thrombozyten - Anteil unreif (ZL)",
+              "data_float_h"
+            ],
+            [
+              243,
+              "Thrombotest (ZL)",
+              "data_float_h"
+            ],
+            [
+              246,
+              "Kernhaltige Erythrocyten (ZL)",
+              "data_float_h"
+            ],
+            [
+              314,
+              "Thrombocyten (ZL)",
+              "data_float_h"
+            ],
+            [
+              315,
+              "Thrombocyten/Citratblut (ZL)",
+              "data_float_h"
+            ],
+            [
+              316,
+              "Erythropoietin (ZL)",
+              "data_float_h"
+            ],
+            [
+              596,
+              "PFA100-Kollagen/Epinephrin (ZL)",
+              "data_float_h"
+            ],
+            [
+              597,
+              "Part.Thromboplastinzeit (ZL)",
+              "data_float_h"
+            ],
+            [
+              598,
+              "Thrombinzeit (ZL)",
+              "data_float_h"
+            ],
+            [
+              599,
+              "Erythrocytenzahl (ZL)",
+              "data_float_h"
+            ],
+            [
+              600,
+              "Thrombozytenaggr.ADP (ZL)",
+              "data_float_h"
+            ],
+            [
+              601,
+              "Thrombozytenaggr.ASPI (ZL)",
+              "data_float_h"
+            ],
+            [
+              602,
+              "Thrombozytenaggr.Kollagen (ZL)",
+              "data_float_h"
+            ],
+            [
+              603,
+              "Thrombozytenaggr.Ristocetin (ZL)",
+              "data_float_h"
+            ],
+            [
+              604,
+              "Thrombozytenaggr.TRAP (ZL)",
+              "data_float_h"
+            ],
+            [
+              647,
+              "Normetanephrin/Urin (ZL)",
+              "data_float_h"
+            ],
+            [
+              648,
+              "Metanephrin im Urin (ZL)",
+              "data_float_h"
+            ],
+            [
+              707,
+              "HeartRateEKG",
+              "data_float_h"
+            ],
+            [
+              724,
+              "HeartRateABP",
+              "data_float_h"
+            ],
+            [
+              733,
+              "Norepinephrin",
+              "data_float_h"
+            ],
+            [
+              734,
+              "NorepinephrinpKG",
+              "data_float_h"
+            ],
+            [
+              772,
+              "NorepinephrinPerHour",
+              "data_float_h"
+            ],
+            [
+              773,
+              "NorepinephrinPerHourWeight",
+              "data_float_h"
+            ],
+            [
+              1431,
+              "Erythromycin",
+              "data_float_h"
+            ],
+            [
+              1449,
+              "Clarithromycin",
+              "data_float_h"
+            ],
+            [
+              1502,
+              "EPINEPHrin",
+              "data_float_h"
+            ],
+            [
+              1562,
+              "Norepinephrin",
+              "data_float_h"
+            ],
+            [
+              1593,
+              "Phenylephrin",
+              "data_float_h"
+            ],
+            [
+              1607,
+              "Erythropoetin",
+              "data_float_h"
+            ],
+            [
+              1738,
+              "Lidocain 2% /Epinephrin",
+              "data_float_h"
+            ],
+            [
+              1772,
+              "Antithrombin III",
+              "data_float_h"
+            ],
+            [
+              1913,
+              "Azithromycin",
+              "data_float_h"
+            ],
+            [
+              2046,
+              "Erythrozytenkonzentrat",
+              "data_float_h"
+            ],
+            [
+              2048,
+              "Thrombozytenkonzentrat gepoolt",
+              "data_float_h"
+            ],
+            [
+              2088,
+              "Thrombozytenkonzentrat Einzelspender",
+              "data_float_h"
+            ],
+            [
+              2124,
+              "Nicht gelistete Parenterale Ern\u00e4hrung",
+              "data_float_h"
+            ],
+            [
+              2143,
+              "Trinknahrung Fresubin Energy",
+              "data_float_h"
+            ],
+            [
+              2144,
+              "Trinknahrung Fortimel compact",
+              "data_float_h"
+            ],
+            [
+              2181,
+              "Trinknahrung Fresubin Protein Energy",
+              "data_float_h"
+            ],
+            [
+              2225,
+              "Abdomen: Leber-Chriurgie",
+              "data_float_h"
+            ]
+          ]
+        }
+      }
+    },
+    "temp": {
+      "description": "temperature",
+      "category": "vitals",
+      "per_db": {
+        "miiv": {
+          "mapped_ids": [
+            223761,
+            223762,
+            224027
+          ],
+          "found_in_dict_n": 58,
+          "missing_ids": [
+            220194,
+            223872,
+            223955,
+            223956,
+            223958,
+            223960,
+            223961,
+            223962,
+            223963,
+            224351,
+            224390,
+            224584,
+            224642,
+            224663,
+            224674,
+            224751,
+            224752,
+            224753,
+            224754,
+            224755,
+            224767,
+            224769,
+            224771,
+            224773,
+            224834,
+            224835,
+            224837,
+            224838,
+            224839,
+            224866,
+            225306,
+            225571,
+            225623,
+            226011,
+            226236,
+            226329,
+            226477,
+            226777,
+            226778,
+            227054,
+            227055,
+            227627,
+            227628,
+            227630,
+            227631,
+            227632,
+            227634,
+            228074,
+            228090,
+            228228,
+            228242,
+            228392,
+            228478,
+            229236,
+            230155
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              220194,
+              "Temporary AV interval",
+              "chartevents"
+            ],
+            [
+              223872,
+              "Inspired Gas Temp.",
+              "chartevents"
+            ],
+            [
+              223955,
+              "Temporary Pacemaker Type",
+              "chartevents"
+            ],
+            [
+              223956,
+              "Temporary Pacemaker Mode",
+              "chartevents"
+            ],
+            [
+              223958,
+              "Temporary Venticular Sens Threshold mV",
+              "chartevents"
+            ],
+            [
+              223960,
+              "Temporary Venticular Stim Threshold mA",
+              "chartevents"
+            ],
+            [
+              223961,
+              "Temporary Pacemaker Wire Condition",
+              "chartevents"
+            ],
+            [
+              223962,
+              "Temporary Pacemaker Wires Venticular",
+              "chartevents"
+            ],
+            [
+              223963,
+              "Temporary Pacemaker Wires Ground",
+              "chartevents"
+            ],
+            [
+              224351,
+              "Number of attempts required to place line (CVL)",
+              "chartevents"
+            ],
+            [
+              224390,
+              "Temporary Atrial Sens",
+              "chartevents"
+            ],
+            [
+              224584,
+              "Number of attempts required to place line (PICC)",
+              "chartevents"
+            ],
+            [
+              224642,
+              "Temperature Site",
+              "chartevents"
+            ],
+            [
+              224663,
+              "PCA attempt",
+              "chartevents"
+            ],
+            [
+              224674,
+              "Changes in Temperature",
+              "chartevents"
+            ],
+            [
+              224751,
+              "Temporary Pacemaker Rate",
+              "chartevents"
+            ],
+            [
+              224752,
+              "Temporary Atrial Sens Threshold mV",
+              "chartevents"
+            ],
+            [
+              224753,
+              "Temporary Atrial Sens Setting mV",
+              "chartevents"
+            ],
+            [
+              224754,
+              "Temporary Atrial Stim Threshold mA",
+              "chartevents"
+            ],
+            [
+              224755,
+              "Temporary Atrial Stim Setting mA",
+              "chartevents"
+            ],
+            [
+              224767,
+              "RUE Temp",
+              "chartevents"
+            ],
+            [
+              224769,
+              "LUE Temp",
+              "chartevents"
+            ],
+            [
+              224771,
+              "RLE Temp",
+              "chartevents"
+            ],
+            [
+              224773,
+              "LLE Temp",
+              "chartevents"
+            ],
+            [
+              224834,
+              "Temporary Ventricular Sens",
+              "chartevents"
+            ],
+            [
+              224835,
+              "Temporary Ventricular Capture",
+              "chartevents"
+            ],
+            [
+              224837,
+              "Temporary Ventricular Sens Setting mV",
+              "chartevents"
+            ],
+            [
+              224838,
+              "Temporary Ventricular Stim Setting mA",
+              "chartevents"
+            ],
+            [
+              224839,
+              "Temporary Pacemaker Wires Atrial",
+              "chartevents"
+            ],
+            [
+              224866,
+              "Temporary Atrial Capture",
+              "chartevents"
+            ],
+            [
+              225306,
+              "Number of Attempts (Intubation)",
+              "chartevents"
+            ],
+            [
+              225571,
+              "Number of attempts required to place line (A-Line)",
+              "chartevents"
+            ],
+            [
+              225623,
+              "Number of attempts require to place line (PA line)",
+              "chartevents"
+            ],
+            [
+              226011,
+              "Number of attempts (PACEN)",
+              "chartevents"
+            ],
+            [
+              226236,
+              "Temporary Pacemaker Wires Discontinued",
+              "procedureevents"
+            ],
+            [
+              226329,
+              "Blood Temperature CCO (C)",
+              "chartevents"
+            ],
+            [
+              226477,
+              "Temporary Pacemaker Wires Inserted",
+              "procedureevents"
+            ],
+            [
+              226777,
+              "TempApacheIIScore",
+              "chartevents"
+            ],
+            [
+              226778,
+              "TempApacheIIValue",
+              "chartevents"
+            ],
+            [
+              227054,
+              "TemperatureF_ApacheIV",
+              "chartevents"
+            ],
+            [
+              227055,
+              "TempScore_ApacheIV",
+              "chartevents"
+            ],
+            [
+              227627,
+              "Arctic Sun/Alsius Set Temp",
+              "chartevents"
+            ],
+            [
+              227628,
+              "Arctic Sun Water Temp",
+              "chartevents"
+            ],
+            [
+              227630,
+              "Arctic Sun Temp #1 Location",
+              "chartevents"
+            ],
+            [
+              227631,
+              "Arctic Sun Temp #2 Location",
+              "chartevents"
+            ],
+            [
+              227632,
+              "Arctic Sun/Alsius Temp #1 C",
+              "chartevents"
+            ],
+            [
+              227634,
+              "Arctic Sun/Alsius Temp #2 C",
+              "chartevents"
+            ],
+            [
+              228074,
+              "Number of attempts to perform (LP)",
+              "chartevents"
+            ],
+            [
+              228090,
+              "Number of attempts (THCEN)",
+              "chartevents"
+            ],
+            [
+              228228,
+              "Family meeting attempted, unable",
+              "procedureevents"
+            ],
+            [
+              228242,
+              "Pt. Temperature (BG) (SOFT)",
+              "chartevents"
+            ],
+            [
+              228392,
+              "Alsius Bath Temp",
+              "chartevents"
+            ],
+            [
+              228478,
+              "Number of Attempts (Gen Proc)",
+              "chartevents"
+            ],
+            [
+              229236,
+              "Cerebral Temperature (C)",
+              "chartevents"
+            ],
+            [
+              230155,
+              "CFS-Temp",
+              "chartevents"
+            ]
+          ]
+        },
+        "mimic": {
+          "mapped_ids": [
+            676,
+            677,
+            678,
+            679,
+            223761,
+            223762,
+            224027
+          ],
+          "found_in_dict_n": 82,
+          "missing_ids": [
+            417,
+            424,
+            427,
+            591,
+            597,
+            645,
+            674,
+            2668,
+            2882,
+            3460,
+            3652,
+            3653,
+            3654,
+            3655,
+            3656,
+            5632,
+            5652,
+            5772,
+            6277,
+            6643,
+            8449,
+            8537,
+            220194,
+            223872,
+            223955,
+            223956,
+            223958,
+            223960,
+            223961,
+            223962,
+            223963,
+            224351,
+            224390,
+            224584,
+            224642,
+            224663,
+            224674,
+            224751,
+            224752,
+            224753,
+            224754,
+            224755,
+            224767,
+            224769,
+            224771,
+            224773,
+            224834,
+            224835,
+            224837,
+            224838,
+            224839,
+            224866,
+            225306,
+            225571,
+            225623,
+            226011,
+            226236,
+            226329,
+            226477,
+            226777,
+            226778,
+            227054,
+            227055,
+            227627,
+            227628,
+            227630,
+            227631,
+            227632,
+            227634,
+            228074,
+            228090,
+            228228,
+            228242,
+            228392,
+            228478
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              591,
+              "RLE [Temperature]",
+              "chartevents"
+            ],
+            [
+              597,
+              "RUE [Temperature]",
+              "chartevents"
+            ],
+            [
+              417,
+              "Inspired Gas Temp",
+              "chartevents"
+            ],
+            [
+              424,
+              "LLE [Temp]",
+              "chartevents"
+            ],
+            [
+              427,
+              "LUE [Temp]",
+              "chartevents"
+            ],
+            [
+              645,
+              "Skin [Temperature]",
+              "chartevents"
+            ],
+            [
+              674,
+              "Temp. Site",
+              "chartevents"
+            ],
+            [
+              3460,
+              "Humidity Temp [Meas]",
+              "chartevents"
+            ],
+            [
+              5632,
+              "R BREAST TEMP/COLOR",
+              "chartevents"
+            ],
+            [
+              5652,
+              "PICC Attempt",
+              "chartevents"
+            ],
+            [
+              5772,
+              "FLAP TEMP/COLOR",
+              "chartevents"
+            ],
+            [
+              2668,
+              "TEMP GRAFT",
+              "chartevents"
+            ],
+            [
+              2882,
+              "FLAP COLOR/TEMP",
+              "chartevents"
+            ],
+            [
+              3652,
+              "Temp Axillary [F]",
+              "chartevents"
+            ],
+            [
+              3653,
+              "Temp CoB 1/W/C",
+              "chartevents"
+            ],
+            [
+              3654,
+              "Temp Rectal [F]",
+              "chartevents"
+            ],
+            [
+              3655,
+              "Temp Skin [C]",
+              "chartevents"
+            ],
+            [
+              3656,
+              "Temp/Iso/Warmer [Type]",
+              "chartevents"
+            ],
+            [
+              6277,
+              "PICC line attempt",
+              "chartevents"
+            ],
+            [
+              8449,
+              "Patient controlled analgesia (PCA) [Attempt]",
+              "chartevents"
+            ],
+            [
+              8537,
+              "Temp/Iso/Warmer [Temperature, degrees C]",
+              "chartevents"
+            ],
+            [
+              6643,
+              "Temp Rectal",
+              "chartevents"
+            ],
+            [
+              227054,
+              "TemperatureF_ApacheIV",
+              "chartevents"
+            ],
+            [
+              227055,
+              "TempScore_ApacheIV",
+              "chartevents"
+            ],
+            [
+              225571,
+              "Number of attempts required to place line (A-Line)",
+              "chartevents"
+            ],
+            [
+              228392,
+              "Alsius Bath Temp",
+              "chartevents"
+            ],
+            [
+              223955,
+              "Temporary Pacemaker Type",
+              "chartevents"
+            ],
+            [
+              223956,
+              "Temporary Pacemaker Mode",
+              "chartevents"
+            ],
+            [
+              223958,
+              "Temporary Venticular Sens Threshold mV",
+              "chartevents"
+            ],
+            [
+              223960,
+              "Temporary Venticular Stim Threshold mA",
+              "chartevents"
+            ],
+            [
+              223961,
+              "Temporary Pacemaker Wire Condition",
+              "chartevents"
+            ],
+            [
+              223962,
+              "Temporary Pacemaker Wires Venticular",
+              "chartevents"
+            ],
+            [
+              223963,
+              "Temporary Pacemaker Wires Ground",
+              "chartevents"
+            ],
+            [
+              224674,
+              "Changes in Temperature",
+              "chartevents"
+            ],
+            [
+              228478,
+              "Number of Attempts (Gen Proc)",
+              "chartevents"
+            ],
+            [
+              224351,
+              "Number of attempts required to place line (CVL)",
+              "chartevents"
+            ],
+            [
+              224390,
+              "Temporary Atrial Sens",
+              "chartevents"
+            ],
+            [
+              225623,
+              "Number of attempts require to place line (PA line)",
+              "chartevents"
+            ],
+            [
+              224751,
+              "Temporary Pacemaker Rate",
+              "chartevents"
+            ],
+            [
+              224752,
+              "Temporary Atrial Sens Threshold mV",
+              "chartevents"
+            ],
+            [
+              224753,
+              "Temporary Atrial Sens Setting mV",
+              "chartevents"
+            ],
+            [
+              224754,
+              "Temporary Atrial Stim Threshold mA",
+              "chartevents"
+            ],
+            [
+              224755,
+              "Temporary Atrial Stim Setting mA",
+              "chartevents"
+            ],
+            [
+              224767,
+              "RUE Temp",
+              "chartevents"
+            ],
+            [
+              224769,
+              "LUE Temp",
+              "chartevents"
+            ],
+            [
+              224771,
+              "RLE Temp",
+              "chartevents"
+            ],
+            [
+              224773,
+              "LLE Temp",
+              "chartevents"
+            ],
+            [
+              227627,
+              "Arctic Sun/Alsius Set Temp",
+              "chartevents"
+            ],
+            [
+              227628,
+              "Arctic Sun Water Temp",
+              "chartevents"
+            ],
+            [
+              227630,
+              "Arctic Sun Temp #1 Location",
+              "chartevents"
+            ],
+            [
+              227631,
+              "Arctic Sun Temp #2 Location",
+              "chartevents"
+            ],
+            [
+              227632,
+              "Arctic Sun/Alsius Temp #1 C",
+              "chartevents"
+            ],
+            [
+              227634,
+              "Arctic Sun/Alsius Temp #2 C",
+              "chartevents"
+            ],
+            [
+              224837,
+              "Temporary Ventricular Sens Setting mV",
+              "chartevents"
+            ],
+            [
+              224838,
+              "Temporary Ventricular Stim Setting mA",
+              "chartevents"
+            ],
+            [
+              224839,
+              "Temporary Pacemaker Wires Atrial",
+              "chartevents"
+            ],
+            [
+              224866,
+              "Temporary Atrial Capture",
+              "chartevents"
+            ],
+            [
+              226011,
+              "Number of attempts (PACEN)",
+              "chartevents"
+            ],
+            [
+              224584,
+              "Number of attempts required to place line (PICC)",
+              "chartevents"
+            ],
+            [
+              224642,
+              "Temperature Site",
+              "chartevents"
+            ],
+            [
+              224663,
+              "PCA attempt",
+              "chartevents"
+            ],
+            [
+              228228,
+              "Family meeting attempted, unable",
+              "procedureevents_mv"
+            ],
+            [
+              228242,
+              "Pt. Temperature (BG) (SOFT)",
+              "chartevents"
+            ],
+            [
+              220194,
+              "Temporary AV interval",
+              "chartevents"
+            ],
+            [
+              224834,
+              "Temporary Ventricular Sens",
+              "chartevents"
+            ],
+            [
+              224835,
+              "Temporary Ventricular Capture",
+              "chartevents"
+            ],
+            [
+              226236,
+              "Temporary Pacemaker Wires Discontinued",
+              "procedureevents_mv"
+            ],
+            [
+              226777,
+              "TempApacheIIScore",
+              "chartevents"
+            ],
+            [
+              226778,
+              "TempApacheIIValue",
+              "chartevents"
+            ],
+            [
+              223872,
+              "Inspired Gas Temp.",
+              "chartevents"
+            ],
+            [
+              226329,
+              "Blood Temperature CCO (C)",
+              "chartevents"
+            ],
+            [
+              226477,
+              "Temporary Pacemaker Wires Inserted",
+              "procedureevents_mv"
+            ],
+            [
+              228074,
+              "Number of attempts to perform (LP)",
+              "chartevents"
+            ],
+            [
+              228090,
+              "Number of attempts (THCEN)",
+              "chartevents"
+            ],
+            [
+              225306,
+              "Number of Attempts (Intubation)",
+              "chartevents"
+            ]
+          ]
+        },
+        "hirid": {
+          "mapped_ids": [
+            400,
+            410,
+            7100
+          ],
+          "found_in_dict_n": 3,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [],
+          "status": "OK"
+        },
+        "sic": {
+          "mapped_ids": [
+            709
+          ],
+          "found_in_dict_n": 2,
+          "missing_ids": [
+            681
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              681,
+              "Temp. (BGA)",
+              "data_float_h"
+            ]
+          ]
+        }
+      }
+    },
+    "resp": {
+      "description": "respiratory rate",
+      "category": "respiratory",
+      "per_db": {
+        "miiv": {
+          "mapped_ids": [
+            220210,
+            224688,
+            224689,
+            224690
+          ],
+          "found_in_dict_n": 47,
+          "missing_ids": [
+            223804,
+            223900,
+            223901,
+            223916,
+            223985,
+            223990,
+            224079,
+            224409,
+            224413,
+            224745,
+            224756,
+            225475,
+            227032,
+            227047,
+            227121,
+            227288,
+            227915,
+            227916,
+            227918,
+            227919,
+            227922,
+            227923,
+            227925,
+            227926,
+            227929,
+            227930,
+            227932,
+            227933,
+            228234,
+            228397,
+            228709,
+            228902,
+            228903,
+            228905,
+            228907,
+            229090,
+            229091,
+            229425,
+            229563,
+            229702,
+            230094
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              223804,
+              "TOF Response/Twitch",
+              "chartevents"
+            ],
+            [
+              223900,
+              "GCS - Verbal Response",
+              "chartevents"
+            ],
+            [
+              223901,
+              "GCS - Motor Response",
+              "chartevents"
+            ],
+            [
+              223916,
+              "Response to Stimuli (Type)",
+              "chartevents"
+            ],
+            [
+              223985,
+              "Respiratory Pattern",
+              "chartevents"
+            ],
+            [
+              223990,
+              "Respiratory Effort",
+              "chartevents"
+            ],
+            [
+              224079,
+              "Education Response",
+              "chartevents"
+            ],
+            [
+              224409,
+              "Pain Level Response",
+              "chartevents"
+            ],
+            [
+              224413,
+              "TOF Response",
+              "chartevents"
+            ],
+            [
+              224745,
+              "Respiratory Quotient",
+              "chartevents"
+            ],
+            [
+              224756,
+              "Response",
+              "chartevents"
+            ],
+            [
+              225475,
+              "Respiratory Arrest",
+              "procedureevents"
+            ],
+            [
+              227032,
+              "Non-Operative Respiratory (RESPIRAT)",
+              "chartevents"
+            ],
+            [
+              227047,
+              "Post-Operative Respiratory (RESPIRAT)",
+              "chartevents"
+            ],
+            [
+              227121,
+              "Pupil Response Right",
+              "chartevents"
+            ],
+            [
+              227288,
+              "Pupil Response Left",
+              "chartevents"
+            ],
+            [
+              227915,
+              "Position - Rest - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227916,
+              "Rest HR -  Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227918,
+              "Rest RR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227919,
+              "Rest O2 Sat - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227922,
+              "Position - Activity - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227923,
+              "Activity HR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227925,
+              "Activity RR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227926,
+              "Activity O2 sat - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227929,
+              "Position - Recovery - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227930,
+              "Recovery HR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227932,
+              "Recovery RR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227933,
+              "Recovery O2 sat - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              228234,
+              "PAR-Respiration",
+              "chartevents"
+            ],
+            [
+              228397,
+              "Commands Response",
+              "chartevents"
+            ],
+            [
+              228709,
+              "Respiratory",
+              "chartevents"
+            ],
+            [
+              228902,
+              "Altered Respiratory Status NCP - Expected outcomes",
+              "chartevents"
+            ],
+            [
+              228903,
+              "Altered Respiratory Status NCP - Goal",
+              "chartevents"
+            ],
+            [
+              228905,
+              "Altered Respiratory Status NCP - Interventions",
+              "chartevents"
+            ],
+            [
+              228907,
+              "Altered Respiratory Status NCP - outcomes met",
+              "chartevents"
+            ],
+            [
+              229090,
+              "Altered Respiratory Status NCP - Plan revised",
+              "chartevents"
+            ],
+            [
+              229091,
+              "Altered Respiratory Status NCP - Problem resolved",
+              "chartevents"
+            ],
+            [
+              229425,
+              "ROS-Respiratory",
+              "chartevents"
+            ],
+            [
+              229563,
+              "Plan-Respiratory",
+              "chartevents"
+            ],
+            [
+              229702,
+              "Pain Level Response-b",
+              "chartevents"
+            ],
+            [
+              230094,
+              "Respiratory",
+              "chartevents"
+            ]
+          ]
+        },
+        "mimic": {
+          "mapped_ids": [
+            618,
+            619,
+            220210,
+            224688,
+            224689,
+            224690
+          ],
+          "found_in_dict_n": 68,
+          "missing_ids": [
+            170,
+            219,
+            454,
+            584,
+            613,
+            614,
+            615,
+            616,
+            617,
+            620,
+            653,
+            673,
+            723,
+            1045,
+            1635,
+            1884,
+            3603,
+            3605,
+            3606,
+            8113,
+            8466,
+            8474,
+            30078,
+            43087,
+            44958,
+            70057,
+            70058,
+            80177,
+            223804,
+            223900,
+            223901,
+            223916,
+            223985,
+            223990,
+            224079,
+            224409,
+            224413,
+            224745,
+            224756,
+            225475,
+            227032,
+            227047,
+            227121,
+            227288,
+            227915,
+            227916,
+            227918,
+            227919,
+            227922,
+            227923,
+            227925,
+            227926,
+            227929,
+            227930,
+            227932,
+            227933,
+            228234,
+            228397
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              1045,
+              "Pain Level/Response",
+              "chartevents"
+            ],
+            [
+              584,
+              "Pupil Response [Right]",
+              "chartevents"
+            ],
+            [
+              613,
+              "Resp Quotient - (R)",
+              "chartevents"
+            ],
+            [
+              614,
+              "Resp Rate (Spont)",
+              "chartevents"
+            ],
+            [
+              615,
+              "Resp Rate (Total)",
+              "chartevents"
+            ],
+            [
+              616,
+              "Respiratory Effort",
+              "chartevents"
+            ],
+            [
+              617,
+              "Respiratory Pattern",
+              "chartevents"
+            ],
+            [
+              170,
+              "Education Response",
+              "chartevents"
+            ],
+            [
+              219,
+              "High Resp. Rate",
+              "chartevents"
+            ],
+            [
+              454,
+              "Motor Response",
+              "chartevents"
+            ],
+            [
+              620,
+              "Responds to Stimuli [Type]",
+              "chartevents"
+            ],
+            [
+              653,
+              "Spont. Resp. Rate",
+              "chartevents"
+            ],
+            [
+              673,
+              "TOF Response/Twitch",
+              "chartevents"
+            ],
+            [
+              723,
+              "Verbal Response",
+              "chartevents"
+            ],
+            [
+              1884,
+              "Spont Resp rate",
+              "chartevents"
+            ],
+            [
+              8113,
+              "Resp. Rate",
+              "chartevents"
+            ],
+            [
+              1635,
+              "HIGH Resp Rate",
+              "chartevents"
+            ],
+            [
+              3603,
+              "Resp Rate",
+              "chartevents"
+            ],
+            [
+              3605,
+              "Respiratory Support",
+              "chartevents"
+            ],
+            [
+              3606,
+              "Response To Stimuli",
+              "chartevents"
+            ],
+            [
+              8466,
+              "Pupil Response [Left]",
+              "chartevents"
+            ],
+            [
+              8474,
+              "Responds to Stimuli [Value]",
+              "chartevents"
+            ],
+            [
+              30078,
+              "Respalor",
+              "inputevents_cv"
+            ],
+            [
+              44958,
+              "1/2strength respalor",
+              "outputevents"
+            ],
+            [
+              43087,
+              "3/4 RESPALOR",
+              "inputevents_cv"
+            ],
+            [
+              227121,
+              "Pupil Response Right",
+              "chartevents"
+            ],
+            [
+              225475,
+              "Respiratory Arrest",
+              "procedureevents_mv"
+            ],
+            [
+              227047,
+              "Post-Operative Respiratory (RESPIRAT)",
+              "chartevents"
+            ],
+            [
+              227288,
+              "Pupil Response Left",
+              "chartevents"
+            ],
+            [
+              223990,
+              "Respiratory Effort",
+              "chartevents"
+            ],
+            [
+              227032,
+              "Non-Operative Respiratory (RESPIRAT)",
+              "chartevents"
+            ],
+            [
+              228397,
+              "Commands Response",
+              "chartevents"
+            ],
+            [
+              224079,
+              "Education Response",
+              "chartevents"
+            ],
+            [
+              223985,
+              "Respiratory Pattern",
+              "chartevents"
+            ],
+            [
+              224409,
+              "Pain Level Response",
+              "chartevents"
+            ],
+            [
+              224413,
+              "TOF Response",
+              "chartevents"
+            ],
+            [
+              70057,
+              "Rapid Respiratory Viral Screen & Culture",
+              "microbiologyevents"
+            ],
+            [
+              70058,
+              "RAPID RESPIRATORY VIRAL ANTIGEN TEST",
+              "microbiologyevents"
+            ],
+            [
+              224745,
+              "Respiratory Quotient",
+              "chartevents"
+            ],
+            [
+              224756,
+              "Response",
+              "chartevents"
+            ],
+            [
+              80177,
+              "RESPIRATORY SYNCYTIAL VIRUS (RSV)",
+              "microbiologyevents"
+            ],
+            [
+              227915,
+              "Position - Rest - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227916,
+              "Rest HR -  Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227918,
+              "Rest RR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227919,
+              "Rest O2 Sat - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227922,
+              "Position - Activity - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227923,
+              "Activity HR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227925,
+              "Activity RR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227926,
+              "Activity O2 sat - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227929,
+              "Position - Recovery - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              228234,
+              "PAR-Respiration",
+              "chartevents"
+            ],
+            [
+              227930,
+              "Recovery HR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227932,
+              "Recovery RR - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              227933,
+              "Recovery O2 sat - Aerobic Activity Response",
+              "chartevents"
+            ],
+            [
+              223900,
+              "GCS - Verbal Response",
+              "chartevents"
+            ],
+            [
+              223901,
+              "GCS - Motor Response",
+              "chartevents"
+            ],
+            [
+              223916,
+              "Response to Stimuli (Type)",
+              "chartevents"
+            ],
+            [
+              223804,
+              "TOF Response/Twitch",
+              "chartevents"
+            ]
+          ]
+        },
+        "hirid": {
+          "mapped_ids": [
+            300,
+            310
+          ],
+          "found_in_dict_n": 5,
+          "missing_ids": [
+            5685,
+            10000100,
+            10000200
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              5685,
+              "Respiratory rate",
+              "Observation"
+            ],
+            [
+              10000100,
+              "Glasgow Coma Score verbal response subscore",
+              "Observation"
+            ],
+            [
+              10000200,
+              "Glasgow Coma Score motor response subscore",
+              "Observation"
+            ]
+          ]
+        },
+        "sic": {
+          "mapped_ids": [
+            719
+          ],
+          "found_in_dict_n": 5,
+          "missing_ids": [
+            2274,
+            2280,
+            2282,
+            2287
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              2274,
+              "RespRateEKG",
+              "data_float_h"
+            ],
+            [
+              2280,
+              "RespRateSpontanous",
+              "data_float_h"
+            ],
+            [
+              2282,
+              "RespRate",
+              "data_float_h"
+            ],
+            [
+              2287,
+              "RespiratoryRateEKG",
+              "data_float_h"
+            ]
+          ]
+        }
+      }
+    },
+    "spo2": {
+      "description": "oxygen saturation",
+      "category": "respiratory",
+      "per_db": {
+        "miiv": {
+          "mapped_ids": [
+            220277,
+            226253
+          ],
+          "found_in_dict_n": 3,
+          "missing_ids": [
+            228232,
+            229862
+          ],
+          "extra_mapped_not_in_dict": [
+            220277
+          ],
+          "status": "BOTH",
+          "missing_with_labels": [
+            [
+              228232,
+              "PAR-Oxygen saturation",
+              "chartevents"
+            ],
+            [
+              229862,
+              "Forehead SpO2 Sensor in Place",
+              "chartevents"
+            ]
+          ]
+        },
+        "mimic": {
+          "mapped_ids": [
+            646,
+            220277,
+            226253
+          ],
+          "found_in_dict_n": 6,
+          "missing_ids": [
+            6719,
+            228232
+          ],
+          "extra_mapped_not_in_dict": [
+            220277
+          ],
+          "status": "BOTH",
+          "missing_with_labels": [
+            [
+              6719,
+              "SpO2-L",
+              "chartevents"
+            ],
+            [
+              228232,
+              "PAR-Oxygen saturation",
+              "chartevents"
+            ]
+          ]
+        },
+        "hirid": {
+          "mapped_ids": [
+            4000,
+            8280
+          ],
+          "found_in_dict_n": 4,
+          "missing_ids": [
+            4200,
+            20000800
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              4200,
+              "Mixed venous oxygen saturation",
+              "Observation"
+            ],
+            [
+              20000800,
+              "Oxygen saturation in Arterial blood",
+              "Observation"
+            ]
+          ]
+        },
+        "sic": {
+          "mapped_ids": [
+            710
+          ],
+          "found_in_dict_n": 2,
+          "missing_ids": [
+            708
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              708,
+              "HeartRateSPO2",
+              "data_float_h"
+            ]
+          ]
+        }
+      }
+    },
+    "fio2": {
+      "description": "fraction of inspired oxygen",
+      "category": "blood gas",
+      "per_db": {
+        "miiv": {
+          "mapped_ids": [
+            50816,
+            223835
+          ],
+          "found_in_dict_n": 7,
+          "missing_ids": [
+            226754,
+            227009,
+            227010,
+            229238,
+            229239,
+            229280,
+            229841
+          ],
+          "extra_mapped_not_in_dict": [
+            50816,
+            223835
+          ],
+          "status": "BOTH",
+          "missing_with_labels": [
+            [
+              226754,
+              "FiO2ApacheIIValue",
+              "chartevents"
+            ],
+            [
+              227009,
+              "FiO2_ApacheIV_old",
+              "chartevents"
+            ],
+            [
+              227010,
+              "FiO2_ApacheIV",
+              "chartevents"
+            ],
+            [
+              229238,
+              "FiO2 Challenge",
+              "chartevents"
+            ],
+            [
+              229239,
+              "FiO2 Challenge Result",
+              "chartevents"
+            ],
+            [
+              229280,
+              "FiO2 (ECMO)",
+              "chartevents"
+            ],
+            [
+              229841,
+              "FiO2 (CH)",
+              "chartevents"
+            ]
+          ]
+        },
+        "mimic": {
+          "mapped_ids": [
+            3420,
+            50816,
+            223835
+          ],
+          "found_in_dict_n": 22,
+          "missing_ids": [
+            189,
+            190,
+            191,
+            727,
+            1040,
+            1206,
+            1863,
+            2518,
+            2981,
+            3422,
+            5955,
+            7018,
+            7041,
+            7570,
+            226754,
+            227009,
+            227010
+          ],
+          "extra_mapped_not_in_dict": [
+            50816,
+            223835
+          ],
+          "status": "BOTH",
+          "missing_with_labels": [
+            [
+              1040,
+              "BIpap FIO2",
+              "chartevents"
+            ],
+            [
+              1206,
+              "HFO FIO2:",
+              "chartevents"
+            ],
+            [
+              189,
+              "FiO2 (Analyzed)",
+              "chartevents"
+            ],
+            [
+              190,
+              "FiO2 Set",
+              "chartevents"
+            ],
+            [
+              191,
+              "FiO2/O2 Delivered",
+              "chartevents"
+            ],
+            [
+              727,
+              "Vision FiO2",
+              "chartevents"
+            ],
+            [
+              3422,
+              "FIO2 [Meas]",
+              "chartevents"
+            ],
+            [
+              1863,
+              "HFO-FiO2",
+              "chartevents"
+            ],
+            [
+              5955,
+              "Analyzed INOV FiO2",
+              "chartevents"
+            ],
+            [
+              2518,
+              "HFO- FIO2",
+              "chartevents"
+            ],
+            [
+              2981,
+              "FiO2",
+              "chartevents"
+            ],
+            [
+              7018,
+              "ecmo fio2",
+              "chartevents"
+            ],
+            [
+              7041,
+              "vapotherm fio2",
+              "chartevents"
+            ],
+            [
+              7570,
+              "FIO2 SET",
+              "chartevents"
+            ],
+            [
+              227009,
+              "FiO2_ApacheIV_old",
+              "chartevents"
+            ],
+            [
+              227010,
+              "FiO2_ApacheIV",
+              "chartevents"
+            ],
+            [
+              226754,
+              "FiO2ApacheIIValue",
+              "chartevents"
+            ]
+          ]
+        },
+        "hirid": {
+          "mapped_ids": [
+            2010
+          ],
+          "found_in_dict_n": 0,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [
+            2010
+          ],
+          "status": "EXTRA"
+        },
+        "sic": {
+          "mapped_ids": [
+            2283
+          ],
+          "found_in_dict_n": 4,
+          "missing_ids": [
+            684,
+            714,
+            727
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              684,
+              "FiO2 (BGA)",
+              "data_float_h"
+            ],
+            [
+              714,
+              "FIO2",
+              "data_float_h"
+            ],
+            [
+              727,
+              "FIO2",
+              "data_float_h"
+            ]
+          ]
+        }
+      }
+    },
+    "peep": {
+      "description": "Positive End Expiratory Pressure",
+      "category": "ventilator",
+      "per_db": {
+        "miiv": {
+          "mapped_ids": [
+            220339,
+            224700
+          ],
+          "found_in_dict_n": 3,
+          "missing_ids": [
+            224699
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              224699,
+              "ZAuto Peep Level",
+              "chartevents"
+            ]
+          ]
+        },
+        "mimic": {
+          "mapped_ids": [
+            535,
+            543,
+            220339,
+            224700
+          ],
+          "found_in_dict_n": 27,
+          "missing_ids": [
+            60,
+            437,
+            505,
+            506,
+            686,
+            1096,
+            1227,
+            5964,
+            6349,
+            6350,
+            6489,
+            6601,
+            6859,
+            6889,
+            6924,
+            6943,
+            6985,
+            7534,
+            7802,
+            7803,
+            8053,
+            8345,
+            8357,
+            224699
+          ],
+          "extra_mapped_not_in_dict": [
+            535,
+            543
+          ],
+          "status": "BOTH",
+          "missing_with_labels": [
+            [
+              1096,
+              "Auto-PEEP level",
+              "chartevents"
+            ],
+            [
+              505,
+              "PEEP",
+              "chartevents"
+            ],
+            [
+              506,
+              "PEEP Set",
+              "chartevents"
+            ],
+            [
+              60,
+              "Auto-PEEP Level",
+              "chartevents"
+            ],
+            [
+              437,
+              "Low Peep",
+              "chartevents"
+            ],
+            [
+              8053,
+              "SIGH PEEP LEVEL",
+              "chartevents"
+            ],
+            [
+              1227,
+              "autopeep",
+              "chartevents"
+            ],
+            [
+              686,
+              "Total PEEP Level",
+              "chartevents"
+            ],
+            [
+              5964,
+              "Autopeep",
+              "chartevents"
+            ],
+            [
+              8345,
+              "Sigh peep level",
+              "chartevents"
+            ],
+            [
+              8357,
+              "Sigh Peep",
+              "chartevents"
+            ],
+            [
+              6349,
+              "AUTOPeeP",
+              "chartevents"
+            ],
+            [
+              6350,
+              "total PeeP",
+              "chartevents"
+            ],
+            [
+              6985,
+              "Sigh PEEP level",
+              "chartevents"
+            ],
+            [
+              7534,
+              "Intrinsic peep",
+              "chartevents"
+            ],
+            [
+              7802,
+              "high peep",
+              "chartevents"
+            ],
+            [
+              7803,
+              "low peep",
+              "chartevents"
+            ],
+            [
+              6489,
+              "auto-peep",
+              "chartevents"
+            ],
+            [
+              6601,
+              "Auto PeeP",
+              "chartevents"
+            ],
+            [
+              6859,
+              "Insp press mius PEEP",
+              "chartevents"
+            ],
+            [
+              6889,
+              "PEEP Sigh level",
+              "chartevents"
+            ],
+            [
+              6924,
+              "MEASURED PEEP",
+              "chartevents"
+            ],
+            [
+              6943,
+              "LOW PEEP",
+              "chartevents"
+            ],
+            [
+              224699,
+              "ZAuto Peep Level",
+              "chartevents"
+            ]
+          ]
+        },
+        "hirid": {
+          "mapped_ids": [
+            2600,
+            2610
+          ],
+          "found_in_dict_n": 2,
+          "missing_ids": [],
+          "extra_mapped_not_in_dict": [],
+          "status": "OK"
+        },
+        "sic": {
+          "mapped_ids": [
+            2278
+          ],
+          "found_in_dict_n": 3,
+          "missing_ids": [
+            711,
+            3040
+          ],
+          "extra_mapped_not_in_dict": [],
+          "status": "MISSING",
+          "missing_with_labels": [
+            [
+              711,
+              "PEEP",
+              "data_float_h"
+            ],
+            [
+              3040,
+              "PressureOverPeep",
+              "data_float_h"
+            ]
+          ]
+        }
+      }
+    }
+  },
+  "summary_counts": {
+    "OK": 7,
+    "MISSING": 19,
+    "EXTRA": 6,
+    "BOTH": 8,
+    "col_based_skip": 0,
+    "not_mapped": 0,
+    "no_ids_in_mapping": 0
+  }
+}

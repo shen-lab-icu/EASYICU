@@ -1,0 +1,283 @@
+{
+  "_metadata": {
+    "generated_at": "2026-05-27T15:16:32",
+    "purpose": "Comprehensive CVP itemid audit \u2014 find ALL source tables/items across 6 DBs",
+    "synonym_pattern": "cvp|central\\s*venous|c\\.?v\\.?p\\.?|zentral.*ven\u00f6s|zentralven\u00f6s|zvd|centraal.*veneuze|centraalvenuze|cvd"
+  },
+  "miiv_d_items": [
+    {
+      "ITEMID": 220072,
+      "LABEL": "Central Venous Pressure Alarm - High",
+      "LINKSTO": "chartevents",
+      "UNITNAME": "mmHg",
+      "PARAM_TYPE": "Numeric"
+    },
+    {
+      "ITEMID": 220073,
+      "LABEL": "Central Venous Pressure  Alarm - Low",
+      "LINKSTO": "chartevents",
+      "UNITNAME": "mmHg",
+      "PARAM_TYPE": "Numeric"
+    },
+    {
+      "ITEMID": 220074,
+      "LABEL": "Central Venous Pressure",
+      "LINKSTO": "chartevents",
+      "UNITNAME": "mmHg",
+      "PARAM_TYPE": "Numeric"
+    },
+    {
+      "ITEMID": 226541,
+      "LABEL": "ScvO2 Central Venous O2% Sat",
+      "LINKSTO": "chartevents",
+      "UNITNAME": null,
+      "PARAM_TYPE": "Numeric"
+    },
+    {
+      "ITEMID": 227685,
+      "LABEL": "ZCentral Venous O2% Sat",
+      "LINKSTO": "chartevents",
+      "UNITNAME": null,
+      "PARAM_TYPE": "Numeric"
+    },
+    {
+      "ITEMID": 227686,
+      "LABEL": "Central Venous O2% Sat",
+      "LINKSTO": "chartevents",
+      "UNITNAME": "%",
+      "PARAM_TYPE": "Numeric"
+    }
+  ],
+  "mimic_iii_d_items": [
+    {
+      "ITEMID": 113,
+      "LABEL": "CVP",
+      "DBSOURCE": "carevue",
+      "LINKSTO": "chartevents",
+      "UNITNAME": null
+    },
+    {
+      "ITEMID": 1103,
+      "LABEL": "cvp",
+      "DBSOURCE": "carevue",
+      "LINKSTO": "chartevents",
+      "UNITNAME": null
+    },
+    {
+      "ITEMID": 3345,
+      "LABEL": "CVP Alarm [Low]",
+      "DBSOURCE": "carevue",
+      "LINKSTO": "chartevents",
+      "UNITNAME": null
+    },
+    {
+      "ITEMID": 5814,
+      "LABEL": "CVP Alarm [Low]",
+      "DBSOURCE": "carevue",
+      "LINKSTO": "chartevents",
+      "UNITNAME": null
+    },
+    {
+      "ITEMID": 8511,
+      "LABEL": "CVP Alarm [High]",
+      "DBSOURCE": "carevue",
+      "LINKSTO": "chartevents",
+      "UNITNAME": null
+    },
+    {
+      "ITEMID": 8548,
+      "LABEL": "CVP Alarm [High]",
+      "DBSOURCE": "carevue",
+      "LINKSTO": "chartevents",
+      "UNITNAME": null
+    },
+    {
+      "ITEMID": 220072,
+      "LABEL": "Central Venous Pressure Alarm - High",
+      "DBSOURCE": "metavision",
+      "LINKSTO": "chartevents",
+      "UNITNAME": "mmHg"
+    },
+    {
+      "ITEMID": 220073,
+      "LABEL": "Central Venous Pressure  Alarm - Low",
+      "DBSOURCE": "metavision",
+      "LINKSTO": "chartevents",
+      "UNITNAME": "mmHg"
+    },
+    {
+      "ITEMID": 220074,
+      "LABEL": "Central Venous Pressure",
+      "DBSOURCE": "metavision",
+      "LINKSTO": "chartevents",
+      "UNITNAME": "mmHg"
+    },
+    {
+      "ITEMID": 226541,
+      "LABEL": "ScvO2 Central Venous O2% Sat",
+      "DBSOURCE": "metavision",
+      "LINKSTO": "chartevents",
+      "UNITNAME": null
+    },
+    {
+      "ITEMID": 227685,
+      "LABEL": "ZCentral Venous O2% Sat",
+      "DBSOURCE": "metavision",
+      "LINKSTO": "chartevents",
+      "UNITNAME": null
+    },
+    {
+      "ITEMID": 227686,
+      "LABEL": "Central Venous O2% Sat",
+      "DBSOURCE": "metavision",
+      "LINKSTO": "chartevents",
+      "UNITNAME": "%"
+    }
+  ],
+  "eicu_all_tables": {
+    "vitalPeriodic_columns": [
+      "cvp"
+    ],
+    "vitalAperiodic_columns": [],
+    "nurseCharting_cells": [
+      [
+        "Other Vital Signs and Infusions",
+        "CVP (mmHg)",
+        "Value"
+      ],
+      [
+        "Vital Signs",
+        "CVP",
+        "CVP"
+      ]
+    ]
+  },
+  "aumc_all_tables": {
+    "numericitems": [
+      [
+        6655,
+        "CVD"
+      ],
+      [
+        6707,
+        "End tidal CO2 concentratie"
+      ],
+      [
+        7668,
+        "Veneuze druk braun"
+      ],
+      [
+        12279,
+        "O2 concentratie"
+      ],
+      [
+        12282,
+        "O2 concentratie (Set)"
+      ],
+      [
+        12329,
+        "O2 concentratie (Set) (2)"
+      ],
+      [
+        12356,
+        "End tidal CO2 concentratie (2)"
+      ],
+      [
+        14837,
+        "MFT_Veneuze druk"
+      ],
+      [
+        14843,
+        "MFT_Veneuze bovengrens"
+      ],
+      [
+        14844,
+        "MFT_Veneuze ondergrens"
+      ],
+      [
+        16443,
+        "Veneuze lijn KlinischEventID"
+      ],
+      [
+        16444,
+        "Veneuze lijn lijn PendingOrderID"
+      ],
+      [
+        16447,
+        "Veneuze lijn ProcessID"
+      ],
+      [
+        18280,
+        "Cumulatief T-cellen/KG (Tcellen concentraat)"
+      ],
+      [
+        18535,
+        "T-cel % (Tcellen concentraat)"
+      ],
+      [
+        18536,
+        "T-cel kg (Tcellen concentraat)"
+      ],
+      [
+        18557,
+        "Tot. WBC*10^8 (Tcellen concentraat)"
+      ],
+      [
+        20658,
+        "ECMO - Veneuze saturatie"
+      ],
+      [
+        20926,
+        "CVDm-gekoppeld"
+      ]
+    ],
+    "listitems": [],
+    "processitems": []
+  },
+  "hirid_variable_reference": [
+    {
+      "Source Table": "Observation",
+      "ID": 700,
+      "Variable Name": "Central venous pressure",
+      "Unit": "mmHg",
+      "Additional information": null
+    },
+    {
+      "Source Table": "Observation",
+      "ID": 15001441,
+      "Variable Name": "Central venous pressure",
+      "Unit": "mmHg",
+      "Additional information": null
+    },
+    {
+      "Source Table": "Observation",
+      "ID": 960,
+      "Variable Name": "Central venous pressure",
+      "Unit": "mmHg",
+      "Additional information": null
+    },
+    {
+      "Source Table": "Observation",
+      "ID": 20001000,
+      "Variable Name": "Central venous oxygenation saturation",
+      "Unit": "%",
+      "Additional information": null
+    },
+    {
+      "Source Table": "Observation",
+      "ID": 24000737,
+      "Variable Name": "Central venous oxygenation saturation",
+      "Unit": "%",
+      "Additional information": null
+    }
+  ],
+  "sic_d_references": [
+    {
+      "ReferenceGlobalID": 2018,
+      "ReferenceValue": "CentralVenousPressure",
+      "ReferenceName": "SignalFloat",
+      "ReferenceDescription": null,
+      "ReferenceUnit": "mmHg"
+    }
+  ]
+}
