@@ -13,6 +13,7 @@ REQUEST_TIMEOUT="300"
 MAX_TOTAL_STEPS=""
 DRY_RUN=0
 ALLOW_DIRTY=0
+FORCE_WRITER_PROBE=0
 
 usage() {
   cat <<'EOF'
@@ -26,6 +27,7 @@ Options:
   --env-file PATH          Local LLM env file. Default: /tmp/easyicu_local_llm.env.
   --request-timeout SEC    Per-request timeout for the bench runner.
   --max-total-steps N      Optional ResearchAgentPipeline max_total_steps.
+  --force-writer-probe     Diagnostic only: force writer output past failed execution gate.
   --dry-run                Validate bootstrap and write a dry-run manifest only.
   --allow-dirty            Permit a dirty git working tree.
   -h, --help               Show this help.
@@ -41,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --env-file) ENV_FILE="$2"; shift 2 ;;
     --request-timeout) REQUEST_TIMEOUT="$2"; shift 2 ;;
     --max-total-steps) MAX_TOTAL_STEPS="$2"; shift 2 ;;
+    --force-writer-probe) FORCE_WRITER_PROBE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -160,10 +163,14 @@ CMD=(
 if [[ -n "${MAX_TOTAL_STEPS}" ]]; then
   CMD+=(--max-total-steps "${MAX_TOTAL_STEPS}")
 fi
+if [[ "${FORCE_WRITER_PROBE}" -eq 1 ]]; then
+  CMD+=(--force-writer-probe)
+fi
 
 if [[ "${DRY_RUN}" -eq 1 ]]; then
   OUT_ROOT="${OUT_ROOT}" CASE_NAME="${CASE_NAME}" BACKEND="${BACKEND}" MODEL="${MODEL}" \
   REQUEST_TIMEOUT="${REQUEST_TIMEOUT}" MAX_TOTAL_STEPS="${MAX_TOTAL_STEPS}" \
+  FORCE_WRITER_PROBE="${FORCE_WRITER_PROBE}" \
   COMMAND_PREVIEW="${CMD[*]}" "${PYTHON_BIN}" - <<'PY'
 import json
 import os
@@ -181,6 +188,7 @@ payload = {
     "model": os.environ["MODEL"],
     "request_timeout": os.environ["REQUEST_TIMEOUT"],
     "max_total_steps": os.environ.get("MAX_TOTAL_STEPS") or None,
+    "force_writer_probe": os.environ.get("FORCE_WRITER_PROBE") == "1",
     "command_preview": os.environ["COMMAND_PREVIEW"],
     "concept_dict_fingerprint": compute_concept_dict_fingerprint().to_dict(),
     "artifacts_expected": [

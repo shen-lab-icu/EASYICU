@@ -708,6 +708,8 @@ def finalise_success(
         run_dir=run_dir,
         manuscript_path=write_result.bound_path,
         stop_after_analysis=stop_after_analysis,
+        writer_probe_mode=write_result.writer_probe_mode,
+        writer_probe_failed_steps=write_result.writer_probe_failed_steps,
     )
 
     report_path.write_text(
@@ -765,6 +767,8 @@ def finalise_success(
         side_findings_path=str(side_findings_path.relative_to(run_dir)),
         side_findings_sha=side_findings_sha,
         side_findings_count=len(side_findings),
+        writer_probe_mode=write_result.writer_probe_mode,
+        writer_probe_failed_steps=list(write_result.writer_probe_failed_steps),
         report_path=str(report_path.relative_to(run_dir)),
         manuscript_path=str(write_result.bound_path.relative_to(run_dir)),
         audit_log_path=audit_log_rel,

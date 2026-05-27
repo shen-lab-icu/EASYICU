@@ -312,6 +312,8 @@ def _compute_readiness_gates(
     run_dir: Path,
     manuscript_path: Path,
     stop_after_analysis: bool,
+    writer_probe_mode: bool = False,
+    writer_probe_failed_steps: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     execution = execution_gate_status(plan=plan, per_step_records=per_step_records)
     manuscript_text = ""
@@ -364,7 +366,8 @@ def _compute_readiness_gates(
         }
     ]
     manuscript_generated = (
-        manuscript_path.exists()
+        not writer_probe_mode
+        and manuscript_path.exists()
         and "Manuscript scaffold not generated" not in manuscript_text[:300]
         and not stop_after_analysis
     )
@@ -387,6 +390,8 @@ def _compute_readiness_gates(
         "publication_ready": manuscript_ready
         and publication["publication_figure_bundle_ready"],
         "manuscript_generated": manuscript_generated,
+        "writer_probe_mode": bool(writer_probe_mode),
+        "writer_probe_failed_steps": list(writer_probe_failed_steps or []),
         "missing_evidence_count": missing_evidence_count,
         "numeric_error_count": len(numeric_errors),
         "evidence_error_count": len(evidence_errors),
@@ -418,6 +423,8 @@ def write_readiness_artifacts(
     run_dir: Path,
     manuscript_path: Path,
     stop_after_analysis: bool,
+    writer_probe_mode: bool = False,
+    writer_probe_failed_steps: Optional[Sequence[str]] = None,
 ) -> tuple[Dict[str, Any], Dict[str, str]]:
     gates = _compute_readiness_gates(
         plan=plan,
@@ -427,6 +434,8 @@ def write_readiness_artifacts(
         run_dir=run_dir,
         manuscript_path=manuscript_path,
         stop_after_analysis=stop_after_analysis,
+        writer_probe_mode=writer_probe_mode,
+        writer_probe_failed_steps=writer_probe_failed_steps,
     )
     status = (
         "publication_ready"
@@ -445,6 +454,8 @@ def write_readiness_artifacts(
         "schema_version": "easyicu.run_status/1",
         "status": status,
         "strict_fail_closed": True,
+        "writer_probe_mode": bool(writer_probe_mode),
+        "writer_probe_failed_steps": list(writer_probe_failed_steps or []),
         "research_question": context.research_question,
         "gates": gates,
         "canonical_outputs": {},

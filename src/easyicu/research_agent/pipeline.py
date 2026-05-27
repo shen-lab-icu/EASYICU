@@ -1394,6 +1394,7 @@ class ResearchAgentPipeline:
         manuscript_authors: Optional[Sequence[str]],
         run_language: str,
         emit_progress: Callable[..., None],
+        force_writer_probe: bool = False,
     ) -> _WritePhaseResult:
         """Delegate to :mod:`pipeline_write`."""
         from .pipeline_write import run_write_phase
@@ -1409,6 +1410,7 @@ class ResearchAgentPipeline:
             manuscript_authors=manuscript_authors,
             run_language=run_language,
             emit_progress=emit_progress,
+            force_writer_probe=force_writer_probe,
         )
 
     def _finalise_success(
@@ -1586,6 +1588,7 @@ class ResearchAgentPipeline:
         experiment_spec: Optional[Union[ExperimentSpec, Dict[str, Any]]] = None,
         source_files: Optional[Sequence[Any]] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        force_writer_probe: bool = False,
         _use_graph: bool = False,
     ) -> PipelineResult:
         """Run the explicit Plan → Execute → Write phases for one cohort.
@@ -1811,6 +1814,7 @@ class ResearchAgentPipeline:
                 manuscript_authors=manuscript_authors,
                 run_language=run_language,
                 emit_progress=_emit_progress,
+                force_writer_probe=force_writer_probe,
             )
 
         def _finalise_invoker(plan_result, execute_result, write_result):
