@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .analysis_types import infer_analysis_type, planner_analysis_type_guide
-from .cohort_schema import known_concept_ids
+from .cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
 from .icu_rules import VariableKind, default_time_windows
 from .llm import LLMClient, LLMMessage
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
@@ -100,6 +100,54 @@ _CODER_GUIDE = _PROMPT_PACK["coder"]
 _REPLANNER_GUIDE = _PROMPT_PACK["replanner"]
 _WRITER_GUIDE = _PROMPT_PACK["writer"]
 
+PLANNER_MAX_RETRIES = 4
+
+_ICU_RULE_TO_CTAS_HINT = {
+    AggregationRule.FIRST_VALUE.value: (
+        "first",
+        'ICU rule label "first_value" maps to CTAS aggregation "first".',
+    ),
+    AggregationRule.MAX_LAST.value: (
+        "max",
+        'ICU rule label "max_or_last" maps to CTAS aggregation "max" or '
+        '"last"; prefer "max" for acuity scores.',
+    ),
+    AggregationRule.MEAN_MEDIAN.value: (
+        "median",
+        'ICU rule label "mean_or_median" maps to CTAS aggregation "mean" or '
+        '"median"; prefer "median" for robustness checks.',
+    ),
+    AggregationRule.MEDIAN_ONLY.value: (
+        "median",
+        'ICU rule label "median_only" maps to CTAS aggregation "median".',
+    ),
+    AggregationRule.SUM.value: (
+        "sum",
+        'ICU rule label "sum" maps to CTAS aggregation "sum".',
+    ),
+    AggregationRule.ANY.value: (
+        "any",
+        'ICU rule label "any" maps to CTAS aggregation "any".',
+    ),
+    AggregationRule.NONE.value: (
+        "first",
+        'ICU rule label "none" is not a CTAS aggregation; use an explicit '
+        'window and choose "first" only when filtering a point-in-time value.',
+    ),
+}
+
+
+def _ctas_aggregation_hint(rule: Optional[AggregationRule]) -> str:
+    """Return a CTAS-compatible aggregation hint for variable context."""
+
+    if rule is None:
+        return "any"
+    ctas_value, note = _ICU_RULE_TO_CTAS_HINT.get(
+        rule.value,
+        ("any", f'Unrecognised ICU rule label "{rule.value}"; choose a CTAS enum.'),
+    )
+    return f"{ctas_value} (icu_rule={rule.value}; {note})"
+
 
 def _format_variable(v: ConceptDescriptor) -> str:
     miss = ""
@@ -113,7 +161,7 @@ def _format_variable(v: ConceptDescriptor) -> str:
     unit = f" unit={v.unit}" if v.unit else ""
     return (
         f"- {v.name} | role={v.role.value} dtype={v.dtype}{unit}{rng}"
-        f" agg_default={v.aggregation_default.value if v.aggregation_default else 'any'}"
+        f" agg_default={_ctas_aggregation_hint(v.aggregation_default)}"
         f"{miss}{pit}"
     )
 
@@ -211,6 +259,36 @@ def _format_concept_id_allowlist() -> str:
     return "\n".join(lines)
 
 
+def _format_ctas_schema_constraints() -> str:
+    """Render CTAS enum and cross-field constraints for planner prompts."""
+
+    enum_values = ", ".join(f'"{value}"' for value in ALLOWED_CTAS_AGGREGATIONS)
+    return (
+        "CTAS SCHEMA CONSTRAINTS — you MUST satisfy ALL of these in every "
+        "ConceptPredicate, including those inside "
+        "robustness_specs[*].cohort_override:\n\n"
+        "1. aggregation MUST be exactly one of these 10 values (case-sensitive, "
+        f"no synonyms): {enum_values}. Do NOT use ICU rule labels or synonyms "
+        'such as "first_value", "max_or_last", "mean_or_median", '
+        '"mean_median", "median_only", "latest", "most_recent", '
+        '"earliest", "average", or "total" as aggregation values; these '
+        "are not CTAS enum values and will be rejected.\n\n"
+        "2. time_window.end_offset_hours MUST be strictly greater than "
+        "time_window.start_offset_hours. Zero-width windows (end == start) "
+        "are invalid. If you want a single instant, use a small window like "
+        "[0h, 1h] instead.\n\n"
+        "3. aggregation \"any\" / \"all\" can only be paired with op in "
+        "{\"==\", \"!=\", \"missing\", \"not_missing\"}; they yield "
+        "booleans, not numeric thresholds.\n\n"
+        "4. If the ResearchContext shows an ICU rule label in an "
+        "`agg_default=... (icu_rule=...)` annotation, translate it before "
+        "writing CTAS JSON: first_value -> \"first\"; max_or_last -> "
+        '"max" or "last" (prefer "max" for acuity scores); '
+        "mean_or_median / mean_median -> \"mean\" or \"median\" (prefer "
+        '"median" for robustness checks); median_only -> "median".'
+    )
+
+
 def _build_planner_user_prompt(context: ResearchContext) -> str:
     """Build the planner user prompt with runtime concept-id grounding."""
 
@@ -242,6 +320,8 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "self-contained clustering step; do not create later mortality-by-cluster "
         "steps that require cluster labels from prior outputs.\n\n"
         + _format_concept_id_allowlist()
+        + "\n\n"
+        + _format_ctas_schema_constraints()
         + "\n\n"
         "Every cohort/exposure/outcome concept used to define the "
         "analysis population must be represented as a typed cohort "
@@ -354,7 +434,7 @@ class PlannerAgent:
             messages,
             parser=lambda raw: self._parse(raw, context),
             role="planner",
-            max_retries=2,
+            max_retries=PLANNER_MAX_RETRIES,
             max_tokens=4096,
             temperature=0.2,
             format_reminder=(
