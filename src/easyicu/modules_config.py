@@ -128,7 +128,7 @@ MODULES: List[FeatureModule] = [
     FeatureModule(
         name="vital",
         ricu_file="{db}_vital.csv",
-        concepts=["dbp", "etco2", "hr", "map", "sbp", "temp"],
+        concepts=["cvp", "dbp", "etco2", "hr", "map", "sbp", "temp"],
         description="Bedside vitals",
     ),
     FeatureModule(

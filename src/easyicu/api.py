@@ -3268,7 +3268,7 @@ def get_smart_parallel_config(
 
 # 模块定义（与 webapp CONCEPT_GROUPS_INTERNAL 一致，19 个模块 167 个概念）
 EXTRACT_MODULES: Dict[str, List[str]] = {
-    'vitals':        ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp'],
+    'vitals':        ['hr', 'map', 'sbp', 'dbp', 'temp', 'spo2', 'resp', 'cvp'],
     'demographics':  ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
     'outcome':       ['death', 'los_icu', 'los_hosp'],
     'chemistry':     ['alb', 'alp', 'alt', 'ast', 'bicar', 'bili', 'bili_dir', 'bun',
