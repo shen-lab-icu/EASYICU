@@ -46,6 +46,9 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
     assert manifest["used_mock_llm"] is True
     assert manifest["prompt_pack_version"].startswith("easyicu-research-agent-prompts/")
     assert manifest["prompt_pack_files"]
+    assert manifest["concept_dict_path"] == "easyicu/data/concept-dict.json"
+    assert len(manifest["concept_dict_sha"]) == 64
+    assert set(manifest["concept_dict_sha"]) <= set("0123456789abcdef")
     kinds = {e["kind"] for e in manifest["evidence"]}
     assert {"code", "log", "table", "figure", "statistic"} <= kinds, (
         f"evidence kinds incomplete: {kinds}"
@@ -143,7 +146,13 @@ def test_pipeline_stops_when_hypothesis_blueprint_is_blocked(
         BlockedBlueprintAgent,
     )
 
-    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+        submission_profile_name="npj_dm",
+        submission_profile_version="20260527",
+        submission_profile_locked_at="2026-05-27T00:00:00Z",
+    )
     result = pipeline.run(
         question="Describe admission SOFA-2 signal in this ICU cohort.",
         cohort=cohort_path,
@@ -153,6 +162,9 @@ def test_pipeline_stops_when_hypothesis_blueprint_is_blocked(
 
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
     assert manifest["notes"] == "aborted: hypothesis_blueprint_blocked"
+    assert manifest["submission_profile_name"] == "npj_dm"
+    assert manifest["submission_profile_version"] == "20260527"
+    assert manifest["submission_profile_locked_at"] == "2026-05-27T00:00:00Z"
     assert result.plan_path == ""
     assert any(
         finding["validator"] == "hypothesis_blueprint"

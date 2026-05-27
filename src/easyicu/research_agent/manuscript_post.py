@@ -32,6 +32,11 @@ from .evidence import (
     _NUMERIC_IN_PROSE_RE,
 )
 from .schema import ResearchContext
+from .side_findings import (
+    SideFinding,
+    annotate_side_finding_leaks,
+    side_finding_leaks,
+)
 
 
 _UNRESOLVED_EVIDENCE_PLACEHOLDER_RE = re.compile(
@@ -39,6 +44,23 @@ _UNRESOLVED_EVIDENCE_PLACEHOLDER_RE = re.compile(
 )
 
 _TBD_RE = re.compile(r"\[(?:TBD|TODO|TK)\]|\bTBD\b", re.IGNORECASE)
+
+_FORBIDDEN_INTERPRETIVE_TERMS = (
+    "surprise",
+    "surprising",
+    "surprisingly",
+    "unexpected",
+    "unexpectedly",
+    "interestingly",
+    "notably",
+    "striking",
+    "strikingly",
+)
+
+_FORBIDDEN_INTERPRETIVE_RE = re.compile(
+    r"\b(" + "|".join(re.escape(t) for t in _FORBIDDEN_INTERPRETIVE_TERMS) + r")\b",
+    re.IGNORECASE,
+)
 
 
 def _first_resolvable_name(
@@ -242,15 +264,18 @@ def bind_numeric_values(
     binding_map: Dict[str, NumericClaim] = {}
     untraced: List[str] = []
     used_ids: Dict[str, str] = {}  # source_field -> footnote_id
+    display_values: Dict[str, str] = {}
 
-    def _footnote_id_for(claim: NumericClaim) -> str:
+    def _footnote_id_for(claim: NumericClaim, *, display_value: str) -> str:
         existing = used_ids.get(claim.source_field)
         if existing is not None:
+            display_values.setdefault(existing, display_value)
             return existing
         idx = len(used_ids) + 1
         fid = f"{footnote_prefix}_{idx}"
         used_ids[claim.source_field] = fid
         binding_map[fid] = claim
+        display_values[fid] = display_value
         return fid
 
     out_parts: List[str] = []
@@ -267,7 +292,7 @@ def bind_numeric_values(
             if mode is EvidenceEnforcementMode.SOFT:
                 out_parts.append(f" <!-- UNTRACED:{value} -->")
         else:
-            fid = _footnote_id_for(claim)
+            fid = _footnote_id_for(claim, display_value=value)
             out_parts.append(f"[^{fid}]")
         cursor = end
     out_parts.append(manuscript[cursor:])
@@ -276,12 +301,31 @@ def bind_numeric_values(
     if binding_map:
         defs = ["\n"]
         for fid, claim in binding_map.items():
-            defs.append(
-                f"[^{fid}]: value={claim.value}; "
-                f"step={claim.step_id}; "
-                f"field={claim.source_field}; "
-                f"evidence={claim.evidence_id}\n"
-            )
+            fields = [
+                f"value={claim.value}",
+                f"step={claim.step_id}",
+                f"field={claim.source_field}",
+                f"evidence={claim.evidence_id}",
+            ]
+            display_value = display_values.get(fid)
+            if display_value and display_value != claim.value:
+                fields.extend(
+                    [
+                        f"display={display_value}",
+                        "match=rounded_or_transformed",
+                    ]
+                )
+            if claim.is_derived:
+                fields.append(f"formula={claim.formula}")
+                if claim.explanation:
+                    fields.append(f"explanation={claim.explanation}")
+                if claim.derived_from:
+                    sources = ", ".join(
+                        f"{src_step}.{src_field}"
+                        for src_step, src_field in claim.derived_from
+                    )
+                    fields.append(f"derived_from={sources}")
+            defs.append(f"[^{fid}]: " + "; ".join(fields) + "\n")
         bound = bound.rstrip() + "\n" + "".join(defs)
 
     if mode is EvidenceEnforcementMode.STRICT and untraced:
@@ -295,10 +339,48 @@ def bind_numeric_values(
     return bound, binding_map, untraced
 
 
+def enforce_writer_claim_language(
+    manuscript: str,
+    *,
+    enforcement_mode: EvidenceEnforcementMode,
+    side_findings: Sequence[SideFinding] | None = None,
+) -> Tuple[str, Dict[str, List[str]]]:
+    """Block post-hoc rhetoric and side-finding leakage before final binding."""
+
+    detail: Dict[str, List[str]] = {}
+    forbidden_terms = sorted(
+        {m.group(1).lower() for m in _FORBIDDEN_INTERPRETIVE_RE.finditer(manuscript or "")}
+    )
+    if forbidden_terms:
+        detail["forbidden_terms"] = forbidden_terms
+
+    leaks = side_finding_leaks(manuscript, side_findings or [])
+    if leaks:
+        detail["side_finding_leak"] = [finding.title or finding.finding_id for finding in leaks]
+
+    if enforcement_mode is EvidenceEnforcementMode.STRICT and detail:
+        raise EvidenceEnforcementError(
+            "Manuscript contains post-hoc claim language or side-finding leakage "
+            "blocked by STRICT evidence mode.",
+            detail=detail,
+        )
+
+    annotated = manuscript
+    if forbidden_terms:
+        for term in forbidden_terms:
+            marker = f"<!-- LEXICON:{term} -->"
+            if marker not in annotated:
+                annotated = annotated.rstrip() + f"\n{marker}\n"
+    if leaks:
+        annotated = annotate_side_finding_leaks(annotated, leaks)
+    return annotated, detail
+
+
 __all__ = [
     "_first_resolvable_name",
     "_repair_common_writer_placeholders",
     "_demote_unresolved_evidence_placeholders",
     "_remove_tbd_sentences",
     "bind_numeric_values",
+    "enforce_writer_claim_language",
 ]

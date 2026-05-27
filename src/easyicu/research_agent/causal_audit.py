@@ -400,7 +400,9 @@ def scan_manuscript_for_causal_language(
                     strength=strength,
                     severity=severity,
                     linked_evidence_ids=list(dict.fromkeys(linked_ids)),
-                    linked_effect_labels=list(dict.fromkeys(l for l in linked_labels if l)),
+                    linked_effect_labels=list(
+                        dict.fromkeys(label for label in linked_labels if label)
+                    ),
                 )
             )
             # Only record the strongest match per sentence; the first match

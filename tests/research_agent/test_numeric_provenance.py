@@ -145,6 +145,46 @@ def test_bind_numeric_values_handles_percent_and_rounding(ra, tmp_path: Path):
     assert "1.22" in bound
     assert len(binding_map) == 2
     assert untraced == []
+    assert "display=3.8%" in bound
+    assert "match=rounded_or_transformed" in bound
+
+
+def test_bind_numeric_values_footnote_exposes_derived_provenance(ra, tmp_path: Path):
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    store.register_numeric_claim(
+        value="1.42",
+        canonical=1.42,
+        evidence_id="evid_assoc",
+        step_id="03_assoc",
+        source_field="primary_or",
+    )
+    store.register_numeric_claim(
+        value="0.13",
+        canonical=0.13,
+        evidence_id="evid_assoc",
+        step_id="03_assoc",
+        source_field="primary_or_se",
+    )
+    claim = store.register_derived_claim(
+        name="primary_or_ci_low",
+        formula="exp(log(primary_or) - 1.96 * primary_or_se)",
+        explanation="Lower 95% CI for primary OR, log-normal approx",
+        sources={
+            "primary_or": ("03_assoc", "primary_or"),
+            "primary_or_se": ("03_assoc", "primary_or_se"),
+        },
+        evidence_id="evid_assoc",
+        step_id="03_assoc",
+    )
+    manuscript = f"The lower confidence bound was {claim.value}."
+    bound, binding_map, untraced = bind_numeric_values(manuscript, evidence=store)
+    assert len(binding_map) == 1
+    assert untraced == []
+    assert "formula=exp(log(primary_or) - 1.96 * primary_or_se)" in bound
+    assert "explanation=Lower 95% CI for primary OR, log-normal approx" in bound
+    assert "derived_from=03_assoc.primary_or, 03_assoc.primary_or_se" in bound
 
 
 def test_bind_numeric_values_strict_raises_on_untraced(ra, tmp_path: Path):

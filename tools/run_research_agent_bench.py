@@ -43,6 +43,7 @@ runs reproducible from one entrypoint.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -50,7 +51,10 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+
+if TYPE_CHECKING:
+    from easyicu.research_agent.pipeline_profiles import SubmissionProfile
 
 
 def _bootstrap_imports():
@@ -71,6 +75,7 @@ def _bootstrap_imports():
 _REQUIRED_KINDS = {"code", "log", "table", "figure", "statistic"}
 _ARM_ORDER = ("naive", "aware")
 _ARM_LABELS = {"naive": "Naive", "aware": "ICU-aware"}
+_DEFAULT_SUBMISSION_PROFILE_REF = "npj_dm/20260527"
 
 
 def _local_openai_base_url(base_url: Optional[str]) -> bool:
@@ -89,6 +94,47 @@ def _normalize_arms(arms: Optional[Sequence[str]]) -> List[str]:
     if not ordered:
         raise SystemExit("At least one benchmark arm is required.")
     return ordered
+
+
+def _resolve_submission_profile(profile_ref: Optional[str]):
+    _bootstrap_imports()
+    from easyicu.research_agent.pipeline_profiles import get_submission_profile
+
+    try:
+        return get_submission_profile(profile_ref or _DEFAULT_SUBMISSION_PROFILE_REF)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _register_case_patterns(case_name: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not case_name:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_]+", case_name):
+        raise SystemExit(
+            "--case must be a case directory name containing only letters, "
+            "numbers, and underscores"
+        )
+    _bootstrap_imports()
+    from easyicu.research_agent.cohort_schema import default_pattern_registry
+
+    module_name = f"benchmark.cases.{case_name}.register_patterns"
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        raise SystemExit(f"Unknown case {case_name!r}: {module_name} not found") from exc
+    register = getattr(module, "register_patterns", None)
+    if register is None:
+        raise SystemExit(
+            f"Case {case_name!r} must expose register_patterns()"
+        )
+    register(default_pattern_registry())
+    patterns_path = getattr(module, "COHORT_PATTERNS_PATH", None)
+    config_path = getattr(module, "CASE_CONFIG_PATH", None)
+    return {
+        "case": case_name,
+        "patterns_path": str(patterns_path) if patterns_path is not None else None,
+        "case_config_path": str(config_path) if config_path is not None else None,
+    }
 
 
 def _skipped_arm(label: str) -> Dict[str, Any]:
@@ -771,23 +817,48 @@ def _benchmark_pipeline_options(
     max_code_repair_attempts: Optional[int],
     enable_repro_envelope: bool = True,
     llm_seed: Optional[int] = None,
+    writer_digest_widened: bool = False,
+    strict_evidence: bool = False,
+    submission_profile: Optional["SubmissionProfile"] = None,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
+    if submission_profile:
+        options.update(submission_profile.pipeline_options())
     if max_total_steps is not None:
         options["max_total_steps"] = int(max_total_steps)
     if disable_replanning:
         options["enable_replanning"] = False
     if max_code_repair_attempts is not None:
         options["max_code_repair_attempts"] = int(max_code_repair_attempts)
+    if strict_evidence:
+        options["evidence_enforcement_mode"] = "strict"
     if enable_repro_envelope:
         # Default ON for bench runs so the per-call envelope
         # (temperature / requested_top_p / seed / model / prompt+response
         # SHA256) lands as reproducibility_envelope.json next to each
         # arm's run_status.json.
         options["enable_reproducibility_envelope"] = True
+    if writer_digest_widened:
+        options["writer_digest_widened"] = True
     if llm_seed is not None:
         options["llm_seed"] = int(llm_seed)
     return options
+
+
+def _enforce_submission_profile_arms(
+    arms: Sequence[str],
+    *,
+    profile: Optional["SubmissionProfile"],
+) -> List[str]:
+    selected = _normalize_arms(arms)
+    if profile is not None and selected != [profile.requires_arm]:
+        raise SystemExit(
+            "Submission profile is paper-facing and must run the full "
+            f"EasyICU workflow only: pass '--arms {profile.requires_arm}'. Use "
+            "the historical naive arm only for an explicit ablation or "
+            "reviewer-response run."
+        )
+    return selected
 
 
 def _run_suite(
@@ -803,6 +874,7 @@ def _run_suite(
     verbose: bool = True,
     request_timeout: float = 180.0,
     reuse_existing: bool = False,
+    case_registration: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     selected_arms = _normalize_arms(arms)
     llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
@@ -834,6 +906,7 @@ def _run_suite(
         "provider": provider,
         "model": model,
         "arms": selected_arms,
+        "case_registration": case_registration,
         "pipeline_options": dict(pipeline_options or {}),
         "items": [it.key for it in items],
         "scores": scores,
@@ -1003,6 +1076,50 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--writer-digest-widened",
+        action="store_true",
+        help=(
+            "Expose primary, secondary, and derived numeric claims to the "
+            "writer. Kept opt-in for compatibility; submission profile "
+            "enables it automatically."
+        ),
+    )
+    parser.add_argument(
+        "--strict-evidence",
+        action="store_true",
+        help=(
+            "Fail the run if manuscript evidence placeholders or numeric "
+            "claims cannot be bound. Submission profile enables this "
+            "automatically."
+        ),
+    )
+    parser.add_argument(
+        "--submission-profile",
+        action="store_true",
+        help=(
+            "Use paper-facing canonical options: require '--arms aware', "
+            "strict evidence, reproducibility envelope, and widened writer "
+            "digest."
+        ),
+    )
+    parser.add_argument(
+        "--profile",
+        default=_DEFAULT_SUBMISSION_PROFILE_REF,
+        help=(
+            "Versioned submission profile ref used with --submission-profile "
+            f"(default: {_DEFAULT_SUBMISSION_PROFILE_REF})."
+        ),
+    )
+    parser.add_argument(
+        "--case",
+        default=None,
+        help=(
+            "Optional case protocol directory name under benchmark/cases. "
+            "When set, case-owned cohort patterns are registered before "
+            "planning. Example: case_b_sofa2_sepsis."
+        ),
+    )
+    parser.add_argument(
         "--llm-seed",
         type=int,
         default=None,
@@ -1019,12 +1136,25 @@ def main() -> int:
         "key, question, cohort_path, target_outcome, expected_or_direction.",
     )
     args = parser.parse_args()
+    case_registration = _register_case_patterns(args.case)
+    submission_profile = (
+        _resolve_submission_profile(args.profile)
+        if bool(args.submission_profile)
+        else None
+    )
+    args.arms = _enforce_submission_profile_arms(
+        args.arms,
+        profile=submission_profile,
+    )
     pipeline_options = _benchmark_pipeline_options(
         max_total_steps=args.max_total_steps,
         disable_replanning=bool(args.disable_replanning),
         max_code_repair_attempts=args.max_code_repair_attempts,
         enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
         llm_seed=getattr(args, "llm_seed", None),
+        writer_digest_widened=bool(args.writer_digest_widened),
+        strict_evidence=bool(args.strict_evidence),
+        submission_profile=submission_profile,
     )
 
     if args.ehrflowbench_jsonl:
@@ -1084,6 +1214,7 @@ def main() -> int:
             pipeline_options=pipeline_options,
             request_timeout=float(args.request_timeout),
             reuse_existing=bool(args.reuse_existing),
+            case_registration=case_registration,
         )
         all_runs.append(payload)
         totals = payload["totals"]
@@ -1112,6 +1243,7 @@ def main() -> int:
             "bench_kind": args.bench_kind,
             "provider": args.provider,
             "arms": _normalize_arms(args.arms),
+            "case_registration": case_registration,
             "pipeline_options": pipeline_options,
             "items": [it.key for it in items],
             "runs": all_runs,

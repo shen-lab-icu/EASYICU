@@ -123,18 +123,37 @@ def test_run_execute_phase_does_not_mutate_pipeline_state():
     )
 
 
-def test_plan_and_execute_result_dataclass_shapes_match_pipeline_module():
+def test_plan_and_execute_result_dataclass_shapes_match_contracts_module():
     """Pin the two dataclasses that flow through run_execute_phase.
 
-    The function takes a ``_PlanPhaseResult`` and returns an
-    ``_ExecutePhaseResult``; both are defined in ``pipeline.py``. If
-    either shape drifts, the execute phase silently misreads its input
-    or produces a malformed handoff to the write phase.
+    The pipeline phases exchange ``_PlanPhaseResult``,
+    ``_ExecutePhaseResult`` and ``_WritePhaseResult``. They are defined in
+    ``contracts.py`` and re-exported by ``pipeline.py`` / ``pipeline_state.py``
+    for compatibility. If any shape drifts, a phase silently misreads its
+    input or produces a malformed handoff to the next phase.
     """
-    from easyicu.research_agent.pipeline import (
+    from easyicu.research_agent.contracts import (
         _PlanPhaseResult,
         _ExecutePhaseResult,
+        _WritePhaseResult,
     )
+    from easyicu.research_agent.pipeline import (
+        _PlanPhaseResult as PipelinePlanPhaseResult,
+        _ExecutePhaseResult as PipelineExecutePhaseResult,
+        _WritePhaseResult as PipelineWritePhaseResult,
+    )
+    from easyicu.research_agent.pipeline_state import (
+        PlanPhaseState,
+        ExecutePhaseState,
+        WritePhaseState,
+    )
+
+    assert PipelinePlanPhaseResult is _PlanPhaseResult
+    assert PipelineExecutePhaseResult is _ExecutePhaseResult
+    assert PipelineWritePhaseResult is _WritePhaseResult
+    assert PlanPhaseState is _PlanPhaseResult
+    assert ExecutePhaseState is _ExecutePhaseResult
+    assert WritePhaseState is _WritePhaseResult
 
     plan_fields = {f.name for f in fields(_PlanPhaseResult)}
     # Names the execute phase actually reads off plan_result, verified
@@ -170,6 +189,19 @@ def test_plan_and_execute_result_dataclass_shapes_match_pipeline_module():
     assert not missing_exec, (
         f"_ExecutePhaseResult is missing fields {missing_exec} produced "
         "by run_execute_phase / consumed by the write phase."
+    )
+
+    write_fields = {f.name for f in fields(_WritePhaseResult)}
+    required_write_fields = {
+        "literature",
+        "bound_path",
+        "manuscript_packet",
+        "manuscript_critique",
+    }
+    missing_write = required_write_fields - write_fields
+    assert not missing_write, (
+        f"_WritePhaseResult is missing fields {missing_write} produced "
+        "by the write phase / consumed by the package phase."
     )
 
 

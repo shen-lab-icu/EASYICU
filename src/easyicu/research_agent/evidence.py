@@ -175,7 +175,7 @@ _NUMERIC_IN_PROSE_RE = re.compile(
     r")"
     r"%?"                                        # optional percent suffix
     r")"
-    r"(?![A-Za-z_\d.])"                          # not followed by identifier / decimal
+    r"(?![A-Za-z_\d]|\.\d)"                       # not followed by identifier / decimal continuation
 )
 
 
@@ -194,6 +194,29 @@ class NumericClaim:
       (e.g. ``primary_or`` or ``stratified.male.auc``)
     * ``tolerance`` — relative tolerance for fuzzy matching when the
       manuscript prints a rounded version of the canonical value
+
+    Phase-1 derived-claim fields (Commit 2, May 2026). All optional;
+    when ``formula is None`` the claim is a regular step_summary leaf
+    and behaviour is byte-identical to pre-derived versions.
+
+    * ``formula`` — the source expression as a string (e.g.
+      ``exp(log(primary_or) - 1.96 * primary_or_se)``). When set, the
+      claim was computed at register-time from one or more source
+      claims via the restricted-AST evaluator
+      (``_evaluate_derived_formula``).
+    * ``explanation`` — short human-readable rationale for the
+      formula (e.g. ``"low 95% CI for primary OR, log-normal
+      approximation"``). Surfaces in audit reports and the writer
+      digest's derived block.
+    * ``derived_from`` — list of ``(source_step_id, source_field)``
+      pairs identifying which source claims the formula references.
+      Captured at register-time so audit can replay derivation
+      without re-parsing the formula string.
+
+    Inspired by data-to-paper's ``\\num{<formula>, "<explanation>"}``
+    macro (NEJM AI 2024); evaluated at register-time rather than
+    compile-time so the result is persisted as a regular claim and
+    can be matched by the existing reverse-binder.
     """
 
     value: str
@@ -202,15 +225,231 @@ class NumericClaim:
     step_id: str
     source_field: str
     tolerance: float = 1e-3
+    # Derived-claim metadata. Default `None` / empty list so existing
+    # step_summary leaves serialise to the same JSON as before.
+    formula: Optional[str] = None
+    explanation: Optional[str] = None
+    derived_from: List[Tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def is_derived(self) -> bool:
+        return self.formula is not None
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        if not self.is_derived:
+            # Preserve the pre-derived JSON shape for ordinary numeric
+            # leaves so old audit tooling does not suddenly see empty
+            # formula/provenance fields on every claim.
+            payload.pop("formula", None)
+            payload.pop("explanation", None)
+            payload.pop("derived_from", None)
+        return payload
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "NumericClaim":
         known = {f for f in cls.__dataclass_fields__}
         clean = {k: v for k, v in data.items() if k in known}
+        # ``derived_from`` may come back from JSON as list-of-lists;
+        # coerce inner pairs to tuples for hashability + .__eq__ parity
+        # with the dataclass-default empty list.
+        if "derived_from" in clean and clean["derived_from"]:
+            clean["derived_from"] = [
+                tuple(pair) if not isinstance(pair, tuple) else pair
+                for pair in clean["derived_from"]
+            ]
         return cls(**clean)
+
+
+# ---------------------------------------------------------------------------
+# Derived-claim formula evaluator (restricted AST sandbox)
+# ---------------------------------------------------------------------------
+#
+# Coder-generated step_summary entries can request that a derived
+# numeric value (an OR confidence-interval bound, a between-cohort
+# difference, an AUC delta) be computed from other registered claims
+# and registered as its own NumericClaim. The formula is evaluated
+# here in a restricted-AST sandbox that accepts ONLY:
+#
+#   * Numeric constants
+#   * Names resolving to entries in ``sources`` (or to a math whitelist
+#     constant — pi, e)
+#   * Arithmetic: + - * / **
+#   * Unary +/-
+#   * Calls to a small math whitelist: exp, log, log10, sqrt, abs,
+#     min, max
+#   * Parentheses
+#
+# Rejected: attribute access, subscripts, comprehensions, comparisons,
+# bool ops, lambda, named expressions, anything else. Names starting
+# with ``_`` are rejected outright. The output is a finite float; nan
+# / inf raise. Errors raise ``DerivedFormulaError`` with the offending
+# AST node type for the audit trail.
+#
+# Inspired by data-to-paper's ``\num{<formula>, "<explanation>"}``;
+# our variant evaluates at register-time and persists the result as a
+# regular NumericClaim with ``derived_from`` provenance — so the
+# existing reverse-binder picks it up with no extra plumbing.
+
+
+class DerivedFormulaError(ValueError):
+    """Raised when a derived-claim formula contains a disallowed
+    expression, references an unknown source, or evaluates to a
+    non-finite value. The message is safe to surface in audit findings.
+    """
+
+
+# Math whitelist. ``min`` / ``max`` accept any positive number of
+# args; the rest are single-arg. Anything outside this dict is rejected
+# at call-time.
+import math as _math  # noqa: E402  (deliberate post-typing local-only import)
+
+_DERIVED_FORMULA_FUNCS: Dict[str, Any] = {
+    "exp": _math.exp,
+    "log": _math.log,
+    "log10": _math.log10,
+    "sqrt": _math.sqrt,
+    "abs": abs,
+    "min": min,
+    "max": max,
+}
+_DERIVED_FORMULA_CONSTS: Dict[str, float] = {
+    "pi": _math.pi,
+    "e": _math.e,
+}
+
+
+def _evaluate_derived_formula(
+    formula: str,
+    *,
+    sources: Dict[str, float],
+) -> float:
+    """Evaluate ``formula`` in the restricted sandbox.
+
+    ``sources`` maps Python identifier → canonical float of a
+    registered claim. Names referenced in the formula that aren't in
+    ``sources`` and aren't in the math constants whitelist raise
+    ``DerivedFormulaError``. Returns a finite float.
+    """
+    import ast  # local import — only needed when a derived claim arrives
+
+    try:
+        tree = ast.parse(formula, mode="eval")
+    except SyntaxError as exc:
+        raise DerivedFormulaError(
+            f"derived-formula syntax error: {exc.msg}"
+        ) from exc
+
+    _ALLOWED_BINOPS = (
+        ast.Add,
+        ast.Sub,
+        ast.Mult,
+        ast.Div,
+        ast.Pow,
+    )
+    _ALLOWED_UNARYOPS = (ast.UAdd, ast.USub)
+
+    def _walk(node: ast.AST) -> float:
+        if isinstance(node, ast.Expression):
+            return _walk(node.body)
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, (int, float)) and not isinstance(
+                node.value, bool
+            ):
+                return float(node.value)
+            raise DerivedFormulaError(
+                f"derived-formula rejected constant of type {type(node.value).__name__}"
+            )
+        if isinstance(node, ast.Name):
+            name = node.id
+            if name.startswith("_"):
+                raise DerivedFormulaError(
+                    f"derived-formula rejected dunder/private name {name!r}"
+                )
+            if name in sources:
+                return float(sources[name])
+            if name in _DERIVED_FORMULA_CONSTS:
+                return _DERIVED_FORMULA_CONSTS[name]
+            raise DerivedFormulaError(
+                f"derived-formula references unknown source {name!r}; "
+                f"available sources: {sorted(sources)}"
+            )
+        if isinstance(node, ast.BinOp):
+            if not isinstance(node.op, _ALLOWED_BINOPS):
+                raise DerivedFormulaError(
+                    f"derived-formula rejected binary operator "
+                    f"{type(node.op).__name__}"
+                )
+            lhs = _walk(node.left)
+            rhs = _walk(node.right)
+            try:
+                if isinstance(node.op, ast.Add):
+                    return lhs + rhs
+                if isinstance(node.op, ast.Sub):
+                    return lhs - rhs
+                if isinstance(node.op, ast.Mult):
+                    return lhs * rhs
+                if isinstance(node.op, ast.Div):
+                    if rhs == 0.0:
+                        raise DerivedFormulaError("derived-formula division by zero")
+                    return lhs / rhs
+                if isinstance(node.op, ast.Pow):
+                    return lhs ** rhs
+            except OverflowError as exc:
+                # Python raises OverflowError on float ** float when the
+                # result would exceed float range; we surface this as a
+                # non-finite result so callers see one consistent error
+                # type regardless of whether overflow happens silently
+                # (→ inf, caught below) or eagerly (→ OverflowError).
+                raise DerivedFormulaError(
+                    f"derived-formula evaluated to non-finite value "
+                    f"(arithmetic overflow): {exc}"
+                ) from exc
+        if isinstance(node, ast.UnaryOp):
+            if not isinstance(node.op, _ALLOWED_UNARYOPS):
+                raise DerivedFormulaError(
+                    f"derived-formula rejected unary operator "
+                    f"{type(node.op).__name__}"
+                )
+            operand = _walk(node.operand)
+            return +operand if isinstance(node.op, ast.UAdd) else -operand
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                raise DerivedFormulaError(
+                    "derived-formula rejected call with non-name callable"
+                )
+            fname = node.func.id
+            if fname.startswith("_") or fname not in _DERIVED_FORMULA_FUNCS:
+                raise DerivedFormulaError(
+                    f"derived-formula rejected call to {fname!r}; "
+                    f"allowed: {sorted(_DERIVED_FORMULA_FUNCS)}"
+                )
+            if node.keywords:
+                raise DerivedFormulaError(
+                    f"derived-formula rejected keyword arguments to {fname!r}"
+                )
+            args = [_walk(a) for a in node.args]
+            try:
+                return float(_DERIVED_FORMULA_FUNCS[fname](*args))
+            except (ArithmeticError, ValueError, TypeError) as exc:
+                raise DerivedFormulaError(
+                    f"derived-formula call {fname!r} failed: {exc}"
+                ) from exc
+        raise DerivedFormulaError(
+            f"derived-formula rejected AST node {type(node).__name__}"
+        )
+
+    result = _walk(tree)
+    if not isinstance(result, (int, float)):
+        raise DerivedFormulaError(
+            f"derived-formula evaluated to non-numeric {type(result).__name__}"
+        )
+    fresult = float(result)
+    if fresult != fresult or fresult in (float("inf"), float("-inf")):
+        raise DerivedFormulaError(
+            f"derived-formula evaluated to non-finite value {fresult!r}"
+        )
+    return fresult
 
 
 def _coerce_numeric_literal(value: Any) -> Optional[Tuple[str, float]]:
@@ -803,6 +1042,229 @@ class EvidenceStore:
             )
         return registered
 
+    # ------------------------------------------------------------------
+    # Derived numeric claims (Commit 2, Phase-1 widening)
+    # ------------------------------------------------------------------
+
+    def _resolve_derived_sources(
+        self,
+        *,
+        sources: Dict[str, Tuple[str, str]],
+    ) -> Tuple[Dict[str, float], List[Tuple[str, str]]]:
+        """Look up canonical floats for the sources a formula names.
+
+        ``sources`` is ``{formula_name: (source_step_id, source_field)}``.
+        For every source the most recently registered claim whose
+        ``(step_id, source_field)`` matches wins (matches the same
+        latest-wins semantics as ``register_numeric_claim`` dedup).
+
+        Returns ``(values, provenance)`` where ``provenance`` is a
+        sorted list of ``(step_id, source_field)`` pairs for the
+        ``derived_from`` field. Raises ``DerivedFormulaError`` when
+        any source is unresolved — caller surfaces this to validator
+        findings rather than ignoring silently.
+        """
+        values: Dict[str, float] = {}
+        provenance: List[Tuple[str, str]] = []
+        with self._lock:
+            for name, (src_step, src_field) in sources.items():
+                if name.startswith("_") or not name.isidentifier():
+                    raise DerivedFormulaError(
+                        f"derived-claim source name {name!r} is not a "
+                        f"valid Python identifier (or starts with underscore)"
+                    )
+                match: Optional[NumericClaim] = None
+                for claim in reversed(self._numeric_claims):
+                    if claim.step_id == src_step and claim.source_field == src_field:
+                        match = claim
+                        break
+                if match is None:
+                    raise DerivedFormulaError(
+                        f"derived-claim source {name!r} → "
+                        f"({src_step}, {src_field}) not found in registry"
+                    )
+                values[name] = match.canonical
+                provenance.append((src_step, src_field))
+        provenance.sort()
+        return values, provenance
+
+    def register_derived_claim(
+        self,
+        *,
+        name: str,
+        formula: str,
+        explanation: str,
+        sources: Dict[str, Tuple[str, str]],
+        evidence_id: str,
+        step_id: str,
+        tolerance: float = 1e-3,
+    ) -> NumericClaim:
+        """Evaluate ``formula`` in the restricted sandbox and register it.
+
+        ``formula`` is a string in the grammar accepted by
+        :func:`_evaluate_derived_formula`. ``sources`` maps formula
+        identifiers to ``(step_id, source_field)`` pairs that must
+        resolve to existing claims; the resolved canonical floats are
+        substituted in. The result is registered as a NumericClaim
+        with ``source_field=name``, ``formula``, ``explanation`` and
+        ``derived_from`` populated — so the existing reverse-binder
+        in ``manuscript_post.bind_numeric_values`` recognises it like
+        any other claim.
+
+        Raises ``DerivedFormulaError`` on syntax, unresolved sources,
+        disallowed operators, division by zero, or non-finite result.
+        """
+        if not name or not name.isidentifier() or name.startswith("_"):
+            raise DerivedFormulaError(
+                f"derived-claim name {name!r} must be a non-empty Python "
+                f"identifier not starting with underscore"
+            )
+        if not isinstance(formula, str) or not formula.strip():
+            raise DerivedFormulaError("derived-claim formula must be a non-empty string")
+        if not isinstance(explanation, str) or not explanation.strip():
+            raise DerivedFormulaError(
+                "derived-claim explanation must be a non-empty string "
+                "(this surfaces in audit findings and the writer digest)"
+            )
+        source_values, provenance = self._resolve_derived_sources(sources=sources)
+        result = _evaluate_derived_formula(formula, sources=source_values)
+        # Use the same value/canonical pair shape as register_numeric_claim
+        # so downstream tooling does not need to special-case derived.
+        literal = f"{result:.6g}" if not float(result).is_integer() else str(int(result))
+        with self._lock:
+            for claim in self._numeric_claims:
+                if (
+                    claim.step_id == step_id
+                    and claim.source_field == name
+                    and abs(claim.canonical - result) <= claim.tolerance
+                ):
+                    # Idempotent re-registration (e.g. resume of the same
+                    # step). Refresh formula/explanation in case the
+                    # coder updated them between runs.
+                    if len(literal) > len(claim.value):
+                        claim.value = literal
+                    claim.formula = formula.strip()
+                    claim.explanation = explanation.strip()
+                    claim.derived_from = list(provenance)
+                    self._save()
+                    return claim
+            claim = NumericClaim(
+                value=literal,
+                canonical=float(result),
+                evidence_id=evidence_id,
+                step_id=step_id,
+                source_field=name,
+                tolerance=tolerance,
+                formula=formula.strip(),
+                explanation=explanation.strip(),
+                derived_from=list(provenance),
+            )
+            self._numeric_claims.append(claim)
+            self._save()
+            return claim
+
+    def register_step_derived_claims(
+        self,
+        *,
+        step_id: str,
+        evidence_id: str,
+        summary: Any,
+        tolerance: float = 1e-3,
+    ) -> Tuple[List[NumericClaim], List[Dict[str, Any]]]:
+        """Bulk-register all ``derived_claims`` entries from a step_summary.
+
+        The coder declares derived numbers under a top-level
+        ``derived_claims`` list in ``step_summary.json``::
+
+            {
+              "primary_or": 1.42,
+              "primary_or_se": 0.13,
+              "derived_claims": [
+                {
+                  "name": "primary_or_ci_low",
+                  "formula": "exp(log(primary_or) - 1.96 * primary_or_se)",
+                  "explanation": "Lower 95% CI for primary OR, log-normal approx",
+                  "sources": {
+                    "primary_or":   {"step_id": "<this-step>", "field": "primary_or"},
+                    "primary_or_se": {"step_id": "<this-step>", "field": "primary_or_se"}
+                  }
+                }
+              ]
+            }
+
+        Returns ``(registered_claims, errors)`` where ``errors`` is a
+        list of ``{name, message}`` dicts for each entry that failed
+        (bad formula, unresolved source, non-finite result, etc.). The
+        pipeline turns each error into a ``derived_claim_error``
+        validator finding; *registered_claims* is what enters the
+        binding registry.
+
+        Default ``step_id`` for omitted source ``step_id`` is the
+        current step — most derived numbers are intra-step (build a
+        CI from the same step's OR and SE). Cross-step derivations
+        are supported by giving an explicit ``step_id``.
+        """
+        registered: List[NumericClaim] = []
+        errors: List[Dict[str, Any]] = []
+        entries: Any = None
+        if isinstance(summary, dict):
+            entries = summary.get("derived_claims")
+        if not isinstance(entries, list):
+            return registered, errors
+        for idx, entry in enumerate(entries):
+            try:
+                if not isinstance(entry, dict):
+                    raise DerivedFormulaError(
+                        f"derived_claims[{idx}] is not a dict"
+                    )
+                name = entry.get("name")
+                formula = entry.get("formula")
+                explanation = entry.get("explanation", "")
+                raw_sources = entry.get("sources", {})
+                if not isinstance(raw_sources, dict):
+                    raise DerivedFormulaError(
+                        f"derived_claims[{idx}].sources must be a dict"
+                    )
+                sources: Dict[str, Tuple[str, str]] = {}
+                for src_name, ref in raw_sources.items():
+                    if isinstance(ref, dict):
+                        src_step = ref.get("step_id") or step_id
+                        src_field = ref.get("field") or ref.get("source_field")
+                    elif isinstance(ref, str):
+                        # Shorthand: "field" inside the same step.
+                        src_step = step_id
+                        src_field = ref
+                    else:
+                        raise DerivedFormulaError(
+                            f"derived_claims[{idx}].sources[{src_name!r}] "
+                            f"must be a dict or a string, got "
+                            f"{type(ref).__name__}"
+                        )
+                    if not src_field:
+                        raise DerivedFormulaError(
+                            f"derived_claims[{idx}].sources[{src_name!r}] "
+                            f"missing 'field'"
+                        )
+                    sources[src_name] = (str(src_step), str(src_field))
+                claim = self.register_derived_claim(
+                    name=str(name) if name is not None else "",
+                    formula=str(formula) if formula is not None else "",
+                    explanation=str(explanation),
+                    sources=sources,
+                    evidence_id=evidence_id,
+                    step_id=step_id,
+                    tolerance=tolerance,
+                )
+                registered.append(claim)
+            except DerivedFormulaError as exc:
+                errors.append(
+                    {
+                        "name": str(entry.get("name") if isinstance(entry, dict) else f"#{idx}"),
+                        "message": str(exc),
+                    }
+                )
+        return registered, errors
+
     def numeric_claims(self) -> List[NumericClaim]:
         with self._lock:
             return list(self._numeric_claims)
@@ -1117,6 +1579,8 @@ __all__ = [
     "EvidenceStore",
     "EvidenceEnforcementMode",
     "EvidenceEnforcementError",
+    "NumericClaim",
+    "DerivedFormulaError",
     "sha256_of_file",
     "sha256_of_bytes",
 ]

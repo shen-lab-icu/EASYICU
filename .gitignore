@@ -118,6 +118,9 @@ tests/
 !tests/**/*.py
 scripts/*
 !scripts/launch_easyicu.py
+!scripts/pilot_real_llm.py
+!scripts/audit/
+!scripts/audit/**
 
 # 环境文件
 .env
@@ -133,6 +136,11 @@ pilot_runs/
 !README.md
 !README_zh.md
 !CONTRIBUTING.md
+!baselines/REGISTRY.md
+!docs/architecture_glossary.md
+!docs/concept_dict_audit_log.md
+!docs/research_agent_module_map_20260527.md
+!docs/user_added_concepts_tracker.md
 .easyicu-runtime/
 
 # Root-level run debris (analysis scripts that mistakenly use cwd)

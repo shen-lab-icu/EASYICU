@@ -43,6 +43,54 @@ Code contract:
   axis limit or outside the saved canvas.
 - Save a machine-readable summary to step_summary.json containing
   every numeric statistic that downstream agents may quote.
+- DERIVED NUMBERS (optional): if you computed a derived value (a CI
+  bound from a coefficient + standard error, an OR from a coefficient,
+  a between-cohort difference, etc.), you MAY declare it under a
+  top-level ``derived_claims`` list so the writer can cite it with
+  traceability back to its inputs. Each entry must contain ``name``
+  (a Python identifier), ``formula`` (a string using only +, -, *,
+  /, **, parentheses, and the functions exp / log / log10 / sqrt /
+  abs / min / max — NO attribute access, subscripts, comparisons,
+  comprehensions, or other function calls), ``explanation`` (one
+  short sentence), and ``sources`` (a dict mapping the names used in
+  the formula to the source field they should resolve to in this
+  same step). Example:
+  ```
+  step_summary["derived_claims"] = [
+      {
+          "name": "primary_or_ci_low",
+          "formula": "exp(log(primary_or) - 1.96 * primary_or_se)",
+          "explanation": "Lower 95% CI for primary OR, log-normal approx",
+          "sources": {"primary_or": "primary_or", "primary_or_se": "primary_or_se"}
+      }
+  ]
+  ```
+  Derived entries with malformed formulas, unresolved sources, or
+  non-finite results are dropped with a warning finding — they do
+  NOT fail the step. If you have nothing derived to declare, omit
+  the key entirely.
+- Do NOT put derived numbers only in prose, comments, figure labels,
+  or free-text notes. If a downstream writer may cite a derived value,
+  declare it in ``step_summary["derived_claims"]`` so EasyICU can
+  evaluate it once and bind it to source NumericClaims.
+- PRE-SPECIFIED ROBUSTNESS PANEL (optional but preferred for primary
+  association / prediction steps): if the plan context provides
+  robustness specifications, run the same primary estimator under
+  those pre-specified variants when the required variables exist, and
+  write rows under ``step_summary["robustness_rows"]``. Each row must
+  contain ``spec_id``, ``axis`` (cohort / missing / outcome), ``n``,
+  ``point_estimate``, ``ci_low``, ``ci_high``, ``se``, ``converged``,
+  and ``notes``. If a variant cannot be run, emit the row with
+  ``converged=false``, ``n=0``, null numeric fields, and a precise
+  note. Do not change the primary estimate based on panel results.
+- SIDE FINDINGS (optional): if execution reveals a secondary
+  observation the plan did not request, record it under
+  ``step_summary["side_findings"]`` as a list of objects with
+  ``finding_id``, ``title``, ``description``, optional ``n``, and
+  optional ``related_concept``. These observations are archived as an
+  appendix and are NOT available to the manuscript writer. Do not use
+  side_findings to hide primary or robustness statistics from strict
+  evidence checks.
 - For association / prediction steps, if the step asks for a named
   primary predictor or exposure, that variable MUST remain in the
   fitted design matrix. Do not accidentally drop it when building `X`

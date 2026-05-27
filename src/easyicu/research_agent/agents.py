@@ -233,6 +233,19 @@ class PlannerAgent:
                     "post-hoc mortality by cluster, and the clustering figure in one "
                     "self-contained clustering step; do not create later mortality-by-cluster "
                     "steps that require cluster labels from prior outputs.\n\n"
+                    "Every cohort/exposure/outcome concept used to define the "
+                    "analysis population must be represented as a typed cohort "
+                    "definition: concept_id, time_window, aggregation, operator, "
+                    "and value. You may write `cohort: {\"from_named\": \"...\"}` "
+                    "only when the caller has explicitly registered that named "
+                    "pattern for this case; otherwise supply the full five-tuple "
+                    "predicate. Free-text cohort strings are invalid.\n\n"
+                    "Pre-specify robustness variants before execution. Add a "
+                    "`robustness_specs` array with at least 3 cohort-axis, "
+                    "2 missingness-axis, and 2 outcome-axis alternatives. "
+                    "These are advisory execution specifications: do not use "
+                    "them to change the primary analysis, and do not describe "
+                    "their results as surprising or unexpected.\n\n"
                     + planner_analysis_type_guide()
                     + "\n\n"
                     "OUTPUT FORMAT — VERY IMPORTANT:\n"
@@ -243,6 +256,19 @@ class PlannerAgent:
                     "Required JSON shape (truncated example):\n"
                     "{\n"
                     '  "research_question": "<copy from context>",\n'
+                    '  "cohort": {\n'
+                    '    "name": "primary",\n'
+                    '    "inclusion": [\n'
+                    "      {\n"
+                    '        "concept_id": "<easyicu concept id>",\n'
+                    '        "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 24},\n'
+                    '        "aggregation": "max",\n'
+                    '        "op": ">=",\n'
+                    '        "value": 1\n'
+                    "      }\n"
+                    "    ],\n"
+                    '    "exclusion": []\n'
+                    "  },\n"
                     '  "steps": [\n'
                     "    {\n"
                     '      "step_id": "01_table_one",\n'
@@ -251,6 +277,16 @@ class PlannerAgent:
                     '      "expected_outputs": ["table:table_one"],\n'
                     '      "method": "descriptive",\n'
                     '      "icu_rule_refs": ["aggregation_rule_for"]\n'
+                    "    }\n"
+                    "  ],\n"
+                    '  "robustness_specs": [\n'
+                    "    {\n"
+                    '      "spec_id": "alt_missing_complete_case",\n'
+                    '      "axis": "missing",\n'
+                    '      "description": "Use complete-case handling for required variables.",\n'
+                    '      "cohort_override": null,\n'
+                    '      "missing_override": {"strategy": "complete_case"},\n'
+                    '      "outcome_override": null\n'
                     "    }\n"
                     "  ],\n"
                     '  "rationale": "<one paragraph>"\n'
@@ -271,7 +307,8 @@ class PlannerAgent:
             temperature=0.2,
             format_reminder=(
                 "The JSON must be a single object with keys: "
-                "research_question (string), steps (array of objects "
+                "research_question (string), cohort (object or null), "
+                "steps (array of objects "
                 "each with step_id, intent, inputs, expected_outputs, "
                 "method, icu_rule_refs), rationale (string). "
                 "All string values must be plain ASCII or UTF-8 quoted strings; "
@@ -1410,7 +1447,14 @@ def _normalise_plan_payload(
     keys that were discarded so the pipeline can surface them in the
     manifest instead of silently suppressing them.
     """
-    allowed_plan = {"research_question", "steps", "rationale", "revision"}
+    allowed_plan = {
+        "research_question",
+        "cohort",
+        "steps",
+        "robustness_specs",
+        "rationale",
+        "revision",
+    }
     allowed_step = {
         "step_id",
         "intent",

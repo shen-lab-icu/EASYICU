@@ -1,0 +1,46 @@
+case_id: case_b_sofa2_sepsis
+title: Case B sepsis SOFA-family mortality pilot
+bench_kind: rule
+bench_items:
+  - sofa2_mortality
+research_question: >
+  Among adult ICU stays meeting an admission-window suspected-infection and
+  SOFA-family sepsis definition, is admission-window SOFA burden associated
+  with in-hospital mortality?
+primary_exposure:
+  concept_id: sofa
+  pattern: sofa2_admission_window
+primary_outcome:
+  concept_id: death
+  label: in-hospital mortality
+primary_cohort:
+  pattern: sepsis3_at_admission
+min_n: 100
+success_criteria:
+  min_converged_panel_rows: 4
+  max_writer_retry_rate: 0.30
+admissible_robustness_specs:
+  - spec_id: alt_cohort_sofa2_max_during_stay
+    axis: cohort
+    pattern: sofa2_max_during_stay
+  - spec_id: alt_cohort_suspected_infection_only
+    axis: cohort
+    pattern: suspected_infection_admission_window
+  - spec_id: alt_cohort_vent_first_24h
+    axis: cohort
+    pattern: mech_vent_first_24h
+  - spec_id: alt_missing_complete_case
+    axis: missing
+    strategy: complete_case
+  - spec_id: alt_missing_median_imputation
+    axis: missing
+    strategy: median_imputation
+  - spec_id: alt_outcome_in_hospital_mortality
+    axis: outcome
+    concept_id: death
+  - spec_id: alt_outcome_database_specific_mortality
+    axis: outcome
+    target: database_specific_mortality
+notes:
+  - This file is case-specific protocol metadata, not a framework prompt.
+  - Concept dictionary validation is owned by the user WIP audit before archival pilot.

@@ -328,6 +328,11 @@ __all__ = [
     "build_execution_replay",
     # Pipeline
     "ResearchAgentPipeline",
+    "SubmissionProfile",
+    "NPJ_DM_2026_05",
+    "DEFAULT_SUBMISSION_PROFILE_REF",
+    "SUBMISSION_PROFILE_REGISTRY",
+    "get_submission_profile",
     # Prompt pack provenance
     "PROMPT_PACK_VERSION",
     "prompt_pack_files",
@@ -762,6 +767,16 @@ def __getattr__(name: str):
         from .pipeline_config import PipelineConfig
 
         return PipelineConfig
+    if name in {
+        "SubmissionProfile",
+        "NPJ_DM_2026_05",
+        "DEFAULT_SUBMISSION_PROFILE_REF",
+        "SUBMISSION_PROFILE_REGISTRY",
+        "get_submission_profile",
+    }:
+        from . import pipeline_profiles as _profiles
+
+        return getattr(_profiles, name)
     if name in {"PlanPhaseState", "ExecutePhaseState", "WritePhaseState"}:
         from . import pipeline_state as _ps
 
