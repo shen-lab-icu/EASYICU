@@ -1734,6 +1734,8 @@ def run_execute_phase(
             specs=list(getattr(plan, "robustness_specs", []) or []),
             per_step_records=per_step_records,
             primary_cohort=getattr(plan, "cohort", None),
+            cohort_path=cohort_path,
+            context=context,
         )
         for warning in adapter_warnings:
             findings.append(
