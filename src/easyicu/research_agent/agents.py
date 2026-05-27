@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .analysis_types import infer_analysis_type, planner_analysis_type_guide
+from .cohort_schema import known_concept_ids
 from .icu_rules import VariableKind, default_time_windows
 from .llm import LLMClient, LLMMessage
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
@@ -186,6 +187,146 @@ def _format_context(ctx: ResearchContext) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _format_concept_id_allowlist() -> str:
+    """Render legal EasyICU concept ids for CTAS planner prompts."""
+
+    concept_ids = sorted(known_concept_ids())
+    if not concept_ids:
+        return (
+            "ALLOWED concept_ids — no concept dictionary entries were loaded. "
+            "Do not invent concept_id values; ask for a configured concept "
+            "dictionary before emitting a CohortDefinition."
+        )
+    lines = [
+        "ALLOWED concept_ids — the ONLY values acceptable in any "
+        "CohortDefinition or RobustnessSpec.cohort_override.concept_id field. "
+        "Synthesizing new names (e.g. \"sofa2_admission\", "
+        "\"kdigo_aki_max\", \"sepsis_onset_window\") is forbidden — these "
+        "are operationalizations, not concepts. To operationalize a concept "
+        "over a time window, use the 5-tuple form: "
+        "concept_id=\"<one from the list below>\" + time_window + aggregation.",
+        "",
+    ]
+    lines.extend(f"- `{concept_id}`" for concept_id in concept_ids)
+    return "\n".join(lines)
+
+
+def _build_planner_user_prompt(context: ResearchContext) -> str:
+    """Build the planner user prompt with runtime concept-id grounding."""
+
+    return (
+        "Produce an ICU-AWARE RESEARCH PLAN as JSON matching the "
+        "AnalysisPlan schema. First infer the EHR analysis type, "
+        "then choose only the steps justified by that family and "
+        "the available context. The plan must not assume that "
+        "every task needs Table 1, outcome incidence, missingness, "
+        "or a primary association model. If cross-database "
+        "replication is requested, include a cross-database step, "
+        "but mark it as a feasibility / protocol step unless the "
+        "ResearchContext explicitly provides external cohort files. "
+        "Use score-specific QC steps only when a relevant score is "
+        "actually central to the question. Do not put invented "
+        "prefixed variables such as eicu:age in `inputs`. Honor "
+        "explicit user preferences and requested outputs when they "
+        "are compatible with the cohort and analysis family.\n"
+        "For prediction_model tasks, keep the executable plan compact: "
+        "use one self-contained model training/evaluation step that reads "
+        "the cohort and writes AUROC, Brier/calibration, baseline prevalence, "
+        "model metadata, and the discrimination/calibration figure. Do not "
+        "split training, performance evaluation, figure generation, and "
+        "baseline comparison into separate code steps unless those later "
+        "steps can be completed directly from COHORT_PARQUET without reading "
+        "prior step outputs. For clustering tasks, likewise keep cluster-label "
+        "generation, cluster characteristics, silhouette/stability metrics, "
+        "post-hoc mortality by cluster, and the clustering figure in one "
+        "self-contained clustering step; do not create later mortality-by-cluster "
+        "steps that require cluster labels from prior outputs.\n\n"
+        + _format_concept_id_allowlist()
+        + "\n\n"
+        "Every cohort/exposure/outcome concept used to define the "
+        "analysis population must be represented as a typed cohort "
+        "definition: concept_id, time_window, aggregation, operator, "
+        "and value. You may write `cohort: {\"from_named\": \"...\"}` "
+        "only when the caller has explicitly registered that named "
+        "pattern for this case; otherwise supply the full five-tuple "
+        "predicate. Free-text cohort strings are invalid.\n\n"
+        "Pre-specify robustness variants before execution. Add a "
+        "`robustness_specs` array with at least 3 cohort-axis, "
+        "2 missingness-axis, and 2 outcome-axis alternatives. "
+        "These are advisory execution specifications: do not use "
+        "them to change the primary analysis, and do not describe "
+        "their results as surprising or unexpected.\n\n"
+        + planner_analysis_type_guide()
+        + "\n\n"
+        "OUTPUT FORMAT — VERY IMPORTANT:\n"
+        "Return *only* a single JSON object matching the "
+        "AnalysisPlan schema. No prose, no markdown headings, no "
+        "trailing commentary. A ```json … ``` fence is acceptable; "
+        "anything outside that fence will be discarded.\n\n"
+        "Required JSON shape (truncated example):\n"
+        "The example values are illustrative only; do not prefer SOFA or "
+        "any example concept unless the ResearchContext supports it.\n"
+        "{\n"
+        '  "research_question": "<copy from context>",\n'
+        '  "cohort": {\n'
+        '    "name": "primary",\n'
+        '    "inclusion": [\n'
+        "      {\n"
+        '        "concept_id": "<easyicu concept id>",\n'
+        '        "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 24},\n'
+        '        "aggregation": "max",\n'
+        '        "op": ">=",\n'
+        '        "value": 1\n'
+        "      }\n"
+        "    ],\n"
+        '    "exclusion": []\n'
+        "  },\n"
+        '  "steps": [\n'
+        "    {\n"
+        '      "step_id": "01_table_one",\n'
+        '      "intent": "<one sentence>",\n'
+        '      "inputs": ["<variable names from context>"],\n'
+        '      "expected_outputs": ["table:table_one"],\n'
+        '      "method": "descriptive",\n'
+        '      "icu_rule_refs": ["aggregation_rule_for"]\n'
+        "    }\n"
+        "  ],\n"
+        '  "robustness_specs": [\n'
+        "    {\n"
+        '      "spec_id": "alt_cohort_max_during_stay",\n'
+        '      "axis": "cohort",\n'
+        '      "description": "Use stay-level max SOFA instead of admission-window max.",\n'
+        '      "cohort_override": {\n'
+        '        "name": "alt_max_stay",\n'
+        '        "inclusion": [\n'
+        "          {\n"
+        '            "concept_id": "sofa",\n'
+        '            "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 168},\n'
+        '            "aggregation": "max",\n'
+        '            "op": ">=",\n'
+        '            "value": 2\n'
+        "          }\n"
+        "        ],\n"
+        '        "exclusion": []\n'
+        "      },\n"
+        '      "missing_override": null,\n'
+        '      "outcome_override": null\n'
+        "    },\n"
+        "    {\n"
+        '      "spec_id": "alt_missing_complete_case",\n'
+        '      "axis": "missing",\n'
+        '      "description": "Use complete-case handling for required variables.",\n'
+        '      "cohort_override": null,\n'
+        '      "missing_override": {"strategy": "complete_case"},\n'
+        '      "outcome_override": null\n'
+        "    }\n"
+        "  ],\n"
+        '  "rationale": "<one paragraph>"\n'
+        "}\n\n"
+        "RESEARCH CONTEXT:\n" + _format_context(context)
+    )
+
+
 class PlannerAgent:
     """Produces an :class:`AnalysisPlan` from the research context.
 
@@ -204,96 +345,7 @@ class PlannerAgent:
     def run(self, context: ResearchContext) -> AnalysisPlan:
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE),
-            LLMMessage(
-                role="user",
-                content=(
-                    "Produce an ICU-AWARE RESEARCH PLAN as JSON matching the "
-                    "AnalysisPlan schema. First infer the EHR analysis type, "
-                    "then choose only the steps justified by that family and "
-                    "the available context. The plan must not assume that "
-                    "every task needs Table 1, outcome incidence, missingness, "
-                    "or a primary association model. If cross-database "
-                    "replication is requested, include a cross-database step, "
-                    "but mark it as a feasibility / protocol step unless the "
-                    "ResearchContext explicitly provides external cohort files. "
-                    "Use score-specific QC steps only when a relevant score is "
-                    "actually central to the question. Do not put invented "
-                    "prefixed variables such as eicu:age in `inputs`. Honor "
-                    "explicit user preferences and requested outputs when they "
-                    "are compatible with the cohort and analysis family.\n"
-                    "For prediction_model tasks, keep the executable plan compact: "
-                    "use one self-contained model training/evaluation step that reads "
-                    "the cohort and writes AUROC, Brier/calibration, baseline prevalence, "
-                    "model metadata, and the discrimination/calibration figure. Do not "
-                    "split training, performance evaluation, figure generation, and "
-                    "baseline comparison into separate code steps unless those later "
-                    "steps can be completed directly from COHORT_PARQUET without reading "
-                    "prior step outputs. For clustering tasks, likewise keep cluster-label "
-                    "generation, cluster characteristics, silhouette/stability metrics, "
-                    "post-hoc mortality by cluster, and the clustering figure in one "
-                    "self-contained clustering step; do not create later mortality-by-cluster "
-                    "steps that require cluster labels from prior outputs.\n\n"
-                    "Every cohort/exposure/outcome concept used to define the "
-                    "analysis population must be represented as a typed cohort "
-                    "definition: concept_id, time_window, aggregation, operator, "
-                    "and value. You may write `cohort: {\"from_named\": \"...\"}` "
-                    "only when the caller has explicitly registered that named "
-                    "pattern for this case; otherwise supply the full five-tuple "
-                    "predicate. Free-text cohort strings are invalid.\n\n"
-                    "Pre-specify robustness variants before execution. Add a "
-                    "`robustness_specs` array with at least 3 cohort-axis, "
-                    "2 missingness-axis, and 2 outcome-axis alternatives. "
-                    "These are advisory execution specifications: do not use "
-                    "them to change the primary analysis, and do not describe "
-                    "their results as surprising or unexpected.\n\n"
-                    + planner_analysis_type_guide()
-                    + "\n\n"
-                    "OUTPUT FORMAT — VERY IMPORTANT:\n"
-                    "Return *only* a single JSON object matching the "
-                    "AnalysisPlan schema. No prose, no markdown headings, no "
-                    "trailing commentary. A ```json … ``` fence is acceptable; "
-                    "anything outside that fence will be discarded.\n\n"
-                    "Required JSON shape (truncated example):\n"
-                    "{\n"
-                    '  "research_question": "<copy from context>",\n'
-                    '  "cohort": {\n'
-                    '    "name": "primary",\n'
-                    '    "inclusion": [\n'
-                    "      {\n"
-                    '        "concept_id": "<easyicu concept id>",\n'
-                    '        "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 24},\n'
-                    '        "aggregation": "max",\n'
-                    '        "op": ">=",\n'
-                    '        "value": 1\n'
-                    "      }\n"
-                    "    ],\n"
-                    '    "exclusion": []\n'
-                    "  },\n"
-                    '  "steps": [\n'
-                    "    {\n"
-                    '      "step_id": "01_table_one",\n'
-                    '      "intent": "<one sentence>",\n'
-                    '      "inputs": ["<variable names from context>"],\n'
-                    '      "expected_outputs": ["table:table_one"],\n'
-                    '      "method": "descriptive",\n'
-                    '      "icu_rule_refs": ["aggregation_rule_for"]\n'
-                    "    }\n"
-                    "  ],\n"
-                    '  "robustness_specs": [\n'
-                    "    {\n"
-                    '      "spec_id": "alt_missing_complete_case",\n'
-                    '      "axis": "missing",\n'
-                    '      "description": "Use complete-case handling for required variables.",\n'
-                    '      "cohort_override": null,\n'
-                    '      "missing_override": {"strategy": "complete_case"},\n'
-                    '      "outcome_override": null\n'
-                    "    }\n"
-                    "  ],\n"
-                    '  "rationale": "<one paragraph>"\n'
-                    "}\n\n"
-                    "RESEARCH CONTEXT:\n" + _format_context(context)
-                ),
-            ),
+            LLMMessage(role="user", content=_build_planner_user_prompt(context)),
         ]
         from .structured_retry import call_llm_with_structured_retry
 
