@@ -1,0 +1,137 @@
+{
+  "schema_version": "easyicu.case_cohort_patterns/1",
+  "case_id": "case_b_sofa2_sepsis",
+  "patterns": {
+    "sepsis3_at_admission": {
+      "provenance": "Case B protocol. Operationalizes Sepsis-3 as suspected infection plus SOFA >= 2 in an admission-anchored ICU window; see Singer et al., JAMA 2016, and EasyICU concepts susp_inf and sofa.",
+      "definition": {
+        "name": "sepsis3_at_admission",
+        "inclusion": [
+          {
+            "concept_id": "susp_inf",
+            "time_window": {
+              "anchor": "icu_admit",
+              "start_offset_hours": -24,
+              "end_offset_hours": 24
+            },
+            "aggregation": "any",
+            "op": "==",
+            "value": true
+          },
+          {
+            "concept_id": "sofa",
+            "time_window": {
+              "anchor": "icu_admit",
+              "start_offset_hours": 0,
+              "end_offset_hours": 24
+            },
+            "aggregation": "max",
+            "op": ">=",
+            "value": 2
+          }
+        ],
+        "exclusion": []
+      }
+    },
+    "sofa2_admission_window": {
+      "provenance": "Case B protocol. Admission-window SOFA threshold used as a pre-specified SOFA-family exposure variant; EasyICU concept sofa, first ICU day aggregation.",
+      "definition": {
+        "name": "sofa2_admission_window",
+        "inclusion": [
+          {
+            "concept_id": "sofa",
+            "time_window": {
+              "anchor": "icu_admit",
+              "start_offset_hours": 0,
+              "end_offset_hours": 24
+            },
+            "aggregation": "max",
+            "op": ">=",
+            "value": 2
+          }
+        ],
+        "exclusion": []
+      }
+    },
+    "sofa2_max_during_stay": {
+      "provenance": "Case B protocol. Stay-level maximum SOFA threshold retained as a robustness cohort variant; EasyICU concept sofa with ICU-stay aggregation.",
+      "definition": {
+        "name": "sofa2_max_during_stay",
+        "inclusion": [
+          {
+            "concept_id": "sofa",
+            "time_window": {
+              "anchor": "icu_admit",
+              "start_offset_hours": 0,
+              "end_offset_hours": "inf"
+            },
+            "aggregation": "max",
+            "op": ">=",
+            "value": 2
+          }
+        ],
+        "exclusion": []
+      }
+    },
+    "mech_vent_first_24h": {
+      "provenance": "Case B protocol. First-day invasive or mechanical ventilation marker used as an acuity/context pattern; EasyICU concept mech_vent.",
+      "definition": {
+        "name": "mech_vent_first_24h",
+        "inclusion": [
+          {
+            "concept_id": "mech_vent",
+            "time_window": {
+              "anchor": "icu_admit",
+              "start_offset_hours": 0,
+              "end_offset_hours": 24
+            },
+            "aggregation": "any",
+            "op": "==",
+            "value": true
+          }
+        ],
+        "exclusion": []
+      }
+    },
+    "vasopressor_at_admission": {
+      "provenance": "Case B protocol. First-day vasopressor exposure pattern for acuity/context checks; EasyICU concept vaso_ind.",
+      "definition": {
+        "name": "vasopressor_at_admission",
+        "inclusion": [
+          {
+            "concept_id": "vaso_ind",
+            "time_window": {
+              "anchor": "icu_admit",
+              "start_offset_hours": 0,
+              "end_offset_hours": 24
+            },
+            "aggregation": "any",
+            "op": "==",
+            "value": true
+          }
+        ],
+        "exclusion": []
+      }
+    },
+    "suspected_infection_admission_window": {
+      "provenance": "Case B protocol. Suspected infection admission window used as a Sepsis-3 component; EasyICU concept susp_inf.",
+      "definition": {
+        "name": "suspected_infection_admission_window",
+        "inclusion": [
+          {
+            "concept_id": "susp_inf",
+            "time_window": {
+              "anchor": "icu_admit",
+              "start_offset_hours": -24,
+              "end_offset_hours": 24
+            },
+            "aggregation": "any",
+            "op": "==",
+            "value": true
+          }
+        ],
+        "exclusion": []
+      }
+    }
+  }
+}

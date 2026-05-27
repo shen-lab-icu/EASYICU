@@ -18,6 +18,7 @@ import pandas as pd
 
 from .context import ResearchContext
 from .evidence import EvidenceStore
+from .robustness_panel import load_robustness_panel, worst_rows_by_axis
 from .scalar_utils import _first_present_scalar
 
 
@@ -28,6 +29,8 @@ __all__ = [
     "_summarise_sofa_zero_audit",
     "_preferred_writer_evidence_names",
     "_render_writer_evidence_digest",
+    "_render_writer_evidence_digest_v2",
+    "WRITER_DIGEST_PREFERRED_KEYS",
 ]
 
 
@@ -180,6 +183,80 @@ def _preferred_writer_evidence_names(evidence: EvidenceStore) -> List[str]:
     return out or evidence.resolvable_names()
 
 
+# Module-level constant: the keys the "primary" writer digest pulls out
+# of step_summary. v1 (``_render_writer_evidence_digest``) feeds *only*
+# these to the writer. v2 (``_render_writer_evidence_digest_v2``,
+# Phase-1 widening behind ``PipelineConfig.writer_digest_widened``) uses
+# this same tuple as the primary block plus a secondary block sourced
+# from the full ``EvidenceStore.numeric_claims()`` registry.
+#
+# Exposed at module level so:
+#   1. v2 can reuse it without re-defining the literal list, and
+#   2. tests can assert primary vs secondary partitioning without
+#      hand-maintaining a parallel tuple.
+WRITER_DIGEST_PREFERRED_KEYS: tuple[str, ...] = (
+    "sample_size",
+    "n_total",
+    "n_total_stays",
+    "n_death",
+    "n_complete",
+    "n_complete_case",
+    "complete_case_n",
+    "outcome_rate",
+    "overall_mortality_rate",
+    "overall_ci_low",
+    "overall_ci_high",
+    "mortality_rate",
+    "median_age",
+    "estimate",
+    "primary_or",
+    "odds_ratio",
+    "adjusted_or",
+    "ci_lower",
+    "ci_upper",
+    "primary_ci_low",
+    "primary_ci_high",
+    "primary_or_ci",
+    "p_value",
+    "auroc",
+    "statistic:auroc",
+    "auc",
+    "statistic:auc",
+    "cv_auroc",
+    "statistic:cv_auroc",
+    "held_out_auroc",
+    "statistic:held_out_auroc",
+    "mean_auroc",
+    "statistic:mean_auroc",
+    "auroc_median",
+    "statistic:auroc_ci_lower",
+    "statistic:auroc_ci_upper",
+    "brier_score",
+    "statistic:brier_score",
+    "held_out_brier",
+    "statistic:held_out_brier",
+    "brier_median",
+    "calibration_slope",
+    "statistic:calibration_slope",
+    "calibration_slope_median",
+    "calibration_intercept",
+    "statistic:calibration_intercept",
+    "calibration_intercept_median",
+    "baseline_prevalence",
+    "statistic:baseline_prevalence",
+    "split_strategy",
+    "statistic:split_strategy",
+    "silhouette_score",
+    "silhouette",
+    "n_clusters",
+    "cluster_count",
+    "spearman_rho",
+    "rho",
+    "skipped",
+    "error",
+)
+
+
 def _render_writer_evidence_digest(
     per_step_records: Sequence[Dict[str, Any]] | None = None,
     *,
@@ -312,3 +389,311 @@ def _render_writer_evidence_digest(
             "  " + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
         )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# v2 digest — primary + secondary blocks (Phase 1 widening)
+# ---------------------------------------------------------------------------
+#
+# The v1 digest above feeds the writer ONLY the curated
+# ``WRITER_DIGEST_PREFERRED_KEYS`` subset of every step_summary. The
+# manuscript binder (``manuscript_post.bind_numeric_values``) is
+# already wider than that — it accepts any value present in the full
+# ``EvidenceStore.numeric_claims()`` registry via tolerance-based
+# fuzzy matching. So in practice the writer is BIASED toward primary
+# keys (because that's what it sees), not RESTRICTED to them.
+#
+# v2 closes the gap by appending a "secondary numbers" block. The
+# secondary block enumerates every NumericClaim whose ``source_field``
+# is not already covered by the primary block, grouped by step_id and
+# capped to keep the writer prompt from bloating on heavy runs.
+#
+# v2 is opt-in via ``PipelineConfig.writer_digest_widened`` (default
+# False). v1's behaviour is byte-for-byte preserved for callers that
+# don't flip the flag. See
+# ``easyicu写作/00_当前投稿_20260516/03_phase0_baseline_study/spec_autonomous_refactor_20260527.md``
+# §2 for the design.
+
+
+def _claim_step_field_covered_by_primary(
+    *,
+    step_id: str,
+    source_field: str,
+    primary_step_field_keys: set[tuple[str, str]],
+) -> bool:
+    """Return True if (step_id, source_field) is already cited in the v1 primary block.
+
+    Matching rules:
+
+    1. Exact match on (step_id, source_field).
+    2. ``source_field`` is one of ``WRITER_DIGEST_PREFERRED_KEYS`` and the
+       step emitted ANY primary-block row (handled by the caller via
+       ``primary_step_field_keys`` set construction).
+    3. ``statistic:<name>`` and ``<name>`` are treated as the same key
+       (matches the v1 ``_first_present_scalar`` flatten behaviour
+       tested in ``test_render_writer_evidence_digest_flattens_nested_statistics``).
+    """
+    if (step_id, source_field) in primary_step_field_keys:
+        return True
+    if source_field.startswith("statistic:"):
+        if (step_id, source_field[len("statistic:") :]) in primary_step_field_keys:
+            return True
+    else:
+        if (step_id, f"statistic:{source_field}") in primary_step_field_keys:
+            return True
+    return False
+
+
+def _render_writer_evidence_digest_v2(
+    per_step_records: Sequence[Dict[str, Any]] | None = None,
+    *,
+    context: ResearchContext | None = None,
+    run_dir: Path | None = None,
+    evidence: EvidenceStore | None = None,
+    secondary_cap_per_step: int = 20,
+) -> str:
+    """Phase-1 wider writer-evidence digest.
+
+    Layout:
+
+    ::
+
+        RUN_CONTEXT
+          {json}
+        ## primary numbers (most likely to be cited)
+        - <step_id> [<status>]
+          {json of primary subset}
+        ## secondary numbers (cite if relevant; binder will accept)
+        - <step_id>
+          source_field=<value> (canonical=<canonical>)
+          ...
+
+    The primary block is the byte-identical output of
+    :func:`_render_writer_evidence_digest`. The secondary block reads
+    ``evidence.numeric_claims()`` and shows fields not already in the
+    primary block. ``secondary_cap_per_step`` caps how many secondary
+    fields per step are emitted; the cap exists because
+    ``register_step_summary_numerics`` can legitimately register up to
+    ``PipelineConfig.max_numeric_claims_per_step`` (default 100) leaves
+    per step.
+
+    ``evidence`` is optional. When None, the secondary block falls
+    back to enumerating fields directly from each record's
+    ``step_summary`` — useful for callers that do not have a live
+    ``EvidenceStore`` (tests, replay tooling). When ``evidence`` is
+    supplied, the secondary block prefers it because the registry has
+    the canonical literal+float pair plus an authoritative dedup.
+    """
+    primary = _render_writer_evidence_digest(
+        per_step_records,
+        context=context,
+        run_dir=run_dir,
+    )
+    records = list(per_step_records or [])
+    if not records:
+        return primary
+    primary_keys_lower = {k.lower() for k in WRITER_DIGEST_PREFERRED_KEYS}
+
+    # Build the (step_id, source_field) coverage set that the primary
+    # block emitted. We can't introspect the rendered string cheaply,
+    # so we walk per_step_records the same way v1 walks them and
+    # record every key v1 *would* include.
+    primary_step_field_keys: set[tuple[str, str]] = set()
+    for record in records:
+        step_id = str(record.get("step_id") or "unknown_step")
+        summary = record.get("step_summary")
+        if not isinstance(summary, dict):
+            continue
+        for key in WRITER_DIGEST_PREFERRED_KEYS:
+            if _first_present_scalar(summary, (key,)) is not None:
+                primary_step_field_keys.add((step_id, key))
+
+    secondary_lines: List[str] = []
+    derived_lines: List[str] = []
+    if evidence is not None:
+        # Group claims by step_id, sorted for determinism.
+        claims_by_step: Dict[str, List[Any]] = {}
+        for claim in evidence.numeric_claims():
+            if claim.source_field == "__easyicu_numeric_claim_overflow__":
+                continue
+            claims_by_step.setdefault(claim.step_id, []).append(claim)
+        for step_id in sorted(claims_by_step.keys()):
+            step_claims = claims_by_step[step_id]
+            # Preserve registration order (which matches step_summary
+            # leaf walk order) while partitioning the uncovered claims
+            # into formula-derived and ordinary secondary values.
+            uncovered = [
+                c
+                for c in step_claims
+                if not _claim_step_field_covered_by_primary(
+                    step_id=step_id,
+                    source_field=c.source_field,
+                    primary_step_field_keys=primary_step_field_keys,
+                )
+                and c.source_field.lower() not in primary_keys_lower
+                and not _is_hidden_robustness_row_claim(step_id, c.source_field)
+            ]
+            derived_claims = [
+                c for c in uncovered if getattr(c, "is_derived", False)
+            ]
+            secondary_claims = [
+                c for c in uncovered if not getattr(c, "is_derived", False)
+            ]
+            if derived_claims:
+                derived_total = len(derived_claims)
+                derived_truncated = False
+                cap = max(0, int(secondary_cap_per_step))
+                if cap and derived_total > cap:
+                    derived_claims = derived_claims[:cap]
+                    derived_truncated = True
+                derived_lines.append(f"- {step_id}")
+                for c in derived_claims:
+                    sources = ", ".join(
+                        f"{src_step}.{src_field}"
+                        for src_step, src_field in getattr(c, "derived_from", [])
+                    )
+                    derived_lines.append(f"  {c.source_field}={c.value}")
+                    derived_lines.append(f"    formula={c.formula}")
+                    if sources:
+                        derived_lines.append(f"    sources={sources}")
+                    if getattr(c, "explanation", None):
+                        derived_lines.append(f"    explanation={c.explanation}")
+                if derived_truncated:
+                    derived_lines.append(
+                        f"  ... ({derived_total - cap} more derived leaves omitted)"
+                    )
+            if not secondary_claims:
+                continue
+            truncated = False
+            cap = max(0, int(secondary_cap_per_step))
+            secondary_total = len(secondary_claims)
+            if cap and secondary_total > cap:
+                secondary_claims = secondary_claims[:cap]
+                truncated = True
+            secondary_lines.append(f"- {step_id}")
+            for c in secondary_claims:
+                secondary_lines.append(
+                    f"  {c.source_field}={c.value} (canonical={c.canonical})"
+                )
+            if truncated:
+                secondary_lines.append(
+                    f"  ... ({secondary_total - cap} more leaves omitted; raise writer_digest_secondary_cap_per_step to see)"
+                )
+    else:
+        # Fallback path: walk step_summary directly. Cheaper than the
+        # registry path but lacks canonical floats.
+        for record in records:
+            step_id = str(record.get("step_id") or "unknown_step")
+            summary = record.get("step_summary")
+            if not isinstance(summary, dict) or not summary:
+                continue
+            uncovered_pairs: List[tuple[str, Any]] = []
+            for key, value in summary.items():
+                if not isinstance(value, (int, float, str)) and not (
+                    isinstance(value, list) and value and isinstance(value[0], (int, float))
+                ):
+                    continue
+                if (step_id, key) in primary_step_field_keys:
+                    continue
+                if key.lower() in primary_keys_lower:
+                    continue
+                uncovered_pairs.append((key, value))
+            if not uncovered_pairs:
+                continue
+            truncated = False
+            cap = max(0, int(secondary_cap_per_step))
+            uncovered_pairs_total = len(uncovered_pairs)
+            if cap and uncovered_pairs_total > cap:
+                uncovered_pairs = uncovered_pairs[:cap]
+                truncated = True
+            secondary_lines.append(f"- {step_id}")
+            for key, value in uncovered_pairs:
+                secondary_lines.append(f"  {key}={value}")
+            if truncated:
+                secondary_lines.append(
+                    f"  ... ({uncovered_pairs_total - cap} more leaves omitted; pass evidence= or raise the per-step cap to see)"
+                )
+
+    extra_blocks: List[str] = []
+    robustness_lines = _render_robustness_panel_block(run_dir=run_dir)
+    if robustness_lines:
+        extra_blocks.extend(["", "## robustness panel", *robustness_lines])
+    if derived_lines:
+        extra_blocks.extend(
+            [
+                "",
+                "## derived numbers (computed from registered claims; cite with explanation)",
+                *derived_lines,
+            ]
+        )
+    if secondary_lines:
+        extra_blocks.extend(
+            [
+                "",
+                "## secondary numbers (cite if relevant; binder will accept any registered claim)",
+                *secondary_lines,
+            ]
+        )
+
+    if not extra_blocks:
+        # No additional bindable numbers found beyond the primary
+        # block; emit only the primary block (no empty header) so the
+        # writer doesn't see an "empty secondary block" prompt artifact.
+        return primary
+
+    return "\n".join([primary, *extra_blocks])
+
+
+def _is_hidden_robustness_row_claim(step_id: str, source_field: str) -> bool:
+    """Hide row-level robustness claims from the writer digest.
+
+    The numeric binder can still trace these registered values, but the writer
+    should only see the fixed robustness summary block to avoid variant
+    cherry-picking.
+    """
+
+    return step_id == "robustness_panel" and source_field.startswith("row_")
+
+
+def _render_robustness_panel_block(*, run_dir: Path | None) -> List[str]:
+    if run_dir is None:
+        return []
+    panel = load_robustness_panel(Path(run_dir) / "robustness_panel.json")
+    if panel is None:
+        return []
+    primary = next(
+        (row for row in panel.rows if row.spec_id == panel.primary_spec_id),
+        None,
+    )
+    lines: List[str] = []
+    if primary is not None:
+        lines.append(
+            "primary: "
+            f"spec_id={primary.spec_id}, "
+            f"OR={_fmt_panel_number(primary.point_estimate)}, "
+            f"95% CI=[{_fmt_panel_number(primary.ci_low)}, "
+            f"{_fmt_panel_number(primary.ci_high)}], "
+            f"n={primary.n}"
+        )
+    lines.append(
+        "variants: "
+        f"n_variants={panel.n_variants}, "
+        "range across variants OR "
+        f"in [{_fmt_panel_number(panel.range_low)}, "
+        f"{_fmt_panel_number(panel.range_high)}]"
+    )
+    for axis, row in sorted(worst_rows_by_axis(panel).items()):
+        lines.append(
+            f"worst on {axis} axis: "
+            f"spec_id={row.spec_id}, OR={_fmt_panel_number(row.point_estimate)}"
+        )
+    return lines
+
+
+def _fmt_panel_number(value: Any) -> str:
+    if value is None:
+        return "NA"
+    try:
+        return f"{float(value):.6g}"
+    except (TypeError, ValueError):
+        return str(value)

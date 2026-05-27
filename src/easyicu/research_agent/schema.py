@@ -21,9 +21,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .cohort_schema import (
+    CohortDefinition,
+    CohortSchemaError,
+    coerce_cohort_definition,
+)
+from .robustness_panel import RobustnessPlanError, RobustnessSpec, validate_robustness_specs
 
 
 # ---------------------------------------------------------------------------
@@ -402,8 +409,41 @@ class AnalysisPlan(BaseModel):
 
     research_question: str
     steps: List[AnalysisStep]
+    cohort: Optional[CohortDefinition] = Field(
+        default=None,
+        description=(
+            "Typed primary cohort definition. If supplied, every predicate must "
+            "include concept_id, time_window, aggregation, operator and value."
+        ),
+    )
+    robustness_specs: List[RobustnessSpec] = Field(
+        default_factory=list,
+        description=(
+            "Pre-specified robustness specifications locked before execution. "
+            "When present, the specs must cover cohort, missingness, and outcome axes."
+        ),
+    )
     rationale: Optional[str] = None
     revision: int = 1
+
+    @field_validator("cohort", mode="before")
+    @classmethod
+    def _coerce_cohort_definition(cls, value: Any) -> Optional[CohortDefinition]:
+        if value is None:
+            return None
+        try:
+            return coerce_cohort_definition(value)
+        except CohortSchemaError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @model_validator(mode="after")
+    def _validate_robustness_specs(self) -> "AnalysisPlan":
+        if self.robustness_specs:
+            try:
+                validate_robustness_specs(self.robustness_specs)
+            except RobustnessPlanError as exc:
+                raise ValueError(str(exc)) from exc
+        return self
 
 
 class EvidenceRef(BaseModel):
@@ -690,6 +730,41 @@ class AnalysisManifest(BaseModel):
             "ResearchAgentPipeline(enable_reproducibility_envelope=True)."
         ),
     )
+    submission_profile_name: Optional[str] = Field(
+        default=None,
+        description="Name of the versioned paper-facing submission profile, if any.",
+    )
+    submission_profile_version: Optional[str] = Field(
+        default=None,
+        description="Version token for the paper-facing submission profile, if any.",
+    )
+    submission_profile_locked_at: Optional[str] = Field(
+        default=None,
+        description="Timestamp at which the submission profile was frozen.",
+    )
+    concept_dict_path: Optional[str] = Field(
+        default=None,
+        description="Package-relative EasyICU concept dictionary path used by the run.",
+    )
+    concept_dict_sha: Optional[str] = Field(
+        default=None,
+        description="SHA-256 of the EasyICU concept dictionary used by the run.",
+    )
+    sofa2_dict_path: Optional[str] = Field(
+        default=None,
+        description="Package-relative EasyICU SOFA-2 dictionary path used by the run.",
+    )
+    sofa2_dict_sha: Optional[str] = Field(
+        default=None,
+        description="SHA-256 of the EasyICU SOFA-2 dictionary used by the run.",
+    )
+    concept_dict_fingerprint: Optional[Dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Full concept-dictionary fingerprint including concept-dict and "
+            "SOFA-2 dictionary paths, hashes, and computed_at timestamp."
+        ),
+    )
     readiness: Dict[str, Any] = Field(
         default_factory=dict,
         description=(
@@ -706,6 +781,16 @@ class AnalysisManifest(BaseModel):
             "author_review_note.md and, only when gated, manuscript_ready.md."
         ),
     )
+    robustness_panel_path: Optional[str] = None
+    robustness_panel_sha: Optional[str] = None
+    robustness_n_variants: Optional[int] = None
+    robustness_range_low: Optional[float] = None
+    robustness_range_high: Optional[float] = None
+    cohort_locked_path: Optional[str] = None
+    cohort_locked_sha: Optional[str] = None
+    side_findings_path: Optional[str] = None
+    side_findings_sha: Optional[str] = None
+    side_findings_count: int = 0
     report_path: Optional[str] = None
     manuscript_path: Optional[str] = None
     audit_log_path: Optional[str] = None

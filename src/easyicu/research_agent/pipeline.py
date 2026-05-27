@@ -31,11 +31,10 @@ Loop shape::
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
 import asyncio
 import csv
-import hashlib
 import json
+import logging
 import re
 import shutil
 import textwrap
@@ -47,6 +46,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from .agents import (
     AnalyzerAgent,
@@ -112,6 +113,13 @@ from .context import (
 )
 from . import pipeline_cache as _pipeline_cache
 from .pipeline_config import PipelineConfig
+from .contracts import _ExecutePhaseResult, _PlanPhaseResult, _WritePhaseResult
+from .concept_dict_audit import (
+    assert_dict_matches as assert_concept_dict_matches,
+    write_concept_dict_fingerprint,
+)
+from .cohort_schema import ensure_cohort_definition, write_locked_cohort_definition
+from .robustness_panel import ensure_robustness_specs, write_locked_robustness_specs
 from .pipeline_report import (
     execution_gate_status,
     render_report,
@@ -155,6 +163,11 @@ from .evidence import (
     EvidenceEnforcementMode,
     EvidenceStore,
     _coerce_enforcement_mode,
+)
+from .experience import (
+    ExperienceBank,
+    ExperienceRecord,
+    mine_experience_from_run,
 )
 from .manuscript_post import (
     bind_numeric_values,
@@ -205,6 +218,7 @@ from .pipeline_primary_effect import (
 from .pipeline_writer_aux import (
     _preferred_writer_evidence_names,
     _render_writer_evidence_digest,
+    _render_writer_evidence_digest_v2,
     _resolve_writer_aux_path,
     _summarise_primary_association_table,
     _summarise_sofa_zero_audit,
@@ -288,42 +302,10 @@ from .audits.validators import (
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 
-@dataclass
-class _PlanPhaseResult:
-    context: ResearchContext
-    agent_context: ResearchContext
-    context_path: Path
-    evidence: EvidenceStore
-    findings: List[ValidationFinding]
-    plan: AnalysisPlan
-    plan_path: Path
-    llm_signature: str
-    used_mock_llm: bool
-    prompt_version: str
-    prompt_files: Dict[str, str]
-    role_resolver: Callable[[str], Any]
-    cost_meter: Optional[CostMeter]
-    repro_envelope: Optional[ReproEnvelope]
-    started_at: datetime
-    resume_state: Optional[Dict[str, Any]]
-    aborted_result: Optional[PipelineResult] = None
-
-
-@dataclass
-class _ExecutePhaseResult:
-    plan: AnalysisPlan
-    per_step_records: List[Dict[str, Any]]
-    probe_summary: Dict[str, Any]
-    runtime_state: AgentRuntimeState
-    flush_partial_manifest: Callable[[Optional[Dict[str, Any]]], None]
-
-
-@dataclass
-class _WritePhaseResult:
-    literature: Optional[LiteratureBundle]
-    bound_path: Path
-    manuscript_packet: Optional[ManuscriptDraftPacket] = None
-    manuscript_critique: Optional[CritiqueReport] = None
+from .pipeline_package import (
+    _concept_dictionary_manifest_fields,  # noqa: F401
+    _render_cost_summary,  # noqa: F401
+)
 
 
 class ResearchAgentPipeline:
@@ -382,6 +364,11 @@ class ResearchAgentPipeline:
         enable_reproducibility_envelope: bool = False,
         llm_seed: Optional[int] = None,
         envelope_include_previews: bool = False,
+        submission_profile_name: Optional[str] = None,
+        submission_profile_version: Optional[str] = None,
+        submission_profile_locked_at: Optional[str] = None,
+        expected_concept_dict_sha: Optional[str] = None,
+        expected_sofa2_dict_sha: Optional[str] = None,
         enable_multiple_testing_correction: bool = True,
         multiple_testing_alpha: float = 0.05,
         enable_causal_audit: bool = True,
@@ -397,6 +384,12 @@ class ResearchAgentPipeline:
         enable_replanning: bool = True,
         max_total_steps: int = 12,
         max_numeric_claims_per_step: int = 100,
+        writer_digest_widened: bool = False,
+        writer_digest_secondary_cap_per_step: int = 20,
+        enable_experience_bank: bool = False,
+        experience_bank_path: Optional[Union[str, Path]] = None,
+        experience_bank_top_k: int = 5,
+        experience_bank_min_similarity: float = 0.2,
         runner_kind: str = "subprocess",
         runner_image: Optional[str] = None,
         runner_network: str = "none",
@@ -517,6 +510,11 @@ class ResearchAgentPipeline:
         self._enable_reproducibility_envelope = bool(enable_reproducibility_envelope)
         self._llm_seed = int(llm_seed) if llm_seed is not None else None
         self._envelope_include_previews = bool(envelope_include_previews)
+        self._submission_profile_name = submission_profile_name
+        self._submission_profile_version = submission_profile_version
+        self._submission_profile_locked_at = submission_profile_locked_at
+        self._expected_concept_dict_sha = expected_concept_dict_sha
+        self._expected_sofa2_dict_sha = expected_sofa2_dict_sha
         # O22 — run-wide multiple-testing correction. Defaults to ON
         # because reviewers of a research-agent paper will always ask
         # for it; the correction is cheap to compute and does not
@@ -575,6 +573,28 @@ class ResearchAgentPipeline:
             if max_numeric_claims_per_step and max_numeric_claims_per_step > 0
             else 0
         )
+        # Phase-1 writer-digest widening (default off). When True, the
+        # writer's evidence digest is augmented with a "secondary
+        # numbers" block enumerating NumericClaim entries outside the
+        # ``WRITER_DIGEST_PREFERRED_KEYS`` primary subset. The binder
+        # already accepts these; the flag controls only what the
+        # writer SEES. See pipeline_writer_aux._render_writer_evidence_digest_v2.
+        self._writer_digest_widened = bool(writer_digest_widened)
+        self._writer_digest_secondary_cap_per_step = max(
+            0, int(writer_digest_secondary_cap_per_step)
+        )
+        # Phase-1 cross-run experience bank (default off). When True,
+        # the planner sees retrieved hints in its context block and
+        # the post-run reflector mines + writes back records via the
+        # deterministic helper in experience.py. The bank is read in
+        # ``_retrieve_experience_hints`` and written in
+        # ``_reflect_and_persist_experience``.
+        self._enable_experience_bank = bool(enable_experience_bank)
+        self._experience_bank_path: Optional[Path] = (
+            Path(experience_bank_path) if experience_bank_path else None
+        )
+        self._experience_bank_top_k = max(0, int(experience_bank_top_k))
+        self._experience_bank_min_similarity = float(experience_bank_min_similarity)
         # T3.1 — runner backend selection. ``subprocess`` keeps the
         # existing behaviour; ``docker`` swaps in :class:`DockerRunner`
         # which mounts the cohort read-only inside a container with
@@ -707,6 +727,23 @@ class ResearchAgentPipeline:
                 producer="pipeline",
                 generation_mode="system",
             )
+        concept_fingerprint_path = run_dir / "concept_dict_fingerprint.json"
+        concept_fingerprint = write_concept_dict_fingerprint(concept_fingerprint_path)
+        assert_concept_dict_matches(
+            concept_fingerprint,
+            expected_concept_dict_sha=self._expected_concept_dict_sha,
+            expected_sofa2_dict_sha=self._expected_sofa2_dict_sha,
+            mode="strict",
+        )
+        if evidence.get("concept_dict_fingerprint") is None:
+            evidence.register_file(
+                kind="log",
+                description="SHA-256 fingerprint for EasyICU concept dictionaries.",
+                source_path=concept_fingerprint_path,
+                evidence_id="concept_dict_fingerprint",
+                producer="pipeline",
+                generation_mode="system",
+            )
         if (
             experiment_spec_path is not None
             and experiment_spec_path.exists()
@@ -825,9 +862,67 @@ class ResearchAgentPipeline:
                     generation_mode="system",
                 )
 
+        experience_digest_text: Optional[str] = None
+        experience_hits = self.retrieve_experience_hints(
+            research_question=question,
+            database=database,
+        )
+        if experience_hits:
+            bank = self._experience_bank()
+            bank_record_count = len(bank.records()) if bank is not None else len(experience_hits)
+            retired_count = max(0, bank_record_count - len(experience_hits))
+            lines = [
+                "# Experience Hints",
+                "",
+                "Only deterministic, audit-safe experience buckets are shown: "
+                "concept_usage_hint and failure_counter_example. These are hints, "
+                "not ICU rules; cohort definitions and clinical rules still come "
+                "from the concept dictionary and validators.",
+                "",
+                f"Selected {len(experience_hits)} card(s); withheld/retired "
+                f"{retired_count} card(s) below the retrieval threshold or top-k.",
+            ]
+            for idx, (record, score) in enumerate(experience_hits, start=1):
+                lines.extend(
+                    [
+                        "",
+                        f"## Card {idx}: {record.kind}",
+                        f"- score: {score:.3f}",
+                        f"- database: {record.database}",
+                        f"- cohort: {record.cohort_name}",
+                        f"- produced_by: {record.producer_run_id or 'unknown'}",
+                        f"- reason: lexical overlap with the current question"
+                        + (
+                            " plus same-database boost"
+                            if database and record.database == database
+                            else ""
+                        ),
+                        f"- summary: {record.summary}",
+                    ]
+                )
+            experience_digest_text = "\n".join(lines) + "\n"
+            experience_path = run_dir / "experience_hints.md"
+            experience_path.write_text(experience_digest_text, encoding="utf-8")
+            if evidence.get("experience_hints") is None:
+                evidence.register_file(
+                    kind="log",
+                    description="Audit log of cross-run experience cards fed to the planner.",
+                    source_path=experience_path,
+                    evidence_id="experience_hints",
+                    producer="experience_bank",
+                    generation_mode="system",
+                )
+
         agent_context = context
+        planner_notes: List[str] = []
         if memory_digest_text:
-            note = "RunMemory digest for planner:\n" + memory_digest_text
+            planner_notes.append("RunMemory digest for planner:\n" + memory_digest_text)
+        if experience_digest_text:
+            planner_notes.append(
+                "Experience hints for planner:\n" + experience_digest_text
+            )
+        if planner_notes:
+            note = "\n\n".join(planner_notes)
             agent_notes = f"{context.notes}\n\n{note}" if context.notes else note
             agent_context = agent_context.model_copy(update={"notes": agent_notes})
         if self._context_top_k and skill_obj is None:
@@ -1187,6 +1282,8 @@ class ResearchAgentPipeline:
                     detail={"dropped_step_ids": dropped, "cap": cap},
                 )
             )
+        plan = ensure_cohort_definition(plan)
+        plan = ensure_robustness_specs(plan)
         plan_path = run_dir / "analysis_plan.json"
         plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:
@@ -1207,6 +1304,20 @@ class ResearchAgentPipeline:
                     "used_mock_llm": used_mock_llm,
                 },
             )
+        write_locked_cohort_definition(
+            run_dir=run_dir,
+            plan=plan,
+            evidence=evidence,
+            prompt_pack_version=prompt_version,
+            llm_signature=llm_signature,
+        )
+        write_locked_robustness_specs(
+            run_dir=run_dir,
+            plan=plan,
+            evidence=evidence,
+            prompt_pack_version=prompt_version,
+            llm_signature=llm_signature,
+        )
         emit_progress(
             "plan",
             f"Analysis plan ready with {len(plan.steps)} step(s).",
@@ -1284,924 +1395,20 @@ class ResearchAgentPipeline:
         run_language: str,
         emit_progress: Callable[..., None],
     ) -> _WritePhaseResult:
-        """Draft manuscript-facing outputs after analysis is complete."""
-        context = plan_result.context
-        agent_context = plan_result.agent_context
-        evidence = plan_result.evidence
-        findings = plan_result.findings
-        role_resolver = plan_result.role_resolver
-        prompt_version = plan_result.prompt_version
-        runtime_state = execute_result.runtime_state
-        per_step_records = execute_result.per_step_records
-        critic = CriticAgent(role_resolver("analyzer"))
+        """Delegate to :mod:`pipeline_write`."""
+        from .pipeline_write import run_write_phase
 
-        execution_gate = execution_gate_status(
-            plan=execute_result.plan,
-            per_step_records=per_step_records,
-        )
-        if not execution_gate["execution_complete"]:
-            findings.append(
-                ValidationFinding(
-                    validator="manuscript_gate",
-                    severity="error",
-                    message=(
-                        "Formal manuscript generation skipped because the execution "
-                        "gate did not pass. Review author_review_note.md and the "
-                        "diagnostic artefacts before rerunning."
-                    ),
-                    detail=execution_gate,
-                )
-            )
-            bound_path = run_dir / "manuscript_scaffold_bound.md"
-            bound_path.write_text(
-                "# Manuscript scaffold not generated\n\n"
-                "Strict fail-closed policy blocked manuscript drafting because "
-                "one or more required analysis steps did not complete successfully.\n\n"
-                "Review `author_review_note.md`, `run_status.json`, "
-                "`evidence_audit.json`, `numeric_audit.json`, and "
-                "`claim_ledger.csv` for the diagnostic record.\n",
-                encoding="utf-8",
-            )
-            return _WritePhaseResult(literature=None, bound_path=bound_path)
-
-        if stop_after_analysis:
-            emit_progress(
-                "pause",
-                "Analysis phase complete; manuscript generation skipped by user setting.",
-                status="paused",
-                run_id=run_id,
-            )
-            bound_path = run_dir / "manuscript_scaffold_bound.md"
-            bound_path.write_text(
-                "# Manuscript scaffold not generated\n\n"
-                "This run stopped after the analysis phase. Review the "
-                "`results_report.md`, tables, figures and manifest, then "
-                "rerun with manuscript drafting enabled when the analysis "
-                "is ready.\n",
-                encoding="utf-8",
-            )
-            return _WritePhaseResult(literature=None, bound_path=bound_path)
-
-        literature: Optional[LiteratureBundle] = None
-        if self._enable_publication_figure_skill:
-            try:
-                emit_progress(
-                    "figure",
-                    "Rendering manuscript-facing publication figure bundle from registered evidence.",
-                    run_id=run_id,
-                )
-                figure_result = PublicationFigureSkill().run(
-                    context=context,
-                    plan=execute_result.plan,
-                    evidence=evidence,
-                    run_dir=run_dir,
-                    prompt_pack_version=prompt_version,
-                )
-                findings.extend(figure_result.findings)
-                if self._enable_visual_qa and figure_result.figure_evidence_ids:
-                    fig_paths = []
-                    for evidence_id in figure_result.figure_evidence_ids:
-                        record = evidence.get(evidence_id)
-                        if record is not None:
-                            fig_paths.append(run_dir / record.relative_path)
-                    if fig_paths:
-                        vlm_adapter = self._visual_qa_adapter
-                        if vlm_adapter is None and self._enable_vlm_visual_qa:
-                            client = self._vlm_client or role_resolver("analyzer")
-                            if client is not None:
-                                vlm_adapter = VLMVisualQAAdapter(client)
-                        publication_visual_findings = VisualQAAuditor(
-                            vlm_adapter=vlm_adapter
-                        ).audit(figure_paths=fig_paths)
-                        # See the final-pass demotion above: layout-style
-                        # visual_qa errors raised on the publication
-                        # bundle are cosmetic and must not block
-                        # acceptance after the per-step repair budget
-                        # has been exhausted upstream.
-                        findings.extend(
-                            (
-                                finding.model_copy(
-                                    update={"severity": "warning"}
-                                )
-                                if finding.severity == "error"
-                                else finding
-                            )
-                            for finding in publication_visual_findings
-                        )
-            except Exception as exc:
-                findings.append(
-                    ValidationFinding(
-                        validator="publication_figure_skill",
-                        severity="warning",
-                        message=f"Publication figure skill failed; writer will use existing evidence only: {exc}",
-                    )
-                )
-
-        if self._enable_literature:
-            try:
-                emit_progress(
-                    "literature",
-                    "Building literature bundle for manuscript drafting.",
-                    run_id=run_id,
-                )
-                lit_client = role_resolver("literature")
-                if hasattr(lit_client, "_inner") and isinstance(
-                    getattr(lit_client, "_inner", None), MockLLMClient
-                ):
-                    lit_client = None
-                if isinstance(lit_client, MockLLMClient):
-                    lit_client = None
-                pubmed_client = None
-                if self._enable_pubmed:
-                    from .literature import PubMedLiteratureClient
-
-                    pubmed_client = PubMedLiteratureClient(
-                        email=self._pubmed_email,
-                        api_key=self._pubmed_api_key,
-                    )
-                tavily_client = None
-                if self._enable_tavily:
-                    from .literature import TavilyLiteratureClient
-
-                    tavily_client = TavilyLiteratureClient(
-                        api_key=self._tavily_api_key,
-                        include_domains=self._tavily_include_domains,
-                        exclude_domains=self._tavily_exclude_domains,
-                    )
-                literature = LiteratureAgent(
-                    lit_client,
-                    enable_pubmed=self._enable_pubmed,
-                    pubmed_client=pubmed_client,
-                    enable_tavily=self._enable_tavily,
-                    tavily_client=tavily_client,
-                    tavily_retmax=self._tavily_retmax,
-                ).run(agent_context)
-                lit_path = run_dir / "literature_bundle.json"
-                lit_path.write_text(
-                    literature.model_dump_json(indent=2), encoding="utf-8"
-                )
-                if evidence.get("literature_bundle") is None:
-                    evidence.register_file(
-                        kind="log",
-                        description="LiteratureBundle (citation registry for this run).",
-                        source_path=lit_path,
-                        evidence_id="literature_bundle",
-                        producer="literature",
-                        generation_mode=(
-                            "llm" if lit_client is not None else "deterministic_skill"
-                        ),
-                        prompt_pack_version=prompt_version,
-                        metadata={
-                            "enable_pubmed": self._enable_pubmed,
-                            "enable_tavily": self._enable_tavily,
-                        },
-                    )
-                # O21 — PRISMA 2020 counts. Registered as a separate
-                # evidence id so the manuscript can cite
-                # ``{evidence:literature_prisma}`` without pulling the
-                # whole citation table into the binder.
-                if literature.prisma is not None:
-                    prisma_path = run_dir / "literature_prisma.json"
-                    prisma_md_path = run_dir / "literature_prisma.md"
-                    prisma_path.write_text(
-                        json.dumps(
-                            {
-                                "research_question": literature.research_question,
-                                "prisma": literature.prisma,
-                            },
-                            indent=2,
-                            default=str,
-                        ),
-                        encoding="utf-8",
-                    )
-                    p = literature.prisma
-                    prisma_md = (
-                        "# PRISMA 2020 flow (O21)\n\n"
-                        f"- Records identified: **{p.get('identified', 0)}**\n"
-                        f"- Duplicates removed: **{p.get('duplicates_removed', 0)}**\n"
-                        f"- Records screened: **{p.get('screened', 0)}**\n"
-                        f"- Records eligible: **{p.get('eligible', 0)}**\n"
-                        f"- Records included in review: **{p.get('included', 0)}**\n"
-                    )
-                    prisma_md_path.write_text(prisma_md, encoding="utf-8")
-                    if evidence.get("literature_prisma") is None:
-                        evidence.register_file(
-                            kind="statistic",
-                            description=(
-                                "PRISMA 2020 flow counts for the literature search (O21)."
-                            ),
-                            source_path=prisma_path,
-                            evidence_id="literature_prisma",
-                            producer="literature",
-                            generation_mode="system",
-                        )
-                    if evidence.get("literature_prisma_summary") is None:
-                        evidence.register_file(
-                            kind="log",
-                            description="Human-readable PRISMA flow summary (O21).",
-                            source_path=prisma_md_path,
-                            evidence_id="literature_prisma_summary",
-                            producer="literature",
-                            generation_mode="system",
-                        )
-            except Exception as exc:
-                findings.append(
-                    ValidationFinding(
-                        validator="literature_agent",
-                        severity="warning",
-                        message=f"Literature agent failed: {exc}",
-                    )
-                )
-
-        emit_progress(
-            "writer",
-            "Drafting manuscript scaffold.",
+        return run_write_phase(
+            self,
+            plan_result=plan_result,
+            execute_result=execute_result,
+            run_dir=run_dir,
             run_id=run_id,
-        )
-        writer = ManuscriptAgent(role_resolver("writer"), language=run_language)
-        manuscript_packet: Optional[ManuscriptDraftPacket] = None
-        if runtime_state.semantics is not None:
-            manuscript_packet = writer.build_packet(
-                context=context,
-                semantics=runtime_state.semantics,
-                evidence_refs=[
-                    EvidenceRef(
-                        evidence_id=record.evidence_id,
-                        kind=record.kind,
-                        description=record.description,
-                        relative_path=record.relative_path,
-                    )
-                    for record in evidence.records()
-                ],
-                findings=[
-                    f.message for f in findings if f.severity in {"warning", "error"}
-                ],
-                caveats=list(runtime_state.semantics.safety_guardrails),
-            )
-            packet_path = run_dir / "manuscript_packet.json"
-            packet_path.write_text(
-                manuscript_packet.model_dump_json(indent=2),
-                encoding="utf-8",
-            )
-            if evidence.get("manuscript_packet") is None:
-                evidence.register_file(
-                    kind="log",
-                    description="Typed manuscript draft packet passed into the manuscript agent.",
-                    source_path=packet_path,
-                    evidence_id="manuscript_packet",
-                    producer="manuscript_agent",
-                    generation_mode="system",
-                    prompt_pack_version=prompt_version,
-                )
-        try:
-            writer_evidence_digest = _render_writer_evidence_digest(
-                context=context,
-                run_dir=run_dir,
-                per_step_records=per_step_records,
-            )
-            scaffold = writer.run(
-                context=agent_context,
-                evidence_ids=_preferred_writer_evidence_names(evidence),
-                evidence_digest=writer_evidence_digest,
-            )
-        except Exception as exc:
-            scaffold = f"(writer failed: {exc})"
-        scaffold, placeholder_repairs = _repair_common_writer_placeholders(
-            scaffold,
-            context=context,
-            evidence=evidence,
-        )
-        if placeholder_repairs:
-            findings.append(
-                ValidationFinding(
-                    validator="evidence_bound_writer",
-                    severity="warning",
-                    message=(
-                        "Repaired common manuscript evidence placeholder(s): "
-                        + ", ".join(
-                            f"{old}->{new}" for old, new in placeholder_repairs
-                        )
-                    ),
-                    detail={
-                        "repairs": [
-                            {"from": old, "to": new}
-                            for old, new in placeholder_repairs
-                        ]
-                    },
-                )
-            )
-        scaffold_path = run_dir / "manuscript_scaffold.md"
-        scaffold_path.write_text(scaffold, encoding="utf-8")
-        if evidence.get("manuscript_scaffold_raw") is None:
-            evidence.register_file(
-                kind="log",
-                description="Manuscript scaffold (raw, with {evidence:*} placeholders).",
-                source_path=scaffold_path,
-                evidence_id="manuscript_scaffold_raw",
-                producer="writer",
-                generation_mode="llm",
-                prompt_pack_version=prompt_version,
-            )
-
-        evidence_bound_scaffold, removed_sentences = (
-            evidence.enforce_evidence_bound_scaffold(scaffold)
-        )
-        if removed_sentences:
-            findings.append(
-                ValidationFinding(
-                    validator="evidence_bound_writer",
-                    severity="warning",
-                    message=(
-                        f"Filtered {len(removed_sentences)} result-like sentence(s) without evidence placeholders before manuscript binding."
-                    ),
-                    detail={"removed_sentences": removed_sentences},
-                )
-            )
-            filtered_path = run_dir / "manuscript_scaffold_filtered.md"
-            filtered_path.write_text(evidence_bound_scaffold, encoding="utf-8")
-            if evidence.get("manuscript_scaffold_filtered") is None:
-                evidence.register_file(
-                    kind="log",
-                    description="Manuscript scaffold after evidence-bound filtering.",
-                    source_path=filtered_path,
-                    evidence_id="manuscript_scaffold_filtered",
-                    producer="pipeline",
-                    generation_mode="system",
-                )
-
-        bound_unfiltered = evidence.bind_manuscript(evidence_bound_scaffold)
-        bound, demoted_missing_ids = _demote_unresolved_evidence_placeholders(
-            bound_unfiltered
-        )
-        bound, removed_tbd_sentences = _remove_tbd_sentences(bound)
-        if (
-            removed_tbd_sentences
-            and self._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT
-        ):
-            raise EvidenceEnforcementError(
-                f"STRICT evidence mode: writer emitted {len(removed_tbd_sentences)} "
-                f"sentence(s) containing [TBD]/[TODO]/[TK] placeholder(s). "
-                f"The bound manuscript must not carry unresolved writer "
-                f"placeholders before submission.",
-                detail={"tbd_sentences": removed_tbd_sentences},
-            )
-        # Value-level provenance binding: attach a footnote next to every
-        # numeric value in the manuscript pointing to the exact step /
-        # field / evidence id that produced it. STRICT mode raises when a
-        # number cannot be traced; SOFT mode marks it inline so reviewers
-        # see the gap without breaking the bound output.
-        bound, numeric_binding_map, untraced_numerics = bind_numeric_values(
-            bound,
-            evidence=evidence,
-            enforcement_mode=self._evidence_enforcement_mode,
-        )
-        bound_path = run_dir / "manuscript_scaffold_bound.md"
-        bound_path.write_text(bound, encoding="utf-8")
-        if evidence.get("manuscript_scaffold_bound") is None:
-            evidence.register_file(
-                kind="log",
-                description="Manuscript scaffold with evidence ids resolved to file links + sha256.",
-                source_path=bound_path,
-                evidence_id="manuscript_scaffold_bound",
-                producer="pipeline",
-                generation_mode="system",
-            )
-        if demoted_missing_ids:
-            unfiltered_path = run_dir / "manuscript_scaffold_bound_unfiltered.md"
-            unfiltered_path.write_text(bound_unfiltered, encoding="utf-8")
-            if evidence.get("manuscript_scaffold_bound_unfiltered") is None:
-                evidence.register_file(
-                    kind="log",
-                    description=(
-                        "Manuscript scaffold prior to demoting unresolved "
-                        "[evidence missing: …] placeholders to HTML comments."
-                    ),
-                    source_path=unfiltered_path,
-                    evidence_id="manuscript_scaffold_bound_unfiltered",
-                    producer="pipeline",
-                    generation_mode="system",
-                )
-            findings.append(
-                ValidationFinding(
-                    validator="evidence_bound_writer",
-                    severity="warning",
-                    message=(
-                        f"Demoted {len(demoted_missing_ids)} unresolved "
-                        f"[evidence missing: …] placeholder(s) to HTML "
-                        f"comments so the manuscript still renders cleanly; "
-                        f"see manuscript_scaffold_bound_unfiltered.md for "
-                        f"the original."
-                    ),
-                    detail={"missing_evidence_ids": sorted(set(demoted_missing_ids))},
-                )
-            )
-        if removed_tbd_sentences:
-            findings.append(
-                ValidationFinding(
-                    validator="evidence_bound_writer",
-                    severity="warning",
-                    message=(
-                        f"Removed {len(removed_tbd_sentences)} sentence(s) containing "
-                        "[TBD] from the bound manuscript; the writer must omit "
-                        "unsupported values instead of leaving placeholders."
-                    ),
-                    detail={"removed_sentences": removed_tbd_sentences},
-                )
-            )
-        manuscript_numeric_findings = audit_manuscript_numeric_claims(
-            bound,
-            per_step_records=per_step_records,
-        )
-        findings.extend(manuscript_numeric_findings)
-
-        manuscript_critique = critic.review_manuscript(
-            scaffold=bound,
-            available_evidence_ids=evidence.resolvable_names(),
-        )
-        if manuscript_numeric_findings:
-            manuscript_critique = manuscript_critique.model_copy(
-                update={
-                    "status": "blocked",
-                    "unsupported_claims": list(manuscript_critique.unsupported_claims)
-                    + [finding.message for finding in manuscript_numeric_findings],
-                    "concerns": list(manuscript_critique.concerns)
-                    + [
-                        "Manuscript numeric claims disagree with registered step_summary values."
-                    ],
-                }
-            )
-        critique_path = run_dir / "manuscript_critique.json"
-        critique_path.write_text(
-            manuscript_critique.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-        if evidence.get("manuscript_critique") is None:
-            evidence.register_file(
-                kind="log",
-                description="Structured manuscript critique after evidence binding.",
-                source_path=critique_path,
-                evidence_id="manuscript_critique",
-                producer="critic",
-                generation_mode="system",
-            )
-        if manuscript_critique.status in {"needs_revision", "blocked"}:
-            findings.append(
-                ValidationFinding(
-                    validator="critic_agent",
-                    severity="error",
-                    message=(
-                        f"CriticAgent marked manuscript as {manuscript_critique.status}: "
-                        + "; ".join(
-                            manuscript_critique.concerns
-                            or manuscript_critique.suggested_repairs
-                            or ["review required"]
-                        )
-                    ),
-                    evidence_ids=["manuscript_critique"],
-                )
-            )
-
-        if self._enable_latex:
-            try:
-                emit_progress(
-                    "latex",
-                    "Rendering LaTeX and BibTeX scaffold.",
-                    run_id=run_id,
-                )
-                bib_basename = "manuscript_scaffold"
-                # Collect registered figure paths for auto-embedding.
-                fig_paths_for_latex: List[Tuple[str, str]] = []
-                for rec in evidence.records():
-                    if rec.kind != "figure":
-                        continue
-                    # Prefer PNG for LaTeX compatibility; SVG needs
-                    # inkscape or svg package.
-                    if rec.relative_path.endswith((".png", ".pdf", ".tiff")):
-                        fig_paths_for_latex.append(
-                            (rec.evidence_id, "evidence/" + rec.relative_path)
-                        )
-                tex = scaffold_to_latex(
-                    markdown=bound,
-                    title=manuscript_title
-                    or f"EasyICU research-agent: {context.research_question}",
-                    authors=manuscript_authors or ["EasyICU research-agent"],
-                    bibliography=literature,
-                    bibliography_basename=bib_basename,
-                    venue_template=self._latex_venue_template,
-                    figure_paths=fig_paths_for_latex or None,
-                )
-                tex_path = run_dir / "manuscript_scaffold.tex"
-                tex_path.write_text(tex, encoding="utf-8")
-                if evidence.get("manuscript_scaffold_tex") is None:
-                    evidence.register_file(
-                        kind="log",
-                        description="LaTeX manuscript scaffold generated from the bound markdown.",
-                        source_path=tex_path,
-                        evidence_id="manuscript_scaffold_tex",
-                        producer="pipeline",
-                        generation_mode="system",
-                    )
-                if literature is not None and getattr(literature, "citations", None):
-                    bib = render_bibtex(literature)
-                    bib_path = run_dir / f"{bib_basename}.bib"
-                    bib_path.write_text(bib, encoding="utf-8")
-                    if evidence.get("manuscript_bibliography") is None:
-                        evidence.register_file(
-                            kind="log",
-                            description="BibTeX file rendered from the literature bundle.",
-                            source_path=bib_path,
-                            evidence_id="manuscript_bibliography",
-                            producer="pipeline",
-                            generation_mode="system",
-                        )
-                # Optional: compile the .tex to PDF on disk so users
-                # can open ``manuscript_scaffold.pdf`` directly. Off
-                # by default because not every environment has a
-                # LaTeX install.
-                if self._enable_pdf_render:
-                    bib_full = (
-                        run_dir / f"{bib_basename}.bib"
-                        if (run_dir / f"{bib_basename}.bib").exists()
-                        else None
-                    )
-                    pdf_result = render_pdf_for_run(
-                        tex_path=tex_path,
-                        bib_path=bib_full,
-                        output_dir=run_dir,
-                    )
-                    if pdf_result.success and pdf_result.pdf_path is not None:
-                        if evidence.get("manuscript_scaffold_pdf") is None:
-                            evidence.register_file(
-                                kind="log",
-                                description=(
-                                    f"Compiled manuscript PDF "
-                                    f"(engine={pdf_result.engine})."
-                                ),
-                                source_path=pdf_result.pdf_path,
-                                evidence_id="manuscript_scaffold_pdf",
-                                producer="pipeline",
-                                generation_mode="system",
-                            )
-                        findings.append(
-                            ValidationFinding(
-                                validator="pdf_render",
-                                severity="info",
-                                message=(
-                                    f"Rendered manuscript PDF via "
-                                    f"{pdf_result.engine}."
-                                ),
-                                evidence_ids=["manuscript_scaffold_pdf"],
-                            )
-                        )
-                    else:
-                        findings.append(
-                            ValidationFinding(
-                                validator="pdf_render",
-                                severity="warning",
-                                message=(
-                                    "PDF render failed or no LaTeX "
-                                    "engine found: "
-                                    + "; ".join(pdf_result.notes)
-                                ),
-                            )
-                        )
-            except Exception as exc:
-                findings.append(
-                    ValidationFinding(
-                        validator="latex_export",
-                        severity="warning",
-                        message=f"LaTeX export failed: {exc}",
-                    )
-                )
-
-        # O18 — Causal audit. Run last in the write phase so the
-        # bound manuscript (post binding, post filtering) is what gets
-        # scanned. Associational-effect-with-causal-language is a
-        # warning; causal_overclaimed-with-causal-language is an
-        # error.
-        if self._enable_causal_audit:
-            try:
-                bound_text = bound_path.read_text(encoding="utf-8")
-            except Exception:
-                bound_text = ""
-            causal_report = run_causal_audit(
-                evidence_records=evidence.records(),
-                run_dir=run_dir,
-                bound_manuscript=bound_text,
-            )
-            causal_json = run_dir / "causal_audit_report.json"
-            causal_md = run_dir / "causal_audit_report.md"
-            causal_report.write_json(causal_json)
-            causal_report.write_markdown(causal_md)
-            if evidence.get("causal_audit_report") is None:
-                evidence.register_file(
-                    kind="statistic",
-                    description=(
-                        "Causal-claim audit (O18): effect labels "
-                        "(associational / causal_explicit / "
-                        "causal_overclaimed) and causal-language hits."
-                    ),
-                    source_path=causal_json,
-                    evidence_id="causal_audit_report",
-                    producer="pipeline",
-                    generation_mode="system",
-                )
-            if evidence.get("causal_audit_summary") is None:
-                evidence.register_file(
-                    kind="log",
-                    description="Human-readable causal-audit summary (O18).",
-                    source_path=causal_md,
-                    evidence_id="causal_audit_summary",
-                    producer="pipeline",
-                    generation_mode="system",
-                )
-            summary = causal_report.summary()
-            if summary["n_effects_labelled"] > 0 or summary["n_language_errors"] > 0:
-                findings.append(
-                    ValidationFinding(
-                        validator="causal_audit",
-                        severity="info",
-                        message=(
-                            f"Labelled {summary['n_effects_labelled']} effect(s); "
-                            f"{summary['n_associational']} associational, "
-                            f"{summary['n_causal_explicit']} causal_explicit, "
-                            f"{summary['n_causal_overclaimed']} causal_overclaimed."
-                        ),
-                        evidence_ids=["causal_audit_report"],
-                        detail=summary,
-                    )
-                )
-            for hit in causal_report.language_hits:
-                findings.append(
-                    ValidationFinding(
-                        validator="causal_audit",
-                        severity=hit.severity,
-                        message=(
-                            f"Causal language over {hit.strength} pattern "
-                            f"`{hit.pattern}` cited "
-                            f"{hit.linked_effect_labels or 'no labelled effect'}."
-                        ),
-                        evidence_ids=list(hit.linked_evidence_ids)
-                        + ["causal_audit_report"],
-                        detail={"sentence": hit.sentence[:280]},
-                    )
-                )
-
-        # O16 — Reporting-guideline checklist. Writes STROBE (always)
-        # and TRIPOD+AI (when the analysis family looks like a
-        # prediction / validation study). Findings are emitted at
-        # ``info`` severity by default so the paper can still be
-        # produced; reviewers see the coverage number and decide.
-        if self._enable_reporting_checklist:
-            try:
-                bound_text = bound_path.read_text(encoding="utf-8")
-            except Exception:
-                bound_text = ""
-            if self._reporting_checklist_names is not None:
-                wanted = tuple(
-                    n.lower() for n in self._reporting_checklist_names
-                )
-            else:
-                analysis_family = (
-                    (context.user_preferences.inferred_analysis_family or "")
-                    if getattr(context, "user_preferences", None)
-                    else ""
-                )
-                wanted = choose_checklist(analysis_family)
-            checklist_reports = []
-            if "strobe" in wanted:
-                checklist_reports.append(
-                    ("strobe", build_strobe_checklist(
-                        evidence_records=evidence.records(),
-                        bound_manuscript=bound_text,
-                    ))
-                )
-            if "tripod_ai" in wanted or "tripod+ai" in wanted:
-                checklist_reports.append(
-                    ("tripod_ai", build_tripod_ai_checklist(
-                        evidence_records=evidence.records(),
-                        bound_manuscript=bound_text,
-                    ))
-                )
-            for key, report in checklist_reports:
-                md_path = run_dir / f"reporting_checklist_{key}.md"
-                json_path = run_dir / f"reporting_checklist_{key}.json"
-                md_path.write_text(report.to_markdown(), encoding="utf-8")
-                json_path.write_text(
-                    json.dumps(report.to_json(), indent=2, default=str),
-                    encoding="utf-8",
-                )
-                md_evid_id = f"reporting_checklist_{key}"
-                json_evid_id = f"reporting_checklist_{key}_json"
-                if evidence.get(md_evid_id) is None:
-                    evidence.register_file(
-                        kind="log",
-                        description=(
-                            f"Auto-filled {report.name} reporting checklist (O16)."
-                        ),
-                        source_path=md_path,
-                        evidence_id=md_evid_id,
-                        producer="pipeline",
-                        generation_mode="system",
-                    )
-                if evidence.get(json_evid_id) is None:
-                    evidence.register_file(
-                        kind="log",
-                        description=(
-                            f"Structured {report.name} reporting checklist (O16)."
-                        ),
-                        source_path=json_path,
-                        evidence_id=json_evid_id,
-                        producer="pipeline",
-                        generation_mode="system",
-                    )
-                summary = report.summary()
-                findings.append(
-                    ValidationFinding(
-                        validator="reporting_checklist",
-                        severity="info",
-                        message=(
-                            f"{report.name} coverage {summary['coverage']:.0%} "
-                            f"({summary['n_addressed']} addressed, "
-                            f"{summary['n_partial']} partial, "
-                            f"{summary['n_open']} open, "
-                            f"{summary['n_not_applicable']} n/a)."
-                        ),
-                        evidence_ids=[md_evid_id],
-                        detail=summary,
-                    )
-                )
-                # Promote to warning only if coverage < 50 %; reviewers
-                # care about Methods completeness, not every cell.
-                if summary["coverage"] < 0.5:
-                    findings.append(
-                        ValidationFinding(
-                            validator="reporting_checklist",
-                            severity="warning",
-                            message=(
-                                f"{report.name} reporting coverage below 50 %; "
-                                "expect reviewer pushback on Methods completeness."
-                            ),
-                            evidence_ids=[md_evid_id],
-                            detail=summary,
-                        )
-                    )
-
-        # O15 — Simulated three-role reviewer round. Runs after the
-        # deterministic gates so each reviewer reads the latest
-        # findings (multiple-testing, causal-audit, checklist). The
-        # output is not a validator; it is a reviewer-facing note
-        # bundle that the manuscript author / responsible clinician
-        # uses to tighten the draft before submission.
-        if self._enable_reviewer_round:
-            reviewer_report = run_reviewer_round(
-                evidence_records=evidence.records(),
-                findings=findings,
-                round_index=0,
-            )
-            reviewer_md = run_dir / "reviewer_report.md"
-            reviewer_json = run_dir / "reviewer_report.json"
-            reviewer_md.write_text(reviewer_report.to_markdown(), encoding="utf-8")
-            reviewer_json.write_text(
-                json.dumps(reviewer_report.to_json(), indent=2, default=str),
-                encoding="utf-8",
-            )
-            if evidence.get("reviewer_report") is None:
-                evidence.register_file(
-                    kind="log",
-                    description=(
-                        "Three-role simulated reviewer report (O15): "
-                        "statistician / clinician / methodologist."
-                    ),
-                    source_path=reviewer_md,
-                    evidence_id="reviewer_report",
-                    producer="pipeline",
-                    generation_mode="system",
-                )
-            if evidence.get("reviewer_report_json") is None:
-                evidence.register_file(
-                    kind="log",
-                    description="Structured reviewer report (O15).",
-                    source_path=reviewer_json,
-                    evidence_id="reviewer_report_json",
-                    producer="pipeline",
-                    generation_mode="system",
-                )
-            summary = reviewer_report.summary()
-            rec = summary["aggregated_recommendation"]
-            severity = {
-                "accept": "info",
-                "minor_revision": "info",
-                "major_revision": "warning",
-                "reject": "error",
-            }.get(rec, "info")
-            findings.append(
-                ValidationFinding(
-                    validator="reviewer_round",
-                    severity=severity,
-                    message=(
-                        f"Simulated reviewers returned `{rec}` "
-                        f"(info={summary['counts'].get('info',0)}, "
-                        f"minor={summary['counts'].get('minor',0)}, "
-                        f"major={summary['counts'].get('major',0)}, "
-                        f"reject={summary['counts'].get('reject',0)})."
-                    ),
-                    evidence_ids=["reviewer_report"],
-                    detail=summary,
-                )
-            )
-
-        # O26 — Notebook + lockfile. Concatenates every per-step
-        # generated script in plan order into a single runnable
-        # ``run.ipynb`` and captures the interpreter's installed
-        # packages in ``requirements.lock.txt``. Runs regardless of
-        # reviewer / checklist flags so the reproducibility artefacts
-        # are always present.
-        try:
-            notebook_steps: List[NotebookStep] = []
-            intent_by_id = {s.step_id: s.intent for s in plan_result.plan.steps}
-            # Preserve plan order: iterate plan, pick first 'code'
-            # evidence per step.
-            code_records_by_step: Dict[str, Any] = {}
-            for rec in evidence.records():
-                if rec.kind != "code":
-                    continue
-                step_id = rec.produced_by_step or ""
-                if step_id and step_id not in code_records_by_step:
-                    code_records_by_step[step_id] = rec
-            for step in plan_result.plan.steps:
-                rec = code_records_by_step.get(step.step_id)
-                if rec is None:
-                    continue
-                candidates = [
-                    run_dir / "evidence" / rec.relative_path,
-                    run_dir / rec.relative_path,
-                ]
-                path = next((p for p in candidates if p.exists()), None)
-                if path is None:
-                    continue
-                try:
-                    code_text = path.read_text(encoding="utf-8")
-                except Exception:
-                    continue
-                notebook_steps.append(
-                    NotebookStep(
-                        step_id=step.step_id,
-                        intent=intent_by_id.get(step.step_id, step.intent),
-                        code=code_text,
-                    )
-                )
-            if notebook_steps:
-                notebook = build_notebook(
-                    research_question=plan_result.context.research_question,
-                    cohort_relative_path="cohort.parquet",
-                    steps=notebook_steps,
-                )
-                nb_path = run_dir / "run.ipynb"
-                write_notebook(nb_path, notebook)
-                if evidence.get("run_notebook") is None:
-                    evidence.register_file(
-                        kind="code",
-                        description=(
-                            "Auto-generated Jupyter notebook re-running "
-                            "every plan step top-to-bottom (O26)."
-                        ),
-                        source_path=nb_path,
-                        evidence_id="run_notebook",
-                        producer="pipeline",
-                        generation_mode="system",
-                    )
-            lockfile_path = run_dir / "requirements.lock.txt"
-            lockfile_path.write_text(build_requirements_lockfile(), encoding="utf-8")
-            if evidence.get("requirements_lockfile") is None:
-                evidence.register_file(
-                    kind="log",
-                    description=(
-                        "Interpreter-level requirements lockfile captured "
-                        "at run time (O26)."
-                    ),
-                    source_path=lockfile_path,
-                    evidence_id="requirements_lockfile",
-                    producer="pipeline",
-                    generation_mode="system",
-                )
-        except Exception as exc:
-            findings.append(
-                ValidationFinding(
-                    validator="repro_artifacts",
-                    severity="warning",
-                    message=(
-                        f"Failed to build run.ipynb / lockfile: "
-                        f"{type(exc).__name__}: {exc}"
-                    ),
-                )
-            )
-
-        return _WritePhaseResult(
-            literature=literature,
-            bound_path=bound_path,
-            manuscript_packet=manuscript_packet,
-            manuscript_critique=manuscript_critique,
+            stop_after_analysis=stop_after_analysis,
+            manuscript_title=manuscript_title,
+            manuscript_authors=manuscript_authors,
+            run_language=run_language,
+            emit_progress=emit_progress,
         )
 
     def _finalise_success(
@@ -2222,680 +1429,131 @@ class ResearchAgentPipeline:
         audit_logger: Optional[AuditLogger],
         emit_progress: Callable[..., None],
     ) -> PipelineResult:
-        """Write reports/manifests and persist run memory after all phases finish."""
-        context = plan_result.context
-        evidence = plan_result.evidence
-        findings = plan_result.findings
-        per_step_records = execute_result.per_step_records
-        plan = execute_result.plan
+        """Delegate to :mod:`pipeline_package`."""
+        from .pipeline_package import finalise_success
 
-        plan_order = {s.step_id: i for i, s in enumerate(plan.steps)}
-        per_step_records.sort(
-            key=lambda r: (
-                -1
-                if r.get("step_id") == "00_probe"
-                else plan_order.get(r.get("step_id"), 10**9)
-            )
-        )
-        report_path = run_dir / "results_report.md"
-        report_path.write_text(
-            render_report(
-                context=context,
-                plan=plan,
-                findings=findings,
-                per_step_records=per_step_records,
-                evidence=evidence,
-                paused_after_analysis=stop_after_analysis,
-            ),
-            encoding="utf-8",
-        )
-
-        workflow_graph = build_workflow_graph(
+        return finalise_success(
+            self,
+            plan_result=plan_result,
+            execute_result=execute_result,
+            write_result=write_result,
             run_id=run_id,
-            context=context,
-            plan=plan,
-            per_step_records=per_step_records,
-            paused_after_analysis=stop_after_analysis,
-        )
-        workflow_graph_path = write_json_artifact(
-            run_dir / "workflow_graph.json",
-            workflow_graph,
-        )
-        workflow_mermaid_path = run_dir / "workflow_graph.md"
-        workflow_mermaid_path.write_text(
-            render_workflow_graph_mermaid(workflow_graph),
-            encoding="utf-8",
-        )
-        evidence.register_file(
-            kind="log",
-            description="Workflow graph JSON for this run.",
-            source_path=workflow_graph_path,
-            aliases=["workflow_graph"],
-            producer="pipeline",
-            generation_mode="system",
-        )
-        evidence.register_file(
-            kind="log",
-            description="Mermaid workflow graph for this run.",
-            source_path=workflow_mermaid_path,
-            aliases=["workflow_graph_mermaid"],
-            producer="pipeline",
-            generation_mode="system",
-        )
-
-        replay_bundle = build_execution_replay(
-            run_id=run_id,
-            cohort_path=cohort_path,
-            context_path=str(plan_result.context_path.relative_to(run_dir)),
-            plan_path=str(plan_result.plan_path.relative_to(run_dir)),
-            llm_signature=plan_result.llm_signature,
-            prompt_pack_version=plan_result.prompt_version,
-            per_step_records=per_step_records,
-            findings=findings,
-            evidence_ids=[r.evidence_id for r in evidence.records()],
-        )
-        replay_path = write_json_artifact(
-            run_dir / "execution_replay.json",
-            replay_bundle,
-        )
-        evidence.register_file(
-            kind="log",
-            description="Deterministic execution replay bundle for this run.",
-            source_path=replay_path,
-            aliases=["execution_replay"],
-            producer="pipeline",
-            generation_mode="system",
-        )
-
-        audit_log_rel: Optional[str] = None
-        if audit_logger is not None and audit_logger.path.exists():
-            evidence.register_file(
-                kind="log",
-                description="RuntimeSupervisor audit log (JSONL).",
-                source_path=audit_logger.path,
-                aliases=["audit_log"],
-                producer="pipeline",
-                generation_mode="system",
-            )
-            audit_log_rel = str(audit_logger.path.relative_to(run_dir))
-
-        cost_records_for_manifest = []
-        if plan_result.cost_meter is not None:
-            cost_records_for_manifest = list(plan_result.cost_meter.records)
-            cost_json_path = run_dir / "cost_records.json"
-            cost_json_path.write_text(
-                json.dumps(
-                    [r.model_dump(mode="json") for r in plan_result.cost_meter.records],
-                    indent=2,
-                    ensure_ascii=False,
-                    default=str,
-                ),
-                encoding="utf-8",
-            )
-            cost_md_path = run_dir / "cost_summary.md"
-            cost_md_path.write_text(
-                _render_cost_summary(plan_result.cost_meter), encoding="utf-8"
-            )
-            evidence.register_file(
-                kind="log",
-                description="Raw per-call LLM cost records (T3.2).",
-                source_path=cost_json_path,
-                evidence_id="cost_records",
-                producer="pipeline",
-                generation_mode="system",
-                # Resume legitimately appends new cost records, so the
-                # JSON sha changes between original and resumption; the
-                # original record stays canonical, the new one lands
-                # alongside as ``cost_records_v2`` for the audit trail.
-                on_sha_change="new_id",
-            )
-            evidence.register_file(
-                kind="log",
-                description="Human-readable LLM cost summary (T3.2).",
-                source_path=cost_md_path,
-                evidence_id="cost_summary",
-                producer="pipeline",
-                generation_mode="system",
-                on_sha_change="new_id",
-            )
-
-        reproducibility_summary: Optional[Dict[str, Any]] = None
-        if plan_result.repro_envelope is not None:
-            envelope_path = run_dir / "reproducibility_envelope.json"
-            plan_result.repro_envelope.to_disk(envelope_path)
-            # The envelope captures per-call prompt/response shas,
-            # timestamps, and the env snapshot. On a resumed run the
-            # content legitimately differs from the original (new
-            # per-call records for the steps we re-executed), so a sha
-            # collision is expected. Use ``on_sha_change="new_id"`` so
-            # the original envelope keeps its canonical evidence id
-            # (still resolvable for citations) and the resume's
-            # envelope lands beside it as ``..._v2`` for auditability,
-            # instead of crashing the whole run.
-            evidence.register_file(
-                kind="log",
-                description=(
-                    "LLM reproducibility envelope (O20): per-call prompt/response "
-                    "sha256, requested seed, temperature, provider/model, and a "
-                    "PHI-safe environment snapshot."
-                ),
-                source_path=envelope_path,
-                evidence_id="reproducibility_envelope",
-                producer="pipeline",
-                generation_mode="system",
-                on_sha_change="new_id",
-            )
-            reproducibility_summary = plan_result.repro_envelope.to_manifest_summary()
-
-        # O22 — Multiple-testing correction. Scan every registered
-        # table / statistic artefact for p-values and BH-adjust the
-        # whole family run-wide. Writes a CSV + MD pair and registers
-        # both as evidence so the manuscript can cite
-        # ``{evidence:multiple_testing_report}``.
-        if self._enable_multiple_testing_correction:
-            mt_report = build_multiple_testing_report(
-                evidence_records=evidence.records(),
-                run_dir=run_dir,
-                alpha=self._multiple_testing_alpha,
-            )
-            mt_csv = run_dir / "multiple_testing_report.csv"
-            mt_md = run_dir / "multiple_testing_report.md"
-            mt_report.write_csv(mt_csv)
-            mt_report.write_markdown(mt_md)
-            if evidence.get("multiple_testing_report") is None:
-                evidence.register_file(
-                    kind="statistic",
-                    description=(
-                        "Run-wide Benjamini–Hochberg and Bonferroni correction "
-                        "for every registered p-value (O22)."
-                    ),
-                    source_path=mt_csv,
-                    evidence_id="multiple_testing_report",
-                    producer="pipeline",
-                    generation_mode="system",
-                )
-            if evidence.get("multiple_testing_summary") is None:
-                evidence.register_file(
-                    kind="log",
-                    description=(
-                        "Human-readable summary of multiple-testing correction (O22)."
-                    ),
-                    source_path=mt_md,
-                    evidence_id="multiple_testing_summary",
-                    producer="pipeline",
-                    generation_mode="system",
-                )
-            summary = mt_report.summary()
-            if summary["n_tests"] > 0:
-                # Surface the raw → corrected gap as an info finding so
-                # paper figures can include it without re-reading the
-                # CSV.
-                findings.append(
-                    ValidationFinding(
-                        validator="multiple_testing",
-                        severity="info",
-                        message=(
-                            f"Ran BH-FDR across {summary['n_tests']} tests at "
-                            f"alpha={summary['alpha']:.3f}: "
-                            f"{summary['n_significant_raw']} significant raw, "
-                            f"{summary['n_significant_bh']} after BH, "
-                            f"{summary['n_significant_bonferroni']} after Bonferroni."
-                        ),
-                        evidence_ids=["multiple_testing_report"],
-                        detail=summary,
-                    )
-                )
-                # If raw and BH disagree meaningfully, emit a warning
-                # so the Discussion section has to engage with it.
-                if (
-                    summary["n_significant_raw"]
-                    > summary["n_significant_bh"]
-                ):
-                    findings.append(
-                        ValidationFinding(
-                            validator="multiple_testing",
-                            severity="warning",
-                            message=(
-                                "Some raw-significant results did not survive "
-                                "BH-FDR at the run-wide family level. Revise "
-                                "the primary / secondary endpoint distinction "
-                                "or report corrected p-values explicitly."
-                            ),
-                            evidence_ids=["multiple_testing_report"],
-                            detail={
-                                "n_raw_only": (
-                                    summary["n_significant_raw"]
-                                    - summary["n_significant_bh"]
-                                ),
-                            },
-                        )
-                    )
-
-        # O23 — E-values. For every primary-association row, compute
-        # VanderWeele–Ding E-value + lower-CI E-value. Writes
-        # ``e_values.csv`` + ``e_values.md`` and registers both.
-        # Baseline prevalence defaults to observed outcome rate when
-        # an ``outcome_rate.csv`` was registered.
-        try:
-            primary_path = None
-            for rec in evidence.records():
-                if rec.evidence_id != "primary_association":
-                    continue
-                candidates = [
-                    run_dir / "evidence" / rec.relative_path,
-                    run_dir / rec.relative_path,
-                ]
-                primary_path = next(
-                    (c for c in candidates if c.exists() and c.suffix == ".csv"),
-                    None,
-                )
-                break
-            if primary_path is not None:
-                import csv as _csv
-
-                baseline_prev = 0.1
-                outcome_rate_rec = evidence.get("outcome_rate")
-                if outcome_rate_rec is not None:
-                    try:
-                        or_path = next(
-                            (
-                                p
-                                for p in (
-                                    run_dir / "evidence" / outcome_rate_rec.relative_path,
-                                    run_dir / outcome_rate_rec.relative_path,
-                                )
-                                if p.exists() and p.suffix == ".csv"
-                            ),
-                            None,
-                        )
-                        if or_path:
-                            with or_path.open("r", encoding="utf-8") as fh:
-                                for row in _csv.DictReader(fh):
-                                    for key in (
-                                        "outcome_rate",
-                                        "rate",
-                                        "mortality_rate",
-                                        "event_rate",
-                                    ):
-                                        if key in row:
-                                            try:
-                                                cand = float(row[key])
-                                                if 0 < cand < 1:
-                                                    baseline_prev = cand
-                                            except (TypeError, ValueError):
-                                                pass
-                    except Exception:
-                        pass
-
-                rows_out: List[Dict[str, Any]] = []
-                with primary_path.open("r", encoding="utf-8") as fh:
-                    reader = _csv.DictReader(fh)
-                    for row in reader:
-                        # Accept OR or odds_ratio column; skip age / intercept etc.
-                        or_val = None
-                        for key in ("odds_ratio", "or", "OR"):
-                            if key in row and row[key] not in (None, "", "nan"):
-                                try:
-                                    or_val = float(row[key])
-                                    break
-                                except (TypeError, ValueError):
-                                    continue
-                        if or_val is None:
-                            continue
-                        try:
-                            ci_lo = float(row.get("or_lower") or row.get("ci_lower") or 0.0)
-                            ci_hi = float(row.get("or_upper") or row.get("ci_upper") or 0.0)
-                            ci = (ci_lo, ci_hi) if ci_lo > 0 and ci_hi > 0 else None
-                        except (TypeError, ValueError):
-                            ci = None
-                        ev = compute_e_value(
-                            estimate=or_val,
-                            ci=ci,
-                            estimate_type="or",
-                            baseline_prevalence=baseline_prev,
-                        )
-                        row_out = {
-                            "term": row.get("term")
-                            or row.get("variable")
-                            or row.get("predictor")
-                            or "",
-                            "odds_ratio": or_val,
-                            "ci_lower": ci[0] if ci else "",
-                            "ci_upper": ci[1] if ci else "",
-                            "baseline_prevalence": baseline_prev,
-                            "e_value": ev.e_value,
-                            "e_value_lower_bound": ev.e_value_lower_bound,
-                            "note": ev.note or "",
-                        }
-                        rows_out.append(row_out)
-
-                if rows_out:
-                    ev_csv = run_dir / "e_values.csv"
-                    ev_md = run_dir / "e_values.md"
-                    with ev_csv.open("w", newline="", encoding="utf-8") as fh:
-                        writer = _csv.writer(fh)
-                        writer.writerow(list(rows_out[0].keys()))
-                        for row in rows_out:
-                            writer.writerow([row[k] for k in rows_out[0].keys()])
-                    ev_md_lines = [
-                        "# E-values for primary effects (O23)",
-                        "",
-                        f"Baseline event prevalence used: **{baseline_prev:.3f}**",
-                        "",
-                        "| Term | OR | 95% CI | E-value | E-value (CI bound) |",
-                        "|---|---|---|---|---|",
-                    ]
-                    for row in rows_out:
-                        ci_disp = (
-                            f"{row['ci_lower']:.2f} – {row['ci_upper']:.2f}"
-                            if row["ci_lower"] != "" and row["ci_upper"] != ""
-                            else "—"
-                        )
-                        ev_md_lines.append(
-                            "| {t} | {orv:.2f} | {ci} | {ev:.2f} | {evb} |".format(
-                                t=str(row["term"])[:40],
-                                orv=row["odds_ratio"],
-                                ci=ci_disp,
-                                ev=row["e_value"],
-                                evb=(
-                                    f"{row['e_value_lower_bound']:.2f}"
-                                    if row["e_value_lower_bound"] is not None
-                                    else "—"
-                                ),
-                            )
-                        )
-                    ev_md.write_text("\n".join(ev_md_lines) + "\n", encoding="utf-8")
-                    if evidence.get("e_values") is None:
-                        evidence.register_file(
-                            kind="statistic",
-                            description=(
-                                "VanderWeele–Ding E-values for every primary "
-                                "effect row (O23)."
-                            ),
-                            source_path=ev_csv,
-                            evidence_id="e_values",
-                            producer="pipeline",
-                            generation_mode="system",
-                        )
-                    if evidence.get("e_values_summary") is None:
-                        evidence.register_file(
-                            kind="log",
-                            description="Human-readable E-value summary (O23).",
-                            source_path=ev_md,
-                            evidence_id="e_values_summary",
-                            producer="pipeline",
-                            generation_mode="system",
-                        )
-                    findings.append(
-                        ValidationFinding(
-                            validator="e_value",
-                            severity="info",
-                            message=(
-                                f"Computed E-values for {len(rows_out)} primary "
-                                f"effect row(s) (baseline prevalence={baseline_prev:.3f})."
-                            ),
-                            evidence_ids=["e_values"],
-                        )
-                    )
-        except Exception as exc:
-            findings.append(
-                ValidationFinding(
-                    validator="e_value",
-                    severity="warning",
-                    message=f"E-value computation failed: {type(exc).__name__}: {exc}",
-                )
-            )
-
-        # O24 — Fairness / subgroup analysis. Runs when a
-        # ``primary_association`` artefact exists and the cohort has
-        # at least one of (``age``, ``sex``, ``sex_M``, ``race``,
-        # ``insurance``). Pure numpy; no pandas-only helpers so we
-        # stay consistent with the rest of the deterministic layer.
-        if self._enable_fairness_subgroups:
-            try:
-                primary_rec = evidence.get("primary_association")
-                if primary_rec is not None:
-                    import csv as _csv
-
-                    candidates = [
-                        run_dir / "evidence" / primary_rec.relative_path,
-                        run_dir / primary_rec.relative_path,
-                    ]
-                    primary_path = next(
-                        (p for p in candidates if p.exists() and p.suffix == ".csv"),
-                        None,
-                    )
-                    predictor_name: Optional[str] = None
-                    outcome_name = context.target_outcome
-                    if primary_path is not None:
-                        with primary_path.open("r", encoding="utf-8") as fh:
-                            for row in _csv.DictReader(fh):
-                                term = (
-                                    row.get("term")
-                                    or row.get("variable")
-                                    or row.get("predictor")
-                                    or ""
-                                )
-                                if term and term.lower() not in {
-                                    "intercept",
-                                    "const",
-                                    "age",
-                                    "sex_m",
-                                }:
-                                    predictor_name = term
-                                    break
-                    cohort_df = pd.read_parquet(cohort_path)
-                    candidate_subgroups = [
-                        col
-                        for col in ("age", "sex", "sex_M", "race", "insurance")
-                        if col in cohort_df.columns
-                    ]
-                    if (
-                        predictor_name is not None
-                        and outcome_name
-                        and outcome_name in cohort_df.columns
-                        and candidate_subgroups
-                    ):
-                        from .fairness import run_subgroup_analysis
-
-                        result = run_subgroup_analysis(
-                            cohort_df=cohort_df,
-                            predictor=predictor_name,
-                            outcome=outcome_name,
-                            subgroup_columns=candidate_subgroups,
-                        )
-                        fair_csv = run_dir / "fairness_subgroups.csv"
-                        fair_md = run_dir / "fairness_subgroups.md"
-                        result.write_csv(fair_csv)
-                        result.write_markdown(fair_md)
-                        if evidence.get("fairness_subgroups") is None:
-                            evidence.register_file(
-                                kind="statistic",
-                                description=(
-                                    "Subgroup / fairness analysis for the "
-                                    "primary effect (O24)."
-                                ),
-                                source_path=fair_csv,
-                                evidence_id="fairness_subgroups",
-                                producer="pipeline",
-                                generation_mode="system",
-                            )
-                        if evidence.get("fairness_subgroups_summary") is None:
-                            evidence.register_file(
-                                kind="log",
-                                description=(
-                                    "Human-readable fairness / subgroup summary (O24)."
-                                ),
-                                source_path=fair_md,
-                                evidence_id="fairness_subgroups_summary",
-                                producer="pipeline",
-                                generation_mode="system",
-                            )
-                        findings.append(
-                            ValidationFinding(
-                                validator="fairness_subgroups",
-                                severity="info",
-                                message=(
-                                    f"Subgroup analysis for {predictor_name} ~ "
-                                    f"{outcome_name} across "
-                                    f"{len(candidate_subgroups)} axis/axes."
-                                ),
-                                evidence_ids=["fairness_subgroups"],
-                                detail={
-                                    "predictor": predictor_name,
-                                    "outcome": outcome_name,
-                                    "subgroup_columns": candidate_subgroups,
-                                    "interaction_pvalues": result.interaction_pvalues,
-                                },
-                            )
-                        )
-                        # Escalate to warning if any interaction p < 0.05.
-                        sig_cols = [
-                            col
-                            for col, p in result.interaction_pvalues.items()
-                            if p < 0.05
-                        ]
-                        if sig_cols:
-                            findings.append(
-                                ValidationFinding(
-                                    validator="fairness_subgroups",
-                                    severity="warning",
-                                    message=(
-                                        f"Interaction p < 0.05 on "
-                                        f"{sig_cols}; subgroup heterogeneity "
-                                        "must be discussed."
-                                    ),
-                                    evidence_ids=["fairness_subgroups"],
-                                    detail={"significant_subgroups": sig_cols},
-                                )
-                            )
-            except Exception as exc:
-                findings.append(
-                    ValidationFinding(
-                        validator="fairness_subgroups",
-                        severity="warning",
-                        message=(
-                            f"Subgroup analysis failed: "
-                            f"{type(exc).__name__}: {exc}"
-                        ),
-                    )
-                )
-
-        manifest_notes = notes
-        if stop_after_analysis:
-            suffix = (
-                "paused_after_analysis: manuscript generation skipped by user option."
-            )
-            manifest_notes = f"{notes}\n\n{suffix}" if notes else suffix
-        literature_provenance = _literature_provenance_note(
-            enable_literature=self._enable_literature,
-            enable_pubmed=self._enable_pubmed,
-            enable_tavily=self._enable_tavily,
-        )
-        manifest_notes = (
-            f"{manifest_notes}\n\n{literature_provenance}"
-            if manifest_notes
-            else literature_provenance
-        )
-
-        # C3 (pilot 20260515 fix): byte-identical findings recorded
-        # multiple times across steps that share the same flagged column
-        # get rolled up into a single entry with a ``duplicate_count``
-        # detail. Keeps the manifest, the bound report, and the reviewer
-        # prompt readable without losing audit information.
-        findings = dedupe_findings(findings)
-
-        readiness, artifact_paths = write_readiness_artifacts(
-            context=context,
-            plan=plan,
-            findings=findings,
-            per_step_records=per_step_records,
-            evidence=evidence,
             run_dir=run_dir,
-            manuscript_path=write_result.bound_path,
+            cohort_path=cohort_path,
+            notes=notes,
+            database=database,
+            target_outcome=target_outcome,
             stop_after_analysis=stop_after_analysis,
+            cache_key=cache_key,
+            experiment_spec_path=experiment_spec_path,
+            audit_logger=audit_logger,
+            emit_progress=emit_progress,
         )
 
-        report_path.write_text(
-            render_report(
-                context=context,
-                plan=plan,
-                findings=findings,
-                per_step_records=per_step_records,
-                evidence=evidence,
-                paused_after_analysis=stop_after_analysis,
-                readiness=readiness,
-            ),
-            encoding="utf-8",
+    # ------------------------------------------------------------------
+    # Cross-run experience bank (Phase-1, Commit 3 — opt-in)
+    # ------------------------------------------------------------------
+
+    def _experience_bank(self) -> Optional[ExperienceBank]:
+        """Lazy-construct the ExperienceBank from the configured path.
+
+        Returns ``None`` when the feature is disabled or no path was
+        configured. Callers must treat the bank as optional.
+        """
+        if not self._enable_experience_bank or self._experience_bank_path is None:
+            return None
+        return ExperienceBank(path=self._experience_bank_path)
+
+    def retrieve_experience_hints(
+        self,
+        *,
+        research_question: str,
+        database: Optional[str] = None,
+    ) -> List[Tuple[ExperienceRecord, float]]:
+        """Top-k experience records most lexically similar to the question.
+
+        Returns an empty list when the bank is disabled, missing, or
+        contains no records above the configured similarity floor.
+        Surface the returned ``summary`` lines verbatim in the planner
+        prompt — the bank guarantees they are self-contained
+        sentences. Callers that need the raw records (e.g. for
+        debugging) can read ``ExperienceBank(path).records()``
+        directly.
+        """
+        bank = self._experience_bank()
+        if bank is None:
+            return []
+        return bank.retrieve(
+            research_question=research_question,
+            database=database,
+            top_k=self._experience_bank_top_k,
+            min_similarity=self._experience_bank_min_similarity,
         )
 
-        manifest = AnalysisManifest(
-            run_id=run_id,
-            research_question=context.research_question,
-            started_at=plan_result.started_at,
-            finished_at=datetime.now(timezone.utc),
-            context_path=str(plan_result.context_path.relative_to(run_dir)),
-            plan_path=str(plan_result.plan_path.relative_to(run_dir)),
-            evidence=evidence.records(),
-            findings=findings,
-            per_step_records=per_step_records,
-            cost_records=cost_records_for_manifest,
-            reproducibility=reproducibility_summary,
-            readiness=readiness,
-            artifact_paths=artifact_paths,
-            report_path=str(report_path.relative_to(run_dir)),
-            manuscript_path=str(write_result.bound_path.relative_to(run_dir)),
-            audit_log_path=audit_log_rel,
-            workflow_graph_path=str(workflow_graph_path.relative_to(run_dir)),
-            execution_replay_path=str(replay_path.relative_to(run_dir)),
-            experiment_spec_path=(
-                str(experiment_spec_path.relative_to(run_dir))
-                if experiment_spec_path is not None and experiment_spec_path.exists()
-                else None
-            ),
-            llm_signature=plan_result.llm_signature,
-            used_mock_llm=plan_result.used_mock_llm,
-            prompt_pack_version=plan_result.prompt_version,
-            prompt_pack_files=plan_result.prompt_files,
-            notes=manifest_notes,
-        )
-        manifest_path = run_dir / "manifest.json"
-        manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
-        execute_result.flush_partial_manifest()
+    def reflect_and_persist_experience(
+        self,
+        *,
+        run_dir: Path,
+        context: ResearchContext,
+        database: str,
+        cohort_name: str,
+    ) -> List[ExperienceRecord]:
+        """Mine experience records from a completed run and write them back.
 
-        if self._memory is not None:
-            self._memory.record(
-                run_id=run_id,
-                research_question=context.research_question,
-                database=database,
-                target_outcome=target_outcome,
-                findings=findings,
-                workdir=run_dir,
+        Reads ``run_status.json`` from ``run_dir`` for the gates +
+        findings + superseded-error partition. Returns the records
+        that were registered (after dedup against the existing bank);
+        an empty list when the feature is disabled or the run dir
+        does not yet have a run_status.
+
+        Idempotent on ``(kind, summary)``: re-running over the same
+        run_dir does not duplicate records, only refreshes
+        ``produced_at`` / ``producer_run_id``.
+        """
+        bank = self._experience_bank()
+        if bank is None:
+            return []
+        run_status_path = Path(run_dir) / "run_status.json"
+        if not run_status_path.exists():
+            return []
+        try:
+            run_status = json.loads(run_status_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "experience-bank: run_status.json at %s could not be read: %s",
+                run_status_path, exc,
             )
-
-        result = PipelineResult(
-            run_id=run_id,
-            workdir=str(run_dir),
-            context_path=str(plan_result.context_path),
-            plan_path=str(plan_result.plan_path),
-            manifest_path=str(manifest_path),
-            report_path=str(report_path),
-            manuscript_path=str(write_result.bound_path),
-            evidence_count=len(evidence.records()),
-            findings_count=len(findings),
+            return []
+        gates = run_status.get("gates") or run_status.get("readiness_gates") or {}
+        findings = run_status.get("findings") or []
+        superseded_errors = (
+            gates.get("superseded_errors")
+            or run_status.get("superseded_errors")
+            or []
         )
-        if cache_key is not None:
-            self._cache.record_hit(cache_key, result)
-        emit_progress(
-            "run",
-            "Research-agent run complete.",
-            status="complete",
-            run_id=run_id,
-            evidence_count=result.evidence_count,
-            findings_count=result.findings_count,
-            stop_after_analysis=stop_after_analysis,
+        plan_step_ids = []
+        for step in run_status.get("plan_steps") or []:
+            sid = step.get("step_id") if isinstance(step, dict) else None
+            if sid:
+                plan_step_ids.append(str(sid))
+        if not plan_step_ids:
+            # Fall back to per_step_records if plan_steps not surfaced.
+            for record in run_status.get("per_step_records") or []:
+                sid = record.get("step_id") if isinstance(record, dict) else None
+                if sid:
+                    plan_step_ids.append(str(sid))
+        records = mine_experience_from_run(
+            research_question=context.research_question,
+            database=database,
+            cohort_name=cohort_name,
+            gates=gates,
+            findings=findings,
+            superseded_errors=superseded_errors,
+            plan_step_ids=plan_step_ids,
+            producer_run_id=Path(run_dir).name,
         )
-        return result
+        bank.extend(records)
+        return records
 
     # ------------------------------------------------------------------
     # Public API
@@ -3603,76 +2261,18 @@ class ResearchAgentPipeline:
         findings: List[ValidationFinding],
         reason: str,
     ) -> PipelineResult:
-        # C3: dedupe before any output uses the findings list.
-        findings = dedupe_findings(findings)
-        report_path = run_dir / "results_report.md"
-        report_path.write_text(
-            render_report(
-                context=context,
-                plan=None,
-                findings=findings,
-                per_step_records=[],
-                evidence=evidence,
-                aborted_reason=reason,
-            ),
-            encoding="utf-8",
-        )
-        bound_path = run_dir / "manuscript_scaffold_bound.md"
-        bound_path.write_text(
-            f"# Manuscript scaffold not generated\n\nPipeline aborted: {reason}.\n",
-            encoding="utf-8",
-        )
-        readiness, artifact_paths = write_readiness_artifacts(
-            context=context,
-            plan=None,
-            findings=findings,
-            per_step_records=[],
-            evidence=evidence,
+        """Delegate to :mod:`pipeline_package`."""
+        from .pipeline_package import finalise_aborted
+
+        return finalise_aborted(
+            self,
+            run_id=run_id,
             run_dir=run_dir,
-            manuscript_path=bound_path,
-            stop_after_analysis=False,
-        )
-        report_path.write_text(
-            render_report(
-                context=context,
-                plan=None,
-                findings=findings,
-                per_step_records=[],
-                evidence=evidence,
-                aborted_reason=reason,
-                readiness=readiness,
-            ),
-            encoding="utf-8",
-        )
-        manifest = AnalysisManifest(
-            run_id=run_id,
-            research_question=context.research_question,
-            started_at=datetime.now(timezone.utc),
-            finished_at=datetime.now(timezone.utc),
-            context_path=str(context_path.relative_to(run_dir)),
-            evidence=evidence.records(),
+            context=context,
+            context_path=context_path,
+            evidence=evidence,
             findings=findings,
-            report_path=str(report_path.relative_to(run_dir)),
-            readiness=readiness,
-            artifact_paths=artifact_paths,
-            llm_signature=self._llm_signature(self._llm),
-            used_mock_llm=any(True for _ in self._iter_mock_clients(self._llm)),
-            prompt_pack_version=PROMPT_PACK_VERSION,
-            prompt_pack_files=prompt_pack_files(),
-            notes=f"aborted: {reason}",
-        )
-        manifest_path = run_dir / "manifest.json"
-        manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
-        return PipelineResult(
-            run_id=run_id,
-            workdir=str(run_dir),
-            context_path=str(context_path),
-            plan_path="",
-            manifest_path=str(manifest_path),
-            report_path=str(report_path),
-            manuscript_path=str(bound_path),
-            evidence_count=len(evidence.records()),
-            findings_count=len(findings),
+            reason=reason,
         )
 
 
@@ -4334,74 +2934,6 @@ def _clear_output_dir(out_dir: Path) -> None:
                 child.unlink(missing_ok=True)
         except Exception:
             pass
-
-
-# ---------------------------------------------------------------------------
-# T3.2 — cost summary renderer
-# ---------------------------------------------------------------------------
-
-
-def _render_cost_summary(meter: "CostMeter") -> str:
-    """Render a markdown view of a :class:`CostMeter` for the run report.
-
-    The output has three sections:
-
-    * a one-line headline (``n_calls``, total tokens, total USD);
-    * a per-role breakdown so paper authors can quote, e.g., that the
-      planner is the most expensive role;
-    * a per-model breakdown so a multi-model router run shows which
-      checkpoint dominates spend.
-
-    All numbers come from :meth:`CostMeter.summary` so the markdown
-    here is purely presentational — the row-level
-    ``cost_records.json`` is the source of truth.
-    """
-    summary = meter.summary()
-    lines: List[str] = ["# LLM cost summary (T3.2)", ""]
-    if summary["n_calls"] == 0:
-        lines.append("_No LLM calls were recorded for this run._")
-        return "\n".join(lines) + "\n"
-    lines.append(
-        f"- **{summary['n_calls']}** LLM calls — "
-        f"{summary['total_prompt_tokens']:,} prompt + "
-        f"{summary['total_completion_tokens']:,} completion = "
-        f"**{summary['total_tokens']:,} total tokens**"
-    )
-    cost = summary["total_cost_usd"]
-    if cost > 0:
-        lines.append(f"- Estimated total cost: **${cost:.4f} USD**")
-    if summary["any_heuristic"]:
-        lines.append(
-            "- ⚠️ At least one record relies on a `chars/4` token heuristic "
-            "(client did not expose `last_usage`). Treat counts as "
-            "approximate."
-        )
-    lines.append("")
-    if summary["by_role"]:
-        lines.append("## By role")
-        lines.append("")
-        lines.append("| role | calls | prompt | completion | total | cost (USD) |")
-        lines.append("|---|---:|---:|---:|---:|---:|")
-        for role, b in sorted(summary["by_role"].items()):
-            lines.append(
-                f"| `{role}` | {b['n_calls']} | {b['prompt_tokens']:,} | "
-                f"{b['completion_tokens']:,} | {b['total_tokens']:,} | "
-                f"${b['cost_usd']:.4f} |"
-            )
-        lines.append("")
-    if summary["by_model"]:
-        lines.append("## By model")
-        lines.append("")
-        lines.append("| model | calls | prompt | completion | total | cost (USD) |")
-        lines.append("|---|---:|---:|---:|---:|---:|")
-        for model, b in sorted(summary["by_model"].items()):
-            lines.append(
-                f"| `{model}` | {b['n_calls']} | {b['prompt_tokens']:,} | "
-                f"{b['completion_tokens']:,} | {b['total_tokens']:,} | "
-                f"${b['cost_usd']:.4f} |"
-            )
-        lines.append("")
-    return "\n".join(lines) + "\n"
 
 
 __all__ = ["ResearchAgentPipeline"]

@@ -4,7 +4,8 @@
 private methods — ``_run_plan_phase`` → ``_run_execute_phase`` →
 ``_run_write_phase`` — that pass typed result dataclasses between
 themselves. Those dataclasses (``_PlanPhaseResult`` / ``_ExecutePhaseResult``
-/ ``_WritePhaseResult``) are the de-facto inter-phase contract.
+/ ``_WritePhaseResult``) are the inter-phase contract and now live in
+:mod:`contracts`.
 
 This module promotes them to first-class public types so:
 
@@ -17,9 +18,9 @@ This module promotes them to first-class public types so:
 * the data flow between phases is documented in one place rather than
   scattered across a 12k-line module.
 
-The classes are re-exported, not redefined. Pipeline keeps the original
-``_PlanPhaseResult`` etc. as aliases, so all existing call sites in
-``pipeline.py`` continue to work identically.
+The classes are re-exported, not redefined. ``pipeline.py`` imports the
+original ``_PlanPhaseResult`` etc. from :mod:`contracts`, so all existing
+call sites continue to work identically.
 
 Phase data flow
 ---------------
@@ -56,7 +57,7 @@ internal type hints in :mod:`pipeline`.
 
 from __future__ import annotations
 
-from .pipeline import (
+from .contracts import (
     _ExecutePhaseResult as ExecutePhaseState,
     _PlanPhaseResult as PlanPhaseState,
     _WritePhaseResult as WritePhaseState,

@@ -104,6 +104,11 @@ class PipelineConfig:
     enable_reproducibility_envelope: bool = False
     llm_seed: Optional[int] = None
     envelope_include_previews: bool = False
+    submission_profile_name: Optional[str] = None
+    submission_profile_version: Optional[str] = None
+    submission_profile_locked_at: Optional[str] = None
+    expected_concept_dict_sha: Optional[str] = None
+    expected_sofa2_dict_sha: Optional[str] = None
 
     # --- statistical safeguards -----------------------------------------
     enable_multiple_testing_correction: bool = True
@@ -136,6 +141,48 @@ class PipelineConfig:
     # had a step with 295 claims; 100 covers any realistic clinical
     # analysis without truncating real result quantities.
     max_numeric_claims_per_step: int = 100
+    # --- writer namespace breadth ---------------------------------------
+    # When False (default), the writer's evidence digest is the curated
+    # ``preferred_keys`` tuple in pipeline_writer_aux. When True, the
+    # digest is augmented with a "secondary numbers" block that
+    # enumerates every NumericClaim that isn't already covered by the
+    # primary block, capped per step. The binder
+    # (``bind_numeric_values()``) already accepts numbers outside
+    # preferred_keys via the full claim registry; this flag controls
+    # only what the writer SEES, not what the binder ACCEPTS. The cap
+    # below prevents prompt-bloat on steps that registered a large
+    # number of leaves under ``max_numeric_claims_per_step``.
+    #
+    # Background: Phase-0 baseline comparison (May 2026) noted that
+    # data-to-paper exposes every numeric in every source artefact to
+    # the writer via auto-generated hypertargets; our writer was being
+    # given the narrower ``preferred_keys`` subset. Widening parity-
+    # tests as the "primary" subset, plus a "secondary" block, is the
+    # Phase-1 step toward the more autonomous writer namespace.
+    writer_digest_widened: bool = False
+    writer_digest_secondary_cap_per_step: int = 20
+
+    # --- cross-run experience bank --------------------------------------
+    # Phase-1 widening (Commit 3, May 2026). When enabled, the pipeline
+    # reads the experience bank at planner-start (retrieving up to
+    # ``experience_bank_top_k`` records lexically similar to the
+    # current research question) and writes back any
+    # ExperienceRecords mined from this run at completion. The bank
+    # is a single JSONL file shared across all runs that point at
+    # the same ``experience_bank_path`` — so multiple parallel runs
+    # against the same path will see each other's hints once their
+    # respective ``add`` calls return.
+    #
+    # The mined records are produced by a deterministic reflector
+    # (no LLM call): see
+    # ``easyicu.research_agent.experience.mine_experience_from_run``.
+    # The bank is opt-in because (i) it changes the planner's input
+    # surface and (ii) the npj DM submission run does not depend on
+    # experience-bank behaviour.
+    enable_experience_bank: bool = False
+    experience_bank_path: Optional[Union[str, Path]] = None
+    experience_bank_top_k: int = 5
+    experience_bank_min_similarity: float = 0.2
 
     # --- code runner ----------------------------------------------------
     runner_kind: str = "subprocess"

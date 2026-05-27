@@ -97,6 +97,12 @@ class MockLLMClient:
                 response = _mock_code_for_step(ctx, last_user)
             elif "INTERPRET THE RESULTS OF STEP" in upper or "INTERPRET THE RESULTS" in upper:
                 response = _mock_interpretation(ctx, last_user)
+            elif "WRITE ONLY THE **" in upper and "CITATION RULE" in upper:
+                language = "zh" if (
+                    "OUTPUT LANGUAGE: ZH" in upper
+                    or "SIMPLIFIED CHINESE" in upper
+                ) else "en"
+                response = _mock_writer_section(ctx, last_user, language=language)
             elif (
                 "WRITE A MANUSCRIPT SCAFFOLD" in upper
                 or "MANUSCRIPT SCAFFOLD" in upper
@@ -1478,6 +1484,119 @@ def _mock_interpretation(ctx: ResearchContext, prompt: str) -> str:
         "store; reviewers can verify each value against its generating script and run log."
     )
     return " ".join(parts)
+
+
+def _mock_writer_section(
+    ctx: ResearchContext,
+    prompt: str,
+    *,
+    language: str = "en",
+) -> str:
+    """Evidence-bound section stub for WriterAgent unit/smoke tests.
+
+    The production WriterAgent writes each manuscript section in a
+    separate prompt. The older mock only knew the legacy one-shot
+    scaffold prompt, which meant strict evidence smoke tests received
+    a generic "no live LLM configured" paragraph and correctly failed.
+    This helper keeps the mock narrow: it emits short, citation-shaped
+    prose that exercises the binder without pretending to write a
+    submission-ready manuscript.
+    """
+    m = re.search(r"Write ONLY the \*\*(.*?)\*\* section", prompt, flags=re.I | re.S)
+    section = (m.group(1) if m else "Section").strip()
+    ids_match = re.search(
+        r"Only use ids from this list:\s*(.*?)\n\nLANGUAGE POLICY:",
+        prompt,
+        flags=re.I | re.S,
+    )
+    ids = [
+        token.strip()
+        for token in (ids_match.group(1) if ids_match else "").split(",")
+        if token.strip() and token.strip() != "(none)"
+    ]
+
+    def cite(*preferred: str) -> str:
+        for candidate in preferred:
+            if candidate in ids:
+                return f"{{evidence:{candidate}}}"
+        return f"{{evidence:{ids[0]}}}" if ids else "{evidence:research_context}"
+
+    table = cite("table_one", "cohort_summary", "research_context")
+    outcome = cite("outcome_rate", "outcome_incidence", "mortality_rate", "table_one")
+    association = cite("primary_association", "model_performance", "table_one")
+    missingness = cite("missingness", "research_context", "table_one")
+    context = cite("research_context", "architecture_profile", "table_one")
+
+    if language == "zh":
+        if section.startswith("Title"):
+            return "# EasyICU ICU 关联分析\n\n**关键词：** ICU，队列，关联，证据追踪，EasyICU"
+        heading = "## " + section.replace("Conclusion, Data availability, Funding, COI", "结论")
+        return textwrap.dedent(f"""
+        {heading}
+
+        本节为确定性 mock writer 生成的证据绑定占位文本。队列和变量定义见 {context}。
+        结局、缺失和主要关联分别记录于 {outcome}、{missingness} 和 {association}。
+        这些表述仅用于测试证据绑定流程，不构成新的临床结论。
+        """).strip()
+
+    if section.startswith("Title"):
+        return (
+            "# EasyICU evidence-bound ICU association analysis\n"
+            "**Keywords:** ICU, cohort, association, provenance, EasyICU"
+        )
+    if section.startswith("Abstract"):
+        return textwrap.dedent(f"""
+        ## Abstract
+
+        **Background:** This evidence-bound EasyICU analysis evaluates the requested ICU association.
+        **Methods:** Cohort construction and variable semantics are documented in {context}.
+        **Results:** Outcome incidence, missingness, and the primary association are recorded in {outcome}, {missingness}, and {association}.
+        **Conclusions:** Findings are associational and require external validation.
+        """).strip()
+    if section.startswith("Methods"):
+        return textwrap.dedent(f"""
+        ## Methods
+
+        The cohort, variable definitions, and analysis context were taken from the EasyICU research context {context}.
+        Descriptive cohort evidence is available in {table}, and missingness handling is documented in {missingness}.
+        """).strip()
+    if section.startswith("Results"):
+        return textwrap.dedent(f"""
+        ## Results
+
+        Cohort characteristics are summarized in {table}.
+        Outcome incidence is reported in {outcome}.
+        Missingness diagnostics are reported in {missingness}.
+        The primary association is reported in {association}.
+        """).strip()
+    if section.startswith("Discussion"):
+        return textwrap.dedent(f"""
+        ## Discussion
+
+        The analysis should be interpreted as an observed association grounded in the registered evidence {association}.
+        EasyICU's concept layer and evidence registry document how the cohort and variables were constructed {context}.
+        """).strip()
+    if section.startswith("Limitations"):
+        return textwrap.dedent(f"""
+        ## Limitations
+
+        This is an observational, agent-assisted analysis, so residual confounding and limited external generalisability remain possible {context}.
+        The mock writer records these limitations while leaving clinical interpretation to the final human-authored manuscript {context}.
+        """).strip()
+    return textwrap.dedent(f"""
+    ## Conclusion
+
+    The registered evidence supports an associational summary only {association}.
+
+    ## Data and code availability
+    Generated scripts and evidence artefacts are recorded in the EasyICU run manifest {context}.
+
+    ## Funding
+    Funding information was not assessed in this mock smoke run.
+
+    ## Conflicts of interest
+    The authors declare no conflicts of interest.
+    """).strip()
 
 
 def _mock_manuscript_scaffold(ctx: ResearchContext, *, language: str = "en") -> str:

@@ -52,10 +52,11 @@ from .audits.validators import (
     StatisticalValidator,
 )
 from .code_repair import _deterministic_runner_repair, _deterministic_summary_repair
+from .cohort_schema import assert_cohort_definition_locked
+from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
+from .estimators import fit_robustness_rows_from_records
 from .llm import MockLLMClient
 from .pipeline import (
-    _ExecutePhaseResult,
-    _PlanPhaseResult,
     _build_probe_summary,
     _clear_output_dir,
     _has_figure_exports,
@@ -74,8 +75,14 @@ from .plan_utils import (
     _step_expects_figure,
     _step_produces_figure,
 )
-from .schema import AnalysisPlan, AnalysisStep, EvidenceRef, ValidationFinding
+from .schema import AnalysisPlan, AnalysisStep, EvidenceRef
+from .robustness_panel import (
+    assert_robustness_specs_locked,
+    build_robustness_panel_from_records,
+    write_robustness_panel,
+)
 from .scalar_utils import _expected_numeric_annotations_for_step
+from .side_findings import SideFinding
 from .skills import ClinicalSkill
 from .summary_repair import (
     _salvage_minimal_contract_step_summary,
@@ -112,6 +119,8 @@ def run_execute_phase(
     llm_signature = plan_result.llm_signature
     prompt_version = plan_result.prompt_version
     prompt_files = plan_result.prompt_files
+    assert_cohort_definition_locked(run_dir=run_dir, plan=plan)
+    assert_robustness_specs_locked(run_dir=run_dir, plan=plan)
 
     coder = CoderAgent(role_resolver("coder"))
     analyzer = AnalyzerAgent(role_resolver("analyzer"))
@@ -1429,6 +1438,8 @@ def run_execute_phase(
                 # a dict so every downstream consumer that calls
                 # ``.get(...)`` still works.
                 step_summary = {"raw": loaded}
+        if step_summary_record_id is not None:
+            step_record["step_summary_evidence_id"] = step_summary_record_id
         if step_summary and step_summary_record_id is not None:
             # Value-level provenance (A-track): every numeric leaf in the
             # step's summary is registered as a NumericClaim so the
@@ -1445,6 +1456,39 @@ def run_execute_phase(
             except Exception as exc:
                 logger.warning(
                     "Failed to register numeric claims for step %s: %s",
+                    step.step_id, exc,
+                )
+            # Phase-1 derived-claim hook (Commit 2). After every leaf
+            # is registered, evaluate any ``derived_claims`` the coder
+            # declared in step_summary. Sources must resolve to claims
+            # that ALREADY exist in the registry, so this runs second.
+            # Errors surface as ``derived_claim_error`` findings rather
+            # than aborting — a bad formula should not kill the step.
+            try:
+                _, derived_errors = evidence.register_step_derived_claims(
+                    step_id=step.step_id,
+                    evidence_id=step_summary_record_id,
+                    summary=step_summary,
+                )
+                for err in derived_errors:
+                    findings.append(
+                        ValidationFinding(
+                            validator="derived_claim",
+                            severity="warning",
+                            message=(
+                                f"derived_claims entry {err['name']!r} for step "
+                                f"{step.step_id} was rejected: {err['message']}"
+                            ),
+                            detail={
+                                "step_id": step.step_id,
+                                "claim_name": err["name"],
+                                "reason": err["message"],
+                            },
+                        )
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to register derived claims for step %s: %s",
                     step.step_id, exc,
                 )
         stat_findings = stat_validator.audit(
@@ -1489,6 +1533,18 @@ def run_execute_phase(
             fallback_used=deterministic_fallback_used,
             runner_repair_name=runner_repair_name,
         )
+        raw_side_findings = step_summary.get("side_findings")
+        if isinstance(raw_side_findings, list):
+            side_findings = []
+            for idx, raw in enumerate(raw_side_findings):
+                if not isinstance(raw, dict):
+                    continue
+                payload = dict(raw)
+                payload.setdefault("step_id", step.step_id)
+                payload.setdefault("finding_id", f"{step.step_id}_side_{idx + 1}")
+                side_findings.append(SideFinding.from_dict(payload).to_dict())
+            if side_findings:
+                step_record["side_findings"] = side_findings
         step_record["step_summary"] = step_summary
         evidence_refs_for_step = _evidence_refs_for_names(evidence_ids_for_step)
         validator_messages = _validator_messages(
@@ -1669,9 +1725,51 @@ def run_execute_phase(
                             ValidationFinding(
                                 validator="step_executor",
                                 severity="error",
-                                message=f"Worker raised an unhandled exception: {exc!r}",
-                            )
+                            message=f"Worker raised an unhandled exception: {exc!r}",
                         )
+                    )
+
+    try:
+        adapter_rows, adapter_warnings = fit_robustness_rows_from_records(
+            specs=list(getattr(plan, "robustness_specs", []) or []),
+            per_step_records=per_step_records,
+            primary_cohort=getattr(plan, "cohort", None),
+        )
+        for warning in adapter_warnings:
+            findings.append(
+                ValidationFinding(
+                    validator="robustness_estimator",
+                    severity="warning",
+                    message=warning,
+                )
+            )
+        robustness_panel = build_robustness_panel_from_records(
+            specs=list(getattr(plan, "robustness_specs", []) or []),
+            per_step_records=per_step_records,
+            adapter_rows=adapter_rows,
+        )
+        write_robustness_panel(
+            run_dir=run_dir,
+            panel=robustness_panel,
+            evidence=evidence,
+            prompt_pack_version=prompt_version,
+        )
+        _flush_partial_manifest(
+            {
+                "robustness_panel_path": "robustness_panel.json",
+                "robustness_n_variants": robustness_panel.n_variants,
+                "robustness_range_low": robustness_panel.range_low,
+                "robustness_range_high": robustness_panel.range_high,
+            }
+        )
+    except Exception as exc:
+        findings.append(
+            ValidationFinding(
+                validator="robustness_panel",
+                severity="warning",
+                message=f"Robustness panel artifact could not be built: {exc}",
+            )
+        )
 
     if pipeline._enable_visual_qa:
         emit_progress(

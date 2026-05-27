@@ -12,7 +12,9 @@ Keeps the registry and the fetcher in sync. Verifies:
 
 from __future__ import annotations
 
+import json
 import pathlib
+import re
 import sys
 
 import pytest
@@ -20,6 +22,14 @@ import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "tools"
+LOCK_PATH = REPO_ROOT / "baselines" / "LOCK.json"
+PAPER_CITED_BASELINES = {
+    "data-to-paper",
+    "healthflow",
+    "ai-scientist-v2",
+    "openlens-ai",
+    "m4",
+}
 
 
 @pytest.fixture(scope="module")
@@ -58,9 +68,27 @@ def test_registry_covers_expected_baselines(fetch_module):
         "openlens-ai",
         "m4",
         "ai-scientist-v2",
+        "data-to-paper",
         "science-agent-bench",
         "dowhy",
         "lifelines",
     }
     missing = required - names
     assert not missing, f"missing expected baselines: {missing}"
+
+
+def test_paper_cited_baselines_are_locked(fetch_module):
+    entries = {e.name: e for e in fetch_module.load_registry()}
+    lock = json.loads(LOCK_PATH.read_text(encoding="utf-8"))
+    locked = {row["name"]: row for row in lock.get("paper_cited", [])}
+    missing_lock = PAPER_CITED_BASELINES - locked.keys()
+    assert not missing_lock, f"paper-cited baselines missing from LOCK.json: {missing_lock}"
+    for name in PAPER_CITED_BASELINES:
+        entry = entries[name]
+        row = locked[name]
+        assert re.fullmatch(r"[0-9a-f]{40}", row["commit"])
+        assert entry.ref == row["commit"], (
+            f"{name} must use the exact locked commit in REGISTRY.md; "
+            "mutable refs such as main are not allowed for paper-cited baselines"
+        )
+        assert row["repo"].rstrip(".git") == entry.repo.rstrip(".git")

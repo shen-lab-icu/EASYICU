@@ -1,0 +1,36 @@
+{
+  "schema_version": "easyicu.baseline_lock/1",
+  "generated_at": "2026-05-27",
+  "paper_cited": [
+    {
+      "name": "data-to-paper",
+      "repo": "https://github.com/Technion-Kishony-lab/data-to-paper",
+      "commit": "81df14c4b9600466e645c3b2b336cc54daa3df3a",
+      "local_checkout": "../_baselines/data-to-paper"
+    },
+    {
+      "name": "healthflow",
+      "repo": "https://github.com/yhzhu99/HealthFlow",
+      "commit": "45dab966959b6730ec20e8f3b3e22998735523ac",
+      "local_checkout": "../_baselines/HealthFlow"
+    },
+    {
+      "name": "ai-scientist-v2",
+      "repo": "https://github.com/SakanaAI/AI-Scientist-v2",
+      "commit": "96bd51617cfdbb494a9fc283af00fe090edfae48",
+      "local_checkout": "../_baselines/AI-Scientist-v2"
+    },
+    {
+      "name": "openlens-ai",
+      "repo": "https://github.com/jarrycyx/openlens-ai",
+      "commit": "ddb05b90e78517c1ee16885e711c9a61a73e7bf7",
+      "local_checkout": "../_baselines/openlens-ai"
+    },
+    {
+      "name": "m4",
+      "repo": "https://github.com/hannesill/m4",
+      "commit": "312417196e970ea5678000bbeb0d2c7397eac63b",
+      "local_checkout": "../_baselines/m4"
+    }
+  ]
+}
