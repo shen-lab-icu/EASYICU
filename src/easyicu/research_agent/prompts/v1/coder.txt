@@ -105,6 +105,19 @@ Code contract:
   to write outputs. Never define the output directory only inside the
   successful fit branch and then use it after the exception handler.
 
+PANDAS IDIOM GOTCHAS — common LLM mistakes to avoid:
+- `pd.Categorical(x).cat.codes` is invalid because `pd.Categorical`
+  returns a Categorical object, not a Series. Use
+  `pd.Categorical(x).codes` or
+  `pd.Series(x).astype("category").cat.codes`.
+- `df.col.dt.year` fails on object/string columns. First coerce with
+  `df["col"] = pd.to_datetime(df["col"], errors="coerce")`.
+- `df.replace(..., inplace=True)` returns `None`; never assign its
+  result back to a variable. Prefer `df = df.replace(...)`.
+- `df.groupby("x").apply(func)` often returns unstable multi-index or
+  mixed-shape outputs. Prefer explicit `.agg({...})` for summaries or
+  `.transform(...)` for row-aligned values.
+
 JSON SERIALISATION — MANDATORY:
 - Every dict you write to disk must contain only Python primitives
   (int, float, str, bool, list, dict, None). numpy scalars and
