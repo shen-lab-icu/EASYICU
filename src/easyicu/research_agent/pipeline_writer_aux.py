@@ -256,6 +256,19 @@ WRITER_DIGEST_PREFERRED_KEYS: tuple[str, ...] = (
     "error",
 )
 
+_PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT = {
+    "estimate",
+    "primary_or",
+    "odds_ratio",
+    "adjusted_or",
+    "ci_lower",
+    "ci_upper",
+    "primary_ci_low",
+    "primary_ci_high",
+    "primary_or_ci",
+    "p_value",
+}
+
 
 def _render_writer_evidence_digest(
     per_step_records: Sequence[Dict[str, Any]] | None = None,
@@ -284,6 +297,7 @@ def _render_writer_evidence_digest(
             )
         )
     run_dir = Path(run_dir or ".")
+    has_panel_primary = _robustness_panel_has_primary_effect(run_dir)
     preferred_keys = (
         "sample_size",
         "n_total",
@@ -355,6 +369,8 @@ def _render_writer_evidence_digest(
             continue
         digest_row: Dict[str, Any] = {}
         for key in preferred_keys:
+            if has_panel_primary and key in _PRIMARY_EFFECT_DIGEST_KEYS_WHEN_PANEL_PRESENT:
+                continue
             scalar = _first_present_scalar(summary, (key,))
             if scalar is not None:
                 digest_row[key] = scalar
@@ -377,7 +393,8 @@ def _render_writer_evidence_digest(
             step_id=step_id,
             candidate=summary.get("primary_association_path"),
         )
-        digest_row.update(_summarise_primary_association_table(primary_path))
+        if not has_panel_primary:
+            digest_row.update(_summarise_primary_association_table(primary_path))
         strata_path = _resolve_writer_aux_path(
             run_dir=run_dir,
             step_id=step_id,
@@ -680,6 +697,11 @@ def _render_robustness_panel_block(*, run_dir: Path | None) -> List[str]:
     lines: List[str] = []
     if primary is not None:
         lines.append(
+            "CANONICAL PRIMARY EFFECT SOURCE: use this robustness-panel "
+            "primary row for the manuscript-facing primary effect. Do not "
+            "mix it with generated per-step model estimates."
+        )
+        lines.append(
             "primary: "
             f"spec_id={primary.spec_id}, "
             f"point={_fmt_panel_number(primary.point_estimate)}, "
@@ -713,6 +735,25 @@ def _render_robustness_panel_block(*, run_dir: Path | None) -> List[str]:
             f"spec_id={row.spec_id}, point={_fmt_panel_number(row.point_estimate)}"
         )
     return lines
+
+
+def _robustness_panel_has_primary_effect(run_dir: Path | None) -> bool:
+    if run_dir is None:
+        return False
+    panel = load_robustness_panel(Path(run_dir) / "robustness_panel.json")
+    if panel is None:
+        return False
+    primary = next(
+        (row for row in panel.rows if row.spec_id == panel.primary_spec_id),
+        None,
+    )
+    return (
+        primary is not None
+        and primary.converged
+        and primary.point_estimate is not None
+        and primary.ci_low is not None
+        and primary.ci_high is not None
+    )
 
 
 def _fmt_panel_number(value: Any) -> str:

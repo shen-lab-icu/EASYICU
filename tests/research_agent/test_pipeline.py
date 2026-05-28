@@ -3967,6 +3967,29 @@ def test_semantic_aliases_bind_kdigo_sensitivity_to_primary_association(ra, tmp_
     assert "kdigo_sensitivity" in aliases
 
 
+def test_semantic_aliases_do_not_bind_primary_association_for_robustness_without_effect(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    summary = tmp_path / "step_summary.json"
+    summary.write_text(
+        '{"missingness_strategy": null, "note": "no effect estimate"}',
+        encoding="utf-8",
+    )
+    step = ra.AnalysisStep(
+        step_id="02b_missingness_handling",
+        intent="Finalize robustness missingness strategy.",
+        expected_outputs=["log:robustness_missingness"],
+    )
+
+    aliases = _semantic_aliases_for(step, summary)
+
+    assert "robustness_summary" in aliases
+    assert "primary_association" not in aliases
+
+
 def test_semantic_aliases_bind_sofa_zero_audit_outcome_rate(ra, tmp_path: Path):
     from easyicu.research_agent.pipeline import _semantic_aliases_for
 
