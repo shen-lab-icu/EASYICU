@@ -496,6 +496,9 @@ def _deterministic_summary_repair(
     )
     generic_soft_failure = "unknown error" in error_text.lower()
     dtype_soft_failure = "pandas data cast to numpy dtype of object" in error_text.lower()
+    index_alignment_soft_failure = (
+        "indices for endog and exog are not aligned" in error_text.lower()
+    )
     undefined_dummy_formula_failure = (
         "nameerror" in error_text.lower()
         and "sex_" in error_text.lower()
@@ -510,6 +513,7 @@ def _deterministic_summary_repair(
         and not (
             generic_soft_failure
             or dtype_soft_failure
+            or index_alignment_soft_failure
             or undefined_dummy_formula_failure
         )
     ):
@@ -560,6 +564,9 @@ def _deterministic_summary_repair(
             or '"estimate": null' in summary_text
         )
         dtype_summary_failure = "pandas data cast to numpy dtype of object" in summary_text
+        index_alignment_summary_failure = (
+            "indices for endog and exog are not aligned" in summary_text
+        )
         helper_dtype_summary_failure = (
             dtype_summary_failure
             and "def _fit_logistic" in code
@@ -582,6 +589,14 @@ def _deterministic_summary_repair(
                 if repaired != code:
                     return repair_name, repaired
         if dtype_summary_failure:
+            repaired = _deterministic_runner_repair(
+                code=code,
+                run_log=summary_text,
+                previous_repair=previous_repair,
+            )
+            if repaired is not None:
+                return repaired
+        if index_alignment_summary_failure:
             repaired = _deterministic_runner_repair(
                 code=code,
                 run_log=summary_text,
@@ -1130,6 +1145,57 @@ def _patch_statsmodels_conf_int_filter_axis(code: str) -> str:
         )
 
     return assignment_re.sub(_rewrite, code)
+
+
+def _patch_statsmodels_endog_exog_index_alignment(code: str) -> str:
+    """Align pandas endog/exog indices before statsmodels model construction.
+
+    Generated scripts often reset the design matrix to a compact 0..n index
+    after dummy encoding, while leaving the outcome series on the original
+    filtered-cohort index. Statsmodels rejects this with "The indices for
+    endog and exog are not aligned". The repair is case-neutral: it wraps
+    statsmodels constructors and only resets indices when X and y have the
+    same row count but different pandas indices.
+    """
+
+    helper_name = "_easyicu_statsmodels_align_index_v1"
+    model_call = re.compile(
+        r"(?P<prefix>\b[A-Za-z_]\w*\s*=\s*sm\.(?:Logit|OLS|GLM)\()\s*"
+        r"(?P<y>[^,]+?)\s*,\s*(?P<X>[^,\)\n]+?)\s*"
+        r"(?P<kwargs>,\s*[^)\n]+)?(?P<suffix>\))"
+    )
+
+    def _rewrite(match: re.Match[str]) -> str:
+        y_expr = match.group("y").strip()
+        x_expr = match.group("X").strip()
+        kwargs = match.group("kwargs") or ""
+        return (
+            f"{match.group('prefix')}*{helper_name}("
+            f"{x_expr}, {y_expr}){kwargs}{match.group('suffix')}"
+        )
+
+    repaired = model_call.sub(_rewrite, code, count=1)
+    if repaired == code:
+        return code
+    if f"def {helper_name}" in repaired:
+        return repaired
+    helper = textwrap.dedent(
+        f"""
+
+        def {helper_name}(X, y):
+            X_work = X.copy() if hasattr(X, "copy") else X
+            y_work = y.copy() if hasattr(y, "copy") else y
+            try:
+                if hasattr(X_work, "index") and hasattr(y_work, "index"):
+                    if len(X_work) == len(y_work) and not X_work.index.equals(y_work.index):
+                        X_work = X_work.reset_index(drop=True)
+                        y_work = y_work.reset_index(drop=True)
+            except Exception:
+                pass
+            return y_work, X_work
+        """
+    ).strip("\n")
+    return helper + "\n\n" + repaired
 
 
 def _patch_json_dump_numpy_key_sanitizer(code: str) -> str:
@@ -1874,6 +1940,17 @@ def _deterministic_runner_repair(
         repair_name = "statsmodels_conf_int_filter_axis_v1"
         if previous_repair != repair_name:
             repaired = _patch_statsmodels_conf_int_filter_axis(code)
+            if repaired != code:
+                return repair_name, repaired
+
+    statsmodels_endog_exog_index_mismatch = (
+        "indices for endog and exog are not aligned" in lowered
+        and any(token in code for token in ("sm.Logit(", "sm.OLS(", "sm.GLM("))
+    )
+    if statsmodels_endog_exog_index_mismatch:
+        repair_name = "statsmodels_endog_exog_index_align_v1"
+        if previous_repair != repair_name:
+            repaired = _patch_statsmodels_endog_exog_index_alignment(code)
             if repaired != code:
                 return repair_name, repaired
 

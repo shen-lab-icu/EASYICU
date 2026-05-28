@@ -1114,6 +1114,79 @@ result = model.fit(disp=0)
     compile(patched, "<patched>", "exec")
 
 
+def test_deterministic_runner_repair_aligns_statsmodels_endog_exog_indices(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+df = pd.DataFrame(
+    {
+        "death": [0, 1, 0, 1, 0, 1],
+        "lactate": [1.0, 2.2, 1.4, 2.8, 1.7, 3.1],
+        "age": [50, 60, 55, 65, 58, 70],
+    },
+    index=[10, 12, 14, 16, 18, 20],
+)
+y = df["death"].astype(float)
+X = df[["lactate", "age"]].reset_index(drop=True).astype(float)
+X = sm.add_constant(X, has_constant="add")
+model = sm.OLS(y, X)
+result = model.fit()
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="ValueError: The indices for endog and exog are not aligned",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "statsmodels_endog_exog_index_align_v1"
+    assert "_easyicu_statsmodels_align_index_v1(X, y)" in patched
+    namespace = {}
+    exec(patched, namespace)
+    result = namespace["result"]
+    assert len(result.params) == 3
+
+
+def test_deterministic_summary_repair_aligns_indices_after_dtype_repair(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+df = pd.DataFrame(
+    {
+        "death": [0, 1, 0, 1, 0, 1],
+        "lactate": [1.0, 2.2, 1.4, 2.8, 1.7, 3.1],
+        "age": [50, 60, 55, 65, 58, 70],
+    },
+    index=[101, 103, 107, 109, 113, 127],
+)
+y = df["death"].astype(float)
+X = df[["lactate", "age"]].reset_index(drop=True).astype(float)
+X = sm.add_constant(X, has_constant="add")
+model = sm.OLS(y, X)
+result = model.fit()
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "primary_predictor": "lactate",
+            "primary_or": None,
+            "fit_error": "The indices for endog and exog are not aligned",
+        },
+        previous_repair="dtype_coerce_v1",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "statsmodels_endog_exog_index_align_v1"
+    namespace = {}
+    exec(patched, namespace)
+    assert len(namespace["result"].params) == 3
+
+
 def test_deterministic_runner_repair_reapplies_dtype_after_coder_rewrite(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
