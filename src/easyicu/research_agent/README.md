@@ -25,8 +25,8 @@ mortality with hospital mortality.
 explicit aggregation rules, time windows, missingness semantics and
 known pitfalls — into the agent loop, and it routes every produced
 artefact through a SHA-256-hashed evidence store that the manuscript
-scaffold is allowed to cite from. Sentences without an evidence id
-are blocked.
+scaffold is allowed to cite from. Evidence-carrying claims without an
+evidence id are blocked or surfaced for human review.
 
 ## Architecture
 
@@ -560,6 +560,11 @@ Hard rules currently encoded:
 - Reported `outcome_rate` that disagrees with a cohort recompute by
   more than 0.001 is an error.
 
+Coverage note: these validators are deterministic, rule-based checks
+for a curated set of ICU-specific failure modes. They are not a formal
+verifier for arbitrary Python semantics, dynamic aliasing, causal
+identification, or clinical interpretation.
+
 ## How this fits into a paper
 
 The intended publication framing is:
@@ -568,16 +573,15 @@ The intended publication framing is:
 > by injecting structured concept metadata, time-window constraints,
 > and aggregation rules into the agent's reasoning context, and by
 > routing every produced artefact through a SHA-256-hashed evidence
-> store that the manuscript scaffolder is allowed to cite from. We
-> demonstrate that the same off-the-shelf agent loop, run with vs.
-> without the EasyICU context layer, behaves substantially
-> differently on canonical ICU pitfalls (SOFA==0 missingness
-> ambiguity, ordinal-score averaging, mortality-definition
-> conflation) — providing a reproducible, traceable analysis pipeline
-> for high-stakes medical research.
+> store that the manuscript scaffolder is allowed to cite from. In
+> controlled demonstrations, the same off-the-shelf agent loop, run
+> with vs. without the EasyICU context layer, can be audited on
+> canonical ICU pitfalls (SOFA==0 missingness ambiguity,
+> ordinal-score averaging, mortality-definition conflation) —
+> providing a reproducible, traceable workflow for ICU analysis.
 
 The `examples/research_agent_mortality_sofa.py` demo is the seed for
-the **hero ablation**: run the same generated cohort with a generic
+the small ablation example: run the same generated cohort with a generic
 agent (no context) and with EasyICU's context layer, and contrast
 their handling of the SOFA2==0 stratum.
 
@@ -605,8 +609,9 @@ planner/context quality from the downstream statistical safety net.
   lets the layer be safely published.
 - **No default Docker requirement.** The default runner remains a plain
   subprocess with a wall-clock timeout so local demos and CI stay
-  simple. Docker/OpenHands is opt-in via `runner_kind="docker"` or a
-  user-supplied `runner_factory`.
+  simple. It captures provenance and enforces timeouts, but it is not a
+  strong security sandbox. Docker/OpenHands is opt-in via
+  `runner_kind="docker"` or a user-supplied `runner_factory`.
 - **No unbounded automatic cross-database execution.** v1 can build
   deterministic replication packages from supplied EasyICU exports or
   local raw database paths, but long-running targets such as HiRID are

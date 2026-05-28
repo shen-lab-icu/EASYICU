@@ -89,7 +89,7 @@ easyicu-webapp
 - **准备完成的数据是统一契约**：原始 CSV / CSV.GZ / tar.gz 数据需先转换，再供 Web 界面和 Python API 共用。
 - **AI 助手默认关闭**：只有在用户显式启用后才会工作。
 - **始终保留人工确认**：队列、特征、数据转换与导出等关键操作仍需用户确认。
-- **仓库已包含自动化检查**：当前提供 `pytest` 与 GitHub Actions，覆盖基础仓库契约与界面渲染检查。
+- **仓库已包含自动化检查**：GitHub Actions 在 Python 3.10、3.11 和 3.12 上运行 `ruff check src tests` 与 `pytest -q`，覆盖基础仓库契约、公共 API 与界面渲染检查。
 
 ## 论文、引用与可复现
 
@@ -147,7 +147,7 @@ easyicu-webapp
 
 ### Cross-Database Benchmark
 
-**Cross-DB Benchmark（跨库基准）** Tab 把同一组临床概念在六个支持的 ICU 数据库间标准化对齐，并叠加其分布以直接对比 —— 是研究希望"跨队列推广"时的一项关键合理性检查。
+**Cross-DB Benchmark（跨库对照）** Tab 把同一组临床概念在六个支持的 ICU 数据库间标准化对齐，并叠加其分布以直接对比。这里的 "Benchmark" 是 Web 界面中的探索性对照与质量检查入口，不代表正式模型排行榜或外部 benchmark 结论。
 
 ![Cross-Database Benchmark](docs/images/06_cross_db_benchmark.jpg)
 
@@ -158,10 +158,10 @@ EasyICU Web 主界面包含 5 个顶级 tab：
 - **Tutorial（教程）** — 数据准备工作流向导（数据源 → 队列 → 概念 → 导出），作为最左侧顶部 tab，新用户进来就能找到，不必再去侧边栏；侧边栏的「📚 工作流帮助」也依然可用。
 - **Patient Review（患者审阅）** — 数据表浏览、带临床阈值的时间序列、单患者概览、数据质量审计（缺失 / 物理范围越界 / 时间完整性）。
 - **Cohort Statistics（队列统计）** — 分组对照表（含 p 值与 SMD）、覆盖度与入组流程审计、队列单页快照、SOFA-1 与 SOFA-2 敏感性分析。
-- **Cross-DB Benchmark（跨库基准）** — 多数据库间的标准化特征分布对比（独立出来是因为它需要 ≥ 2 个数据库的原始 schema）。
-- **Research Agent（研究智能体）** — 可选模块：以研究问题为入口的分析与文章草稿生成，内置确定性的论文复现入口。
+- **Cross-DB Benchmark（跨库对照）** — 多数据库间的标准化特征分布对比（独立出来是因为它需要 ≥ 2 个数据库的原始 schema）。
+- **Research Agent（研究智能体）** — 可选模块：以研究问题为入口的分析与证据绑定稿件框架生成，内置确定性的论文复现入口。
 
-Research Agent 把"问题 + EasyICU 准备好的数据"通过 4 阶段流水线 **Plan → Build → Analyze → Gate** 变成证据绑定的研究产物，并只在 Evidence Gate 通过后才生成论文草稿：
+Research Agent 把"问题 + EasyICU 准备好的数据"通过 4 阶段流水线 **Plan → Build → Analyze → Gate** 变成证据绑定的研究产物，并只在 Evidence Gate 通过后才生成可审稿件框架；它不是全自动论文写作或自主科学发现系统。
 
 ![Research Agent pipeline](docs/images/05_research_agent.jpg)
 
@@ -169,7 +169,7 @@ Research Agent 把"问题 + EasyICU 准备好的数据"通过 4 阶段流水线 
 
 对于高级用户，EasyICU 还提供一个可选的
 `easyicu.research_agent` 层，用于 ICU 语义感知的分析规划、
-证据绑定式结果整理，以及 manuscript scaffold 生成。它不是
+证据绑定式结果整理，以及 manuscript scaffold 生成。它不是临床决策支持工具，也不是无需人工审阅的自动投稿系统；它不是
 标准 Web 工作流或 Python 提取 API 的必需部分。详情见
 [src/easyicu/research_agent/README.md](src/easyicu/research_agent/README.md)。
 
@@ -191,7 +191,7 @@ pip install -e ".[dev,webapp]"
 pytest -q
 ```
 
-仓库中的 GitHub Actions 会在 push 和 pull request 时运行同一套 `pytest` 检查。提交改动前可先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+仓库中的 GitHub Actions 会在 push 和 pull request 时对 Python 3.10、3.11 和 3.12 运行 `ruff check src tests` 与 `pytest -q`。提交改动前可先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 💻 Python API
 
