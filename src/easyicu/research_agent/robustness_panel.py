@@ -451,33 +451,36 @@ def load_robustness_panel(path: Path) -> Optional[RobustnessPanel]:
 
 def numeric_digest_for_panel(panel: RobustnessPanel) -> Dict[str, Any]:
     primary = next((row for row in panel.rows if row.spec_id == panel.primary_spec_id), None)
-    digest: Dict[str, Any] = {
-        "n_variants": panel.n_variants,
-    }
+    digest: Dict[str, Any] = {}
+    seen_values: set[tuple[float, int]] = set()
+
+    def _add_unique(key: str, value: Any) -> None:
+        if not isinstance(value, (int, float)):
+            return
+        fvalue = float(value)
+        # Collapse duplicate display-equivalent panel values so the manuscript
+        # numeric binder does not see five indistinguishable claims for the
+        # same point estimate (primary, worst-by-axis, and multiple rows).
+        # Keeping the first claim preserves a stable panel-level source while
+        # the full row list remains available in robustness_panel.json.
+        normalized = (round(fvalue, 12), 0 if isinstance(value, int) else 1)
+        if normalized in seen_values:
+            return
+        seen_values.add(normalized)
+        digest[key] = value
+
+    _add_unique("n_variants", panel.n_variants)
     if panel.n_variants > 0 and panel.range_low is not None:
-        digest["range_low"] = panel.range_low
+        _add_unique("range_low", panel.range_low)
     if panel.n_variants > 0 and panel.range_high is not None:
-        digest["range_high"] = panel.range_high
+        _add_unique("range_high", panel.range_high)
     if primary is not None:
-        digest.update(
-            {
-                "primary_n": primary.n,
-                "primary_point_estimate": primary.point_estimate,
-                "primary_ci_low": primary.ci_low,
-                "primary_ci_high": primary.ci_high,
-            }
-        )
+        _add_unique("primary_n", primary.n)
+        _add_unique("primary_point_estimate", primary.point_estimate)
+        _add_unique("primary_ci_low", primary.ci_low)
+        _add_unique("primary_ci_high", primary.ci_high)
     for axis, row in worst_rows_by_axis(panel).items():
-        digest[f"worst_{axis}_point_estimate"] = row.point_estimate
-    for row in panel.rows:
-        if row.spec_id == panel.primary_spec_id:
-            continue
-        prefix = "row_" + _safe_key(row.spec_id)
-        digest[f"{prefix}_n"] = row.n
-        digest[f"{prefix}_point_estimate"] = row.point_estimate
-        digest[f"{prefix}_ci_low"] = row.ci_low
-        digest[f"{prefix}_ci_high"] = row.ci_high
-        digest[f"{prefix}_se"] = row.se
+        _add_unique(f"worst_{axis}_point_estimate", row.point_estimate)
     return {k: v for k, v in digest.items() if isinstance(v, (int, float))}
 
 

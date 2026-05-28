@@ -160,6 +160,7 @@ def audit_manuscript_numeric_claims(
         for claimed in _extract_percent_claims_near(
             bound_manuscript,
             r"\b(?:baseline prevalence|mortality|death|outcome incidence)\b",
+            skip_stratified_context=True,
         ):
             if abs(claimed - baseline) > 0.015:
                 findings.append(
@@ -217,7 +218,12 @@ def _extract_metric_claims(text: str, metric_pattern: str) -> List[float]:
     return claims
 
 
-def _extract_percent_claims_near(text: str, phrase_pattern: str) -> List[float]:
+def _extract_percent_claims_near(
+    text: str,
+    phrase_pattern: str,
+    *,
+    skip_stratified_context: bool = False,
+) -> List[float]:
     claims: List[float] = []
     clean_text = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")
     clean_text = re.sub(r"<!--.*?-->", "", clean_text, flags=re.DOTALL)
@@ -239,6 +245,10 @@ def _extract_percent_claims_near(text: str, phrase_pattern: str) -> List[float]:
         trailer = clean_text[match.end(): match.end() + 32]
         if ci_trailer.match(trailer):
             continue
+        if skip_stratified_context:
+            window = clean_text[max(0, match.start() - 96): match.end() + 96]
+            if _looks_like_stratified_rate_context(window):
+                continue
         try:
             value = float(match.group(1)) / 100.0
         except (TypeError, ValueError):
@@ -246,6 +256,26 @@ def _extract_percent_claims_near(text: str, phrase_pattern: str) -> List[float]:
         if 0.0 <= value <= 1.0:
             claims.append(value)
     return claims
+
+
+def _looks_like_stratified_rate_context(window: str) -> bool:
+    """Return true when a percent is clearly subgroup-specific, not baseline.
+
+    The baseline-prevalence audit should catch statements like "overall
+    cohort mortality was 5.6%" when the registered event rate is 9.4%. It
+    should not treat "the SOFA-2=0 stratum had mortality 5.6%" as a baseline
+    claim. Keep this lexical and case-neutral: any stratum/subgroup/bin/level
+    language can describe a legitimate within-group rate.
+    """
+
+    text = (window or "").lower()
+    if not re.search(
+        r"\b(?:stratum|strata|subgroup|sub-group|category|level|bin|"
+        r"quartile|tertile|decile)\b",
+        text,
+    ):
+        return False
+    return True
 
 
 

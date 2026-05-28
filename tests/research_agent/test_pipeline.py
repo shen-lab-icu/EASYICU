@@ -3104,6 +3104,47 @@ def test_manuscript_numeric_auditor_ignores_ci_percent_near_outcome_phrase(ra):
     assert not any("prevalence claim" in m for m in messages), messages
 
 
+def test_manuscript_numeric_auditor_ignores_stratum_specific_mortality_rate(ra):
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "The overall cohort mortality was 9.4% [probe](evidence/probe.csv). "
+        "The zero-score stratum had a lower mortality rate of 5.6% "
+        "[strata](evidence/strata.csv).\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "00_probe",
+                "status": "ok",
+                "step_summary": {"statistic:baseline_prevalence": 0.094},
+            }
+        ],
+    )
+
+    messages = [finding.message for finding in findings]
+    assert not any("prevalence claim 0.056" in m for m in messages), messages
+
+
+def test_manuscript_numeric_auditor_still_flags_overall_prevalence_mismatch(ra):
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = "The overall cohort mortality was 5.6% [probe](evidence/probe.csv).\n"
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "00_probe",
+                "status": "ok",
+                "step_summary": {"statistic:baseline_prevalence": 0.094},
+            }
+        ],
+    )
+
+    assert any("prevalence claim 0.056" in finding.message for finding in findings)
+
+
 def test_repair_common_writer_placeholders_prediction_fallbacks(ra, tmp_path: Path):
     from easyicu.research_agent.evidence import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_placeholders
@@ -3339,6 +3380,32 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
 
     assert readiness["publication_figure_bundle_ready"] is True
     assert readiness["publication_ready_stems"] == ["easyicu_publication_figure"]
+
+
+def test_publication_bundle_ready_accepts_registered_forest_plot_png_svg(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+
+    evidence = EvidenceStore(tmp_path)
+    for suffix in ("png", "svg"):
+        path = tmp_path / f"forest_plot.{suffix}"
+        path.write_text("x", encoding="utf-8")
+        evidence.register_file(
+            kind="figure",
+            description="Forest plot for the association model.",
+            source_path=path,
+            evidence_id=f"figure_forest_plot_{suffix}",
+            producer="coder",
+            generation_mode="llm_code",
+        )
+
+    readiness = _publication_figure_bundle_ready(evidence=evidence, run_dir=tmp_path)
+
+    assert readiness["publication_figure_bundle_ready"] is True
+    assert readiness["publication_ready_stems"] == ["forest_plot"]
 
 
 def test_salvage_minimal_contract_step_summary_from_table_one_csv(

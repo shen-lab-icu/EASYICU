@@ -312,6 +312,25 @@ def _parsed_numeric_literal(value_str: str) -> tuple[float, bool] | None:
         return None
 
 
+def _lookup_literal_for_numeric_match(
+    text: str,
+    *,
+    match_end: int,
+    value: str,
+) -> str:
+    """Return the literal used for NumericClaim lookup.
+
+    Manuscripts often render percentages with a thin space or ordinary space
+    before the percent sign ("9.4 %"). The numeric regex intentionally matches
+    only the number in that form, but the claim registry stores prevalence as a
+    proportion (0.094). Preserve the manuscript text while letting the matcher
+    use percent semantics whenever the next non-space character is "%".
+    """
+
+    trailer = text[match_end:min(len(text), match_end + 8)]
+    return f"{value}%" if re.match(r"\s*%", trailer) else value
+
+
 def _claim_numeric_distance(
     claim: NumericClaim,
     value_str: str,
@@ -533,6 +552,11 @@ def bind_numeric_values(
         if _position_is_inside(start, skip_spans):
             continue
         value = match.group("value")
+        lookup_value = _lookup_literal_for_numeric_match(
+            manuscript,
+            match_end=end,
+            value=value,
+        )
         if _is_bibliographic_year_context(
             manuscript,
             start=start,
@@ -544,7 +568,7 @@ def bind_numeric_values(
         context_start = max(0, start - 80)
         context_end = min(len(manuscript), end + 80)
         context = manuscript[context_start:context_end]
-        candidates = _candidate_claims_for_value(evidence, value)
+        candidates = _candidate_claims_for_value(evidence, lookup_value)
         claim, ambiguous = _select_numeric_claim(
             candidates=candidates,
             context=context,

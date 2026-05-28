@@ -247,6 +247,31 @@ def test_panel_range_correctness() -> None:
     assert panel.range_high == 2.0
 
 
+def test_panel_numeric_digest_deduplicates_repeated_panel_values() -> None:
+    from easyicu.research_agent.robustness_panel import (
+        RobustnessPanel,
+        RobustnessPanelRow,
+        numeric_digest_for_panel,
+    )
+
+    panel = RobustnessPanel.from_rows(
+        [
+            RobustnessPanelRow("primary", "primary", 500, 1.33, 1.2, 1.47, 0.1, "e1", True),
+            RobustnessPanelRow("alt_same", "cohort", 500, 1.33, 1.2, 1.47, 0.1, "e2", True),
+            RobustnessPanelRow("alt_diff", "missing", 400, 0.84, 0.7, 1.1, 0.2, "e3", True),
+        ],
+        locked_at="2026-05-27T00:00:00Z",
+    )
+
+    digest = numeric_digest_for_panel(panel)
+
+    assert "primary_point_estimate" in digest
+    assert digest["primary_point_estimate"] == 1.33
+    assert "worst_cohort_point_estimate" not in digest
+    assert not any(key.startswith("row_alt_same") for key in digest)
+    assert list(digest.values()).count(1.33) == 1
+
+
 def test_writer_digest_contains_panel_block(ra, tmp_path: Path) -> None:
     from easyicu.research_agent.robustness_panel import (
         RobustnessPanel,
