@@ -355,6 +355,43 @@ def _candidate_claims_for_value(
     return candidates
 
 
+def _is_bibliographic_year_context(
+    text: str,
+    *,
+    start: int,
+    end: int,
+    value: str,
+) -> bool:
+    """Return true for citation years that should not require NumericClaim.
+
+    Evidence binding tracks study results, not bibliography metadata. Keep the
+    check conservative so ordinary result years still surface as UNTRACED.
+    """
+
+    raw = (value or "").strip()
+    if not re.fullmatch(r"(?:19|20)\d{2}", raw):
+        return False
+    year = int(raw)
+    if year < 1900 or year > 2099:
+        return False
+    left = text[max(0, start - 80):start]
+    right = text[end:min(len(text), end + 80)]
+    window = left + raw + right
+    if re.search(r"\bet\s+al\.?,?\s*$", left, re.IGNORECASE):
+        return True
+    if re.search(r"\b[A-Z][A-Za-z'’-]+(?:\s+and\s+[A-Z][A-Za-z'’-]+)?\s*,\s*$", left):
+        if re.search(r"^\s*(?:[);,\]]|and\b|;)", right):
+            return True
+    if re.search(
+        r"\([^\)]*(?:et\s+al\.?|[A-Z][A-Za-z'’-]+(?:\s+and\s+[A-Z][A-Za-z'’-]+)?\s*,)\s*"
+        + raw,
+        window,
+        re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
 def _semantic_hint_score(context: str, claim: NumericClaim) -> int:
     source = claim.source_field
     score = 0
@@ -495,8 +532,15 @@ def bind_numeric_values(
         start, end = match.start("value"), match.end("value")
         if _position_is_inside(start, skip_spans):
             continue
-        out_parts.append(manuscript[cursor:end])
         value = match.group("value")
+        if _is_bibliographic_year_context(
+            manuscript,
+            start=start,
+            end=end,
+            value=value,
+        ):
+            continue
+        out_parts.append(manuscript[cursor:end])
         context_start = max(0, start - 80)
         context_end = min(len(manuscript), end + 80)
         context = manuscript[context_start:context_end]

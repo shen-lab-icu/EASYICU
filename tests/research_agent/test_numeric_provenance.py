@@ -212,6 +212,42 @@ def test_bind_numeric_values_strict_raises_on_untraced(ra, tmp_path: Path):
     assert "999" in exc_info.value.detail["untraced"]
 
 
+def test_bind_numeric_values_skips_bibliographic_years(ra, tmp_path: Path):
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+    manuscript = (
+        "Prior SOFA work was reported by Vincent et al., 1996; "
+        "external validation followed in Ricu et al., 2023; "
+        "and an earlier citation used (Vincent, 1996)."
+    )
+
+    bound, binding_map, untraced = bind_numeric_values(
+        manuscript,
+        evidence=store,
+        enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
+    )
+
+    assert bound == manuscript
+    assert binding_map == {}
+    assert untraced == []
+
+
+def test_bind_numeric_values_does_not_skip_result_years(ra, tmp_path: Path):
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = _store(ra, tmp_path)
+
+    with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
+        bind_numeric_values(
+            "In 2023, the primary outcome was observed during follow-up.",
+            evidence=store,
+            enforcement_mode=ra.EvidenceEnforcementMode.STRICT,
+        )
+
+    assert "2023" in exc_info.value.detail["untraced"]
+
+
 def test_bind_numeric_values_skips_existing_evidence_placeholders(
     ra, tmp_path: Path,
 ):

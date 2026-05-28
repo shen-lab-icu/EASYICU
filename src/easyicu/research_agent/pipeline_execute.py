@@ -73,6 +73,7 @@ from .schema import AnalysisPlan, AnalysisStep, EvidenceRef
 from .robustness_panel import (
     assert_robustness_specs_locked,
     build_robustness_panel_from_records,
+    robustness_specs_for_execution,
     write_robustness_panel,
 )
 from .scalar_utils import _expected_numeric_annotations_for_step
@@ -1730,8 +1731,20 @@ def run_execute_phase(
                     )
 
     try:
+        robustness_specs = robustness_specs_for_execution(run_dir=run_dir, plan=plan)
+        if robustness_specs and not list(getattr(plan, "robustness_specs", []) or []):
+            findings.append(
+                ValidationFinding(
+                    validator="robustness_panel",
+                    severity="warning",
+                    message=(
+                        "Recovered robustness_specs from the plan-time lock because "
+                        "the active replanned AnalysisPlan no longer carried them."
+                    ),
+                )
+            )
         adapter_rows, adapter_warnings = fit_robustness_rows_from_records(
-            specs=list(getattr(plan, "robustness_specs", []) or []),
+            specs=robustness_specs,
             per_step_records=per_step_records,
             primary_cohort=getattr(plan, "cohort", None),
             cohort_path=cohort_path,
@@ -1746,7 +1759,7 @@ def run_execute_phase(
                 )
             )
         robustness_panel = build_robustness_panel_from_records(
-            specs=list(getattr(plan, "robustness_specs", []) or []),
+            specs=robustness_specs,
             per_step_records=per_step_records,
             adapter_rows=adapter_rows,
         )

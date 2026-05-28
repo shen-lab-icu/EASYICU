@@ -115,7 +115,8 @@ def test_adapter_builds_full_eight_row_panel_and_registers_claims(ra, tmp_path) 
     assert panel.n_variants == 7
     assert all(row.converged for row in panel.rows)
     claim_fields = {claim.source_field for claim in evidence.numeric_claims()}
-    assert "row_primary_point_estimate" in claim_fields
+    assert "primary_point_estimate" in claim_fields
+    assert "row_primary_point_estimate" not in claim_fields
     assert f"row_{specs[0].spec_id}_point_estimate" in claim_fields
 
 
