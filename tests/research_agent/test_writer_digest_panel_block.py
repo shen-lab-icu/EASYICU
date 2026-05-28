@@ -46,8 +46,44 @@ def test_digest_contains_panel_block_when_panel_populated(ra, tmp_path: Path) ->
     )
 
     assert "## robustness panel" in digest
+    assert "CANONICAL PRIMARY EFFECT SOURCE" in digest
     assert "primary: spec_id=primary, point=1.2, CI=[1, 1.4], n=100" in digest
     assert "n_variants=1" in digest
+
+
+def test_digest_suppresses_generated_primary_effect_when_panel_is_canonical(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.pipeline_writer_aux import (
+        _render_writer_evidence_digest,
+    )
+    from easyicu.research_agent.robustness_panel import RobustnessPanelRow
+
+    _write_panel(
+        ra,
+        tmp_path,
+        [
+            RobustnessPanelRow("primary", "primary", 100, 1.33, 1.2, 1.47, 0.1, "e1", True),
+            RobustnessPanelRow("cohort_worst", "cohort", 90, 1.1, 0.7, 1.8, 0.2, "e2", True),
+        ],
+    )
+
+    digest = _render_writer_evidence_digest(
+        [
+            {
+                "step_id": "03_association_model",
+                "status": "ok",
+                "step_summary": {"odds_ratio": 0.75, "p_value": 0.73, "n": 225},
+            }
+        ],
+        run_dir=tmp_path,
+    )
+
+    assert "CANONICAL PRIMARY EFFECT SOURCE" in digest
+    assert "point=1.33" in digest
+    assert '"odds_ratio": 0.75' not in digest
+    assert '"p_value": 0.73' not in digest
 
 
 def test_digest_panel_block_shows_range_not_rows(ra, tmp_path: Path) -> None:

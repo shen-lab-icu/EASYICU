@@ -504,6 +504,76 @@ def test_publication_figure_skill_renders_from_registered_association_table(ra, 
     assert (run_dir / "publication_figures" / "easyicu_publication_figure.svg").exists()
 
 
+def test_publication_figure_skill_renders_from_robustness_panel_without_table(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.robustness_panel import (
+        RobustnessPanel,
+        RobustnessPanelRow,
+        write_robustness_panel,
+    )
+
+    run_dir = tmp_path / "run"
+    evidence = ra.EvidenceStore(run_dir)
+    panel = RobustnessPanel.from_rows(
+        [
+            RobustnessPanelRow("primary", "primary", 100, 1.33, 1.2, 1.47, 0.1, "e1", True),
+            RobustnessPanelRow("alt_cohort", "cohort", 90, 1.10, 0.8, 1.52, 0.2, "e2", True),
+        ],
+        locked_at="2026-05-27T00:00:00Z",
+    )
+    write_robustness_panel(
+        run_dir=run_dir,
+        panel=panel,
+        evidence=evidence,
+        prompt_pack_version="test",
+    )
+    context = ra.ResearchContext(
+        research_question="Is severity associated with ICU mortality?",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[
+            ra.ConceptDescriptor(name="sofa", role="ordinal_score", dtype="float64"),
+            ra.ConceptDescriptor(name="death", role="outcome", dtype="int64"),
+        ],
+        target_outcome="death",
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="04_association_model_figure",
+                intent="Render a publication-ready figure.",
+                expected_outputs=["figure:primary_association_curve"],
+            )
+        ],
+    )
+
+    result = ra.PublicationFigureSkill().run(
+        context=context,
+        plan=plan,
+        evidence=evidence,
+        run_dir=run_dir,
+    )
+
+    assert result.generated is True
+    summary = json.loads(
+        (run_dir / "evidence" / "publication_figure_skill_summary__publication_figure_skill_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["generation_mode"] == "robustness_panel_publication_figure"
+    for suffix in ("svg", "png", "pdf", "tiff"):
+        assert evidence.get(f"publication_figure_{suffix}") is not None
+        assert (run_dir / "publication_figures" / f"easyicu_publication_figure.{suffix}").exists()
+    assert evidence.get("publication_figure_contract") is not None
+
+
 def test_publication_figure_skill_promotes_prediction_validation_bundle(ra, tmp_path: Path):
     from PIL import Image
 

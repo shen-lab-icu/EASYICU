@@ -25,6 +25,7 @@ from .publication_figures import (
     make_figure_contract,
     save_publication_figure,
 )
+from .robustness_panel import RobustnessPanel, load_robustness_panel
 from .schema import AnalysisPlan, EvidenceRecord, ResearchContext, ValidationFinding
 
 
@@ -108,6 +109,38 @@ class PublicationFigureSkill:
                 ),
                 prompt_pack_version=prompt_pack_version,
             )
+        robustness_record = evidence.get("robustness_panel")
+        robustness_panel = load_robustness_panel(run_dir / "robustness_panel.json")
+        if robustness_record is not None and robustness_panel is not None:
+            try:
+                return self._render_robustness_panel(
+                    context=context,
+                    evidence=evidence,
+                    run_dir=run_dir,
+                    source_record=robustness_record,
+                    panel=robustness_panel,
+                    prompt_pack_version=prompt_pack_version,
+                )
+            except Exception as exc:
+                return self._write_skip_summary(
+                    reason="robustness_panel_render_failed",
+                    context=context,
+                    plan=plan,
+                    evidence=evidence,
+                    run_dir=run_dir,
+                    prompt_pack_version=prompt_pack_version,
+                    findings=[
+                        ValidationFinding(
+                            validator=self.name,
+                            severity="warning",
+                            message=(
+                                "PublicationFigureSkill skipped robustness-panel "
+                                f"rendering: {exc}"
+                            ),
+                            evidence_ids=[robustness_record.evidence_id],
+                        )
+                    ],
+                )
         if primary is None:
             return self._write_skip_summary(
                 reason="no_supported_source_table",
@@ -478,6 +511,248 @@ class PublicationFigureSkill:
             findings=audit_findings,
         )
 
+    def _render_robustness_panel(
+        self,
+        *,
+        context: ResearchContext,
+        evidence: EvidenceStore,
+        run_dir: Path,
+        source_record: EvidenceRecord,
+        panel: RobustnessPanel,
+        prompt_pack_version: Optional[str],
+    ) -> PublicationFigureSkillResult:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        rows = [
+            row
+            for row in panel.rows
+            if row.converged
+            and row.point_estimate is not None
+            and row.ci_low is not None
+            and row.ci_high is not None
+        ]
+        if not rows:
+            raise ValueError("robustness panel has no converged rows to plot")
+        primary_rows = [row for row in rows if row.spec_id == panel.primary_spec_id]
+        other_rows = [row for row in rows if row.spec_id != panel.primary_spec_id]
+        plot_rows = (primary_rows + other_rows)[:10]
+        source_df = pd.DataFrame(
+            [
+                {
+                    "spec_id": row.spec_id,
+                    "axis": row.axis,
+                    "n": row.n,
+                    "point_estimate": row.point_estimate,
+                    "ci_low": row.ci_low,
+                    "ci_high": row.ci_high,
+                    "converged": row.converged,
+                    "notes": row.notes,
+                }
+                for row in plot_rows
+            ]
+        )
+
+        palette = apply_publication_style()
+        out_dir = run_dir / "publication_figures"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        source_copy = out_dir / "publication_figure_source_robustness_panel.csv"
+        source_df.to_csv(source_copy, index=False)
+
+        height = max(2.5, 0.42 * len(plot_rows) + 1.15)
+        fig, ax = plt.subplots(figsize=(142 / 25.4, height), constrained_layout=False)
+        fig.subplots_adjust(left=0.34, right=0.95, top=0.90, bottom=0.18)
+        y = np.arange(len(source_df))
+        estimate = source_df["point_estimate"].astype(float).to_numpy()
+        lower = source_df["ci_low"].astype(float).to_numpy()
+        upper = source_df["ci_high"].astype(float).to_numpy()
+        labels = [
+            "Primary" if str(row["spec_id"]) == panel.primary_spec_id else str(row["spec_id"]).replace("_", " ")
+            for _, row in source_df.iterrows()
+        ]
+        for idx, row in source_df.iterrows():
+            center = float(row["point_estimate"])
+            lo = float(row["ci_low"])
+            hi = float(row["ci_high"])
+            is_primary = str(row["spec_id"]) == panel.primary_spec_id
+            color = (
+                palette.get("blue", "#0F4D92")
+                if is_primary
+                else palette.get("baseline", "#272727")
+            )
+            ax.errorbar(
+                center,
+                idx,
+                xerr=np.array(
+                    [[max(0.0, center - lo)], [max(0.0, hi - center)]],
+                    dtype=float,
+                ),
+                fmt="o",
+                color=color,
+                ecolor=color,
+                elinewidth=1.0,
+                capsize=2.2,
+                markersize=4.4 if is_primary else 3.6,
+                zorder=3,
+            )
+        ax.axvline(
+            1.0,
+            color=palette.get("neutral", "#8F8F8F"),
+            linestyle="--",
+            linewidth=0.8,
+        )
+        ax.set_yticks(y, labels)
+        ax.invert_yaxis()
+        ax.set_xlabel("Primary effect estimate (95% CI)")
+        ax.set_title("Pre-specified robustness panel", loc="left", pad=4)
+        ax.grid(
+            axis="x",
+            color=palette.get("neutral_light", "#D8D8D8"),
+            linewidth=0.55,
+            alpha=0.8,
+        )
+        right_anchor = float(max(upper.max(), estimate.max(), 1.0))
+        right_pad = right_anchor * 0.46
+        ax.set_xlim(
+            max(0.0, min(float(lower.min()), 1.0) - 0.08 * right_anchor),
+            right_anchor + right_pad,
+        )
+        text_x = right_anchor + right_pad * 0.08
+        ax.text(text_x, -0.55, "Estimate (95% CI)", ha="left", va="bottom", fontsize=6.8)
+        for idx, (center, lo, hi) in enumerate(zip(estimate, lower, upper)):
+            ax.text(
+                text_x,
+                idx,
+                f"{center:.2f} ({lo:.2f}-{hi:.2f})",
+                ha="left",
+                va="center",
+                fontsize=6.5,
+            )
+        add_panel_label(ax, "A", x=-0.32)
+
+        contract = make_figure_contract(
+            figure_id="easyicu_publication_figure",
+            core_claim=(
+                "The manuscript-facing primary effect and robustness range "
+                "are rendered from the registered pre-specified robustness panel."
+            ),
+            panels=[
+                {
+                    "panel_id": "A",
+                    "title": "Primary effect and robustness variants",
+                    "role": "robustness",
+                    "claim": (
+                        "The primary row and converged variants are drawn from "
+                        "robustness_panel.json rather than generated figure-step files."
+                    ),
+                    "evidence_ids": [source_record.evidence_id],
+                    "review_risk": (
+                        "Non-converged variants remain visible in robustness_panel.json "
+                        "and are not silently plotted."
+                    ),
+                }
+            ],
+            source_data=[source_record.evidence_id],
+            statistics_note=(
+                "Generated deterministically from the registered robustness panel "
+                "after analysis validation; no model pickle is required."
+            ),
+        )
+        paths = save_publication_figure(
+            fig,
+            out_dir / "easyicu_publication_figure",
+            contract=contract,
+            dpi=300,
+        )
+        plt.close(fig)
+
+        audit_findings = list(audit_publication_exports(paths))
+        contract_evidence_id: Optional[str] = None
+        figure_ids: List[str] = []
+        for key, path in paths.items():
+            suffix = path.suffix.lower()
+            if key == "contract" or suffix.endswith(".json"):
+                record = evidence.register_file(
+                    kind="log",
+                    description=(
+                        "Publication figure contract generated from the "
+                        "robustness panel."
+                    ),
+                    source_path=path,
+                    evidence_id="publication_figure_contract",
+                    aliases=["publication_figure_contract", "figure_contract"],
+                    producer=self.name,
+                    generation_mode="deterministic_figure_skill",
+                    prompt_pack_version=prompt_pack_version,
+                    metadata={"source_evidence_id": source_record.evidence_id},
+                )
+                contract_evidence_id = record.evidence_id
+                continue
+            record = evidence.register_file(
+                kind="figure",
+                description=(
+                    f"Publication figure export ({suffix.lstrip('.')}) generated "
+                    "from the robustness panel."
+                ),
+                source_path=path,
+                evidence_id=f"publication_figure_{suffix.lstrip('.')}",
+                aliases=["publication_figure", f"publication_figure_{suffix.lstrip('.')}"],
+                producer=self.name,
+                generation_mode="deterministic_figure_skill",
+                prompt_pack_version=prompt_pack_version,
+                metadata={
+                    "source_evidence_id": source_record.evidence_id,
+                    "figure_contract": "publication_figure_contract",
+                    "figure_role": "publication_figure",
+                },
+            )
+            figure_ids.append(record.evidence_id)
+
+        source_copy_record = evidence.register_file(
+            kind="table",
+            description="Source data copied for the robustness-panel publication figure.",
+            source_path=source_copy,
+            evidence_id="publication_figure_source_robustness_panel",
+            aliases=["publication_figure_source_data"],
+            producer=self.name,
+            generation_mode="deterministic_figure_skill",
+            prompt_pack_version=prompt_pack_version,
+            metadata={"source_evidence_id": source_record.evidence_id},
+        )
+        summary = {
+            "stage": self.name,
+            "generated": True,
+            "generation_mode": "robustness_panel_publication_figure",
+            "figure_id": contract.figure_id,
+            "core_claim": contract.core_claim,
+            "source_evidence_ids": [source_record.evidence_id],
+            "source_copy_evidence_id": source_copy_record.evidence_id,
+            "figure_evidence_ids": figure_ids,
+            "contract_evidence_id": contract_evidence_id,
+            "audit_findings": [f.model_dump(mode="json") for f in audit_findings],
+        }
+        summary_record = evidence.register_json(
+            kind="log",
+            description="PublicationFigureSkill summary.",
+            payload=summary,
+            filename="publication_figure_skill_summary.json",
+            evidence_id="publication_figure_skill_summary",
+            aliases=["publication_figure_skill_summary"],
+            producer=self.name,
+            generation_mode="deterministic_figure_skill",
+            prompt_pack_version=prompt_pack_version,
+        )
+        return PublicationFigureSkillResult(
+            generated=True,
+            contract_evidence_id=contract_evidence_id,
+            figure_evidence_ids=figure_ids,
+            summary_evidence_id=summary_record.evidence_id,
+            findings=audit_findings,
+        )
+
     def _promote_prediction_validation_figure(
         self,
         *,
@@ -770,7 +1045,7 @@ def _first_existing_record(
     name_set = {str(name).lower() for name in names}
     for name in names:
         record = evidence.get(name)
-        if record is not None:
+        if record is not None and record.kind == "table":
             return record
     for record in evidence.records():
         if record.kind != "table":
