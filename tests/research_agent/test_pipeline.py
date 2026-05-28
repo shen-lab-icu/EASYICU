@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -4239,6 +4240,128 @@ with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as 
     assert summary["primary_p_value"] is not None
     assert summary["statistic:primary_or"] == summary["primary_or"]
     assert (out_dir / "association_results.csv").exists()
+
+
+def test_deterministic_summary_repair_fallback_for_logit_dtype_primary_or_null(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression for AGENT3Y: Logit dtype failure hidden in a side table.
+
+    The generated script only records ``primary_or=null`` in
+    ``step_summary.json`` while the model-specific error is written into a CSV.
+    The fallback therefore has to rely on the null primary effect, infer the
+    real predictor column from a prose label, and recover a finite association.
+    """
+
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    n = 160
+    cohort = pd.DataFrame(
+        {
+            "sofa2_admission": [i % 8 for i in range(n)],
+            "death": [1 if (i % 8) >= 5 or i % 19 == 0 else 0 for i in range(n)],
+            "age": [45 + (i % 30) for i in range(n)],
+            "sex": ["F", "M", "F", "M"] * (n // 4),
+            "bmi": [20.0 + (i % 11) * 0.7 for i in range(n)],
+            "weight": [55.0 + (i % 25) for i in range(n)],
+        }
+    )
+    cohort_path = tmp_path / "cohort.parquet"
+    out_dir = tmp_path / "step"
+    out_dir.mkdir()
+    cohort.to_parquet(cohort_path, index=False)
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+
+    code = """
+import os
+import json
+import pandas as pd
+import numpy as np
+import statsmodels.api as sm
+
+out_dir = os.environ["STEP_OUT_DIR"]
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+required_vars = ["sofa2_admission", "age", "sex", "bmi", "weight", "death"]
+cc_mask = df[required_vars].notnull().all(axis=1)
+df_cc = df.loc[cc_mask].copy()
+y = df_cc["death"].astype(int)
+df_cc["sex"] = df_cc["sex"].astype("category")
+sex_dummies = pd.get_dummies(df_cc["sex"], drop_first=True, prefix="sex")
+X = pd.concat(
+    [
+        df_cc[["sofa2_admission", "age", "bmi", "weight"]].astype(float),
+        sex_dummies,
+    ],
+    axis=1,
+)
+X = sm.add_constant(X, has_constant="add")
+step_summary = {"skipped": [], "derived_claims": []}
+primary_row = {}
+try:
+    model = sm.Logit(y, X).fit(disp=False)
+    coef = model.params["sofa2_admission"]
+    se = model.bse["sofa2_admission"]
+    primary_row = {
+        "or": np.exp(coef),
+        "ci_low": np.exp(coef - 1.96 * se),
+        "ci_high": np.exp(coef + 1.96 * se),
+        "pvalue": model.pvalues["sofa2_admission"],
+    }
+except Exception as exc:
+    primary_row = {
+        "error": str(exc),
+    }
+pd.DataFrame([primary_row]).to_csv(
+    os.path.join(out_dir, "logistic_regression_results.csv"),
+    index=False,
+)
+step_summary.update(
+    {
+        "n_total": int(df.shape[0]),
+        "n_complete_case": int(df_cc.shape[0]),
+        "outcome": "ICU mortality (death)",
+        "primary_predictor": "sofa2_admission (ordinal, per-point)",
+        "primary_or": float(primary_row.get("or")) if "or" in primary_row else None,
+        "primary_ci_low": float(primary_row.get("ci_low")) if "ci_low" in primary_row else None,
+        "primary_ci_high": float(primary_row.get("ci_high")) if "ci_high" in primary_row else None,
+        "primary_pvalue": float(primary_row.get("pvalue")) if "pvalue" in primary_row else None,
+    }
+)
+with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(step_summary, f)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "n_total": 160,
+            "n_complete_case": 160,
+            "outcome": "ICU mortality (death)",
+            "primary_predictor": "sofa2_admission (ordinal, per-point)",
+            "primary_or": None,
+            "primary_ci_low": None,
+            "primary_ci_high": None,
+            "primary_pvalue": None,
+        },
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "ordinal_primary_association_fallback_v1"
+    assert "predictor_col = 'sofa2_admission'" in patched
+    assert "outcome_col = 'death'" in patched
+
+    exec(compile(patched, "<patched>", "exec"), {})
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+
+    assert summary["primary_association_estimate"]["variable"] == "sofa2_admission"
+    assert math.isfinite(summary["primary_or"])
+    assert summary["primary_or"] > 1
+    assert summary["primary_ci_low"] > 0
+    assert summary["primary_ci_high"] > summary["primary_ci_low"]
+    assert summary["primary_p_value"] is not None
 
 
 def test_deterministic_summary_repair_restores_predictor_in_helper_design(ra):

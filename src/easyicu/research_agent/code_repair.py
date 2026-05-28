@@ -82,12 +82,38 @@ def _infer_binary_outcome_from_code(code: str, default: str = "death") -> str:
     if match:
         return match.group("outcome")
     match = re.search(
-        r"(?m)^\s*y\s*=\s*df\[[\"'](?P<outcome>[A-Za-z_][A-Za-z0-9_]*)[\"']\]",
+        r"(?m)^\s*y\s*=\s*[A-Za-z_][A-Za-z0-9_]*\[[\"'](?P<outcome>[A-Za-z_][A-Za-z0-9_]*)[\"']\]",
         code,
     )
     if match:
         return match.group("outcome")
     return default
+
+
+def _normalise_predictor_column_candidate(value: Any, code: str) -> Optional[str]:
+    """Return the dataframe column part of a prose predictor label.
+
+    Generated summaries often write labels such as
+    ``"sofa2_admission (ordinal, per-point)"``.  The deterministic fallback
+    needs the actual dataframe column, not the prose suffix.
+    """
+
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text):
+        return text
+    candidates = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text)
+    for candidate in candidates:
+        if (
+            f"'{candidate}'" in code
+            or f'"{candidate}"' in code
+            or re.search(rf"\b{re.escape(candidate)}\b", code)
+        ):
+            return candidate
+    return candidates[0] if candidates else None
 
 
 def _infer_primary_association_predictor_from_code(
@@ -105,9 +131,9 @@ def _infer_primary_association_predictor_from_code(
     """
 
     for key in ("primary_predictor", "predictor", "exposure"):
-        value = step_summary.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        value = _normalise_predictor_column_candidate(step_summary.get(key), code)
+        if value:
+            return value
     manifest = (
         step_summary.get("manifest:robustness_analysis_manifest")
         or step_summary.get("robustness_analysis_manifest")
@@ -115,9 +141,9 @@ def _infer_primary_association_predictor_from_code(
     )
     if isinstance(manifest, dict):
         for key in ("primary_predictor", "predictor", "exposure"):
-            value = manifest.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
+            value = _normalise_predictor_column_candidate(manifest.get(key), code)
+            if value:
+                return value
     for pattern in (
         r"(?:primary_predictor|predictor_col|primary_exposure)\s*=\s*['\"]([^'\"]+)['\"]",
         r"predictor\s*=\s*['\"]([^'\"]+)['\"]",
@@ -598,6 +624,9 @@ def _deterministic_summary_repair(
                 "primary_odds_ratio" in summary_text
                 or "primary_association_estimate" in summary_text
                 or "primary association" in summary_text
+                or '"primary_or": null' in summary_text
+                or '"primary_ci_low": null' in summary_text
+                or '"primary_ci_high": null' in summary_text
                 or "statistic:primary_or" in summary_text
             )
             and (
@@ -609,7 +638,11 @@ def _deterministic_summary_repair(
                 "mle_retvals" in code
                 or "glmresults" in summary_text
                 or "model_fit_error" in summary_text
+                or dtype_summary_failure
                 or '"converged": false' in summary_text
+                or '"primary_or": null' in summary_text
+                or '"primary_ci_low": null' in summary_text
+                or '"primary_ci_high": null' in summary_text
             )
         )
         if glm_primary_effect_null:
