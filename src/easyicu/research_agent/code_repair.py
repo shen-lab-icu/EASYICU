@@ -52,6 +52,200 @@ from .scalar_utils import (
 )
 
 
+def _infer_overexpanded_categorical_predictor(step_summary: Dict[str, Any], code: str) -> Optional[str]:
+    """Infer the source variable behind a singular dummy-expanded score model."""
+
+    predictors = step_summary.get("model", {}).get("predictors")
+    if isinstance(predictors, Sequence) and not isinstance(predictors, (str, bytes)):
+        counts: Dict[str, int] = {}
+        for item in predictors:
+            match = re.match(r"C\((?P<name>[A-Za-z_][A-Za-z0-9_]*)\)\[T\.", str(item))
+            if match:
+                name = match.group("name")
+                counts[name] = counts.get(name, 0) + 1
+        if counts:
+            name, count = max(counts.items(), key=lambda pair: pair[1])
+            if count >= 3:
+                return name
+    for match in re.finditer(r"C\((?P<name>[A-Za-z_][A-Za-z0-9_]*)\)", code):
+        return match.group("name")
+    return None
+
+
+def _infer_binary_outcome_from_code(code: str, default: str = "death") -> str:
+    """Best-effort extraction of the left-hand side of a generated formula."""
+
+    match = re.search(r"formula\s*=\s*[\"'](?P<outcome>[A-Za-z_][A-Za-z0-9_]*)\s*~", code)
+    if match:
+        return match.group("outcome")
+    match = re.search(r"(?P<outcome>[A-Za-z_][A-Za-z0-9_]*)\s*~\s*C\(", code)
+    if match:
+        return match.group("outcome")
+    return default
+
+
+def _ordinal_primary_association_fallback_code(
+    *,
+    predictor: str,
+    outcome: str,
+    reason: str,
+) -> str:
+    """Return deterministic code that estimates one ordinal adjusted OR.
+
+    The fallback is intentionally generic: it is triggered by a singular
+    dummy-expanded categorical predictor, then re-estimates a single per-unit
+    odds ratio for the same predictor after numeric coercion. It does not
+    encode one benchmark case or one clinical score; the predictor and outcome
+    are inferred from the generated script / summary.
+    """
+
+    return textwrap.dedent(
+        f"""
+
+        def _easyicu_ordinal_primary_association_fallback_v1():
+            import json
+            import math
+            import os
+            import numpy as np
+            import pandas as pd
+            import statsmodels.api as sm
+
+            def _jsonable(x):
+                if isinstance(x, (np.integer,)):
+                    return int(x)
+                if isinstance(x, (np.floating,)):
+                    value = float(x)
+                    return value if math.isfinite(value) else None
+                if isinstance(x, np.ndarray):
+                    return x.tolist()
+                try:
+                    if pd.isna(x):
+                        return None
+                except Exception:
+                    pass
+                return x
+
+            cohort_path = os.environ.get("COHORT_PARQUET")
+            out_dir = os.environ.get("STEP_OUT_DIR", ".")
+            if not cohort_path:
+                return
+            predictor_col = {predictor!r}
+            outcome_col = {outcome!r}
+            df_fallback = pd.read_parquet(cohort_path)
+            if predictor_col not in df_fallback.columns or outcome_col not in df_fallback.columns:
+                return
+            covariates = [
+                col for col in ("age", "sex", "weight")
+                if col in df_fallback.columns and col not in (predictor_col, outcome_col)
+            ]
+            required = [outcome_col, predictor_col] + covariates
+            model_df = df_fallback[required].copy()
+            if "sex" in model_df.columns:
+                model_df["sex"] = (
+                    model_df["sex"]
+                    .astype(str)
+                    .str.lower()
+                    .isin(["m", "male", "1", "true"])
+                    .astype(float)
+                )
+            for col in model_df.columns:
+                model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
+            model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
+            n_complete = int(len(model_df))
+            summary_path = os.path.join(out_dir, "step_summary.json")
+            summary = {{}}
+            if os.path.exists(summary_path):
+                try:
+                    with open(summary_path, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        summary.update(loaded)
+                except Exception:
+                    summary = {{}}
+            if (
+                n_complete < 20
+                or model_df[outcome_col].nunique(dropna=True) < 2
+                or model_df[predictor_col].nunique(dropna=True) < 2
+            ):
+                summary.setdefault("fallback_notes", []).append(
+                    "ordinal_primary_association_fallback_v1 could not run because "
+                    "there were too few complete observations or no variation."
+                )
+                with open(summary_path, "w", encoding="utf-8") as f:
+                    json.dump(summary, f, indent=2, default=_jsonable, ensure_ascii=False)
+                return
+            y = model_df[outcome_col].astype(float)
+            X = sm.add_constant(
+                model_df[[predictor_col] + covariates].astype(float),
+                has_constant="add",
+            )
+            result = sm.GLM(y, X, family=sm.families.Binomial()).fit()
+            coef = float(result.params[predictor_col])
+            conf = result.conf_int()
+            ci_low = float(conf.loc[predictor_col, 0])
+            ci_high = float(conf.loc[predictor_col, 1])
+            p_value = float(result.pvalues[predictor_col])
+            odds_ratio = float(np.exp(coef))
+            or_ci_low = float(np.exp(ci_low))
+            or_ci_high = float(np.exp(ci_high))
+            result_row = pd.DataFrame([
+                {{
+                    "variable": predictor_col,
+                    "coef": coef,
+                    "std_err": float(result.bse[predictor_col]),
+                    "ci_low": ci_low,
+                    "ci_high": ci_high,
+                    "p_value": p_value,
+                    "odds_ratio": odds_ratio,
+                    "or_ci_low": or_ci_low,
+                    "or_ci_high": or_ci_high,
+                }}
+            ])
+            result_row.to_csv(os.path.join(out_dir, "association_results.csv"), index=False)
+            summary["model"] = {{
+                "type": "logistic_glm_binomial_ordinal_fallback",
+                "outcome": outcome_col,
+                "predictors": list(X.columns),
+                "n_obs": n_complete,
+                "converged": True,
+                "fallback_reason": {reason!r},
+            }}
+            summary["primary_predictor"] = predictor_col
+            summary["outcome"] = outcome_col
+            summary["primary_association_estimate"] = {{
+                "variable": predictor_col,
+                "odds_ratio": odds_ratio,
+                "ci_low": or_ci_low,
+                "ci_high": or_ci_high,
+                "p_value": p_value,
+            }}
+            summary["primary_or"] = odds_ratio
+            summary["adjusted_odds_ratio"] = odds_ratio
+            summary["primary_ci_low"] = or_ci_low
+            summary["primary_ci_high"] = or_ci_high
+            summary["primary_p_value"] = p_value
+            summary["statistic:primary_or"] = odds_ratio
+            summary["statistic:adjusted_odds_ratio"] = odds_ratio
+            summary["statistic:primary_ci_low"] = or_ci_low
+            summary["statistic:primary_ci_high"] = or_ci_high
+            summary["statistic:primary_p_value"] = p_value
+            summary["statistic:complete_case_n"] = n_complete
+            summary["log:primary_association_fallback"] = (
+                "Deterministic ordinal GLM fallback after generated categorical "
+                "logistic model failed to produce a finite primary association."
+            )
+            with open(summary_path, "w", encoding="utf-8") as f:
+                json.dump(summary, f, indent=2, default=_jsonable, ensure_ascii=False)
+            print(json.dumps(summary, indent=2, default=_jsonable, ensure_ascii=False))
+
+        try:
+            _easyicu_ordinal_primary_association_fallback_v1()
+        except Exception as _easyicu_fallback_exc:
+            print(f"ordinal_primary_association_fallback_failed: {{_easyicu_fallback_exc}}")
+        """
+    ).strip("\n")
+
+
 def _patch_primary_predictor_into_design_matrix(
     *,
     code: str,
@@ -339,6 +533,32 @@ def _deterministic_summary_repair(
                     ),
                 )
                 return repair_name, code.rstrip() + "\n\n" + fallback + "\n"
+        overexpanded_categorical_singular = (
+            null_model_summary
+            and "singular matrix" in summary_text
+            and (
+                "primary_association_estimate" in summary_text
+                or "primary association" in summary_text
+                or "primary_or" in summary_text
+            )
+        )
+        if overexpanded_categorical_singular:
+            categorical_predictor = _infer_overexpanded_categorical_predictor(
+                step_summary,
+                code,
+            )
+            if categorical_predictor:
+                repair_name = "ordinal_primary_association_fallback_v1"
+                if previous_repair != repair_name:
+                    fallback = _ordinal_primary_association_fallback_code(
+                        predictor=categorical_predictor,
+                        outcome=_infer_binary_outcome_from_code(code),
+                        reason=(
+                            "Deterministic fallback after generated categorical "
+                            "logistic model failed with a singular matrix."
+                        ),
+                    )
+                    return repair_name, code.rstrip() + "\n\n" + fallback + "\n"
         raw_categorical_sex_logit = (
             null_model_summary
             and "sm.logit" in code.lower()

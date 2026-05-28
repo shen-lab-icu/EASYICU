@@ -131,9 +131,17 @@ class RobustnessPanel:
         )
 
     def to_dict(self) -> Dict[str, Any]:
+        primary = next(
+            (row for row in self.rows if row.spec_id == self.primary_spec_id),
+            None,
+        )
         return {
             "primary_spec_id": self.primary_spec_id,
             "rows": [row.to_dict() for row in self.rows],
+            "row_count": len(self.rows),
+            "primary_point_estimate": (
+                primary.point_estimate if primary is not None else None
+            ),
             "range_low": self.range_low,
             "range_high": self.range_high,
             "n_variants": self.n_variants,

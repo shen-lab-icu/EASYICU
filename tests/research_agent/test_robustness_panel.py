@@ -354,6 +354,25 @@ def test_panel_numerics_registered_in_evidence_store(ra, tmp_path: Path) -> None
     assert "row_primary_point_estimate" not in fields
 
 
+def test_panel_json_exposes_row_count_and_primary_point_estimate() -> None:
+    from easyicu.research_agent.robustness_panel import (
+        RobustnessPanel,
+        RobustnessPanelRow,
+    )
+
+    panel = RobustnessPanel.from_rows(
+        [
+            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
+            RobustnessPanelRow("a", "cohort", 90, 1.5, 0.8, 2.0, 0.2, "e2", True),
+        ]
+    )
+
+    payload = panel.to_dict()
+
+    assert payload["row_count"] == 2
+    assert payload["primary_point_estimate"] == 1.2
+
+
 def test_primary_only_panel_does_not_register_duplicate_range_claims(
     ra,
     tmp_path: Path,
