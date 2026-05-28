@@ -2972,6 +2972,17 @@ def _semantic_aliases_for(step: AnalysisStep, artefact: Path) -> List[str]:
             and not (artefact.parent / "table_one.csv").exists()
         ):
             out.append("table_one")
+        if "report" in step_id.lower() and _step_summary_has_any_key(
+            artefact,
+            ("mortality_rate", "outcome_rate", "death_rate", "icu_mortality_rate"),
+        ):
+            out.extend(
+                [
+                    "outcome_rate",
+                    "mortality_rate",
+                    "cohort_summary",
+                ]
+            )
     for (step_substr, basename), aliases in _SEMANTIC_ALIAS_MAP.items():
         if basename != artefact.name:
             continue
@@ -3032,6 +3043,20 @@ def _step_summary_has_primary_effect(path: Path) -> bool:
             ):
                 return True
     return False
+
+
+def _step_summary_has_any_key(path: Path, keys: Sequence[str]) -> bool:
+    """Return True when an existing step_summary contains any requested key."""
+
+    if path.name != "step_summary.json" or not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return any(key in payload for key in keys)
 
 
 def _clear_output_dir(out_dir: Path) -> None:
