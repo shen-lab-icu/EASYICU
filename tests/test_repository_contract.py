@@ -84,6 +84,15 @@ def test_repository_includes_ci_workflow() -> None:
     assert (REPO_ROOT / ".github" / "workflows" / "ci.yml").exists()
 
 
+def test_ci_workflow_runs_supported_python_matrix() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert 'python-version: ["3.10", "3.11", "3.12"]' in workflow
+    assert "python-version: ${{ matrix.python-version }}" in workflow
+    assert "ruff check src tests" in workflow
+    assert "pytest -q" in workflow
+
+
 def test_repository_includes_citation_metadata() -> None:
     citation = REPO_ROOT / "CITATION.cff"
     assert citation.exists()
@@ -126,6 +135,43 @@ def test_readmes_link_to_citation_metadata() -> None:
 
     assert "## 论文、引用与可复现" in chinese
     assert "[CITATION.cff](CITATION.cff)" in chinese
+
+
+def test_readme_console_scripts_match_pyproject_entry_points() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    scripts = pyproject["project"]["scripts"]
+    for script_name, target in scripts.items():
+        assert script_name in readme
+
+        module_name, function_name = target.split(":", 1)
+        module_path = REPO_ROOT / "src" / Path(*module_name.split(".")).with_suffix(".py")
+        package_main_path = REPO_ROOT / "src" / Path(*module_name.split(".")) / "__main__.py"
+        script_path = module_path if module_path.exists() else package_main_path
+        assert script_path.exists(), f"{script_name} points to missing module {target}"
+        assert f"def {function_name}(" in script_path.read_text(encoding="utf-8")
+
+
+def test_readme_image_references_exist() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    image_refs = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", readme)
+
+    assert image_refs, "README should include visual workflow references."
+    local_refs = [ref for ref in image_refs if not ref.startswith(("http://", "https://"))]
+    missing = [ref for ref in local_refs if not (REPO_ROOT / ref).exists()]
+    assert not missing, f"README image references are missing: {missing}"
+
+
+def test_research_agent_readme_example_scripts_exist() -> None:
+    readme = (REPO_ROOT / "src" / "easyicu" / "research_agent" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    example_refs = sorted(set(re.findall(r"examples/[A-Za-z0-9_./-]+\.py", readme)))
+
+    assert example_refs, "research_agent README should reference runnable examples."
+    missing = [ref for ref in example_refs if not (REPO_ROOT / ref).exists()]
+    assert not missing, f"research_agent README references missing examples: {missing}"
 
 
 def test_repository_does_not_ignore_tests_or_contributing_guide() -> None:
