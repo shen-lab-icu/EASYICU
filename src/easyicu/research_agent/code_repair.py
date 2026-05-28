@@ -81,7 +81,65 @@ def _infer_binary_outcome_from_code(code: str, default: str = "death") -> str:
     match = re.search(r"(?P<outcome>[A-Za-z_][A-Za-z0-9_]*)\s*~\s*C\(", code)
     if match:
         return match.group("outcome")
+    match = re.search(
+        r"(?m)^\s*y\s*=\s*df\[[\"'](?P<outcome>[A-Za-z_][A-Za-z0-9_]*)[\"']\]",
+        code,
+    )
+    if match:
+        return match.group("outcome")
     return default
+
+
+def _infer_primary_association_predictor_from_code(
+    step_summary: Dict[str, Any],
+    code: str,
+) -> Optional[str]:
+    """Infer the predictor for a primary association fallback.
+
+    Generated association scripts often use hand-written dataframe code rather
+    than a formula. When such a script fails before writing a finite effect
+    estimate, the deterministic fallback still needs the predictor column. Keep
+    the inference conservative and case-neutral: prefer explicit summary/code
+    variables, then fall back to the non-outcome member of a required column
+    list.
+    """
+
+    for key in ("primary_predictor", "predictor", "exposure"):
+        value = step_summary.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    manifest = (
+        step_summary.get("manifest:robustness_analysis_manifest")
+        or step_summary.get("robustness_analysis_manifest")
+        or {}
+    )
+    if isinstance(manifest, dict):
+        for key in ("primary_predictor", "predictor", "exposure"):
+            value = manifest.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    for pattern in (
+        r"(?:primary_predictor|predictor_col|primary_exposure)\s*=\s*['\"]([^'\"]+)['\"]",
+        r"predictor\s*=\s*['\"]([^'\"]+)['\"]",
+    ):
+        match = re.search(pattern, code)
+        if match:
+            return match.group(1)
+    outcome = _infer_binary_outcome_from_code(code)
+    required_match = re.search(r"required_cols\s*=\s*\[(?P<body>[^\]]+)\]", code)
+    if required_match:
+        cols = re.findall(r"['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]", required_match.group("body"))
+        for col in cols:
+            if col != outcome and col.lower() not in {"death", "mortality", "outcome"}:
+                return col
+    numeric_assignments = re.findall(
+        r"df\[['\"](?P<name>[A-Za-z_][A-Za-z0-9_]*)['\"]\]\s*=\s*pd\.to_numeric",
+        code,
+    )
+    for col in numeric_assignments:
+        if col != outcome:
+            return col
+    return _infer_overexpanded_categorical_predictor(step_summary, code)
 
 
 def _ordinal_primary_association_fallback_code(
@@ -470,6 +528,7 @@ def _deterministic_summary_repair(
             or '"statistic:lactate_or_stability": null' in summary_text
             or '"or_estimate": null' in summary_text
             or '"odds_ratio": null' in summary_text
+            or '"primary_odds_ratio": null' in summary_text
             or '"primary_or": null' in summary_text
             or '"statistic:primary_or": null' in summary_text
             or '"estimate": null' in summary_text
@@ -533,6 +592,43 @@ def _deterministic_summary_repair(
                     ),
                 )
                 return repair_name, code.rstrip() + "\n\n" + fallback + "\n"
+        glm_primary_effect_null = (
+            null_model_summary
+            and (
+                "primary_odds_ratio" in summary_text
+                or "primary_association_estimate" in summary_text
+                or "primary association" in summary_text
+                or "statistic:primary_or" in summary_text
+            )
+            and (
+                "sm.glm" in code.lower()
+                or "sm.logit" in code.lower()
+                or "logit(" in code.lower()
+            )
+            and (
+                "mle_retvals" in code
+                or "glmresults" in summary_text
+                or "model_fit_error" in summary_text
+                or '"converged": false' in summary_text
+            )
+        )
+        if glm_primary_effect_null:
+            fallback_predictor = _infer_primary_association_predictor_from_code(
+                step_summary,
+                code,
+            )
+            if fallback_predictor:
+                repair_name = "ordinal_primary_association_fallback_v1"
+                if previous_repair != repair_name:
+                    fallback = _ordinal_primary_association_fallback_code(
+                        predictor=fallback_predictor,
+                        outcome=_infer_binary_outcome_from_code(code),
+                        reason=(
+                            "Deterministic fallback after generated GLM/Logit "
+                            "model failed to produce a finite primary association."
+                        ),
+                    )
+                    return repair_name, code.rstrip() + "\n\n" + fallback + "\n"
         overexpanded_categorical_singular = (
             null_model_summary
             and "singular matrix" in summary_text

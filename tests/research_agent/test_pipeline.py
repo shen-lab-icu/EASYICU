@@ -4152,6 +4152,95 @@ with open(os.path.join(os.environ["STEP_OUT_DIR"], "step_summary.json"), "w", en
     assert (out_dir / "association_results.csv").exists()
 
 
+def test_deterministic_summary_repair_fallback_for_glmresults_mle_retvals_primary_null(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression for AGENT3W: GLMResults has no ``mle_retvals`` attr.
+
+    The generated script catches that AttributeError, records
+    ``primary_odds_ratio=null``, and otherwise exits 0. The deterministic
+    summary repair must not leave this to another LLM repair cycle; it should
+    append the ordinal association fallback and write a finite primary effect.
+    """
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    cohort = pd.DataFrame(
+        {
+            "sofa2_admission": [0, 1, 2, 3, 4, 5] * 20,
+            "death": [0, 0, 1, 0, 1, 1] * 10 + [0, 1, 0, 1, 0, 1] * 10,
+            "age": [50 + (i % 23) for i in range(120)],
+            "sex": ["F", "M", "F", "M", "F", "M"] * 20,
+            "weight": [60 + ((i * 7) % 35) for i in range(120)],
+        }
+    )
+    cohort_path = tmp_path / "cohort.parquet"
+    out_dir = tmp_path / "step"
+    out_dir.mkdir()
+    cohort.to_parquet(cohort_path, index=False)
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+
+    code = """
+import os
+import json
+import pandas as pd
+import statsmodels.api as sm
+
+out_dir = os.environ["STEP_OUT_DIR"]
+df = pd.read_parquet(os.environ["COHORT_PARQUET"])
+required_cols = ["sofa2_admission", "death"]
+df = df[required_cols].dropna().copy()
+df["sofa2_admission"] = pd.to_numeric(df["sofa2_admission"], errors="coerce")
+df = df.dropna(subset=["sofa2_admission"])
+X = sm.add_constant(pd.get_dummies(df["sofa2_admission"], prefix="sofa2").astype(float))
+y = df["death"].astype(float)
+step_summary = {"skipped": [], "derived_claims": []}
+try:
+    result = sm.GLM(y, X, family=sm.families.Binomial()).fit()
+    converged = result.mle_retvals.get("converged", True)
+except Exception as exc:
+    step_summary["skipped"].append({"reason": "model_fit_error", "error": str(exc)})
+    converged = False
+step_summary["primary_odds_ratio"] = None
+step_summary["converged"] = converged
+step_summary["n_observations"] = int(len(df))
+with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(step_summary, f)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "skipped": [
+                {
+                    "reason": "model_fit_error",
+                    "error": "'GLMResults' object has no attribute 'mle_retvals'",
+                }
+            ],
+            "primary_odds_ratio": None,
+            "converged": False,
+            "n_observations": 120,
+        },
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "ordinal_primary_association_fallback_v1"
+    assert "_easyicu_ordinal_primary_association_fallback_v1" in patched
+
+    exec(compile(patched, "<patched>", "exec"), {})
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+
+    assert summary["primary_association_estimate"]["variable"] == "sofa2_admission"
+    assert summary["primary_or"] > 1
+    assert summary["primary_ci_low"] > 0
+    assert summary["primary_ci_high"] > summary["primary_ci_low"]
+    assert summary["primary_p_value"] is not None
+    assert summary["statistic:primary_or"] == summary["primary_or"]
+    assert (out_dir / "association_results.csv").exists()
+
+
 def test_deterministic_summary_repair_restores_predictor_in_helper_design(ra):
     from easyicu.research_agent.pipeline import _deterministic_summary_repair
 
