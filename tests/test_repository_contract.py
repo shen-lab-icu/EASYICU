@@ -37,6 +37,13 @@ def test_pyproject_license_uses_spdx_string() -> None:
     assert pyproject["project"]["license"] == "MIT"
 
 
+def test_pyproject_dev_extra_includes_build_for_release_contract() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    dev_dependencies = pyproject["project"]["optional-dependencies"]["dev"]
+    assert "build>=1.2" in dev_dependencies
+
+
 def test_manifest_does_not_reference_missing_optional_payloads() -> None:
     manifest = (REPO_ROOT / "MANIFEST.in").read_text(encoding="utf-8")
 

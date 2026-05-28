@@ -1,13 +1,25 @@
 # Include documentation
 include README.md
+include README_zh.md
 include LICENSE
+include CITATION.cff
+include CONTRIBUTING.md
 
 # Include configuration files
+include MANIFEST.in
 include pyproject.toml
+include pytest.ini
 include start_easyicu.bat
 include start_easyicu.command
 include start_easyicu.sh
 include scripts/launch_easyicu.py
+include .github/workflows/*.yml
+
+# Include reviewer-facing examples, images, and contract tests in the sdist.
+recursive-include docs/images *.jpg
+recursive-include examples *.py
+recursive-include tests *.py
+include src/easyicu/research_agent/README.md
 
 # Include data files
 recursive-include src/easyicu/data *.json
@@ -22,6 +34,5 @@ global-exclude *.dylib
 # Exclude test data (too large for package)
 prune test_data_50patients
 prune test_data_minimal
-prune tests
 prune .pytest_cache
 prune .git

@@ -26,6 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "build>=1.2",
   "pytest>=7.0",
   "pytest-cov>=4.0",
   "black>=23.0",
