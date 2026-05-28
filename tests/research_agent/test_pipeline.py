@@ -3196,6 +3196,27 @@ def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
     )
 
 
+def test_manuscript_critic_ignores_markdown_title_and_background_framing(ra):
+    critic = ra.CriticAgent()
+    scaffold = (
+        "# Retrospective cohort study of 500 miiv ICU admissions reveals "
+        "admission SOFA-2 score was associated with increased ICU mortality\n\n"
+        "## Abstract\n\n"
+        "**Background:**\n"
+        "Clarifying this association could inform early risk stratification.\n\n"
+        "**Results:**\n"
+        "The cohort comprised 500 stays [cohort](evidence/cohort.json)."
+    )
+
+    critique = critic.review_manuscript(
+        scaffold=scaffold,
+        available_evidence_ids=["cohort"],
+    )
+
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
+
+
 def test_evidence_filter_removes_unquantified_performance_claims(ra, tmp_path: Path):
     from easyicu.research_agent.evidence import EvidenceStore
 

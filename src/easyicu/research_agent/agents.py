@@ -1718,6 +1718,25 @@ def _suggest_repairs_for(
 def _sentences_missing_evidence_tokens(scaffold: str) -> List[str]:
     unsupported: List[str] = []
     text = re.sub(r"```.*?```", " ", scaffold, flags=re.S)
+    cleaned_lines: List[str] = []
+    section_label_re = re.compile(
+        r"^\*\*(?:background|methods?|results?|conclusions?|discussion|limitations?)\s*:\*\*\s*",
+        flags=re.I,
+    )
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            cleaned_lines.append(" ")
+            continue
+        if re.match(r"^#{1,6}\s+", stripped):
+            continue
+        match = section_label_re.match(stripped)
+        if match:
+            stripped = stripped[match.end() :].strip()
+            if not stripped:
+                continue
+        cleaned_lines.append(stripped)
+    text = " ".join(cleaned_lines)
     for raw_sentence in re.split(r"(?<=[.!?。！？])\s+", text):
         sentence = raw_sentence.strip()
         if not sentence:
