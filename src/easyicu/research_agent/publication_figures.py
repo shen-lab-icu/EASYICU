@@ -652,6 +652,25 @@ def save_publication_figure(
             else FigureContract.model_validate(fig)
         )
 
+    legacy_name_keys = (
+        "png_name",
+        "svg_name",
+        "pdf_name",
+        "tiff_name",
+        "tif_name",
+        "pptx_name",
+    )
+    legacy_stem = next(
+        (
+            Path(str(legacy_kwargs[key])).stem
+            for key in legacy_name_keys
+            if legacy_kwargs.get(key)
+        ),
+        None,
+    )
+    if legacy_stem and stem is None and filename is None and basename is None:
+        stem = legacy_stem
+
     if output_path is not None and output_dir is None and out_dir is None:
         path_value = Path(output_path)
         output_dir = path_value.parent
@@ -660,6 +679,36 @@ def save_publication_figure(
 
     if step_out_dir is not None and output_dir is None and out_dir is None:
         out_dir = step_out_dir
+
+    if (
+        not contract_only
+        and output_stem is not None
+        and isinstance(output_stem, (str, Path))
+        and legacy_args
+        and not any(v is not None for v in (output_dir, out_dir))
+    ):
+        maybe_contract = next(
+            (
+                arg for arg in legacy_args
+                if isinstance(arg, (FigureContract, Mapping))
+            ),
+            None,
+        )
+        output_path_candidate = Path(output_stem)
+        output_token = str(output_stem)
+        output_stem_is_dir = (
+            (output_path_candidate.exists() and output_path_candidate.is_dir())
+            or output_token.endswith(("figures", "figure", "output", "outputs"))
+        )
+        if maybe_contract is not None and (legacy_stem or output_stem_is_dir):
+            out_dir = output_path_candidate
+            output_stem = None
+            if resolved_contract is None:
+                resolved_contract = (
+                    maybe_contract
+                    if isinstance(maybe_contract, FigureContract)
+                    else FigureContract.model_validate(maybe_contract)
+                )
 
     if (
         not contract_only
@@ -709,6 +758,11 @@ def save_publication_figure(
                 stem
                 or filename
                 or basename
+                or (
+                    resolved_contract.figure_id
+                    if isinstance(resolved_contract, FigureContract)
+                    else None
+                )
                 or (
                     resolved_contract.figure_id
                     if contract_only and isinstance(resolved_contract, FigureContract)

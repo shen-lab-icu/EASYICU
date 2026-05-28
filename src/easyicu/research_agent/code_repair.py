@@ -281,6 +281,27 @@ def _deterministic_summary_repair(
             or '"estimate": null' in summary_text
         )
         dtype_summary_failure = "pandas data cast to numpy dtype of object" in summary_text
+        helper_dtype_summary_failure = (
+            dtype_summary_failure
+            and "def _fit_logistic" in code
+            and 'X = X.apply(pd.to_numeric, errors="coerce")' in code
+        )
+        if helper_dtype_summary_failure:
+            repair_name = "statsmodels_helper_design_float_v1"
+            if previous_repair != repair_name:
+                repaired = code.replace(
+                    'X = X.apply(pd.to_numeric, errors="coerce")',
+                    'X = X.apply(pd.to_numeric, errors="coerce").astype(float)',
+                    1,
+                )
+                repaired = repaired.replace(
+                    "X_clean = data.drop(columns=[y.name])",
+                    "X_clean = data.drop(columns=[y.name]).apply(pd.to_numeric, errors=\"coerce\").astype(float)\n"
+                    "    y_clean = pd.to_numeric(y_clean, errors=\"coerce\").astype(float)",
+                    1,
+                )
+                if repaired != code:
+                    return repair_name, repaired
         if dtype_summary_failure:
             repaired = _deterministic_runner_repair(
                 code=code,
@@ -2785,7 +2806,6 @@ def _deterministic_runner_repair(
     )
     dtype_coerce_applies = (
         any(sig in lowered for sig in signatures)
-        and previous_repair != "dtype_coerce_v1"
         and "_easyicu_runner_repair_v1" not in code
         and any(token in code for token in ("sm.Logit(", "sm.OLS(", "sm.GLM("))
     )
