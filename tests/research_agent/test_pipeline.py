@@ -4003,6 +4003,155 @@ except Exception as e:
     compile(patched, "<patched>", "exec")
 
 
+def test_deterministic_summary_repair_adds_ordinal_fallback_for_singular_categorical_score(
+    ra,
+):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = """
+import os
+import json
+import pandas as pd
+import statsmodels.api as sm
+import patsy
+
+cohort_path = os.environ["COHORT_PARQUET"]
+out_dir = os.environ["STEP_OUT_DIR"]
+df = pd.read_parquet(cohort_path)
+formula = "death ~ C(sofa2_admission) + age + weight + C(sex)"
+y, X = patsy.dmatrices(formula, data=df, return_type="dataframe")
+try:
+    model = sm.Logit(y, X.astype(float)).fit(disp=False)
+except Exception as exc:
+    step_summary = {
+        "model": {
+            "type": "logistic_regression",
+            "predictors": list(X.columns),
+            "converged": False,
+            "error": "Singular matrix",
+        },
+        "primary_association_estimate": {
+            "variable": None,
+            "odds_ratio": None,
+            "ci_low": None,
+            "ci_high": None,
+            "p_value": None,
+        },
+    }
+    with open(os.path.join(out_dir, "step_summary.json"), "w", encoding="utf-8") as f:
+        json.dump(step_summary, f)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code,
+        step_summary={
+            "model": {
+                "predictors": [
+                    "Intercept",
+                    "C(sofa2_admission)[T.1]",
+                    "C(sofa2_admission)[T.2]",
+                    "C(sofa2_admission)[T.3]",
+                    "C(sofa2_admission)[T.4]",
+                ],
+                "converged": False,
+                "error": "Singular matrix",
+            },
+            "primary_association_estimate": {
+                "variable": None,
+                "odds_ratio": None,
+                "ci_low": None,
+                "ci_high": None,
+                "p_value": None,
+            },
+        },
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "ordinal_primary_association_fallback_v1"
+    assert "_easyicu_ordinal_primary_association_fallback_v1" in patched
+    assert '"statistic:adjusted_odds_ratio"' in patched
+    compile(patched, "<patched>", "exec")
+
+
+def test_ordinal_primary_association_fallback_writes_finite_primary_or(
+    ra,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    cohort = pd.DataFrame(
+        {
+            "sofa2_admission": [0, 1, 2, 3, 4, 5] * 20,
+            "death": [0, 0, 1, 0, 1, 1] * 10 + [0, 1, 0, 1, 0, 1] * 10,
+            "age": [50 + (i % 23) for i in range(120)],
+            "sex": ["F", "M", "F", "M", "F", "M"] * 20,
+            "weight": [60 + ((i * 7) % 35) for i in range(120)],
+        }
+    )
+    cohort_path = tmp_path / "cohort.parquet"
+    out_dir = tmp_path / "step"
+    out_dir.mkdir()
+    cohort.to_parquet(cohort_path, index=False)
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+
+    code = """
+import os
+import json
+with open(os.path.join(os.environ["STEP_OUT_DIR"], "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump({
+        "model": {
+            "predictors": ["Intercept", "C(sofa2_admission)[T.1]", "C(sofa2_admission)[T.2]", "age"],
+            "converged": False,
+            "error": "Singular matrix"
+        },
+        "primary_association_estimate": {
+            "variable": None,
+            "odds_ratio": None,
+            "ci_low": None,
+            "ci_high": None,
+            "p_value": None
+        }
+    }, f)
+"""
+    repaired = _deterministic_summary_repair(
+        code=code + "\n# formula reference: death ~ C(sofa2_admission) + age",
+        step_summary={
+            "model": {
+                "predictors": [
+                    "Intercept",
+                    "C(sofa2_admission)[T.1]",
+                    "C(sofa2_admission)[T.2]",
+                    "C(sofa2_admission)[T.3]",
+                ],
+                "converged": False,
+                "error": "Singular matrix",
+            },
+            "primary_association_estimate": {
+                "variable": None,
+                "odds_ratio": None,
+                "ci_low": None,
+                "ci_high": None,
+                "p_value": None,
+            },
+        },
+    )
+    assert repaired is not None
+    _name, patched = repaired
+
+    exec(compile(patched, "<patched>", "exec"), {})
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+
+    assert summary["primary_association_estimate"]["variable"] == "sofa2_admission"
+    assert summary["primary_or"] > 1
+    assert summary["primary_ci_low"] > 0
+    assert summary["primary_ci_high"] > summary["primary_ci_low"]
+    assert summary["primary_p_value"] is not None
+    assert summary["statistic:adjusted_odds_ratio"] == summary["primary_or"]
+    assert (out_dir / "association_results.csv").exists()
+
+
 def test_deterministic_summary_repair_restores_predictor_in_helper_design(ra):
     from easyicu.research_agent.pipeline import _deterministic_summary_repair
 
