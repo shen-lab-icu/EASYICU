@@ -188,7 +188,18 @@ class ReviewerReport:
 
 
 def _available_evidence_ids(evidence_records: Iterable[Any]) -> set:
-    return {getattr(r, "evidence_id", None) for r in evidence_records if getattr(r, "evidence_id", None)}
+    aliases: set[str] = set()
+    for record in evidence_records:
+        for attr in ("evidence_id", "produced_by_step", "description"):
+            value = getattr(record, attr, None)
+            if value:
+                aliases.add(str(value))
+    return aliases
+
+
+def _has_evidence_token(aliases: Iterable[str], *needles: str) -> bool:
+    haystack = "\n".join(str(alias).lower() for alias in aliases)
+    return any(needle.lower() in haystack for needle in needles)
 
 
 def _finding_msg(findings: Iterable[Any], validator: str) -> List[Dict[str, Any]]:
@@ -250,7 +261,19 @@ def _build_statistician_comments(
                 evidence_ids=["multiple_testing_report"],
             )
         )
-    if "primary_association" not in aliases and "model_performance" not in aliases:
+    has_primary_effect = (
+        "primary_association" in aliases
+        or "model_performance" in aliases
+        or _has_evidence_token(
+            aliases,
+            "primary association",
+            "primary_association",
+            "association_model",
+            "adjusted_odds_ratio",
+            "odds_ratio",
+        )
+    )
+    if not has_primary_effect:
         comments.append(
             ReviewerComment(
                 reviewer="statistician",
@@ -263,7 +286,14 @@ def _build_statistician_comments(
                 ),
             )
         )
-    if "missingness" not in aliases:
+    has_missingness_profile = "missingness" in aliases or _has_evidence_token(
+        aliases,
+        "missingness",
+        "missingness_audit",
+        "missingness profile",
+        "missing strategy",
+    )
+    if not has_missingness_profile:
         comments.append(
             ReviewerComment(
                 reviewer="statistician",

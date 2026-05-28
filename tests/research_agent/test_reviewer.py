@@ -9,8 +9,10 @@ import pytest
 
 
 class _EvRec:
-    def __init__(self, evidence_id):
+    def __init__(self, evidence_id, *, produced_by_step=None, description=None):
         self.evidence_id = evidence_id
+        self.produced_by_step = produced_by_step
+        self.description = description
 
 
 class _Finding:
@@ -66,6 +68,26 @@ def test_missing_primary_estimate_triggers_statistician_major(ra):
     assert any(
         c.topic == "effect_estimate" and c.severity == "major" for c in stats.comments
     )
+
+
+def test_reviewer_detects_generated_association_and_missingness_evidence(ra):
+    recs = [
+        _EvRec(
+            "statistic_step_summary_a029c2dd",
+            produced_by_step="06_association_model",
+            description="Step summary containing primary association odds_ratio.",
+        ),
+        _EvRec(
+            "table_report_missingness_summary_1a19c00e",
+            produced_by_step="02_missingness_audit",
+            description="Table report_missingness_summary from the missingness profile.",
+        ),
+        _EvRec("multiple_testing_report"),
+    ]
+    report = ra.run_reviewer_round(evidence_records=recs, findings=[])
+    stats = next(c for c in report.critiques if c.reviewer == "statistician")
+    assert not any(c.topic == "effect_estimate" for c in stats.comments)
+    assert not any(c.topic == "missingness" for c in stats.comments)
 
 
 def test_causal_error_triggers_clinician_reject(ra):
