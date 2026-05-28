@@ -296,6 +296,42 @@ def assert_robustness_specs_locked(*, run_dir: Path, plan: Any) -> None:
         )
 
 
+def load_locked_robustness_specs(run_dir: Path) -> List[RobustnessSpec]:
+    """Load plan-time robustness specs from ``robustness_specs_locked.json``.
+
+    Late replanning can replace the active ``AnalysisPlan`` object and drop the
+    `robustness_specs` attribute. The locked file is the durable pre-specified
+    panel contract, so execute finalisation can safely fall back to it.
+    """
+
+    path = Path(run_dir) / LOCK_FILENAME
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RobustnessPlanError(
+            f"robustness_specs lock is unreadable: {exc}"
+        ) from exc
+    raw_specs = payload.get("specs") or []
+    if not isinstance(raw_specs, list):
+        raise RobustnessPlanError("robustness_specs lock has invalid specs payload")
+    return [
+        RobustnessSpec.from_dict(spec)
+        for spec in raw_specs
+        if isinstance(spec, dict)
+    ]
+
+
+def robustness_specs_for_execution(*, run_dir: Path, plan: Any) -> List[RobustnessSpec]:
+    """Return active plan specs, falling back to the plan-time lock."""
+
+    specs = list(getattr(plan, "robustness_specs", []) or [])
+    if specs:
+        return specs
+    return load_locked_robustness_specs(run_dir)
+
+
 def robustness_specs_sha(specs: Sequence[RobustnessSpec]) -> str:
     payload = [spec.to_dict() for spec in specs]
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
@@ -410,9 +446,9 @@ def numeric_digest_for_panel(panel: RobustnessPanel) -> Dict[str, Any]:
     digest: Dict[str, Any] = {
         "n_variants": panel.n_variants,
     }
-    if panel.range_low is not None:
+    if panel.n_variants > 0 and panel.range_low is not None:
         digest["range_low"] = panel.range_low
-    if panel.range_high is not None:
+    if panel.n_variants > 0 and panel.range_high is not None:
         digest["range_high"] = panel.range_high
     if primary is not None:
         digest.update(
@@ -426,6 +462,8 @@ def numeric_digest_for_panel(panel: RobustnessPanel) -> Dict[str, Any]:
     for axis, row in worst_rows_by_axis(panel).items():
         digest[f"worst_{axis}_point_estimate"] = row.point_estimate
     for row in panel.rows:
+        if row.spec_id == panel.primary_spec_id:
+            continue
         prefix = "row_" + _safe_key(row.spec_id)
         digest[f"{prefix}_n"] = row.n
         digest[f"{prefix}_point_estimate"] = row.point_estimate
@@ -547,8 +585,10 @@ __all__ = [
     "build_robustness_panel_from_records",
     "default_robustness_specs",
     "ensure_robustness_specs",
+    "load_locked_robustness_specs",
     "load_robustness_panel",
     "numeric_digest_for_panel",
+    "robustness_specs_for_execution",
     "validate_robustness_specs",
     "worst_rows_by_axis",
     "write_locked_robustness_specs",

@@ -68,6 +68,46 @@ def test_panel_freezes_after_plan(ra, tmp_path: Path) -> None:
         assert_robustness_specs_locked(run_dir=tmp_path, plan=changed)
 
 
+def test_locked_robustness_specs_restore_after_replan_drop(ra, tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.robustness_panel import (
+        default_robustness_specs,
+        robustness_specs_for_execution,
+        write_locked_robustness_specs,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    specs = default_robustness_specs()
+    plan = AnalysisPlan(
+        research_question="Does severity predict mortality?",
+        steps=[
+            AnalysisStep(
+                step_id="01_model",
+                intent="Fit the primary model.",
+                expected_outputs=["statistic:primary_or"],
+            )
+        ],
+        robustness_specs=specs,
+    )
+    evidence = ra.EvidenceStore(tmp_path)
+    write_locked_robustness_specs(
+        run_dir=tmp_path,
+        plan=plan,
+        evidence=evidence,
+        prompt_pack_version="test",
+        llm_signature="mock",
+    )
+
+    replanned_without_specs = SimpleNamespace(robustness_specs=[])
+    restored = robustness_specs_for_execution(
+        run_dir=tmp_path,
+        plan=replanned_without_specs,
+    )
+
+    assert [spec.spec_id for spec in restored] == [spec.spec_id for spec in specs]
+
+
 def test_each_spec_produces_panel_row() -> None:
     from easyicu.research_agent.robustness_panel import (
         build_robustness_panel_from_records,
@@ -274,3 +314,35 @@ def test_panel_numerics_registered_in_evidence_store(ra, tmp_path: Path) -> None
 
     fields = {claim.source_field for claim in evidence.numeric_claims()}
     assert {"n_variants", "range_low", "range_high"} <= fields
+    assert "primary_point_estimate" in fields
+    assert "row_primary_point_estimate" not in fields
+
+
+def test_primary_only_panel_does_not_register_duplicate_range_claims(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.robustness_panel import (
+        RobustnessPanel,
+        RobustnessPanelRow,
+        write_robustness_panel,
+    )
+
+    panel = RobustnessPanel.from_rows(
+        [
+            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
+        ]
+    )
+    evidence = ra.EvidenceStore(tmp_path)
+    write_robustness_panel(
+        run_dir=tmp_path,
+        panel=panel,
+        evidence=evidence,
+        prompt_pack_version="test",
+    )
+
+    fields = {claim.source_field for claim in evidence.numeric_claims()}
+    assert "primary_point_estimate" in fields
+    assert "row_primary_point_estimate" not in fields
+    assert "range_low" not in fields
+    assert "range_high" not in fields

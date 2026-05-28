@@ -558,10 +558,8 @@ def _enrich_target_outcome_descriptor(
             continue
         if descriptor.role != VariableRole.OUTCOME:
             descriptor.role = VariableRole.OUTCOME
-        if not descriptor.description:
-            descriptor.description = semantics["description"]
-        if not descriptor.source_concept:
-            descriptor.source_concept = semantics["source_concept"]
+        descriptor.description = semantics["description"]
+        descriptor.source_concept = semantics["source_concept"]
         explicit_note = (
             f"For this analysis, '{target_outcome}' is explicitly treated as "
             f"{semantics['label']} because that is what the research question asks for."
