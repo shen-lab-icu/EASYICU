@@ -59,6 +59,7 @@ from .pipeline import (
     _clear_output_dir,
     _has_figure_exports,
     _promote_prior_publication_bundle,
+    _promote_sibling_figure_exports,
     _render_prediction_publication_bundle_from_prior_outputs,
     _semantic_aliases_for,
 )
@@ -1299,23 +1300,28 @@ def run_execute_phase(
             else None
         )
         if publication_step and not _has_figure_exports(run_result.out_dir):
-            promoted = _promote_prior_publication_bundle(
-                run_dir=run_dir,
-                current_step_id=step.step_id,
-                out_dir=run_result.out_dir,
-            )
+            promoted = _promote_sibling_figure_exports(out_dir=run_result.out_dir)
             if promoted is not None:
                 runner_repair_name = promoted
                 step_record["runner_repair"] = promoted
             else:
-                rescued = _render_prediction_publication_bundle_from_prior_outputs(
+                promoted = _promote_prior_publication_bundle(
                     run_dir=run_dir,
                     current_step_id=step.step_id,
                     out_dir=run_result.out_dir,
                 )
-                if rescued is not None:
-                    runner_repair_name = rescued
-                    step_record["runner_repair"] = rescued
+                if promoted is not None:
+                    runner_repair_name = promoted
+                    step_record["runner_repair"] = promoted
+                else:
+                    rescued = _render_prediction_publication_bundle_from_prior_outputs(
+                        run_dir=run_dir,
+                        current_step_id=step.step_id,
+                        out_dir=run_result.out_dir,
+                    )
+                    if rescued is not None:
+                        runner_repair_name = rescued
+                        step_record["runner_repair"] = rescued
 
         run_result.artefacts = sorted(
             p for p in run_result.out_dir.iterdir() if p.is_file()

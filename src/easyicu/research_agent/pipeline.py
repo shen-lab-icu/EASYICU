@@ -2396,6 +2396,65 @@ def _has_figure_exports(out_dir: Path) -> bool:
     )
 
 
+def _promote_sibling_figure_exports(*, out_dir: Path) -> Optional[str]:
+    """Promote figure files written beside ``outputs/`` into ``outputs/``.
+
+    Some generated scripts treat ``STEP_OUT_DIR`` as a filename stem and
+    write ``outputs.svg`` / ``outputs.png`` beside the canonical
+    ``outputs/`` directory. The execution contract only registers files inside
+    ``outputs/``, so normalize that common layout before declaring the
+    publication figure missing.
+    """
+    parent = out_dir.parent
+    source_stem = out_dir.name
+    figure_suffixes = (".pdf", ".png", ".svg", ".tiff", ".tif", ".pptx")
+    figure_sources = [
+        parent / f"{source_stem}{suffix}"
+        for suffix in figure_suffixes
+        if (parent / f"{source_stem}{suffix}").is_file()
+    ]
+    if not figure_sources:
+        return None
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target_stem = "publication_figure"
+    exported_figure_files: List[str] = []
+    for source in figure_sources:
+        target = out_dir / f"{target_stem}{source.suffix.lower()}"
+        shutil.copy2(source, target)
+        exported_figure_files.append(target.name)
+
+    contract_source = parent / f"{source_stem}.figure_contract.json"
+    if contract_source.is_file():
+        shutil.copy2(contract_source, out_dir / f"{target_stem}.figure_contract.json")
+
+    step_summary_path = out_dir / "step_summary.json"
+    summary: Dict[str, Any] = {}
+    if step_summary_path.exists():
+        try:
+            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                summary = loaded
+        except Exception:
+            summary = {}
+    summary.setdefault("publication_figure_rescue", {})
+    summary["publication_figure_rescue"].update(
+        {
+            "mode": "sibling_outputs_stem",
+            "source_stem": source_stem,
+            "source_dir": str(parent),
+        }
+    )
+    summary["figure_files"] = sorted(exported_figure_files)
+    if exported_figure_files:
+        summary["figure_path"] = sorted(exported_figure_files)[0]
+    step_summary_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "sibling_figure_exports_promote_v1"
+
+
 def _promote_prior_publication_bundle(
     *,
     run_dir: Path,
