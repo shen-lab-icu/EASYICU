@@ -12,7 +12,7 @@ import weakref
 
 import pandas as pd
 
-from .config import SrcConfig
+from .config import DataSourceConfig as SrcConfig
 
 class SrcEnv:
     """Source environment for lazy loading tables (R ricu src_env).

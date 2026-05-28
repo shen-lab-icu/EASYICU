@@ -34,8 +34,8 @@ import pandas as pd
 import logging
 
 from .base import BaseICULoader, get_default_data_path, detect_database_type
-from .resources import load_dictionary
-from .config import load_data_sources
+from .resources import load_dictionary, load_data_sources as load_packaged_data_sources
+from .config import load_data_sources as load_user_data_sources
 
 logger = logging.getLogger(__name__)
 
@@ -1774,9 +1774,13 @@ def list_available_concepts(source: Optional[str] = None) -> List[str]:
     
     return sorted(supported)
 
-def list_available_sources() -> List[str]:
+def list_available_sources(use_user_config: bool = False) -> List[str]:
     """
     列出可用的数据源
+
+    Args:
+        use_user_config: If True, read the legacy user configuration registry.
+            By default this reports packaged sources shipped with EasyICU.
     
     Returns:
         数据源名称列表
@@ -1786,7 +1790,7 @@ def list_available_sources() -> List[str]:
         >>> print(sources)
         ['mimic', 'hirid', 'eicu', 'aumc']
     """
-    registry = load_data_sources()
+    registry = load_user_data_sources() if use_user_config else load_packaged_data_sources()
     return [cfg.name for cfg in registry]
 
 def get_concept_info(concept_name: str) -> Dict:
@@ -1805,18 +1809,25 @@ def get_concept_info(concept_name: str) -> Dict:
         'heart rate'
     """
     dict_obj = load_dictionary()
-    
-    if concept_name not in dict_obj.concepts:
+    concept = dict_obj.get(concept_name)
+
+    if concept is None:
         raise ValueError(f"未知概念: {concept_name}")
-    
-    concept = dict_obj.concepts[concept_name]
-    
+
+    units = list(getattr(concept, 'units', None) or [])
+    sources = getattr(concept, 'sources', {}) or {}
+
     info = {
         'name': concept_name,
         'description': getattr(concept, 'description', ''),
         'category': getattr(concept, 'category', ''),
-        'unit': getattr(concept, 'unit', ''),
-        'sources': list(getattr(concept, 'sources', {}).keys()),
+        'units': units,
+        'unit': units[0] if units else '',
+        'sources': sorted(sources.keys()),
+        'class_name': getattr(concept, 'class_name', None),
+        'callback': getattr(concept, 'callback', None),
+        'sub_concepts': list(getattr(concept, 'sub_concepts', None) or []),
+        'depends_on': list(getattr(concept, 'depends_on', None) or []),
     }
     
     return info

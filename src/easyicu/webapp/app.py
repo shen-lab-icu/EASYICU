@@ -341,6 +341,8 @@ def _has_any_source_recursive(concept_name, database, concept_dict, visited=None
     concept_def = concept_dict.get(concept_name)
     if not concept_def:
         return False
+    if concept_name in SPECIAL_CONCEPTS:
+        return True
     if getattr(concept_def, 'sources', {}).get(database):
         return True
     if getattr(concept_def, 'sub_concepts', None):
@@ -1473,26 +1475,6 @@ def load_special_concepts(
                 break
 
     return results
-
-
-def _has_any_source_recursive(concept_name, database, concept_dict, visited=None):
-    """递归检查概念或其子概念是否在目标数据库有数据源。"""
-    if visited is None:
-        visited = set()
-    if concept_name in visited:
-        return False
-    visited.add(concept_name)
-
-    concept_def = concept_dict.get(concept_name)
-    if not concept_def:
-        return False
-    if concept_name in SPECIAL_CONCEPTS:
-        return True
-    if concept_def.sources.get(database):
-        return True
-    if concept_def.sub_concepts:
-        return any(_has_any_source_recursive(sub_concept, database, concept_dict, visited) for sub_concept in concept_def.sub_concepts)
-    return False
 
 
 def load_preview_concepts(
@@ -3341,14 +3323,18 @@ def _publication_figure_image_path(panel: str) -> Optional[Path]:
     if not filename:
         return None
 
-    candidates = [
+    candidates = []
+    env_dir = os.environ.get("EASYICU_PUBLICATION_FIGURE_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir).expanduser() / filename)
+
+    candidates.extend([
         Path(__file__).resolve().parents[4]
         / 'easyicu写作'
         / 'final_figure_layout'
         / 'image2_generated_review'
         / filename,
-        Path('/Users/haibo/Documents/GitHub/easyicu写作/final_figure_layout/image2_generated_review') / filename,
-    ]
+    ])
     for path in candidates:
         if path.exists():
             return path

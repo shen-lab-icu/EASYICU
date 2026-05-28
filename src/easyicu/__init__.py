@@ -370,7 +370,7 @@ try:
 except ImportError:
     _HAS_SEPSIS = False
 
-# SOFA-2 & Sepsis-2
+# SOFA-2 scoring functions
 try:
     from .sofa2 import (
         sofa2_score,
@@ -381,12 +381,18 @@ try:
         sofa2_cns,
         sofa2_renal,
     )
-    from .sepsis2 import (
-        sep2,
-    )
     _HAS_SOFA2 = True
 except ImportError:
     _HAS_SOFA2 = False
+
+try:
+    from .sepsis_sofa2 import (
+        sep3_sofa2,
+        label_sep3_sofa2,
+    )
+    _HAS_SEPSIS_SOFA2 = True
+except ImportError:
+    _HAS_SEPSIS_SOFA2 = False
 
 try:
     from .export import (
@@ -962,7 +968,12 @@ if _HAS_SOFA2:
         "sofa2_cardio",
         "sofa2_cns",
         "sofa2_renal",
-        "sep2",
+    ])
+
+if _HAS_SEPSIS_SOFA2:
+    __all__.extend([
+        "sep3_sofa2",
+        "label_sep3_sofa2",
     ])
 
 if _HAS_EXPORT:

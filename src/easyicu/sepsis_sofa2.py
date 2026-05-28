@@ -263,8 +263,8 @@ def label_sep3_sofa2(
     )
 
 __all__ = [
-    "sep2",
-    "label_sep2",
+    "sep3_sofa2",
+    "label_sep3_sofa2",
     "susp_inf",
     "delta_cummin",
     "delta_min",
