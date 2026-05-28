@@ -26,10 +26,8 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence
 
@@ -65,15 +63,11 @@ from .pipeline import (
     _semantic_aliases_for,
 )
 from .plan_utils import (
-    _ensure_publication_figure_step_in_plan,
-    _enforce_advanced_plan_contract,
     _parent_step_id_for_figure_step,
     _preserve_figure_steps_after_replan,
-    _split_table_and_figure_outputs_in_plan,
     _step_contract_findings,
     _step_contract_repair_guidance,
     _step_expects_figure,
-    _step_produces_figure,
 )
 from .schema import AnalysisPlan, AnalysisStep, EvidenceRef
 from .robustness_panel import (
@@ -1027,9 +1021,12 @@ def run_execute_phase(
                                     total_steps=total_steps,
                                 )
                                 return step_record
+                with shared_lock:
+                    completed_records_snapshot = list(per_step_records)
                 early_contract_findings = _step_contract_findings(
                     step=step,
                     step_summary=visual_step_summary,
+                    completed_step_records=completed_records_snapshot,
                 )
                 early_contract_errors = [
                     f for f in early_contract_findings if f.severity == "error"
@@ -1511,9 +1508,12 @@ def run_execute_phase(
             out_dir=run_result.out_dir,
             step_summary=step_summary,
         )
+        with shared_lock:
+            completed_records_snapshot = list(per_step_records)
         contract_findings = _step_contract_findings(
             step=step,
             step_summary=step_summary,
+            completed_step_records=completed_records_snapshot,
         )
         with shared_lock:
             findings.extend(stat_findings)

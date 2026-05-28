@@ -25,25 +25,20 @@ underscore-prefixed names by re-import) so the file stays readable.
 from __future__ import annotations
 
 import json
+import math
 import re
-import textwrap
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from .audits.patterns import AnalysisPatternAuditor
 from .scalar_utils import (
-    _coerce_scalar,
     _first_numeric_effect_from_text,
     _first_numeric_scalar_with_key_fragment,
     _first_present_scalar,
     _flatten_scalar_dict,
 )
 from .schema import (
-    AggregationRule,
     AnalysisPlan,
     AnalysisStep,
-    ConceptDescriptor,
     ResearchContext,
-    TimeWindow,
     ValidationFinding,
     VariableRole,
 )
@@ -704,10 +699,215 @@ def _preserve_figure_steps_after_replan(
     return preserved, findings
 
 
+_PRIMARY_EFFECT_DIRECT_KEYS = (
+    "estimate",
+    "statistic:estimate",
+    "primary_or",
+    "statistic:primary_or",
+    "odds_ratio",
+    "statistic:odds_ratio",
+    "adjusted_or",
+    "statistic:adjusted_or",
+    "adjusted_odds_ratio",
+    "statistic:adjusted_odds_ratio",
+    "lactate_or",
+    "statistic:lactate_or",
+    "lactate_or_complete_case",
+    "statistic:lactate_or_complete_case",
+    "complete_case_lactate_or",
+    "statistic:complete_case_lactate_or",
+    "lactate_max_24h_or",
+    "statistic:lactate_max_24h_or",
+    "primary_association_estimate",
+    "statistic:primary_association_estimate",
+    "association_estimate",
+    "statistic:association_estimate",
+    "or",
+)
+
+_PRIMARY_EFFECT_VALUE_KEYS = (
+    "primary_or",
+    "odds_ratio",
+    "adjusted_odds_ratio",
+    "adjusted_or",
+    "or",
+    "estimate",
+    "value",
+)
+
+_PRIMARY_EFFECT_CI_LOW_KEYS = (
+    "ci_low",
+    "ci_lower",
+    "lower_ci",
+    "ci_lower_95",
+    "confidence_interval_low",
+)
+
+_PRIMARY_EFFECT_CI_HIGH_KEYS = (
+    "ci_high",
+    "ci_upper",
+    "upper_ci",
+    "ci_upper_95",
+    "confidence_interval_high",
+)
+
+
+def _finite_float(value: Any) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
+
+
+def _first_finite_present_scalar(
+    payload: Dict[str, Any], keys: Sequence[str]
+) -> Optional[float]:
+    value = _first_present_scalar(payload, keys)
+    return _finite_float(value)
+
+
+def _lookup_first_finite(
+    payload: Mapping[str, Any],
+    keys: Sequence[str],
+) -> Optional[float]:
+    lowered = {str(key).lower(): value for key, value in payload.items()}
+    for key in keys:
+        if key.lower() not in lowered:
+            continue
+        numeric = _finite_float(lowered[key.lower()])
+        if numeric is not None:
+            return numeric
+    return None
+
+
+def _primary_effect_name_matches(source_path: str) -> bool:
+    lowered = source_path.lower()
+    return bool(
+        "primary" in lowered
+        or "odds_ratio" in lowered
+        or re.search(r"(?:^|[._:\-])or(?:$|[._:\-])", lowered)
+    )
+
+
+def _primary_effect_from_mapping(
+    payload: Mapping[str, Any],
+    *,
+    require_ci: bool,
+) -> Optional[float]:
+    effect = _lookup_first_finite(payload, _PRIMARY_EFFECT_VALUE_KEYS)
+    if effect is None:
+        return None
+    if not require_ci:
+        return effect
+    ci_low = _lookup_first_finite(payload, _PRIMARY_EFFECT_CI_LOW_KEYS)
+    ci_high = _lookup_first_finite(payload, _PRIMARY_EFFECT_CI_HIGH_KEYS)
+    if ci_low is None or ci_high is None:
+        return None
+    return effect
+
+
+def _primary_effect_from_estimates_list(payload: Mapping[str, Any]) -> Optional[float]:
+    estimates = payload.get("primary_estimates")
+    if not isinstance(estimates, list):
+        return None
+    for idx, item in enumerate(estimates):
+        if not isinstance(item, Mapping):
+            continue
+        effect = _primary_effect_from_mapping(
+            item,
+            require_ci=False,
+        )
+        if effect is not None:
+            return effect
+    return None
+
+
+def _primary_effect_from_statistic_dicts(payload: Mapping[str, Any]) -> Optional[float]:
+    for key, value in payload.items():
+        source_path = str(key)
+        if isinstance(value, Mapping):
+            if source_path.lower().startswith("statistic:") and _primary_effect_name_matches(
+                source_path
+            ):
+                effect = _primary_effect_from_mapping(
+                    value,
+                    require_ci=True,
+                )
+                if effect is not None:
+                    return effect
+            nested = _primary_effect_from_statistic_dicts(value)
+            if nested is not None:
+                return nested
+        elif isinstance(value, list):
+            for idx, item in enumerate(value):
+                if not isinstance(item, Mapping):
+                    continue
+                nested = _primary_effect_from_statistic_dicts(
+                    {f"{source_path}[{idx}]": item}
+                )
+                if nested is not None:
+                    return nested
+    return None
+
+
+def _primary_effect_from_summary(step_summary: Dict[str, Any]) -> Optional[float]:
+    effect = _first_finite_present_scalar(step_summary, _PRIMARY_EFFECT_DIRECT_KEYS)
+    if effect is not None:
+        return effect
+    effect = _primary_effect_from_estimates_list(step_summary)
+    if effect is not None:
+        return effect
+    effect = _primary_effect_from_statistic_dicts(step_summary)
+    if effect is not None:
+        return effect
+    for key, value in _flatten_scalar_dict(step_summary).items():
+        lowered = key.lower()
+        if (
+            lowered.endswith("_or")
+            or lowered.endswith("_odds_ratio")
+            or lowered.endswith("_estimate")
+        ):
+            effect = _finite_float(value)
+            if effect is not None:
+                return effect
+    effect = _first_numeric_effect_from_text(step_summary)
+    return _finite_float(effect)
+
+
+def _primary_effect_from_completed_records(
+    completed_step_records: Optional[Sequence[Dict[str, Any]]],
+    *,
+    current_step_id: str,
+) -> Optional[Tuple[str, float]]:
+    if not completed_step_records:
+        return None
+    for record in completed_step_records:
+        if not isinstance(record, dict):
+            continue
+        source_step_id = str(record.get("step_id") or "")
+        if not source_step_id or source_step_id == current_step_id:
+            continue
+        if record.get("status") != "ok":
+            continue
+        step_summary = record.get("step_summary")
+        if not isinstance(step_summary, dict):
+            continue
+        effect = _primary_effect_from_summary(step_summary)
+        if effect is not None:
+            return source_step_id, effect
+    return None
+
+
 def _step_contract_findings(
     *,
     step: AnalysisStep,
     step_summary: Dict[str, Any],
+    completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> List[ValidationFinding]:
     if not isinstance(step_summary, dict) or not step_summary:
         return [
@@ -786,46 +986,33 @@ def _step_contract_findings(
     ):
         effect_required = True
     if effect_required:
-        effect_value = _first_present_scalar(
-            step_summary,
-            (
-                "estimate",
-                "statistic:estimate",
-                "primary_or",
-                "statistic:primary_or",
-                "odds_ratio",
-                "statistic:odds_ratio",
-                "adjusted_or",
-                "statistic:adjusted_or",
-                "lactate_or",
-                "statistic:lactate_or",
-                "lactate_or_complete_case",
-                "statistic:lactate_or_complete_case",
-                "complete_case_lactate_or",
-                "statistic:complete_case_lactate_or",
-                "lactate_max_24h_or",
-                "statistic:lactate_max_24h_or",
-                "primary_association_estimate",
-                "statistic:primary_association_estimate",
-                "association_estimate",
-                "statistic:association_estimate",
-                "or",
-            ),
-        )
+        effect_value = _primary_effect_from_summary(step_summary)
+        fallback_effect = None
         if effect_value is None:
-            for key, value in _flatten_scalar_dict(step_summary).items():
-                lowered = key.lower()
-                if (
-                    lowered.endswith("_or")
-                    or lowered.endswith("_odds_ratio")
-                    or lowered.endswith("_estimate")
-                ):
-                    effect_value = _coerce_scalar(value)
-                    if effect_value is not None:
-                        break
-        if effect_value is None:
-            effect_value = _first_numeric_effect_from_text(step_summary)
-        if effect_value is None:
+            fallback_effect = _primary_effect_from_completed_records(
+                completed_step_records,
+                current_step_id=str(step.step_id or ""),
+            )
+        if effect_value is None and fallback_effect is not None:
+            source_step_id, _source_effect = fallback_effect
+            findings.append(
+                ValidationFinding(
+                    validator="step_contract",
+                    severity="warning",
+                    message=(
+                        f"Step {step.step_id} did not record its own primary association "
+                        f"estimate, but the requirement was satisfied by successful step "
+                        f"{source_step_id}."
+                    ),
+                    detail={
+                        "step_id": step.step_id,
+                        "fallback_step_id": source_step_id,
+                        "expected_outputs": list(step.expected_outputs or []),
+                        "summary_keys": sorted(step_summary.keys()),
+                    },
+                )
+            )
+        elif effect_value is None:
             _append_missing(
                 (
                     f"Step {step.step_id} was expected to report a primary association "
@@ -1205,5 +1392,3 @@ def _step_contract_repair_guidance(
             "numbers in step_summary.json, or write a precise skipped/error reason."
         )
     return "\n".join(f"- {item}" for item in guidance)
-
-
