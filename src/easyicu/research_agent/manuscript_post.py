@@ -214,6 +214,72 @@ _NUMERIC_BIND_SKIP_CONTEXTS = (
     re.compile(r"\(evidence/[^)]*\)"),
 )
 
+_SEMANTIC_HINTS = (
+    (
+        (
+            re.compile(r"\bodds\s+ratio\b", re.IGNORECASE),
+            re.compile(r"\baOR\b"),
+            re.compile(r"\bOR\b"),
+        ),
+        (
+            re.compile(r"odds[_:. -]*ratio", re.IGNORECASE),
+            re.compile(r"primary[_:. -]*or", re.IGNORECASE),
+            re.compile(r"adjusted[_:. -]*or", re.IGNORECASE),
+            re.compile(r"(^|[_:. -])or($|[_:. -])", re.IGNORECASE),
+        ),
+    ),
+    (
+        (
+            re.compile(r"\bmortality(?:\s+rate)?\b", re.IGNORECASE),
+            re.compile(r"死亡率"),
+        ),
+        (re.compile(r"mortality", re.IGNORECASE),),
+    ),
+    (
+        (
+            re.compile(r"\bAUROC\b"),
+            re.compile(r"\bAUC\b"),
+        ),
+        (
+            re.compile(r"auroc", re.IGNORECASE),
+            re.compile(r"(^|[_:. -])auc($|[_:. -])", re.IGNORECASE),
+        ),
+    ),
+    (
+        (
+            re.compile(r"\bCI\b"),
+            re.compile(r"\bconfidence\s+interval\b", re.IGNORECASE),
+        ),
+        (
+            re.compile(r"ci[_:. -]*(low|lower|high|higher|upper)", re.IGNORECASE),
+            re.compile(r"(low|lower|high|higher|upper)[_:. -]*ci", re.IGNORECASE),
+        ),
+    ),
+    (
+        (
+            re.compile(r"\bp\s*-?\s*value\b", re.IGNORECASE),
+            re.compile(r"\bp\s*=", re.IGNORECASE),
+        ),
+        (re.compile(r"p[_:. -]*value", re.IGNORECASE),),
+    ),
+    (
+        (re.compile(r"\bBrier\b", re.IGNORECASE),),
+        (re.compile(r"brier", re.IGNORECASE),),
+    ),
+    (
+        (
+            re.compile(r"\b[nN]\s*="),
+            re.compile(r"\b(?:patients|stays|cases)\b", re.IGNORECASE),
+        ),
+        (
+            re.compile(r"(^|[_:. -])n($|[_:. -])", re.IGNORECASE),
+            re.compile(r"count", re.IGNORECASE),
+            re.compile(r"sample[_:. -]*size", re.IGNORECASE),
+            re.compile(r"n[_:. -]*total", re.IGNORECASE),
+        ),
+    ),
+)
+
 
 def _spans_to_skip(text: str) -> List[Tuple[int, int]]:
     spans: List[Tuple[int, int]] = []
@@ -225,6 +291,149 @@ def _spans_to_skip(text: str) -> List[Tuple[int, int]]:
 
 def _position_is_inside(pos: int, spans: Sequence[Tuple[int, int]]) -> bool:
     return any(start <= pos < end for start, end in spans)
+
+
+def _display_decimal_places(value_str: str) -> int:
+    text = (value_str or "").strip().rstrip("%").replace(",", "")
+    if not text or "e" in text.lower() or "." not in text:
+        return 0
+    frac = text.split(".", 1)[1]
+    frac = re.sub(r"[^0-9].*$", "", frac)
+    return len(frac)
+
+
+def _parsed_numeric_literal(value_str: str) -> tuple[float, bool] | None:
+    raw = value_str.strip()
+    has_percent = raw.endswith("%")
+    stripped = raw.rstrip("%").replace(",", "")
+    try:
+        return float(stripped), has_percent
+    except ValueError:
+        return None
+
+
+def _claim_numeric_distance(
+    claim: NumericClaim,
+    value_str: str,
+    *,
+    tolerance: Optional[float] = None,
+) -> Optional[float]:
+    parsed = _parsed_numeric_literal(value_str)
+    if parsed is None:
+        return None
+    canonical, has_percent = parsed
+    raw = value_str.strip()
+    candidate = claim.canonical * 100.0 if has_percent else claim.canonical
+    if claim.value == raw or candidate == canonical:
+        return 0.0
+    display_places = _display_decimal_places(value_str)
+    display_abs_tol = 0.0
+    if display_places > 0:
+        display_abs_tol = 0.5 * (10 ** (-display_places))
+    window = tolerance if tolerance is not None else claim.tolerance
+    if abs(candidate) > 1e-9:
+        rel = abs(candidate - canonical) / abs(candidate)
+    else:
+        rel = abs(candidate - canonical)
+    abs_window = max(display_abs_tol, window * max(abs(candidate), abs(canonical), 1.0))
+    if rel <= window or abs(candidate - canonical) <= abs_window:
+        return abs(candidate - canonical) / max(abs(candidate), 1e-9)
+    return None
+
+
+def _candidate_claims_for_value(
+    evidence: EvidenceStore,
+    value_str: str,
+) -> List[tuple[NumericClaim, float]]:
+    candidates: List[tuple[NumericClaim, float]] = []
+    for claim in evidence.numeric_claims():
+        if claim.source_field == "__easyicu_numeric_claim_overflow__":
+            continue
+        distance = _claim_numeric_distance(claim, value_str)
+        if distance is not None:
+            candidates.append((claim, distance))
+    return candidates
+
+
+def _semantic_hint_score(context: str, claim: NumericClaim) -> int:
+    source = claim.source_field
+    score = 0
+    for context_patterns, source_patterns in _SEMANTIC_HINTS:
+        if not any(pattern.search(context) for pattern in context_patterns):
+            continue
+        if any(pattern.search(source) for pattern in source_patterns):
+            score += 1
+    return score
+
+
+def _step_order_key(step_id: str) -> tuple[int, str]:
+    match = re.match(r"^(\d+)", step_id or "")
+    numeric = int(match.group(1)) if match else -1
+    return (numeric, step_id or "")
+
+
+def _claim_identity(claim: NumericClaim) -> str:
+    return f"{claim.step_id}:{claim.source_field}@{claim.evidence_id}"
+
+
+def _select_numeric_claim(
+    *,
+    candidates: Sequence[tuple[NumericClaim, float]],
+    context: str,
+    previous_step_id: Optional[str],
+) -> tuple[Optional[NumericClaim], bool]:
+    """Return ``(claim, ambiguous)`` for one manuscript numeric literal."""
+
+    if not candidates:
+        return None, False
+    if len(candidates) == 1:
+        return candidates[0][0], False
+
+    remaining = list(candidates)
+    semantic_scores = [
+        (_semantic_hint_score(context, claim), claim, distance)
+        for claim, distance in remaining
+    ]
+    best_semantic = max(score for score, _, _ in semantic_scores)
+    if best_semantic > 0:
+        remaining = [
+            (claim, distance)
+            for score, claim, distance in semantic_scores
+            if score == best_semantic
+        ]
+        if len(remaining) == 1:
+            return remaining[0][0], False
+
+    best_distance = min(distance for _, distance in remaining)
+    remaining = [
+        (claim, distance)
+        for claim, distance in remaining
+        if abs(distance - best_distance) <= 1e-12
+    ]
+    if len(remaining) == 1:
+        return remaining[0][0], False
+
+    if previous_step_id:
+        same_step = [
+            (claim, distance)
+            for claim, distance in remaining
+            if claim.step_id == previous_step_id
+        ]
+        if same_step:
+            remaining = same_step
+            if len(remaining) == 1:
+                return remaining[0][0], False
+
+    best_step = max(_step_order_key(claim.step_id) for claim, _ in remaining)
+    remaining = [
+        (claim, distance)
+        for claim, distance in remaining
+        if _step_order_key(claim.step_id) == best_step
+    ]
+    if len(remaining) == 1:
+        return remaining[0][0], False
+
+    return None, True
 
 
 def bind_numeric_values(
@@ -263,17 +472,19 @@ def bind_numeric_values(
     skip_spans = _spans_to_skip(manuscript)
     binding_map: Dict[str, NumericClaim] = {}
     untraced: List[str] = []
-    used_ids: Dict[str, str] = {}  # source_field -> footnote_id
+    used_ids: Dict[str, str] = {}  # claim identity -> footnote_id
     display_values: Dict[str, str] = {}
+    previous_step_id: Optional[str] = None
 
     def _footnote_id_for(claim: NumericClaim, *, display_value: str) -> str:
-        existing = used_ids.get(claim.source_field)
+        claim_key = _claim_identity(claim)
+        existing = used_ids.get(claim_key)
         if existing is not None:
             display_values.setdefault(existing, display_value)
             return existing
         idx = len(used_ids) + 1
         fid = f"{footnote_prefix}_{idx}"
-        used_ids[claim.source_field] = fid
+        used_ids[claim_key] = fid
         binding_map[fid] = claim
         display_values[fid] = display_value
         return fid
@@ -286,14 +497,32 @@ def bind_numeric_values(
             continue
         out_parts.append(manuscript[cursor:end])
         value = match.group("value")
-        claim = evidence.find_claim_for_value(value)
+        context_start = max(0, start - 80)
+        context_end = min(len(manuscript), end + 80)
+        context = manuscript[context_start:context_end]
+        candidates = _candidate_claims_for_value(evidence, value)
+        claim, ambiguous = _select_numeric_claim(
+            candidates=candidates,
+            context=context,
+            previous_step_id=previous_step_id,
+        )
         if claim is None:
             untraced.append(value)
             if mode is EvidenceEnforcementMode.SOFT:
-                out_parts.append(f" <!-- UNTRACED:{value} -->")
+                if ambiguous:
+                    candidate_ids = ",".join(
+                        _claim_identity(candidate)
+                        for candidate, _ in candidates
+                    )
+                    out_parts.append(
+                        f" <!-- AMBIGUOUS:{value}:candidates=[{candidate_ids}] -->"
+                    )
+                else:
+                    out_parts.append(f" <!-- UNTRACED:{value} -->")
         else:
             fid = _footnote_id_for(claim, display_value=value)
             out_parts.append(f"[^{fid}]")
+            previous_step_id = claim.step_id
         cursor = end
     out_parts.append(manuscript[cursor:])
     bound = "".join(out_parts)
