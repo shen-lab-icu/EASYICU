@@ -115,7 +115,18 @@ def _publication_figure_bundle_ready(
                 role,
             ]
         ).lower()
-        if "publication" not in haystack:
+        is_explicit_publication = "publication" in haystack
+        is_association_fallback = any(
+            token in haystack
+            for token in (
+                "forest_plot",
+                "forest plot",
+                "association_model",
+                "association model",
+                "association figure",
+            )
+        )
+        if not is_explicit_publication and not is_association_fallback:
             continue
         path = run_dir / record.relative_path
         stem = path.with_suffix("").name.split("__", 1)[-1]
@@ -123,7 +134,9 @@ def _publication_figure_bundle_ready(
     ready_stems = [
         stem
         for stem, suffixes in stems.items()
-        if {"svg", "png", "pdf", "tiff"} <= suffixes or {"svg", "png", "pdf", "tif"} <= suffixes
+        if {"svg", "png"} <= suffixes
+        or {"svg", "png", "pdf", "tiff"} <= suffixes
+        or {"svg", "png", "pdf", "tif"} <= suffixes
     ]
     return {
         "publication_figure_bundle_ready": bool(ready_stems),

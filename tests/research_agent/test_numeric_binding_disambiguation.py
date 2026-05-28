@@ -147,3 +147,25 @@ def test_precision_distance_breaks_remaining_tie(ra, tmp_path: Path) -> None:
 
     assert untraced == []
     assert binding_map["claim_1"].source_field == "closer_value"
+
+
+def test_spaced_percent_display_binds_to_proportion_claim(ra, tmp_path: Path) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="0.094",
+        canonical=0.094,
+        evidence_id="e_baseline",
+        step_id="00_probe",
+        source_field="baseline_prevalence",
+    )
+
+    bound, binding_map, untraced = bind_numeric_values(
+        "The overall mortality rate was 9.4 % in the cohort.",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert "<!-- UNTRACED:9.4 -->" not in bound
+    assert binding_map["claim_1"].source_field == "baseline_prevalence"
