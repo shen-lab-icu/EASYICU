@@ -1091,6 +1091,29 @@ cc_model = sm.Logit(cc_df["death"], sm.add_constant(cc_df[["lactate", "sex_M"]])
     assert "cc_model = sm.Logit(*_easyicu_runner_repair_v1(" in patched
 
 
+def test_deterministic_runner_repair_preserves_statsmodels_constructor_kwargs(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+X = pd.DataFrame({"age": ["50", "60", "55", "65"], "sex_M": [True, False, True, False]})
+y = pd.Series([0, 1, 0, 1])
+model = sm.Logit(y, X, missing="raise")
+result = model.fit(disp=0)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="Pandas data cast to numpy dtype of object",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "dtype_coerce_v1"
+    assert 'model = sm.Logit(*_easyicu_runner_repair_v1(X, y), missing="raise")' in patched
+    compile(patched, "<patched>", "exec")
+
+
 def test_deterministic_runner_repair_reapplies_dtype_after_coder_rewrite(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
@@ -1295,6 +1318,101 @@ upper = np.exp(ci.iloc[:, 1])
     exec(patched, namespace)
     assert list(namespace["lower"].round(6)) == list(np.exp([-0.2, 0.3]).round(6))
     assert list(namespace["upper"].round(6)) == list(np.exp([0.1, 0.7]).round(6))
+
+
+def test_deterministic_runner_repair_materializes_analysis_cohort_before_required_cols(
+    ra,
+    tmp_path: Path,
+    monkeypatch,
+):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import json
+import os
+from pathlib import Path
+
+import pandas as pd
+
+
+def write_json(path, payload):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+
+
+cohort_path = os.environ["COHORT_PARQUET"]
+out_dir = Path(os.environ["STEP_OUT_DIR"])
+out_dir.mkdir(parents=True, exist_ok=True)
+
+df = pd.read_parquet(cohort_path)
+required_cols = ["sofa2_admission", "analysis_cohort", "death", "age", "sex", "weight"]
+missing_cols = [c for c in required_cols if c not in df.columns]
+step_summary = {"step": "association"}
+if missing_cols:
+    step_summary["skipped"] = {
+        "reason": "required columns missing",
+        "missing_columns": missing_cols,
+    }
+    write_json(out_dir / "step_summary.json", step_summary)
+    raise SystemExit
+
+data = df[required_cols].copy()
+data["analysis_cohort"] = data["analysis_cohort"].astype("category")
+step_summary["status"] = "completed"
+step_summary["categories"] = [str(x) for x in data["analysis_cohort"].cat.categories]
+write_json(out_dir / "step_summary.json", step_summary)
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log='{"skipped": {"reason": "required columns missing", "missing_columns": ["analysis_cohort"]}}',
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "derived_analysis_cohort_materialization_v1"
+    assert "materialize generated analysis strata" in patched
+
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "sofa2_admission": [0, 1, 2],
+            "death": [0, 1, 0],
+            "age": [60, 70, 80],
+            "sex": ["F", "M", "F"],
+            "weight": [60.0, 75.0, 81.0],
+        }
+    ).to_parquet(cohort_path)
+    out_dir = tmp_path / "out"
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    exec(compile(patched, "<patched>", "exec"), {})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["status"] == "completed"
+    assert summary["categories"] == ["0", "1", "2"]
+
+
+def test_deterministic_runner_repair_analysis_cohort_source_is_case_neutral(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import pandas as pd
+df = pd.read_parquet(cohort_path)
+required_cols = ["lactate_max_24h", "analysis_cohort", "death"]
+missing_cols = [c for c in required_cols if c not in df.columns]
+if missing_cols:
+    raise SystemExit
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log='{"missing_columns": ["analysis_cohort"]}',
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "derived_analysis_cohort_materialization_v1"
+    assert "'lactate_max_24h' in df.columns" in patched
+    assert "sofa2" not in patched
 
 
 def test_deterministic_runner_repair_downgrades_bad_publication_contract(ra):

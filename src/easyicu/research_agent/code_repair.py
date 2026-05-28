@@ -1029,6 +1029,74 @@ def _strip_columns_from_list_literals(code: str, missing_cols: Sequence[str]) ->
     return list_literal_re.sub(_rewrite, code)
 
 
+def _extract_required_cols_list(code: str) -> List[str]:
+    """Return literal strings from a generated ``required_cols`` list."""
+
+    match = re.search(r"required_cols\s*=\s*(?P<literal>\[[\s\S]*?\])", code)
+    if match is None:
+        return []
+    try:
+        value = ast.literal_eval(match.group("literal"))
+    except (SyntaxError, ValueError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _infer_analysis_cohort_source_column(code: str) -> Optional[str]:
+    """Infer the source column immediately preceding ``analysis_cohort``.
+
+    Generated association scripts sometimes define a derived analysis stratum
+    column (``analysis_cohort``) but include it in ``required_cols`` before
+    materialising it. Keep the inference local to the generated script shape:
+    the source is the literal column listed immediately before
+    ``analysis_cohort`` in ``required_cols``.
+    """
+
+    required_cols = _extract_required_cols_list(code)
+    try:
+        idx = required_cols.index("analysis_cohort")
+    except ValueError:
+        return None
+    if idx <= 0:
+        return None
+    source = required_cols[idx - 1]
+    if source in {"death", "mortality", "outcome", "analysis_cohort"}:
+        return None
+    return source
+
+
+def _patch_derived_analysis_cohort_materialization(code: str) -> str:
+    """Materialise ``analysis_cohort`` before required-column validation."""
+
+    if "_easyicu_derived_analysis_cohort_materialization_v1" in code:
+        return code
+    source_col = _infer_analysis_cohort_source_column(code)
+    if not source_col:
+        return code
+
+    read_re = re.compile(
+        r"(?m)^(?P<indent>[ \t]*)"
+        r"(?P<target>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*pd\.read_parquet\((?P<args>[^\n]*)\)\s*$"
+    )
+
+    def _rewrite(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        target = match.group("target")
+        line = match.group(0)
+        return (
+            f"{line}\n"
+            f"{indent}# EasyICU deterministic repair: materialize generated analysis strata.\n"
+            f"{indent}_easyicu_derived_analysis_cohort_materialization_v1 = True\n"
+            f"{indent}if \"analysis_cohort\" not in {target}.columns and {source_col!r} in {target}.columns:\n"
+            f"{indent}    {target}[\"analysis_cohort\"] = {target}[{source_col!r}].astype(\"string\")\n"
+            f"{indent}    {target}.loc[{target}[{source_col!r}].isna(), \"analysis_cohort\"] = pd.NA"
+        )
+
+    return read_re.sub(_rewrite, code, count=1)
+
+
 def _patch_statsmodels_conf_int_filter_axis(code: str) -> str:
     """Filter ``statsmodels.conf_int()`` rows by coefficient name.
 
@@ -1806,6 +1874,20 @@ def _deterministic_runner_repair(
         repair_name = "statsmodels_conf_int_filter_axis_v1"
         if previous_repair != repair_name:
             repaired = _patch_statsmodels_conf_int_filter_axis(code)
+            if repaired != code:
+                return repair_name, repaired
+
+    derived_analysis_cohort_missing = (
+        "analysis_cohort" in code
+        and "required_cols" in code
+        and "pd.read_parquet" in code
+        and "missing_columns" in lowered
+        and "analysis_cohort" in lowered
+    )
+    if derived_analysis_cohort_missing:
+        repair_name = "derived_analysis_cohort_materialization_v1"
+        if previous_repair != repair_name:
+            repaired = _patch_derived_analysis_cohort_materialization(code)
             if repaired != code:
                 return repair_name, repaired
 
@@ -3250,15 +3332,17 @@ def _deterministic_runner_repair(
 
         model_call = re.compile(
             r"(?P<prefix>\b[A-Za-z_]\w*\s*=\s*sm\.(?:Logit|OLS|GLM)\()\s*"
-            r"(?P<y>[^,]+?)\s*,\s*(?P<X>[^)\n]+?)\s*(?P<suffix>\))"
+            r"(?P<y>[^,]+?)\s*,\s*(?P<X>[^,\)\n]+?)\s*"
+            r"(?P<kwargs>,\s*[^)\n]+)?(?P<suffix>\))"
         )
 
         def _rewrite(match: re.Match[str]) -> str:
             y_expr = match.group("y").strip()
             x_expr = match.group("X").strip()
+            kwargs = match.group("kwargs") or ""
             return (
                 f"{match.group('prefix')}*_easyicu_runner_repair_v1("
-                f"{x_expr}, {y_expr}){match.group('suffix')}"
+                f"{x_expr}, {y_expr}){kwargs}{match.group('suffix')}"
             )
 
         repaired = model_call.sub(_rewrite, patched, count=1)
