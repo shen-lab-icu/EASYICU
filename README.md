@@ -192,7 +192,7 @@ pip install -e ".[dev,webapp]"
 pytest -q
 ```
 
-GitHub Actions runs the same `pytest` suite on pushes and pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected workflow when proposing changes.
+GitHub Actions runs `ruff check src tests` and `pytest -q` on Python 3.10, 3.11, and 3.12 for pushes and pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected workflow when proposing changes.
 
 ## 💻 Python API
 
