@@ -1029,6 +1029,41 @@ def _strip_columns_from_list_literals(code: str, missing_cols: Sequence[str]) ->
     return list_literal_re.sub(_rewrite, code)
 
 
+def _patch_statsmodels_conf_int_filter_axis(code: str) -> str:
+    """Filter ``statsmodels.conf_int()`` rows by coefficient name.
+
+    ``DataFrame.filter(like=...)`` defaults to ``axis=1``. Generated figure
+    scripts often intend to subset confidence intervals by coefficient names,
+    which live on the index of the ``statsmodels`` confidence-interval frame.
+    Rewriting the assignment keeps downstream ``.iloc[:, 0]`` / ``.iloc[:, 1]``
+    code working with the expected two-column CI shape.
+    """
+
+    assignment_re = re.compile(
+        r"(?m)^(?P<indent>[ \t]*)"
+        r"(?P<target>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+        r"(?P<expr>.+?\.conf_int\(\))\.filter\(\s*like\s*=\s*"
+        r"(?P<needle>['\"][^'\"]+['\"])\s*\)\s*$"
+    )
+    counter = 0
+
+    def _rewrite(match: re.Match[str]) -> str:
+        nonlocal counter
+        counter += 1
+        indent = match.group("indent")
+        target = match.group("target")
+        expr = match.group("expr").strip()
+        needle = match.group("needle")
+        full_name = f"_easyicu_{target}_conf_int_full_{counter}"
+        return (
+            f"{indent}{full_name} = {expr}\n"
+            f"{indent}{target} = {full_name}.loc["
+            f"{full_name}.index.astype(str).str.contains({needle}, regex=False)]"
+        )
+
+    return assignment_re.sub(_rewrite, code)
+
+
 def _patch_json_dump_numpy_key_sanitizer(code: str) -> str:
     if "_easyicu_json_sanitize_v1" in code:
         return code
@@ -1756,6 +1791,21 @@ def _deterministic_runner_repair(
                 r"xerr=np.vstack([np.ravel(\1), np.ravel(\2)])",
                 code,
             )
+            if repaired != code:
+                return repair_name, repaired
+
+    statsmodels_conf_int_filter_axis = (
+        "indexerror" in lowered
+        and "single positional indexer is out-of-bounds" in lowered
+        and ".conf_int()" in code
+        and ".filter(" in code
+        and "like=" in code
+        and ".iloc" in code
+    )
+    if statsmodels_conf_int_filter_axis:
+        repair_name = "statsmodels_conf_int_filter_axis_v1"
+        if previous_repair != repair_name:
+            repaired = _patch_statsmodels_conf_int_filter_axis(code)
             if repaired != code:
                 return repair_name, repaired
 
