@@ -31,6 +31,19 @@ def test_pyproject_requires_modern_pyarrow_for_export_compatibility() -> None:
     assert "pyarrow>=23.0.0" in dependencies
 
 
+def test_pyproject_license_uses_spdx_string() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert pyproject["project"]["license"] == "MIT"
+
+
+def test_manifest_does_not_reference_missing_optional_payloads() -> None:
+    manifest = (REPO_ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+
+    assert "CHANGELOG.md" not in manifest
+    assert "src/easyicu/extdata" not in manifest
+
+
 def test_python39_compatible_union_annotations_use_future_import() -> None:
     files_requiring_future = [
         "src/easyicu/attach.py",
