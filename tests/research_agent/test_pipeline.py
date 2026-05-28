@@ -1089,6 +1089,43 @@ cc_model = sm.Logit(cc_df["death"], sm.add_constant(cc_df[["lactate", "sex_M"]])
     assert "cc_model = sm.Logit(*_easyicu_runner_repair_v1(" in patched
 
 
+def test_deterministic_runner_repair_reapplies_dtype_after_coder_rewrite(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+
+def _fit_logistic(X, y):
+    X = X.apply(pd.to_numeric, errors="coerce")
+    X = sm.add_constant(X, has_constant="add")
+    y = pd.to_numeric(y, errors="coerce")
+    data = pd.concat([y, X], axis=1).dropna()
+    y_clean = data[y.name]
+    X_clean = data.drop(columns=[y.name])
+    model = sm.Logit(y_clean, X_clean)
+    return model.fit(disp=0)
+
+df = pd.DataFrame({
+    "death": [0, 1, 0, 1, 0, 1],
+    "age": ["50", "60", "55", "65", "45", "70"],
+    "sex_M": [True, False, True, False, True, False],
+})
+result = _fit_logistic(df[["age", "sex_M"]], df["death"])
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="Pandas data cast to numpy dtype of object",
+        previous_repair="dtype_coerce_v1",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "dtype_coerce_v1"
+    assert "model = sm.Logit(*_easyicu_runner_repair_v1(X_clean, y_clean))" in patched
+    assert "_easyicu_runner_repair_v1" in patched
+
+
 def test_deterministic_runner_repair_adds_missing_os_import(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
@@ -1244,6 +1281,37 @@ fig, ax = plt.subplots()
     assert 'figure_contract["panels"]' not in patched
     assert "panel_a_data = cluster_means.reset_index()" in patched
     assert "fig, ax = plt.subplots()" in patched
+
+
+def test_promote_sibling_figure_exports_normalizes_outputs_stem(ra, tmp_path: Path):
+    from easyicu.research_agent.pipeline import _promote_sibling_figure_exports
+
+    step_dir = tmp_path / "steps" / "03_figure"
+    out_dir = step_dir / "outputs"
+    out_dir.mkdir(parents=True)
+    (out_dir / "step_summary.json").write_text(
+        json.dumps({"artifact_type": "figure"}), encoding="utf-8"
+    )
+    (step_dir / "outputs.png").write_bytes(b"png")
+    (step_dir / "outputs.svg").write_text("<svg/>", encoding="utf-8")
+    (step_dir / "outputs.figure_contract.json").write_text(
+        json.dumps({"figure_id": "sofa_mortality_by_stratum"}),
+        encoding="utf-8",
+    )
+
+    name = _promote_sibling_figure_exports(out_dir=out_dir)
+
+    assert name == "sibling_figure_exports_promote_v1"
+    assert (out_dir / "publication_figure.png").exists()
+    assert (out_dir / "publication_figure.svg").exists()
+    assert (out_dir / "publication_figure.figure_contract.json").exists()
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["figure_path"] == "publication_figure.png"
+    assert sorted(summary["figure_files"]) == [
+        "publication_figure.png",
+        "publication_figure.svg",
+    ]
+    assert summary["publication_figure_rescue"]["mode"] == "sibling_outputs_stem"
 
 
 def test_deterministic_runner_repair_restores_shadowed_json_module(ra):
@@ -3819,6 +3887,41 @@ result = model.fit(disp=0)
     name, patched = repaired
     assert name == "dtype_coerce_v1"
     assert "_easyicu_runner_repair_v1" in patched
+
+
+def test_deterministic_summary_repair_patches_nested_logit_helper_dtype(ra):
+    from easyicu.research_agent.pipeline import _deterministic_summary_repair
+
+    code = '''
+import pandas as pd
+import statsmodels.api as sm
+
+def _fit_logistic(X, y):
+    X = X.apply(pd.to_numeric, errors="coerce")
+    X = sm.add_constant(X, has_constant="add")
+    y = pd.to_numeric(y, errors="coerce")
+    data = pd.concat([y, X], axis=1).dropna()
+    y_clean = data[y.name]
+    X_clean = data.drop(columns=[y.name])
+    model = sm.Logit(y_clean, X_clean)
+    return model.fit(disp=False)
+'''
+    repaired = _deterministic_summary_repair(
+        code=code,
+        previous_repair="dtype_coerce_v1",
+        step_summary={
+            "model:logistic_regression_complete_case": {
+                "converged": False,
+                "error": "Pandas data cast to numpy dtype of object. Check input data with np.asarray(data).",
+            },
+        },
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "statsmodels_helper_design_float_v1"
+    assert 'X = X.apply(pd.to_numeric, errors="coerce").astype(float)' in patched
+    assert 'X_clean = data.drop(columns=[y.name]).apply(pd.to_numeric, errors="coerce").astype(float)' in patched
 
 
 def test_deterministic_summary_repair_casts_dummy_design_for_null_logit(ra):

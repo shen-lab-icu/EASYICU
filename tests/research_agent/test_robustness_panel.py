@@ -108,6 +108,42 @@ def test_locked_robustness_specs_restore_after_replan_drop(ra, tmp_path: Path) -
     assert [spec.spec_id for spec in restored] == [spec.spec_id for spec in specs]
 
 
+def test_plan_payload_normalizer_drops_extra_robustness_spec_keys(ra) -> None:
+    from easyicu.research_agent.agents import _normalise_plan_payload
+    from easyicu.research_agent.robustness_panel import default_robustness_specs
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    specs = []
+    for spec in default_robustness_specs():
+        payload = spec.to_dict()
+        payload["missing_handling"] = "listwise deletion"
+        specs.append(payload)
+
+    data, dropped = _normalise_plan_payload(
+        {
+            "research_question": "Does severity predict mortality?",
+            "steps": [
+                {
+                    "step_id": "01_model",
+                    "intent": "Fit the primary model.",
+                    "expected_outputs": ["statistic:primary_or"],
+                }
+            ],
+            "robustness_specs": specs,
+        }
+    )
+
+    assert all("missing_handling" not in spec for spec in data["robustness_specs"])
+    assert len(dropped["robustness_specs"]) == len(specs)
+    assert all(item.endswith(":missing_handling") for item in dropped["robustness_specs"])
+    plan = AnalysisPlan(
+        research_question=data["research_question"],
+        steps=[AnalysisStep(**data["steps"][0])],
+        robustness_specs=data["robustness_specs"],
+    )
+    assert len(plan.robustness_specs) == len(specs)
+
+
 def test_each_spec_produces_panel_row() -> None:
     from easyicu.research_agent.robustness_panel import (
         build_robustness_panel_from_records,

@@ -1595,7 +1595,19 @@ def _normalise_plan_payload(
         "method",
         "icu_rule_refs",
     }
-    dropped: Dict[str, List[str]] = {"top_level": [], "steps": []}
+    allowed_robustness_spec = {
+        "spec_id",
+        "axis",
+        "description",
+        "cohort_override",
+        "missing_override",
+        "outcome_override",
+    }
+    dropped: Dict[str, List[str]] = {
+        "top_level": [],
+        "steps": [],
+        "robustness_specs": [],
+    }
     out = {}
     for key, value in data.items():
         if key in allowed_plan:
@@ -1614,6 +1626,21 @@ def _normalise_plan_payload(
                     dropped["steps"].append(f"{step_id}:{key}")
             steps.append(step_payload)
     out["steps"] = steps
+    specs = []
+    for idx, raw_spec in enumerate(out.get("robustness_specs", []) or []):
+        if not isinstance(raw_spec, dict):
+            specs.append(raw_spec)
+            continue
+        spec_payload = {}
+        spec_id = raw_spec.get("spec_id") or f"robustness_specs[{idx}]"
+        for key, value in raw_spec.items():
+            if key in allowed_robustness_spec:
+                spec_payload[key] = value
+            else:
+                dropped["robustness_specs"].append(f"{spec_id}:{key}")
+        specs.append(spec_payload)
+    if "robustness_specs" in out:
+        out["robustness_specs"] = specs
     return out, dropped
 
 

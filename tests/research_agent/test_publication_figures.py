@@ -350,6 +350,47 @@ def test_save_publication_figure_accepts_legacy_contract_and_output_dir_call(tmp
     assert paths["svg"].name == "legacy_figure.svg"
 
 
+def test_save_publication_figure_accepts_agent_output_dir_name_kwargs(tmp_path: Path):
+    plt = pytest.importorskip("matplotlib.pyplot")
+    apply_publication_style()
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    fig, ax = plt.subplots(figsize=(2.5, 1.8))
+    ax.plot([0, 1], [1, 0])
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    contract = make_figure_contract(
+        figure_id="sofa_mortality_by_stratum",
+        core_claim="Legacy agent call should write into STEP_OUT_DIR.",
+        panels=[
+            {
+                "panel_id": "a",
+                "title": "Panel",
+                "role": "overview",
+                "claim": "Line exists.",
+                "evidence_ids": ["src"],
+            }
+        ],
+    )
+
+    paths = save_publication_figure(
+        fig,
+        out_dir,
+        contract,
+        png_name="sofa_mortality_by_stratum.png",
+        svg_name="sofa_mortality_by_stratum.svg",
+        formats=["svg", "png"],
+        dpi=150,
+    )
+    plt.close(fig)
+
+    assert paths["svg"] == out_dir / "sofa_mortality_by_stratum.svg"
+    assert paths["png"] == out_dir / "sofa_mortality_by_stratum.png"
+    assert paths["contract"] == out_dir / "sofa_mortality_by_stratum.figure_contract.json"
+    assert audit_publication_exports(out_dir, min_bytes=1) == []
+
+
 def test_save_publication_figure_accepts_contract_only_output_dir_call(tmp_path: Path):
     contract = make_figure_contract(
         figure_id="FigureContractOnly",
