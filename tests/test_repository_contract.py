@@ -137,6 +137,21 @@ def test_readmes_link_to_citation_metadata() -> None:
     assert "[CITATION.cff](CITATION.cff)" in chinese
 
 
+def test_readmes_include_scope_limiting_claim_language() -> None:
+    chinese = (REPO_ROOT / "README_zh.md").read_text(encoding="utf-8")
+    agent_readme = (REPO_ROOT / "src" / "easyicu" / "research_agent" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    agent_readme_flat = re.sub(r"\s+", " ", agent_readme)
+
+    assert "不代表正式模型排行榜或外部 benchmark 结论" in chinese
+    assert "不是全自动论文写作或自主科学发现系统" in chinese
+    assert "不是临床决策支持工具" in chinese
+    assert "not a formal verifier" in agent_readme_flat
+    assert "not a strong security sandbox" in agent_readme_flat
+    assert "controlled demonstrations" in agent_readme_flat
+
+
 def test_readme_console_scripts_match_pyproject_entry_points() -> None:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
