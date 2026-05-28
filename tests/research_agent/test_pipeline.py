@@ -2114,6 +2114,70 @@ def test_step_contract_findings_accepts_nested_primary_association_or(ra):
     assert findings == []
 
 
+def test_step_contract_findings_accepts_nested_adjusted_sofa_odds_ratio_dict(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="04_association_model",
+        intent="Estimate adjusted association between admission SOFA-2 and ICU mortality.",
+        expected_outputs=["statistic:primary_or", "table:adjusted_odds_ratio_sofa"],
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "primary": {
+                "n": 470,
+                "event_count": 43,
+                "reference_sofa_level": 1.0,
+                "adjusted_odds_ratio_sofa": {
+                    "sofa2_0.0": 2.0253510259937584,
+                    "sofa2_2.0": 2.0132350215619796,
+                },
+                "adjusted_odds_ratio_sofa_ci95": {
+                    "sofa2_0.0": {
+                        "low": 0.545606642458396,
+                        "high": 7.518322650932099,
+                    },
+                    "sofa2_2.0": {
+                        "low": 0.4295700581569013,
+                        "high": 9.43528343067909,
+                    },
+                },
+            },
+        },
+    )
+
+    assert findings == []
+
+
+def test_step_contract_findings_rejects_nested_ci_without_effect_value(ra):
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    step = ra.AnalysisStep(
+        step_id="04_association_model",
+        intent="Estimate adjusted association between admission SOFA-2 and ICU mortality.",
+        expected_outputs=["statistic:primary_or", "table:adjusted_odds_ratio_sofa"],
+    )
+    findings = _step_contract_findings(
+        step=step,
+        step_summary={
+            "primary": {
+                "n": 470,
+                "adjusted_odds_ratio_sofa_ci95": {
+                    "sofa2_0.0": {
+                        "low": 0.545606642458396,
+                        "high": 7.518322650932099,
+                    },
+                },
+            },
+        },
+    )
+
+    assert findings
+    assert findings[0].validator == "step_contract"
+    assert findings[0].severity == "error"
+
+
 def test_step_contract_findings_accepts_predictor_named_or_key(ra):
     from easyicu.research_agent.pipeline import _step_contract_findings
 

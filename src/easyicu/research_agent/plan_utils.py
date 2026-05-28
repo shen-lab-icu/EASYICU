@@ -794,6 +794,45 @@ def _primary_effect_name_matches(source_path: str) -> bool:
     )
 
 
+def _flattened_primary_effect_key_matches(source_path: str) -> bool:
+    """True for flattened scalar paths that represent an effect value.
+
+    Generated step summaries sometimes report the primary association as a
+    dictionary of per-level effects, for example
+    ``primary.adjusted_odds_ratio_sofa.sofa2_5.0``.  The contract only needs
+    to know that a finite primary effect was recorded, while avoiding CI
+    bounds and p-values from sibling paths such as
+    ``primary.adjusted_odds_ratio_sofa_ci95.sofa2_5.0.low``.
+    """
+
+    lowered = source_path.lower()
+    if any(
+        marker in lowered
+        for marker in (
+            "ci95",
+            "_ci",
+            ".ci",
+            "confidence",
+            "p_value",
+            "pvalue",
+        )
+    ):
+        return False
+    if re.search(
+        r"(?:^|[._:\-\[\]])(?:low|high|lower|upper|p|se|stderr)(?:$|[._:\-\[\]])",
+        lowered,
+    ):
+        return False
+    return bool(
+        "odds_ratio" in lowered
+        or "primary_or" in lowered
+        or "adjusted_or" in lowered
+        or re.search(r"(?:^|[._:\-])or(?:$|[._:\-])", lowered)
+        or lowered.endswith("_estimate")
+        or lowered.endswith(".estimate")
+    )
+
+
 def _primary_effect_from_mapping(
     payload: Mapping[str, Any],
     *,
@@ -871,6 +910,7 @@ def _primary_effect_from_summary(step_summary: Dict[str, Any]) -> Optional[float
             lowered.endswith("_or")
             or lowered.endswith("_odds_ratio")
             or lowered.endswith("_estimate")
+            or _flattened_primary_effect_key_matches(lowered)
         ):
             effect = _finite_float(value)
             if effect is not None:
