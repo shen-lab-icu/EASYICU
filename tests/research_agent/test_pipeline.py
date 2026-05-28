@@ -13,6 +13,7 @@ import math
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -1215,6 +1216,85 @@ ax.errorbar([or_estimate], [0], xerr=np.array([[xerr_lower], [xerr_upper]]), fmt
     name, patched = repaired
     assert name == "matplotlib_errorbar_xerr_shape_v1"
     assert "xerr=np.vstack([np.ravel(xerr_lower), np.ravel(xerr_upper)])" in patched
+
+
+def test_deterministic_runner_repair_filters_statsmodels_conf_int_rows(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import numpy as np
+import pandas as pd
+
+class FakeResult:
+    params = pd.Series(
+        [0.0, 0.2, 0.4],
+        index=["const", "sofa2_1", "sofa2_2"],
+    )
+
+    def conf_int(self):
+        return pd.DataFrame(
+            {0: [-0.1, 0.1, 0.3], 1: [0.1, 0.3, 0.5]},
+            index=["const", "sofa2_1", "sofa2_2"],
+        )
+
+model_result = FakeResult()
+coef_series = model_result.params.filter(like="sofa2_")
+conf_int = model_result.conf_int().filter(like="sofa2_")
+lower = np.exp(conf_int.iloc[:, 0])
+upper = np.exp(conf_int.iloc[:, 1])
+or_vals = np.exp(coef_series)
+plot_df = pd.DataFrame({
+    "or": or_vals.values,
+    "ci_low": lower.values,
+    "ci_high": upper.values,
+})
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="IndexError: single positional indexer is out-of-bounds",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "statsmodels_conf_int_filter_axis_v1"
+    assert ".index.astype(str).str.contains(\"sofa2_\", regex=False)" in patched
+    namespace = {}
+    exec(patched, namespace)
+    plot_df = namespace["plot_df"]
+    assert list(plot_df["or"].round(6)) == list(np.exp([0.2, 0.4]).round(6))
+    assert len(plot_df) == 2
+
+
+def test_deterministic_runner_repair_conf_int_filter_is_case_neutral(ra):
+    from easyicu.research_agent.pipeline import _deterministic_runner_repair
+
+    code = """
+import numpy as np
+import pandas as pd
+
+class FakeResult:
+    def conf_int(self):
+        return pd.DataFrame(
+            {0: [-0.4, -0.2, 0.3], 1: [-0.1, 0.1, 0.7]},
+            index=["const", "lact_early", "lact_late"],
+        )
+
+result = FakeResult()
+ci = result.conf_int().filter(like="lact_")
+lower = np.exp(ci.iloc[:, 0])
+upper = np.exp(ci.iloc[:, 1])
+"""
+    repaired = _deterministic_runner_repair(
+        code=code,
+        run_log="IndexError: single positional indexer is out-of-bounds",
+    )
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "statsmodels_conf_int_filter_axis_v1"
+    assert ".index.astype(str).str.contains(\"lact_\", regex=False)" in patched
+    namespace = {}
+    exec(patched, namespace)
+    assert list(namespace["lower"].round(6)) == list(np.exp([-0.2, 0.3]).round(6))
+    assert list(namespace["upper"].round(6)) == list(np.exp([0.1, 0.7]).round(6))
 
 
 def test_deterministic_runner_repair_downgrades_bad_publication_contract(ra):
