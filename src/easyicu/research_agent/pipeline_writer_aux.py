@@ -262,6 +262,7 @@ def _render_writer_evidence_digest(
     *,
     context: ResearchContext | None = None,
     run_dir: Path | None = None,
+    include_robustness_panel: bool = True,
 ) -> str:
     lines: List[str] = []
     if context is not None:
@@ -388,7 +389,10 @@ def _render_writer_evidence_digest(
         lines.append(
             "  " + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
         )
-    return "\n".join(lines)
+    primary = "\n".join(lines)
+    if not include_robustness_panel:
+        return primary
+    return _append_robustness_panel_block(primary, run_dir=run_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -488,10 +492,11 @@ def _render_writer_evidence_digest_v2(
         per_step_records,
         context=context,
         run_dir=run_dir,
+        include_robustness_panel=False,
     )
     records = list(per_step_records or [])
     if not records:
-        return primary
+        return _append_robustness_panel_block(primary, run_dir=run_dir)
     primary_keys_lower = {k.lower() for k in WRITER_DIGEST_PREFERRED_KEYS}
 
     # Build the (step_id, source_field) coverage set that the primary
@@ -644,6 +649,13 @@ def _render_writer_evidence_digest_v2(
     return "\n".join([primary, *extra_blocks])
 
 
+def _append_robustness_panel_block(text: str, *, run_dir: Path | None) -> str:
+    robustness_lines = _render_robustness_panel_block(run_dir=run_dir)
+    if not robustness_lines:
+        return text
+    return "\n".join([text, "", "## robustness panel", *robustness_lines])
+
+
 def _is_hidden_robustness_row_claim(step_id: str, source_field: str) -> bool:
     """Hide row-level robustness claims from the writer digest.
 
@@ -670,22 +682,35 @@ def _render_robustness_panel_block(*, run_dir: Path | None) -> List[str]:
         lines.append(
             "primary: "
             f"spec_id={primary.spec_id}, "
-            f"OR={_fmt_panel_number(primary.point_estimate)}, "
-            f"95% CI=[{_fmt_panel_number(primary.ci_low)}, "
+            f"point={_fmt_panel_number(primary.point_estimate)}, "
+            f"CI=[{_fmt_panel_number(primary.ci_low)}, "
             f"{_fmt_panel_number(primary.ci_high)}], "
             f"n={primary.n}"
         )
-    lines.append(
-        "variants: "
-        f"n_variants={panel.n_variants}, "
-        "range across variants OR "
-        f"in [{_fmt_panel_number(panel.range_low)}, "
-        f"{_fmt_panel_number(panel.range_high)}]"
-    )
+    converged_variants = [
+        row
+        for row in panel.rows
+        if row.spec_id != panel.primary_spec_id and row.converged
+    ]
+    if converged_variants:
+        lines.append(
+            "variants: "
+            f"n_variants={panel.n_variants}, "
+            "range across variants point "
+            f"in [{_fmt_panel_number(panel.range_low)}, "
+            f"{_fmt_panel_number(panel.range_high)}]"
+        )
+    else:
+        lines.append(
+            "variants: "
+            f"n_variants={panel.n_variants}, "
+            "no robustness variants converged "
+            "(see robustness_panel.json for MVP boundary reasons)"
+        )
     for axis, row in sorted(worst_rows_by_axis(panel).items()):
         lines.append(
             f"worst on {axis} axis: "
-            f"spec_id={row.spec_id}, OR={_fmt_panel_number(row.point_estimate)}"
+            f"spec_id={row.spec_id}, point={_fmt_panel_number(row.point_estimate)}"
         )
     return lines
 
