@@ -81,6 +81,29 @@ def test_repository_includes_citation_metadata() -> None:
     assert 'repository-code: "https://github.com/shen-lab-icu/EASYICU"' in content
 
 
+def test_repository_tracks_no_release_debris() -> None:
+    tracked = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "ls-files",
+            "*.pyc",
+            "**/__pycache__/*",
+            "*.DS_Store",
+            "__MACOSX/*",
+            "*/__MACOSX/*",
+            "._*",
+            "*/._*",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert tracked.stdout == ""
+
+
 def test_readmes_link_to_citation_metadata() -> None:
     english = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     chinese = (REPO_ROOT / "README_zh.md").read_text(encoding="utf-8")
@@ -186,7 +209,7 @@ def test_webapp_data_path_helpers_are_split_from_streamlit_app() -> None:
     assert "def render_directory_structure_guide" in data_paths_content
 
 
-def test_directory_browser_dialog_decorator_stays_with_browser_dialog() -> None:
+def test_directory_browser_panel_stays_with_data_path_helpers() -> None:
     app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
     data_paths_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "data_paths.py").read_text(
         encoding="utf-8"
@@ -194,7 +217,9 @@ def test_directory_browser_dialog_decorator_stays_with_browser_dialog() -> None:
 
     decorator = '@st.dialog("Browse Server Folders / 浏览服务器目录", width="large")'
     assert decorator not in app_content
-    assert f"{decorator}\ndef _render_directory_browser_dialog" in data_paths_content
+    assert "def _render_directory_browser_dialog" not in app_content
+    assert "def _render_directory_browser_dialog" in data_paths_content
+    assert "server-browser-inline-title" in data_paths_content
 
 
 def test_webapp_demo_data_helpers_are_split_from_streamlit_app() -> None:
@@ -312,16 +337,16 @@ def test_webapp_cohort_workspace_state_helpers_are_split_from_streamlit_app() ->
         assert helper_def in cohort_workspace_content
 
 
-def test_feature_definition_panel_lives_inside_tutorial_tab() -> None:
-    """The feature-definition panel must render inside the tutorial page,
-    after render_home() and before the quick-viz page branch. Main
-    navigation is a st.radio (active_page == ...) since the tabs→radio
-    refactor; the assertion still pins panel placement relative to the
-    quick-viz branch."""
+def test_feature_definition_panel_helpers_are_split_from_streamlit_app() -> None:
+    """The feature-definition panel implementation lives in the data-dictionary helper."""
     app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+    dictionary_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "data_dictionary_page.py").read_text(
+        encoding="utf-8"
+    )
 
-    render_home_idx = app_content.index("        render_home()")
-    feature_panel_idx = app_content.index("        _render_feature_definition_panel(lang)")
-    quick_viz_idx = app_content.index('    elif active_page == "quick_viz":')
-
-    assert render_home_idx < feature_panel_idx < quick_viz_idx
+    assert "easyicu_feature_definition_" not in app_content
+    assert "download_feature_definition_csv" not in app_content
+    assert "def _get_feature_definition_rows(" in dictionary_content
+    assert "def _render_feature_definition_panel(lang: str, app_context" in dictionary_content
+    assert "download_feature_definition_csv" in dictionary_content
+    assert "return _render_feature_definition_panel_impl(lang, globals())" in app_content

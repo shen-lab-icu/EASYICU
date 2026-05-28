@@ -51,9 +51,12 @@ OUTPUT_DIR = PROJECT_ROOT / "output"
 CACHE_DIR = PROJECT_ROOT / ".cache"
 LOGS_DIR = PROJECT_ROOT / "logs"
 
-# Create directories if they don't exist
-for directory in [OUTPUT_DIR, CACHE_DIR, LOGS_DIR]:
-    directory.mkdir(parents=True, exist_ok=True)
+def ensure_project_dirs() -> None:
+    """Create project output/cache/log directories for runtime workflows."""
+
+    for directory in [OUTPUT_DIR, CACHE_DIR, LOGS_DIR]:
+        directory.mkdir(parents=True, exist_ok=True)
+
 
 # ============================================================================
 # Default Patient IDs  
@@ -462,6 +465,7 @@ __all__ = [
     'USE_CHUNKED_LOADING',
     
     # Helper functions
+    'ensure_project_dirs',
     'get_data_path',
     'get_patient_ids',
     'get_concepts',
