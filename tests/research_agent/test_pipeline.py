@@ -4005,6 +4005,27 @@ def test_semantic_aliases_bind_sofa_zero_audit_outcome_rate(ra, tmp_path: Path):
     assert "outcome_rate" in aliases
 
 
+def test_semantic_aliases_bind_report_mortality_rate_to_outcome_rate(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.pipeline import _semantic_aliases_for
+
+    summary = tmp_path / "step_summary.json"
+    summary.write_text('{"n_rows": 500, "mortality_rate": 0.094}', encoding="utf-8")
+    step = ra.AnalysisStep(
+        step_id="07_report",
+        intent="Write final report tables.",
+        expected_outputs=["table:table_one"],
+    )
+
+    aliases = _semantic_aliases_for(step, summary)
+
+    assert "outcome_rate" in aliases
+    assert "mortality_rate" in aliases
+    assert "cohort_summary" in aliases
+
+
 def test_advanced_plan_contract_collapses_prediction_to_one_step(ra):
     from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
     from easyicu.research_agent.schema import UserPreferences

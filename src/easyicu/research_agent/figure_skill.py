@@ -78,37 +78,6 @@ class PublicationFigureSkill:
                 generated=False,
                 skipped_reason="existing_curated_publication_figure_bundle",
             )
-        if not _plan_requests_figures(plan):
-            return PublicationFigureSkillResult(
-                generated=False,
-                skipped_reason="plan_has_no_figure_outputs",
-            )
-
-        primary = _first_existing_record(
-            evidence,
-            [
-                "primary_association",
-                "primary_association_table",
-                "table_primary_association",
-            ],
-        )
-        prediction_bundle = _select_existing_prediction_figure_bundle(evidence)
-        if prediction_bundle is not None:
-            return self._promote_prediction_validation_figure(
-                context=context,
-                evidence=evidence,
-                run_dir=run_dir,
-                figure_records=prediction_bundle,
-                summary_record=_first_existing_statistic_record(
-                    evidence,
-                    [
-                        "01_model_training",
-                        "model_performance",
-                        "baseline_prevalence",
-                    ],
-                ),
-                prompt_pack_version=prompt_pack_version,
-            )
         robustness_record = evidence.get("robustness_panel")
         robustness_panel = load_robustness_panel(run_dir / "robustness_panel.json")
         if robustness_record is not None and robustness_panel is not None:
@@ -141,6 +110,37 @@ class PublicationFigureSkill:
                         )
                     ],
                 )
+        if not _plan_requests_figures(plan):
+            return PublicationFigureSkillResult(
+                generated=False,
+                skipped_reason="plan_has_no_figure_outputs",
+            )
+
+        primary = _first_existing_record(
+            evidence,
+            [
+                "primary_association",
+                "primary_association_table",
+                "table_primary_association",
+            ],
+        )
+        prediction_bundle = _select_existing_prediction_figure_bundle(evidence)
+        if prediction_bundle is not None:
+            return self._promote_prediction_validation_figure(
+                context=context,
+                evidence=evidence,
+                run_dir=run_dir,
+                figure_records=prediction_bundle,
+                summary_record=_first_existing_statistic_record(
+                    evidence,
+                    [
+                        "01_model_training",
+                        "model_performance",
+                        "baseline_prevalence",
+                    ],
+                ),
+                prompt_pack_version=prompt_pack_version,
+            )
         if primary is None:
             return self._write_skip_summary(
                 reason="no_supported_source_table",

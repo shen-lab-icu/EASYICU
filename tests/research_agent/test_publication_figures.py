@@ -547,9 +547,9 @@ def test_publication_figure_skill_renders_from_robustness_panel_without_table(
         research_question=context.research_question,
         steps=[
             ra.AnalysisStep(
-                step_id="04_association_model_figure",
-                intent="Render a publication-ready figure.",
-                expected_outputs=["figure:primary_association_curve"],
+                step_id="04_report",
+                intent="Summarize the registered robustness panel.",
+                expected_outputs=["table:summary"],
             )
         ],
     )
