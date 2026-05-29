@@ -81,11 +81,7 @@ from .repair_registry import InvariantStatus, RepairLedger, RepairObservedState
 from .scalar_utils import _expected_numeric_annotations_for_step
 from .side_findings import SideFinding
 from .skills import ClinicalSkill
-from .summary_repair import (
-    _salvage_minimal_contract_step_summary,
-    _salvage_named_json_step_summary,
-    _salvage_stdout_json_step_summary,
-)
+from .summary_repair import salvage_step_summary
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 logger = logging.getLogger(__name__)
@@ -914,55 +910,26 @@ def run_execute_phase(
                 )
 
             if run_result.succeeded:
-                if not (run_result.out_dir / "step_summary.json").exists():
-                    # Step-summary salvage reshapes the source from which numbers
-                    # are registered, so each salvage is recorded in the repair
-                    # ledger (ENG-REPAIR1 P1.5). stdout/named salvage relocates
-                    # the step's own output verbatim → STRUCTURAL.
-                    salvage_repair_id: Optional[str] = None
-                    if _salvage_stdout_json_step_summary(run_result):
-                        salvage_repair_id = "summary_salvage_stdout_json_v1"
-                    elif _salvage_named_json_step_summary(run_result):
-                        salvage_repair_id = "summary_salvage_named_json_v1"
-                    if salvage_repair_id is not None:
+                # Step-summary salvage reshapes the source from which numbers are
+                # registered, so each salvage is recorded in the repair ledger
+                # (ENG-REPAIR1 P1.5). The salvage decision lives in
+                # salvage_step_summary() so it is unit-testable end-to-end; here
+                # we only record what it did.
+                salvage_outcome = salvage_step_summary(run_result, step=step)
+                if salvage_outcome is not None:
+                    if salvage_outcome.reset_artefacts:
                         run_result.artefacts = sorted(
                             p for p in run_result.out_dir.iterdir() if p.is_file()
                         )
-                        _record_repair(
-                            repair_id=salvage_repair_id,
-                            step_id=step.step_id,
-                            trigger={
-                                "source": "summary_salvage",
-                                "reason": "step produced no step_summary.json",
-                            },
-                            transformation=(
-                                "Recovered step_summary.json from the step's own "
-                                "stdout/artefact output without re-running analysis."
-                            ),
-                        )
-                elif _salvage_minimal_contract_step_summary(
-                    step=step,
-                    out_dir=run_result.out_dir,
-                ):
-                    # Backfill extracts/selects from the step's own on-disk CSVs
-                    # → CONTRACT_FILL with a recorded selection rule.
                     _record_repair(
-                        repair_id="summary_salvage_minimal_contract_v1",
+                        repair_id=salvage_outcome.repair_id,
                         step_id=step.step_id,
                         trigger={
                             "source": "summary_salvage",
-                            "reason": "empty step_summary.json backfilled from on-disk artefacts",
+                            "reason": salvage_outcome.trigger_reason,
                         },
-                        transformation=(
-                            "Backfilled a minimal step_summary from existing CSV/"
-                            "figure artefacts; no numbers invented beyond "
-                            "deterministic extraction."
-                        ),
-                        selection_rule=(
-                            "first non-const/intercept association row; mean of "
-                            "model_performance rows; deterministic CSV-to-summary "
-                            "extraction"
-                        ),
+                        transformation=salvage_outcome.transformation,
+                        selection_rule=salvage_outcome.selection_rule,
                     )
                 if not run_result.artefacts:
                     fallback_code = _deterministic_fallback_code("no_artefacts")
