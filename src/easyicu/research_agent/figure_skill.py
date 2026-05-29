@@ -605,9 +605,10 @@ class PublicationFigureSkill:
             linewidth=0.8,
         )
         ax.set_yticks(y, labels)
-        ax.invert_yaxis()
+        header_y = -0.75
+        ax.set_ylim(len(source_df) - 0.5, header_y - 0.15)
         ax.set_xlabel("Primary effect estimate (95% CI)")
-        ax.set_title("Pre-specified robustness panel", loc="left", pad=4)
+        ax.set_title("Pre-specified robustness panel", loc="left", pad=8)
         ax.grid(
             axis="x",
             color=palette.get("neutral_light", "#D8D8D8"),
@@ -621,7 +622,14 @@ class PublicationFigureSkill:
             right_anchor + right_pad,
         )
         text_x = right_anchor + right_pad * 0.08
-        ax.text(text_x, -0.55, "Estimate (95% CI)", ha="left", va="bottom", fontsize=6.8)
+        ax.text(
+            text_x,
+            header_y,
+            "Estimate (95% CI)",
+            ha="left",
+            va="center",
+            fontsize=6.8,
+        )
         for idx, (center, lo, hi) in enumerate(zip(estimate, lower, upper)):
             ax.text(
                 text_x,

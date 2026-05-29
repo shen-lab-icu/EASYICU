@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import os
 import re
 import sys
@@ -191,19 +192,177 @@ def _findings_join(manifest: Dict[str, Any]) -> str:
     return " || ".join(f.get("message", "") for f in manifest.get("findings", []))
 
 
-def _primary_or(run_dir: Path) -> Optional[float]:
-    """Return the primary OR from the primary_association step's summary."""
-    for ssj in run_dir.rglob("step_summary.json"):
-        try:
-            data = json.loads(ssj.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if (
-            data.get("method") == "logistic_regression"
-            and data.get("primary_or") is not None
-        ):
-            return float(data["primary_or"])
+_LOGISTIC_METHODS = {
+    "logistic",
+    "logistic_regression",
+    "logit",
+    "glm_binomial",
+}
+
+_BINARY_CONTRAST_PREDICTORS = {
+    "sex",
+    "gender",
+    "vaso",
+    "vasopressor",
+    "mech_vent",
+    "mechanical_ventilation",
+    "vent",
+}
+
+_NON_OR_BENCHMARK_TOKENS = {
+    "auroc",
+    "brier",
+    "cox",
+    "hazard",
+    "hr",
+    "linear",
+    "los",
+    "prediction",
+    "survival",
+    "time_to",
+}
+
+
+def _finite_float(value: Any) -> Optional[float]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _non_or_benchmark(*, item_key: str = "", research_question: str = "") -> bool:
+    blob = f"{item_key} {research_question}".lower()
+    return any(token in blob for token in _NON_OR_BENCHMARK_TOKENS)
+
+
+def _primary_or_from_robustness_panel(run_dir: Path) -> Optional[float]:
+    panel_path = run_dir / "robustness_panel.json"
+    if not panel_path.exists():
+        return None
+    try:
+        panel = json.loads(panel_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    for row in panel.get("rows", []) or []:
+        if row.get("spec_id") == panel.get("primary_spec_id", "primary"):
+            value = _finite_float(row.get("point_estimate"))
+            if value is not None:
+                return value
+    return _finite_float(panel.get("primary_point_estimate"))
+
+
+def _iter_dicts(value: Any):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _iter_dicts(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_dicts(child)
+
+
+def _primary_or_from_predictor_trend(
+    records: Sequence[Dict[str, Any]], expected_predictor: str
+) -> Optional[float]:
+    predictor = expected_predictor.strip().lower()
+    if not predictor:
+        return None
+    keys = {
+        f"{predictor}_or_per_point",
+        f"{predictor}_odds_ratio_per_point",
+        f"{predictor}_or_per_unit",
+        f"{predictor}_odds_ratio_per_unit",
+    }
+    for record in records:
+        for node in _iter_dicts(record):
+            lowered = {str(k).lower(): v for k, v in node.items()}
+            for key in keys:
+                value = _finite_float(lowered.get(key))
+                if value is not None:
+                    return value
     return None
+
+
+def _term_is_single_level_contrast(term: Any, predictor: str) -> bool:
+    if not predictor:
+        return False
+    lowered = str(term or "").strip().lower().replace(" ", "")
+    pred = predictor.strip().lower()
+    return lowered.startswith(f"{pred}==") or lowered.startswith(f"c({pred})[")
+
+
+def _primary_or_from_logistic_summary(
+    records: Sequence[Dict[str, Any]], expected_predictor: str
+) -> Optional[float]:
+    predictor = expected_predictor.strip().lower()
+    allow_level_contrast = predictor in _BINARY_CONTRAST_PREDICTORS
+    for data in records:
+        primary_model = data.get("primary_model") or {}
+        method = str(
+            data.get("method")
+            or primary_model.get("model_type")
+            or data.get("model_type")
+            or ""
+        ).strip().lower()
+        if method in _LOGISTIC_METHODS and data.get("primary_or") is not None:
+            return _finite_float(data.get("primary_or"))
+        term = data.get("primary_association_term") or data.get("primary_term")
+        value = _finite_float(data.get("primary_association_estimate"))
+        if value is not None and (
+            allow_level_contrast
+            or not _term_is_single_level_contrast(term, predictor)
+        ):
+            return value
+        for node in _iter_dicts(data):
+            node_primary_model = node.get("primary_model") or {}
+            method = str(
+                node.get("method")
+                or node.get("model_type")
+                or node.get("fit_method")
+                or node_primary_model.get("model_type")
+                or ""
+            ).strip().lower()
+            if method and method not in _LOGISTIC_METHODS and "logit" not in method:
+                continue
+            term = (
+                node.get("primary_association_term")
+                or node.get("primary_term")
+                or data.get("primary_association_term")
+            )
+            value = _finite_float(node.get("primary_or"))
+            if value is not None and (
+                allow_level_contrast
+                or not _term_is_single_level_contrast(term, predictor)
+            ):
+                return value
+    return None
+
+
+def _primary_or(
+    run_dir: Path,
+    *,
+    expected_predictor: str = "",
+    item_key: str = "",
+    research_question: str = "",
+) -> Optional[float]:
+    """Return the manuscript-facing primary odds ratio for OR benchmarks.
+
+    The benchmark scores the effect the agent actually surfaced in the
+    manuscript. Prefer the robustness-panel primary row because writer-facing
+    claims are registered from that canonical panel. Fall back to explicit
+    per-point predictor trends, then to unambiguous logistic summaries.
+    """
+    if _non_or_benchmark(item_key=item_key, research_question=research_question):
+        return None
+    panel_value = _primary_or_from_robustness_panel(run_dir)
+    if panel_value is not None:
+        return panel_value
+    records = _step_records(run_dir)
+    trend_value = _primary_or_from_predictor_trend(records, expected_predictor)
+    if trend_value is not None:
+        return trend_value
+    return _primary_or_from_logistic_summary(records, expected_predictor)
 
 
 def _direction_match(or_value: Optional[float], expected: int) -> Optional[bool]:
@@ -273,7 +432,12 @@ def _kinds_complete(manifest: Dict[str, Any]) -> Dict[str, Any]:
 
 def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
     manifest = _load_manifest(run_dir)
-    or_value = _primary_or(run_dir)
+    or_value = _primary_or(
+        run_dir,
+        expected_predictor=getattr(item, "primary_predictor", ""),
+        item_key=getattr(item, "key", ""),
+        research_question=getattr(item, "research_question", ""),
+    )
     return {
         "arm": label,
         "run_id": manifest.get("run_id"),
