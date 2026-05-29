@@ -162,3 +162,43 @@ def test_ledger_records_invariant_status(tmp_path: Path) -> None:
     record = payload["repairs"][0]
     assert record["invariant_status"] == InvariantStatus.VERIFIED_FAIL.value
     assert "n_unchanged" in record["invariant_failures"]
+
+
+# --- P1.5: step-summary salvage is inside the provenance net ----------------
+
+
+def test_summary_salvage_repairs_are_classified() -> None:
+    assert (
+        repair_metadata_for("summary_salvage_stdout_json_v1").repair_class
+        is RepairClass.STRUCTURAL
+    )
+    assert (
+        repair_metadata_for("summary_salvage_named_json_v1").repair_class
+        is RepairClass.STRUCTURAL
+    )
+    minimal = repair_metadata_for("summary_salvage_minimal_contract_v1")
+    assert minimal.repair_class is RepairClass.CONTRACT_FILL
+    assert minimal.selection_rule_required is True
+    # None of the salvage ids may fall through to the conservative
+    # unknown -> METHOD_SUBSTITUTION classification.
+    for repair_id in (
+        "summary_salvage_stdout_json_v1",
+        "summary_salvage_named_json_v1",
+        "summary_salvage_minimal_contract_v1",
+    ):
+        assert not repair_metadata_for(repair_id).classification_source.startswith(
+            "fallback:"
+        )
+
+
+def test_summary_salvage_minimal_contract_records_selection_rule() -> None:
+    provenance = make_repair_provenance(
+        repair_id="summary_salvage_minimal_contract_v1",
+        step_id="03_model",
+        selection_rule="first non-const association row; mean of perf rows",
+    )
+    assert provenance.repair_class == RepairClass.CONTRACT_FILL.value
+    assert provenance.selection_rule
+    # A CONTRACT_FILL whose other invariants are unobservable here is honestly
+    # UNVERIFIED, never a fabricated pass.
+    assert provenance.invariant_status == InvariantStatus.UNVERIFIED.value

@@ -266,6 +266,11 @@ _STRUCTURAL_REPAIRS = {
     "strip_unknown_cols_from_list_literals_v1",
     "table_one_binary_key_string_v1",
     "prediction_publication_bundle_from_parent_outputs_v1",
+    # Step-summary salvage that faithfully relocates the agent's own output
+    # (stdout JSON / a named summary artefact) into step_summary.json. No new
+    # numbers are introduced; it is a representation/location change.
+    "summary_salvage_stdout_json_v1",
+    "summary_salvage_named_json_v1",
 }
 
 _CONTRACT_FILL_REPAIRS = {
@@ -273,6 +278,11 @@ _CONTRACT_FILL_REPAIRS = {
     "robustness_missingness_contract_v1",
     "robustness_predictor_design_and_plot_v1",
     "categorical_primary_association_selection_v1",
+    # Minimal step-summary backfill that extracts/selects from the step's own
+    # on-disk CSV artefacts (e.g. first non-intercept association row, mean of
+    # model_performance rows). Values are preexisting; the selection rule must
+    # be recorded.
+    "summary_salvage_minimal_contract_v1",
 }
 
 _METHOD_SUBSTITUTION_REPAIRS = {
