@@ -77,6 +77,7 @@ from .robustness_panel import (
     robustness_specs_for_execution,
     write_robustness_panel,
 )
+from .repair_registry import RepairLedger
 from .scalar_utils import _expected_numeric_annotations_for_step
 from .side_findings import SideFinding
 from .skills import ClinicalSkill
@@ -136,6 +137,8 @@ def run_execute_phase(
     clinical_validator = ClinicalConstraintValidator()
     statistical_guard = StatisticalGuard()
     runtime_state = supervisor.bootstrap_state(run_id=run_id, context=context)
+    repair_ledger = RepairLedger(run_dir / "repairs_applied.json")
+    repair_ledger_lock = threading.Lock()
 
     per_step_records: List[Dict[str, Any]] = []
     probe_summary: Dict[str, Any] = {}
@@ -202,6 +205,10 @@ def run_execute_phase(
             "prompt_pack_files": prompt_files,
             "notes": notes,
             "runtime_state": runtime_state.model_dump(mode="json"),
+            "repair_ledger_path": str(repair_ledger.path.relative_to(run_dir)),
+            "repairs_applied": [
+                record.__dict__ for record in repair_ledger.records
+            ],
         }
         if extra:
             payload.update(extra)
@@ -416,6 +423,40 @@ def run_execute_phase(
     shared_lock = threading.Lock()
     step_order = {s.step_id: i for i, s in enumerate(plan.steps)}
     total_steps = len(plan.steps)
+
+    def _record_repair(
+        *,
+        repair_id: str,
+        step_id: str,
+        trigger: Dict[str, Any],
+        transformation: str,
+        before_code: Optional[str] = None,
+        after_code: Optional[str] = None,
+        selection_rule: Optional[str] = None,
+    ) -> None:
+        try:
+            with repair_ledger_lock:
+                repair_ledger.append_application(
+                    repair_id=repair_id,
+                    step_id=step_id,
+                    trigger=trigger,
+                    transformation=transformation,
+                    model_id=llm_signature,
+                    before_text=before_code,
+                    after_text=after_code,
+                    selection_rule=selection_rule,
+                )
+        except Exception as exc:
+            findings.append(
+                ValidationFinding(
+                    validator="repair_ledger",
+                    severity="warning",
+                    message=(
+                        f"Could not record repair provenance for {repair_id}: {exc}"
+                    ),
+                    detail={"repair_id": repair_id, "step_id": step_id},
+                )
+            )
 
     def _script_generation_mode(
         *,
@@ -1116,6 +1157,7 @@ def run_execute_phase(
                         )
                         return step_record
                 if pipeline._enable_deterministic_runner_repair:
+                    before_repair_code = code
                     summary_repair = _deterministic_summary_repair(
                         code=code,
                         step_summary=visual_step_summary,
@@ -1126,6 +1168,19 @@ def run_execute_phase(
                 if summary_repair is not None:
                     runner_repair_name, code = summary_repair
                     step_record["runner_repair"] = runner_repair_name
+                    _record_repair(
+                        repair_id=runner_repair_name,
+                        step_id=step.step_id,
+                        trigger={
+                            "source": "deterministic_summary_repair",
+                            "step_summary_keys": sorted(
+                                str(key) for key in visual_step_summary.keys()
+                            ),
+                        },
+                        transformation="Deterministic repair after step_summary contract inspection.",
+                        before_code=before_repair_code,
+                        after_code=code,
+                    )
                     emit_progress(
                         "runner_repair",
                         f"Applied deterministic summary repair for {step.step_id}: {runner_repair_name}.",
@@ -1145,6 +1200,7 @@ def run_execute_phase(
                     (run_result.stdout or "") + "\n" + (run_result.stderr or "")
                 )
             if pipeline._enable_deterministic_runner_repair:
+                before_repair_code = code
                 runner_repair = _deterministic_runner_repair(
                     code=code,
                     run_log=run_log,
@@ -1155,6 +1211,17 @@ def run_execute_phase(
             if runner_repair is not None:
                 runner_repair_name, code = runner_repair
                 step_record["runner_repair"] = runner_repair_name
+                _record_repair(
+                    repair_id=runner_repair_name,
+                    step_id=step.step_id,
+                    trigger={
+                        "source": "deterministic_runner_repair",
+                        "run_log_tail": run_log[-1200:],
+                    },
+                    transformation="Deterministic repair after runner failure.",
+                    before_code=before_repair_code,
+                    after_code=code,
+                )
                 emit_progress(
                     "runner_repair",
                     f"Applied deterministic runner repair for {step.step_id}: {runner_repair_name}.",
@@ -1304,6 +1371,12 @@ def run_execute_phase(
             if promoted is not None:
                 runner_repair_name = promoted
                 step_record["runner_repair"] = promoted
+                _record_repair(
+                    repair_id=promoted,
+                    step_id=step.step_id,
+                    trigger={"source": "publication_figure_sibling_promotion"},
+                    transformation="Promoted sibling figure exports into canonical outputs directory.",
+                )
             else:
                 promoted = _promote_prior_publication_bundle(
                     run_dir=run_dir,
@@ -1313,6 +1386,12 @@ def run_execute_phase(
                 if promoted is not None:
                     runner_repair_name = promoted
                     step_record["runner_repair"] = promoted
+                    _record_repair(
+                        repair_id=promoted,
+                        step_id=step.step_id,
+                        trigger={"source": "publication_figure_prior_bundle_promotion"},
+                        transformation="Promoted prior publication figure bundle into current outputs directory.",
+                    )
                 else:
                     rescued = _render_prediction_publication_bundle_from_prior_outputs(
                         run_dir=run_dir,
@@ -1322,6 +1401,15 @@ def run_execute_phase(
                     if rescued is not None:
                         runner_repair_name = rescued
                         step_record["runner_repair"] = rescued
+                        _record_repair(
+                            repair_id=rescued,
+                            step_id=step.step_id,
+                            trigger={"source": "prediction_publication_bundle_rescue"},
+                            transformation=(
+                                "Rendered deterministic publication figure bundle "
+                                "from prior prediction outputs."
+                            ),
+                        )
 
         run_result.artefacts = sorted(
             p for p in run_result.out_dir.iterdir() if p.is_file()
