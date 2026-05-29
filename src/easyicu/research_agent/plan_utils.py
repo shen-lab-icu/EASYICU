@@ -43,6 +43,47 @@ from .schema import (
     VariableRole,
 )
 
+
+def _problematic_metric_keys(
+    payload: Any,
+    fragments: Sequence[str],
+) -> List[Dict[str, Any]]:
+    """Return metric-like keys that were present but null/non-finite."""
+
+    lowered_fragments = tuple(fragment.lower() for fragment in fragments if fragment)
+    if not lowered_fragments:
+        return []
+    problems: List[Dict[str, Any]] = []
+
+    def walk(value: Any, path: str = "") -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                walk(child, f"{path}.{key}" if path else str(key))
+            return
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                walk(child, f"{path}[{index}]")
+            return
+        lowered_path = path.lower()
+        if not any(fragment in lowered_path for fragment in lowered_fragments):
+            return
+        bad = False
+        if value is None:
+            bad = True
+        elif isinstance(value, bool):
+            bad = False
+        elif isinstance(value, (int, float)):
+            bad = not math.isfinite(float(value))
+        elif isinstance(value, str):
+            text = value.strip().lower()
+            bad = text in {"", "nan", "none", "null", "model not fitted"} or "not fitted" in text
+        if bad:
+            problems.append({"key": path, "value": value})
+
+    walk(payload)
+    return problems
+
+
 def _parent_step_id_for_figure_step(step: AnalysisStep) -> Optional[str]:
     step_id = str(step.step_id or "")
     if step_id.endswith("_figure") and len(step_id) > len("_figure"):
@@ -1097,11 +1138,22 @@ def _step_contract_findings(
                 ("auroc", "auc"),
             )
         if auroc_value is None:
+            problematic = _problematic_metric_keys(step_summary, ("auroc", "auc"))
+            if problematic:
+                keys = ", ".join(str(item["key"]) for item in problematic)
+                message = (
+                    f"Step {step.step_id} was expected to report AUROC-style "
+                    "discrimination. AUROC-like metric keys were present but "
+                    f"null/non-finite ({keys}), so the validation model did not "
+                    "produce an auditable discrimination estimate."
+                )
+            else:
+                message = (
+                    f"Step {step.step_id} was expected to report AUROC-style "
+                    "discrimination, but no AUROC metric was recorded."
+                )
             _append_missing(
-                (
-                    f"Step {step.step_id} was expected to report AUROC-style discrimination, "
-                    "but no AUROC metric was recorded."
-                ),
+                message,
                 ("auroc", "cv_auroc", "mean_auroc", "auroc_median"),
             )
         calibration_value = _first_present_scalar(
@@ -1129,11 +1181,25 @@ def _step_contract_findings(
                 ("brier", "calibration_slope", "calibration_intercept"),
             )
         if calibration_value is None:
+            problematic = _problematic_metric_keys(
+                step_summary,
+                ("brier", "calibration_slope", "calibration_intercept"),
+            )
+            if problematic:
+                keys = ", ".join(str(item["key"]) for item in problematic)
+                message = (
+                    f"Step {step.step_id} was expected to report calibration or "
+                    "Brier-style evaluation metrics. Calibration/Brier-like keys "
+                    f"were present but null/non-finite ({keys}), so the validation "
+                    "model did not produce an auditable calibration estimate."
+                )
+            else:
+                message = (
+                    f"Step {step.step_id} was expected to report calibration or "
+                    "Brier-style evaluation metrics, but none were recorded."
+                )
             _append_missing(
-                (
-                    f"Step {step.step_id} was expected to report calibration or Brier-style "
-                    "evaluation metrics, but none were recorded."
-                ),
+                message,
                 (
                     "brier_score",
                     "cv_brier_mean",

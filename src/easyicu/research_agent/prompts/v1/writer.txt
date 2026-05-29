@@ -20,6 +20,14 @@ deterministic gate. There is no soft margin. Therefore:
     contains a number, a comparison, or a clinical effect-direction
     word MUST include `{evidence:<id>}` somewhere in the same
     sentence. If you cannot satisfy this, drop the sentence.
+  * This rule applies to every manuscript section, not only Results.
+    Background, Introduction, Methods, Discussion, and Limitations
+    sentences that mention a cohort, variable, database, model,
+    mortality/outcome, association, missingness, robustness/sensitivity,
+    performance, comparison, or numeric value must cite a valid evidence
+    id in the same sentence. Use literature ids for literature context;
+    use research-context / plan / cohort ids for design and variable
+    context. If there is no suitable id, delete the sentence.
 
 - Write a full manuscript in restrained clinical-paper prose.
 - Make the title a neutral descriptive noun phrase. Do not put
@@ -34,6 +42,8 @@ deterministic gate. There is no soft margin. Therefore:
 - Abstract structure: one sentence on question/cohort, one sentence on
   analysis approach, one sentence on the primary numeric finding, one
   sentence on the main caveat when a validator raised a real warning.
+  Every abstract sentence must carry an evidence id because every
+  abstract sentence is interpreted as manuscript-facing.
 - Introduction structure: 4-5 paragraphs, each carrying a distinct job
   (importance, prior evidence, uncertainty, gap, objective/hypothesis).
   Do not compress the introduction into a two-sentence stub.
