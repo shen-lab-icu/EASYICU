@@ -202,3 +202,109 @@ def test_summary_salvage_minimal_contract_records_selection_rule() -> None:
     # A CONTRACT_FILL whose other invariants are unobservable here is honestly
     # UNVERIFIED, never a fabricated pass.
     assert provenance.invariant_status == InvariantStatus.UNVERIFIED.value
+
+
+# --- P1.5 integration: real salvage -> classified outcome -> ledger entry ---
+
+
+def test_salvage_step_summary_records_stdout_salvage_end_to_end(tmp_path: Path) -> None:
+    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.schema import AnalysisStep
+    from easyicu.research_agent.summary_repair import salvage_step_summary
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    run_result = RunResult(
+        step_id="01_assoc",
+        script_path=tmp_path / "analysis.py",
+        cwd=tmp_path,
+        out_dir=out_dir,
+        stdout='noise\n{"primary_or": 1.4, "sample_size": 500}\n',
+        stderr="",
+        returncode=0,
+        duration_seconds=0.1,
+    )
+    step = AnalysisStep(
+        step_id="01_assoc", intent="assoc", expected_outputs=["statistic:primary_or"]
+    )
+
+    outcome = salvage_step_summary(run_result, step=step)
+    assert outcome is not None
+    assert outcome.repair_id == "summary_salvage_stdout_json_v1"
+    assert outcome.reset_artefacts is True
+    assert (
+        repair_metadata_for(outcome.repair_id).repair_class is RepairClass.STRUCTURAL
+    )
+    # Salvage actually wrote the summary the registration step will read.
+    assert (out_dir / "step_summary.json").exists()
+
+    # Feeding the outcome to the ledger (what the execute-phase closure does)
+    # produces a real provenance entry — closing the wiring gap.
+    ledger = RepairLedger(tmp_path / "repairs_applied.json")
+    ledger.append_application(
+        repair_id=outcome.repair_id,
+        step_id=step.step_id,
+        trigger={"source": "summary_salvage", "reason": outcome.trigger_reason},
+        transformation=outcome.transformation,
+        selection_rule=outcome.selection_rule,
+    )
+    payload = json.loads((tmp_path / "repairs_applied.json").read_text())
+    assert payload["repairs"][0]["repair_id"] == "summary_salvage_stdout_json_v1"
+    assert payload["repairs"][0]["repair_class"] == RepairClass.STRUCTURAL.value
+
+
+def test_salvage_step_summary_reports_minimal_contract(tmp_path: Path) -> None:
+    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.schema import AnalysisStep
+    from easyicu.research_agent.summary_repair import salvage_step_summary
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    (out_dir / "step_summary.json").write_text("{}", encoding="utf-8")
+    (out_dir / "table_one.csv").write_text(
+        "variable,median\nage,65.0\nsofa2,7.0\n", encoding="utf-8"
+    )
+    run_result = RunResult(
+        step_id="01_table_one",
+        script_path=tmp_path / "analysis.py",
+        cwd=tmp_path,
+        out_dir=out_dir,
+        stdout="",
+        stderr="",
+        returncode=0,
+        duration_seconds=0.1,
+    )
+    step = AnalysisStep(
+        step_id="01_table_one", intent="t1", expected_outputs=["table:table_one"]
+    )
+
+    outcome = salvage_step_summary(run_result, step=step)
+    assert outcome is not None
+    assert outcome.repair_id == "summary_salvage_minimal_contract_v1"
+    assert (
+        repair_metadata_for(outcome.repair_id).repair_class is RepairClass.CONTRACT_FILL
+    )
+    assert outcome.selection_rule  # CONTRACT_FILL must record how it selected
+    assert outcome.reset_artefacts is False
+
+
+def test_salvage_step_summary_returns_none_when_summary_present(tmp_path: Path) -> None:
+    from easyicu.research_agent.runner import RunResult
+    from easyicu.research_agent.schema import AnalysisStep
+    from easyicu.research_agent.summary_repair import salvage_step_summary
+
+    out_dir = tmp_path / "outputs"
+    out_dir.mkdir()
+    (out_dir / "step_summary.json").write_text('{"primary_or": 1.2}', encoding="utf-8")
+    run_result = RunResult(
+        step_id="01_assoc",
+        script_path=tmp_path / "analysis.py",
+        cwd=tmp_path,
+        out_dir=out_dir,
+        stdout="",
+        stderr="",
+        returncode=0,
+        duration_seconds=0.1,
+    )
+    step = AnalysisStep(step_id="01_assoc", intent="assoc", expected_outputs=[])
+    assert salvage_step_summary(run_result, step=step) is None

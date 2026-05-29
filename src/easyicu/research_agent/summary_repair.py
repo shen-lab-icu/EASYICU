@@ -20,6 +20,7 @@ live in :mod:`.code_repair`.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -232,9 +233,83 @@ def _salvage_minimal_contract_step_summary(
     return True
 
 
+@dataclass(frozen=True)
+class SummarySalvageOutcome:
+    """Describes which step-summary salvage fired, so the caller can record it.
+
+    Keeping this separate from the recording side lets the salvage decision be
+    unit-tested end-to-end (which salvage fired, with which repair id) without
+    driving the whole execute phase. ``repair_id`` values are classified in
+    :mod:`.repair_registry`.
+    """
+
+    repair_id: str
+    trigger_reason: str
+    transformation: str
+    selection_rule: Optional[str] = None
+    reset_artefacts: bool = False
+
+
+def salvage_step_summary(
+    run_result: RunResult, *, step: AnalysisStep
+) -> Optional[SummarySalvageOutcome]:
+    """Run step-summary salvage and report what (if anything) was salvaged.
+
+    Behaviour matches the previous inline logic exactly:
+
+    * if ``step_summary.json`` is absent, try stdout JSON then a named summary
+      artefact (short-circuit), and signal that artefacts should be re-listed;
+    * else (present but empty) backfill a minimal contract from on-disk CSVs.
+
+    Returns ``None`` when no salvage was needed or possible. The caller is
+    responsible for recording the returned outcome in the repair ledger.
+    """
+
+    summary_path = run_result.out_dir / "step_summary.json"
+    if not summary_path.exists():
+        if _salvage_stdout_json_step_summary(run_result):
+            return SummarySalvageOutcome(
+                repair_id="summary_salvage_stdout_json_v1",
+                trigger_reason="step produced no step_summary.json",
+                transformation=(
+                    "Recovered step_summary.json from the step's own stdout JSON "
+                    "without re-running analysis."
+                ),
+                reset_artefacts=True,
+            )
+        if _salvage_named_json_step_summary(run_result):
+            return SummarySalvageOutcome(
+                repair_id="summary_salvage_named_json_v1",
+                trigger_reason="step produced no step_summary.json",
+                transformation=(
+                    "Promoted a named summary JSON artefact to step_summary.json."
+                ),
+                reset_artefacts=True,
+            )
+        return None
+    if _salvage_minimal_contract_step_summary(step=step, out_dir=run_result.out_dir):
+        return SummarySalvageOutcome(
+            repair_id="summary_salvage_minimal_contract_v1",
+            trigger_reason=(
+                "empty step_summary.json backfilled from on-disk artefacts"
+            ),
+            transformation=(
+                "Backfilled a minimal step_summary from existing CSV/figure "
+                "artefacts; no numbers invented beyond deterministic extraction."
+            ),
+            selection_rule=(
+                "first non-const/intercept association row; mean of "
+                "model_performance rows; deterministic CSV-to-summary extraction"
+            ),
+        )
+    return None
+
+
 __all__ = [
     "_extract_last_json_object",
     "_salvage_stdout_json_step_summary",
     "_salvage_named_json_step_summary",
     "_salvage_minimal_contract_step_summary",
+    "SummarySalvageOutcome",
+    "salvage_step_summary",
 ]
