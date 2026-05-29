@@ -6,9 +6,12 @@ from pathlib import Path
 
 from easyicu.research_agent import code_repair
 from easyicu.research_agent.repair_registry import (
+    InvariantStatus,
     RepairClass,
     RepairLedger,
+    RepairObservedState,
     assert_registry_invariants,
+    evaluate_invariants,
     make_repair_provenance,
     repair_metadata_for,
 )
@@ -85,3 +88,77 @@ def test_make_repair_provenance_conservatively_classifies_unknown() -> None:
     assert provenance.repair_class == RepairClass.METHOD_SUBSTITUTION.value
     assert provenance.classification_source == "fallback:unknown_method_substitution"
     assert provenance.requires_disclosure is True
+
+
+# --- P1: runtime invariant verification -----------------------------------
+
+
+def test_structural_invariant_unverified_without_state_is_not_a_pass() -> None:
+    """The P0 honesty hole: a STRUCTURAL repair must not report a pass when no
+    state was supplied to check ``row_set_unchanged`` / ``n_unchanged``."""
+
+    provenance = make_repair_provenance(
+        repair_id="statsmodels_endog_exog_index_align_v1",
+        step_id="04_model",
+    )
+    assert provenance.invariant_status == InvariantStatus.UNVERIFIED.value
+    assert provenance.invariants_passed is None
+
+
+def test_structural_n_unchanged_verified_pass_and_fail() -> None:
+    metadata = repair_metadata_for("statsmodels_endog_exog_index_align_v1")
+
+    ok = evaluate_invariants(
+        metadata,
+        before_state=RepairObservedState(row_count=500, id_values=(1, 2, 3)),
+        after_state=RepairObservedState(row_count=500, id_values=(1, 2, 3)),
+    )
+    assert ok.status == InvariantStatus.VERIFIED_PASS.value
+    assert ok.passed is True
+    assert ok.failures == ()
+
+    dropped = evaluate_invariants(
+        metadata,
+        before_state=RepairObservedState(row_count=500, id_values=(1, 2, 3)),
+        after_state=RepairObservedState(row_count=498, id_values=(1, 2)),
+    )
+    assert dropped.status == InvariantStatus.VERIFIED_FAIL.value
+    assert dropped.passed is False
+    assert "n_unchanged" in dropped.failures
+    assert "row_set_unchanged" in dropped.failures
+
+
+def test_syntactic_repair_has_no_invariants_and_passes_vacuously() -> None:
+    metadata = repair_metadata_for("missing_os_import_v1")
+    evaluation = evaluate_invariants(metadata)
+    assert evaluation.status == InvariantStatus.VERIFIED_PASS.value
+    assert evaluation.passed is True
+
+
+def test_contract_fill_without_selection_rule_fails() -> None:
+    metadata = repair_metadata_for("categorical_primary_association_selection_v1")
+
+    missing = evaluate_invariants(metadata, selection_rule=None)
+    assert missing.status == InvariantStatus.VERIFIED_FAIL.value
+    assert "deterministic_selection_rule" in missing.failures
+
+    # A present rule clears that invariant, but the others remain unobservable
+    # at this layer, so the overall result is honestly UNVERIFIED, not a pass.
+    with_rule = evaluate_invariants(
+        metadata, selection_rule="first_finite_adjusted_or"
+    )
+    assert with_rule.status == InvariantStatus.UNVERIFIED.value
+
+
+def test_ledger_records_invariant_status(tmp_path: Path) -> None:
+    ledger = RepairLedger(tmp_path / "repairs_applied.json")
+    ledger.append_application(
+        repair_id="statsmodels_endog_exog_index_align_v1",
+        step_id="04_model",
+        before_state=RepairObservedState(row_count=500),
+        after_state=RepairObservedState(row_count=480),
+    )
+    payload = json.loads((tmp_path / "repairs_applied.json").read_text())
+    record = payload["repairs"][0]
+    assert record["invariant_status"] == InvariantStatus.VERIFIED_FAIL.value
+    assert "n_unchanged" in record["invariant_failures"]

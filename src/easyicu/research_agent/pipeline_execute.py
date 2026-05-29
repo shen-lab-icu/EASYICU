@@ -77,7 +77,7 @@ from .robustness_panel import (
     robustness_specs_for_execution,
     write_robustness_panel,
 )
-from .repair_registry import RepairLedger
+from .repair_registry import InvariantStatus, RepairLedger, RepairObservedState
 from .scalar_utils import _expected_numeric_annotations_for_step
 from .side_findings import SideFinding
 from .skills import ClinicalSkill
@@ -433,10 +433,12 @@ def run_execute_phase(
         before_code: Optional[str] = None,
         after_code: Optional[str] = None,
         selection_rule: Optional[str] = None,
+        before_state: Optional[RepairObservedState] = None,
+        after_state: Optional[RepairObservedState] = None,
     ) -> None:
         try:
             with repair_ledger_lock:
-                repair_ledger.append_application(
+                provenance = repair_ledger.append_application(
                     repair_id=repair_id,
                     step_id=step_id,
                     trigger=trigger,
@@ -445,6 +447,28 @@ def run_execute_phase(
                     before_text=before_code,
                     after_text=after_code,
                     selection_rule=selection_rule,
+                    before_state=before_state,
+                    after_state=after_state,
+                )
+            # P1: a runtime invariant that was actually checked and failed is a
+            # non-blocking warning in soft mode; P2 will escalate this to a
+            # fail-closed block for STRUCTURAL / CONTRACT_FILL repairs.
+            if provenance.invariant_status == InvariantStatus.VERIFIED_FAIL.value:
+                findings.append(
+                    ValidationFinding(
+                        validator="repair_invariant",
+                        severity="warning",
+                        message=(
+                            f"Repair {repair_id} violated declared invariant(s) "
+                            f"{list(provenance.invariant_failures)} on step {step_id}."
+                        ),
+                        detail={
+                            "repair_id": repair_id,
+                            "step_id": step_id,
+                            "repair_class": provenance.repair_class,
+                            "invariant_failures": list(provenance.invariant_failures),
+                        },
+                    )
                 )
         except Exception as exc:
             findings.append(

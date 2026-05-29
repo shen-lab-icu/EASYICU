@@ -58,6 +58,8 @@ class RepairProvenance:
     transformation: str = ""
     invariants_checked: Tuple[str, ...] = ()
     invariants_passed: Optional[bool] = None
+    invariant_status: str = "unverified"
+    invariant_failures: Tuple[str, ...] = ()
     introduces_numbers: bool = False
     requires_disclosure: bool = False
     selection_rule: Optional[str] = None
@@ -76,6 +78,126 @@ CONTRACT_FILL_INVARIANTS = (
     "selected_value_surfaced",
 )
 METHOD_SUBSTITUTION_INVARIANTS = ("requires_disclosure",)
+
+
+class InvariantStatus(str, Enum):
+    """Three-state outcome of a runtime invariant evaluation.
+
+    P0 recorded a bare ``invariants_passed`` that defaulted to ``True`` for any
+    repair declaring invariants, even though nothing was actually checked.  P1
+    replaces that with an honest three-state result so an unverified invariant
+    is never reported as a pass.
+    """
+
+    VERIFIED_PASS = "verified_pass"
+    VERIFIED_FAIL = "verified_fail"
+    UNVERIFIED = "unverified"
+
+
+@dataclass(frozen=True)
+class RepairObservedState:
+    """Observable state captured before/after a repair, for invariant checks.
+
+    Fields are all optional: a checker returns ``None`` (unverified) when the
+    state it needs is absent, so a repair applied at the code-rewrite layer
+    (where row-level data is not observable) is honestly recorded as
+    ``UNVERIFIED`` rather than a fake pass.
+    """
+
+    row_count: Optional[int] = None
+    id_values: Optional[Tuple[Any, ...]] = None
+    value_pool: Optional[Tuple[Any, ...]] = None
+    filled_value: Optional[Any] = None
+
+
+@dataclass(frozen=True)
+class InvariantEvaluation:
+    """Result of evaluating all declared invariants for one repair application."""
+
+    status: str
+    passed: Optional[bool]
+    checked: Tuple[str, ...]
+    failures: Tuple[str, ...]
+
+
+def _check_n_unchanged(
+    before: Optional[RepairObservedState], after: Optional[RepairObservedState]
+) -> Optional[bool]:
+    if before is None or after is None:
+        return None
+    if before.row_count is None or after.row_count is None:
+        return None
+    return before.row_count == after.row_count
+
+
+def _check_row_set_unchanged(
+    before: Optional[RepairObservedState], after: Optional[RepairObservedState]
+) -> Optional[bool]:
+    if before is None or after is None:
+        return None
+    if before.id_values is None or after.id_values is None:
+        return None
+    return frozenset(before.id_values) == frozenset(after.id_values)
+
+
+def _check_source_values_preexisting(
+    after: Optional[RepairObservedState],
+) -> Optional[bool]:
+    if after is None or after.filled_value is None or after.value_pool is None:
+        return None
+    return after.filled_value in set(after.value_pool)
+
+
+def _check_deterministic_selection_rule(selection_rule: Optional[str]) -> bool:
+    return bool(selection_rule and str(selection_rule).strip())
+
+
+def evaluate_invariants(
+    metadata: RepairMetadata,
+    *,
+    before_state: Optional[RepairObservedState] = None,
+    after_state: Optional[RepairObservedState] = None,
+    selection_rule: Optional[str] = None,
+) -> InvariantEvaluation:
+    """Run each declared invariant and return an honest three-state result.
+
+    A declared invariant whose required state is unavailable is left
+    unevaluated (``None``); it is never silently counted as a pass.  Status is
+    ``VERIFIED_FAIL`` if any checkable invariant failed, ``VERIFIED_PASS`` only
+    if every declared invariant was checked and held (vacuously true when a
+    repair declares no invariants), otherwise ``UNVERIFIED``.
+    """
+
+    results: Dict[str, Optional[bool]] = {}
+    for invariant in metadata.invariants:
+        if invariant == "n_unchanged":
+            results[invariant] = _check_n_unchanged(before_state, after_state)
+        elif invariant == "row_set_unchanged":
+            results[invariant] = _check_row_set_unchanged(before_state, after_state)
+        elif invariant == "source_values_preexisting":
+            results[invariant] = _check_source_values_preexisting(after_state)
+        elif invariant == "deterministic_selection_rule":
+            results[invariant] = _check_deterministic_selection_rule(selection_rule)
+        elif invariant == "requires_disclosure":
+            results[invariant] = metadata.requires_disclosure is True
+        else:
+            # e.g. selected_value_surfaced — not observable at this layer yet.
+            results[invariant] = None
+
+    checked = tuple(name for name, value in results.items() if value is not None)
+    failures = tuple(name for name, value in results.items() if value is False)
+
+    if failures:
+        return InvariantEvaluation(
+            InvariantStatus.VERIFIED_FAIL.value, False, checked, failures
+        )
+    if not metadata.invariants:
+        return InvariantEvaluation(InvariantStatus.VERIFIED_PASS.value, True, (), ())
+    if checked and len(checked) == len(metadata.invariants):
+        return InvariantEvaluation(
+            InvariantStatus.VERIFIED_PASS.value, True, checked, ()
+        )
+    return InvariantEvaluation(InvariantStatus.UNVERIFIED.value, None, checked, ())
 
 
 def _meta(
@@ -310,22 +432,35 @@ def make_repair_provenance(
     before_text: Optional[str] = None,
     after_text: Optional[str] = None,
     selection_rule: Optional[str] = None,
-    invariants_passed: Optional[bool] = None,
+    before_state: Optional[RepairObservedState] = None,
+    after_state: Optional[RepairObservedState] = None,
 ) -> RepairProvenance:
-    """Build a provenance record for a repair application."""
+    """Build a provenance record for a repair application.
+
+    Invariants are evaluated at runtime against the supplied observable state;
+    the result is recorded honestly (``verified_pass`` / ``verified_fail`` /
+    ``unverified``).  ``invariants_passed`` is derived from that evaluation and
+    is ``None`` when nothing could be checked — it is never defaulted to a pass.
+    """
 
     metadata = repair_metadata_for(repair_id)
     assert_repair_metadata_invariants(metadata)
+    evaluation = evaluate_invariants(
+        metadata,
+        before_state=before_state,
+        after_state=after_state,
+        selection_rule=selection_rule,
+    )
     return RepairProvenance(
         repair_id=repair_id,
         repair_class=metadata.repair_class.value,
         step_id=step_id,
         trigger=trigger or {},
         transformation=transformation or metadata.description or repair_id,
-        invariants_checked=metadata.invariants,
-        invariants_passed=(
-            True if invariants_passed is None and metadata.invariants else invariants_passed
-        ),
+        invariants_checked=evaluation.checked,
+        invariants_passed=evaluation.passed,
+        invariant_status=evaluation.status,
+        invariant_failures=evaluation.failures,
         introduces_numbers=metadata.introduces_numbers,
         requires_disclosure=metadata.requires_disclosure,
         selection_rule=selection_rule,
@@ -368,6 +503,8 @@ class RepairLedger:
         before_text: Optional[str] = None,
         after_text: Optional[str] = None,
         selection_rule: Optional[str] = None,
+        before_state: Optional[RepairObservedState] = None,
+        after_state: Optional[RepairObservedState] = None,
     ) -> RepairProvenance:
         provenance = make_repair_provenance(
             repair_id=repair_id,
@@ -379,6 +516,8 @@ class RepairLedger:
             before_text=before_text,
             after_text=after_text,
             selection_rule=selection_rule,
+            before_state=before_state,
+            after_state=after_state,
         )
         self.append(provenance)
         return provenance
@@ -398,14 +537,18 @@ class RepairLedger:
 
 
 __all__ = [
+    "InvariantEvaluation",
+    "InvariantStatus",
     "Repair",
     "RepairClass",
     "RepairLedger",
     "RepairMetadata",
+    "RepairObservedState",
     "RepairProvenance",
     "REPAIR_METADATA",
     "assert_registry_invariants",
     "assert_repair_metadata_invariants",
+    "evaluate_invariants",
     "make_repair_provenance",
     "repair_metadata_for",
 ]
