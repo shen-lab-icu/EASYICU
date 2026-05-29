@@ -1,0 +1,411 @@
+"""Typed registry and provenance ledger for deterministic repairs.
+
+P0 of ENG-REPAIR1 keeps existing repair behavior unchanged while making every
+repair auditable.  The registry is intentionally conservative: anything that
+fits or substitutes an analytical method is classified as
+``METHOD_SUBSTITUTION`` so strict-mode enforcement can fail closed in P2.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
+
+
+class RepairClass(str, Enum):
+    """Integrity class for deterministic repairs."""
+
+    SYNTACTIC = "syntactic"
+    STRUCTURAL = "structural"
+    CONTRACT_FILL = "contract_fill"
+    METHOD_SUBSTITUTION = "method_substitution"
+
+
+class Repair(Protocol):
+    """Minimal protocol future repair objects must satisfy."""
+
+    repair_id: str
+    repair_class: RepairClass
+
+
+@dataclass(frozen=True)
+class RepairMetadata:
+    """Static metadata attached to a deterministic repair."""
+
+    repair_id: str
+    repair_class: RepairClass
+    invariants: Tuple[str, ...] = ()
+    introduces_numbers: bool = False
+    requires_disclosure: bool = False
+    selection_rule_required: bool = False
+    description: str = ""
+    classification_source: str = "exact"
+
+
+@dataclass(frozen=True)
+class RepairProvenance:
+    """One attempted or applied repair record."""
+
+    repair_id: str
+    repair_class: str
+    step_id: Optional[str]
+    trigger: Dict[str, Any] = field(default_factory=dict)
+    transformation: str = ""
+    invariants_checked: Tuple[str, ...] = ()
+    invariants_passed: Optional[bool] = None
+    introduces_numbers: bool = False
+    requires_disclosure: bool = False
+    selection_rule: Optional[str] = None
+    outcome: str = "applied"
+    model_id: Optional[str] = None
+    applied_at: str = ""
+    before_hash: Optional[str] = None
+    after_hash: Optional[str] = None
+    classification_source: str = "exact"
+
+
+STRUCTURAL_INVARIANTS = ("row_set_unchanged", "n_unchanged")
+CONTRACT_FILL_INVARIANTS = (
+    "source_values_preexisting",
+    "deterministic_selection_rule",
+    "selected_value_surfaced",
+)
+METHOD_SUBSTITUTION_INVARIANTS = ("requires_disclosure",)
+
+
+def _meta(
+    repair_id: str,
+    repair_class: RepairClass,
+    *,
+    invariants: Sequence[str] = (),
+    introduces_numbers: bool = False,
+    requires_disclosure: bool = False,
+    selection_rule_required: bool = False,
+    description: str = "",
+) -> RepairMetadata:
+    return RepairMetadata(
+        repair_id=repair_id,
+        repair_class=repair_class,
+        invariants=tuple(invariants),
+        introduces_numbers=introduces_numbers,
+        requires_disclosure=requires_disclosure,
+        selection_rule_required=selection_rule_required,
+        description=description,
+    )
+
+
+_SYNTACTIC_REPAIRS = {
+    "missing_os_import_v1",
+    "strip_python_prefix_v1",
+    "restore_shadowed_json_module_v1",
+    "replace_hallucinated_figure_utils_import_v1",
+    "prediction_calibration_import_fix_v1",
+}
+
+_STRUCTURAL_REPAIRS = {
+    "cohort_csv_to_parquet_v1",
+    "cohort_file_direct_read_v1",
+    "cut_bins_flatten_v1",
+    "dedupe_predictor_numeric_design_v1",
+    "dedupe_required_cols_outcome_v1",
+    "derived_analysis_cohort_materialization_v1",
+    "dtype_coerce_v1",
+    "filter_x_cols_after_dummy_encoding_v1",
+    "filter_x_cols_before_dropna_after_dummy_encoding_v1",
+    "include_outcome_in_all_vars_v1",
+    "inline_missing_to_jsonable_utils_v1",
+    "json_dump_numpy_key_sanitizer_v1",
+    "local_wilson_proportion_confint_v1",
+    "matplotlib_errorbar_xerr_shape_v1",
+    "missing_indicator_source_df_v1",
+    "prediction_preserve_categorical_before_ohe_v1",
+    "primary_predictor_safe_summary_lookup_v1",
+    "proportion_confint_nobs_keyword_v1",
+    "publication_bundle_promote_script_v1",
+    "publication_bundle_promote_v1",
+    "publication_contract_optional_v1",
+    "remove_pandas_cut_observed_keyword_v1",
+    "robustness_encode_sex_before_numeric_checks_v1",
+    "seaborn_matplotlib_fallback_v1",
+    "sex_binary_encode_for_logit_v1",
+    "sex_covariate_numeric_loop_guard_v1",
+    "sex_numeric_coercion_before_dropna_v1",
+    "sklearn_bool_imputer_cast_v1",
+    "sibling_figure_exports_promote_v1",
+    "statsmodels_conf_int_filter_axis_v1",
+    "statsmodels_dummy_design_float_v1",
+    "statsmodels_endog_exog_index_align_v1",
+    "statsmodels_helper_design_float_v1",
+    "strip_unknown_cols_from_list_literals_v1",
+    "table_one_binary_key_string_v1",
+    "prediction_publication_bundle_from_parent_outputs_v1",
+}
+
+_CONTRACT_FILL_REPAIRS = {
+    "primary_predictor_omitted_from_design_v1",
+    "robustness_missingness_contract_v1",
+    "robustness_predictor_design_and_plot_v1",
+    "categorical_primary_association_selection_v1",
+}
+
+_METHOD_SUBSTITUTION_REPAIRS = {
+    "age_stratified_mortality_dependency_free_v1",
+    "formula_dummy_name_fallback_v1",
+    "logit_regularized_fit_v1",
+    "logreg_impute_v1",
+    "norepinephrine_dose_response_dependency_free_v1",
+    "ordinal_primary_association_fallback_v1",
+    "outcome_incidence_descriptive_repair_v1",
+    "prediction_discrimination_template_v1",
+    "prediction_split_minimal_v1",
+    "robustness_complete_case_or_fallback_v1",
+    "shock_primary_assoc_sklearn_v1",
+    "table_one_descriptive_repair_v1",
+    "validation_nonconvergence_fallback_v1",
+}
+
+
+REPAIR_METADATA: Dict[str, RepairMetadata] = {
+    **{
+        repair_id: _meta(repair_id, RepairClass.SYNTACTIC)
+        for repair_id in _SYNTACTIC_REPAIRS
+    },
+    **{
+        repair_id: _meta(
+            repair_id,
+            RepairClass.STRUCTURAL,
+            invariants=STRUCTURAL_INVARIANTS,
+        )
+        for repair_id in _STRUCTURAL_REPAIRS
+    },
+    **{
+        repair_id: _meta(
+            repair_id,
+            RepairClass.CONTRACT_FILL,
+            invariants=CONTRACT_FILL_INVARIANTS,
+            selection_rule_required=True,
+        )
+        for repair_id in _CONTRACT_FILL_REPAIRS
+    },
+    **{
+        repair_id: _meta(
+            repair_id,
+            RepairClass.METHOD_SUBSTITUTION,
+            invariants=METHOD_SUBSTITUTION_INVARIANTS,
+            introduces_numbers=True,
+            requires_disclosure=True,
+        )
+        for repair_id in _METHOD_SUBSTITUTION_REPAIRS
+    },
+}
+
+
+_PATTERN_METADATA: Tuple[Tuple[str, RepairMetadata], ...] = (
+    (
+        "generic_v15_",
+        _meta(
+            "generic_v15_*_fallback_v1",
+            RepairClass.METHOD_SUBSTITUTION,
+            invariants=METHOD_SUBSTITUTION_INVARIANTS,
+            introduces_numbers=True,
+            requires_disclosure=True,
+            description="Generic fallback analysis template.",
+        ),
+    ),
+    (
+        "strip_fake_easyicu_import_",
+        _meta("strip_fake_easyicu_import_*_v1", RepairClass.SYNTACTIC),
+    ),
+    (
+        "undefined_helper_stub_",
+        _meta(
+            "undefined_helper_stub_*_v1",
+            RepairClass.STRUCTURAL,
+            invariants=STRUCTURAL_INVARIANTS,
+        ),
+    ),
+)
+
+
+def repair_metadata_for(repair_id: str) -> RepairMetadata:
+    """Return metadata for ``repair_id``.
+
+    Unknown repairs are classified conservatively as method substitutions.  P0
+    records them without changing soft-mode behavior; P2 can then block them
+    in strict mode rather than letting an unreviewed repair silently through.
+    """
+
+    if repair_id in REPAIR_METADATA:
+        return REPAIR_METADATA[repair_id]
+    for prefix, metadata in _PATTERN_METADATA:
+        if repair_id.startswith(prefix):
+            return RepairMetadata(
+                repair_id=repair_id,
+                repair_class=metadata.repair_class,
+                invariants=metadata.invariants,
+                introduces_numbers=metadata.introduces_numbers,
+                requires_disclosure=metadata.requires_disclosure,
+                selection_rule_required=metadata.selection_rule_required,
+                description=metadata.description,
+                classification_source=f"pattern:{metadata.repair_id}",
+            )
+    return RepairMetadata(
+        repair_id=repair_id,
+        repair_class=RepairClass.METHOD_SUBSTITUTION,
+        invariants=METHOD_SUBSTITUTION_INVARIANTS,
+        introduces_numbers=True,
+        requires_disclosure=True,
+        description="Conservative fallback for unclassified repair id.",
+        classification_source="fallback:unknown_method_substitution",
+    )
+
+
+def assert_repair_metadata_invariants(metadata: RepairMetadata) -> None:
+    """Assert class-level integrity invariants for one repair declaration."""
+
+    if metadata.repair_class == RepairClass.METHOD_SUBSTITUTION:
+        if not metadata.introduces_numbers or not metadata.requires_disclosure:
+            raise AssertionError(
+                f"{metadata.repair_id} is METHOD_SUBSTITUTION but is not "
+                "marked as introducing numbers and requiring disclosure."
+            )
+    if metadata.repair_class == RepairClass.CONTRACT_FILL:
+        if not metadata.selection_rule_required:
+            raise AssertionError(
+                f"{metadata.repair_id} is CONTRACT_FILL but does not require "
+                "a deterministic selection rule."
+            )
+    if metadata.repair_class == RepairClass.STRUCTURAL and not metadata.invariants:
+        raise AssertionError(
+            f"{metadata.repair_id} is STRUCTURAL but declares no invariants."
+        )
+
+
+def assert_registry_invariants() -> None:
+    """Assert static invariants for every explicitly registered repair."""
+
+    for metadata in REPAIR_METADATA.values():
+        assert_repair_metadata_invariants(metadata)
+
+
+def _hash_text(text: Optional[str]) -> Optional[str]:
+    if text is None:
+        return None
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def make_repair_provenance(
+    *,
+    repair_id: str,
+    step_id: Optional[str],
+    trigger: Optional[Dict[str, Any]] = None,
+    transformation: Optional[str] = None,
+    outcome: str = "applied",
+    model_id: Optional[str] = None,
+    before_text: Optional[str] = None,
+    after_text: Optional[str] = None,
+    selection_rule: Optional[str] = None,
+    invariants_passed: Optional[bool] = None,
+) -> RepairProvenance:
+    """Build a provenance record for a repair application."""
+
+    metadata = repair_metadata_for(repair_id)
+    assert_repair_metadata_invariants(metadata)
+    return RepairProvenance(
+        repair_id=repair_id,
+        repair_class=metadata.repair_class.value,
+        step_id=step_id,
+        trigger=trigger or {},
+        transformation=transformation or metadata.description or repair_id,
+        invariants_checked=metadata.invariants,
+        invariants_passed=(
+            True if invariants_passed is None and metadata.invariants else invariants_passed
+        ),
+        introduces_numbers=metadata.introduces_numbers,
+        requires_disclosure=metadata.requires_disclosure,
+        selection_rule=selection_rule,
+        outcome=outcome,
+        model_id=model_id,
+        applied_at=datetime.now(timezone.utc).isoformat(),
+        before_hash=_hash_text(before_text),
+        after_hash=_hash_text(after_text),
+        classification_source=metadata.classification_source,
+    )
+
+
+class RepairLedger:
+    """Append-only JSON ledger for repair provenance records."""
+
+    schema_version = "easyicu.repair_ledger/1"
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self._records: List[RepairProvenance] = []
+        self.write()
+
+    @property
+    def records(self) -> Tuple[RepairProvenance, ...]:
+        return tuple(self._records)
+
+    def append(self, provenance: RepairProvenance) -> None:
+        self._records.append(provenance)
+        self.write()
+
+    def append_application(
+        self,
+        *,
+        repair_id: str,
+        step_id: Optional[str],
+        trigger: Optional[Dict[str, Any]] = None,
+        transformation: Optional[str] = None,
+        outcome: str = "applied",
+        model_id: Optional[str] = None,
+        before_text: Optional[str] = None,
+        after_text: Optional[str] = None,
+        selection_rule: Optional[str] = None,
+    ) -> RepairProvenance:
+        provenance = make_repair_provenance(
+            repair_id=repair_id,
+            step_id=step_id,
+            trigger=trigger,
+            transformation=transformation,
+            outcome=outcome,
+            model_id=model_id,
+            before_text=before_text,
+            after_text=after_text,
+            selection_rule=selection_rule,
+        )
+        self.append(provenance)
+        return provenance
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "repairs": [asdict(record) for record in self._records],
+        }
+
+    def write(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(
+            json.dumps(self.to_dict(), indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+
+
+__all__ = [
+    "Repair",
+    "RepairClass",
+    "RepairLedger",
+    "RepairMetadata",
+    "RepairProvenance",
+    "REPAIR_METADATA",
+    "assert_registry_invariants",
+    "assert_repair_metadata_invariants",
+    "make_repair_provenance",
+    "repair_metadata_for",
+]
