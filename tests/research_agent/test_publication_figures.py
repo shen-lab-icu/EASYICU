@@ -17,6 +17,83 @@ from easyicu.research_agent.publication_figures import (
 )
 
 
+@pytest.mark.parametrize("variant_count", [0, 3])
+def test_robustness_panel_publication_figure_has_no_header_title_overlap(
+    ra, tmp_path: Path, variant_count: int
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.figure_skill import PublicationFigureSkill
+    from easyicu.research_agent.robustness_panel import (
+        RobustnessPanel,
+        RobustnessPanelRow,
+    )
+
+    rows = [
+        RobustnessPanelRow(
+            spec_id="primary",
+            axis="primary",
+            n=100,
+            point_estimate=1.14,
+            ci_low=1.08,
+            ci_high=1.21,
+            se=0.03,
+            evidence_id="primary_row",
+            converged=True,
+        )
+    ]
+    for idx in range(variant_count):
+        rows.append(
+            RobustnessPanelRow(
+                spec_id=f"alt_variant_{idx}",
+                axis="cohort",
+                n=90 - idx,
+                point_estimate=1.05 + idx * 0.03,
+                ci_low=0.98 + idx * 0.02,
+                ci_high=1.18 + idx * 0.02,
+                se=0.04,
+                evidence_id=f"alt_row_{idx}",
+                converged=True,
+            )
+        )
+    panel = RobustnessPanel.from_rows(rows)
+    (tmp_path / "robustness_panel.json").write_text(
+        json.dumps(panel.to_dict()), encoding="utf-8"
+    )
+    evidence = EvidenceStore(tmp_path)
+    source_record = evidence.register_json(
+        kind="statistic",
+        description="Robustness panel.",
+        payload=panel.to_dict(),
+        filename="robustness_panel.json",
+        evidence_id="robustness_panel",
+    )
+    context = ra.ResearchContext(
+        research_question="Does early severity predict mortality?",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_patients=100,
+            n_stays=100,
+        ),
+        variables=[],
+        target_outcome="death",
+    )
+    result = PublicationFigureSkill()._render_robustness_panel(
+        context=context,
+        evidence=evidence,
+        run_dir=tmp_path,
+        source_record=source_record,
+        panel=panel,
+        prompt_pack_version="test",
+    )
+
+    assert result.generated is True
+    assert not any(
+        finding.severity == "error" and "overlapping text" in finding.message
+        for finding in result.findings
+    )
+
+
 def test_figure_contract_enforces_unique_panel_ids():
     with pytest.raises(ValueError):
         make_figure_contract(
