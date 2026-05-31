@@ -2072,7 +2072,10 @@ def render_extract_page(lang: str):
 
 def _handle_sidebar_export_trigger(default_export_container) -> bool:
     """Run a queued sidebar export and keep the main page quiet while it runs."""
-    if not st.session_state.get('trigger_export', False):
+    if not (
+        st.session_state.get('trigger_export', False)
+        or st.session_state.get('_export_conflict_pending', False)
+    ):
         return False
 
     st.session_state.trigger_export = False
@@ -3859,6 +3862,7 @@ def main():
     export_in_progress = bool(
         st.session_state.get('trigger_export', False)
         or st.session_state.get('_exporting_in_progress', False)
+        or st.session_state.get('_export_conflict_pending', False)
     )
 
     if figure_section == 'viz':
@@ -4143,7 +4147,7 @@ def main():
         'research_agent': 'research_agent',
         'assistant': 'assistant',
         'settings': 'settings',
-        'export_progress': 'tutorial',
+        'export_progress': 'extract',
         'home_dict': 'tutorial',
     }
     if _nav_request == 'ai_assistant':

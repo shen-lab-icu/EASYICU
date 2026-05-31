@@ -205,6 +205,22 @@ def _terminate_process_tree(proc: Any, *, timeout: float = 2.0) -> None:
             pass
 
 
+def _export_cancel_message(lang: str) -> str:
+    return "Export stopped by user." if lang == 'en' else "导出已被用户停止。"
+
+
+def _queue_export_cancel(state: Any, *, lang: str = 'en') -> None:
+    """Return the UI to Step 4 after a user-requested export cancellation."""
+    state['_export_cancelled'] = False
+    state['trigger_export'] = False
+    state['_exporting_in_progress'] = False
+    state.pop('_export_conflict_pending', None)
+    state.pop('_scroll_to_tab', None)
+    state['_active_main_page'] = 'extract'
+    state['_main_nav_widget'] = 'extract'
+    state['_export_cancel_notice'] = _export_cancel_message(lang)
+
+
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to the extracted workflow."""
     for name, value in app_context.items():
@@ -358,14 +374,21 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
         if '_export_cancelled' not in st.session_state:
             st.session_state._export_cancelled = False
 
-        stop_label = "⏹ Stop" if lang == 'en' else "⏹ 停止"
+        stop_label = "Stop" if lang == 'en' else "停止"
         stop_help = (
             "Stop the export after the current module finishes."
             if lang == 'en' else
             "在当前模块结束后尽快停止导出。"
         )
-        if cancel_placeholder.button(stop_label, key="stop_export_btn", use_container_width=True, help=stop_help):
-            st.session_state._export_cancelled = True
+        if cancel_placeholder.button(
+            stop_label,
+            key="stop_export_btn",
+            use_container_width=True,
+            help=stop_help,
+            icon=":material/stop_circle:",
+        ):
+            _queue_export_cancel(st.session_state, lang=lang)
+            st.rerun()
 
         def check_cancelled():
             """检查是否已取消导出"""
@@ -377,11 +400,14 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
             st.session_state['_exporting_in_progress'] = False
             st.session_state['_export_cancelled'] = False
             st.session_state.pop('_export_conflict_pending', None)
+            st.session_state.pop('_scroll_to_tab', None)
+            st.session_state['_active_main_page'] = 'extract'
+            st.session_state['_main_nav_widget'] = 'extract'
             progress_bar.empty()
             status_text.empty()
             cancel_placeholder.empty()
-            cancel_msg = "⏹ Export stopped by user." if lang == 'en' else "⏹ 导出已被用户停止。"
-            st.warning(cancel_msg)
+            st.session_state['_export_cancel_notice'] = _export_cancel_message(lang)
+            st.rerun()
 
         if check_cancelled():
             _handle_export_cancel()
