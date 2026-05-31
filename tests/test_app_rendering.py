@@ -3124,6 +3124,24 @@ def test_real_data_validation_uses_resolved_database_path() -> None:
     convert_result = {"valid": False, "can_convert": True, "csv_path": "/data/eicu-csv"}
     assert sidebar._validation_resolved_path(convert_result, "/data") == "/data/eicu-csv"
 
+
+def test_real_data_validation_status_accepts_resolved_child_path(tmp_path: Path) -> None:
+    parent = tmp_path / "mimic-parent"
+    resolved = parent / "mimic-iv-3.1"
+    resolved.mkdir(parents=True)
+    state = {
+        "path_validated": True,
+        "data_path": str(resolved),
+        "last_validated_path": str(resolved),
+        "last_validation": {"valid": True, "resolved_path": str(resolved)},
+    }
+
+    assert sidebar._current_input_matches_validated_data_path(state, str(parent)) is True
+
+    stale_state = dict(state)
+    stale_state["data_path"] = str(tmp_path / "other-mimic")
+    assert sidebar._current_input_matches_validated_data_path(stale_state, str(parent)) is False
+
     assert sidebar._validation_resolved_path({}, "/fallback") == "/fallback"
 
 
