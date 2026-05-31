@@ -1588,33 +1588,70 @@ def render_sidebar_chat_widget():
                 show_starters=not bool(pending_prompt),
             )
 
-def _inline_ai_context_html(lang: str) -> str:
-    state = st.session_state
+def _inline_ai_context_payload(state, lang: str) -> dict[str, object]:
     is_en = lang == "en"
     mode = str(state.get("entry_mode") or "demo")
-    mode_label = "demo" if mode in {"none", "demo"} else "real data"
-    if not is_en:
-        mode_label = "演示" if mode in {"none", "demo"} else "真实数据"
+    is_demo = mode in {"none", "demo"}
     patient_ids = state.get("patient_ids") or []
-    mock_params = state.get("mock_params") or {}
-    patient_count = len(patient_ids) or int(
-        mock_params.get("n_patients") or state.get("demo_mode_patients") or 10
-    )
     loaded = state.get("loaded_concepts") or {}
     selected = state.get("selected_concepts") or []
-    module_count = len(loaded) or len(selected) or 19
-    context_name = (
-        state.get("last_export_name")
-        or state.get("research_agent_case_label")
-        or "sepsis_mortality_demo"
-    )
-    tags = selected[:6] if selected else ["vitals", "labs", "sofa", "sepsis-3", "lactate", "outcomes"]
-    tags_html = "".join(f"<span>{html.escape(str(tag))}</span>" for tag in tags[:6])
+    inbound_cohort = state.get("research_agent_inbound_cohort")
+    try:
+        inbound_rows = len(inbound_cohort) if inbound_cohort is not None else 0
+    except TypeError:
+        inbound_rows = 0
+
+    if is_demo:
+        mock_params = state.get("mock_params") or {}
+        patient_count = len(patient_ids) or inbound_rows or int(
+            mock_params.get("n_patients") or state.get("demo_mode_patients") or 10
+        )
+        module_count = len(loaded) or len(selected) or 19
+        context_name = (
+            state.get("last_export_name")
+            or state.get("research_agent_case_label")
+            or "sepsis_mortality_demo"
+        )
+        mode_label = "demo" if is_en else "演示"
+        detail = f"{mode_label} · {patient_count} stays · {module_count} modules"
+        tags = selected[:6] if selected else ["vitals", "labs", "sofa", "sepsis-3", "lactate", "outcomes"]
+    elif patient_ids or inbound_rows or loaded:
+        patient_count = len(patient_ids) or inbound_rows
+        module_count = len(loaded) or len(selected)
+        context_name = (
+            state.get("last_export_name")
+            or state.get("research_agent_case_label")
+            or ("local cohort loaded" if is_en else "已加载本地队列")
+        )
+        count_label = f"{patient_count} stays" if patient_count else ("cohort loaded" if is_en else "队列已加载")
+        module_label = f"{module_count} modules" if module_count else ("modules pending" if is_en else "模块待确认")
+        detail = (
+            f"real data · {count_label} · {module_label}"
+            if is_en else f"真实数据 · {count_label} · {module_label}"
+        )
+        tags = selected[:6] or list(loaded)[:6] or ["local export", "evidence-bound"]
+    else:
+        database = str(state.get("database") or "").strip() or ("local data" if is_en else "本地数据")
+        context_name = "No cohort loaded" if is_en else "尚未加载队列"
+        detail = "real data · waiting for local export" if is_en else "真实数据 · 等待本地导出"
+        tags = [
+            database.upper(),
+            "local-only" if is_en else "仅本地",
+            "no cohort" if is_en else "无队列",
+            "no patient rows" if is_en else "无患者行",
+        ]
+    return {"context_name": str(context_name), "detail": detail, "tags": [str(tag) for tag in tags[:6]]}
+
+
+def _inline_ai_context_html(lang: str, state=None) -> str:
+    payload = _inline_ai_context_payload(st.session_state if state is None else state, lang)
+    is_en = lang == "en"
+    tags_html = "".join(f"<span>{html.escape(str(tag))}</span>" for tag in payload["tags"])
     return (
         '<div class="inline-ai-context-card">'
         f'<div class="inline-ai-section-label">{"In context" if is_en else "当前上下文"}</div>'
-        f'<h3>{html.escape(str(context_name))}</h3>'
-        f'<p class="mono">{html.escape(mode_label)} · {patient_count} stays · {module_count} modules</p>'
+        f'<h3>{html.escape(str(payload["context_name"]))}</h3>'
+        f'<p class="mono">{html.escape(str(payload["detail"]))}</p>'
         f'<div class="inline-ai-tag-row">{tags_html}</div>'
         '</div>'
     )

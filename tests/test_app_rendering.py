@@ -29,6 +29,7 @@ import easyicu.webapp.data_workflows as data_workflows
 import easyicu.webapp.export_reports as export_reports
 import easyicu.webapp.export_workflow as export_workflow
 import easyicu.webapp.i18n as i18n
+import easyicu.webapp.llm_chat as llm_chat
 import easyicu.webapp.page_header as page_header
 import easyicu.webapp.pages_redesign as pages_redesign
 import easyicu.webapp.patient_page as patient_page
@@ -5567,6 +5568,23 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
         assert legacy_emoji not in llm_text
     assert 'icon=":material/smart_toy:"' in llm_text
     assert "_render_inline_ai_context_and_handoff" in llm_text
+
+
+def test_ai_assistant_real_context_card_does_not_invent_demo_counts() -> None:
+    real_empty_state = {"entry_mode": "real", "database": "miiv"}
+
+    html = llm_chat._inline_ai_context_html("en", state=real_empty_state)
+
+    assert "No cohort loaded" in html
+    assert "real data · waiting for local export" in html
+    assert "MIIV" in html
+    assert "10 stays" not in html
+    assert "19 modules" not in html
+    assert "sepsis_mortality_demo" not in html
+
+    demo_html = llm_chat._inline_ai_context_html("en", state={"entry_mode": "demo"})
+    assert "sepsis_mortality_demo" in demo_html
+    assert "demo · 10 stays · 19 modules" in demo_html
 
 
 def test_sidebar_settings_gear_opens_full_settings_page() -> None:
