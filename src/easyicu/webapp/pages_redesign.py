@@ -201,9 +201,24 @@ def _route_to_research_agent_setup(
         state.pop("research_agent_module_dir_pick", None)
     else:
         state.pop("_eu_ra_focus_module_folder", None)
+    state.pop("_eu_ra_focus_no_data", None)
+    state.pop("_eu_ra_no_data_entry", None)
     state["_active_main_page"] = "research_agent"
     state["_ra_view"] = "setup"
     state["_scroll_to_top"] = True
+
+
+def _route_to_research_agent_no_data_setup(state: MutableMapping[str, Any]) -> None:
+    """Open Agent setup on the real no-data/extraction path.
+
+    The entry-page no-data CTA should not land on the demo guide: the backend
+    path users need is the no-data cohort source, where they choose a database,
+    modules, and an output folder before launching extraction.
+    """
+    _route_to_research_agent_setup(state, force_real=True)
+    state["_eu_ra_focus_no_data"] = True
+    state["_eu_ra_no_data_entry"] = True
+    state.pop("research_agent_cohort_source", None)
 
 
 def _selected_tutorial_module_concepts(state: MutableMapping[str, Any]) -> list[str]:
@@ -524,17 +539,17 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
     nodata_card = cc.render_tutorial_starting_card(
         tone="neutral",
         icon="file",
-        title_en=_T(lang, "No Data", "No Data"),
-        title_zh=_T(lang, "仅代码", "仅代码"),
+        title_en=_T(lang, "No Data Yet", "No Data Yet"),
+        title_zh=_T(lang, "先准备提取", "先准备提取"),
         badge_html="",
         desc=_T(lang,
-            "No data yet? Let the Research Agent generate a reusable code skeleton first; plug in real data later.",
-            "还没有数据？先让研究智能体生成可复用的代码骨架，稍后再接入真实数据。"),
+            "Prepare extraction settings first; plug in real data when the folder is ready.",
+            "先准备提取设置；等真实数据目录就绪后再接入。"),
         bullets=[
-            _T(lang, "Generate cohort.py / analysis.py", "生成 cohort.py / analysis.py"),
-            _T(lang, "Methods section draft", "Methods 段草稿"),
+            _T(lang, "Choose database and modules", "选择数据库和模块"),
+            _T(lang, "Hand settings to Data Extraction", "交给数据提取执行"),
         ],
-        cta_label=_T(lang, "Skip data for now", "跳过数据"),
+        cta_label=_T(lang, "Prepare extraction", "准备提取"),
         cta_dashed=True,
     )
     st.markdown(
@@ -560,10 +575,10 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
             _route_to_extract_entry_mode(st.session_state, "real")
             st.rerun()
     with cols[2]:
-        if st.button(_T(lang, "Skip data → Agent", "跳过数据 → Agent"),
+        if st.button(_T(lang, "Prepare extraction → Agent", "准备提取 → Agent"),
                      key="_eu_tutorial_nodata",
                      use_container_width=True):
-            _route_to_research_agent_setup(st.session_state)
+            _route_to_research_agent_no_data_setup(st.session_state)
             st.rerun()
 
     # Resources --------------------------------------------------
@@ -2618,15 +2633,14 @@ def render_entry_redesign_page(lang: str) -> None:
                 '<div style="flex:1">'
                 f'<div style="font-size:13px;font-weight:500">{_T(lang, "No data yet?", "还没有数据?")}</div>'
                 f'<div style="font-size:12px;color:var(--ink-3)">'
-                f'{_T(lang, "Let the Research Agent generate a reusable code skeleton, then plug data in later.", "让研究智能体先生成可复用代码骨架，稍后再接入真实数据。")}</div>'
+                f'{_T(lang, "Let the Research Agent prepare extraction settings, then plug a data folder in later.", "让研究智能体先准备提取设置，稍后再接入真实数据目录。")}</div>'
                 '</div></div>',
                 unsafe_allow_html=True,
             )
         with code_col:
-            if st.button(_T(lang, "Generate code only →", "仅生成代码 →"),
+            if st.button(_T(lang, "Prepare extraction →", "准备数据提取 →"),
                          key="_eu_entry_nodata", use_container_width=True):
-                _apply_demo_defaults_for_tutorial(st.session_state)
-                _route_to_research_agent_setup(st.session_state)
+                _route_to_research_agent_no_data_setup(st.session_state)
                 st.rerun()
 
     st.markdown(
