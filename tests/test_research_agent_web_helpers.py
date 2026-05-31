@@ -160,6 +160,102 @@ def test_module_file_multiselect_defaults_reset_when_folder_changes(tmp_path: Pa
     assert state["research_agent_module_files_folder"] == str(folder_b)
 
 
+def test_module_file_selection_recovers_once_after_build_rerun(tmp_path: Path) -> None:
+    folder = tmp_path / "miiv_20260427"
+    folder.mkdir()
+    labels = [
+        "demographics_adm_age.parquet",
+        "outcome_death.parquet",
+        "vitals_hr.parquet",
+    ]
+    built_labels = [labels[0], labels[2]]
+    state = {
+        "research_agent_module_files": [],
+        "research_agent_module_files_folder": str(folder),
+        "research_agent_module_built": {
+            "signature": {
+                "folder": str(folder),
+                "files": [str(folder / label) for label in built_labels],
+                "id_col": "stay_id",
+                "filter": None,
+                "join_how": "outer",
+            },
+            "df": pd.DataFrame({"stay_id": [1], "age": [70], "hr": [88]}),
+        },
+        "_research_agent_module_restore_built_selection": True,
+    }
+
+    ra_page._restore_module_file_selection_after_build_rerun(
+        state,
+        key="research_agent_module_files",
+        signature_key="research_agent_module_files_folder",
+        folder=folder,
+        labels=labels,
+    )
+
+    assert state["research_agent_module_files"] == built_labels
+    assert state["research_agent_module_files_folder"] == str(folder)
+    assert "_research_agent_module_restore_built_selection" not in state
+
+    state["research_agent_module_files"] = []
+    ra_page._restore_module_file_selection_after_build_rerun(
+        state,
+        key="research_agent_module_files",
+        signature_key="research_agent_module_files_folder",
+        folder=folder,
+        labels=labels,
+    )
+
+    assert state["research_agent_module_files"] == []
+
+
+def test_module_file_selection_survives_apply_question_rerun(tmp_path: Path) -> None:
+    folder = tmp_path / "miiv_20260427"
+    folder.mkdir()
+    labels = [
+        "demographics_adm_age.parquet",
+        "outcome_death.parquet",
+        "vitals_hr.parquet",
+    ]
+    selected = [labels[0], labels[2]]
+    state = {
+        "research_agent_module_files": selected.copy(),
+        "research_agent_module_files_folder": str(folder),
+        "research_agent_cohort_source": "Pick an EasyICU module export folder",
+    }
+
+    ra_page._preserve_module_file_selection_for_next_rerun(state)
+
+    assert state["_research_agent_module_pending_selection_restore"] == {
+        "folder": str(folder),
+        "labels": selected,
+        "source": "Pick an EasyICU module export folder",
+    }
+
+    state["research_agent_cohort_source"] = "I haven't extracted data yet — help me do it"
+    ra_page._restore_pending_module_source(
+        state,
+        options=[
+            "I haven't extracted data yet — help me do it",
+            "Pick an EasyICU module export folder",
+        ],
+    )
+    assert state["research_agent_cohort_source"] == "Pick an EasyICU module export folder"
+
+    state["research_agent_module_files"] = []
+    ra_page._restore_pending_module_file_selection(
+        state,
+        key="research_agent_module_files",
+        signature_key="research_agent_module_files_folder",
+        folder=folder,
+        labels=labels,
+    )
+
+    assert state["research_agent_module_files"] == selected
+    assert state["research_agent_module_files_folder"] == str(folder)
+    assert "_research_agent_module_pending_selection_restore" not in state
+
+
 def test_detected_module_folder_defaults_to_most_complete_export(tmp_path: Path) -> None:
     sparse = tmp_path / "miiv_20260427"
     complete = tmp_path / "mock_20260424"

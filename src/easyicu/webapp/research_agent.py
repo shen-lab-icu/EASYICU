@@ -837,6 +837,107 @@ def _sync_module_file_multiselect_defaults(
         state[key] = valid or _default_module_selection(label_list)
 
 
+def _restore_module_file_selection_after_build_rerun(
+    state: MutableMapping[str, Any],
+    *,
+    key: str,
+    signature_key: str,
+    folder: Path,
+    labels: Sequence[str],
+) -> None:
+    """Recover a just-built module selection if a later rerun drops it.
+
+    Streamlit's multiselect can transiently return an empty value when another
+    control reruns the page while the dropdown is still active. After a
+    successful build, restore that exact file set once so the built cohort stays
+    bound to the launch gate. A deliberate later clear is left alone.
+    """
+    if not state.pop("_research_agent_module_restore_built_selection", False):
+        return
+    current = state.get(key)
+    if current:
+        return
+    cached_build = state.get("research_agent_module_built")
+    if not isinstance(cached_build, dict):
+        return
+    signature = cached_build.get("signature")
+    if not isinstance(signature, dict) or signature.get("folder") != str(folder):
+        return
+    label_set = set(labels)
+    restored: list[str] = []
+    for file_name in signature.get("files") or []:
+        try:
+            label = str(Path(str(file_name)).relative_to(folder))
+        except ValueError:
+            label = Path(str(file_name)).name
+        if label in label_set:
+            restored.append(label)
+    if restored:
+        state[key] = restored
+        state[signature_key] = str(folder)
+
+
+def _preserve_module_file_selection_for_next_rerun(
+    state: MutableMapping[str, Any],
+    *,
+    key: str = "research_agent_module_files",
+    signature_key: str = "research_agent_module_files_folder",
+) -> None:
+    """Remember module-file choices before an early manual ``st.rerun``."""
+    current = state.get(key)
+    if not isinstance(current, (list, tuple)) or not current:
+        return
+    folder_signature = str(state.get(signature_key) or "")
+    if not folder_signature:
+        return
+    state["_research_agent_module_pending_selection_restore"] = {
+        "folder": folder_signature,
+        "labels": [str(label) for label in current],
+        "source": str(state.get("research_agent_cohort_source") or ""),
+    }
+
+
+def _restore_pending_module_source(
+    state: MutableMapping[str, Any],
+    *,
+    options: Sequence[str],
+) -> None:
+    """Restore module-folder source before the cohort radio renders."""
+    pending = state.get("_research_agent_module_pending_selection_restore")
+    if not isinstance(pending, dict):
+        return
+    source = pending.get("source")
+    if isinstance(source, str) and source in options:
+        state["research_agent_cohort_source"] = source
+
+
+def _restore_pending_module_file_selection(
+    state: MutableMapping[str, Any],
+    *,
+    key: str,
+    signature_key: str,
+    folder: Path,
+    labels: Sequence[str],
+) -> None:
+    """Restore choices saved before Apply question/template reruns."""
+    current = state.get(key)
+    if current:
+        state.pop("_research_agent_module_pending_selection_restore", None)
+        return
+    pending = state.pop("_research_agent_module_pending_selection_restore", None)
+    if not isinstance(pending, dict) or pending.get("folder") != str(folder):
+        return
+    label_set = set(labels)
+    restored = [
+        str(label)
+        for label in pending.get("labels") or []
+        if str(label) in label_set
+    ]
+    if restored:
+        state[key] = restored
+        state[signature_key] = str(folder)
+
+
 _RAW_EXTRACT_MODULES_KEY = "research_agent_extract_modules"
 _LEGACY_RAW_EXTRACT_DEFAULT_MODULES = (
     "demographics",
@@ -2420,6 +2521,7 @@ def _section_cohort_picker(
     if st.session_state.pop("_eu_ra_no_data_entry", False):
         st.session_state["research_agent_cohort_source"] = source_no_data
         _clear_research_agent_preflight_confirmation()
+    _restore_pending_module_source(st.session_state, options=options)
     if st.session_state.get("research_agent_cohort_source") not in (None, *options):
         st.session_state.pop("research_agent_cohort_source", None)
     source = st.radio(
@@ -2626,6 +2728,20 @@ def _section_cohort_picker(
             folder=folder,
             labels=labels,
         )
+        _restore_pending_module_file_selection(
+            st.session_state,
+            key="research_agent_module_files",
+            signature_key="research_agent_module_files_folder",
+            folder=folder,
+            labels=labels,
+        )
+        _restore_module_file_selection_after_build_rerun(
+            st.session_state,
+            key="research_agent_module_files",
+            signature_key="research_agent_module_files_folder",
+            folder=folder,
+            labels=labels,
+        )
         selected_labels = st.multiselect(
             _ra_text("module_files"),
             labels,
@@ -2787,6 +2903,7 @@ def _section_cohort_picker(
             "signature": build_signature,
             "df": df,
         }
+        st.session_state["_research_agent_module_restore_built_selection"] = True
         st.dataframe(df.head(8), use_container_width=True, hide_index=True)
         return df, f"module_folder:{folder}"
 
@@ -3165,6 +3282,7 @@ def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
             st.caption(_ra_text("starter_selected", label=selected_example["label"], summary=selected_example["summary"]))
         with c2:
             if st.button(_ra_text("use_template"), key=f"research_agent_apply_{selected_example['key']}", use_container_width=True):
+                _preserve_module_file_selection_for_next_rerun(st.session_state)
                 st.session_state["research_agent_question"] = selected_example["prompt"]
                 st.session_state["research_agent_target_outcome"] = selected_example.get("outcome", "")
                 st.session_state["research_agent_example_active"] = selected_example["label"]
@@ -3192,6 +3310,7 @@ def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
     with apply_cols[1]:
         st.caption(_ra_text("apply_question_help"))
     if apply_question:
+        _preserve_module_file_selection_for_next_rerun(st.session_state)
         if str(st.session_state.get("research_agent_question", "")).strip():
             st.session_state["_research_agent_question_applied_notice"] = True
         else:
