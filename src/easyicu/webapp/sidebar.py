@@ -1716,9 +1716,12 @@ def _render_export_completed_panel() -> bool:
         st.session_state.trigger_export = False
         st.session_state.step1_confirmed = False
         st.session_state.step2_confirmed = False
+        st.session_state.step3_confirmed = False
+        st.session_state[_STEP2_RESET_PENDING_KEY] = True
         st.session_state.selected_concepts = []
         st.session_state.concept_checkboxes = {}
         st.session_state.selected_groups = []
+        st.session_state.pop('_eu_concept_defaults_seeded', None)
         st.session_state.loaded_concepts = {}
         st.session_state.loaded_data_origin = 'none'
         # 🔧 FIX (2026-02-15): 重置采样参数，避免上次提取的 patient_limit/patient_ids 泄露到新提取
@@ -1727,6 +1730,8 @@ def _render_export_completed_panel() -> bool:
         st.session_state.all_patient_count = 0
         st.session_state.pop('_viz_auto_load_export', None)
         st.session_state.pop('_post_export_guidance_dismissed', None)
+        st.session_state.pop('_post_export_navigation_pending', None)
+        st.session_state.pop('_post_export_target_panel', None)
         st.session_state.pop('_export_success_result', None)
         # 🔧 FIX (2026-02-15): 清除 easyicu 内部缓存，避免上次提取的数据影响新提取
         try:
@@ -3200,6 +3205,9 @@ def _render_step2_cohort_builder_design() -> bool:
                 use_container_width=True,
             ):
                 _clear_icd_preview_state()
+                concept_groups = get_concept_groups()
+                st.session_state.pop("_eu_concept_defaults_seeded", None)
+                _reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))
                 st.session_state.step2_confirmed = True
                 st.rerun()
 

@@ -965,8 +965,12 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
         'research_agent_extract_data_path',
         'research_agent_extract_db',
         '_research_agent_extract_db_source',
+        '_post_export_navigation_pending',
+        '_post_export_target_panel',
+        '_export_cancel_notice',
     ):
         state.pop(key, None)
+    state['_post_export_guidance_dismissed'] = True
     clear_agent_continuation_state(state)
     for key in (
         '_agent_workbench',

@@ -160,6 +160,17 @@ def test_concept_selection_design_exposes_all_action() -> None:
     assert "_all_concept_groups(concept_groups)" in source
 
 
+def test_step2_confirm_seeds_default_concepts_before_rerun() -> None:
+    source = Path(sidebar.__file__).read_text(encoding="utf-8")
+    confirm_block = source[
+        source.index('key="step2_confirm_design"'):
+        source.index("with right:\n        _render_cohort_live_preview")
+    ]
+
+    assert "_reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))" in confirm_block
+    assert confirm_block.index("_reset_concepts_to_groups") < confirm_block.index("st.rerun()")
+
+
 def test_concept_search_matches_display_metadata_and_units() -> None:
     assert sidebar._concept_matches_search("lact", "lactate") is True
     assert sidebar._concept_matches_search("lact", "mmol") is True
@@ -4610,6 +4621,22 @@ def test_export_cancel_queue_keeps_user_on_extraction_page() -> None:
     assert state["_export_cancel_notice"] == "Export stopped by user."
 
 
+def test_completed_export_restart_resets_all_extraction_steps() -> None:
+    source = Path(sidebar.__file__).read_text(encoding="utf-8")
+    restart_block = source[
+        source.index('key="restart_extraction"'):
+        source.index("# 返回首页按钮")
+    ]
+
+    assert "st.session_state.step1_confirmed = False" in restart_block
+    assert "st.session_state.step2_confirmed = False" in restart_block
+    assert "st.session_state.step3_confirmed = False" in restart_block
+    assert "st.session_state[_STEP2_RESET_PENDING_KEY] = True" in restart_block
+    assert "st.session_state.pop('_eu_concept_defaults_seeded', None)" in restart_block
+    assert "st.session_state.pop('_post_export_navigation_pending', None)" in restart_block
+    assert "st.session_state.pop('_post_export_target_panel', None)" in restart_block
+
+
 def test_sidebar_pipeline_steps_are_sequential_click_targets() -> None:
     source = Path(sidebar.__file__).read_text(encoding="utf-8")
     css_text = shell_styles._load_shell_overrides_css()
@@ -5337,6 +5364,11 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
         "_eu_wb_evidence_pick_step_key": "01",
         "_eu_wb_timeline_jump_run_key": "03",
         "_ra_view": "summary",
+        "export_completed": True,
+        "_post_export_navigation_pending": True,
+        "_post_export_target_panel": "Data Tables",
+        "_post_export_guidance_dismissed": False,
+        "_export_cancel_notice": "Export stopped by user.",
     }
 
     result = app._consume_topbar_run_request(state, "settings", "en")
@@ -5367,6 +5399,11 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert "research_agent_extract_data_path" not in state
     assert "research_agent_extract_db" not in state
     assert "_research_agent_extract_db_source" not in state
+    assert state["export_completed"] is True
+    assert state["_post_export_guidance_dismissed"] is True
+    assert "_post_export_navigation_pending" not in state
+    assert "_post_export_target_panel" not in state
+    assert "_export_cancel_notice" not in state
     assert state["_ra_view"] == "setup"
     for key in (
         "research_agent_resume_run_id",
