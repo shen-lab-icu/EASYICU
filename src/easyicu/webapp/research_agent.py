@@ -4941,6 +4941,11 @@ def _render_research_agent_setup_overview(
         "在本页确认计划、上下文披露和文件影响之前，不会调用模型。"
     )
     gate_action = "Confirm below before launch" if is_en else "启动前在下方确认"
+    context_badge = (
+        ("ready" if is_en else "已就绪")
+        if cohort_ready else
+        ("awaiting cohort" if is_en else "等待队列")
+    )
     st.markdown(
         f"""
         <div class="ra-setup-overview ra-pipeline-overview">
@@ -4954,7 +4959,7 @@ def _render_research_agent_setup_overview(
           <div class="ra-setup-stage-list">{stage_html}</div>
           <div class="ra-setup-split">
             <div class="ra-setup-card context">
-              <div class="ra-setup-card-title">{"Context pack" if is_en else "上下文包"} <span>{"handed off" if is_en else "已交接"}</span></div>
+              <div class="ra-setup-card-title">{"Context pack" if is_en else "上下文包"} <span>{html.escape(context_badge)}</span></div>
               <div class="ra-setup-context-grid">{context_html}</div>
               <div class="ra-setup-card-title tray">{"Concept tray" if is_en else "概念托盘"}</div>
               <div class="ra-setup-tray">{tray_html}</div>
