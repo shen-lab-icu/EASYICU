@@ -2220,6 +2220,32 @@ def test_get_started_buttons_route_to_real_destinations() -> None:
     ):
         assert key not in agent_state
 
+    no_data_state: dict[str, object] = {
+        "entry_mode": "demo",
+        "use_mock_data": True,
+        "database": "mock",
+        "path_validated": True,
+        "last_validated_path": "/tmp/mock",
+        "research_agent_resume_run_id": "run_old",
+        "research_agent_force_manuscript": True,
+        "research_agent_preflight_confirmed": True,
+        "research_agent_cohort_source": i18n.TEXTS["en"]["ra_source_synthetic"],
+    }
+    pages_redesign._route_to_research_agent_no_data_setup(no_data_state)
+    assert no_data_state["_active_main_page"] == "research_agent"
+    assert no_data_state["_ra_view"] == "setup"
+    assert no_data_state["entry_mode"] == "real"
+    assert no_data_state["use_mock_data"] is False
+    assert no_data_state["database"] == "miiv"
+    assert no_data_state["path_validated"] is False
+    assert "last_validated_path" not in no_data_state
+    assert no_data_state["_eu_ra_focus_no_data"] is True
+    assert no_data_state["_eu_ra_no_data_entry"] is True
+    assert "research_agent_cohort_source" not in no_data_state
+    assert "research_agent_resume_run_id" not in no_data_state
+    assert "research_agent_force_manuscript" not in no_data_state
+    assert "research_agent_preflight_confirmed" not in no_data_state
+
     settings_agent_state: dict[str, object] = {
         "entry_mode": "demo",
         "use_mock_data": True,
@@ -2351,6 +2377,42 @@ def test_demo_entry_routes_to_data_extraction_before_visualization(tmp_path, mon
     warning_text = " ".join(getattr(warning, "value", "") for warning in at.warning)
     assert "Dashboard rendering failed" not in warning_text
     assert "time_candidates" not in warning_text
+
+
+def test_entry_no_data_cta_routes_to_real_agent_extraction_setup(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.session_state["research_agent_resume_run_id"] = "run_old"
+    at.session_state["research_agent_force_manuscript"] = True
+    at.session_state["research_agent_preflight_confirmed"] = True
+    at.run(timeout=60)
+    at.button(key="_eu_entry_nodata").click().run(timeout=60)
+
+    assert at.session_state["_active_main_page"] == "research_agent"
+    assert at.session_state["_ra_view"] == "setup"
+    assert at.session_state["entry_mode"] == "real"
+    assert at.session_state["use_mock_data"] is False
+    assert at.session_state["database"] == "miiv"
+    assert at.session_state["research_agent_cohort_source"] == i18n.TEXTS["en"]["ra_source_no_data"]
+    assert at.session_state["_eu_ra_focus_no_data"] is True
+    assert "_eu_ra_no_data_entry" not in at.session_state
+    assert "research_agent_resume_run_id" not in at.session_state
+    assert "research_agent_force_manuscript" not in at.session_state
+    assert at.session_state["research_agent_preflight_confirmed"] is False
+
+    page_text = " ".join(
+        getattr(element, "value", "")
+        for collection in (at.markdown, at.info, at.warning)
+        for element in collection
+    )
+    assert "Demo Mode is a lightweight preview" not in page_text
+    assert "Use this when you start from raw ICU tables" in page_text
 
 
 def test_topbar_render_loads_quick_preview_from_demo_mode(tmp_path, monkeypatch) -> None:

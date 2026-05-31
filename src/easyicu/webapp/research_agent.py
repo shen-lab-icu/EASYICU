@@ -2417,6 +2417,9 @@ def _section_cohort_picker(
             source_multi_db,
             source_no_data,
         ]
+    if st.session_state.pop("_eu_ra_no_data_entry", False):
+        st.session_state["research_agent_cohort_source"] = source_no_data
+        _clear_research_agent_preflight_confirmation()
     if st.session_state.get("research_agent_cohort_source") not in (None, *options):
         st.session_state.pop("research_agent_cohort_source", None)
     source = st.radio(
@@ -5363,7 +5366,8 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
             method_notes, user_preferences = _section_method_preferences(free_question, target_outcome)
         question_hint = free_question
         focus_module_folder = bool(st.session_state.get("_eu_ra_focus_module_folder", False))
-        with st.expander(_step_titles[2], expanded=bool(question_hint) or focus_module_folder):
+        focus_no_data = bool(st.session_state.get("_eu_ra_focus_no_data", False))
+        with st.expander(_step_titles[2], expanded=bool(question_hint) or focus_module_folder or focus_no_data):
             cohort, cohort_label = _section_cohort_picker(research_question=question_hint)
         if cohort is not None and not _multi_db_label_is_distinct(cohort_label):
             tags = _multi_db_label_tags(cohort_label)
