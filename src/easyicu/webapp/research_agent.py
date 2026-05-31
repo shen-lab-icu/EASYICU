@@ -4944,7 +4944,11 @@ def _render_research_agent_setup_overview(
         if is_en else
         "在本页确认计划、上下文披露和文件影响之前，不会调用模型。"
     )
-    gate_action = "Confirm below before launch" if is_en else "启动前在下方确认"
+    gate_action = (
+        ("Ready to run" if is_en else "可以运行")
+        if preflight_confirmed else
+        ("Confirm below before launch" if is_en else "启动前在下方确认")
+    )
     context_badge = (
         ("ready" if is_en else "已就绪")
         if cohort_ready else
@@ -5222,7 +5226,7 @@ def _render_execution_preflight(
         ):
             st.session_state["research_agent_preflight_confirmed"] = True
             st.session_state["research_agent_preflight_signature"] = signature
-            confirmed = True
+            st.rerun()
     with c2:
         if st.button(
             "Reset review" if is_en else "重置复核",
@@ -5230,7 +5234,7 @@ def _render_execution_preflight(
             key="research_agent_preflight_reset",
         ):
             st.session_state["research_agent_preflight_confirmed"] = False
-            confirmed = False
+            st.rerun()
     external_consent_needed = bool(contract["external_llm"] and not st.session_state.get("llm_enabled", False))
     if confirmed and external_consent_needed:
         st.info(
