@@ -35,7 +35,7 @@ import re
 import threading
 import base64
 from functools import lru_cache
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, MutableMapping, Optional
 from easyicu.webapp.mock_data import generate_mock_data
 from easyicu.webapp.sidebar import render_sidebar as _render_sidebar_impl
 from easyicu.webapp.patient_page import render_patient_page as _render_patient_page_impl
@@ -2248,14 +2248,31 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
             st.session_state["research_agent_inbound_cohort"] = df
             st.session_state["research_agent_inbound_cohort_label"] = label
             st.session_state["research_agent_inbound_signature"] = signature
+            st.session_state["research_agent_cohort_source"] = get_text("ra_source_handoff")
+            st.session_state["_eu_ra_force_setup_from_handoff"] = True
+            st.session_state["_ra_view"] = "setup"
+            st.session_state["research_agent_preflight_confirmed"] = False
+            st.session_state.pop("research_agent_preflight_signature", None)
             message = get_text("ra_handoff_success").format(rows=len(df))
             st.session_state["_assistant_notice"] = message
-            st.success(message)
+            st.session_state["_eu_ra_handoff_success_message"] = message
+            st.rerun()
+
+
+def _research_agent_handoff_setup_ready(state: Dict[str, Any]) -> bool:
+    """Return whether an in-session cohort should open the real setup surface."""
+    inbound = state.get("research_agent_inbound_cohort")
+    return (
+        bool(state.get("_eu_ra_force_setup_from_handoff"))
+        and isinstance(inbound, pd.DataFrame)
+        and not inbound.empty
+    )
 
 
 def _render_research_agent_reference_header(lang: str, *, view: str = "setup") -> None:
     """Render the shared Agent identity before the view tabs."""
     entry_is_demo = st.session_state.get("entry_mode") == "demo"
+    handoff_setup_ready = _research_agent_handoff_setup_ready(st.session_state)
     state = st.session_state.get("_agent_workbench")
     step_count = 0
     state_is_demo: bool | None = None
@@ -2263,7 +2280,7 @@ def _render_research_agent_reference_header(lang: str, *, view: str = "setup") -
         step_count = len(state.get("steps") or [])
         if step_count:
             state_is_demo = bool(state.get("is_demo"))
-    is_static_guide = entry_is_demo if state_is_demo is None else state_is_demo
+    is_static_guide = (entry_is_demo and not handoff_setup_ready) if state_is_demo is None else state_is_demo
     runs_value = "preview" if is_static_guide and not step_count else str(step_count)
     arm_label = "Static guide" if is_static_guide else "ICU-aware · default arm"
     arm_title = (
@@ -4416,6 +4433,10 @@ def main():
                         st.session_state['_ra_view'] = 'summary'
                         st.rerun()
 
+            _ra_handoff_success = st.session_state.pop("_eu_ra_handoff_success_message", "")
+            if _ra_handoff_success:
+                st.success(str(_ra_handoff_success))
+
             if _ra_view == 'workbench':
                 from easyicu.webapp.agent_workbench import render_agent_workbench
                 render_agent_workbench(lang, show_header=False)
@@ -4447,7 +4468,12 @@ def main():
                         st.session_state.get("research_agent_resume_run_id")
                         or st.session_state.get("research_agent_force_manuscript")
                     )
-                    if st.session_state.get('entry_mode') == 'demo' and not _draft_resume_pending:
+                    _handoff_setup_pending = _research_agent_handoff_setup_ready(st.session_state)
+                    if (
+                        st.session_state.get('entry_mode') == 'demo'
+                        and not _draft_resume_pending
+                        and not _handoff_setup_pending
+                    ):
                         render_research_agent_demo_page(show_header=False)
                     else:
                         render_research_agent_page(show_header=False)
