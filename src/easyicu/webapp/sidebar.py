@@ -3428,11 +3428,9 @@ def render_sidebar(app_context: dict[str, Any] | None = None):
         # === Shell-A header: brand, workspace switcher, search, nav, pipeline ===
         _render_shell_brand(entry_mode)
         if entry_mode != 'none':
-            active_main_page = st.session_state.get("_active_main_page", "tutorial")
             with st.container(key="eu_sidebar_nav_area"):
                 _render_shell_primary_nav()
-                if active_main_page in {"assistant", "tutorial", "states"}:
-                    _render_shell_aux_nav()
+                _render_shell_aux_nav()
             _render_shell_context_dock(entry_mode)
 
         # Footer icon row (back / help / settings / lang / avatar) — at
