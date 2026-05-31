@@ -5224,6 +5224,29 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
         "research_agent_extract_data_path": "/tmp/old-agent-source",
         "research_agent_extract_db": "mimic",
         "_research_agent_extract_db_source": "mimic",
+        "research_agent_resume_run_id": "run_20260531T121512_3a91c8",
+        "research_agent_force_manuscript": True,
+        "research_agent_resume_mode": "force_manuscript",
+        "research_agent_resume_notes": "stale review note",
+        "research_agent_resume_relax_probe": True,
+        "research_agent_preflight_confirmed": True,
+        "research_agent_preflight_signature": "stale-signature",
+        "_agent_workbench": {"run_id": "run_20260531T121512_3a91c8"},
+        "_agent_workbench_source_run_dir": "/tmp/run_old",
+        "_agent_workbench_is_active_selection": True,
+        "_eu_ra_launch_requested": True,
+        "_eu_ra_focus_module_folder": True,
+        "_eu_ra_module_pick_force_manual": True,
+        "_eu_ra_apply_export_file_selection": True,
+        "_eu_wb_findings_acked": {"finding-a"},
+        "_eu_wb_review_details_expanded": True,
+        "_eu_wb_action_panel": "plan",
+        "_eu_summary_review_note_run_20260531T121512_3a91c8": "stale note",
+        "_eu_wb_ev_sha_show_step_key": True,
+        "_eu_wb_ev_id_show_step_key": True,
+        "_eu_wb_evidence_pick_step_key": "01",
+        "_eu_wb_timeline_jump_run_key": "03",
+        "_ra_view": "summary",
     }
 
     result = app._consume_topbar_run_request(state, "settings", "en")
@@ -5254,6 +5277,32 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert "research_agent_extract_data_path" not in state
     assert "research_agent_extract_db" not in state
     assert "_research_agent_extract_db_source" not in state
+    assert state["_ra_view"] == "setup"
+    for key in (
+        "research_agent_resume_run_id",
+        "research_agent_force_manuscript",
+        "research_agent_resume_mode",
+        "research_agent_resume_notes",
+        "research_agent_resume_relax_probe",
+        "research_agent_preflight_confirmed",
+        "research_agent_preflight_signature",
+        "_agent_workbench",
+        "_agent_workbench_source_run_dir",
+        "_agent_workbench_is_active_selection",
+        "_eu_ra_launch_requested",
+        "_eu_ra_focus_module_folder",
+        "_eu_ra_module_pick_force_manual",
+        "_eu_ra_apply_export_file_selection",
+        "_eu_wb_findings_acked",
+        "_eu_wb_review_details_expanded",
+        "_eu_wb_action_panel",
+        "_eu_summary_review_note_run_20260531T121512_3a91c8",
+        "_eu_wb_ev_sha_show_step_key",
+        "_eu_wb_ev_id_show_step_key",
+        "_eu_wb_evidence_pick_step_key",
+        "_eu_wb_timeline_jump_run_key",
+    ):
+        assert key not in state
     assert "_eu_topbar_run_request" not in state
 
 
