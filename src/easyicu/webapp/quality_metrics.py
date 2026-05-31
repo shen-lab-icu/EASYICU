@@ -331,7 +331,7 @@ def _patient_selector(
         'options': options,
         'key': state_key,
     }
-    if default_patient in options:
+    if state_key not in st.session_state and default_patient in options:
         select_kwargs['index'] = options.index(default_patient)
     return st.selectbox(**select_kwargs)
 

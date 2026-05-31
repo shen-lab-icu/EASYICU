@@ -659,19 +659,19 @@ def _suggest_ui_actions(prompt: str, answer: str, lang: str) -> list[dict[str, o
         any(key in answer_l for key in ["data dictionary", "数据字典", "concept dictionary"]) and
         any(key in prompt_l for key in ["where", "在哪", "在哪里", "怎么找", "how to find", "查看"])
     ):
-        add_nav("home_dict", "📖 Open Data Dictionary", "📖 打开数据字典")
+        add_nav("home_dict", "Open Data Dictionary", "打开数据字典")
 
     if tutorial_requested and not dictionary_requested:
-        add_nav("tutorial", "📚 Open Tutorial", "📚 打开教程")
+        add_nav("tutorial", "Open Tutorial", "打开教程")
 
     if viz_requested:
-        add_nav("viz", "📊 Open Quick Visualization", "📊 前往快速可视化")
+        add_nav("viz", "Open Quick Visualization", "前往快速可视化")
 
     if cohort_requested:
-        add_nav("cohort", "🔬 Open Cohort Analysis", "🔬 前往队列分析")
+        add_nav("cohort", "Open Cohort Analysis", "前往队列分析")
 
     if export_requested:
-        add_nav("tutorial", "📚 Open Export Guide", "📚 打开导出教程")
+        add_nav("tutorial", "Open Export Guide", "打开导出教程")
 
     target_db = _infer_db_from_text(combined)
     is_all_features_request = any(key in combined for key in [
@@ -686,8 +686,8 @@ def _suggest_ui_actions(prompt: str, answer: str, lang: str) -> list[dict[str, o
     if target_db == "miiv" and is_all_features_request:
         add_preset(
             "preset_miiv_all",
-            "⚙️ Prepare MIMIC-IV Full Feature Selection",
-            "⚙️ 预设 MIMIC-IV 全量特征选择",
+            "Prepare MIMIC-IV Full Feature Selection",
+            "预设 MIMIC-IV 全量特征选择",
             {
                 "kind": "feature_preset",
                 "database": "miiv",
@@ -702,8 +702,8 @@ def _suggest_ui_actions(prompt: str, answer: str, lang: str) -> list[dict[str, o
     if target_db == "miiv" and is_sepsis_extract_request:
         add_preset(
             "preset_miiv_sepsis",
-            "🦠 Prepare MIMIC-IV Sepsis Feature Set",
-            "🦠 预设 MIMIC-IV Sepsis 特征集",
+            "Prepare MIMIC-IV Sepsis Feature Set",
+            "预设 MIMIC-IV Sepsis 特征集",
             {
                 "kind": "feature_preset",
                 "database": "miiv",
@@ -1042,6 +1042,8 @@ def render_llm_settings(
     expanded: bool = False,
     show_status_card: bool = True,
     controls_only: bool = False,
+    show_enable_toggle: bool = True,
+    open_sidebar_on_enable: bool = True,
 ):
     """Render LLM configuration controls in the sidebar or settings popover."""
     _init_chat_state()
@@ -1120,26 +1122,62 @@ def render_llm_settings(
             unsafe_allow_html=True,
         )
 
-    label = "⚙️ AI settings" if lang == "en" else "⚙️ AI 设置"
+    label = "AI settings" if lang == "en" else "AI 设置"
     if controls_only:
-        _render_llm_settings_controls(lang)
+        _render_llm_settings_controls(
+            lang,
+            show_enable_toggle=show_enable_toggle,
+            open_sidebar_on_enable=open_sidebar_on_enable,
+        )
     else:
         with st.expander(label, expanded=expanded):
-            _render_llm_settings_controls(lang)
+            _render_llm_settings_controls(
+                lang,
+                show_enable_toggle=show_enable_toggle,
+                open_sidebar_on_enable=open_sidebar_on_enable,
+            )
 
 
-def _render_llm_settings_controls(lang: str) -> None:
+def _render_llm_settings_controls(
+    lang: str,
+    *,
+    show_enable_toggle: bool = True,
+    open_sidebar_on_enable: bool = True,
+) -> None:
     previous_enabled = bool(st.session_state.llm_enabled)
-    enabled = st.toggle(
-        "Enable AI assistant" if lang == "en" else "启用 AI 助手",
-        value=previous_enabled,
-        key="_llm_toggle",
-    )
-    st.session_state.llm_enabled = bool(enabled)
-    st.session_state["_floating_ai_open"] = False
-    if enabled:
-        st.session_state["_sidebar_ai_open"] = True
-    if not enabled:
+    if show_enable_toggle:
+        enabled = st.toggle(
+            "Enable AI assistant" if lang == "en" else "启用 AI 助手",
+            value=previous_enabled,
+            key="_llm_toggle",
+        )
+        st.session_state.llm_enabled = bool(enabled)
+        st.session_state["_floating_ai_open"] = False
+        if enabled and open_sidebar_on_enable:
+            st.session_state["_sidebar_ai_open"] = True
+    else:
+        enabled = previous_enabled
+        status = (
+            "Outbound model calls allowed" if enabled else "Outbound model calls disabled"
+        ) if lang == "en" else (
+            "已允许模型端调用" if enabled else "模型端调用已关闭"
+        )
+        detail = (
+            "Provider details can be prepared here; calls still require the shared outbound toggle."
+            if lang == "en" else
+            "可以先准备服务商配置；是否允许调用由上方共享开关控制。"
+        )
+        klass = "on" if enabled else "off"
+        st.markdown(
+            f"""
+            <div class="eu-llm-settings-status {klass}">
+              <span></span>
+              <div><b>{status}</b><p>{detail}</p></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    if not enabled and show_enable_toggle:
         hint = ("Enable this to use the AI panel in the main workspace."
                 if lang == "en"
                 else "启用后可在主工作区使用 AI 面板。")
@@ -1193,8 +1231,16 @@ def _render_llm_settings_controls(lang: str) -> None:
     )
     st.session_state.llm_model = model
 
-    if _is_configured():
+    configured = _is_configured()
+    if configured and enabled:
         st.success("Ready" if lang == 'en' else "已就绪")
+        st.session_state.llm_configured = True
+    elif configured:
+        st.info(
+            "Provider configured. Turn on outbound model calls above when you want to use it."
+            if lang == "en" else
+            "服务商配置已就绪；需要使用时请打开上方模型端调用开关。"
+        )
         st.session_state.llm_configured = True
     else:
         st.warning("Enter API Key to enable chat"
@@ -1231,10 +1277,10 @@ def render_chat_tab():
     # ---- Guard: not enabled --------------------------------------------------
     if not st.session_state.llm_enabled:
         st.info(
-            "🤖 " + (
-                "The AI Assistant is disabled. Enable it in the sidebar **🤖 AI Assistant** section."
+            (
+                "The AI Assistant is disabled. Enable it in the sidebar AI Assistant section."
                 if lang == "en" else
-                "AI 助手当前已关闭。请在侧边栏 **🤖 AI 助手** 中开启。"
+                "AI 助手当前已关闭。请在侧边栏 AI 助手中开启。"
             )
         )
         # Show a brief intro even when disabled
@@ -1244,10 +1290,10 @@ def render_chat_tab():
     # ---- Guard: not configured -----------------------------------------------
     if not _is_configured():
         st.warning(
-            "🔑 " + (
-                "Please configure your API Key in the sidebar **🤖 AI Assistant** section first."
+            (
+                "Please configure your API Key in the sidebar AI Assistant section first."
                 if lang == "en" else
-                "请先在侧边栏 **🤖 AI 助手** 中设置 API Key。"
+                "请先在侧边栏 AI 助手中设置 API Key。"
             )
         )
         return
@@ -1257,7 +1303,7 @@ def render_chat_tab():
         import openai as _openai_mod  # noqa: F401
     except ImportError:
         st.error(
-            "📦 " + (
+            (
                 "The `openai` Python package is required. "
                 "Install it with: `pip install openai`"
                 if lang == "en" else
@@ -1272,8 +1318,8 @@ def render_chat_tab():
                   or public_provider_defaults(st.session_state.get("llm_provider", public_default_provider_key()))[2]
                   or "—")
     st.markdown(
-        "##### " + ("💬 Chat with AI Assistant" if lang == "en"
-                     else "💬 与 AI 助手对话")
+        "##### " + ("Chat with AI Assistant" if lang == "en"
+                     else "与 AI 助手对话")
     )
     st.caption(f"**{provider_name}** · `{model_name}`")
     st.caption(
@@ -1282,15 +1328,15 @@ def render_chat_tab():
         "引导模式：优先教你如何使用 Web 工作流，再按需补充代码与证据"
     )
 
-    with st.expander("💡 " + ("What can I ask?" if lang == "en" else "我可以问什么？"),
+    with st.expander(("What can I ask?" if lang == "en" else "我可以问什么？"),
                       expanded=False):
         _render_tips(lang)
 
     if st.session_state.get("llm_last_tool_events"):
-        with st.expander("🛠️ " + ("Last tool activity" if lang == "en" else "上次工具调用"), expanded=False):
+        with st.expander(("Last tool activity" if lang == "en" else "上次工具调用"), expanded=False):
             for event in st.session_state.llm_last_tool_events:
-                icon = "✅" if event.get("status") == "ok" else "⚠️"
-                st.markdown(f"{icon} `{event.get('tool', 'tool')}` — {event.get('detail', '')}")
+                status = "ok" if event.get("status") == "ok" else "needs attention"
+                st.markdown(f"`{event.get('tool', 'tool')}` · {status} — {event.get('detail', '')}")
 
     # ---- Render message history -----------------------------------------------
     history_container = st.container(height=680, border=True)
@@ -1346,7 +1392,7 @@ def _submit_prompt(prompt: str, lang: str, history_container, key_prefix: str = 
 
     prep_placeholder = st.empty()
     prep_placeholder.info(
-        "🛠️ Preparing tools..." if lang == "en" else "🛠️ 正在准备工具..."
+        "Preparing tools..." if lang == "en" else "正在准备工具..."
     )
     try:
         messages, tool_events = _compose_agent_messages(prompt)
@@ -1366,6 +1412,74 @@ def _submit_prompt(prompt: str, lang: str, history_container, key_prefix: str = 
     with history_container:
         with st.chat_message("assistant"):
             _stream_response(messages, lang)
+
+
+def _submit_prompt_background(
+    prompt: str,
+    lang: str,
+    history_container,
+    key_prefix: str = "_llm",
+) -> None:
+    """Append a routed prompt and generate without blocking page navigation."""
+    prompt = (prompt or "").strip()
+    if not prompt:
+        return
+
+    st.session_state.llm_messages.append({"role": "user", "content": prompt})
+    with history_container:
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+    instant_reply = _get_instant_reply(prompt, lang)
+    if instant_reply is not None:
+        st.session_state.llm_last_tool_events = []
+        st.session_state.llm_last_verification = {
+            "status": "pass",
+            "issues": [],
+        }
+        instant_actions = _suggest_ui_actions(prompt, instant_reply, lang)
+        st.session_state.llm_messages.append(
+            {
+                "role": "assistant",
+                "content": instant_reply,
+                "actions": instant_actions,
+            }
+        )
+        with history_container:
+            with st.chat_message("assistant"):
+                st.markdown(instant_reply)
+                _render_nav_actions(instant_actions, key_prefix=f"{key_prefix}_instant")
+        return
+
+    session_id = _start_bg_response(prompt, lang)
+    if session_id:
+        st.session_state["_ai_bg_session_id"] = session_id
+        st.session_state["_ai_bg_responding"] = True
+        st.session_state["_ai_bg_response_ready"] = False
+        st.session_state["_ai_bg_unread_count"] = 0
+        status_text = (
+            "Generating response in the background. You can switch pages while I work."
+            if lang == "en" else
+            "正在后台生成回答。你可以切换页面，助手不会悬浮残留。"
+        )
+        with history_container:
+            st.markdown(
+                f'<div class="inline-ai-status-strip">{html.escape(status_text)}</div>',
+                unsafe_allow_html=True,
+            )
+        return
+
+    error_message = (
+        "I could not start the assistant response. Check the AI provider settings, then try again."
+        if lang == "en" else
+        "无法启动助手回答。请检查 AI 服务商设置后重试。"
+    )
+    st.session_state.llm_messages.append(
+        {"role": "assistant", "content": error_message, "actions": []}
+    )
+    with history_container:
+        with st.chat_message("assistant"):
+            st.markdown(error_message)
 
 
 def render_sidebar_chat_widget():
@@ -1447,7 +1561,7 @@ def render_sidebar_chat_widget():
         unsafe_allow_html=True,
     )
 
-    title = "💬 Embedded chat" if lang == "en" else "💬 嵌入式对话"
+    title = "Embedded chat" if lang == "en" else "嵌入式对话"
     with st.expander(title, expanded=expanded):
         st.session_state["_sidebar_ai_open"] = expanded
         if not st.session_state.llm_enabled:
@@ -1474,12 +1588,183 @@ def render_sidebar_chat_widget():
                 show_starters=not bool(pending_prompt),
             )
 
+def _inline_ai_context_html(lang: str) -> str:
+    state = st.session_state
+    is_en = lang == "en"
+    mode = str(state.get("entry_mode") or "demo")
+    mode_label = "demo" if mode in {"none", "demo"} else "real data"
+    if not is_en:
+        mode_label = "演示" if mode in {"none", "demo"} else "真实数据"
+    patient_ids = state.get("patient_ids") or []
+    mock_params = state.get("mock_params") or {}
+    patient_count = len(patient_ids) or int(
+        mock_params.get("n_patients") or state.get("demo_mode_patients") or 10
+    )
+    loaded = state.get("loaded_concepts") or {}
+    selected = state.get("selected_concepts") or []
+    module_count = len(loaded) or len(selected) or 19
+    context_name = (
+        state.get("last_export_name")
+        or state.get("research_agent_case_label")
+        or "sepsis_mortality_demo"
+    )
+    tags = selected[:6] if selected else ["vitals", "labs", "sofa", "sepsis-3", "lactate", "outcomes"]
+    tags_html = "".join(f"<span>{html.escape(str(tag))}</span>" for tag in tags[:6])
+    return (
+        '<div class="inline-ai-context-card">'
+        f'<div class="inline-ai-section-label">{"In context" if is_en else "当前上下文"}</div>'
+        f'<h3>{html.escape(str(context_name))}</h3>'
+        f'<p class="mono">{html.escape(mode_label)} · {patient_count} stays · {module_count} modules</p>'
+        f'<div class="inline-ai-tag-row">{tags_html}</div>'
+        '</div>'
+    )
 
-def render_inline_ai_panel():
+
+def _render_inline_ai_blocked_state(lang: str, *, enabled: bool) -> None:
+    is_en = lang == "en"
+    title = (
+        "Assistant is off" if not enabled else "Provider key is missing"
+    ) if is_en else (
+        "助手已关闭" if not enabled else "缺少模型服务配置"
+    )
+    desc = (
+        "Open Settings and enable the shared AI / API connection before chatting here."
+        if not enabled else
+        "Configure provider/API key in Settings first. API keys stay in this browser session only."
+    ) if is_en else (
+        "请先打开设置并启用共享 AI / API 连接，再在这里对话。"
+        if not enabled else
+        "请先在设置中配置服务商/API Key。API Key 只保存在当前浏览器会话。"
+    )
+    st.markdown(
+        '<div class="inline-ai-blocked">'
+        '<div class="inline-ai-blocked-icon">'
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/>'
+        '</svg></div>'
+        f'<div><b>{html.escape(title)}</b><p>{html.escape(desc)}</p></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_inline_ai_context_and_handoff(lang: str) -> None:
+    is_en = lang == "en"
+    st.markdown(_inline_ai_context_html(lang), unsafe_allow_html=True)
+    st.markdown(
+        '<div class="inline-ai-evidence-note">'
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M20 6 9 17l-5-5"/></svg>'
+        '<div>'
+        f'<b>{html.escape("Evidence-bound" if is_en else "证据绑定")}</b>'
+        f'<p>{html.escape("Suggestions only. Drafting stays locked until the agent checks pass." if is_en else "这里只给建议。Agent 检查通过前，草稿始终锁定。")}</p>'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="inline-ai-handoff-card">'
+        f'<div class="inline-ai-section-label">{html.escape("Hand off to" if is_en else "交接到")}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    col_a, col_b = st.columns(2, gap="small")
+    with col_a:
+        if st.button(
+            "Research Agent setup" if is_en else "Research Agent 配置",
+            key="_inline_ai_to_agent_setup",
+            icon=":material/smart_toy:",
+            use_container_width=True,
+        ):
+            st.session_state["_active_main_page"] = "research_agent"
+            st.session_state["_ra_view"] = "setup"
+            st.session_state["_scroll_to_top"] = True
+            st.session_state["_inline_ai_panel_open"] = False
+            st.session_state["_floating_ai_open"] = False
+            st.session_state.pop("_ai_pending_question", None)
+            st.rerun()
+    with col_b:
+        if st.button(
+            "How the workflow works" if is_en else "查看工作流说明",
+            key="_inline_ai_to_workflow",
+            icon=":material/help:",
+            use_container_width=True,
+        ):
+            st.session_state["_active_main_page"] = "tutorial"
+            st.session_state["_scroll_to_top"] = True
+            st.session_state["_inline_ai_panel_open"] = False
+            st.session_state["_floating_ai_open"] = False
+            st.session_state.pop("_ai_pending_question", None)
+            st.rerun()
+
+
+def _ai_panel_header_html(lang: str) -> str:
+    provider_key = coerce_public_provider(
+        st.session_state.get("llm_provider", public_default_provider_key())
+    )
+    provider_label = public_provider_defaults(provider_key)[0] or provider_key
+    default_model = public_provider_defaults(provider_key)[2] or "model"
+    model_label = st.session_state.get("llm_model") or default_model
+    title = "EasyICU Assistant" if lang == "en" else "EasyICU 助手"
+    if provider_key == "easyicu_hosted":
+        subtitle = (
+            "EasyICU hosted · evidence-bound"
+            if lang == "en" else
+            "EasyICU 托管 · 证据绑定"
+        )
+    else:
+        subtitle = (
+            f"{provider_label} · {model_label} · evidence-bound"
+            if lang == "en" else
+            f"{provider_label} · {model_label} · 证据绑定"
+        )
+    llm_configured = _is_configured()
+    if not st.session_state.get("llm_enabled", False):
+        status_label = "AI off" if lang == "en" else "AI 已关闭"
+        status_color = "var(--ink-4)"
+    elif not llm_configured:
+        status_label = "key missing" if lang == "en" else "缺少 API key"
+        status_color = "var(--warn)"
+    else:
+        status_label = "Ready" if lang == "en" else "已就绪"
+        status_color = "var(--ok)"
+    status_pill_html = (
+        f'<span class="inline-ai-status-pill eu-pill mono" '
+        f'style="font-size:10px;padding:2px 7px;height:18px;margin-left:8px;'
+        f'background:var(--surface);color:{status_color};'
+        f'border:1px solid var(--hair-2);vertical-align:middle">'
+        f'<span class="dot" style="background:{status_color}"></span>'
+        f'{html.escape(status_label)}</span>'
+    )
+    return (
+        '<div class="inline-ai-header">'
+        '<div class="inline-ai-avatar">AI</div>'
+        '<div class="inline-ai-meta">'
+        f'<div class="inline-ai-title">{html.escape(title)}</div>'
+        f'<div class="inline-ai-subtitle">{html.escape(subtitle)}</div>'
+        '</div>'
+        f'{status_pill_html}'
+        '</div>'
+    )
+
+
+def render_inline_ai_panel(*, force_open: bool = False, allow_close: bool = True):
     """Render the non-floating AI assistant as part of the main workspace."""
     _init_chat_state()
     lang = st.session_state.get("language", "en")
     pending_prompt = bool(st.session_state.get("_ai_pending_question"))
+    active_page = st.session_state.get("_active_main_page")
+    if active_page != "assistant":
+        st.session_state["_inline_ai_panel_open"] = False
+        st.session_state["_floating_ai_open"] = False
+        if force_open or pending_prompt:
+            st.session_state["_active_main_page"] = "assistant"
+            st.session_state["_scroll_to_top"] = True
+            st.rerun()
+        return
+    if force_open:
+        st.session_state["_inline_ai_panel_open"] = True
     if pending_prompt:
         st.session_state["_inline_ai_panel_open"] = True
         st.session_state["llm_enabled"] = True
@@ -1492,120 +1777,424 @@ def render_inline_ai_panel():
         """
         <style>
         .stApp div.st-key-inline_ai_assistant_panel {
-            border: 1px solid #d6dee8;
-            border-left: 3px solid #0e7490;
-            border-radius: 8px;
-            background: #ffffff;
-            padding: 0.72rem 0.78rem 0.78rem;
-            margin: 0.72rem 0 1rem;
-            box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
+            position: relative;
+            border: 1px solid var(--hair);
+            border-radius: var(--r-3);
+            background: color-mix(in oklab, white 74%, var(--surface));
+            padding: 0;
+            margin: 0.72rem 0 1.35rem;
+            overflow: hidden;
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
         }
         .stApp div.st-key-inline_ai_assistant_panel .inline-ai-header {
             display: flex;
             align-items: center;
-            gap: 0.62rem;
+            gap: 0.78rem;
             min-width: 0;
-            padding: 0.04rem 0 0.35rem;
+            padding: 1.02rem 4.1rem 1rem 1.18rem;
+            border-bottom: 1px solid var(--hair);
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .st-key-_inline_ai_close {
+            position: absolute !important;
+            top: 0.66rem;
+            right: 0.86rem;
+            z-index: 5;
+            width: 2.55rem !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .st-key-_inline_ai_close button {
+            width: 2.55rem !important;
+            min-width: 2.55rem !important;
+            min-height: 2.05rem !important;
+            padding: 0 !important;
+            border-radius: var(--r-2) !important;
+            background: white !important;
         }
         .stApp div.st-key-inline_ai_assistant_panel .inline-ai-avatar {
-            width: 2rem;
-            height: 2rem;
-            border-radius: 8px;
+            width: 2.25rem;
+            height: 2.25rem;
+            border-radius: var(--r-2);
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            color: #0f172a;
-            background: #ecfeff;
-            border: 1px solid #a5f3fc;
-            font-size: 1rem;
+            color: var(--accent);
+            background: var(--accent-soft);
+            border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--hair));
+            font-family: var(--font-mono);
+            font-size: 0.76rem;
+            font-weight: 760;
             flex: 0 0 auto;
         }
         .stApp div.st-key-inline_ai_assistant_panel .inline-ai-title {
-            color: #0f172a;
-            font-size: 0.95rem;
-            font-weight: 800;
+            color: var(--ink);
+            font-size: 1rem;
+            font-weight: 720;
             line-height: 1.2;
         }
         .stApp div.st-key-inline_ai_assistant_panel .inline-ai-subtitle {
-            color: #64748b;
-            font-size: 0.76rem;
+            color: var(--ink-4);
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
             line-height: 1.35;
             margin-top: 0.1rem;
         }
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-welcome {
-            border: 1px solid #dbe4ee;
-            border-radius: 8px;
-            background: #f8fafc;
-            padding: 0.8rem 0.88rem;
-            margin-bottom: 0.62rem;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            padding: 0.2rem 0 0.25rem;
+            margin: 0;
             box-shadow: none;
         }
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-welcome-title {
-            color: #0f172a;
-            font-size: 0.92rem;
-            font-weight: 800;
+            color: var(--ink-4);
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            font-weight: 650;
+            letter-spacing: .12em;
+            text-transform: uppercase;
             line-height: 1.25;
-            margin-bottom: 0.28rem;
+            margin: 0 0 0.5rem;
         }
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-welcome-subtitle,
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-user-bubble,
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-answer-card {
-            color: #475569;
-            font-size: 0.82rem;
-            line-height: 1.5;
+            color: var(--ink);
+            font-size: 0.9rem;
+            line-height: 1.58;
         }
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-sample {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-            gap: 0.5rem;
-            margin: 0.58rem 0 0.62rem;
+            grid-template-columns: minmax(0, 1fr);
+            gap: 0.72rem;
+            margin: 0.7rem 0 0.78rem;
         }
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-user-bubble,
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-answer-card,
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-recommendation {
-            border-radius: 8px;
-            border: 1px solid #e2e8f0;
-            background: #ffffff;
-            padding: 0.58rem 0.64rem;
+            border-radius: var(--r-3);
+            border: 1px solid var(--hair);
+            background: var(--surface);
+            padding: 0.86rem 1rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-user-bubble {
+            max-width: 68%;
+            margin-left: auto;
+            background: var(--ink);
+            color: white;
+            border-color: var(--ink);
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .floating-ai-answer-card {
+            max-width: 82%;
         }
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-recommendation {
-            grid-column: 1 / -1;
             display: grid;
-            gap: 0.12rem;
+            gap: 0.32rem;
+            max-width: 82%;
         }
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-recommendation span {
-            color: #64748b;
-            font-size: 0.68rem;
-            font-weight: 800;
+            color: var(--ink-4);
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 650;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.12em;
         }
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-recommendation strong,
         .stApp div.st-key-inline_ai_assistant_panel .floating-ai-welcome-hint {
-            color: #0f172a;
-            font-size: 0.8rem;
-            line-height: 1.38;
+            color: var(--ink);
+            font-size: 0.86rem;
+            line-height: 1.5;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-blocked,
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-context-card,
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-evidence-note,
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-handoff-card {
+            margin: 0.78rem 1.18rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-blocked {
+            display: grid;
+            grid-template-columns: 2.25rem 1fr;
+            gap: 0.82rem;
+            align-items: start;
+            padding: 0.9rem 1rem;
+            border: 1px solid color-mix(in oklab, var(--warn) 32%, var(--hair));
+            border-radius: var(--r-3);
+            background: color-mix(in oklab, var(--warn) 10%, white);
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-blocked-icon {
+            width: 2.1rem;
+            height: 2.1rem;
+            border-radius: var(--r-2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--warn);
+            background: white;
+            border: 1px solid color-mix(in oklab, var(--warn) 28%, var(--hair));
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-blocked b,
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-context-card h3,
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-evidence-note b {
+            color: var(--ink);
+            font-size: 0.95rem;
+            line-height: 1.3;
+            font-weight: 720;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-blocked p,
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-context-card p,
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-evidence-note p {
+            margin: 0.24rem 0 0;
+            color: var(--ink-2);
+            font-size: 0.84rem;
+            line-height: 1.5;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-context-card {
+            padding: 1rem;
+            border: 1px solid var(--hair);
+            border-radius: var(--r-3);
+            background: white;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-section-label {
+            color: var(--ink-4);
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 650;
+            letter-spacing: .12em;
+            line-height: 1.2;
+            text-transform: uppercase;
+            margin-bottom: 0.7rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-context-card h3 {
+            margin: 0;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-tag-row {
+            display: flex;
+            gap: 0.42rem;
+            flex-wrap: wrap;
+            margin-top: 0.82rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-tag-row span {
+            display: inline-flex;
+            align-items: center;
+            min-height: 24px;
+            padding: 0 0.72rem;
+            border: 1px solid var(--hair);
+            border-radius: 999px;
+            background: var(--surface);
+            color: var(--ink-2);
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-evidence-note {
+            display: grid;
+            grid-template-columns: 1.3rem 1fr;
+            gap: 0.72rem;
+            align-items: start;
+            padding: 0.98rem 1rem;
+            border: 1px solid color-mix(in oklab, var(--ok) 30%, var(--hair));
+            border-radius: var(--r-3);
+            background: color-mix(in oklab, var(--ok) 13%, white);
+            color: var(--ok);
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-handoff-card {
+            margin-bottom: 0.2rem;
+            padding-top: 0.2rem;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel .inline-ai-status-strip {
+            margin: 0.42rem 1.18rem 0.66rem;
+            padding: 0.62rem 0.78rem;
+            border: 1px solid var(--hair);
+            border-radius: var(--r-2);
+            background: color-mix(in oklab, var(--surface) 86%, white);
+            color: var(--ink-4);
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            line-height: 1.35;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessage"] {
+            display: flex !important;
+            align-items: flex-start !important;
+            gap: 0.72rem !important;
+            padding: 0.36rem 1.18rem !important;
+            background: transparent !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+            flex-direction: row-reverse !important;
+            justify-content: flex-start !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageAvatarUser"],
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageAvatarAssistant"] {
+            width: 2rem !important;
+            height: 2rem !important;
+            min-width: 2rem !important;
+            border-radius: var(--r-2) !important;
+            border: 1px solid var(--hair) !important;
+            box-shadow: none !important;
+            overflow: hidden !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageAvatarAssistant"] {
+            background: var(--accent-soft) !important;
+            color: var(--accent) !important;
+            border-color: color-mix(in oklab, var(--accent) 26%, var(--hair)) !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageAvatarUser"] {
+            background: color-mix(in oklab, var(--warn) 13%, white) !important;
+            color: var(--ink) !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageAvatarUser"] > *,
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageAvatarAssistant"] > * {
+            display: none !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageAvatarUser"]::after,
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageAvatarAssistant"]::after {
+            display: grid !important;
+            place-items: center !important;
+            width: 100% !important;
+            height: 100% !important;
+            font-family: var(--font-mono) !important;
+            font-size: 0.56rem !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.04em !important;
+            line-height: 1 !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageAvatarUser"]::after {
+            content: "YOU";
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageAvatarAssistant"]::after {
+            content: "AI";
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"] {
+            flex: 0 1 auto !important;
+            width: fit-content !important;
+            max-width: min(820px, 82%) !important;
+            min-width: 0 !important;
+            margin: 0 !important;
+            padding: 0.84rem 0.98rem !important;
+            border: 1px solid var(--hair) !important;
+            border-radius: var(--r-3) !important;
+            background: var(--surface) !important;
+            color: var(--ink) !important;
+            box-shadow: none !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"]::before {
+            content: "Assistant";
+            display: block;
+            margin-bottom: 0.34rem;
+            color: var(--ink-4);
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+            font-weight: 680;
+            letter-spacing: 0.12em;
+            line-height: 1.1;
+            text-transform: uppercase;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
+            max-width: min(650px, 68%) !important;
+            background: var(--ink) !important;
+            border-color: var(--ink) !important;
+            color: white !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"]::before {
+            content: "You";
+            color: rgba(255, 255, 255, 0.68);
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] p,
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] li {
+            color: white !important;
         }
         .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"] p,
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"] li,
         .stApp div.st-key-inline_ai_assistant_panel [data-testid="stMarkdownContainer"] p,
         .stApp div.st-key-inline_ai_assistant_panel input,
         .stApp div.st-key-inline_ai_assistant_panel label {
-            font-size: 0.84rem !important;
-            line-height: 1.48;
+            font-size: 0.9rem !important;
+            line-height: 1.56;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"] p,
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"] ul,
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"] ol {
+            margin-top: 0 !important;
+            margin-bottom: 0.48rem !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"] p:last-child,
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"] ul:last-child,
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"] ol:last-child {
+            margin-bottom: 0 !important;
         }
         .stApp div.st-key-inline_ai_assistant_panel .stButton > button,
         .stApp div.st-key-inline_ai_assistant_panel form button {
-            min-height: 34px;
-            border-radius: 7px;
-            font-size: 0.8rem;
+            min-height: 38px;
+            border-radius: var(--r-2);
+            font-size: 0.83rem;
+            font-weight: 650;
+            box-shadow: none !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stForm"] {
+            border: 0 !important;
+            padding: 0 1.18rem 1.05rem !important;
+            background: transparent !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stForm"] [data-testid="stHorizontalBlock"] {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            align-items: flex-end !important;
+            gap: 0.5rem !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stForm"] [data-testid="stColumn"] {
+            min-width: 0 !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stForm"] [data-testid="stColumn"]:last-child {
+            flex: 0 0 3.25rem !important;
+            width: 3.25rem !important;
+            min-width: 3.25rem !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stForm"] [data-testid="stTextInput"] {
+            margin-bottom: 0 !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stForm"] input {
+            min-height: 40px !important;
+            border-radius: var(--r-2) !important;
+        }
+        .stApp div.st-key-inline_ai_assistant_panel [data-testid="stFormSubmitButton"] button {
+            min-width: 42px !important;
+            min-height: 40px !important;
+            padding-left: 0.7rem !important;
+            padding-right: 0.7rem !important;
+            font-size: 1rem !important;
         }
         @media (max-width: 900px) {
-            .stApp div.st-key-inline_ai_assistant_panel .floating-ai-sample {
-                grid-template-columns: 1fr;
+            .stApp div.st-key-inline_ai_assistant_panel { margin-top: 0.55rem; }
+            .stApp div.st-key-inline_ai_assistant_panel .inline-ai-header { padding: 0.86rem 3.85rem 0.86rem 0.86rem; }
+            .stApp div.st-key-inline_ai_assistant_panel .st-key-_inline_ai_close {
+                top: -2.65rem;
+                right: 0.78rem;
             }
-            .stApp div.st-key-inline_ai_assistant_panel {
-                margin-top: 0.55rem;
-                padding: 0.62rem;
+            .stApp div.st-key-inline_ai_assistant_panel .floating-ai-user-bubble,
+            .stApp div.st-key-inline_ai_assistant_panel .floating-ai-answer-card,
+            .stApp div.st-key-inline_ai_assistant_panel .floating-ai-recommendation { max-width: 100%; }
+            .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessage"] {
+                padding-left: 0.86rem !important;
+                padding-right: 0.86rem !important;
+            }
+            .stApp div.st-key-inline_ai_assistant_panel .inline-ai-status-strip {
+                margin-left: 0.86rem;
+                margin-right: 0.86rem;
+            }
+            .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessageContent"],
+            .stApp div.st-key-inline_ai_assistant_panel [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
+                max-width: calc(100% - 2.72rem) !important;
+            }
+            .stApp div.st-key-inline_ai_assistant_panel .inline-ai-blocked,
+            .stApp div.st-key-inline_ai_assistant_panel .inline-ai-context-card,
+            .stApp div.st-key-inline_ai_assistant_panel .inline-ai-evidence-note,
+            .stApp div.st-key-inline_ai_assistant_panel .inline-ai-handoff-card {
+                margin-left: 0.86rem;
+                margin-right: 0.86rem;
+            }
+            .stApp div.st-key-inline_ai_assistant_panel [data-testid="stForm"] {
+                padding-left: 0.86rem !important;
+                padding-right: 0.86rem !important;
             }
         }
         </style>
@@ -1614,82 +2203,96 @@ def render_inline_ai_panel():
     )
 
     with st.container(key="inline_ai_assistant_panel"):
-        left, close_col = st.columns([10, 1], gap="small")
+        if allow_close:
+            left, close_col = st.columns([10, 1], gap="small")
+        else:
+            left = st.container()
+            close_col = None
         with left:
-            title = "AI assistant" if lang == "en" else "AI 助手"
-            subtitle = (
-                "Page-aware guidance embedded in the current workspace."
-                if lang == "en" else
-                "嵌入当前工作区的页面感知式建议。"
-            )
-            provider_key = coerce_public_provider(
-                st.session_state.get("llm_provider", public_default_provider_key())
-            )
-            provider_label = public_provider_defaults(provider_key)[0] or provider_key
-            llm_configured = _is_configured()
-            if not st.session_state.get("llm_enabled", False):
-                status_label = "AI off" if lang == "en" else "AI 已关闭"
-                status_color = "var(--ink-4)"
-            elif not llm_configured:
-                status_label = "key missing" if lang == "en" else "缺少 API key"
-                status_color = "var(--warn)"
-            else:
-                status_label = f"{provider_label} · online"
-                status_color = "var(--ok)"
-            status_pill_html = (
-                f'<span class="eu-pill mono" '
-                f'style="font-size:10px;padding:2px 7px;height:18px;margin-left:8px;'
-                f'background:var(--surface);color:{status_color};'
-                f'border:1px solid var(--hair-2);vertical-align:middle">'
-                f'<span class="dot" style="background:{status_color}"></span>'
-                f'{html.escape(status_label)}</span>'
-            )
-            st.markdown(
-                f"""
-                <div class="inline-ai-header">
-                    <div class="inline-ai-avatar">AI</div>
-                    <div>
-                        <div class="inline-ai-title">{title}{status_pill_html}</div>
-                        <div class="inline-ai-subtitle">{subtitle}</div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with close_col:
-            if st.button(
-                "",
-                icon=":material/close:",
-                key="_inline_ai_close",
-                help="Close AI panel" if lang == "en" else "关闭 AI 面板",
-                use_container_width=True,
-            ):
-                st.session_state["_inline_ai_panel_open"] = False
-                st.session_state["_ai_pending_question"] = None
-                st.rerun()
+            st.markdown(_ai_panel_header_html(lang), unsafe_allow_html=True)
+        if close_col is not None:
+            with close_col:
+                if st.button(
+                    "",
+                    icon=":material/close:",
+                    key="_inline_ai_close",
+                    help="Close AI panel" if lang == "en" else "关闭 AI 面板",
+                    use_container_width=True,
+                ):
+                    st.session_state["_inline_ai_panel_open"] = False
+                    st.session_state["_ai_pending_question"] = None
+                    st.rerun()
 
-        if not st.session_state.get("llm_enabled", False):
-            st.caption(
-                "Enable AI Assistant in sidebar settings, then return here."
-                if lang == "en" else
-                "请先在侧栏设置中启用 AI 助手，然后回到这里。"
-            )
+        enabled = bool(st.session_state.get("llm_enabled", False))
+        configured = _is_configured()
+        if not enabled:
+            _render_inline_ai_blocked_state(lang, enabled=False)
+            _render_inline_ai_context_and_handoff(lang)
             return
 
-        if not _is_configured():
-            st.caption(
-                "Configure provider/API key in sidebar settings first."
-                if lang == "en" else
-                "请先在侧栏设置中配置服务商/API Key。"
-            )
+        if not configured:
+            _render_inline_ai_blocked_state(lang, enabled=True)
+            _render_inline_ai_context_and_handoff(lang)
             return
 
         _render_compact_chat_panel(
             lang=lang,
             panel_key="_llm_inline_workspace",
-            history_height=390,
+            history_height=440,
             show_starters=not pending_prompt,
         )
+        _render_inline_ai_context_and_handoff(lang)
+
+
+def _render_ai_assistant_workspace_page(lang: str, *, pending_prompt: bool) -> None:
+    with st.container(key="ai_assistant_page_panel"):
+        st.markdown(_ai_panel_header_html(lang), unsafe_allow_html=True)
+
+        enabled = bool(st.session_state.get("llm_enabled", False))
+        configured = _is_configured()
+        if not enabled:
+            _render_inline_ai_blocked_state(lang, enabled=False)
+            _render_inline_ai_context_and_handoff(lang)
+            return
+
+        if not configured:
+            _render_inline_ai_blocked_state(lang, enabled=True)
+            _render_inline_ai_context_and_handoff(lang)
+            return
+
+        _render_compact_chat_panel(
+            lang=lang,
+            panel_key="_llm_ai_page_workspace",
+            history_height=500,
+            show_starters=not pending_prompt,
+            background_pending_prompts=True,
+        )
+        _render_inline_ai_context_and_handoff(lang)
+
+
+def render_ai_assistant_page(lang: str | None = None) -> None:
+    """Render the latest Tools · AI Assistant page using the live chat backend."""
+    _init_chat_state()
+    lang = lang or st.session_state.get("language", "en")
+    is_en = lang == "en"
+    pending_prompt = bool(st.session_state.get("_ai_pending_question"))
+    provider_key = coerce_public_provider(
+        st.session_state.get("llm_provider", public_default_provider_key())
+    )
+    if not _needs_api_key(provider_key):
+        st.session_state["llm_enabled"] = True
+        st.session_state["_llm_toggle"] = True
+    st.session_state["_floating_ai_open"] = False
+    st.session_state["_inline_ai_panel_open"] = False
+    st.markdown(
+        '<div class="eu-ai-page-head">'
+        f'<div class="eyebrow">{html.escape("EasyICU · research helper" if is_en else "EasyICU · 研究助手")}</div>'
+        f'<h1>{html.escape("AI Assistant" if is_en else "AI 助手")}</h1>'
+        f'<p>{html.escape("A local, evidence-bound helper for framing questions and shaping analysis plans. It reads your loaded context and never invents results." if is_en else "一个本地、证据绑定的助手，用于整理研究问题和分析计划。它读取当前上下文，但不会编造结果。")}</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    _render_ai_assistant_workspace_page(lang, pending_prompt=pending_prompt)
 
 
 def _starter_prompts(lang: str) -> list[str]:
@@ -1709,34 +2312,34 @@ def _starter_prompts(lang: str) -> list[str]:
 
 
 def _render_chat_welcome(*, lang: str, panel_key: str, history_container, show_starters: bool = True) -> None:
-    title = "Page-aware assistant guidance" if lang == "en" else "页面感知式 AI 引导"
+    title = "Assistant" if lang == "en" else "助手"
     subtitle = (
-        "Grounded in your current page, selected database, cohort filters, and feature modules."
+        "I'm the EasyICU assistant — I help you frame questions, shape an analysis plan, and read your results. I work from your loaded context and stay evidence-bound."
         if lang == "en" else
-        "基于当前页面、数据库、队列筛选和特征模块给出下一步建议。"
+        "我是 EasyICU 助手，可以帮你框定问题、组织分析计划、阅读结果。我只基于当前上下文给建议，并保持证据绑定。"
     )
     prompt_hint = (
-        "Try one of these questions:" if lang == "en" else "你可以直接点下面这些问题："
+        "Try one of these prompts:" if lang == "en" else "可以从这些提示开始："
     ) if show_starters else (
         "Ask about your current workflow, cohort, or export settings."
         if lang == "en" else
         "可以直接询问当前流程、队列筛选或导出设置。"
     )
     sample_q = (
-        "Which setting should I check before exporting SOFA features?"
+        'Help me turn "does lactate matter for sepsis mortality" into a researchable question.'
         if lang == "en" else
-        "导出 SOFA 特征前，我应该重点检查哪个设置？"
+        "帮我把“乳酸是否影响脓毒症死亡率”整理成可研究问题。"
     )
     sample_a = (
-        "Check that the cohort is confirmed, SOFA-1/SOFA-2 concepts are selected, and the export path is writable."
+        "A tighter framing maps cleanly onto a cohort, outcome, first-24h window, and a comparator model with and without lactate."
         if lang == "en" else
-        "请确认队列已经锁定、SOFA-1/SOFA-2 概念已选择，并且导出路径可写。"
+        "更稳的表述会同时固定队列、结局、前 24 小时窗口，以及含/不含乳酸的比较模型。"
     )
-    rec_label = "Recommended next step" if lang == "en" else "推荐下一步"
+    rec_label = "Evidence-bound note" if lang == "en" else "证据绑定提示"
     rec_text = (
-        "Open feature selection and verify score modules before export."
+        "I will not assert effect sizes here; those come from the run, and only after the evidence gate opens."
         if lang == "en" else
-        "进入特征选择页，在导出前检查评分模块。"
+        "我不会在这里断言效应量；这些必须来自实际运行，并且只有证据闸门通过后才能写入。"
     )
 
     st.markdown(
@@ -1770,7 +2373,14 @@ def _render_chat_welcome(*, lang: str, panel_key: str, history_container, show_s
                 st.rerun()
 
 
-def _render_compact_chat_panel(*, lang: str, panel_key: str, history_height: int = 320, show_starters: bool = True) -> None:
+def _render_compact_chat_panel(
+    *,
+    lang: str,
+    panel_key: str,
+    history_height: int = 320,
+    show_starters: bool = True,
+    background_pending_prompts: bool = False,
+) -> None:
     """Render a compact chat history + input form panel."""
     # Check for background response that completed while panel was minimized
     bg_result = _check_bg_response()
@@ -1820,29 +2430,57 @@ def _render_compact_chat_panel(*, lang: str, panel_key: str, history_height: int
             )
         else:
             for msg_idx, msg in enumerate(recent_messages):
-                with st.chat_message(msg["role"]):
+                role = str(msg.get("role") or "assistant")
+                avatar = ":material/person:" if role == "user" else ":material/smart_toy:"
+                with st.chat_message(role, avatar=avatar):
                     st.markdown(msg["content"])
-                    if msg["role"] == "assistant" and msg.get("actions"):
+                    if role == "assistant" and msg.get("actions"):
                         _render_nav_actions(msg["actions"], key_prefix=f"{panel_key}_{msg_idx}")
             if queued_prompt:
-                st.info(
+                status_text = (
                     "Using page context to ask the assistant..."
                     if lang == "en" else
                     "正在带着当前页面上下文向 AI 提问..."
                 )
-                _submit_prompt(queued_prompt, lang, history_container, key_prefix=panel_key)
+                st.markdown(
+                    f'<div class="inline-ai-status-strip">{html.escape(status_text)}</div>',
+                    unsafe_allow_html=True,
+                )
+                if background_pending_prompts:
+                    _submit_prompt_background(
+                        queued_prompt,
+                        lang,
+                        history_container,
+                        key_prefix=panel_key,
+                    )
+                else:
+                    _submit_prompt(queued_prompt, lang, history_container, key_prefix=panel_key)
+            elif st.session_state.get("_ai_bg_responding", False):
+                status_text = (
+                    "Generating response in the background. You can continue elsewhere in EasyICU."
+                    if lang == "en" else
+                    "正在后台生成回答。你可以继续使用 EasyICU 的其他页面。"
+                )
+                st.markdown(
+                    f'<div class="inline-ai-status-strip">{html.escape(status_text)}</div>',
+                    unsafe_allow_html=True,
+                )
 
     with st.form(f"{panel_key}_form", clear_on_submit=True):
-        prompt = st.text_input(
-            "Ask EasyICU AI" if lang == "en" else "向 EasyICU AI 提问",
-            placeholder="Ask about the current workflow..." if lang == "en" else "询问当前流程、概念或报错...",
-            label_visibility="collapsed",
-        )
-        send_clicked = st.form_submit_button(
-            "Send" if lang == "en" else "发送",
-            type="primary",
-            use_container_width=True,
-        )
+        input_col, send_col = st.columns([1, 0.08], gap="small")
+        with input_col:
+            prompt = st.text_input(
+                "Ask EasyICU AI" if lang == "en" else "向 EasyICU AI 提问",
+                placeholder="Ask about the current workflow..." if lang == "en" else "询问当前流程、概念或报错...",
+                label_visibility="collapsed",
+            )
+        with send_col:
+            send_clicked = st.form_submit_button(
+                "→",
+                type="primary",
+                use_container_width=True,
+                help="Send" if lang == "en" else "发送",
+            )
     if send_clicked and prompt.strip():
         st.session_state["_ai_pending_question"] = prompt.strip()
         st.rerun()
@@ -1851,15 +2489,21 @@ def _render_compact_chat_panel(*, lang: str, panel_key: str, history_height: int
         action_cols = st.columns(2)
         with action_cols[0]:
             st.download_button(
-                "📄 Export Chat" if lang == "en" else "📄 导出对话",
+                "Export Chat" if lang == "en" else "导出对话",
                 data=_build_chat_export_text(),
                 file_name=f"easyicu_ai_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
                 mime="text/markdown",
                 use_container_width=True,
                 key=f"{panel_key}_export_chat",
+                icon=":material/download:",
             )
         with action_cols[1]:
-            if st.button("🗑️ Clear Chat" if lang == "en" else "🗑️ 清空对话", key=f"{panel_key}_clear_chat", use_container_width=True):
+            if st.button(
+                "Clear Chat" if lang == "en" else "清空对话",
+                key=f"{panel_key}_clear_chat",
+                use_container_width=True,
+                icon=":material/delete:",
+            ):
                 st.session_state.llm_messages = []
                 st.session_state["_ai_pending_question"] = None
                 st.rerun()
@@ -2299,7 +2943,12 @@ def render_floating_chat_dock():
                     '<div class="ai-notif-badge pulse">⋯</div>',
                     unsafe_allow_html=True,
                 )
-            if st.button("💬", key="_floating_ai_open_btn", help="Open AI chat" if lang == "en" else "打开 AI 对话"):
+            if st.button(
+                "",
+                key="_floating_ai_open_btn",
+                help="Open AI chat" if lang == "en" else "打开 AI 对话",
+                icon=":material/smart_toy:",
+            ):
                 st.session_state["_floating_ai_open"] = True
                 st.rerun()
 
@@ -2402,10 +3051,10 @@ def _render_intro(lang: str):
         st.markdown("""\
 #### What is the AI Assistant?
 A built-in conversational helper that knows EasyICU inside-out. It can:
-- 🎯 Start from your study goal, then map it to the right EasyICU workflow
-- 📖 Explain which cohort filters, feature modules, and scores fit your task
-- 🗄️ List supported databases, concepts, and scoring systems
-- 📊 Help interpret extraction results (SOFA, Sepsis-3, missingness, etc.)
+- Start from your study goal, then map it to the right EasyICU workflow
+- Explain which cohort filters, feature modules, and scores fit your task
+- List supported databases, concepts, and scoring systems
+- Help interpret extraction results (SOFA, Sepsis-3, missingness, etc.)
 
 **Getting started:**
 1. Toggle **Enable AI Assistant** in the sidebar
@@ -2417,10 +3066,10 @@ A built-in conversational helper that knows EasyICU inside-out. It can:
         st.markdown("""\
 #### AI 助手是什么？
 内置的对话助手，熟知 EasyICU 的所有功能。它可以：
-- 🎯 从你的研究目标出发，反推最合适的 EasyICU 工作流
-- 📖 解释适合该任务的队列筛选、特征模块和临床评分
-- 🗄️ 列出支持的数据库、概念和评分系统
-- 📊 帮助解读提取结果（SOFA、Sepsis-3、缺失率等）
+- 从你的研究目标出发，反推最合适的 EasyICU 工作流
+- 解释适合该任务的队列筛选、特征模块和临床评分
+- 列出支持的数据库、概念和评分系统
+- 帮助解读提取结果（SOFA、Sepsis-3、缺失率等）
 
 **快速开始：**
 1. 在侧边栏开启 **启用 AI 助手**
@@ -2614,7 +3263,7 @@ def _stream_response(messages: list, lang: str):
     model = (st.session_state.get("llm_model", "").strip()
              or public_provider_defaults(provider)[2])
     if not model:
-        st.error("⚠️ " + ("No model specified." if lang == "en" else "未指定模型名称。"))
+        st.error("No model specified." if lang == "en" else "未指定模型名称。")
         return
 
     status_placeholder = st.empty()
@@ -2622,7 +3271,7 @@ def _stream_response(messages: list, lang: str):
 
     try:
         status_placeholder.info(
-            "🤔 Thinking..." if lang == "en" else "🤔 正在思考..."
+            "Thinking..." if lang == "en" else "正在思考..."
         )
         stream = client.chat.completions.create(
             model=model,
@@ -2630,7 +3279,7 @@ def _stream_response(messages: list, lang: str):
             stream=True,
         )
         status_placeholder.info(
-            "✍️ Generating response..." if lang == "en" else "✍️ 正在生成回答..."
+            "Generating response..." if lang == "en" else "正在生成回答..."
         )
         final_response = _stream_text(stream, answer_placeholder)
         final_response = _append_quick_links(
@@ -2689,15 +3338,15 @@ def _handle_api_error(exc: Exception, lang: str, render: bool = True) -> str:
         provider = st.session_state.get("llm_provider", "custom")
         if provider == "huggingface_free":
             msg = (
-                "❌ Hugging Face requires your own token. "
+                "Hugging Face requires your own token. "
                 "Please create an HF token and paste it here."
                 if lang == "en" else
-                "❌ Hugging Face 需要你自己提供 token。"
+                "Hugging Face 需要你自己提供 token。"
                 "请创建 HF token 后再填写。"
             )
         else:
-            msg = ("❌ Authentication failed — please check your API Key."
-                   if lang == "en" else "❌ 认证失败 — 请检查 API Key 是否正确。")
+            msg = ("Authentication failed — please check your API Key."
+                   if lang == "en" else "认证失败 — 请检查 API Key 是否正确。")
     elif (
         "429" in err_str
         or "rate" in err_lower
@@ -2706,28 +3355,28 @@ def _handle_api_error(exc: Exception, lang: str, render: bool = True) -> str:
         or "retry shortly" in err_lower
     ):
         msg = (
-            "⏳ The current hosted model is being rate-limited upstream. Please retry shortly, or switch the hosted default model to a more stable free model."
+            "The current hosted model is being rate-limited upstream. Please retry shortly, or switch the hosted default model to a more stable free model."
             if lang == "en" else
-            "⏳ 当前托管模型被上游限流了。请稍后重试，或把 hosted 默认模型切换到更稳定的免费模型。"
+            "当前托管模型被上游限流了。请稍后重试，或把 hosted 默认模型切换到更稳定的免费模型。"
         )
     elif "socksio" in err_lower or "using socks proxy" in err_lower:
         msg = (
-            "🌐 Proxy configuration error — the app detected a SOCKS proxy from the environment. "
+            "Proxy configuration error — the app detected a SOCKS proxy from the environment. "
             "EasyICU now ignores system proxy variables by default. Please retry. "
             "If you explicitly need a SOCKS proxy, install `httpx[socks]`."
             if lang == "en" else
-            "🌐 代理配置异常 — 应用检测到了环境变量中的 SOCKS 代理。"
+            "代理配置异常 — 应用检测到了环境变量中的 SOCKS 代理。"
             "EasyICU 现在默认忽略系统代理变量，请重试。"
             "如果你确实需要 SOCKS 代理，请安装 `httpx[socks]`。"
         )
     elif "model" in err_lower or "404" in err_str:
-        msg = ("⚠️ Model not found — please verify the model name."
-               if lang == "en" else "⚠️ 模型未找到 — 请确认模型名称是否正确。")
+        msg = ("Model not found — please verify the model name."
+               if lang == "en" else "模型未找到 — 请确认模型名称是否正确。")
     elif "connect" in err_lower or "timeout" in err_lower:
-        msg = ("🌐 Connection error — check the API Base URL and your network."
-               if lang == "en" else "🌐 连接失败 — 请检查 API Base URL 和网络连接。")
+        msg = ("Connection error — check the API Base URL and your network."
+               if lang == "en" else "连接失败 — 请检查 API Base URL 和网络连接。")
     else:
-        msg = ("❌ API error: " if lang == "en" else "❌ API 调用出错: ") + err_str
+        msg = ("API error: " if lang == "en" else "API 调用出错: ") + err_str
     if render:
         st.error(msg)
     return msg

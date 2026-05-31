@@ -91,12 +91,18 @@ from easyicu.webapp.paper_figures import (
     render_cohort_figure_panel as _render_cohort_figure_panel_impl,
 )
 from easyicu.webapp.workflow_figure import _render_extraction_pipeline_figure as _render_extraction_pipeline_figure_impl
+from easyicu.webapp import cohort_charts as cc
 from easyicu.webapp.styles import render_global_styles
 from easyicu.webapp.shell_styles import render_shell_styles
 from easyicu.webapp.i18n import get_text, strip_emoji
 from easyicu.webapp.page_registry import build_main_page_registry
 from easyicu.webapp.page_header import render_page_header
-from easyicu.webapp.session_state import clear_run_state, get_state, init_session_state
+from easyicu.webapp.session_state import (
+    clear_agent_continuation_state,
+    clear_run_state,
+    get_state,
+    init_session_state,
+)
 from easyicu.webapp.services import (
     COLUMN_NORMALIZATION_MAP,
     NORMALIZED_TO_ORIGINAL_MAP,
@@ -215,6 +221,41 @@ render_global_styles(st)
 # tokens (restrained-teal accent, IBM Plex stack, flat surfaces) override
 # the legacy gradient palette from styles.py.
 render_shell_styles(st)
+
+_eu_density_pref = str(st.session_state.get("ui_density") or "comfortable").lower()
+if _eu_density_pref not in {"comfortable", "compact"}:
+    _eu_density_pref = "comfortable"
+_eu_reduce_motion = "true" if bool(st.session_state.get("reduce_motion", False)) else "false"
+st.markdown(
+    f"""
+    <div id="eu-display-preferences"
+         data-density="{_eu_density_pref}"
+         data-reduce-motion="{_eu_reduce_motion}"
+         style="display:none"></div>
+    <style>
+    .stApp:has(#eu-display-preferences[data-density="compact"]) {{
+      font-size: 13px;
+    }}
+    .stApp:has(#eu-display-preferences[data-density="compact"]) .main .block-container {{
+      padding-top: 0.75rem !important;
+    }}
+    .stApp:has(#eu-display-preferences[data-density="compact"]) .eu-card,
+    .stApp:has(#eu-display-preferences[data-density="compact"]) .eu-settings-card,
+    .stApp:has(#eu-display-preferences[data-density="compact"]) .eu-agent-panel {{
+      padding-block: 12px !important;
+    }}
+    .stApp:has(#eu-display-preferences[data-reduce-motion="true"]) *,
+    .stApp:has(#eu-display-preferences[data-reduce-motion="true"]) *::before,
+    .stApp:has(#eu-display-preferences[data-reduce-motion="true"]) *::after {{
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.001ms !important;
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 def _dataframe_compat(data, **kwargs):
@@ -466,18 +507,31 @@ def _apply_screenshot_mode_ui_state(state: dict[str, Any]) -> None:
         state.pop('_scroll_to_tab', None)
 
 
+def _clear_assistant_surfaces(
+    state: MutableMapping[str, Any],
+    *,
+    clear_pending: bool = False,
+) -> None:
+    """Close assistant-only surfaces when navigation leaves the assistant page."""
+    state['_inline_ai_panel_open'] = False
+    state['_floating_ai_open'] = False
+    state['_sidebar_ai_open'] = False
+    if clear_pending:
+        state.pop('_ai_pending_question', None)
+
+
 def _open_embedded_ai_assistant(
     state: dict[str, Any],
     question: str | None = None,
 ) -> None:
-    """Open the main-workspace AI assistant and optionally queue a prompt."""
+    """Route to the standalone AI Assistant page and optionally queue a prompt."""
     if question:
         state['_ai_pending_question'] = question
     state['llm_enabled'] = True
     state['_llm_toggle'] = True
-    state['_inline_ai_panel_open'] = True
-    state['_sidebar_ai_open'] = False
-    state['_floating_ai_open'] = False
+    state['_active_main_page'] = 'assistant'
+    state['_scroll_to_top'] = True
+    _clear_assistant_surfaces(state, clear_pending=False)
 
 
 def _resolve_viz_data_source_mode(
@@ -621,12 +675,36 @@ def _switch_extract_entry_mode(state: dict[str, Any], target: str) -> None:
     """Switch demo/real source mode and reset the extraction workflow."""
     if target not in {'demo', 'real'}:
         return
+    previous_database = state.get('database')
     state['entry_mode'] = target
     state['use_mock_data'] = target == 'demo'
     if target == 'demo':
         state['database'] = 'mock'
+        state['mock_params'] = {
+            'n_patients': LIGHTWEIGHT_DEMO_PATIENTS,
+            'hours': LIGHTWEIGHT_DEMO_HOURS,
+            'demo_profile': 'lite',
+        }
+        state['demo_mode_patients'] = LIGHTWEIGHT_DEMO_PATIENTS
+        state['demo_mode_hours'] = LIGHTWEIGHT_DEMO_HOURS
+    elif previous_database not in {'miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic'}:
+        state['database'] = 'miiv'
+        state['path_validated'] = False
+        state.pop('last_validated_path', None)
     for key in ('step1_confirmed', 'step2_confirmed', 'step3_confirmed', 'export_completed'):
         state[key] = False
+    state['trigger_export'] = False
+    state['_exporting_in_progress'] = False
+    state['loaded_concepts'] = {}
+    state['loaded_data_origin'] = 'none'
+    state['patient_ids'] = []
+    state['all_patient_count'] = 0
+    state['selected_patient'] = None
+    state['selected_concepts'] = []
+    state.pop('quick_viz_active_panel', None)
+    state.pop('_preview_requested', None)
+    state.pop('_viz_import_export_auto_trigger', None)
+    state.pop('_scroll_to_tab', None)
     state['_active_main_page'] = 'extract'
 
 
@@ -638,7 +716,7 @@ def _apply_topbar_breadcrumb_target(state: dict[str, Any], target: str) -> None:
         state['use_mock_data'] = False
         state['_active_main_page'] = 'tutorial'
     elif target == 'data_extraction':
-        state['_active_main_page'] = 'tutorial'
+        state['_active_main_page'] = 'extract'
     elif target == 'extract':
         state['_active_main_page'] = 'extract'
     elif target == 'data_visualization':
@@ -677,22 +755,31 @@ def _apply_post_export_next_step(
 
     if target == "review":
         state["_active_main_page"] = "quick_viz"
-        state["_main_nav_widget"] = "quick_viz"
         state["quick_viz_active_panel"] = "Data Tables"
         state["_scroll_to_top"] = True
         return
 
     if target == "cohort":
         state["_active_main_page"] = "cohort"
-        state["_main_nav_widget"] = "cohort"
         state["_scroll_to_top"] = True
         return
 
     if target == "agent":
+        clear_agent_continuation_state(state)
+        state["entry_mode"] = "real"
+        state["use_mock_data"] = False
+        valid_real_databases = {"miiv", "eicu", "aumc", "hirid", "mimic", "sic"}
+        if state.get("database") not in valid_real_databases:
+            state["database"] = "miiv"
+            state["path_validated"] = False
+            state.pop("last_validated_path", None)
         state["_active_main_page"] = "research_agent"
-        state["_main_nav_widget"] = "research_agent"
         state["_ra_view"] = "setup"
         state["_scroll_to_top"] = True
+        state["_eu_ra_focus_module_folder"] = True
+        state["_eu_ra_module_pick_force_manual"] = True
+        state["_eu_ra_apply_export_file_selection"] = True
+        state.pop("research_agent_module_dir_pick", None)
         export_dir = str(state.get("last_export_dir") or state.get("export_path") or "")
         if export_dir:
             state["research_agent_module_dir_text"] = export_dir
@@ -725,13 +812,35 @@ def _render_post_export_guidance(
     if active_page not in {"quick_viz", "cohort", "research_agent", "tutorial"}:
         return
 
+    export_dir = str(st.session_state.get("last_export_dir", "") or "")
+    result = st.session_state.get("_export_success_result", {})
+    n_files = len(result.get("files", []) or []) if isinstance(result, dict) else 0
+    n_patients = int(result.get("patient_count", 0) or 0) if isinstance(result, dict) else 0
+    title = "Export complete" if lang == "en" else "导出完成"
     message = (
-        "Export complete. Next, review the loaded tables, run cohort statistics, or use this export as the Research Agent cohort source."
+        "Review the loaded tables, run cohort statistics, or use this export as the Research Agent cohort source."
         if lang == "en"
-        else "提取已完成。下一步可以先审阅导出表、做队列统计，或把这个导出文件夹交给研究智能体。"
+        else "下一步可以审阅导出表、做队列统计，或把这个导出文件夹交给研究智能体。"
     )
+    meta_bits = []
+    if n_files:
+        meta_bits.append(f"{n_files} files" if lang == "en" else f"{n_files} 个文件")
+    if n_patients:
+        meta_bits.append(f"{n_patients:,} patients" if lang == "en" else f"{n_patients:,} 位患者")
+    if export_dir:
+        meta_bits.append(export_dir)
+    meta = " · ".join(meta_bits) if meta_bits else ("local export ready" if lang == "en" else "本地导出已就绪")
     st.markdown(
-        f'<div class="compact-inline-notice info">{html.escape(message)}</div>',
+        f"""
+        <div class="eu-post-export-hero">
+          <span class="glyph">✓</span>
+          <div>
+            <b>{html.escape(title)}</b>
+            <p>{html.escape(message)}</p>
+            <code>{html.escape(meta)}</code>
+          </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
@@ -783,6 +892,8 @@ def _consume_completed_export_navigation(state: dict[str, Any]) -> bool:
         return False
     if not state.get('export_completed'):
         return False
+    if state.get('_scroll_to_tab') == 'export_progress':
+        state.pop('_scroll_to_tab', None)
     _route_completed_export_to_visualization(state)
     return True
 
@@ -826,6 +937,36 @@ def _prepare_quick_viz_demo_workspace(
     for tmp_key in ['_skipped_modules', '_overwrite_modules', '_viz_import_export_auto_trigger']:
         state.pop(tmp_key, None)
     return len(mock_data), len(state['patient_ids'])
+
+
+def _reset_settings_defaults(state: dict[str, Any]) -> None:
+    """Apply the visible Settings-page defaults without touching local paths."""
+    try:
+        from easyicu.webapp.llm_config import default_provider_key
+        default_provider = default_provider_key()
+    except Exception:
+        default_provider = "easyicu_hosted"
+
+    state['entry_mode'] = 'demo'
+    state['use_mock_data'] = True
+    state['database'] = 'mock'
+    state['demo_mode_patients'] = LIGHTWEIGHT_DEMO_PATIENTS
+    state['demo_mode_hours'] = LIGHTWEIGHT_DEMO_HOURS
+    state['mock_params'] = {
+        'n_patients': LIGHTWEIGHT_DEMO_PATIENTS,
+        'hours': LIGHTWEIGHT_DEMO_HOURS,
+        'demo_profile': 'lite',
+    }
+
+    state['llm_enabled'] = False
+    state['llm_provider'] = default_provider
+    state['llm_api_key'] = ''
+    state['llm_model'] = ''
+    state['llm_base_url'] = ''
+    state['llm_configured'] = False
+    state['_llm_toggle'] = False
+    state['_llm_toggle_sync_pending'] = True
+    state['_floating_ai_open'] = False
 
 
 def _consume_topbar_run_request(
@@ -917,17 +1058,46 @@ def _consume_topbar_run_request(
             message = 'Demo Cross-DB benchmark data refreshed.' if is_en else '已刷新演示跨数据库对比数据。'
             level = 'success'
         elif state.get('multidb_data'):
-            message = 'Cross-DB comparison data is already loaded.' if is_en else '跨数据库对比数据已加载。'
+            state['_eu_crossdb_distribution_open'] = True
+            message = (
+                'Detailed Cross-DB distributions are open below.'
+                if is_en else
+                '下方已打开跨数据库详细分布。'
+            )
             level = 'success'
         else:
+            state['_eu_crossdb_distribution_open'] = True
             message = (
-                'The Cross-DB loader is shown below; connect at least two database roots.'
+                'Detailed Cross-DB distribution panel is open below; connect at least two database roots.'
                 if is_en else
-                '跨数据库加载器已在下方展示；请连接至少两个数据库根目录。'
+                '下方已打开跨数据库详细分布面板；请连接至少两个数据库根目录。'
             )
             level = 'warning'
         _append_action_log(state, message)
         return {'level': level, 'message': message}
+
+    if active_page == 'settings':
+        _reset_settings_defaults(state)
+        message = 'Settings reset to workspace defaults.' if is_en else '设置已恢复为工作区默认值。'
+        _append_action_log(state, message)
+        return {'level': 'success', 'message': message}
+
+    if active_page == 'assistant':
+        clear_agent_continuation_state(state)
+        state['_active_main_page'] = 'research_agent'
+        state['_ra_view'] = 'setup'
+        state['_scroll_to_top'] = True
+        _clear_assistant_surfaces(state, clear_pending=True)
+        message = 'Opened Research Agent setup.' if is_en else '已打开 Research Agent 配置。'
+        _append_action_log(state, message)
+        return {'level': 'info', 'message': message}
+
+    if active_page == 'states':
+        state['_active_main_page'] = 'quick_viz'
+        state['_scroll_to_top'] = True
+        message = 'Opened Patient Review.' if is_en else '已打开患者审阅。'
+        _append_action_log(state, message)
+        return {'level': 'info', 'message': message}
 
     if active_page == 'research_agent':
         if entry_mode == 'demo':
@@ -951,7 +1121,20 @@ def _consume_topbar_run_request(
 
 def _handle_topbar_run_request(active_page: str, lang: str) -> dict[str, str] | None:
     """Consume a queued topbar request and surface a small user notice."""
+    pending_notice = st.session_state.pop('_eu_topbar_notice_pending', None)
+    if pending_notice:
+        try:
+            st.toast(pending_notice)
+        except Exception:
+            pass
+
     result = _consume_topbar_run_request(st.session_state, active_page, lang)
+    if result and active_page == 'settings':
+        # The reset is consumed after the sidebar has rendered. Re-run once
+        # so its Current setup summary immediately reflects Demo / Mock too.
+        st.session_state['_eu_topbar_notice_pending'] = result.get('message', '')
+        st.rerun()
+
     if result and result.get('message'):
         try:
             st.toast(result['message'])
@@ -968,15 +1151,42 @@ def _topbar_primary_action_label(
 ) -> tuple[str, str]:
     """Return the global topbar action label for the current page."""
     if active_page == 'research_agent':
-        if entry_mode == 'demo':
-            return ('Agent guide', 'Agent 导览')
-        return ('Run controls', '运行控制')
+        return ('Agent guide', 'Agent 导览')
     label_map = {
+        'assistant': ('Open Agent', '打开 Agent'),
+        'states': ('Patient Review', '患者审阅'),
         'quick_viz': ('Render', '渲染'),
         'cohort': ('Re-run', '重新运行'),
         'cross_db': ('Run', '运行'),
+        'settings': ('Reset to defaults', '恢复默认'),
     }
     return label_map.get(active_page, ('Run', '运行'))
+
+
+def _topbar_primary_action_icon(active_page: str) -> str | None:
+    """Return an optional material icon for the global topbar action."""
+    if active_page == 'settings':
+        return ':material/refresh:'
+    if active_page == 'assistant':
+        return ':material/smart_toy:'
+    if active_page == 'states':
+        return ':material/table_chart:'
+    return None
+
+
+def _render_narrow_view_notice(active_page: str, lang: str) -> None:
+    """Show the dense-chart mobile notice only where it applies."""
+    if active_page not in {'quick_viz', 'cohort', 'cross_db'}:
+        return
+    message = (
+        "Narrow view: EasyICU keeps this page readable here. Use a ≥1024 px window for dense chart comparison."
+        if lang == "en" else
+        "窄屏视图：EasyICU 会保持当前页面可读；密集图表对比建议使用 ≥1024 px 窗口。"
+    )
+    st.markdown(
+        f'<div class="eu-narrow-view-note">{html.escape(message)}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 FIGURE_TARGET_MAP = {
@@ -1684,8 +1894,13 @@ def get_optimal_parallel_config(num_patients: int = None, task_type: str = 'load
 
 def _render_sepsis_ai_button(lang: str) -> None:
     """Offer a contextual AI explanation button for Sepsis settings."""
-    button_label = "🤖 Ask AI about Sepsis settings" if lang == 'en' else "🤖 问 AI 解释脓毒症设置"
-    if st.button(button_label, key="ask_ai_about_sepsis_settings", use_container_width=True):
+    button_label = "Ask AI about Sepsis settings" if lang == 'en' else "问 AI 解释脓毒症设置"
+    if st.button(
+        button_label,
+        key="ask_ai_about_sepsis_settings",
+        use_container_width=True,
+        icon=":material/smart_toy:",
+    ):
         si_mode = st.session_state.get('sepsis_si_mode', 'auto')
         abx_hours = st.session_state.get('sepsis_abx_win_hours', 24)
         samp_hours = st.session_state.get('sepsis_samp_win_hours', 72)
@@ -1836,7 +2051,8 @@ def _handle_sidebar_export_trigger(default_export_container) -> bool:
                     var headings = Array.from(doc.querySelectorAll('h1, h2, h3, div, p, span'));
                     var target = headings.find(function(node) {
                         var text = (node.innerText || node.textContent || '').trim();
-                        return text === '📤 Export Progress' || text === '📤 导出进度';
+                        return text === 'Packaging export bundle...' || text === '正在打包导出包...' ||
+                            text === '📤 Export Progress' || text === '📤 导出进度';
                     });
                     if (target) {
                         target.scrollIntoView({behavior: 'smooth', block: 'start'});
@@ -2025,6 +2241,58 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
             message = get_text("ra_handoff_success").format(rows=len(df))
             st.session_state["_assistant_notice"] = message
             st.success(message)
+
+
+def _render_research_agent_reference_header(lang: str, *, view: str = "setup") -> None:
+    """Render the shared Agent identity before the view tabs."""
+    entry_is_demo = st.session_state.get("entry_mode") == "demo"
+    state = st.session_state.get("_agent_workbench")
+    step_count = 0
+    state_is_demo: bool | None = None
+    if isinstance(state, dict):
+        step_count = len(state.get("steps") or [])
+        if step_count:
+            state_is_demo = bool(state.get("is_demo"))
+    is_static_guide = entry_is_demo if state_is_demo is None else state_is_demo
+    runs_value = "preview" if is_static_guide and not step_count else str(step_count)
+    arm_label = "Static guide" if is_static_guide else "ICU-aware · default arm"
+    arm_title = (
+        "Demo mode does not call an LLM."
+        if is_static_guide else
+        "Web UI runs the ICU-aware arm only; the naive ablation is exposed via the CLI --arms flag."
+    )
+    if view == "history":
+        actions = (
+            f'<span class="eu-pill">{"Runs" if lang == "en" else "运行"} · '
+            f'{"local history" if lang == "en" else "本地历史"}</span>'
+            f'<span class="eu-pill" title="'
+            f'{html.escape("Local manifests only; nothing leaves your machine." if lang == "en" else "仅读取本地 manifest；不会离开本机。")}">'
+            f'<span class="dot" style="background:var(--accent)"></span>'
+            f'{html.escape("Local manifests" if lang == "en" else "本地 manifest")}</span>'
+        )
+    else:
+        actions = (
+            f'<span class="eu-pill">{"Runs" if lang == "en" else "运行"} · {html.escape(runs_value)}</span>'
+            f'<span class="eu-pill" title="{html.escape(arm_title)}">'
+            f'<span class="dot" style="background:var(--accent)"></span>{html.escape(arm_label)}</span>'
+        )
+    header_html = cc.render_design_page_header(
+        kicker="Research Agent · research workflow" if lang == "en" else "研究智能体 · 研究工作流",
+        title_en="EasyICU Research Agent",
+        title_zh="EasyICU Research Agent",
+        desc=(
+            "An auditable, evidence-bound workflow — plan, run, review, then draft."
+            if lang == "en" else
+            "可审计、证据绑定的工作流：计划、运行、复核，然后再写作。"
+        ),
+        right_html=actions,
+        lang=lang,
+    ).replace(
+        'class="eu-design-page-header"',
+        'class="eu-design-page-header eu-ra-reference-header"',
+        1,
+    )
+    st.markdown(header_html, unsafe_allow_html=True)
 
 
 
@@ -3581,7 +3849,10 @@ def main():
     _active = st.session_state.get('_active_main_page', 'tutorial')
     _page_labels_for_topbar = {
         'extract':        'Data Extraction' if lang == 'en' else '数据提取',
-        'tutorial':       'Data Extraction' if lang == 'en' else '数据提取',
+        'tutorial':       'Get Started' if lang == 'en' else '开始使用',
+        'assistant':      'AI Assistant' if lang == 'en' else 'AI 助手',
+        'states':         'Workspace States' if lang == 'en' else '工作区状态',
+        'settings':       'Settings' if lang == 'en' else '设置',
         'quick_viz':      'Patient Review' if lang == 'en' else '患者审阅',
         'cohort':         'Cohort Statistics' if lang == 'en' else '队列统计',
         'cross_db':       'Cross-DB Benchmark' if lang == 'en' else '跨数据库对比',
@@ -3590,6 +3861,8 @@ def main():
     _topbar_home_label = 'Home' if lang == 'en' else '首页'
     _data_extraction_label = 'Data extraction' if lang == 'en' else '数据提取'
     _data_visualization_label = 'Data visualization' if lang == 'en' else '数据可视化'
+    _tools_label = 'Tools' if lang == 'en' else '工具'
+    _reference_label = 'Reference' if lang == 'en' else '参考'
     if _active == 'extract':
         if not st.session_state.get('step1_confirmed'):
             _step_crumb = 'Step 1 · Data source' if lang == 'en' else '第 1 步 · 数据源'
@@ -3642,7 +3915,22 @@ def main():
     _topbar_path_items_by_page: dict[str, list[tuple[str, str | None]]] = {
         'tutorial': [
             (_topbar_home_label, 'entry'),
-            (_data_extraction_label, None),
+            (_tools_label, None),
+            (_page_labels_for_topbar['tutorial'], None),
+        ],
+        'assistant': [
+            (_topbar_home_label, 'entry'),
+            (_tools_label, None),
+            (_page_labels_for_topbar['assistant'], None),
+        ],
+        'states': [
+            (_topbar_home_label, 'entry'),
+            (_reference_label, None),
+            (_page_labels_for_topbar['states'], None),
+        ],
+        'settings': [
+            (_topbar_home_label, 'entry'),
+            (_page_labels_for_topbar['settings'], None),
         ],
         'quick_viz': [
             (_topbar_home_label, 'entry'),
@@ -3734,18 +4022,22 @@ def main():
                     lang,
                     entry_mode=entry_mode,
                 )
-                if st.button(
-                    _run_en if lang == 'en' else _run_zh,
-                    key="_eu_topbar_run",
-                    type="primary",
-                    use_container_width=True,
-                ):
+                _run_button_kwargs = {
+                    "key": "_eu_topbar_run",
+                    "type": "primary",
+                    "use_container_width": True,
+                }
+                _run_icon = _topbar_primary_action_icon(_active)
+                if _run_icon:
+                    _run_button_kwargs["icon"] = _run_icon
+                if st.button(_run_en if lang == 'en' else _run_zh, **_run_button_kwargs):
                     st.session_state['_eu_topbar_run_request'] = {
                         'page': _active,
                         'requested_at': 'now',
                     }
 
     _render_global_status_strip(lang, entry_mode)
+    _render_narrow_view_notice(_active, lang)
 
     if st.session_state.get('_eu_show_history'):
         with st.expander(
@@ -3772,6 +4064,12 @@ def main():
     page_registry = build_main_page_registry(get_text)
     page_keys = [page["key"] for page in page_registry]
     page_labels = {page["key"]: page["label"] for page in page_registry}
+    mobile_page_keys = ["extract"] + page_keys + ["assistant", "states", "settings"]
+    page_labels["extract"] = "Data Extraction" if lang == "en" else "数据提取"
+    page_labels["tutorial"] = "Get Started" if lang == "en" else "开始使用"
+    page_labels["assistant"] = "AI Assistant" if lang == "en" else "AI 助手"
+    page_labels["states"] = "Workspace States" if lang == "en" else "工作区状态"
+    page_labels["settings"] = "Settings" if lang == "en" else "设置"
 
     # Resolve any pending navigation request (set by "Go to ..." buttons,
     # the sidebar, or the AI dock) into the active main page. This replaces
@@ -3785,6 +4083,8 @@ def main():
         'cross_db': 'cross_db',
         'crossdb': 'cross_db',
         'research_agent': 'research_agent',
+        'assistant': 'assistant',
+        'settings': 'settings',
         'export_progress': 'tutorial',
         'home_dict': 'tutorial',
     }
@@ -3794,33 +4094,24 @@ def main():
     elif _nav_request in _nav_page_map:
         st.session_state['_active_main_page'] = _nav_page_map[_nav_request]
 
-    if not _is_screenshot_mode():
-        try:
-            from easyicu.webapp.llm_chat import render_inline_ai_panel
-            render_inline_ai_panel()
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "Inline AI assistant failed to render", exc_info=True
-            )
-
     # Tutorial is now the leftmost top tab again so it's discoverable from
     # the main pane (also still reachable via the sidebar "📚 Workflow Help"
     # button and ``_scroll_to_tab='tutorial'`` nav requests).
     # 'extract' is a special main page (the relocated data-extraction
     # workflow) reached via the sidebar pipeline; it is intentionally
     # NOT in the radio page_keys but is still a valid active page.
-    _EXTRA_PAGES = {'extract'}
-    if st.session_state.get('_active_main_page') not in (set(page_keys) | _EXTRA_PAGES):
+    _EXTRA_PAGES = {'extract', 'assistant', 'states', 'settings'}
+    if st.session_state.get('_active_main_page') not in (set(mobile_page_keys) | _EXTRA_PAGES):
         st.session_state['_active_main_page'] = page_keys[0]
 
     # Do NOT bind ``st.radio`` directly to ``_active_main_page`` via
     # ``key=``. Streamlit serializes the widget state against the options
-    # list, so any value that briefly falls outside ``page_keys`` (e.g.
+    # list, so any value that briefly falls outside ``mobile_page_keys`` (e.g.
     # an obsolete page name from a stale session) crashes the radio with
     # ``ValueError: <name> is not in iterable``. Using a separate widget
     # key + on_change-propagation keeps programmatic navigation safe.
     _current_active = st.session_state.get('_active_main_page', page_keys[0])
-    _visible_active = _current_active if _current_active in page_keys else page_keys[0]
+    _visible_active = _current_active if _current_active in mobile_page_keys else page_keys[0]
     # Force the widget to reflect the current (or fallback) visible page
     # each render — without this, Streamlit's widget-state persistence
     # would override programmatic navigation from sidebar buttons.
@@ -3848,7 +4139,7 @@ def main():
         )
         st.radio(
             "Main navigation",
-            options=page_keys,
+            options=mobile_page_keys,
             format_func=lambda key: page_labels.get(key, key),
             horizontal=True,
             label_visibility='collapsed',
@@ -3856,6 +4147,9 @@ def main():
             on_change=_propagate_main_nav,
         )
     active_page = st.session_state.get('_active_main_page', page_keys[0])
+    if active_page != "assistant":
+        _clear_assistant_surfaces(st.session_state, clear_pending=True)
+
     _topbar_result = _handle_topbar_run_request(active_page, lang)
     if _topbar_result and st.session_state.get('_active_main_page') != active_page:
         active_page = st.session_state.get('_active_main_page', active_page)
@@ -3885,6 +4179,18 @@ def main():
         # strip + starting-point cards layout from page-tutorial.jsx.
         from easyicu.webapp.pages_redesign import render_tutorial_redesign_page
         render_tutorial_redesign_page(lang)
+
+    elif active_page == "states":
+        from easyicu.webapp.pages_redesign import render_workspace_states_reference_page
+        render_workspace_states_reference_page(lang)
+
+    elif active_page == "assistant":
+        from easyicu.webapp.llm_chat import render_ai_assistant_page
+        render_ai_assistant_page(lang)
+
+    elif active_page == "settings":
+        from easyicu.webapp.pages_redesign import render_settings_redesign_page
+        render_settings_redesign_page(lang)
 
     elif active_page == "quick_viz":
         if export_in_progress:
@@ -4054,44 +4360,61 @@ def main():
             )
             st.markdown(f'<div class="compact-inline-notice info">{ra_hold_msg}</div>', unsafe_allow_html=True)
         else:
-            # Shell-A redesign: Research Agent has three stateful views.
+            # Shell-A redesign: Research Agent has four stateful views.
             # Setup is the only page that configures and launches runs.
-            # Workbench and Summary render only a live/imported manifest,
-            # never a synthetic demo queue.
+            # History is a local project picker. Workbench and Summary
+            # render only a live/imported manifest, never a synthetic demo queue.
             _default_ra_view = 'setup'
             _ra_view = st.session_state.get('_ra_view', _default_ra_view)
-            _seg_l, _seg_m, _seg_r, _ = st.columns([1.2, 1.35, 1.2, 5.9])
-            with _seg_l:
-                if st.button(
-                    "Setup" if lang == 'en' else "配置",
-                    key="_eu_ra_view_setup", use_container_width=True,
-                    type="primary" if _ra_view == 'setup' else "secondary",
-                ):
-                    st.session_state['_ra_view'] = 'setup'
-                    st.rerun()
-            with _seg_m:
-                if st.button(
-                    "Workbench" if lang == 'en' else "工作台",
-                    key="_eu_ra_view_workbench", use_container_width=True,
-                    type="primary" if _ra_view == 'workbench' else "secondary",
-                ):
-                    st.session_state['_ra_view'] = 'workbench'
-                    st.rerun()
-            with _seg_r:
-                if st.button(
-                    "Summary" if lang == 'en' else "总览",
-                    key="_eu_ra_view_summary", use_container_width=True,
-                    type="primary" if _ra_view == 'summary' else "secondary",
-                ):
-                    st.session_state['_ra_view'] = 'summary'
-                    st.rerun()
+            _render_research_agent_reference_header(lang, view=_ra_view)
+            with st.container(key="_eu_ra_tabs"):
+                _seg_l, _seg_m, _seg_h, _seg_r, _ = st.columns([1.15, 1.35, 1.15, 1.15, 5.2])
+                with _seg_l:
+                    if st.button(
+                        "Setup" if lang == 'en' else "配置",
+                        icon=":material/tune:",
+                        key="_eu_ra_view_setup", use_container_width=True,
+                        type="primary" if _ra_view == 'setup' else "secondary",
+                    ):
+                        st.session_state['_ra_view'] = 'setup'
+                        st.rerun()
+                with _seg_m:
+                    if st.button(
+                        "Workbench" if lang == 'en' else "工作台",
+                        icon=":material/view_kanban:",
+                        key="_eu_ra_view_workbench", use_container_width=True,
+                        type="primary" if _ra_view == 'workbench' else "secondary",
+                    ):
+                        st.session_state['_ra_view'] = 'workbench'
+                        st.rerun()
+                with _seg_h:
+                    if st.button(
+                        "History" if lang == 'en' else "历史",
+                        icon=":material/history:",
+                        key="_eu_ra_view_history", use_container_width=True,
+                        type="primary" if _ra_view == 'history' else "secondary",
+                    ):
+                        st.session_state['_ra_view'] = 'history'
+                        st.rerun()
+                with _seg_r:
+                    if st.button(
+                        "Summary" if lang == 'en' else "总览",
+                        icon=":material/verified_user:",
+                        key="_eu_ra_view_summary", use_container_width=True,
+                        type="primary" if _ra_view == 'summary' else "secondary",
+                    ):
+                        st.session_state['_ra_view'] = 'summary'
+                        st.rerun()
 
             if _ra_view == 'workbench':
                 from easyicu.webapp.agent_workbench import render_agent_workbench
-                render_agent_workbench(lang)
+                render_agent_workbench(lang, show_header=False)
+            elif _ra_view == 'history':
+                from easyicu.webapp.research_agent import render_research_agent_history_page
+                render_research_agent_history_page(lang, show_header=False)
             elif _ra_view == 'summary':
                 from easyicu.webapp.agent_workbench import render_agent_output_summary
-                render_agent_output_summary(lang)
+                render_agent_output_summary(lang, show_header=False)
             else:
                 _render_research_agent_handoff(
                     "Loaded concepts" if lang == "en" else "已加载概念",
@@ -4110,10 +4433,14 @@ def main():
                         render_research_agent_demo_page,
                         render_research_agent_page,
                     )
-                    if st.session_state.get('entry_mode') == 'demo':
-                        render_research_agent_demo_page()
+                    _draft_resume_pending = bool(
+                        st.session_state.get("research_agent_resume_run_id")
+                        or st.session_state.get("research_agent_force_manuscript")
+                    )
+                    if st.session_state.get('entry_mode') == 'demo' and not _draft_resume_pending:
+                        render_research_agent_demo_page(show_header=False)
                     else:
-                        render_research_agent_page()
+                        render_research_agent_page(show_header=False)
                 except Exception as _ra_exc:  # pragma: no cover - defensive
                     st.error(get_text("ra_page_load_failed").format(
                         error=f"{type(_ra_exc).__name__}: {_ra_exc}",
@@ -4128,8 +4455,9 @@ def main():
     if st.session_state.pop('_scroll_to_top', False):
         st.components.v1.html(
             "<script>window.parent.scrollTo({top:0});"
-            "window.parent.document.querySelector('section.main')"
-            "?.scrollTo({top:0});</script>",
+            "['section.main','section.stMain','[data-testid=\"stMain\"]'].forEach(function(sel){"
+            "window.parent.document.querySelector(sel)?.scrollTo({top:0});"
+            "});</script>",
             height=0,
         )
 

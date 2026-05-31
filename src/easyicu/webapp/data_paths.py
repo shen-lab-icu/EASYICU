@@ -343,7 +343,7 @@ def _directory_input(
 ) -> str:
     """Text input with a modal server-side directory browser."""
     lang = st.session_state.get("language", "en")
-    browse_label = "📂"
+    browse_label = ""
     pending_input_key = f"{input_key}__pending_value"
 
     if pending_input_key in st.session_state:
@@ -376,7 +376,13 @@ def _directory_input(
             if lang == "en" else
             "浏览运行 EasyICU 的服务器目录"
         )
-        if st.button(browse_label, key=button_key, use_container_width=True, help=browse_help):
+        if st.button(
+            browse_label,
+            key=button_key,
+            use_container_width=True,
+            help=browse_help,
+            icon=":material/folder_open:",
+        ):
             st.session_state[browser_open_key] = True
             st.session_state[browser_cwd_key] = str(_closest_existing_dir(typed_value, value))
             st.rerun()

@@ -9,16 +9,130 @@ from __future__ import annotations
 
 from typing import Any
 from pathlib import Path
+import html
 import os
+import re
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
+from easyicu.webapp.concept_catalog import CONCEPT_GROUP_NAMES
 from easyicu.webapp.services import normalize_column_name
 
 
 _PROTECTED_CONTEXT_NAMES = {"execute_sidebar_export", "_install_app_context"}
+_MODULE_LABEL_PREFIX_RE = re.compile(r"^[^\w\u4e00-\u9fff]+\s*")
+
+
+def _concept_group_label(group_key: object, lang: str) -> str:
+    """Return a user-facing module label without leaking internal keys."""
+    raw = str(group_key or "").strip()
+    names = globals().get("CONCEPT_GROUP_NAMES", CONCEPT_GROUP_NAMES)
+    if isinstance(names, dict) and raw in names:
+        en_name, zh_name = names[raw]
+        text = str(en_name if lang == "en" else zh_name)
+    else:
+        text = raw.replace("_", " ").title()
+    return _MODULE_LABEL_PREFIX_RE.sub("", text).strip() or text
+
+
+def _render_export_progress_shell(
+    *,
+    lang: str,
+    export_dir: Path,
+    export_format: str,
+    selected_concepts: list[str],
+    is_preview_context: bool,
+) -> None:
+    """Render the design-system export progress wrapper before backend work."""
+    title = "Packaging export bundle..." if lang == "en" else "正在打包导出包..."
+    subtitle = (
+        f"local-only · writing to {export_dir}"
+        if lang == "en"
+        else f"仅本地处理 · 写入 {export_dir}"
+    )
+    preview_msg = (
+        "Preview sample detected. Export will re-extract data from the source database instead of exporting the preview sample."
+        if lang == "en"
+        else "检测到当前是 Preview 样本。导出会重新从源数据库提取数据，而不是直接导出这批 Preview 样本。"
+    )
+    rows = "".join(
+        '<div class="eu-export-skeleton-row">'
+        '<span></span><b></b><em></em>'
+        "</div>"
+        for _ in range(5)
+    )
+    preview_html = (
+        f'<div class="compact-inline-notice info">{html.escape(preview_msg)}</div>'
+        if is_preview_context
+        else ""
+    )
+    st.markdown(
+        f"""
+        <div class="eu-export-progress-shell" id="export-progress">
+          <div class="eu-export-progress-head">
+            <span class="eu-spinner"></span>
+            <div>
+              <b>{html.escape(title)}</b>
+              <small>{html.escape(subtitle)}</small>
+            </div>
+          </div>
+          <div class="eu-export-progress-meta">
+            <span>{html.escape("Features" if lang == "en" else "特征")} <b>{len(selected_concepts)}</b></span>
+            <span>{html.escape("Format" if lang == "en" else "格式")} <b>{html.escape(export_format.upper())}</b></span>
+            <span>{html.escape("Privacy" if lang == "en" else "隐私")} <b>{html.escape("local only" if lang == "en" else "仅本地")}</b></span>
+          </div>
+          <div class="eu-export-indeterminate"></div>
+          <div class="eu-export-skeleton-table">{rows}</div>
+        </div>
+        {preview_html}
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_export_conflict_panel(
+    *,
+    lang: str,
+    pending_modules: list[str],
+    existing_modules: dict[str, Path],
+) -> None:
+    """Render file conflicts as a blocked state, while keeping existing actions."""
+    title = "Existing files detected" if lang == "en" else "检测到已存在的文件"
+    desc = (
+        "Choose whether to overwrite or skip matching module files before continuing the export."
+        if lang == "en"
+        else "继续导出前，请选择覆盖或跳过这些已存在的模块文件。"
+    )
+    rows = []
+    for group_key in pending_modules:
+        file_path = existing_modules[group_key]
+        rows.append(
+            '<div class="eu-export-conflict-row">'
+            f'<span>{html.escape(_concept_group_label(group_key, lang))}</span>'
+            f'<code>{html.escape(file_path.name)}</code>'
+            "</div>"
+        )
+    question = (
+        "How do you want to handle these files?"
+        if lang == "en"
+        else "请选择如何处理这些文件："
+    )
+    st.markdown(
+        f"""
+        <div class="eu-export-conflict-card">
+          <div class="eu-export-conflict-glyph">!</div>
+          <div class="eu-export-conflict-body">
+            <b>{html.escape(title)}</b>
+            <p>{html.escape(desc)}</p>
+            <div class="eu-export-conflict-list">{''.join(rows)}</div>
+            <div class="eu-export-conflict-question">{html.escape(question)}</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _terminate_process_tree(proc: Any, *, timeout: float = 2.0) -> None:
@@ -147,21 +261,18 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
         return
 
     try:
-        export_title = "📤 Export Progress" if lang == 'en' else "📤 导出进度"
-        st.markdown(f"### {export_title}")
-        if is_preview_context:
-            preview_reextract_msg = (
-                "ℹ️ Preview sample detected. Export will re-extract data from the source database instead of exporting the preview sample."
-                if lang == 'en' else
-                "ℹ️ 检测到当前是 Preview 样本。导出时会重新从源数据库提取数据，而不是直接导出这批 Preview 样本。"
-            )
-            st.markdown(f'<div class="compact-inline-notice info">{preview_reextract_msg}</div>', unsafe_allow_html=True)
-
         timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
 
         # 直接使用用户设置的导出路径（已包含数据库子目录）
         export_dir = Path(export_path)
         export_dir.mkdir(parents=True, exist_ok=True)
+        _render_export_progress_shell(
+            lang=lang,
+            export_dir=export_dir,
+            export_format=export_format,
+            selected_concepts=selected_concepts,
+            is_preview_context=is_preview_context,
+        )
 
         # ── 内存预检：在创建进度条之前，低内存时要求用户确认 ────────────────
         # 实测：流式导出每模块到峰内存约94k患者约 1––1.3 GB，1.5 GB 阈値下才真正属于低内存场景
@@ -332,21 +443,11 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                     st.session_state.trigger_export = True
                     st.rerun()
 
-                # 显示所有冲突模块
-                conflict_title = "⚠️ Existing Files Detected" if lang == 'en' else "⚠️ 检测到已存在的文件"
-                st.warning(conflict_title)
-
-                # 🔧 简化：只显示文件列表
-                file_list_html = "<ul style='margin: 10px 0; padding-left: 20px;'>"
-                for group_key in pending_modules:
-                    file_path = existing_modules[group_key]
-                    file_list_html += f"<li style='margin: 5px 0;'><b>{group_key}</b>: <code>{file_path.name}</code></li>"
-                file_list_html += "</ul>"
-                st.markdown(file_list_html, unsafe_allow_html=True)
-
-                # 🔧 使用醒目的大按钮
-                st.markdown("---")
-                st.markdown("<p style='font-size: 1.1rem; font-weight: bold; margin-bottom: 15px;'>How do you want to handle these files?</p>" if lang == 'en' else "<p style='font-size: 1.1rem; font-weight: bold; margin-bottom: 15px;'>请选择如何处理这些文件：</p>", unsafe_allow_html=True)
+                _render_export_conflict_panel(
+                    lang=lang,
+                    pending_modules=pending_modules,
+                    existing_modules=existing_modules,
+                )
 
                 # 🔧 FIX: 使用 on_click 回调而不是 if st.button，避免页面跳转
                 def on_overwrite_all():
@@ -373,11 +474,11 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
 
                 col_all_overwrite, col_all_skip = st.columns(2)
                 with col_all_overwrite:
-                    all_overwrite_btn = "🔄 OVERWRITE ALL" if lang == 'en' else "🔄 全部覆盖"
+                    all_overwrite_btn = "Overwrite all" if lang == 'en' else "全部覆盖"
                     st.button(all_overwrite_btn, key="file_overwrite_all", type="primary",
                              use_container_width=True, on_click=on_overwrite_all)
                 with col_all_skip:
-                    all_skip_btn = "⏭️ SKIP ALL" if lang == 'en' else "⏭️ 全部跳过"
+                    all_skip_btn = "Skip all" if lang == 'en' else "全部跳过"
                     st.button(all_skip_btn, key="file_skip_all", type="secondary", use_container_width=True,
                              on_click=on_skip_all)
 
