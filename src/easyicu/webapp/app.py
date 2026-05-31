@@ -967,6 +967,31 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
         '_research_agent_extract_db_source',
     ):
         state.pop(key, None)
+    clear_agent_continuation_state(state)
+    for key in (
+        '_agent_workbench',
+        '_agent_workbench_source_run_dir',
+        '_agent_workbench_is_active_selection',
+        '_eu_ra_launch_requested',
+        '_eu_ra_resource_focus',
+        '_eu_ra_focus_module_folder',
+        '_eu_ra_module_pick_force_manual',
+        '_eu_ra_apply_export_file_selection',
+        '_eu_wb_findings_acked',
+        '_eu_wb_review_details_expanded',
+        '_eu_wb_action_panel',
+    ):
+        state.pop(key, None)
+    for key in list(state):
+        if str(key).startswith((
+            '_eu_summary_review_note_',
+            '_eu_wb_ev_sha_show_',
+            '_eu_wb_ev_id_show_',
+            '_eu_wb_evidence_pick_',
+            '_eu_wb_timeline_jump_',
+        )):
+            state.pop(key, None)
+    state['_ra_view'] = 'setup'
 
     state['llm_enabled'] = False
     state['llm_provider'] = default_provider
