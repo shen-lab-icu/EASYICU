@@ -1571,7 +1571,12 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "All 19 modules / 167 features available" not in source_text
     assert "Lightweight review dataset opens immediately" not in source_text
     assert "Start at data extraction, then open review panels when ready" in source_text
+    assert "Research Agent static gallery viewable" in source_text
+    assert "Research Agent setup and local-run handoff preview" not in source_text
     assert "Use local data folder" in source_text
+    assert "Generate code only" in source_text
+    assert "Let the Research Agent generate a reusable code skeleton" in source_text
+    assert "Let the Research Agent prepare extraction settings" not in source_text
     assert "try first" in source_text
     assert "_eu_entry_lang_toggle" in source_text
     assert "Choose how data enters the workspace" in source_text
@@ -5889,6 +5894,8 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert 'st.session_state["_main_nav_widget"] = "assistant"' in sidebar_text
     assert 'st.session_state["_inline_ai_panel_open"] = False' in sidebar_text
     assert 'st.session_state["_active_main_page"] = item.key' in sidebar_text
+    assert "eu_footer_help_active" in sidebar_text
+    assert "eu_footer_settings_active" in sidebar_text
     assert 'count="3"' not in sidebar_text
     assert "Choose view" not in sidebar_text
     assert 'key="_eu_footer_settings"' in sidebar_text

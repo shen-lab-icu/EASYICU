@@ -2556,8 +2556,8 @@ def render_entry_redesign_page(lang: str) -> None:
                         "10 例快速审阅集 · 默认 24 小时数据"),
                 _T(lang, "Start at data extraction, then open review panels when ready",
                         "先进入数据提取，再按需打开审阅面板"),
-                _T(lang, "Research Agent setup and local-run handoff preview",
-                        "研究智能体设置与本机 run 交接预览"),
+                _T(lang, "Research Agent static gallery viewable",
+                        "可查看研究智能体静态示例库"),
                 _T(lang, "Switch to real data anytime without losing work",
                         "随时可切换到真实数据,不丢工作"),
             ]
@@ -2633,12 +2633,12 @@ def render_entry_redesign_page(lang: str) -> None:
                 '<div style="flex:1">'
                 f'<div style="font-size:13px;font-weight:500">{_T(lang, "No data yet?", "还没有数据?")}</div>'
                 f'<div style="font-size:12px;color:var(--ink-3)">'
-                f'{_T(lang, "Let the Research Agent prepare extraction settings, then plug a data folder in later.", "让研究智能体先准备提取设置，稍后再接入真实数据目录。")}</div>'
+                f'{_T(lang, "Let the Research Agent generate a reusable code skeleton, then plug data in later.", "让研究智能体先生成可复用代码骨架，稍后再接入数据。")}</div>'
                 '</div></div>',
                 unsafe_allow_html=True,
             )
         with code_col:
-            if st.button(_T(lang, "Prepare extraction →", "准备数据提取 →"),
+            if st.button(_T(lang, "Generate code only →", "仅生成代码 →"),
                          key="_eu_entry_nodata", use_container_width=True):
                 _route_to_research_agent_no_data_setup(st.session_state)
                 st.rerun()

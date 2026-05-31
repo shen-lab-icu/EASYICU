@@ -1083,6 +1083,11 @@ def _render_shell_footer_icons() -> None:
     rendered as empty boxes in some Streamlit / Chromium combos.
     """
     lang = st.session_state.get("language", "en")
+    active_page = st.session_state.get("_active_main_page", "tutorial")
+
+    def _footer_slot_state(target: str) -> str:
+        return "active" if active_page == target else "idle"
+
     with st.container(key="eu_sidebar_footer"):
         st.markdown(
             '<div class="eu-sidebar-footer-rule"></div>',
@@ -1090,39 +1095,43 @@ def _render_shell_footer_icons() -> None:
         )
         cols = st.columns([1, 1, 1, 1, 1])
         with cols[0]:
-            if st.button("", icon=":material/arrow_back:", key="_eu_footer_back", help=(
-                    "Mode selection / 模式选择"
-                    if lang == "en" else "返回模式选择 / Mode selection"),
-                    use_container_width=True):
-                _return_to_entry_home()
-                st.rerun()
+            with st.container(key="eu_footer_back_idle"):
+                if st.button("", icon=":material/arrow_back:", key="_eu_footer_back", help=(
+                        "Mode selection / 模式选择"
+                        if lang == "en" else "返回模式选择 / Mode selection"),
+                        use_container_width=True):
+                    _return_to_entry_home()
+                    st.rerun()
         with cols[1]:
-            if st.button("", icon=":material/help:", key="_eu_footer_help", help=(
-                    "Tutorial" if lang == "en" else "教程"),
-                    use_container_width=True):
-                st.session_state["_active_main_page"] = "tutorial"
-                st.session_state["_main_nav_widget"] = "tutorial"
-                st.session_state["_inline_ai_panel_open"] = False
-                st.session_state["_floating_ai_open"] = False
-                st.session_state.pop("_ai_pending_question", None)
-                st.rerun()
+            with st.container(key=f"eu_footer_help_{_footer_slot_state('tutorial')}"):
+                if st.button("", icon=":material/help:", key="_eu_footer_help", help=(
+                        "Tutorial" if lang == "en" else "教程"),
+                        use_container_width=True):
+                    st.session_state["_active_main_page"] = "tutorial"
+                    st.session_state["_main_nav_widget"] = "tutorial"
+                    st.session_state["_inline_ai_panel_open"] = False
+                    st.session_state["_floating_ai_open"] = False
+                    st.session_state.pop("_ai_pending_question", None)
+                    st.rerun()
         with cols[2]:
-            if st.button("", icon=":material/settings:", key="_eu_footer_settings", help=(
-                    "Settings" if lang == "en" else "设置"),
-                    use_container_width=True):
-                st.session_state["_active_main_page"] = "settings"
-                st.session_state["_main_nav_widget"] = "settings"
-                st.session_state["_scroll_to_top"] = True
-                st.session_state["_inline_ai_panel_open"] = False
-                st.session_state["_floating_ai_open"] = False
-                st.session_state.pop("_ai_pending_question", None)
-                st.rerun()
+            with st.container(key=f"eu_footer_settings_{_footer_slot_state('settings')}"):
+                if st.button("", icon=":material/settings:", key="_eu_footer_settings", help=(
+                        "Settings" if lang == "en" else "设置"),
+                        use_container_width=True):
+                    st.session_state["_active_main_page"] = "settings"
+                    st.session_state["_main_nav_widget"] = "settings"
+                    st.session_state["_scroll_to_top"] = True
+                    st.session_state["_inline_ai_panel_open"] = False
+                    st.session_state["_floating_ai_open"] = False
+                    st.session_state.pop("_ai_pending_question", None)
+                    st.rerun()
         with cols[3]:
-            if st.button("中" if lang == "en" else "EN", icon=":material/language:", key="_eu_footer_lang", help=(
-                    "Toggle 中 / EN" if lang == "en" else "切换 中 / EN"),
-                    use_container_width=True):
-                st.session_state["language"] = "zh" if lang == "en" else "en"
-                st.rerun()
+            with st.container(key="eu_footer_lang_idle"):
+                if st.button("中" if lang == "en" else "EN", icon=":material/language:", key="_eu_footer_lang", help=(
+                        "Toggle 中 / EN" if lang == "en" else "切换 中 / EN"),
+                        use_container_width=True):
+                    st.session_state["language"] = "zh" if lang == "en" else "en"
+                    st.rerun()
         with cols[4]:
             st.markdown(
                 '<div style="height:28px;display:flex;align-items:center;justify-content:center">'
@@ -1150,6 +1159,11 @@ def _render_shell_footer_icons() -> None:
         '.stApp [data-testid="stSidebar"] [class*="st-key-_eu_footer_"] .stButton > button:hover,'
         '.stApp [data-testid="stSidebar"] [class*="st-key-_eu_footer_"] button:hover{'
         'color:var(--ink) !important; background:var(--surface-2) !important;'
+        '}'
+        '.stApp [data-testid="stSidebar"] [class*="st-key-eu_footer_help_active"] button,'
+        '.stApp [data-testid="stSidebar"] [class*="st-key-eu_footer_settings_active"] button{'
+        'color:var(--ink) !important; background:var(--surface-2) !important;'
+        'border-color:var(--hair) !important;'
         '}'
         '</style>',
         unsafe_allow_html=True,
