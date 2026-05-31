@@ -380,6 +380,23 @@ def _validation_resolved_path(validation_result: dict[str, Any], fallback: str) 
     return str(fallback or "").strip()
 
 
+def _current_input_matches_validated_data_path(state: Any, effective_data_path: str) -> bool:
+    """Return whether the current text input still points at the validated data source."""
+    if not bool(state.get("path_validated")):
+        return False
+    current = str(state.get("data_path") or "").strip()
+    if not current:
+        return False
+    validation = state.get("last_validation") if isinstance(state.get("last_validation"), dict) else {}
+    candidates = {
+        str(effective_data_path or "").strip(),
+        _validation_resolved_path(validation, effective_data_path),
+        str(state.get("last_validated_path") or "").strip(),
+    }
+    current_path = Path(current).expanduser()
+    return any(candidate and Path(candidate).expanduser() == current_path for candidate in candidates)
+
+
 def _render_step1_data_source(entry_mode: str) -> None:
     """Render Step 1: data-source configuration.
 
@@ -676,7 +693,7 @@ def _render_step1_data_source(entry_mode: str) -> None:
         last_validation = st.session_state.get('last_validation', {})
         last_path = st.session_state.get('last_validated_path', '')
 
-        if st.session_state.get('path_validated') and st.session_state.data_path == effective_data_path:
+        if _current_input_matches_validated_data_path(st.session_state, effective_data_path):
             validated_msg = "Path validated" if st.session_state.language == 'en' else "路径已验证"
             st.success(validated_msg)
         elif last_validation.get('can_convert') and last_path == effective_data_path:
