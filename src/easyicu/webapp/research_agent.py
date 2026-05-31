@@ -3178,6 +3178,26 @@ def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
         key="research_agent_question",
         height=112,
     )
+    apply_cols = st.columns([1.15, 3.85])
+    with apply_cols[0]:
+        apply_question = st.button(
+            _ra_text("apply_question"),
+            key="research_agent_apply_question",
+            help=_ra_text("apply_question_help"),
+            use_container_width=True,
+        )
+    with apply_cols[1]:
+        st.caption(_ra_text("apply_question_help"))
+    if apply_question:
+        if str(st.session_state.get("research_agent_question", "")).strip():
+            st.session_state["_research_agent_question_applied_notice"] = True
+        else:
+            st.session_state["_research_agent_question_empty_notice"] = True
+        st.rerun()
+    if st.session_state.pop("_research_agent_question_applied_notice", False):
+        st.success(_ra_text("question_applied"))
+    if st.session_state.pop("_research_agent_question_empty_notice", False):
+        st.warning(_ra_text("question_empty"))
     target_outcome = st.text_input(
         _ra_text("target_outcome_optional"),
         help=_ra_text("target_outcome_optional_help"),
