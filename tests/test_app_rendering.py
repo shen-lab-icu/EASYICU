@@ -6006,6 +6006,17 @@ def test_ai_assistant_real_context_card_does_not_invent_demo_counts() -> None:
     assert "sepsis_mortality_demo" in demo_html
     assert "demo · 10 stays · 19 modules" in demo_html
 
+    demo_loaded_html = llm_chat._inline_ai_context_html(
+        "en",
+        state={
+            "entry_mode": "demo",
+            "patient_ids": [10001, 10002],
+            "loaded_concepts": {"hr": object(), "map": object()},
+        },
+    )
+    assert "demo · 2 stays · 2 features" in demo_loaded_html
+    assert "demo · 2 stays · 2 modules" not in demo_loaded_html
+
 
 def test_sidebar_settings_gear_opens_full_settings_page() -> None:
     sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
