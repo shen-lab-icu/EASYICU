@@ -5551,6 +5551,8 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
     assert "_eu_visualization_nav_open" in sidebar_text
     assert "def _render_shell_aux_nav" in sidebar_text
+    assert "_render_shell_primary_nav()\n                _render_shell_aux_nav()" in sidebar_text
+    assert 'if active_main_page in {"assistant", "tutorial", "states"}' not in sidebar_text
     assert 'key=f"eunavrow_{item.key}"' in sidebar_text
     assert "assistant" in sidebar_text
     assert "tutorial" in sidebar_text
