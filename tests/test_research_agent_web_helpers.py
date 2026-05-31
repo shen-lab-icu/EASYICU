@@ -1104,6 +1104,7 @@ def test_resume_panel_does_not_nest_streamlit_expanders() -> None:
     assert 'with st.expander(_ra_text("resume_findings_summary")' not in resume_source
     assert resume_source.index("prior_question =") < resume_source.index("action_cols =")
     assert resume_source.count('st.session_state["research_agent_question"] = prior_question') == 2
+    assert resume_source.count('st.session_state["_active_main_page"] = "research_agent"') >= 2
 
 
 def test_empty_workbench_actions_use_responsive_nowrap_buttons() -> None:
@@ -1220,6 +1221,7 @@ def test_summary_draft_cta_routes_to_force_manuscript_setup(monkeypatch) -> None
     assert fake_st.session_state["research_agent_force_manuscript"] is True
     assert fake_st.session_state["research_agent_resume_mode"] == "force_manuscript"
     assert fake_st.session_state["research_agent_question"] == "Does lactate predict mortality?"
+    assert fake_st.session_state["_active_main_page"] == "research_agent"
     assert fake_st.session_state["_ra_view"] == "setup"
     assert fake_st.session_state["_research_agent_expand_history"] is False
 
@@ -1464,6 +1466,7 @@ def test_workbench_uses_claude_reference_overview_before_detail_inspector() -> N
 
     assert "_agent_reference_workbench_html(state, lang)" in workbench_source
     assert 'state["reviewed_finding_ids"] = sorted(_sync_reviewed_findings_to_session(state))' in workbench_source
+    assert 'st.session_state["_active_main_page"] = "research_agent"' in workbench_source
     assert "EasyICU Research Agent" in workbench_source
     assert "An auditable, evidence-bound workflow" in workbench_source
     assert "Review details" in workbench_source
@@ -1514,6 +1517,8 @@ def test_research_agent_shell_view_tabs_precede_identity_card() -> None:
     assert "render_agent_workbench(lang, show_header=False)" in agent_branch
     assert "render_agent_output_summary(lang, show_header=False)" in agent_branch
     assert "render_research_agent_history_page(lang, show_header=False)" in agent_branch
+    assert 'st.session_state["_active_main_page"] = "research_agent"' in agent_branch
+    assert "st.session_state['_active_main_page'] = 'research_agent'" in agent_branch
     assert "_draft_resume_pending = bool(" in agent_branch
     assert "_handoff_setup_pending = _research_agent_handoff_setup_ready(st.session_state)" in agent_branch
     assert "research_agent_force_manuscript" in agent_branch

@@ -1246,6 +1246,7 @@ def _settings_diagnostics_json(
     agent_run_value: str,
 ) -> str:
     """Return a support bundle that intentionally omits secrets and patient rows."""
+    agent_last_run_id = _settings_agent_run_id(state, workdir=workdir)
     payload = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "easyicu_version": "1.0.0",
@@ -1277,7 +1278,7 @@ def _settings_diagnostics_json(
             "workdir": workdir,
             "module_folder_mode": bool(state.get("_eu_settings_module_folder_mode", False)),
             "current_view": str(state.get("_ra_view") or "setup"),
-            "last_run_id": str(state.get("research_agent_resume_run_id") or state.get("research_agent_last_run_id") or ""),
+            "last_run_id": agent_last_run_id,
         },
         "privacy": {
             "local_only": True,
@@ -1287,6 +1288,27 @@ def _settings_diagnostics_json(
         },
     }
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _settings_agent_run_id(state: MutableMapping[str, Any], *, workdir: str) -> str:
+    """Return the run ID diagnostics should report for the visible Agent state."""
+    workdir_path = Path(workdir).expanduser()
+    workbench = state.get("_agent_workbench")
+    source_dir = str(state.get("_agent_workbench_source_run_dir") or "").strip()
+    if bool(state.get("_agent_workbench_is_active_selection")) and isinstance(workbench, dict):
+        candidate = str(workbench.get("run_id") or (Path(source_dir).name if source_dir else "")).strip()
+        if candidate:
+            if source_dir:
+                if Path(source_dir).expanduser().exists():
+                    return candidate
+            elif (workdir_path / candidate).exists():
+                return candidate
+
+    for key in ("research_agent_resume_run_id", "research_agent_last_run_id"):
+        candidate = str(state.get(key) or "").strip()
+        if candidate and (workdir_path / candidate).exists():
+            return candidate
+    return ""
 
 
 def render_settings_redesign_page(lang: str) -> None:

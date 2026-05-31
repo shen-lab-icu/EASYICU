@@ -2297,6 +2297,7 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
             st.session_state["research_agent_inbound_signature"] = signature
             st.session_state["research_agent_cohort_source"] = get_text("ra_source_handoff")
             st.session_state["_eu_ra_force_setup_from_handoff"] = True
+            st.session_state["_active_main_page"] = "research_agent"
             st.session_state["_ra_view"] = "setup"
             st.session_state["research_agent_preflight_confirmed"] = False
             st.session_state.pop("research_agent_preflight_signature", None)
@@ -4439,6 +4440,7 @@ def main():
             # Setup is the only page that configures and launches runs.
             # History is a local project picker. Workbench and Summary
             # render only a live/imported manifest, never a synthetic demo queue.
+            st.session_state["_active_main_page"] = "research_agent"
             _default_ra_view = 'setup'
             _ra_view = st.session_state.get('_ra_view', _default_ra_view)
             with st.container(key="_eu_ra_tabs"):
@@ -4449,6 +4451,7 @@ def main():
                         key="_eu_ra_view_setup", use_container_width=True,
                         type="primary" if _ra_view == 'setup' else "secondary",
                     ):
+                        st.session_state['_active_main_page'] = 'research_agent'
                         st.session_state['_ra_view'] = 'setup'
                         st.rerun()
                 with _seg_m:
@@ -4457,6 +4460,7 @@ def main():
                         key="_eu_ra_view_workbench", use_container_width=True,
                         type="primary" if _ra_view == 'workbench' else "secondary",
                     ):
+                        st.session_state['_active_main_page'] = 'research_agent'
                         st.session_state['_ra_view'] = 'workbench'
                         st.rerun()
                 with _seg_h:
@@ -4465,6 +4469,7 @@ def main():
                         key="_eu_ra_view_history", use_container_width=True,
                         type="primary" if _ra_view == 'history' else "secondary",
                     ):
+                        st.session_state['_active_main_page'] = 'research_agent'
                         st.session_state['_ra_view'] = 'history'
                         st.rerun()
                 with _seg_r:
@@ -4473,6 +4478,7 @@ def main():
                         key="_eu_ra_view_summary", use_container_width=True,
                         type="primary" if _ra_view == 'summary' else "secondary",
                     ):
+                        st.session_state['_active_main_page'] = 'research_agent'
                         st.session_state['_ra_view'] = 'summary'
                         st.rerun()
             _render_research_agent_reference_header(lang, view=_ra_view)

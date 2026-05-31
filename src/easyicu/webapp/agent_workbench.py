@@ -1073,6 +1073,7 @@ def _prime_summary_draft_setup(state: dict[str, Any]) -> None:
     run_id = str(state.get("run_id") or Path(run_dir_text).name or "").strip()
     if not run_id:
         return
+    st.session_state["_active_main_page"] = "research_agent"
     st.session_state["research_agent_resume_run_id"] = run_id
     st.session_state["research_agent_force_manuscript"] = True
     st.session_state["research_agent_resume_mode"] = "force_manuscript"
@@ -3679,6 +3680,8 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
                     run_id=state.get("run_id"),
                 )
                 _sync_review_decision_to_workbench_state(payload, lang=lang)
+                st.session_state["_active_main_page"] = "research_agent"
+                st.session_state["_ra_view"] = "summary"
                 st.success(_T(lang, "Review sign-off saved.", "审核签字已保存。"))
                 st.rerun()
         with lock_col:
@@ -3700,6 +3703,8 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
                     run_id=state.get("run_id"),
                 )
                 _sync_review_decision_to_workbench_state(payload, lang=lang)
+                st.session_state["_active_main_page"] = "research_agent"
+                st.session_state["_ra_view"] = "summary"
                 st.warning(_T(lang, "Review gate kept locked.", "复核关口已保持锁定。"))
                 st.rerun()
         if st.button(
@@ -5034,6 +5039,7 @@ def render_agent_workbench(lang: str, *, show_header: bool = True) -> None:
         c1, c2, c3 = st.columns([1, 1, 1], gap="small")
         with c1:
             if st.button(_T(lang, "Summary", "摘要"), key="_eu_wb_summary", use_container_width=True):
+                st.session_state["_active_main_page"] = "research_agent"
                 st.session_state["_ra_view"] = "summary"
                 st.rerun()
         with c2:
@@ -5047,6 +5053,7 @@ def render_agent_workbench(lang: str, *, show_header: bool = True) -> None:
                     "打开配置页；实时 run 在那里配置和启动。",
                 ),
             ):
+                st.session_state["_active_main_page"] = "research_agent"
                 st.session_state["_ra_view"] = "setup"
                 st.rerun()
         with c3:
