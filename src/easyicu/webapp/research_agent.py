@@ -3196,6 +3196,8 @@ def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
         st.rerun()
     if st.session_state.pop("_research_agent_question_applied_notice", False):
         st.success(_ra_text("question_applied"))
+    if st.session_state.pop("_research_agent_question_handoff_notice", False):
+        st.success(_ra_text("question_handoff"))
     if st.session_state.pop("_research_agent_question_empty_notice", False):
         st.warning(_ra_text("question_empty"))
     target_outcome = st.text_input(

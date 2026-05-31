@@ -1093,12 +1093,18 @@ def _consume_topbar_run_request(
         return {'level': 'success', 'message': message}
 
     if active_page == 'assistant':
-        clear_agent_continuation_state(state)
-        state['_active_main_page'] = 'research_agent'
-        state['_ra_view'] = 'setup'
-        state['_scroll_to_top'] = True
-        _clear_assistant_surfaces(state, clear_pending=True)
-        message = 'Opened Research Agent setup.' if is_en else '已打开 Research Agent 配置。'
+        from easyicu.webapp.llm_chat import _prepare_research_agent_handoff_from_ai
+
+        seeded = _prepare_research_agent_handoff_from_ai(state)
+        message = (
+            'Opened Research Agent setup with the latest assistant question.'
+            if seeded else
+            'Opened Research Agent setup.'
+        ) if is_en else (
+            '已带入最近的助手问题并打开 Research Agent 配置。'
+            if seeded else
+            '已打开 Research Agent 配置。'
+        )
         _append_action_log(state, message)
         return {'level': 'info', 'message': message}
 
