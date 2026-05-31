@@ -2700,6 +2700,20 @@ def test_data_table_preview_controls_are_compact_toolbar() -> None:
     assert "st.columns([2.15, 0.85]" in source
 
 
+def test_data_table_preview_has_easyicu_owned_csv_downloads() -> None:
+    source = Path(data_table_page.__file__).read_text()
+
+    assert "def _render_preview_csv_download(" in source
+    assert "st.download_button(" in source
+    assert "Download preview CSV" in source
+    assert "下载预览 CSV" in source
+    assert 'mime="text/csv"' in source
+    assert ".to_csv(index=False).encode(\"utf-8\")" in source
+    assert "easyicu_" in source
+    assert "data_table_single_feature_csv_" in source
+    assert "data_table_merged_preview_csv_" in source
+
+
 def test_single_feature_preview_copy_matches_preview_style() -> None:
     english = app._get_single_feature_preview_copy("sofa", "en")
     chinese = app._get_single_feature_preview_copy("sofa", "zh")
