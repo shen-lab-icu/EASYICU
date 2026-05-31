@@ -2270,12 +2270,59 @@ def test_workspace_states_page_includes_reference_primitives() -> None:
 
     assert "Status primitives" in page_source
     assert "Reusable building blocks" in page_source
-    assert "eu-states-control-row state-options" in page_source
+    assert "key=\"eu_states_controls\"" in page_source
+    assert 'key=f"_eu_states_context_{item[\'key\']}"' in page_source
+    assert 'key=f"_eu_states_state_{item[\'key\']}"' in page_source
+    assert "_eu_states_primary_action" in page_source
+    assert "_workspace_state_preview_html(current_context, current_mode, current_state, lang)" in page_source
+    assert "_apply_workspace_state_action(st.session_state, current_context, current_mode)" in page_source
     assert "eu-state-primitive-grid" in page_source
     assert ".stApp .eu-state-primitive-card" in css_text
-    assert ".stApp .eu-states-control-row.state-options > div" in css_text
-    assert "repeat(3, minmax(0, 1fr))" in css_text
+    assert '.stApp [class*="st-key-eu_states_controls"]' in css_text
+    assert ".stApp .eu-state-hero" in css_text
+    assert ".stApp .detail-box" in css_text
+    assert ".stApp .gate-block" in css_text
     assert ".stApp .eu-state-status-row .passed" in css_text
+
+
+def test_workspace_state_preview_copy_tracks_selected_context() -> None:
+    html = pages_redesign._workspace_state_preview_html("agent", "real", "error", "en")
+
+    assert "Research Agent" in html
+    assert "Real Data" in html
+    assert "Run failed at analysis step" in html
+    assert "LinAlgError: singular matrix" in html
+    assert "Patient Review" not in html
+
+
+def test_workspace_state_primary_action_routes_selected_context() -> None:
+    patient_demo: dict[str, object] = {}
+    pages_redesign._apply_workspace_state_action(patient_demo, "patient", "demo")
+    assert patient_demo["_active_main_page"] == "quick_viz"
+    assert patient_demo["quick_viz_active_panel"] == "data_tables"
+    assert patient_demo["_eu_topbar_run_request"] == {
+        "page": "quick_viz",
+        "requested_at": "workspace_states",
+    }
+    assert patient_demo["entry_mode"] == "demo"
+    assert patient_demo["use_mock_data"] is True
+
+    crossdb_demo: dict[str, object] = {}
+    pages_redesign._apply_workspace_state_action(crossdb_demo, "crossdb", "demo")
+    assert crossdb_demo["_active_main_page"] == "cross_db"
+    assert crossdb_demo["_eu_topbar_run_request"] == {
+        "page": "cross_db",
+        "requested_at": "workspace_states",
+    }
+
+    agent_real: dict[str, object] = {"database": "unknown"}
+    pages_redesign._apply_workspace_state_action(agent_real, "agent", "real")
+    assert agent_real["_active_main_page"] == "research_agent"
+    assert agent_real["_ra_view"] == "setup"
+    assert agent_real["entry_mode"] == "real"
+    assert agent_real["use_mock_data"] is False
+    assert agent_real["database"] == "miiv"
+    assert "_eu_topbar_run_request" not in agent_real
 
 
 def test_demo_entry_routes_to_data_extraction_before_visualization(tmp_path, monkeypatch) -> None:

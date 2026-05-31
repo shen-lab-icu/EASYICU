@@ -601,6 +601,182 @@ def _route_to_workspace_states(state: MutableMapping[str, Any]) -> None:
     state["_scroll_to_top"] = True
 
 
+def _workspace_state_contexts(lang: str) -> list[dict[str, str]]:
+    return [
+        {"key": "patient", "label": _T(lang, "Patient Review", "患者审阅"), "crumb": _T(lang, "Data Visualization · Patient Review", "数据可视化 · 患者审阅"), "title": _T(lang, "Patient Review", "患者审阅")},
+        {"key": "crossdb", "label": _T(lang, "Cross-DB Benchmark", "跨库基准"), "crumb": _T(lang, "Data Visualization · Cross-DB Benchmark", "数据可视化 · 跨库基准"), "title": _T(lang, "Cross-DB Benchmark", "跨库基准")},
+        {"key": "agent", "label": _T(lang, "Research Agent", "研究智能体"), "crumb": _T(lang, "Research Agent · Run", "研究智能体 · 运行"), "title": _T(lang, "Research Agent", "研究智能体")},
+    ]
+
+
+def _workspace_state_modes(lang: str) -> list[dict[str, str]]:
+    return [
+        {"key": "demo", "label": _T(lang, "Demo", "演示")},
+        {"key": "real", "label": _T(lang, "Real Data", "真实数据")},
+    ]
+
+
+def _workspace_state_options(lang: str) -> list[dict[str, str]]:
+    return [
+        {"key": "loading", "label": _T(lang, "Loading", "加载中")},
+        {"key": "empty", "label": _T(lang, "Empty", "空状态")},
+        {"key": "nodata", "label": _T(lang, "No data", "无数据")},
+        {"key": "error", "label": _T(lang, "Error", "错误")},
+        {"key": "blocked", "label": _T(lang, "Blocked", "阻断")},
+        {"key": "success", "label": _T(lang, "Success", "成功")},
+    ]
+
+
+def _workspace_state_copy(context: str, mode: str, state_key: str, lang: str) -> dict[str, object]:
+    is_demo = mode == "demo"
+    if context == "crossdb":
+        return {
+            "loading": _T(lang, "Loading seeded frames for 6 databases", "正在加载 6 个数据库的种子数据") if is_demo else _T(lang, "Connecting to selected ICU databases", "正在连接所选 ICU 数据库"),
+            "empty_title": _T(lang, "Select at least 2 databases", "至少选择 2 个数据库"),
+            "empty_detail": _T(lang, "Compare one cohort definition across databases. Add a second source to begin.", "跨数据库比较同一个队列定义。至少添加第二个来源后开始。") if is_demo else _T(lang, "Connect two or more local database roots to compare standardized concepts side by side.", "连接两个或更多本地数据库根目录后并排比较标准化概念。"),
+            "empty_chips": ["MIMIC-IV", "eICU-CRD", "AUMC", "HiRID", "SICdb"],
+            "empty_action": _T(lang, "Load demo databases", "加载演示数据库") if is_demo else _T(lang, "Connect databases", "连接数据库"),
+            "nodata_title": _T(lang, "No shared concepts across selection", "所选数据库没有共同概念"),
+            "nodata_detail": _T(lang, "Adjust the database selection or concept set, then re-run the comparison.", "调整数据库选择或概念集后重新运行比较。"),
+            "nodata_filters": ["MIMIC-IV", "SICdb", "concept = lactate", "window = 6h"],
+            "error_title": _T(lang, "Couldn't assemble benchmark", "无法组装基准比较") if is_demo else _T(lang, "Database connection failed", "数据库连接失败"),
+            "error_detail": _T(lang, "One selected source is unreadable or its concept map is missing.", "某个已选来源不可读，或缺少概念映射。"),
+            "error_lines": ["$ benchmark --dbs selected", "SchemaError: concepts/ not found", "expected: <root>/concepts/*.parquet"],
+            "blocked_title": _T(lang, "Export is locked until evidence checks pass", "证据检查通过前导出保持锁定"),
+            "success_title": _T(lang, "Benchmark assembled", "基准比较已组装"),
+            "success_stats": [(_T(lang, "Databases", "数据库"), "6"), (_T(lang, "Concepts", "概念"), "6"), (_T(lang, "Delta range", "差异范围"), "15.5"), (_T(lang, "Rows / DB", "每库行数"), "144")],
+            "success_rows": [("hr median", "76.6", "80.3", "74.1"), ("sbp median", "125.4", "128.5", "119.9"), ("map median", "85.3", "89.6", "83.2")],
+        }
+    if context == "agent":
+        return {
+            "loading": _T(lang, "Running demo pipeline (no tokens)", "正在运行演示 pipeline（无 token）") if is_demo else _T(lang, "Executing plan · evidence-bound run", "正在执行计划 · 证据绑定运行"),
+            "empty_title": _T(lang, "No run yet", "尚未运行"),
+            "empty_detail": _T(lang, "Confirm a plan to preview the evidence-bound workflow.", "确认计划后预览证据绑定工作流。") if is_demo else _T(lang, "Define a research question and confirm the preflight gate before any model call.", "先定义研究问题并确认 preflight 关口，再进行任何模型调用。"),
+            "empty_chips": ["plan", "build", "analyze", "gate", "review"],
+            "empty_action": _T(lang, "Preview demo run", "预览演示运行") if is_demo else _T(lang, "Open plan setup", "打开计划配置"),
+            "nodata_title": _T(lang, "Run produced no evidence artifacts", "运行没有产出证据产物"),
+            "nodata_detail": _T(lang, "Every step completed but no artifact passed the evidence contract.", "步骤已结束，但没有产物通过证据契约。"),
+            "nodata_filters": ["cohort = sepsis", "checks = coverage", "gate = strict"],
+            "error_title": _T(lang, "Demo pipeline halted", "演示 pipeline 已停止") if is_demo else _T(lang, "Run failed at analysis step", "分析步骤运行失败"),
+            "error_detail": _T(lang, "The draft stays locked; the run remains recoverable.", "草稿保持锁定；该运行仍可恢复。"),
+            "error_lines": ["step 04 · LR + SOFA + lactate", "LinAlgError: singular matrix", "evidence ledger: partial"],
+            "blocked_title": _T(lang, "Manuscript draft is locked until checks pass", "证据检查通过前锁定手稿草稿"),
+            "success_title": _T(lang, "Run complete · awaiting review", "运行完成 · 等待复核"),
+            "success_stats": [(_T(lang, "Steps", "步骤"), "6 / 6"), (_T(lang, "Figures", "图件"), "6"), (_T(lang, "Tables", "表格"), "3"), (_T(lang, "Duration", "时长"), "2m 14s")],
+            "success_rows": [("Cohort summary", "n=10 · 20% mortality", "done"), ("Table 1", "11 features", "done"), ("ROC · LR + lactate", "AUC 0.84", "done")],
+        }
+    return {
+        "loading": _T(lang, "Generating demo review data", "正在生成演示审阅数据") if is_demo else _T(lang, "Reading local export folder", "正在读取本地导出目录"),
+        "empty_title": _T(lang, "No review workspace loaded yet", "尚未加载审阅工作区"),
+        "empty_detail": _T(lang, "Generate a compact demo set to populate tables, time series, patient overview, and quality checks.", "生成一组紧凑演示数据来填充表格、时间序列、患者概览和质控。") if is_demo else _T(lang, "Point EasyICU at a local export folder. Files are parsed on your machine.", "将 EasyICU 指向本地导出目录；文件只在本机解析。"),
+        "empty_chips": ["vitals", "labs", "sofa", "sepsis-3", "outcomes"],
+        "empty_action": _T(lang, "Generate demo data", "生成演示数据") if is_demo else _T(lang, "Choose export folder", "选择导出目录"),
+        "nodata_title": _T(lang, "Cohort matched 0 stays", "当前队列匹配 0 个 stay"),
+        "nodata_detail": _T(lang, "Loosen a constraint or widen the time window, then re-run.", "放宽约束或扩大时间窗口后重新运行。"),
+        "nodata_filters": ["age >= 80", "sepsis-3 = true", "LOS > 14d", "vasopressor = yes"],
+        "error_title": _T(lang, "Demo generation failed", "演示数据生成失败") if is_demo else _T(lang, "Couldn't read the export folder", "无法读取导出目录"),
+        "error_detail": _T(lang, "Retry rebuilds the review workspace from the selected source.", "重试会从所选来源重建审阅工作区。"),
+        "error_lines": ["$ easyicu demo --seed 42 --patients 10", "ValueError: frame length 0", "hint: retry regenerates the seed"],
+        "blocked_title": _T(lang, "Export is locked until evidence checks pass", "证据检查通过前导出保持锁定"),
+        "success_title": _T(lang, "Review workspace loaded", "审阅工作区已加载"),
+        "success_stats": [(_T(lang, "Stays", "Stay"), "10"), (_T(lang, "Time points", "时间点"), "240"), (_T(lang, "Modules", "模块"), "19"), (_T(lang, "Coverage", "覆盖率"), "94%")],
+        "success_rows": [("Age, mean (SD)", "54.8 (16.2)", "-"), ("SOFA, median", "6", "0.08"), ("Lactate, mmol/L", "2.4", "0.12")],
+    }
+
+
+def _workspace_state_preview_html(context: str, mode: str, state_key: str, lang: str) -> str:
+    ctx = next(item for item in _workspace_state_contexts(lang) if item["key"] == context)
+    mode_label = next(item["label"] for item in _workspace_state_modes(lang) if item["key"] == mode)
+    state_label = next(item["label"] for item in _workspace_state_options(lang) if item["key"] == state_key)
+    copy = _workspace_state_copy(context, mode, state_key, lang)
+    state_tone = "ok" if state_key == "success" else "warn" if state_key == "blocked" else "bad" if state_key == "error" else ""
+
+    if state_key == "loading":
+        body = (
+            '<div class="eu-state-loading-row"><span class="eu-state-spinner"></span>'
+            f'<div><b>{_esc(copy["loading"])}...</b><p>{_T(lang, "reproducible · no outbound calls", "可复现 · 无外部调用") if mode == "demo" else _T(lang, "local-only · nothing uploaded", "本地优先 · 不上传")}</p></div></div>'
+            '<div class="eu-state-progress"><span></span></div>'
+            '<div class="eu-state-skel-grid">'
+            + ''.join('<div class="eu-state-skel-card"><span></span><b></b></div>' for _ in range(4))
+            + '</div>'
+        )
+    elif state_key == "empty":
+        chips = ''.join(f'<span class="eu-state-chip">{_esc(chip)}</span>' for chip in copy["empty_chips"])
+        body = f'<div class="eu-state-body-pad"><div class="eu-state-hero empty-state"><div class="glyph"></div><div class="st-t">{_esc(copy["empty_title"])}</div><div class="st-d">{_esc(copy["empty_detail"])}</div><div class="filter-recap">{chips}</div></div></div>'
+    elif state_key == "nodata":
+        chips = ''.join(f'<span class="eu-state-chip solid">{_esc(chip)}</span>' for chip in copy["nodata_filters"])
+        body = f'<div class="eu-state-body-pad"><div class="eu-state-hero nodata"><div class="glyph"></div><div class="st-t">{_esc(copy["nodata_title"])}</div><div class="st-d">{_esc(copy["nodata_detail"])}</div><div class="filter-recap">{chips}</div></div></div>'
+    elif state_key == "error":
+        lines = ''.join(
+            f'<span class="{ "ln-bad" if idx == 1 else "ln-key" if idx == 0 else ""}">{_esc(line)}</span>\n'
+            for idx, line in enumerate(copy["error_lines"])
+        )
+        body = f'<div class="eu-state-body-pad"><div class="eu-state-hero error solid"><div class="glyph"></div><div class="st-t">{_esc(copy["error_title"])}</div><div class="st-d">{_esc(copy["error_detail"])}</div><div class="detail-box">{lines}</div></div></div>'
+    elif state_key == "blocked":
+        checks = [
+            (_T(lang, "Cohort denominators resolved", "队列分母已确认"), True),
+            (_T(lang, "Evidence manifest attached", "证据 manifest 已绑定"), True),
+            (_T(lang, "Tables and figures registered", "表格与图件已注册"), True),
+            (_T(lang, "Reviewer sign-off", "审核者签字"), False),
+        ]
+        body = (
+            '<div class="eu-state-body-pad"><div class="gate-block">'
+            f'<div class="eu-state-callout warn">{_esc(copy["blocked_title"])}</div>'
+            '<div class="checks">'
+            + ''.join(
+                f'<div class="check-row {"ok" if ok else "pending"}"><span class="check-mk"></span><span>{_esc(label)}</span><span class="grow"></span><em>{_T(lang, "passed", "通过") if ok else _T(lang, "pending", "待确认")}</em></div>'
+                for label, ok in checks
+            )
+            + '</div></div></div>'
+        )
+    else:
+        stats = ''.join(
+            f'<div class="stat { "ok" if idx == 0 else "accent"}"><div class="label">{_esc(label)}</div><div class="val">{_esc(value)}</div></div>'
+            for idx, (label, value) in enumerate(copy["success_stats"])
+        )
+        rows = ''.join('<tr>' + ''.join(f'<td>{_esc(cell)}</td>' for cell in row) + '</tr>' for row in copy["success_rows"])
+        body = (
+            '<div class="eu-state-body-pad">'
+            f'<div class="ok-banner"><span class="mk"></span><div><strong>{_esc(copy["success_title"])}.</strong> <span>{_T(lang, "Seeded demo output - values are illustrative, not a real run.", "种子演示输出，仅用于界面说明，不是真实结果。") if mode == "demo" else _T(lang, "Local run - results stayed on your machine.", "本地运行；结果保留在本机。")}</span></div></div>'
+            f'<div class="st-stats">{stats}</div><div class="table-wrap"><table class="eu-table"><tbody>{rows}</tbody></table></div></div>'
+        )
+
+    return (
+        '<div class="eu-state-preview-card">'
+        '<div class="eu-state-preview-head">'
+        '<div class="eu-state-preview-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg></div>'
+        f'<div><h2>{_esc(ctx["title"])}</h2><p>{_esc(ctx["crumb"])}</p></div>'
+        '<div class="eu-state-pills">'
+        f'<span class="eu-pill {mode}"><span class="dot"></span>{_esc(mode_label)}</span>'
+        f'<span class="eu-pill {state_tone}"><span class="dot"></span>{_esc(state_label)}</span>'
+        '</div></div>'
+        f'{body}</div>'
+    )
+
+
+def _apply_workspace_state_action(state: MutableMapping[str, Any], context: str, mode: str) -> None:
+    if mode == "demo":
+        _apply_demo_defaults_for_tutorial(state)
+    else:
+        state["entry_mode"] = "real"
+        state["use_mock_data"] = False
+        if state.get("database") not in {"miiv", "eicu", "aumc", "hirid", "mimic", "sic"}:
+            state["database"] = "miiv"
+    if context == "patient":
+        state["_active_main_page"] = "quick_viz"
+        state["quick_viz_active_panel"] = "data_tables"
+        if mode == "demo":
+            state["_eu_topbar_run_request"] = {"page": "quick_viz", "requested_at": "workspace_states"}
+    elif context == "crossdb":
+        state["_active_main_page"] = "cross_db"
+        if mode == "demo":
+            state["_eu_topbar_run_request"] = {"page": "cross_db", "requested_at": "workspace_states"}
+    else:
+        state["_active_main_page"] = "research_agent"
+        state["_ra_view"] = "setup"
+    state["_scroll_to_top"] = True
+
+
 def _route_to_extract_step(
     state: MutableMapping[str, Any],
     step: int,
@@ -809,23 +985,25 @@ def render_tutorial_redesign_page(lang: str) -> None:
 
 def render_workspace_states_reference_page(lang: str) -> None:
     """Render the latest print-reference workspace state catalogue."""
-    contexts = [
-        (_T(lang, "Patient Review", "患者审阅"), True),
-        (_T(lang, "Cross-DB Benchmark", "跨库基准"), False),
-        (_T(lang, "Research Agent", "研究智能体"), False),
-    ]
-    modes = [
-        (_T(lang, "Demo", "演示"), True),
-        (_T(lang, "Real Data", "真实数据"), False),
-    ]
-    states = [
-        (_T(lang, "Loading", "加载中"), True),
-        (_T(lang, "Empty", "空状态"), False),
-        (_T(lang, "No data", "无数据"), False),
-        (_T(lang, "Error", "错误"), False),
-        (_T(lang, "Blocked", "阻断"), False),
-        (_T(lang, "Success", "成功"), False),
-    ]
+    contexts = _workspace_state_contexts(lang)
+    modes = _workspace_state_modes(lang)
+    states = _workspace_state_options(lang)
+    current_context = str(st.session_state.get("_eu_states_context") or "patient")
+    current_mode = str(st.session_state.get("_eu_states_mode") or "demo")
+    current_state = str(st.session_state.get("_eu_states_state") or "loading")
+    valid_contexts = {item["key"] for item in contexts}
+    valid_modes = {item["key"] for item in modes}
+    valid_states = {item["key"] for item in states}
+    if current_context not in valid_contexts:
+        current_context = "patient"
+        st.session_state["_eu_states_context"] = current_context
+    if current_mode not in valid_modes:
+        current_mode = "demo"
+        st.session_state["_eu_states_mode"] = current_mode
+    if current_state not in valid_states:
+        current_state = "loading"
+        st.session_state["_eu_states_state"] = current_state
+
     st.markdown(
         '<div class="eu-states-head">'
         f'<div class="eyebrow">{_T(lang, "Design system · 状态库", "设计系统 · 状态库")}</div>'
@@ -834,57 +1012,72 @@ def render_workspace_states_reference_page(lang: str) -> None:
         '</div>',
         unsafe_allow_html=True,
     )
-    control_html = (
-        '<div class="eu-states-controls">'
-        '<div class="eu-states-control-row"><span>Context</span><div>'
-        + "".join(
-            f'<button class="{("active" if active else "")}">{_esc(label)}</button>'
-            for label, active in contexts
-        )
-        + '</div></div>'
-        '<div class="eu-states-control-row"><span>Mode</span><div>'
-        + "".join(
-            f'<button class="{("active" if active else "")}">{_esc(label)}</button>'
-            for label, active in modes
-        )
-        + '</div></div>'
-        '<div class="eu-states-control-row state-options"><span>State</span><div>'
-        + "".join(
-            f'<button class="{("active" if active else "")}">{_esc(label)}</button>'
-            for label, active in states
-        )
-        + '</div></div>'
-        '</div>'
-    )
-    skeleton_cards = "".join(
-        '<div class="eu-state-skel-card">'
-        '<span></span><b></b>'
-        '</div>'
-        for _ in range(4)
-    )
+
+    with st.container(key="eu_states_controls"):
+        st.markdown('<div class="eu-states-control-label">Context</div>', unsafe_allow_html=True)
+        cols = st.columns(len(contexts), gap="small")
+        for idx, item in enumerate(contexts):
+            with cols[idx]:
+                if st.button(
+                    item["label"],
+                    key=f"_eu_states_context_{item['key']}",
+                    type="primary" if current_context == item["key"] else "secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state["_eu_states_context"] = item["key"]
+                    st.rerun()
+        st.markdown('<div class="eu-states-control-label">Mode</div>', unsafe_allow_html=True)
+        cols = st.columns(len(modes), gap="small")
+        for idx, item in enumerate(modes):
+            with cols[idx]:
+                if st.button(
+                    item["label"],
+                    key=f"_eu_states_mode_{item['key']}",
+                    type="primary" if current_mode == item["key"] else "secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state["_eu_states_mode"] = item["key"]
+                    st.rerun()
+        st.markdown('<div class="eu-states-control-label">State</div>', unsafe_allow_html=True)
+        state_cols = st.columns(3, gap="small")
+        for idx, item in enumerate(states):
+            with state_cols[idx % 3]:
+                if st.button(
+                    item["label"],
+                    key=f"_eu_states_state_{item['key']}",
+                    type="primary" if current_state == item["key"] else "secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state["_eu_states_state"] = item["key"]
+                    st.rerun()
+
     st.markdown(
-        control_html
-        + '<div class="eu-state-preview-card">'
-        '<div class="eu-state-preview-head">'
-        '<div class="eu-state-preview-icon">'
-        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>'
-        '</div>'
-        '<div><h2>Patient Review</h2><p>Data Visualization · Patient Review</p></div>'
-        '<div class="eu-state-pills"><span class="eu-pill demo"><span class="dot"></span>Demo</span>'
-        '<span class="eu-pill"><span class="eu-state-spinner"></span>Loading</span></div>'
-        '</div>'
-        '<div class="eu-state-loading-row">'
-        '<span class="eu-state-spinner"></span>'
-        '<div><b>Generating demo review data...</b><p>reproducible · no outbound calls</p></div>'
-        '<button>Cancel</button>'
-        '</div>'
-        '<div class="eu-state-progress"><span></span></div>'
-        f'<div class="eu-state-skel-grid">{skeleton_cards}</div>'
-        '</div>',
+        _workspace_state_preview_html(current_context, current_mode, current_state, lang),
         unsafe_allow_html=True,
     )
+
+    copy = _workspace_state_copy(current_context, current_mode, current_state, lang)
+    with st.container(key="eu_states_preview_actions"):
+        action_cols = st.columns([0.38, 0.22, 0.40], gap="small")
+        with action_cols[0]:
+            if st.button(
+                str(copy.get("empty_action") or _T(lang, "Open current context", "打开当前上下文")),
+                key="_eu_states_primary_action",
+                type="primary",
+                use_container_width=True,
+            ):
+                _apply_workspace_state_action(st.session_state, current_context, current_mode)
+                st.rerun()
+        with action_cols[1]:
+            if st.button(
+                _T(lang, "Reset preview", "重置预览"),
+                key="_eu_states_reset_preview",
+                use_container_width=True,
+            ):
+                st.session_state["_eu_states_context"] = "patient"
+                st.session_state["_eu_states_mode"] = "demo"
+                st.session_state["_eu_states_state"] = "loading"
+                st.rerun()
 
     primitive_html = (
         '<div class="eu-guide-section eu-state-primitive-head">'
