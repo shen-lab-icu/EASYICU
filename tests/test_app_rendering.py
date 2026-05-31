@@ -3455,6 +3455,9 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
     assert 'st.container(key="eu_ra_preflight_panel")' in ra_source
     assert "Operating model" in overview_source
     assert "Context pack" in overview_source
+    assert "context_badge" in overview_source
+    assert '"awaiting cohort" if is_en else "等待队列"' in overview_source
+    assert '<span>{"handed off" if is_en else "已交接"}</span>' not in overview_source
     assert "Plan preview · 6 steps" in overview_source
     assert "Preflight gate" in overview_source
     assert "ra-setup-stage-list" in overview_source
