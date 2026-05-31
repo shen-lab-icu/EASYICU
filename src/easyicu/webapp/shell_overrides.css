@@ -5721,6 +5721,26 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   font-size: 12px;
   line-height: 1.45;
 }
+.ra-context-policy {
+  min-height: 88px;
+  padding: 10px 11px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+.ra-context-policy b {
+  display: block;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.25;
+}
+.ra-context-policy span {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
 .ra-setup-controls-intro > span,
 .ra-preflight-controls-intro > span {
   flex: none;
