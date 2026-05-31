@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import html
 from collections.abc import MutableMapping
+from pathlib import Path
 from typing import Any, Sequence
 
 import streamlit as st
@@ -35,6 +36,7 @@ from easyicu.webapp.concept_catalog import (
     CONCEPT_GROUP_NAMES,
     CONCEPT_GROUPS_INTERNAL,
 )
+from easyicu.webapp.session_state import clear_agent_continuation_state
 
 
 def _T(lang: str, en: str, zh: str) -> str:
@@ -174,6 +176,32 @@ def _route_to_extract_entry_mode(
     state["_active_main_page"] = "extract"
 
 
+def _route_to_research_agent_setup(
+    state: MutableMapping[str, Any],
+    *,
+    force_real: bool = False,
+    focus_module_folder: bool = False,
+) -> None:
+    """Open a fresh Agent setup without leaking an older resume/draft mode."""
+    clear_agent_continuation_state(state)
+    if force_real:
+        state["entry_mode"] = "real"
+        state["use_mock_data"] = False
+        valid_real_databases = {"miiv", "eicu", "aumc", "hirid", "mimic", "sic"}
+        if state.get("database") not in valid_real_databases:
+            state["database"] = "miiv"
+            state["path_validated"] = False
+            state.pop("last_validated_path", None)
+    if focus_module_folder:
+        state["_eu_ra_focus_module_folder"] = True
+        state.pop("research_agent_module_dir_pick", None)
+    else:
+        state.pop("_eu_ra_focus_module_folder", None)
+    state["_active_main_page"] = "research_agent"
+    state["_ra_view"] = "setup"
+    state["_scroll_to_top"] = True
+
+
 def _selected_tutorial_module_concepts(state: MutableMapping[str, Any]) -> list[str]:
     selected_module = state.get("_eu_tutorial_dict_module")
     if selected_module not in CONCEPT_GROUPS_INTERNAL:
@@ -214,8 +242,7 @@ def _apply_tutorial_resource_action(
     if target == "citation_info":
         if state.get("entry_mode") == "none":
             _apply_demo_defaults_for_tutorial(state)
-        state["_active_main_page"] = "research_agent"
-        state["_ra_view"] = "setup"
+        _route_to_research_agent_setup(state)
         state["_eu_ra_resource_focus"] = "citation_info"
         return
 
@@ -454,15 +481,15 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
         title_zh=_T(lang, "演示模式", "演示模式"),
         badge_html=badge_recommended,
         desc=_T(lang,
-            "Automatically generates reproducible mock data. Full cohort-builder, Quick Viz, and Research Agent gallery experience. No tokens, no local data needed.",
-            "自动生成可重复的模拟数据。完整体验队列构建、患者审阅和研究智能体静态画廊。无需令牌、无需本地数据。"),
+            "Automatically generates reproducible mock data. Full cohort-builder, Quick Viz, and Research Agent setup/history preview. No tokens, no local data needed.",
+            "自动生成可重复的模拟数据。完整体验队列构建、患者审阅和研究智能体设置/历史预览。无需令牌、无需本地数据。"),
         bullets=[
             _T(lang, "10-patient fast review set · 24h default",
                     "10 例快速审阅集 · 默认 24 小时"),
             _T(lang, "Lightweight review data is ready immediately",
                     "轻量审阅数据可立即打开"),
-            _T(lang, "Research Agent static gallery available",
-                    "研究智能体静态输出画廊可查看"),
+            _T(lang, "Research Agent setup and local-run handoff preview",
+                    "研究智能体设置与本机 run 交接预览"),
             _T(lang, "Switching sessions never loses your real work",
                     "会话切换不会丢失你的真实工作"),
         ],
@@ -532,7 +559,7 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
         if st.button(_T(lang, "Skip data → Agent", "跳过数据 → Agent"),
                      key="_eu_tutorial_nodata",
                      use_container_width=True):
-            st.session_state["_active_main_page"] = "research_agent"
+            _route_to_research_agent_setup(st.session_state)
             st.rerun()
 
     # Resources --------------------------------------------------
@@ -555,155 +582,988 @@ def _render_tutorial_redesign_page_legacy(lang: str) -> None:
     )
 
 
+def _route_to_ai_assistant(state: MutableMapping[str, Any], question: str | None = None) -> None:
+    """Route to the standalone assistant page without introducing a new backend path."""
+    state["_active_main_page"] = "assistant"
+    state["_inline_ai_panel_open"] = False
+    state["_floating_ai_open"] = False
+    state["_sidebar_ai_open"] = False
+    state["_scroll_to_top"] = True
+    if question:
+        state["_ai_pending_question"] = question
+
+
+def _route_to_workspace_states(state: MutableMapping[str, Any]) -> None:
+    state["_active_main_page"] = "states"
+    state["_inline_ai_panel_open"] = False
+    state["_floating_ai_open"] = False
+    state.pop("_ai_pending_question", None)
+    state["_scroll_to_top"] = True
+
+
+def _route_to_extract_step(
+    state: MutableMapping[str, Any],
+    step: int,
+) -> None:
+    """Route tutorial actions to a concrete extraction step."""
+    step = max(1, min(4, int(step)))
+    state["_active_main_page"] = "extract"
+    state["step1_confirmed"] = step > 1
+    state["step2_confirmed"] = step > 2
+    state["step3_confirmed"] = step > 3
+    if step < 4:
+        state["export_completed"] = False
+        state["trigger_export"] = False
+    state["_inline_ai_panel_open"] = False
+    state["_floating_ai_open"] = False
+    state["_scroll_to_top"] = True
+
+
+def _guide_step_html(number: str, title: str, desc: str) -> str:
+    return (
+        '<div class="eu-guide-step-copy">'
+        f'<div class="eu-guide-step-num">{_esc(number)}</div>'
+        '<div class="eu-guide-step-body">'
+        f'<div class="eu-guide-step-title" role="heading" aria-level="3">{_esc(title)}</div>'
+        f'<p>{_esc(desc)}</p>'
+        '</div>'
+        '</div>'
+    )
+
+
 def render_tutorial_redesign_page(lang: str) -> None:
+    """Render the latest print-reference Get Started page."""
+    is_en = lang == "en"
     st.markdown(
-        '<div class="eu-tutorial-hero">'
-        f'<div class="mono" style="font-size:11px;color:var(--ink-4);'
-        f'letter-spacing:0;text-transform:uppercase">{_T(lang, "Data extraction", "数据提取")}</div>'
-        f'<h1>{_T(lang, "Extract, review, analyze, draft.", "数据抽取 → 审阅 → 分析 → 起草")}</h1>'
-        f'<p>{_T(lang, "Start with demo data, a local database export, or code-only agent drafting. The page is arranged like a workbench: entry actions on the left, workflow and agent gates on the right.", "你可以从演示数据、本地数据库导出或仅代码 agent 起草开始。页面按工作台组织：左侧选择入口，右侧保留流程和 agent 审阅闸门。")}</p>'
+        '<div class="eu-getstarted-head">'
+        f'<div class="eyebrow">{_T(lang, "Get started · 快速上手", "快速上手")}</div>'
+        f'<h1>{_T(lang, "A quiet, reviewable path from data to draft", "从数据到草稿的可复核路径")}</h1>'
+        f'<p>{_T(lang, "EasyICU runs entirely on your machine. Start with reproducible demo data to learn the flow, then point it at local ICU exports when you’re ready.", "EasyICU 完全在本机运行。先用可复现演示数据熟悉流程，准备好后再连接本地 ICU 导出。")}</p>'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    steps = [
-        {
-            "number": "1",
-            "label": _T(lang, "Data source", "数据源"),
-            "desc": _T(lang, "Demo, real ICU exports, or code-only mode.", "演示、本地 ICU 导出或仅代码模式。"),
-            "sub": _T(lang, "3 modes", "3 种"),
-        },
-        {
-            "number": "2",
-            "label": _T(lang, "Cohort", "队列"),
-            "desc": _T(lang, "Filter age, outcome, LOS, ICD, Sepsis-3, AKI, ARDS.", "筛选年龄、转归、LOS、ICD、Sepsis-3、AKI、ARDS。"),
-            "sub": _T(lang, "9 filters", "9 项"),
-        },
-        {
-            "number": "3",
-            "label": _T(lang, "Concepts", "变量"),
-            "desc": _T(lang, "Select modules, merge previews, align timestamps.", "选择模块、合并预览并对齐时间轴。"),
-            "sub": _T(lang, "module catalog", "模块目录"),
-        },
-        {
-            "number": "4",
-            "label": _T(lang, "Analysis", "分析"),
-            "desc": _T(lang, "Review, compare databases, or hand off to the agent.", "审阅、比较多个数据库，或交给研究智能体。"),
-            "sub": _T(lang, "4 views", "4 视图"),
-        },
+
+    with st.container(key="eu_getstarted_demo_tour"):
+        copy_col, action_col = st.columns([1, 0.22], gap="large")
+        with copy_col:
+            st.markdown(
+                '<div class="eu-guide-hero-copy">'
+                '<div class="eu-guide-mark" aria-hidden="true">'
+                '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+                '<path d="M9 3h6"/><path d="M10 3v6L4 20a1 1 0 0 0 .9 1.5h14.2A1 1 0 0 0 20 20l-6-11V3"/></svg>'
+                '</div>'
+                '<div>'
+                f'<h2>{_T(lang, "New here? Take the 2-minute demo tour", "第一次使用？先走 2 分钟演示")}</h2>'
+                f'<p>{_T(lang, "No tokens, no setup, no patient data. The demo generates 10 mock ICU stays so every screen, table, and review gate is fully explorable before you connect anything real.", "无需 token、无需配置、无需患者数据。演示会生成 10 个模拟 ICU stays，因此在连接真实数据前，每个页面、表格和复核关口都可以完整探索。")}</p>'
+                '</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        with action_col:
+            if st.button(
+                _T(lang, "Start demo", "开始演示"),
+                key="_eu_getstarted_start_demo",
+                type="primary",
+                icon=":material/play_arrow:",
+                use_container_width=True,
+            ):
+                _route_to_extract_entry_mode(st.session_state, "demo")
+                st.rerun()
+            if st.button(
+                _T(lang, "Browse states", "浏览状态"),
+                key="_eu_getstarted_browse_states",
+                icon=":material/grid_view:",
+                use_container_width=True,
+            ):
+                _route_to_workspace_states(st.session_state)
+                st.rerun()
+
+    st.markdown(
+        '<div class="eu-guide-section">'
+        f'<div class="eyebrow">{_T(lang, "Five steps", "五步")}</div>'
+        f'<h2>{_T(lang, "How a study moves through EasyICU", "一项研究如何经过 EasyICU")}</h2>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.container(key="eu_getstarted_steps"):
+        steps = [
+            (
+                "1",
+                _T(lang, "Choose a data mode", "选择数据模式"),
+                _T(lang, "Demo Mode generates reproducible mock data; Real Data connects a local export folder. EasyICU never uploads anything either way.", "演示模式生成可复现模拟数据；真实数据模式连接本地导出文件夹。两种模式都不会上传数据。"),
+                [(_T(lang, "Configure source", "配置数据源"), "extract_source", "primary")],
+            ),
+            (
+                "2",
+                _T(lang, "Extract & gate data", "抽取并闸门检查数据"),
+                _T(lang, "A four-step flow normalizes the source, confirms the cohort, resolves concept coverage, then packages an export — each step gated so nothing runs on incomplete data.", "四步流程会标准化数据源、确认队列、检查变量覆盖并打包导出；每一步都有闸门，避免在不完整数据上运行。"),
+                [(_T(lang, "Open extraction", "打开数据抽取"), "extract", "primary")],
+            ),
+            (
+                "3",
+                _T(lang, "Review patients & cohorts", "审阅患者与队列"),
+                _T(lang, "Inspect patient-level tables and time series, then step up to cohort contrasts, coverage audits, and SOFA reclassification.", "先查看患者级表格和时间序列，再进入队列对比、覆盖审计和 SOFA 重分类。"),
+                [(_T(lang, "Patient Review", "患者审阅"), "quick_viz", "primary"), (_T(lang, "Cohort Statistics", "队列统计"), "cohort", "secondary")],
+            ),
+            (
+                "4",
+                _T(lang, "Benchmark across databases", "跨数据库基准对比"),
+                _T(lang, "Compare one cohort definition across two or more ICU databases — availability matrix and distribution summaries, side by side.", "在两个或更多 ICU 数据库中比较同一队列定义，并排查看可用性矩阵和分布摘要。"),
+                [(_T(lang, "Cross-DB Benchmark", "跨库基准"), "cross_db", "primary")],
+            ),
+            (
+                "5",
+                _T(lang, "Run the Research Agent", "运行研究智能体"),
+                _T(lang, "Plan, run, and review an auditable pipeline. The manuscript draft stays locked until every evidence check passes and you confirm.", "规划、运行并复核一条可审计流水线。所有证据检查通过并由你确认前，手稿草稿保持锁定。"),
+                [(_T(lang, "Open Research Agent", "打开研究智能体"), "research_agent", "primary"), (_T(lang, "Ask the assistant", "询问助手"), "assistant", "secondary")],
+            ),
+        ]
+        for number, title, desc, actions in steps:
+            with st.container(key=f"eu_getstarted_step_{number}"):
+                st.markdown(_guide_step_html(number, title, desc), unsafe_allow_html=True)
+                cols = st.columns([0.075, 0.925], gap="small")
+                with cols[1]:
+                    action_cols = st.columns(len(actions), gap="small")
+                    for idx, (label, target, tone) in enumerate(actions):
+                        with action_cols[idx]:
+                            if st.button(
+                                label + " ->",
+                                key=f"_eu_getstarted_step_{number}_{idx}",
+                                type="primary" if tone == "primary" else "secondary",
+                                use_container_width=True,
+                            ):
+                                if target == "assistant":
+                                    _route_to_ai_assistant(
+                                        st.session_state,
+                                        "Help me frame a researchable ICU analysis question." if is_en
+                                        else "帮我把 ICU 分析问题整理成可研究问题。",
+                                    )
+                                elif target == "extract_source":
+                                    _route_to_extract_step(st.session_state, 1)
+                                elif target == "extract":
+                                    st.session_state["_active_main_page"] = "extract"
+                                    st.session_state["_scroll_to_top"] = True
+                                elif target == "research_agent":
+                                    _route_to_research_agent_setup(st.session_state)
+                                else:
+                                    st.session_state["_active_main_page"] = target
+                                    st.session_state["_scroll_to_top"] = True
+                                st.rerun()
+
+    faq_items = [
+        (
+            _T(lang, "Is any patient data uploaded?", "会上传患者数据吗？"),
+            _T(lang, "No. EasyICU is local-first and the guarantee is enforced — extraction, review, and analysis all run on your machine. The only thing that can ever leave (and only if you explicitly enable it) is the Research Agent’s plan text, never patient rows.", "不会。EasyICU 是本地优先，抽取、审阅和分析都在你的机器上运行。只有在你明确启用时，研究智能体的计划文本才可能发送给模型端，患者行数据不会离开本机。"),
+            True,
+        ),
+        (
+            _T(lang, "What exactly is Demo Mode?", "演示模式是什么？"),
+            _T(lang, "A reproducible synthetic dataset — by default 10 ICU stays over 24 hours across 19 feature modules. It produces no scientific findings; every number is seeded so you can learn the interface safely.", "一套可复现的合成数据：默认 10 个 ICU stays、24 小时窗口、19 个特征模块。它不产生科学发现；所有数值都只是种子化示例，用来安全学习界面。"),
+            False,
+        ),
+        (
+            _T(lang, "Why is the manuscript draft locked?", "为什么手稿草稿会锁定？"),
+            _T(lang, "Drafting is a deliberate second stage. The agent only writes after denominators, coverage, tables, figures, and evidence references pass review.", "写作是第二阶段。只有分母、覆盖率、表格、图件和证据引用通过复核后，智能体才会起草。"),
+            False,
+        ),
+        (
+            _T(lang, "Which databases are supported?", "支持哪些数据库？"),
+            _T(lang, "MIMIC-IV, eICU-CRD, AmsterdamUMCdb, HiRID, MIMIC-III, and SICdb. EasyICU detects known export layouts when you select a local folder.", "支持 MIMIC-IV、eICU-CRD、AmsterdamUMCdb、HiRID、MIMIC-III 和 SICdb。选择本地目录后，EasyICU 会识别已知导出结构。"),
+            False,
+        ),
+        (
+            _T(lang, "Do I need API tokens?", "需要 API token 吗？"),
+            _T(lang, "Not for Demo Mode or data extraction/review/benchmark work. Tokens only apply if you connect an external model endpoint for the Research Agent.", "演示模式、数据抽取、审阅和基准对比都不需要。只有为研究智能体连接外部模型端点时才需要 token。"),
+            False,
+        ),
     ]
+    st.markdown(
+        '<div class="eu-guide-section eu-guide-faq-head">'
+        f'<div class="eyebrow">{_T(lang, "Good to know", "使用前须知")}</div>'
+        f'<h2>{_T(lang, "Common questions", "常见问题")}</h2>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    open_idx = int(st.session_state.get("_eu_getstarted_faq_open", 0))
+    with st.container(key="eu_getstarted_faq_card"):
+        for idx, (question, answer, _default_open) in enumerate(faq_items):
+            is_open = open_idx == idx
+            with st.container(key=f"eu_getstarted_faq_{idx}"):
+                label = f"{question} {'⌄' if is_open else '›'}"
+                if st.button(
+                    label,
+                    key=f"_eu_getstarted_faq_q_{idx}",
+                    use_container_width=True,
+                ):
+                    st.session_state["_eu_getstarted_faq_open"] = -1 if is_open else idx
+                    st.rerun()
+                if is_open:
+                    st.markdown(
+                        f'<div class="eu-faq-answer">{_esc(answer)}</div>',
+                        unsafe_allow_html=True,
+                    )
 
-    badge_recommended = (
-        f'<span class="eu-pill" style="background:var(--surface);border-color:var(--hair-2)">{_T(lang, "try first", "新手先试")}</span>'
+
+def render_workspace_states_reference_page(lang: str) -> None:
+    """Render the latest print-reference workspace state catalogue."""
+    contexts = [
+        (_T(lang, "Patient Review", "患者审阅"), True),
+        (_T(lang, "Cross-DB Benchmark", "跨库基准"), False),
+        (_T(lang, "Research Agent", "研究智能体"), False),
+    ]
+    modes = [
+        (_T(lang, "Demo", "演示"), True),
+        (_T(lang, "Real Data", "真实数据"), False),
+    ]
+    states = [
+        (_T(lang, "Loading", "加载中"), True),
+        (_T(lang, "Empty", "空状态"), False),
+        (_T(lang, "No data", "无数据"), False),
+        (_T(lang, "Error", "错误"), False),
+        (_T(lang, "Blocked", "阻断"), False),
+        (_T(lang, "Success", "成功"), False),
+    ]
+    st.markdown(
+        '<div class="eu-states-head">'
+        f'<div class="eyebrow">{_T(lang, "Design system · 状态库", "设计系统 · 状态库")}</div>'
+        f'<h1>{_T(lang, "Workspace states", "工作区状态")}</h1>'
+        f'<p>{_T(lang, "Every data surface in EasyICU passes through the same six states. Switch context, mode, and state to preview the polished treatment for each — all reference-only, with no invented results.", "EasyICU 的每个数据界面都经过同一组六种状态。切换上下文、模式和状态即可预览每种状态的视觉处理；这里仅作参考，不生成任何结果。")}</p>'
+        '</div>',
+        unsafe_allow_html=True,
     )
-    badge_localonly = (
-        f'<span class="eu-pill ok"><span class="dot"></span>{_T(lang, "local-only", "仅本地")}</span>'
+    control_html = (
+        '<div class="eu-states-controls">'
+        '<div class="eu-states-control-row"><span>Context</span><div>'
+        + "".join(
+            f'<button class="{("active" if active else "")}">{_esc(label)}</button>'
+            for label, active in contexts
+        )
+        + '</div></div>'
+        '<div class="eu-states-control-row"><span>Mode</span><div>'
+        + "".join(
+            f'<button class="{("active" if active else "")}">{_esc(label)}</button>'
+            for label, active in modes
+        )
+        + '</div></div>'
+        '<div class="eu-states-control-row state-options"><span>State</span><div>'
+        + "".join(
+            f'<button class="{("active" if active else "")}">{_esc(label)}</button>'
+            for label, active in states
+        )
+        + '</div></div>'
+        '</div>'
     )
-    demo_card = _tutorial_start_card(
-        tone="primary",
-        title=_T(lang, "Demo Mode", "演示模式"),
-        subtitle=_T(lang, "Fastest complete path", "最快完整路径"),
-        badge_html=badge_recommended,
-        desc=_T(lang,
-            "Generate reproducible mock ICU data and walk through extraction, review, visualization, and agent handoff without touching local files.",
-            "生成可复现的模拟 ICU 数据，直接走完抽取、审阅、可视化和 agent 交接，不需要接触本地文件。"),
-        bullets=[
-            _T(lang, "10-patient fast review set with a 24h default window",
-                    "10 例快速审阅集，默认 24 小时时间窗"),
-            _T(lang, "Lightweight review data is ready immediately",
-                    "轻量审阅数据可立即打开"),
-            _T(lang, "Agent gallery and audit handoff are ready",
-                    "Agent 画廊和审计交接可直接查看"),
-        ],
+    skeleton_cards = "".join(
+        '<div class="eu-state-skel-card">'
+        '<span></span><b></b>'
+        '</div>'
+        for _ in range(4)
     )
-    real_card = _tutorial_start_card(
-        title=_T(lang, "Real Data", "真实数据"),
-        subtitle=_T(lang, "Use local ICU exports", "连接本地 ICU 导出"),
-        badge_html=badge_localonly,
-        desc=_T(lang,
-            "Point EasyICU to prepared database folders and keep processing on your machine.",
-            "将 EasyICU 指向已准备好的数据库目录，所有处理留在本机。"),
-        bullets=[
-            _T(lang, "MIMIC-IV, eICU, AUMC, HiRID, MIMIC-III, SICdb",
-                    "MIMIC-IV、eICU、AUMC、HiRID、MIMIC-III、SICdb"),
-            _T(lang, "Reuse prior module-folder exports",
-                    "可复用之前的模块导出目录"),
-        ],
-    )
-    nodata_card = _tutorial_start_card(
-        title=_T(lang, "No Data", "仅代码"),
-        subtitle=_T(lang, "Draft first", "先起草代码"),
-        desc=_T(lang,
-            "Let the Research Agent prepare a reusable analysis skeleton before data are available.",
-            "还没有数据时，先让研究智能体准备可复用的分析代码骨架。"),
-        bullets=[
-            _T(lang, "Generate cohort.py / analysis.py", "生成 cohort.py / analysis.py"),
-            _T(lang, "Create a methods-section draft", "生成 Methods 段草稿"),
-        ],
+    st.markdown(
+        control_html
+        + '<div class="eu-state-preview-card">'
+        '<div class="eu-state-preview-head">'
+        '<div class="eu-state-preview-icon">'
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>'
+        '</div>'
+        '<div><h2>Patient Review</h2><p>Data Visualization · Patient Review</p></div>'
+        '<div class="eu-state-pills"><span class="eu-pill demo"><span class="dot"></span>Demo</span>'
+        '<span class="eu-pill"><span class="eu-state-spinner"></span>Loading</span></div>'
+        '</div>'
+        '<div class="eu-state-loading-row">'
+        '<span class="eu-state-spinner"></span>'
+        '<div><b>Generating demo review data...</b><p>reproducible · no outbound calls</p></div>'
+        '<button>Cancel</button>'
+        '</div>'
+        '<div class="eu-state-progress"><span></span></div>'
+        f'<div class="eu-state-skel-grid">{skeleton_cards}</div>'
+        '</div>',
+        unsafe_allow_html=True,
     )
 
-    main_col, rail_col = st.columns([1.42, 0.72], gap="large")
-    with main_col:
+    primitive_html = (
+        '<div class="eu-guide-section eu-state-primitive-head">'
+        '<div class="eyebrow">Status primitives</div>'
+        '<h2>Reusable building blocks</h2>'
+        '</div>'
+        '<div class="eu-state-primitive-grid">'
+        '<div class="eu-state-primitive-card">'
+        '<span>Spinner · inline</span>'
+        '<div class="eu-state-primitive-inline">'
+        '<i class="eu-state-spinner"></i><i class="eu-state-spinner ghost"></i><b>working...</b>'
+        '</div>'
+        '</div>'
+        '<div class="eu-state-primitive-card">'
+        '<span>Indeterminate bar</span>'
+        '<div class="eu-state-progress primitive"><span></span></div>'
+        '</div>'
+        '<div class="eu-state-primitive-card">'
+        '<span>Skeleton rows</span>'
+        '<div class="eu-state-skel-lines"><i></i><i></i><i></i></div>'
+        '</div>'
+        '<div class="eu-state-primitive-card">'
+        '<span>Status pills</span>'
+        '<div class="eu-state-status-row">'
+        '<b class="passed">passed</b><b class="blocked">blocked</b><b class="error">error</b><b class="queued">queued</b>'
+        '</div>'
+        '</div>'
+        '<div class="eu-state-primitive-card">'
+        '<span>Callouts</span>'
+        '<div class="eu-state-callout ok">Success</div>'
+        '<div class="eu-state-callout bad">Error</div>'
+        '</div>'
+        '<div class="eu-state-primitive-card">'
+        '<span>Empty glyph</span>'
+        '<div class="eu-state-empty-glyph">'
+        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="m12 4 8 4-8 4-8-4 8-4Z"/><path d="m4 12 8 4 8-4"/>'
+        '</svg>'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
+    st.markdown(primitive_html, unsafe_allow_html=True)
+
+
+def _settings_row_copy(title: str, desc: str) -> str:
+    return (
+        '<div class="eu-settings-row-copy">'
+        f'<b>{_esc(title)}</b>'
+        f'<p>{_esc(desc)}</p>'
+        '</div>'
+    )
+
+
+def _settings_value_pill(value: object, *, icon: str = "folder") -> str:
+    icon_path = (
+        '<path d="M3 7.5h6l1.5 2H21v8.5A2 2 0 0 1 19 20H5a2 2 0 0 1-2-2V7.5Z"/>'
+        if icon == "folder"
+        else '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>'
+    )
+    return (
+        '<div class="eu-settings-value mono">'
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" '
+        f'stroke-linejoin="round">{icon_path}</svg>'
+        f'<span>{_esc(value)}</span>'
+        '</div>'
+    )
+
+
+def _settings_static_toggle(*, active: bool, label: str = "") -> str:
+    cls = " on" if active else ""
+    label_html = f'<span class="eu-settings-toggle-label">{_esc(label)}</span>' if label else ""
+    return (
+        '<div class="eu-settings-toggle-wrap">'
+        f'{label_html}<span class="eu-settings-toggle{cls}"><span></span></span>'
+        '</div>'
+    )
+
+
+def _settings_state_chip(label: str, *, tone: str = "neutral") -> str:
+    return f'<span class="eu-settings-chip {tone}"><i></i>{_esc(label)}</span>'
+
+
+def _settings_status_tile(
+    *,
+    label: str,
+    value: str,
+    detail: str,
+    tone: str = "neutral",
+) -> str:
+    return (
+        f'<div class="eu-settings-status-tile {tone}">'
+        f'<span>{_esc(label)}</span>'
+        f'<b>{_esc(value)}</b>'
+        f'<p>{_esc(detail)}</p>'
+        '</div>'
+    )
+
+
+def _settings_apply_demo_defaults(patients: int, hours: int) -> None:
+    st.session_state["demo_mode_patients"] = int(patients)
+    st.session_state["demo_mode_hours"] = int(hours)
+    params = dict(st.session_state.get("mock_params") or {})
+    params["n_patients"] = int(patients)
+    params["hours"] = int(hours)
+    params.setdefault("demo_profile", "lite")
+    st.session_state["mock_params"] = params
+
+
+def render_settings_redesign_page(lang: str) -> None:
+    """Render the print-reference Settings page using live session settings."""
+    from easyicu.webapp.llm_config import (
+        coerce_public_provider,
+        is_configured as is_shared_llm_configured,
+        needs_api_key as shared_llm_needs_api_key,
+        public_provider_defaults,
+    )
+
+    is_en = lang == "en"
+    state = st.session_state
+    entry_mode = str(state.get("entry_mode") or "demo")
+    demo_patients = int(state.get("demo_mode_patients") or (state.get("mock_params") or {}).get("n_patients") or 10)
+    demo_hours = int(state.get("demo_mode_hours") or (state.get("mock_params") or {}).get("hours") or 24)
+    last_export = str(state.get("last_export_dir") or state.get("export_path") or "")
+    export_hint = last_export or str(Path.home() / "easyicu_export")
+    workdir = str(state.get("research_agent_workdir") or (Path.cwd() / "research_output" / "webapp").resolve())
+    module_folder = str(state.get("research_agent_module_dir_text") or "")
+    outbound_enabled = bool(state.get("llm_enabled", False))
+    provider_key = coerce_public_provider(str(state.get("llm_provider") or "easyicu_hosted"))
+    provider_label, default_base_url, default_model, _provider_needs_key, _desc_en, _desc_zh = public_provider_defaults(provider_key)
+    provider_needs_key = shared_llm_needs_api_key(provider_key)
+    api_key_present = bool(str(state.get("llm_api_key") or "").strip())
+    model_label = str(state.get("llm_model") or default_model or "").strip()
+    base_url_label = str(state.get("llm_base_url") or default_base_url or "").strip()
+    shared_provider_configured = is_shared_llm_configured()
+    hosted_model_active = provider_key == "easyicu_hosted"
+    density_pref = str(state.get("ui_density") or "comfortable")
+    if density_pref not in {"comfortable", "compact"}:
+        density_pref = "comfortable"
+        state["ui_density"] = density_pref
+    reduce_motion = bool(state.get("reduce_motion", False))
+    state["_eu_settings_module_folder_mode"] = bool(module_folder)
+    state["_eu_settings_allow_outbound_model_calls"] = outbound_enabled
+    state["_eu_settings_reduce_motion"] = reduce_motion
+
+    if hosted_model_active:
+        agent_run_value = _T(lang, "Mock or per-run override", "离线或单次覆盖")
+        agent_run_detail = _T(
+            lang,
+            "Hosted relay is reserved for assistant/internal use; real Research Agent runs choose Mock or a user endpoint.",
+            "Hosted relay 仅用于助手/内部用途；真实 Research Agent 运行请用 Mock 或用户提供的端点。",
+        )
+        agent_run_tone = "warn"
+    elif shared_provider_configured and model_label and outbound_enabled:
+        agent_run_value = _T(lang, "Shared external ready", "共享外部端点就绪")
+        agent_run_detail = f"{provider_label} · {model_label}"
+        agent_run_tone = "ok"
+    elif shared_provider_configured and model_label:
+        agent_run_value = _T(lang, "Configured, calls off", "已配置，调用关闭")
+        agent_run_detail = _T(
+            lang,
+            "Turn on outbound model calls before reusing this endpoint in a real run.",
+            "真实运行复用该端点前，需要打开模型端调用。",
+        )
+        agent_run_tone = "warn"
+    else:
+        agent_run_value = _T(lang, "Setup needed", "需要补齐设置")
+        agent_run_detail = _T(
+            lang,
+            "Add the API key/model, or choose MockLLMClient in Research Agent setup.",
+            "请补齐 API key/模型，或在 Research Agent 配置中选择 MockLLMClient。",
+        )
+        agent_run_tone = "bad"
+
+    if provider_needs_key:
+        credential_value = _T(lang, "Session key present", "会话 Key 已填写") if api_key_present else _T(lang, "API key missing", "缺少 API Key")
+        credential_detail = _T(
+            lang,
+            "API keys stay in this browser session only.",
+            "API Key 只保存在当前浏览器会话。",
+        )
+        credential_tone = "ok" if api_key_present else "bad"
+    else:
+        credential_value = _T(lang, "No user key required", "无需用户 Key")
+        credential_detail = _T(
+            lang,
+            "The selected provider uses the configured EasyICU relay.",
+            "当前服务商使用 EasyICU 已配置的代理。",
+        )
+        credential_tone = "neutral"
+
+    def _settings_module_folder_mode_changed() -> None:
+        enabled = bool(st.session_state.get("_eu_settings_module_folder_mode", False))
+        if enabled and not str(st.session_state.get("research_agent_module_dir_text") or ""):
+            st.session_state["research_agent_cohort_source"] = _T(
+                lang,
+                "Pick an EasyICU module export folder",
+                "选择 EasyICU 模块导出文件夹",
+            )
+            _route_to_research_agent_setup(
+                st.session_state,
+                force_real=True,
+                focus_module_folder=True,
+            )
+        elif not enabled:
+            st.session_state["research_agent_module_dir_text"] = ""
+
+    def _settings_outbound_model_calls_changed() -> None:
+        enabled = bool(st.session_state.get("_eu_settings_allow_outbound_model_calls", False))
+        st.session_state["llm_enabled"] = enabled
+        st.session_state["_llm_toggle"] = enabled
+        st.session_state["_llm_toggle_sync_pending"] = True
+        if not enabled:
+            st.session_state["_sidebar_ai_open"] = False
+            st.session_state["_floating_ai_open"] = False
+            st.session_state["_inline_ai_panel_open"] = False
+
+    def _settings_reduce_motion_changed() -> None:
+        st.session_state["reduce_motion"] = bool(
+            st.session_state.get("_eu_settings_reduce_motion", False)
+        )
+
+    st.markdown(
+        '<div class="eu-settings-page-head">'
+        f'<div class="eyebrow">{_T(lang, "Workspace · 设置", "工作区 · 设置")}</div>'
+        f'<h1>{_T(lang, "Settings", "设置")}</h1>'
+        f'<p>{_T(lang, "Configure how EasyICU reads data, runs the agent, and presents the workspace. Everything is local and reversible.", "配置 EasyICU 如何读取数据、运行 agent 并呈现工作区。所有设置都保留在本机，且可以随时改回。")}</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div class="eu-settings-section-head">'
+        f'<span>{_T(lang, "Workspace", "工作区")}</span>'
+        f'<h2>{_T(lang, "Local paths", "本地路径")}</h2>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    with st.container(key="eu_settings_workspace_card"):
+        left, right = st.columns([1.35, 1.0], gap="large")
+        with left:
+            st.markdown(
+                _settings_row_copy(
+                    _T(lang, "Working directory", "工作目录"),
+                    _T(lang, "Where agent runs, caches, and review bundles are written.", "Agent 运行、缓存与复核包写入的位置。"),
+                ),
+                unsafe_allow_html=True,
+            )
+        with right:
+            value_col, action_col = st.columns([0.72, 0.28], gap="small")
+            with value_col:
+                st.markdown(_settings_value_pill(workdir, icon="folder"), unsafe_allow_html=True)
+            with action_col:
+                if st.button(
+                    _T(lang, "Change", "修改"),
+                    key="_eu_settings_change_workdir",
+                    help=_T(lang, "Change in Agent setup", "到 Agent 配置中修改"),
+                    use_container_width=True,
+                ):
+                    _route_to_research_agent_setup(state, force_real=True)
+                    st.rerun()
+        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
+
+        left, right = st.columns([1.35, 1.0], gap="large")
+        with left:
+            st.markdown(
+                _settings_row_copy(
+                    _T(lang, "Default export folder", "默认导出目录"),
+                    _T(lang, "Destination for code, tables, figures, and evidence-ledger bundles.", "代码、表格、图件与证据账本包的导出目的地。"),
+                ),
+                unsafe_allow_html=True,
+            )
+        with right:
+            value_col, action_col = st.columns([0.72, 0.28], gap="small")
+            with value_col:
+                st.markdown(_settings_value_pill(export_hint, icon="download"), unsafe_allow_html=True)
+            with action_col:
+                if st.button(
+                    _T(lang, "Change", "修改"),
+                    key="_eu_settings_change_export",
+                    help=_T(lang, "Change in Data Extraction", "到数据抽取中修改"),
+                    use_container_width=True,
+                ):
+                    state["_active_main_page"] = "extract"
+                    state["_scroll_to_top"] = True
+                    st.rerun()
+        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
+
+        left, right = st.columns([1.35, 1.0], gap="large")
+        with left:
+            st.markdown(
+                _settings_row_copy(
+                    _T(lang, "Module-folder mode", "模块目录模式"),
+                    _T(lang, "Reuse a previously exported module folder instead of re-extracting.", "复用已经导出的模块目录，而不是重新抽取。"),
+                ),
+                unsafe_allow_html=True,
+            )
+        with right:
+            st.toggle(
+                _T(lang, "Module-folder mode", "模块目录模式"),
+                key="_eu_settings_module_folder_mode",
+                label_visibility="collapsed",
+                help=_T(
+                    lang,
+                    "Turn on to open Research Agent setup and choose a module export folder.",
+                    "打开后进入 Research Agent 配置并选择模块导出目录。",
+                ),
+                on_change=_settings_module_folder_mode_changed,
+            )
+
+    st.markdown(
+        '<div class="eu-settings-section-head">'
+        f'<span>{_T(lang, "Data mode", "数据模式")}</span>'
+        f'<h2>{_T(lang, "Defaults for new sessions", "新会话默认值")}</h2>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    with st.container(key="eu_settings_data_mode_card"):
+        left, right = st.columns([1.35, 1.0], gap="large")
+        with left:
+            st.markdown(
+                _settings_row_copy(
+                    _T(lang, "Start mode", "启动模式"),
+                    _T(lang, "Which mode a new workspace opens in. You can always switch later.", "新工作区默认打开哪种模式，之后仍可切换。"),
+                ),
+                unsafe_allow_html=True,
+            )
+        with right:
+            mode_cols = st.columns(2, gap="small")
+            with mode_cols[0]:
+                if st.button(
+                    "Demo",
+                    key="_eu_settings_mode_demo",
+                    type="primary" if entry_mode == "demo" else "secondary",
+                    use_container_width=True,
+                ):
+                    state["entry_mode"] = "demo"
+                    state["use_mock_data"] = True
+                    st.rerun()
+            with mode_cols[1]:
+                if st.button(
+                    "Real Data",
+                    key="_eu_settings_mode_real",
+                    type="primary" if entry_mode == "real" else "secondary",
+                    use_container_width=True,
+                ):
+                    state["entry_mode"] = "real"
+                    state["use_mock_data"] = False
+                    st.rerun()
+        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
+
+        left, right = st.columns([1.35, 1.0], gap="large")
+        with left:
+            st.markdown(
+                _settings_row_copy(
+                    _T(lang, "Demo patients", "演示患者数"),
+                    _T(lang, "Default cohort size generated in Demo Mode.", "演示模式默认生成的队列大小。"),
+                ),
+                unsafe_allow_html=True,
+            )
+        with right:
+            patient_cols = st.columns(3, gap="small")
+            for idx, value in enumerate((10, 20, 50)):
+                with patient_cols[idx]:
+                    if st.button(
+                        str(value),
+                        key=f"_eu_settings_demo_patients_{value}",
+                        type="primary" if demo_patients == value else "secondary",
+                        use_container_width=True,
+                    ):
+                        _settings_apply_demo_defaults(value, demo_hours)
+                        st.rerun()
+        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
+
+        left, right = st.columns([1.35, 1.0], gap="large")
+        with left:
+            st.markdown(
+                _settings_row_copy(
+                    _T(lang, "Demo duration", "演示时长"),
+                    _T(lang, "Default hours of hourly time points per stay.", "每个 ICU stay 默认生成多少小时的小时级时间点。"),
+                ),
+                unsafe_allow_html=True,
+            )
+        with right:
+            hour_cols = st.columns(3, gap="small")
+            for idx, value in enumerate((24, 48, 168)):
+                with hour_cols[idx]:
+                    if st.button(
+                        f"{value}h",
+                        key=f"_eu_settings_demo_hours_{value}",
+                        type="primary" if demo_hours == value else "secondary",
+                        use_container_width=True,
+                    ):
+                        _settings_apply_demo_defaults(demo_patients, value)
+                        st.rerun()
+
+    st.markdown(
+        '<div class="eu-settings-section-head">'
+        f'<span>{_T(lang, "Privacy", "隐私")}</span>'
+        f'<h2>{_T(lang, "Local-first guarantees", "本地优先保障")}</h2>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    with st.container(key="eu_settings_privacy_card"):
+        static_privacy_rows = [
+            (
+                _T(lang, "Local-only mode", "本地模式"),
+                _T(lang, "Patient data never leaves your machine. This guarantee is enforced and cannot be disabled.", "患者数据不会离开你的机器。该保障强制启用，不能关闭。"),
+                True,
+                _T(lang, "enforced", "强制"),
+            ),
+            (
+                _T(lang, "Anonymous usage telemetry", "匿名使用遥测"),
+                _T(lang, "EasyICU collects nothing unless you explicitly add your own instrumentation.", "EasyICU 不收集遥测，除非你自己显式添加。"),
+                False,
+                "",
+            ),
+            (
+                _T(lang, "Cache cohort frames", "缓存队列数据帧"),
+                _T(lang, "Keep extracted frames on disk to speed up repeat reviews.", "将已抽取数据帧保存在本地，加速重复复核。"),
+                True,
+                "",
+            ),
+        ]
+        left, right = st.columns([1.35, 1.0], gap="large")
+        with left:
+            st.markdown(
+                _settings_row_copy(
+                    _T(lang, "Allow outbound model calls", "允许模型端调用"),
+                    _T(lang, "When enabled, only prompts, plans, and run logs may reach the configured endpoint; patient rows are never sent.", "启用后，只有提示词、计划和运行日志可能发送到配置的模型端点；患者行数据不会发送。"),
+                ),
+                unsafe_allow_html=True,
+            )
+        with right:
+            st.toggle(
+                _T(lang, "Allow outbound model calls", "允许模型端调用"),
+                key="_eu_settings_allow_outbound_model_calls",
+                label_visibility="collapsed",
+                help=_T(
+                    lang,
+                    "Shared switch used by AI Assistant and Research Agent. External Research Agent runs still show a per-run disclosure gate.",
+                    "AI 助手和 Research Agent 共用该开关；外部模型运行仍会显示单次运行披露关口。",
+                ),
+                on_change=_settings_outbound_model_calls_changed,
+            )
+        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
+
+        for title, desc, active, label in static_privacy_rows:
+            st.markdown(
+                '<div class="eu-settings-privacy-row">'
+                f'{_settings_row_copy(title, desc)}'
+                f'{_settings_static_toggle(active=active, label=label)}'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown(
+        '<div class="eu-settings-section-head">'
+        f'<span>{_T(lang, "Research Agent", "研究智能体")}</span>'
+        f'<h2>{_T(lang, "Run behavior", "运行行为")}</h2>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    with st.container(key="eu_settings_agent_card"):
+        left, right = st.columns([1.35, 1.0], gap="large")
+        with left:
+            st.markdown(
+                    _settings_row_copy(
+                        _T(lang, "Model", "模型"),
+                        _T(lang, "Shared provider used by the assistant. Research Agent can still choose Mock/offline for a local test run.", "助手使用的共享服务商；Research Agent 仍可为单次运行选择 Mock/离线模式。"),
+                    ),
+                    unsafe_allow_html=True,
+                )
+        with right:
+            model_cols = st.columns(2, gap="small")
+            with model_cols[0]:
+                if st.button(
+                    _T(lang, "Hosted (assistant)", "Hosted（助手）"),
+                    key="_eu_settings_model_local",
+                    type="primary" if hosted_model_active else "secondary",
+                    use_container_width=True,
+                ):
+                    state["llm_provider"] = "easyicu_hosted"
+                    state["_llm_provider_sel"] = "easyicu_hosted"
+                    state["llm_api_key"] = ""
+                    state["llm_base_url"] = ""
+                    state["llm_model"] = ""
+                    state["_llm_api_key_inp"] = ""
+                    state["_llm_base_url_inp"] = ""
+                    state["_llm_model_inp"] = ""
+                    state["llm_configured"] = False
+                    st.rerun()
+            with model_cols[1]:
+                if st.button(
+                    "External endpoint",
+                    key="_eu_settings_model_external",
+                    type="primary" if not hosted_model_active else "secondary",
+                    use_container_width=True,
+                ):
+                    if str(state.get("llm_provider") or "") == "easyicu_hosted":
+                        state["llm_provider"] = "openrouter"
+                        state["_llm_provider_sel"] = "openrouter"
+                        state["_llm_base_url_inp"] = ""
+                        state["_llm_model_inp"] = ""
+                    st.rerun()
+            st.markdown(
+                '<div class="eu-settings-route-note">'
+                f'{_settings_state_chip(agent_run_value, tone=agent_run_tone)}'
+                f'<p>{_esc(agent_run_detail)}</p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
+        static_rows = [
+            (
+                _T(lang, "Token budget", "Token 预算"),
+                _T(lang, "Soft cap per external run. Demo and Mock runs use zero tokens.", "外部模型运行的软上限。演示与 Mock 运行不使用 token。"),
+                '<div class="eu-settings-value mono"><span>120,000</span></div>',
+            ),
+            (
+                _T(lang, "Auto-repair steps", "自动修复步骤"),
+                _T(lang, "Deterministically retry a failed analysis step before halting the run.", "分析步骤失败时，在停止前进行确定性重试。"),
+                _settings_static_toggle(active=True),
+            ),
+            (
+                _T(lang, "Evidence gate", "证据闸门"),
+                _T(lang, "Strict requires every contract to pass before drafting unlocks.", "Strict 要求每个契约通过后才解锁草稿。"),
+                '<div class="eu-settings-segment mono"><span class="active">Strict</span><span>Standard</span></div>',
+            ),
+        ]
+        for title, desc, control_html in static_rows:
+            left, right = st.columns([1.35, 1.0], gap="large")
+            with left:
+                st.markdown(_settings_row_copy(title, desc), unsafe_allow_html=True)
+            with right:
+                st.markdown(control_html, unsafe_allow_html=True)
+            st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
+
+    with st.container(key="eu_settings_llm_live_card"):
         st.markdown(
-            f'<div class="eu-section-label" style="padding:0;margin:4px 0 10px">'
-            f'<span>{_T(lang, "Choose a starting point", "选择起点")}</span></div>',
+            '<div class="eu-settings-live-head">'
+            f'<span>{_T(lang, "AI / API connection", "AI / API 连接")}</span>'
+            f'<p>{_T(lang, "These controls are the real shared settings used by the assistant and Research Agent.", "这里是真实共享设置，会被助手和 Research Agent 使用。")}</p>'
+            '</div>',
             unsafe_allow_html=True,
         )
-        st.markdown(demo_card, unsafe_allow_html=True)
-        if st.button(_T(lang, "Start demo -> Extract", "开始演示 -> 提取"),
-                     key="_eu_tutorial_demo", type="primary",
-                     use_container_width=True):
-            _route_to_extract_entry_mode(st.session_state, "demo")
-            st.rerun()
-
-        with st.container(key="eu_tutorial_secondary_starts"):
-            secondary_left, secondary_right = st.columns(2, gap="medium")
-            with secondary_left:
-                st.markdown(real_card, unsafe_allow_html=True)
-                if st.button(_T(lang, "Configure data path -> Extract", "配置数据路径 -> 提取"),
-                             key="_eu_tutorial_real",
-                             use_container_width=True):
-                    _route_to_extract_entry_mode(st.session_state, "real")
-                    st.rerun()
-            with secondary_right:
-                st.markdown(nodata_card, unsafe_allow_html=True)
-                if st.button(_T(lang, "Skip data -> Agent", "跳过数据 -> Agent"),
-                             key="_eu_tutorial_nodata",
-                             use_container_width=True):
-                    st.session_state["_active_main_page"] = "research_agent"
-                    st.rerun()
-
-        _render_tutorial_dictionary(lang)
-        if st.button(
-            _T(lang, "Open selected module -> Concepts", "打开所选模块 -> 变量选择"),
-            key="_eu_tutorial_dictionary",
-            use_container_width=True,
-        ):
-            if st.session_state.get("entry_mode") == "none":
-                st.session_state["entry_mode"] = "demo"
-                st.session_state["use_mock_data"] = True
-                st.session_state["database"] = "mock"
-            st.session_state["step1_confirmed"] = True
-            st.session_state["step2_confirmed"] = True
-            st.session_state["step3_confirmed"] = False
-            selected_module = st.session_state.get("_eu_tutorial_dict_module")
-            module_concepts = [
-                name
-                for name in CONCEPT_GROUPS_INTERNAL.get(str(selected_module), [])
-                if name in CONCEPT_DICTIONARY
-            ]
-            if module_concepts:
-                st.session_state["selected_concepts"] = module_concepts
-            st.session_state["_active_main_page"] = "extract"
-            st.rerun()
-
-    with rail_col:
         st.markdown(
-            _tutorial_flow_card(steps, lang)
-            + _tutorial_agent_card(lang),
+            '<div class="eu-settings-status-grid">'
+            + _settings_status_tile(
+                label=_T(lang, "Outbound calls", "模型端调用"),
+                value=_T(lang, "Allowed", "已允许") if outbound_enabled else _T(lang, "Off by default", "默认关闭"),
+                detail=_T(
+                    lang,
+                    "Patient rows stay local; only prompts/plans/logs may leave when enabled.",
+                    "患者行数据仍保留本地；开启后仅提示词、计划和日志可能离开。",
+                ),
+                tone="ok" if outbound_enabled else "warn",
+            )
+            + _settings_status_tile(
+                label=_T(lang, "Provider", "服务商"),
+                value=provider_label,
+                detail=base_url_label or _T(lang, "Endpoint will be requested in the per-run override.", "端点将在单次运行覆盖中填写。"),
+                tone="neutral" if hosted_model_active else "ok",
+            )
+            + _settings_status_tile(
+                label=_T(lang, "Credential", "凭证"),
+                value=credential_value,
+                detail=credential_detail,
+                tone=credential_tone,
+            )
+            + _settings_status_tile(
+                label=_T(lang, "Research Agent", "研究智能体"),
+                value=agent_run_value,
+                detail=agent_run_detail,
+                tone=agent_run_tone,
+            )
+            + '</div>',
             unsafe_allow_html=True,
         )
-        _render_tutorial_resources_card(lang)
+        from easyicu.webapp.llm_chat import render_llm_settings
+        render_llm_settings(
+            show_status_card=False,
+            controls_only=True,
+            show_enable_toggle=False,
+            open_sidebar_on_enable=False,
+        )
+
+    st.markdown(
+        '<div class="eu-settings-section-head">'
+        f'<span>{_T(lang, "Language", "语言")}</span>'
+        f'<h2>{_T(lang, "Language & display", "语言与显示")}</h2>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    with st.container(key="eu_settings_language_card"):
+        left, right = st.columns([1.35, 1.0], gap="large")
+        with left:
+            st.markdown(
+                _settings_row_copy(
+                    _T(lang, "Interface language", "界面语言"),
+                    _T(lang, "EasyICU is fully bilingual; labels fit both scripts.", "EasyICU 完整双语，标签适配中英文。"),
+                ),
+                unsafe_allow_html=True,
+            )
+        with right:
+            lang_cols = st.columns(2, gap="small")
+            with lang_cols[0]:
+                if st.button("English", key="_eu_settings_page_lang_en", type="primary" if is_en else "secondary", use_container_width=True):
+                    state["language"] = "en"
+                    st.rerun()
+            with lang_cols[1]:
+                if st.button("中文", key="_eu_settings_page_lang_zh", type="primary" if not is_en else "secondary", use_container_width=True):
+                    state["language"] = "zh"
+                    st.rerun()
+        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
+        left, right = st.columns([1.35, 1.0], gap="large")
+        with left:
+            st.markdown(
+                _settings_row_copy(
+                    _T(lang, "Density", "密度"),
+                    _T(lang, "Comfortable adds breathing room; compact maximises rows on screen.", "舒适模式增加留白；紧凑模式增加屏幕行数。"),
+                ),
+                unsafe_allow_html=True,
+            )
+        with right:
+            density_cols = st.columns(2, gap="small")
+            with density_cols[0]:
+                if st.button(
+                    _T(lang, "Comfortable", "舒适"),
+                    key="_eu_settings_density_comfortable",
+                    type="primary" if density_pref == "comfortable" else "secondary",
+                    use_container_width=True,
+                ):
+                    state["ui_density"] = "comfortable"
+                    st.rerun()
+            with density_cols[1]:
+                if st.button(
+                    _T(lang, "Compact", "紧凑"),
+                    key="_eu_settings_density_compact",
+                    type="primary" if density_pref == "compact" else "secondary",
+                    use_container_width=True,
+                ):
+                    state["ui_density"] = "compact"
+                    st.rerun()
+        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
+        left, right = st.columns([1.35, 1.0], gap="large")
+        with left:
+            st.markdown(
+                _settings_row_copy(
+                    _T(lang, "Reduce motion", "减少动态效果"),
+                    _T(lang, "Disable shimmer and progress animations.", "关闭 shimmer 和进度动画。"),
+                ),
+                unsafe_allow_html=True,
+            )
+        with right:
+            st.toggle(
+                _T(lang, "Reduce motion", "减少动态效果"),
+                key="_eu_settings_reduce_motion",
+                label_visibility="collapsed",
+                on_change=_settings_reduce_motion_changed,
+            )
+
+    st.markdown(
+        '<div class="eu-settings-section-head">'
+        f'<span>{_T(lang, "About", "关于")}</span>'
+        f'<h2>{_T(lang, "Environment", "环境")}</h2>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="eu-settings-card eu-settings-env">'
+        '<div><span>Version</span><b class="mono">EasyICU 1.0.0</b></div>'
+        '<div><span>Python</span><b class="mono">3.10+</b></div>'
+        '<div><span>Databases detected</span><b class="mono">MIMIC-IV · eICU · AUMC · HiRID · MIMIC-III · SICdb</b></div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # =====================================================================
@@ -1280,11 +2140,16 @@ def render_entry_redesign_page(lang: str) -> None:
     state so downstream pages continue to work.
     """
     with st.container(key="eu_entry_topbar_shell"):
-        brand_col, lang_col, version_col = st.columns([1, 0.08, 0.14], gap="small")
+        brand_col, lang_col, version_col = st.columns([1, 0.12, 0.14], gap="small")
         with brand_col:
             st.markdown(
                 '<div class="eu-entry-brand">'
-                '<div class="eu-entry-logo">E</div>'
+                '<div class="eu-entry-logo">'
+                '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" '
+                'stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">'
+                '<path d="M9 3h6"/><path d="M10 3v5.2L5.4 17a3 3 0 0 0 2.7 4.4h7.8'
+                'a3 3 0 0 0 2.7-4.4L14 8.2V3"/><path d="M7.5 15h9"/></svg>'
+                '</div>'
                 '<div style="line-height:1.1">'
                 '<div class="eu-entry-brand-title">EasyICU</div>'
                 f'<div class="eu-entry-brand-sub">{_T(lang, "ICU data research workspace", "ICU 数据研究台")}</div>'
@@ -1310,25 +2175,22 @@ def render_entry_redesign_page(lang: str) -> None:
 
     # Hero
     st.markdown(
-        '<div class="eu-entry-hero" style="padding:24px 0 20px;text-align:center">'
+        '<div class="eu-entry-hero" style="padding:34px 0 32px;text-align:center">'
         f'<div class="mono" style="font-size:11px;color:var(--ink-4);letter-spacing:.08em;'
         f'text-transform:uppercase;font-family:var(--font-mono)">'
         f'{_T(lang, "Local-first ICU research workflow", "本地优先 · ICU 数据研究工作流")}</div>'
-        f'<h1 style="margin:12px 0 8px;font-size:38px;font-weight:500;letter-spacing:-0.025em;color:var(--ink)">'
+        f'<h1 style="margin:12px 0 0;font-size:30px;font-weight:600;letter-spacing:-0.025em;color:var(--ink)">'
         f'{_T(lang, "Extract. Review. Analyze. Draft.", "数据抽取 · 审阅 · 分析 · 起草")}</h1>'
-        f'<div class="eu-cn" style="font-size:15px;color:var(--ink-3)">'
-        f'{_T(lang, "Extract · Review · Analyze · Draft — all in one place", "数据抽取 · 审阅 · 分析 · 起草，一站完成")}</div>'
+        f'<div class="eu-entry-hero-copy" style="font-size:13.5px;color:var(--ink-3);margin-top:10px">'
+        f'{_T(lang, "Choose how data enters the workspace. Everything runs on your machine — nothing is uploaded.", "选择数据如何进入工作区。所有流程都在本机运行，不上传任何患者数据。")}</div>'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    # Two mode cards rendered as a single column row, then a button
-    # column row immediately below — same column ratios so CTAs line
-    # up under each card.
     demo_card = (
-        '<div style="padding:24px 24px 18px;background:var(--accent-soft);'
+        '<div class="eu-entry-mode-card demo" style="padding:24px 24px 18px;background:var(--accent-soft);'
         'border:1px solid var(--accent-border);border-radius:14px;display:flex;'
-        'flex-direction:column;gap:12px;min-height:300px">'
+        'flex-direction:column;gap:12px">'
         '<div style="display:flex;align-items:center;gap:10px">'
         '<div style="width:36px;height:36px;border-radius:8px;background:var(--accent);color:#fff;'
         'display:flex;align-items:center;justify-content:center">'
@@ -1355,8 +2217,8 @@ def render_entry_redesign_page(lang: str) -> None:
                         "10 例快速审阅集 · 默认 24 小时数据"),
                 _T(lang, "Start at data extraction, then open review panels when ready",
                         "先进入数据提取，再按需打开审阅面板"),
-                _T(lang, "Research Agent static gallery viewable",
-                        "研究智能体静态输出画廊可查看"),
+                _T(lang, "Research Agent setup and local-run handoff preview",
+                        "研究智能体设置与本机 run 交接预览"),
                 _T(lang, "Switch to real data anytime without losing work",
                         "随时可切换到真实数据,不丢工作"),
             ]
@@ -1364,9 +2226,9 @@ def render_entry_redesign_page(lang: str) -> None:
         + '</ul></div>'
     )
     real_card = (
-        '<div style="padding:24px 24px 18px;background:var(--surface);'
+        '<div class="eu-entry-mode-card real" style="padding:24px 24px 18px;background:var(--surface);'
         'border:1px solid var(--hair);border-radius:14px;display:flex;'
-        'flex-direction:column;gap:12px;min-height:300px">'
+        'flex-direction:column;gap:12px">'
         '<div style="display:flex;align-items:center;gap:10px">'
         '<div style="width:36px;height:36px;border-radius:8px;background:var(--ink);color:#fff;'
         'display:flex;align-items:center;justify-content:center">'
@@ -1402,47 +2264,45 @@ def render_entry_redesign_page(lang: str) -> None:
         + '</ul></div>'
     )
 
-    # Mode cards row (HTML) — two equal columns
-    col_demo, col_real = st.columns(2, gap="medium")
-    with col_demo:
-        st.markdown(demo_card, unsafe_allow_html=True)
-        if st.button(_T(lang, "Start demo →", "开始演示 →"),
-                     key="_eu_entry_demo", type="primary", use_container_width=True):
-            _route_to_extract_entry_mode(st.session_state, "demo")
-            st.rerun()
-    with col_real:
-        st.markdown(real_card, unsafe_allow_html=True)
-        if st.button(_T(lang, "Use local data folder →", "使用本地数据目录 →"),
-                     key="_eu_entry_real", use_container_width=True):
-            _route_to_extract_entry_mode(st.session_state, "real")
-            st.rerun()
+    with st.container(key="eu_entry_modes_grid"):
+        demo_col, real_col = st.columns(2, gap="large")
+        with demo_col:
+            with st.container(key="eu_entry_demo_mode_card"):
+                st.markdown(demo_card, unsafe_allow_html=True)
+                if st.button(_T(lang, "Start demo →", "开始演示 →"),
+                             key="_eu_entry_demo", type="primary", use_container_width=True):
+                    _route_to_extract_entry_mode(st.session_state, "demo")
+                    st.rerun()
+        with real_col:
+            with st.container(key="eu_entry_real_mode_card"):
+                st.markdown(real_card, unsafe_allow_html=True)
+                if st.button(_T(lang, "Use local data folder →", "使用本地数据目录 →"),
+                             key="_eu_entry_real", use_container_width=True):
+                    _route_to_extract_entry_mode(st.session_state, "real")
+                    st.rerun()
 
-    # Code-only is a real third action, but visually stays secondary.
     with st.container(key="eu_entry_code_row"):
-        code_copy_col, code_action_col = st.columns([5, 2], gap="medium")
-        with code_copy_col:
+        aux_col, code_col = st.columns([0.72, 0.28], gap="large")
+        with aux_col:
             st.markdown(
-                '<div class="eu-entry-nodata" style="display:flex;align-items:center;gap:14px;padding:12px 18px;'
-                'background:var(--surface);border:1px dashed var(--hair-3);border-radius:12px">'
-                '<div style="color:var(--ink-3)">'
+                '<div class="eu-entry-nodata" style="display:flex;align-items:center;gap:14px">'
+                '<div class="eu-entry-nodata-icon" style="color:var(--ink-3)">'
                 '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
                 'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
                 '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>'
                 '<path d="M14 3v6h6"/></svg></div>'
                 '<div style="flex:1">'
-                f'<div style="font-size:13px;font-weight:500">{_T(lang, "No data yet?", "还没有数据?")}'
-                f' <span class="eu-cn" style="color:var(--ink-3);font-weight:400;margin-left:6px">'
-                f'{_T(lang, "No data yet?", "还没有数据？")}</span></div>'
+                f'<div style="font-size:13px;font-weight:500">{_T(lang, "No data yet?", "还没有数据?")}</div>'
                 f'<div style="font-size:12px;color:var(--ink-3)">'
                 f'{_T(lang, "Let the Research Agent generate a reusable code skeleton, then plug data in later.", "让研究智能体先生成可复用代码骨架，稍后再接入真实数据。")}</div>'
                 '</div></div>',
                 unsafe_allow_html=True,
             )
-        with code_action_col:
+        with code_col:
             if st.button(_T(lang, "Generate code only →", "仅生成代码 →"),
                          key="_eu_entry_nodata", use_container_width=True):
-                st.session_state["entry_mode"] = "demo"
-                st.session_state["_active_main_page"] = "research_agent"
+                _apply_demo_defaults_for_tutorial(st.session_state)
+                _route_to_research_agent_setup(st.session_state)
                 st.rerun()
 
     st.markdown(
@@ -1455,7 +2315,7 @@ def render_entry_redesign_page(lang: str) -> None:
         f'<div class="eu-entry-step"><small>{_T(lang, "01", "01")}</small><b>{_T(lang, "Data gate", "数据闸门")}</b><span>{_T(lang, "Normalize demo or local exports before analysis.", "先标准化演示数据或本地导出。")}</span></div>'
         f'<div class="eu-entry-step"><small>{_T(lang, "02", "02")}</small><b>{_T(lang, "Cohort review", "队列审阅")}</b><span>{_T(lang, "Confirm filters, time windows, and concept coverage.", "确认筛选、时间窗和概念覆盖。")}</span></div>'
         f'<div class="eu-entry-step"><small>{_T(lang, "03", "03")}</small><b>{_T(lang, "Quality checks", "质量检查")}</b><span>{_T(lang, "Inspect missingness, ranges, density, and audit notes.", "检查缺失、范围、密度和审计提示。")}</span></div>'
-        f'<div class="eu-entry-step"><small>{_T(lang, "04", "04")}</small><b>{_T(lang, "Export handoff", "导出交付")}</b><span>{_T(lang, "Package code, tables, figures, and evidence ledger.", "打包代码、表格、图件和证据账本。")}</span></div>'
+        f'<div class="eu-entry-step"><small>{_T(lang, "04", "04")}</small><b>{_T(lang, "Export & handoff", "导出与交付")}</b><span>{_T(lang, "Save concept data plus a reproducible manifest; hand findings to the agent.", "保存概念数据和可复现 manifest，并将发现交给智能体。")}</span></div>'
         '</div>'
         '</div>',
         unsafe_allow_html=True,

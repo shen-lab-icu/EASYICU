@@ -53,16 +53,18 @@ import os
 import re
 import socket
 import sys
+import textwrap
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, MutableMapping, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 from urllib.parse import urlparse
 
 import pandas as pd
 import streamlit as st
 
+from easyicu.webapp import cohort_charts as cc
 from easyicu.webapp.ai_optin import AIOptInError, enforce_external_llm_opt_in
 from easyicu.webapp.i18n import get_text
 from easyicu.webapp.llm_config import (
@@ -74,6 +76,7 @@ from easyicu.webapp.llm_config import (
 from easyicu.webapp.data_paths import _directory_input
 from easyicu.webapp.page_header import render_page_header
 from easyicu.webapp.session_state import clear_run_state
+from easyicu.webapp.ui_helpers import icon as _shell_icon
 
 
 def _ra_text(key: str, **kwargs: Any) -> str:
@@ -242,7 +245,8 @@ def _display_path(path: Path) -> str:
 
 def _placeholder_path(name: str) -> str:
     if sys.platform.startswith("win"):
-        return f"D:\\path\\to\\{name.replace('/', '\\\\')}"
+        safe_name = name.replace("/", "\\")
+        return f"D:\\path\\to\\{safe_name}"
     return f"/path/to/{name}"
 
 
@@ -253,6 +257,12 @@ def _hide_prefilled_directory_text(input_key: str, mirrored_value: str) -> None:
         return
     if mirrored_value and current == str(mirrored_value):
         st.session_state[input_key] = ""
+
+
+def _clear_module_folder_handoff_focus() -> None:
+    """Let an explicit detected-folder pick take over from post-export handoff."""
+    st.session_state["_eu_ra_focus_module_folder"] = False
+    st.session_state.pop("_eu_ra_apply_export_file_selection", None)
 
 
 def _detect_id_columns(columns: Sequence[str]) -> List[str]:
@@ -320,12 +330,103 @@ def _scan_workspace_for_module_dirs(roots: List[Path]) -> List[Path]:
 
 def _list_module_parquets(folder: Path) -> List[Path]:
     try:
+        direct = [p.resolve() for p in folder.glob("*.parquet") if p.is_file()]
+        if direct:
+            return sorted(
+                direct,
+                key=lambda p: str(p.relative_to(folder)) if p.is_relative_to(folder) else str(p),
+            )
         return sorted(
             (p.resolve() for p in folder.rglob("*.parquet") if p.is_file()),
             key=lambda p: str(p.relative_to(folder)) if p.is_relative_to(folder) else str(p),
         )
     except Exception:
         return []
+
+
+def _export_result_file_labels_for_folder(
+    state: Mapping[str, Any],
+    folder: Path,
+) -> List[str]:
+    """Return file labels from the latest export result that belong to ``folder``."""
+    result = state.get("_export_success_result")
+    if not isinstance(result, Mapping):
+        return []
+    raw_files = result.get("files")
+    if not isinstance(raw_files, Sequence) or isinstance(raw_files, (str, bytes)):
+        return []
+    try:
+        folder_resolved = folder.expanduser().resolve()
+    except Exception:
+        folder_resolved = folder
+    labels: List[str] = []
+    for raw_path in raw_files:
+        if not raw_path:
+            continue
+        try:
+            path = Path(str(raw_path)).expanduser().resolve()
+        except Exception:
+            path = Path(str(raw_path))
+        if path.suffix.lower() != ".parquet":
+            continue
+        try:
+            label = str(path.relative_to(folder_resolved))
+        except Exception:
+            try:
+                if path.parent.resolve() != folder_resolved:
+                    continue
+            except Exception:
+                continue
+            label = path.name
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _module_dir_parquet_count(folder: Path) -> int:
+    """Count immediate parquet modules for ranking detected export folders."""
+    try:
+        direct = [p for p in folder.glob("*.parquet") if p.is_file()]
+        if direct:
+            return len(direct)
+        return len([p for p in folder.rglob("*.parquet") if p.is_file()])
+    except Exception:
+        return 0
+
+
+def _has_child_module_export_dirs(folder: Path) -> bool:
+    try:
+        return any(
+            child.is_dir() and _module_dir_parquet_count(child) > 0
+            for child in folder.iterdir()
+        )
+    except Exception:
+        return False
+
+
+def _default_module_dir_pick_index(options: Sequence[str], dirs: Sequence[Path]) -> int:
+    """Return the selectbox index for the most complete detected export.
+
+    ``options`` includes the manual-path sentinel at index 0. The Research
+    Agent needs broad context, so the first automatic choice should be the
+    detected folder with the most parquet modules, not whichever sibling sorts
+    first alphabetically.
+    """
+    if not dirs or len(options) <= 1:
+        return 0
+    best_dir_idx = max(
+        range(len(dirs)),
+        key=lambda idx: (
+            not (
+                dirs[idx].name.lower() in {"easyicu_export", "exports", "output", "outputs"}
+                and _has_child_module_export_dirs(dirs[idx])
+            ),
+            _module_dir_parquet_count(dirs[idx]),
+            dirs[idx].stat().st_mtime if dirs[idx].exists() else 0.0,
+            str(dirs[idx]),
+        ),
+    )
+    return best_dir_idx + 1
 
 
 def _parquet_file_summary(path: Path) -> Dict[str, Any]:
@@ -674,6 +775,41 @@ def _default_module_selection(labels: Sequence[str]) -> List[str]:
     # Default to all available modules so the user doesn't have to
     # manually tick every file after selecting a folder.
     return list(labels)
+
+
+def _sync_module_file_multiselect_defaults(
+    state: MutableMapping[str, Any],
+    *,
+    key: str,
+    signature_key: str,
+    folder: Path,
+    labels: Sequence[str],
+) -> None:
+    """Keep module-folder defaults broad without clobbering user edits.
+
+    Older sessions may carry a one-file multiselect state from the previous
+    UI. When a folder is first selected, or when the folder changes, reset to
+    all files. Once the folder signature matches, preserve deliberate user
+    narrowing and only drop labels that no longer exist.
+    """
+    label_list = list(labels)
+    if not label_list:
+        state.pop(key, None)
+        state[signature_key] = str(folder)
+        return
+
+    folder_signature = str(folder)
+    if state.get(signature_key) != folder_signature:
+        state[key] = _default_module_selection(label_list)
+        state[signature_key] = folder_signature
+        return
+
+    current = state.get(key)
+    if not isinstance(current, (list, tuple)):
+        return
+    valid = [str(label) for label in current if str(label) in label_list]
+    if valid != list(current):
+        state[key] = valid or _default_module_selection(label_list)
 
 
 _RAW_EXTRACT_MODULES_KEY = "research_agent_extract_modules"
@@ -1107,17 +1243,26 @@ def _run_summary_from_manifest(
     evidence = [r for r in manifest.get("evidence", []) if isinstance(r, dict)]
     findings = [f for f in manifest.get("findings", []) if isinstance(f, dict)]
     statuses = [_safe_step_status(r) for r in records]
+    step_failed = sum(1 for s in statuses if "fail" in s or "error" in s or "blocked" in s)
+    run_status = _read_json_file(run_dir / "run_status.json")
+    backend_status = str(run_status.get("status") or "").strip().lower()
+    if partial:
+        status = "partial"
+    elif step_failed:
+        status = "blocked"
+    else:
+        status = backend_status or "complete"
     review = _load_review_decision(run_dir)
     return {
         "run_id": str(manifest.get("run_id") or run_dir.name),
         "run_dir": run_dir,
-        "status": "partial" if partial else "complete",
+        "status": status,
         "started_at": str(manifest.get("started_at") or ""),
         "finished_at": str(manifest.get("finished_at") or ""),
         "question": str(manifest.get("research_question") or ""),
         "step_total": len(records),
         "step_ok": sum(1 for s in statuses if s == "ok"),
-        "step_failed": sum(1 for s in statuses if "fail" in s or "error" in s or "blocked" in s),
+        "step_failed": step_failed,
         "finding_errors": sum(1 for f in findings if f.get("severity") == "error"),
         "finding_warnings": sum(1 for f in findings if f.get("severity") == "warning"),
         "evidence_count": len(evidence),
@@ -2255,6 +2400,18 @@ def _section_cohort_picker(
         horizontal=True,
         key="research_agent_cohort_source",
     )
+    previous_source = st.session_state.get("_research_agent_previous_cohort_source")
+    if previous_source != source:
+        st.session_state["_research_agent_previous_cohort_source"] = source
+        _clear_research_agent_preflight_confirmation()
+        if source == source_module:
+            export_dir = str(st.session_state.get("last_export_dir") or st.session_state.get("export_path") or "")
+            if export_dir:
+                st.session_state["_eu_ra_focus_module_folder"] = True
+                st.session_state["_eu_ra_module_pick_force_manual"] = True
+                st.session_state["_eu_ra_apply_export_file_selection"] = True
+                st.session_state["research_agent_module_dir_text"] = export_dir
+                st.session_state.pop("research_agent_module_dir_pick", None)
 
     if source == source_handoff:
         df = inbound  # type: ignore[assignment]
@@ -2325,20 +2482,56 @@ def _section_cohort_picker(
         dirs = _scan_workspace_for_module_dirs(extra_roots + _candidate_cohort_roots())
         dir_labels = [_display_path(p) for p in dirs]
         manual_default = str(extra_roots[0]) if extra_roots else ""
+        force_manual_pick = bool(
+            st.session_state.pop("_eu_ra_module_pick_force_manual", False)
+            and manual_default
+        )
+        handoff_manual_active = bool(
+            st.session_state.get("_eu_ra_focus_module_folder") and manual_default
+        )
         picked_label = ""
         if dir_labels:
+            manual_path_label = _ra_text("manual_path")
+            current_pick = str(st.session_state.get("research_agent_module_dir_pick") or "")
+            current_manual_text = str(st.session_state.get("research_agent_module_dir_text", "") or "")
+            if (
+                handoff_manual_active
+                and current_pick not in {"", manual_path_label}
+                and current_manual_text in {"", manual_default}
+            ):
+                st.session_state.pop("research_agent_module_dir_pick", None)
+            folder_options = [manual_path_label] + dir_labels
+            folder_pick_index = (
+                0
+                if force_manual_pick or handoff_manual_active
+                else _default_module_dir_pick_index(folder_options, dirs)
+            )
             picked_label = st.selectbox(
                 _ra_text("detected_folders"),
-                [_ra_text("manual_path")] + dir_labels,
-                index=1,
+                folder_options,
+                index=folder_pick_index,
                 key="research_agent_module_dir_pick",
+                on_change=_clear_module_folder_handoff_focus,
             )
         selected_folder_value = (
             str(dirs[dir_labels.index(picked_label)])
             if dir_labels and picked_label not in {"", _ra_text("manual_path")}
             else manual_default
         )
-        _hide_prefilled_directory_text("research_agent_module_dir_text", selected_folder_value)
+        picked_manual_path = picked_label in {"", _ra_text("manual_path")}
+        show_handoff_path = bool(
+            st.session_state.get("_eu_ra_focus_module_folder")
+            and picked_manual_path
+            and manual_default
+        )
+        if (
+            not handoff_manual_active
+            and not picked_manual_path
+            and str(st.session_state.get("research_agent_module_dir_text", "") or "") == manual_default
+        ):
+            st.session_state["research_agent_module_dir_text"] = ""
+        if not show_handoff_path:
+            _hide_prefilled_directory_text("research_agent_module_dir_text", selected_folder_value)
         folder_text = _directory_input(
             _ra_text("module_folder"),
             value=selected_folder_value,
@@ -2391,19 +2584,45 @@ def _section_cohort_picker(
             str(p.relative_to(folder)) if p.is_relative_to(folder) else p.name
             for p in module_files
         ]
+        apply_export_files = bool(st.session_state.pop("_eu_ra_apply_export_file_selection", False))
+        if apply_export_files:
+            export_labels = _export_result_file_labels_for_folder(st.session_state, folder)
+            selected_export_labels = [label for label in labels if label in export_labels]
+            if selected_export_labels:
+                st.session_state["research_agent_module_files"] = selected_export_labels
+                st.session_state["research_agent_module_files_folder"] = str(folder)
+        _sync_module_file_multiselect_defaults(
+            st.session_state,
+            key="research_agent_module_files",
+            signature_key="research_agent_module_files_folder",
+            folder=folder,
+            labels=labels,
+        )
         selected_labels = st.multiselect(
             _ra_text("module_files"),
             labels,
-            default=_default_module_selection(labels),
             key="research_agent_module_files",
         )
         selected_files = [module_files[labels.index(label)] for label in selected_labels]
         if not selected_files:
             st.info(_ra_text("select_module_file"))
             return None, ""
+        selected_summaries = [
+            summaries[labels.index(label)]
+            for label in selected_labels
+            if label in labels
+        ]
+        if len(selected_files) < len(module_files):
+            st.caption(
+                _ra_text(
+                    "module_files_subset",
+                    selected=len(selected_files),
+                    total=len(module_files),
+                )
+            )
 
         default_filter_path, default_filter_col = _infer_filter_defaults(
-            summaries,
+            selected_summaries,
             question=research_question,
         )
         use_filter_default = default_filter_path is not None and (
@@ -2419,17 +2638,17 @@ def _section_cohort_picker(
         )
         filter_spec: Optional[Tuple[Path, str, str, str]] = None
         if use_filter:
-            filter_labels = labels
+            filter_labels = selected_labels
             default_idx = 0
-            if default_filter_path is not None and default_filter_path in module_files:
-                default_idx = module_files.index(default_filter_path)
+            if default_filter_path is not None and default_filter_path in selected_files:
+                default_idx = selected_files.index(default_filter_path)
             filter_label = st.selectbox(
                 _ra_text("filter_file"),
                 filter_labels,
                 index=default_idx,
                 key="research_agent_module_filter_file",
             )
-            filter_path = module_files[filter_labels.index(filter_label)]
+            filter_path = selected_files[filter_labels.index(filter_label)]
             filter_summary = _parquet_file_summary(filter_path)
             filter_cols = [
                 c for c in filter_summary.get("columns") or []
@@ -2489,6 +2708,25 @@ def _section_cohort_picker(
             st.success(_ra_text("cached_build", rows=len(df), cols=df.shape[1]))
             st.dataframe(df.head(8), use_container_width=True, hide_index=True)
             return df, f"module_folder:{folder}"
+
+        selected_size_mb = sum(
+            (p.stat().st_size for p in selected_files if p.exists()),
+            start=0,
+        ) / (1024 * 1024)
+        large_merge = selected_size_mb >= 200
+        if large_merge:
+            st.warning(
+                _ra_text(
+                    "large_merge_warning",
+                    files=len(selected_files),
+                    size=selected_size_mb,
+                )
+            )
+            if not st.checkbox(
+                _ra_text("large_merge_confirm"),
+                key="research_agent_module_large_merge_confirmed",
+            ):
+                return None, ""
 
         st.info(_ra_text("build_info"))
         build_clicked = st.button(
@@ -2853,8 +3091,22 @@ def _request_examples() -> List[Dict[str, str]]:
 def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
     """Render one unified request box with detailed example prompts."""
     examples = _request_examples()
-    st.caption(_ra_text("request_intro"))
-    st.markdown(_ra_text("request_capabilities"))
+    is_en = st.session_state.get("language", "en") == "en"
+    st.markdown(
+        textwrap.dedent(f"""
+        <div class="ra-request-brief">
+          <div>
+            <b>{"Question first" if is_en else "先写问题"}</b>
+            <span>{html.escape(_ra_text("request_intro"))}</span>
+          </div>
+          <div>
+            <b>{"Templates optional" if is_en else "模板可选"}</b>
+            <span>{html.escape(_ra_text("request_capabilities"))}</span>
+          </div>
+        </div>
+        """).strip(),
+        unsafe_allow_html=True,
+    )
 
     choice_labels = [_ra_text("starter_none")] + [f"{ex['label']} — {ex['summary']}" for ex in examples]
     selected = st.selectbox(
@@ -2881,16 +3133,16 @@ def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
     else:
         st.session_state["research_agent_template_current"] = None
 
+    st.session_state.setdefault("research_agent_question", "")
+    st.session_state.setdefault("research_agent_target_outcome", "")
     question = st.text_area(
         _ra_text("question"),
-        value=st.session_state.get("research_agent_question", ""),
         help=_ra_text("question_help"),
         key="research_agent_question",
-        height=180,
+        height=112,
     )
     target_outcome = st.text_input(
         _ra_text("target_outcome_optional"),
-        value=st.session_state.get("research_agent_target_outcome", ""),
         help=_ra_text("target_outcome_optional_help"),
         key="research_agent_target_outcome",
     )
@@ -3136,13 +3388,21 @@ def _section_llm_picker(handles: Dict[str, Any]) -> Tuple[str, str, str, Optiona
         st.caption(_ra_text("sdk_missing"))
     if st.session_state.get("research_agent_llm_choice") not in (None, *options):
         st.session_state.pop("research_agent_llm_choice", None)
-    # 2026-05 Phase G: prefer a real API endpoint over MockLLMClient by
-    # default. Most users don't know what MockLLMClient is, and seeing a
-    # deterministic mock pipeline as "the default agent run" was misleading.
-    # Priority: sidebar-configured shared LLM > override (Custom OpenAI/
-    # OpenRouter, prompts for key) > Mock (only as last-resort offline path).
-    if sdk_ok and not sidebar_hosted_blocked and is_shared_llm_configured():
+    prior_choice = st.session_state.get("research_agent_llm_choice")
+    # Preserve the user's explicit choice first. Without this, Streamlit reruns
+    # from unrelated controls (preflight checkbox, build cohort) can snap the
+    # widget back to the preferred real-provider default.
+    if prior_choice in options:
+        default_index = options.index(prior_choice)
+    # Priority: sidebar-configured shared LLM > Mock for Hosted-only shared
+    # settings > override (Custom/OpenRouter prompts for key) > Mock. Hosted
+    # is intentionally blocked for Research Agent runs, so defaulting from
+    # Settings/Hosted straight into a Custom external endpoint is surprising
+    # and makes the launch gate look less local-first than it really is.
+    elif sdk_ok and not sidebar_hosted_blocked and is_shared_llm_configured():
         default_index = options.index(sidebar_choice)
+    elif sidebar_hosted_blocked:
+        default_index = options.index(mock_choice)
     elif sdk_ok and override_choice in options:
         default_index = options.index(override_choice)
     else:
@@ -3295,9 +3555,38 @@ def _section_llm_picker(handles: Dict[str, Any]) -> Tuple[str, str, str, Optiona
     return override_client, api_key, model, base_url, extra_headers
 
 
+def _llm_run_readiness(llm_choice: str, api_key: str, model: str) -> Tuple[bool, str]:
+    """Return whether the selected LLM can be launched without later key errors."""
+    choice = str(llm_choice or "").strip()
+    if not choice:
+        return False, "provider_missing"
+    if "MockLLMClient" in choice or "offline" in choice.lower():
+        return True, ""
+    if not str(api_key or "").strip():
+        return False, "api_key_missing"
+    if not str(model or "").strip():
+        return False, "model_missing"
+    return True, ""
+
+
+def _llm_readiness_message(issue: str, *, is_en: bool) -> str:
+    """Localize compact LLM readiness issues for the launch gate."""
+    if issue == "provider_missing":
+        return "Model provider is missing." if is_en else "缺少模型服务。"
+    if issue == "model_missing":
+        return "Model is missing." if is_en else "缺少模型名称。"
+    if issue == "api_key_missing":
+        return "API key is missing for the selected external provider." if is_en else "当前外部模型缺少 API Key。"
+    return str(issue or "")
+
+
+def _default_research_agent_workdir() -> str:
+    return str((Path.cwd() / "research_output" / "webapp").resolve())
+
+
 def _section_options() -> Tuple[bool, str, bool]:
     cols = st.columns(3)
-    default_workdir = str((Path.cwd() / "research_output" / "webapp").resolve())
+    default_workdir = _default_research_agent_workdir()
     _hide_prefilled_directory_text("research_agent_workdir", default_workdir)
     with cols[0]:
         disable_icu_context = st.checkbox(
@@ -3329,7 +3618,7 @@ def _section_options() -> Tuple[bool, str, bool]:
 
 
 def _format_history_label(row: Dict[str, Any]) -> str:
-    status = "partial" if row.get("manifest_partial") else "complete"
+    status = str(row.get("status") or ("partial" if row.get("manifest_partial") else "complete"))
     started = str(row.get("started_at") or "")[:19].replace("T", " ")
     question = str(row.get("question") or "").strip()
     if len(question) > 64:
@@ -3344,6 +3633,177 @@ def _format_history_label(row: Dict[str, Any]) -> str:
     if question:
         bits.append(question)
     return " · ".join(bits)
+
+
+def _format_history_duration(row: Dict[str, Any]) -> str:
+    """Return a compact real duration for a history row, or an em dash."""
+    started = str(row.get("started_at") or "").strip()
+    finished = str(row.get("finished_at") or "").strip()
+    if not started or not finished:
+        return "—"
+    try:
+        start_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        finish_dt = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+    except ValueError:
+        return "—"
+    seconds = max(0, int((finish_dt - start_dt).total_seconds()))
+    if seconds >= 3600:
+        return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+    if seconds >= 60:
+        return f"{seconds // 60}m {seconds % 60:02d}s"
+    return f"{seconds}s"
+
+
+def _history_status_pill_html(row: Dict[str, Any], *, is_en: bool) -> str:
+    status = str(row.get("status") or ("partial" if row.get("manifest_partial") else "complete")).lower()
+    failed = int(row.get("step_failed") or 0)
+    if row.get("manifest_partial"):
+        cls = "warn"
+        label = "partial" if is_en else "部分完成"
+    elif failed:
+        cls = "bad"
+        label = "blocked" if is_en else "已阻断"
+    elif status in {"complete", "completed", "ok"}:
+        cls = "ok"
+        label = "complete" if is_en else "完成"
+    else:
+        cls = "warn"
+        label = html.escape(status or ("unknown" if is_en else "未知"))
+    return f'<span class="ra-history-pill {cls}"><span></span>{label}</span>'
+
+
+def _history_rows_table_html(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    is_en: bool,
+    selected_run_id: str,
+) -> str:
+    if not rows:
+        empty = "No local manifests found in this workdir." if is_en else "当前工作目录未找到本机 manifest。"
+        return f'<div class="ra-history-empty">{html.escape(empty)}</div>'
+    headers = (
+        ("Run", "Scope", "Status", "Duration", "When", "Evidence")
+        if is_en else
+        ("Run", "范围", "状态", "耗时", "时间", "证据")
+    )
+    body_rows: list[str] = []
+    for row in rows[:10]:
+        run_id = str(row.get("run_id") or "")
+        question = _short_card_text(
+            row.get("question"),
+            "No research question captured." if is_en else "未记录研究问题。",
+            limit=72,
+        )
+        when = str(row.get("started_at") or "")[:16].replace("T", " ") or "—"
+        evidence = f"{int(row.get('figure_count') or 0)}F · {int(row.get('table_count') or 0)}T"
+        row_cls = " active" if run_id == selected_run_id else ""
+        body_rows.append(
+            f'<tr class="{row_cls.strip()}">'
+            f'<td class="key" data-label="{html.escape(headers[0])}">{html.escape(run_id)}</td>'
+            f'<td data-label="{html.escape(headers[1])}">{html.escape(question)}</td>'
+            f'<td data-label="{html.escape(headers[2])}">{_history_status_pill_html(row, is_en=is_en)}</td>'
+            f'<td class="num" data-label="{html.escape(headers[3])}">{html.escape(_format_history_duration(row))}</td>'
+            f'<td class="num muted" data-label="{html.escape(headers[4])}">{html.escape(when)}</td>'
+            f'<td class="num muted" data-label="{html.escape(headers[5])}">{html.escape(evidence)}</td>'
+            "</tr>"
+        )
+    return (
+        '<div class="ra-history-table-scroll">'
+        '<table class="ra-history-table">'
+        "<thead><tr>"
+        + "".join(f"<th>{html.escape(h)}</th>" for h in headers[:3])
+        + "".join(f'<th class="num">{html.escape(h)}</th>' for h in headers[3:])
+        + "</tr></thead><tbody>"
+        + "".join(body_rows)
+        + "</tbody></table></div>"
+    )
+
+
+def _history_export_payload(rows: Sequence[Dict[str, Any]], *, workdir: Path) -> str:
+    payload = {
+        "source": "easyicu_web_research_agent_history",
+        "workdir": str(workdir),
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "runs": [
+            {
+                "run_id": row.get("run_id"),
+                "status": row.get("status"),
+                "started_at": row.get("started_at"),
+                "finished_at": row.get("finished_at"),
+                "question": row.get("question"),
+                "steps": {
+                    "ok": row.get("step_ok"),
+                    "total": row.get("step_total"),
+                    "failed": row.get("step_failed"),
+                },
+                "evidence": {
+                    "figures": row.get("figure_count"),
+                    "tables": row.get("table_count"),
+                    "records": row.get("evidence_count"),
+                },
+                "findings": {
+                    "errors": row.get("finding_errors"),
+                    "warnings": row.get("finding_warnings"),
+                },
+                "review_decision": row.get("review_decision"),
+                "manifest_partial": row.get("manifest_partial"),
+                "run_dir": str(row.get("run_dir") or ""),
+            }
+            for row in rows
+        ],
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def _history_selected_summary_html(
+    *,
+    run_id: str,
+    row: Dict[str, Any],
+    status: str,
+    question: str,
+    finding_summary: str,
+    is_en: bool,
+) -> str:
+    """Compact selected-run summary for the History picker."""
+    labels = {
+        "selected": "Selected manifest" if is_en else "已选 manifest",
+        "status": "Status" if is_en else "状态",
+        "steps": "Steps" if is_en else "步骤",
+        "duration": "Duration" if is_en else "耗时",
+        "evidence": "Evidence" if is_en else "证据",
+        "findings": "Findings" if is_en else "发现",
+    }
+    return f"""
+    <div class="ra-history-selected compact">
+      <div class="ra-history-selected-title">
+        <span>{labels["selected"]}</span>
+        <b>{html.escape(run_id)}</b>
+      </div>
+      <p>{html.escape(question)}</p>
+      <div class="ra-history-metrics compact">
+        <div><span>{labels["status"]}</span><b>{html.escape(status)}</b></div>
+        <div><span>{labels["steps"]}</span><b>{row.get("step_ok", 0)}/{row.get("step_total", 0)}</b></div>
+        <div><span>{labels["duration"]}</span><b>{html.escape(_format_history_duration(row))}</b></div>
+        <div><span>{labels["evidence"]}</span><b>{row.get("evidence_count", 0)}</b></div>
+        <div><span>{labels["findings"]}</span><b>{html.escape(finding_summary)}</b></div>
+      </div>
+    </div>
+    """
+
+
+def _format_history_findings(errors: Any, warnings: Any, *, is_en: bool) -> str:
+    """Human-facing audit count label for history cards and tables."""
+    try:
+        error_count = int(errors or 0)
+    except Exception:
+        error_count = 0
+    try:
+        warning_count = int(warnings or 0)
+    except Exception:
+        warning_count = 0
+    if is_en:
+        return f"{error_count} error(s) · {warning_count} warning(s)"
+    return f"{error_count} 个错误 · {warning_count} 个警告"
 
 
 def _render_run_history(workdir: Path) -> None:
@@ -3369,6 +3829,7 @@ def _render_run_history(workdir: Path) -> None:
         if not rows:
             st.info(_ra_text("history_empty"))
             return
+        is_en = st.session_state.get("language", "en") == "en"
         table = pd.DataFrame([
             {
                 _ra_text("history_run_id"): row["run_id"],
@@ -3377,7 +3838,11 @@ def _render_run_history(workdir: Path) -> None:
                 _ra_text("history_steps"): f"{row['step_ok']}/{row['step_total']}",
                 _ra_text("history_figures"): row["figure_count"],
                 _ra_text("history_tables"): row["table_count"],
-                _ra_text("history_findings"): f"{row['finding_errors']}E / {row['finding_warnings']}W",
+                _ra_text("history_findings"): _format_history_findings(
+                    row["finding_errors"],
+                    row["finding_warnings"],
+                    is_en=is_en,
+                ),
                 "Review" if st.session_state.get("language", "en") == "en" else "审核": row.get("review_decision") or "not reviewed",
                 _ra_text("history_question"): row["question"][:120],
             }
@@ -3399,7 +3864,14 @@ def _render_run_history(workdir: Path) -> None:
             st.markdown(f"### {_ra_text('history_selected')}: `{selected_run['run_id']}`")
             cols = st.columns([1.4, 1.0, 1.0, 4.0])
             cols[0].metric(_ra_text("history_steps"), f"{selected_run['step_ok']}/{selected_run['step_total']}")
-            cols[1].metric(_ra_text("history_findings"), f"{selected_run['finding_errors']}E / {selected_run['finding_warnings']}W")
+            cols[1].metric(
+                _ra_text("history_findings"),
+                _format_history_findings(
+                    selected_run["finding_errors"],
+                    selected_run["finding_warnings"],
+                    is_en=is_en,
+                ),
+            )
             cols[2].metric(_ra_text("history_figures"), selected_run["figure_count"])
             safe_run_id = re.sub(r"[^A-Za-z0-9_]+", "_", str(selected_run["run_id"]))
             if cols[3].button(
@@ -3431,6 +3903,206 @@ def _render_run_history(workdir: Path) -> None:
                     manifest_path=manifest_path,
                     key_prefix=f"research_agent_history_{selected_run['run_id']}",
                 )
+
+
+def render_research_agent_history_page(lang: Optional[str] = None, *, show_header: bool = True) -> None:
+    """Render saved local Research Agent runs as a project picker."""
+    lang = lang or st.session_state.get("language", "en")
+    is_en = lang == "en"
+    title = "EasyICU Research Agent" if is_en else "EasyICU 研究智能体"
+    subtitle = (
+        "An auditable, evidence-bound workflow — plan, run, review, then draft."
+        if is_en else
+        "可审计、证据绑定的研究流程：先计划、运行、审阅，再进入起草。"
+    )
+    if show_header:
+        render_page_header(
+            title,
+            subtitle,
+            icon="",
+            kicker=_ra_text("kicker"),
+        )
+    default_workdir = _default_research_agent_workdir()
+    workdir_text = str(st.session_state.get("research_agent_workdir") or default_workdir)
+    workdir = Path(workdir_text or default_workdir).expanduser().resolve()
+    rows = _scan_research_agent_runs(workdir)
+
+    labels = [_format_history_label(row) for row in rows]
+    selected_run: Dict[str, Any] | None = None
+    selected_label = ""
+    if rows:
+        selected_label = st.session_state.get("research_agent_history_page_pick") or labels[0]
+        if selected_label not in labels:
+            selected_label = labels[0]
+        selected_run = rows[labels.index(selected_label)]
+    selected_run_id = str((selected_run or {}).get("run_id") or "")
+
+    with st.container(key="ra_history_card"):
+        head_l, head_r = st.columns([5.0, 1.15], vertical_alignment="center")
+        with head_l:
+            st.markdown(
+                f"""
+                <div class="ra-history-card-head">
+                  <div>
+                    <div class="ra-history-kicker">{"Local manifests only" if is_en else "仅本机 manifest"}</div>
+                    <h3>{"Run history" if is_en else "运行历史"}</h3>
+                    <p>{"Nothing leaves your machine. Pick a local manifest only when you want to inspect or resume it." if is_en else "所有记录都只来自本机；只有明确选择某个 manifest 时才进入检查或续跑。"}</p>
+                  </div>
+                  <span>{len(rows)} {"runs found" if is_en else "个 run"}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with head_r:
+            st.download_button(
+                "Export ledger" if is_en else "导出记录",
+                data=_history_export_payload(rows, workdir=workdir),
+                file_name="easyicu_research_agent_run_history.json",
+                mime="application/json",
+                key="research_agent_history_export_ledger",
+                use_container_width=True,
+                disabled=not rows,
+            )
+        st.markdown(
+            _history_rows_table_html(rows, is_en=is_en, selected_run_id=selected_run_id),
+            unsafe_allow_html=True,
+        )
+
+        if not rows:
+            c1, _c2 = st.columns([1.1, 5.0])
+            if c1.button("Back to setup" if is_en else "返回配置", key="research_agent_history_back_empty"):
+                st.session_state["_ra_view"] = "setup"
+                st.rerun()
+            return
+
+        st.markdown(
+            f'<div class="ra-history-workdir"><span>{"Workdir" if is_en else "工作目录"}</span><b>{html.escape(str(workdir))}</b></div>',
+            unsafe_allow_html=True,
+        )
+        with st.expander("Change local workdir" if is_en else "切换本机工作目录", expanded=False):
+            _hide_prefilled_directory_text("research_agent_workdir", default_workdir)
+            _directory_input(
+                "Local run workdir" if is_en else "本机 run 工作目录",
+                value=default_workdir,
+                input_key="research_agent_workdir",
+                button_key="research_agent_history_workdir_browse",
+                placeholder=_placeholder_path("research_output/webapp"),
+                show_value=False,
+            )
+            st.caption(
+                "History is scanned from this folder only; changing it refreshes the table on the next render."
+                if is_en else
+                "历史记录只从这个目录读取；切换目录后下次渲染会刷新表格。"
+            )
+        picker_cols = st.columns([4.8, 1.25, 1.05], vertical_alignment="bottom")
+        with picker_cols[0]:
+            selected_label = st.selectbox(
+                "Open local run" if is_en else "打开本机 run",
+                labels,
+                index=labels.index(selected_label),
+                key="research_agent_history_page_pick",
+            )
+        selected_run = rows[labels.index(selected_label)]
+        manifest, manifest_path, partial = _load_run_manifest(selected_run["run_dir"])
+        run_id = str(selected_run.get("run_id") or selected_run["run_dir"].name)
+        safe_run_id = re.sub(r"[^A-Za-z0-9_]+", "_", run_id)
+        status = str(selected_run.get("status") or ("partial" if partial else "complete"))
+        question = _short_card_text(
+            selected_run.get("question"),
+            "No research question captured." if is_en else "未记录研究问题。",
+            limit=220,
+        )
+        finding_summary = _format_history_findings(
+            selected_run.get("finding_errors", 0),
+            selected_run.get("finding_warnings", 0),
+            is_en=is_en,
+        )
+
+        with picker_cols[1]:
+            if st.button(
+                "Open in Workbench" if is_en else "在工作台打开",
+                key=f"research_agent_history_page_open_{safe_run_id}",
+                type="primary",
+                use_container_width=True,
+                disabled=not bool(manifest),
+            ):
+                if manifest:
+                    _bind_workbench_state(
+                        run_dir=selected_run["run_dir"],
+                        manifest=manifest,
+                        partial=partial,
+                    )
+                    st.session_state["_ra_view"] = "workbench"
+                    st.rerun()
+        with picker_cols[2]:
+            if st.button(
+                "Back to setup" if is_en else "返回配置",
+                key=f"research_agent_history_page_setup_{safe_run_id}",
+                use_container_width=True,
+            ):
+                st.session_state["_ra_view"] = "setup"
+                st.rerun()
+
+        if manifest:
+            st.markdown(
+                _history_selected_summary_html(
+                    run_id=run_id,
+                    row=selected_run,
+                    status=status,
+                    question=question,
+                    finding_summary=finding_summary,
+                    is_en=is_en,
+                ),
+                unsafe_allow_html=True,
+            )
+
+    if manifest:
+        with st.container(key=f"ra_history_utilities_{safe_run_id}"):
+            st.markdown(
+                f"""
+                <div class="ra-history-utilities-head">
+                  <div>
+                    <span>{"Selected run utilities" if is_en else "已选 run 工具"}</span>
+                    <b>{"Resume or inspect only when needed" if is_en else "仅在需要时继续运行或检查详情"}</b>
+                  </div>
+                  <em>{"optional" if is_en else "可选"}</em>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            util_cols = st.columns([1, 1], gap="small")
+            with util_cols[0]:
+                show_resume = st.checkbox(
+                    "Resume controls" if is_en else "继续运行控制",
+                    key=f"research_agent_history_page_show_resume_{safe_run_id}",
+                )
+            with util_cols[1]:
+                show_details = st.checkbox(
+                    "Detailed report and artefacts" if is_en else "详细报告与产物",
+                    key=f"research_agent_history_page_show_details_{safe_run_id}",
+                )
+        if show_resume:
+            _render_resume_panel(
+                run_dir=selected_run["run_dir"],
+                manifest=manifest,
+                row=selected_run,
+                key_prefix=f"research_agent_history_page_resume_{safe_run_id}",
+            )
+        if show_details:
+            _render_run_manifest(
+                run_dir=selected_run["run_dir"],
+                manifest=manifest,
+                manifest_path=manifest_path,
+                key_prefix=f"research_agent_history_page_{safe_run_id}",
+            )
+
+    with st.expander(_ra_text("replication_title"), expanded=False):
+        st.caption(
+            "Deterministic replication is kept here as a local utility so Setup stays focused on launching one agent run."
+            if is_en else
+            "确定性复现实用工具放在这里，配置页只负责启动一次 agent 运行。"
+        )
+        _render_replication_section(default_workdir=workdir)
 
 
 def _render_resume_panel(
@@ -3473,10 +4145,7 @@ def _render_resume_panel(
         r for r in records
         if any(tok in _step_status(r) for tok in ("fail", "error", "blocked", "skipped"))
     ]
-    status_label = "manuscript_ready" if (manifest.get("status") == "manuscript_ready") else (
-        "diagnostic_only" if (row.get("step_ok", 0) == 0 and len(failed) >= 1)
-        else ("analysis_only" if row.get("manifest_partial") else "complete")
-    )
+    status_label = str(row.get("status") or ("analysis_only" if row.get("manifest_partial") else "complete"))
     can_resume = status_label != "manuscript_ready"
     has_concept_audit_block = any(
         "blocked_by_concept_audit" in _step_status(r) for r in failed
@@ -3487,7 +4156,8 @@ def _render_resume_panel(
         if str(f.get("severity") or "") in {"warning", "error"}
     ]
 
-    with st.expander(_ra_text("resume_section"), expanded=can_resume):
+    resume_expanded = can_resume and (status_label != "complete" or bool(failed))
+    with st.expander(_ra_text("resume_section"), expanded=resume_expanded):
         st.caption(_ra_text("resume_intro"))
         info_cols = st.columns([1, 1, 1])
         info_cols[0].metric(_ra_text("resume_status"), status_label)
@@ -3495,30 +4165,30 @@ def _render_resume_panel(
         info_cols[2].metric(_ra_text("resume_failed_steps"), len(failed))
 
         if failed:
-            with st.expander(_ra_text("resume_failed_steps"), expanded=False):
-                for rec in failed[:20]:
-                    sid = rec.get("step_id") or rec.get("id") or "?"
-                    status = _step_status(rec)
-                    msg = (
-                        rec.get("error_message")
-                        or rec.get("message")
-                        or (rec.get("error") or {}).get("message", "")
-                        if isinstance(rec.get("error"), dict)
-                        else rec.get("error", "")
-                    )
-                    line = f"- `{sid}` · **{status}**"
-                    if msg:
-                        line += f" — {str(msg)[:240]}"
-                    st.markdown(line)
+            st.markdown(f"**{_ra_text('resume_failed_steps')}**")
+            for rec in failed[:20]:
+                sid = rec.get("step_id") or rec.get("id") or "?"
+                status = _step_status(rec)
+                msg = (
+                    rec.get("error_message")
+                    or rec.get("message")
+                    or (rec.get("error") or {}).get("message", "")
+                    if isinstance(rec.get("error"), dict)
+                    else rec.get("error", "")
+                )
+                line = f"- `{sid}` · **{status}**"
+                if msg:
+                    line += f" — {str(msg)[:240]}"
+                st.markdown(line)
 
         if audit_warnings:
-            with st.expander(_ra_text("resume_findings_summary"), expanded=False):
-                for f in audit_warnings[:15]:
-                    sev = str(f.get("severity") or "info")
-                    code = f.get("code") or f.get("validator") or "audit"
-                    msg = f.get("message") or ""
-                    badge = _FINDING_BADGE.get(sev, "🔵")
-                    st.markdown(f"{badge} `{code}` — {str(msg)[:280]}")
+            st.markdown(f"**{_ra_text('resume_findings_summary')}**")
+            for f in audit_warnings[:15]:
+                sev = str(f.get("severity") or "info")
+                code = f.get("code") or f.get("validator") or "audit"
+                msg = f.get("message") or ""
+                badge = _FINDING_BADGE.get(sev, "🔵")
+                st.markdown(f"{badge} `{code}` — {str(msg)[:280]}")
 
         relax_default = bool(has_concept_audit_block)
         relax_probe = st.checkbox(
@@ -3558,6 +4228,9 @@ def _render_resume_panel(
         )
 
         run_id = str(manifest.get("run_id") or row.get("run_id") or run_dir.name)
+        # Both continuation paths return to Setup. Seed the prior question so
+        # users can review or edit it there instead of reconstructing it.
+        prior_question = str(manifest.get("research_question") or row.get("question") or "").strip()
         action_cols = st.columns([2, 2])
         if action_cols[0].button(
             _ra_text("resume_button"),
@@ -3571,10 +4244,6 @@ def _render_resume_panel(
             st.session_state["research_agent_resume_mode"] = "continue"
             st.session_state["research_agent_resume_notes"] = extra_notes
             st.session_state["research_agent_resume_relax_probe"] = bool(relax_probe)
-            # Seed the question from the prior manifest so the user
-            # doesn't have to retype it. They can still edit it on the
-            # Setup page before clicking Run.
-            prior_question = str(manifest.get("research_question") or row.get("question") or "").strip()
             if prior_question:
                 st.session_state["research_agent_question"] = prior_question
             st.session_state["_ra_view"] = "setup"
@@ -3593,143 +4262,165 @@ def _render_resume_panel(
             st.session_state["research_agent_resume_mode"] = "force_manuscript"
             st.session_state["research_agent_resume_notes"] = ""
             st.session_state["research_agent_resume_relax_probe"] = False
+            if prior_question:
+                st.session_state["research_agent_question"] = prior_question
             st.session_state["_ra_view"] = "setup"
             st.session_state["_research_agent_expand_history"] = False
             st.rerun()
 
 
 def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
-    """Render a compact, non-token guide to the Research Agent workflow."""
-    flow = [
-        (
-            "01",
-            "Plan" if is_en else "规划",
-            "Question -> study recipe"
-            if is_en else
-            "问题 -> 研究配方",
-            "",
-        ),
-        (
-            "02",
-            "Build" if is_en else "组装",
-            "EasyICU exports -> one row per ICU stay"
-            if is_en else
-            "EasyICU 导出 -> 每次 ICU 住院一行",
-            "",
-        ),
-        (
-            "03",
-            "Analyze" if is_en else "分析",
-            "Tables, figures, diagnostics, findings"
-            if is_en else
-            "表格、图、诊断、结果发现",
-            "",
-        ),
-        (
-            "04",
-            "Gate" if is_en else "关口",
-            "Evidence checks before drafting"
-            if is_en else
-            "写作前先过证据检查",
-            " review",
-        ),
+    """Render the Claude-reference setup overview without launching a run."""
+    stages = [
+        ("01", "play", "Plan" if is_en else "规划", "question -> recipe" if is_en else "问题 -> 配方"),
+        ("02", "layers", "Build" if is_en else "组装", "exports -> one row / stay" if is_en else "导出 -> 每次住院一行"),
+        ("03", "bars", "Analyze" if is_en else "分析", "tables, figures, checks" if is_en else "表格、图、检查"),
+        ("04", "agent", "Gate" if is_en else "关口", "evidence before drafting" if is_en else "写作前证据检查"),
+        ("05", "check", "Review" if is_en else "复核", "approve, rerun, export" if is_en else "批准、重跑、导出"),
     ]
-    flow_html = ""
-    for label, title, body, klass in flow:
-        flow_html += (
-            f'<div class="ra-demo-node{klass}">'
-            f'<div class="ra-demo-node-label">{html.escape(label)}</div>'
-            f'<div class="ra-demo-node-title">{html.escape(title)}</div>'
-            f'<div class="ra-demo-node-body">{html.escape(body)}</div>'
-            '</div>'
-        )
-
-    deliverables = [
-        "Study plan" if is_en else "研究方案",
-        "Cohort table" if is_en else "队列表",
-        "Results report" if is_en else "结果报告",
-        "Tables + figures" if is_en else "表格 + 图",
-        "Evidence manifest" if is_en else "证据清单",
-        "Optional draft" if is_en else "可选草稿",
-    ]
-    deliverables_html = "".join(
-        f'<span class="ra-demo-chip">{html.escape(item)}</span>'
-        for item in deliverables
-    )
-    value_cards = [
-        (
-            "Bring" if is_en else "输入",
-            "Question + ICU data"
-            if is_en else
-            "问题 + ICU 数据",
-        ),
-        (
-            "Agent adds" if is_en else "Agent 增加",
-            "Plan, cohort, analysis, evidence checks"
-            if is_en else
-            "规划、队列、分析、证据检查",
-        ),
-        (
-            "Get" if is_en else "产出",
-            "Reviewable results first, draft later"
-            if is_en else
-            "先复核结果，后生成草稿",
-        ),
-    ]
-    value_cards_html = "".join(
-        '<div class="ra-value-card">'
-        f'<div class="ra-value-card-title">{html.escape(title)}</div>'
-        f'<div class="ra-value-card-body">{html.escape(body)}</div>'
+    stage_html = "".join(
+        '<div class="ra-setup-stage">'
+        f'<span title="{html.escape(idx)}">{_shell_icon(icon_name) or html.escape(idx)}</span>'
+        f'<b>{html.escape(title)}</b>'
+        f'<em>{html.escape(body)}</em>'
         '</div>'
-        for title, body in value_cards
+        for idx, icon_name, title, body in stages
     )
-    demo_title = (
-        "Question + EasyICU data -> evidence-bound research output"
-        if is_en else
-        "研究问题 + EasyICU 数据 -> 绑定证据的研究产出"
+    context_items = [
+        ("Dataset" if is_en else "数据集", "Demo · 10 stays"),
+        ("Mode" if is_en else "模式", "static preview" if is_en else "静态预览"),
+        ("Modules" if is_en else "模块", "19 feature groups" if is_en else "19 个特征组"),
+        ("Privacy" if is_en else "隐私", "local only" if is_en else "仅本机"),
+    ]
+    context_html = "".join(
+        '<div class="eu-ref-context-item">'
+        f'<span>{html.escape(label)}</span>'
+        f'<b>{html.escape(value)}</b>'
+        '</div>'
+        for label, value in context_items
     )
-    demo_body = (
-        "The agent turns prepared ICU data into a reviewable analysis pack, then drafts only after the evidence gate."
-        if is_en else
-        "Agent 先把 ICU 数据变成可复核分析包，通过证据关口后才进入文章草稿。"
+    concepts = ["vitals", "labs", "sofa", "demographics", "outcomes", "vent", "lactate", "renal"]
+    concepts_html = "".join(
+        f'<span class="eu-ref-chip">{html.escape(item)}</span>'
+        for item in concepts
     )
-    value_title = (
-        "Real run outputs"
-        if is_en else
-        "真实运行会产出"
-    )
-    demo_note = (
-        "Static demo. No fake metrics."
-        if is_en else
-        "静态 Demo：不编造指标。"
+    plan = [
+        ("Cohort summary", "n, demographics, outcome rates", "ready"),
+        ("Table 1", "baseline characteristics by group", "ready"),
+        ("Missingness audit", "per-concept coverage + denominators", "ready"),
+        ("Model: LR + SOFA + lactate", "first-24h predictors", "ready"),
+        ("ROC · Calibration", "discrimination + calibration", "ready"),
+        ("Manuscript draft", "methods + results", "gated"),
+    ]
+    plan_html = "".join(
+        '<div class="eu-ref-plan-item {cls}">'.format(cls="gated" if status == "gated" else "ready")
+        + f'<div class="eu-ref-pi-n mono">{idx:02d}</div>'
+        + '<div class="eu-ref-pi-node"></div>'
+        + '<div class="eu-ref-pi-body">'
+        + f'<div class="eu-ref-pi-t">{html.escape(title)}</div>'
+        + f'<div class="eu-ref-pi-d">{html.escape(desc)}</div>'
+        + '</div>'
+        + '<div class="eu-ref-pi-tag">'
+        + (
+            '<span class="eu-ref-pill gated">requires review</span>'
+            if status == "gated" else
+            '<span class="eu-ref-pill ok"><span class="dot"></span>planned</span>'
+        )
+        + '</div></div>'
+        for idx, (title, desc, status) in enumerate(plan, start=1)
     )
 
     st.markdown(
-        f"""
-        <div class="ra-demo-hero">
-            <div class="ra-demo-intro">
-                <div>
-                    <div class="ra-demo-kicker">{"Demo guide" if is_en else "Demo 导览"}</div>
-                    <div class="ra-demo-heading">{html.escape(demo_title)}</div>
-                    <div class="ra-demo-copy">{html.escape(demo_body)}</div>
+        textwrap.dedent(f"""
+        <div class="eu-ref-workbench eu-ref-agent-setup">
+          <div class="ra-setup-overview eu-ref-setup-operating ra-pipeline-overview">
+            <div class="ra-setup-head">
+              <div>
+                <div class="ra-setup-kicker">{"Operating model" if is_en else "运行模型"}</div>
+                <h3>{"An auditable workflow, not a black-box chat" if is_en else "可审计工作流，而不是黑箱聊天"}</h3>
+                <p>{"Each stage produces a reviewable artifact. Drafting stays locked until evidence checks pass and you confirm." if is_en else "每个阶段都会生成可复核产物；证据检查和人工确认前不会进入写作。"}</p>
+              </div>
+            </div>
+            <div class="ra-setup-stage-list">{stage_html}</div>
+          </div>
+          <div class="eu-ref-split eu-ref-setup-split">
+          <div class="eu-ref-card eu-ref-pad ra-context-pack-card">
+              <div class="eu-ref-card-head">
+                <div class="eu-ref-eyebrow">{"Context pack" if is_en else "上下文包"}</div>
+                <span>{"handed off" if is_en else "已交接"}</span>
+              </div>
+              <div class="ra-context-pack-title">sepsis_mortality_demo</div>
+              <div class="ra-context-pack-sub">{"demo · 10 stays · 19 modules" if is_en else "演示 · 10 次住院 · 19 个模块"}</div>
+              <div class="ra-context-pack-list">{context_html}</div>
+              <div class="eu-ref-eyebrow eu-ref-chip-title">{"Concept tray · 8 selected" if is_en else "概念托盘 · 8 个已选"}</div>
+              <div class="eu-ref-chip-row">{concepts_html}</div>
+              <div class="ra-context-pack-action">{"Switch cohort" if is_en else "切换队列"}</div>
+          </div>
+          <div class="eu-ref-setup-stack">
+          <div class="eu-ref-card eu-ref-pad ra-question-card">
+                <div class="eu-ref-card-head">
+                  <div>
+                    <div class="eu-ref-eyebrow">{"Research question" if is_en else "研究问题"}</div>
+                    <span class="ra-question-helper">{"One sentence. The agent drafts a plan first; you confirm before any model call." if is_en else "一句话问题。智能体先草拟计划，确认后才调用模型。"}</span>
+                  </div>
+                  <span class="eu-ref-pill">{"Demo · no LLM call" if is_en else "Demo · 不调用模型"}</span>
                 </div>
-                <div class="ra-demo-note">{html.escape(demo_note)}</div>
+                <div class="eu-ref-question-box">{"Which bedside features within the first 24 hours best predict in-hospital mortality among Sepsis-3 patients, and how does adding lactate change calibration?" if is_en else "入 ICU 后 24 小时内哪些床旁特征最能预测 Sepsis-3 患者院内死亡？加入乳酸后校准表现如何变化？"}</div>
+                <div class="eu-ref-chip-row">
+                  <span class="eu-ref-chip">@sepsis_demo</span>
+                  <span class="eu-ref-chip">@first_24h</span>
+                  <span class="eu-ref-chip">@lactate</span>
+                </div>
+          </div>
+          <div class="eu-ref-card eu-ref-pad ra-plan-preview-card">
+                <div class="eu-ref-card-head">
+                  <div class="eu-ref-eyebrow">{"Plan preview · 6 steps" if is_en else "计划预览 · 6 步"}</div>
+                  <span>{"5 ready · 1 gated" if is_en else "5 就绪 · 1 受控"}</span>
+                </div>
+                <div class="eu-ref-planlist">{plan_html}</div>
+          </div>
+          <div class="eu-ref-note warn">
+            <div class="eu-ref-note-ico">!</div>
+            <div class="eu-ref-note-body">
+              <div class="eu-ref-note-head">
+                <b>{"Preflight gate" if is_en else "执行前关口"}</b>
+                <span class="eu-ref-pill queued">{"real data required" if is_en else "需要真实数据"}</span>
+              </div>
+              <p>{"Demo Mode explains the workflow only. Switch to Real Data Mode to bind a cohort, confirm the plan, and launch the real backend pipeline." if is_en else "演示模式只解释工作流；切换到真实数据模式后，才会绑定队列、确认计划并启动真实后端 pipeline。"}</p>
             </div>
-            <div class="ra-value-grid">{value_cards_html}</div>
-            <div class="ra-demo-flow">{flow_html}</div>
+          </div>
+          </div>
+          </div>
         </div>
-        <div class="ra-output-grid" style="grid-template-columns: 1fr;">
-            <div class="ra-output-card">
-                <div class="ra-output-title">{html.escape(value_title)}</div>
-                <div class="ra-demo-chip-row">{deliverables_html}</div>
-            </div>
-        </div>
-        """,
+        """).strip(),
         unsafe_allow_html=True,
     )
 
 
-def render_research_agent_demo_page() -> None:
+def _activate_real_data_mode_from_agent(state: MutableMapping[str, Any]) -> None:
+    """Move the shared workspace from demo preview into real-data setup."""
+    previous_database = state.get("database")
+    state["entry_mode"] = "real"
+    state["use_mock_data"] = False
+    if previous_database not in {"miiv", "eicu", "aumc", "hirid", "mimic", "sic"}:
+        state["database"] = "miiv"
+        state["path_validated"] = False
+        state.pop("last_validated_path", None)
+    for key in ("step1_confirmed", "step2_confirmed", "step3_confirmed", "export_completed"):
+        state[key] = False
+    state["trigger_export"] = False
+    state["_exporting_in_progress"] = False
+    state["loaded_concepts"] = {}
+    state["loaded_data_origin"] = "none"
+    state["patient_ids"] = []
+    state["all_patient_count"] = 0
+    state["selected_patient"] = None
+    state["selected_concepts"] = []
+    state["_active_main_page"] = "research_agent"
+    state["_ra_view"] = "setup"
+
+
+def render_research_agent_demo_page(*, show_header: bool = True) -> None:
     """Render a guide-only Research Agent page for Demo Mode.
 
     Demo mode should explain the research-agent value proposition without
@@ -3740,23 +4431,45 @@ def render_research_agent_demo_page() -> None:
     is_en = lang == "en"
 
     caption = (
-        "Demo Mode is a lightweight preview. It shows what the agent can produce, "
-        "without running an LLM pipeline or using tokens."
+        "Demo Mode is a lightweight preview. It shows what the agent can produce. "
+        "No LLM call, no token use, no fabricated analysis pack."
         if is_en else
         "演示模式只做轻量导览：展示智能体能产出什么，不真正运行 LLM pipeline，也不消耗 token。"
     )
-    render_page_header(
-        _ra_text("header"),
-        caption,
-        icon="",
-        kicker=_ra_text("kicker"),
-    )
+    if show_header:
+        st.markdown(
+            cc.render_design_page_header(
+                kicker=_ra_text("kicker"),
+                title_en="EasyICU Research Agent",
+                title_zh="EasyICU Research Agent",
+                desc=(
+                    "An auditable, evidence-bound workflow — plan, run, review, then draft."
+                    if is_en else
+                    "一个可审计、证据绑定的工作流：先计划、运行、复核，再进入草稿。"
+                ),
+                right_html=(
+                    '<span class="eu-pill">Runs · preview</span>'
+                    '<span class="eu-pill">Static guide</span>'
+                    if is_en else
+                    '<span class="eu-pill">运行 · 预览</span>'
+                    '<span class="eu-pill">静态导览</span>'
+                ),
+                lang=lang,
+            ),
+            unsafe_allow_html=True,
+        )
 
-    st.info(
-        "Use Real Data Mode when you are ready to connect a stay-level file, an EasyICU module export folder, "
-        "or let EasyICU prepare data first."
-        if is_en else
-        "准备接入 stay-level 文件、EasyICU 模块导出文件夹，或让 EasyICU 先提取数据时，再进入真实数据模式。"
+    st.markdown(
+        textwrap.dedent(f"""
+        <div class="eu-ref-note demo">
+          <div class="eu-ref-note-ico">i</div>
+          <div class="eu-ref-note-body">
+            <div class="eu-ref-note-head"><b>{"Demo Mode — lightweight preview." if is_en else "Demo 模式 — 轻量预览。"}</b></div>
+            <p>{html.escape(caption)} {"Switch to Real Data to connect a stay-level file or module export." if is_en else "切换到真实数据模式后再接入 stay-level 文件或模块导出。"}</p>
+          </div>
+        </div>
+        """).strip(),
+        unsafe_allow_html=True,
     )
     _render_research_agent_demo_visuals(is_en=is_en)
 
@@ -3775,11 +4488,7 @@ def render_research_agent_demo_page() -> None:
         key="research_agent_demo_to_real",
     ):
         clear_run_state("all")
-        st.session_state.entry_mode = "real"
-        st.session_state.use_mock_data = False
-        st.session_state.loaded_concepts = {}
-        st.session_state.loaded_data_origin = "none"
-        st.session_state.patient_ids = []
+        _activate_real_data_mode_from_agent(st.session_state)
         st.rerun()
 
 
@@ -3955,6 +4664,8 @@ def _build_execution_preflight_contract(
     force_manuscript: bool,
     template_key: Optional[str],
     language: str = "en",
+    llm_ready: bool = True,
+    llm_issue: str = "",
 ) -> Dict[str, Any]:
     question = (free_question or target_outcome or "").strip()
     try:
@@ -3982,12 +4693,263 @@ def _build_execution_preflight_contract(
         "llm_choice": str(llm_choice or "mock"),
         "model": str(model or "default"),
         "external_llm": external_llm,
+        "llm_ready": bool(llm_ready),
+        "llm_issue": str(llm_issue or ""),
         "workdir": output_dir,
         "write_targets": write_targets,
         "mode": "draft_continuation" if force_manuscript else ("analysis_only" if stop_after_analysis else "analysis_plus_manuscript_gate"),
         "template_key": template_key or "",
         "template_contract": _template_contract(template_key, language=language),
     }
+
+
+def _short_card_text(value: Any, fallback: str, *, limit: int = 170) -> str:
+    text = str(value or "").strip() or fallback
+    text = re.sub(r"\s+", " ", text)
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _render_research_agent_setup_overview(
+    *,
+    free_question: Optional[str],
+    target_outcome: Optional[str],
+    cohort: Optional[pd.DataFrame],
+    cohort_label: str,
+    llm_choice: str,
+    model: str,
+    workdir_text: str,
+    stop_after_analysis: bool,
+    force_manuscript: bool,
+    llm_ready: bool = True,
+    llm_issue: str = "",
+) -> None:
+    """Render a Claude-reference overview above the detailed setup controls."""
+    lang = st.session_state.get("language", "en")
+    is_en = lang == "en"
+    template_key = st.session_state.get("research_agent_template_current") or st.session_state.get("research_agent_example_key")
+    contract = _build_execution_preflight_contract(
+        free_question=free_question or "",
+        target_outcome=target_outcome or "",
+        cohort=cohort,
+        cohort_label=cohort_label or "",
+        llm_choice=llm_choice or "",
+        model=model or "",
+        workdir_text=workdir_text or _default_research_agent_workdir(),
+        stop_after_analysis=stop_after_analysis,
+        force_manuscript=force_manuscript,
+        template_key=str(template_key or ""),
+        language=lang,
+        llm_ready=llm_ready,
+        llm_issue=llm_issue,
+    )
+    template_contract = contract["template_contract"]
+    rows = int(contract.get("cohort_rows") or 0)
+    question_ready = bool(str(contract.get("question") or "").strip()) or force_manuscript
+    cohort_ready = cohort is not None and rows > 0
+    preflight_confirmed = bool(st.session_state.get("research_agent_preflight_confirmed"))
+    llm_label = str(contract.get("llm_choice") or ("provider selected below" if is_en else "在下方选择模型"))
+    model_label = str(contract.get("model") or ("default" if is_en else "默认"))
+    llm_ready = bool(contract.get("llm_ready", True))
+    llm_issue_msg = _llm_readiness_message(str(contract.get("llm_issue") or ""), is_en=is_en)
+    mode_label = {
+        "draft_continuation": "Draft continuation" if is_en else "续写草稿",
+        "analysis_only": "Analysis only" if is_en else "仅分析",
+        "analysis_plus_manuscript_gate": "Analysis + manuscript gate" if is_en else "分析 + 手稿关口",
+    }.get(str(contract.get("mode")), str(contract.get("mode") or ""))
+    stages = [
+        ("01", "play", "Plan" if is_en else "规划", "question -> recipe" if is_en else "问题 -> 配方", question_ready),
+        ("02", "layers", "Build" if is_en else "组装", "cohort -> one row / stay" if is_en else "队列 -> 每次住院一行", cohort_ready),
+        ("03", "bars", "Analyze" if is_en else "分析", "tables, figures, checks" if is_en else "表格、图、检查", cohort_ready and question_ready and llm_ready),
+        ("04", "agent", "Gate" if is_en else "关口", "evidence before drafting" if is_en else "写作前证据检查", preflight_confirmed),
+        ("05", "check", "Review" if is_en else "复核", "approve, rerun, export" if is_en else "批准、重跑、导出", preflight_confirmed),
+    ]
+    stage_html = "".join(
+        f'<div class="ra-setup-stage {"done" if ok else ""}">'
+        f'<span title="{html.escape(idx)}">{_shell_icon(icon_name) or html.escape(idx)}</span>'
+        f'<b>{html.escape(title)}</b>'
+        f'<em>{html.escape(body)}</em>'
+        '</div>'
+        for idx, icon_name, title, body, ok in stages
+    )
+
+    def _plan_item(idx: int, title: str, detail: str, state: str) -> str:
+        state_label = {
+            "ready": "ready" if is_en else "就绪",
+            "missing": "missing" if is_en else "缺失",
+            "gated": "gated" if is_en else "待确认",
+            "planned": "planned" if is_en else "已计划",
+        }.get(state, state)
+        return (
+            f'<div class="ra-setup-plan-item {html.escape(state)}">'
+            f'<div class="ra-setup-plan-index">{idx:02d}</div>'
+            '<div class="ra-setup-plan-node"></div>'
+            '<div class="ra-setup-plan-body">'
+            f'<b>{html.escape(title)}</b>'
+            f'<span>{html.escape(detail)}</span>'
+            '</div>'
+            f'<em>{html.escape(state_label)}</em>'
+            '</div>'
+        )
+
+    expected_outputs = [str(item) for item in list(template_contract.get("expected_outputs", []))[:3]]
+    checkpoints = [str(item) for item in list(template_contract.get("checkpoints", []))[:3]]
+    plan_items = [
+        (
+            "Research request" if is_en else "研究请求",
+            "question captured" if question_ready and is_en else ("问题已填写" if question_ready else ("enter a one-sentence request" if is_en else "填写一句研究问题")),
+            "ready" if question_ready else "missing",
+        ),
+        (
+            "Cohort context" if is_en else "队列上下文",
+            f"{rows:,} stay-level rows" if cohort_ready else ("select or upload a cohort" if is_en else "选择或上传队列"),
+            "ready" if cohort_ready else "missing",
+        ),
+        (
+            "Analysis contract" if is_en else "分析契约",
+            str(template_contract.get("label") or ("free-form template" if is_en else "自由模板")),
+            "planned",
+        ),
+        (
+            "Expected outputs" if is_en else "预期产物",
+            ", ".join(expected_outputs) if expected_outputs else ("results report" if is_en else "结果报告"),
+            "planned",
+        ),
+        (
+            "Evidence checkpoints" if is_en else "证据检查点",
+            ", ".join(checkpoints) if checkpoints else ("numeric claims gated" if is_en else "数值主张受控"),
+            "planned",
+        ),
+        (
+            "Human preflight" if is_en else "人工预检查",
+            "confirmed below" if preflight_confirmed and is_en else ("已在下方确认" if preflight_confirmed else ("confirm below before launch" if is_en else "启动前在下方确认")),
+            "ready" if preflight_confirmed else "gated",
+        ),
+    ]
+    plan_html = "".join(
+        _plan_item(i + 1, title, detail, state)
+        for i, (title, detail, state) in enumerate(plan_items)
+    )
+
+    def _gate_row(label: str, value: str, ok: bool) -> str:
+        klass = "ok" if ok else "warn"
+        return (
+            f'<div class="ra-setup-gate-row {klass}">'
+            f'<span>{html.escape(label)}</span>'
+            f'<b>{html.escape(value)}</b>'
+            '</div>'
+        )
+
+    gate_rows = "".join([
+        _gate_row(
+            "Request" if is_en else "请求",
+            "ready" if question_ready and is_en else ("已就绪" if question_ready else ("missing" if is_en else "未填写")),
+            question_ready,
+        ),
+        _gate_row(
+            "Cohort" if is_en else "队列",
+            f"{rows:,} rows" if cohort_ready else ("not selected" if is_en else "未选择"),
+            cohort_ready,
+        ),
+        _gate_row(
+            "LLM" if is_en else "模型",
+            llm_issue_msg if not llm_ready else (
+                "external provider" if contract.get("external_llm") and is_en else (
+                    "外部模型" if contract.get("external_llm") else ("offline/mock" if is_en else "离线/模拟")
+                )
+            ),
+            llm_ready,
+        ),
+        _gate_row(
+            "Preflight" if is_en else "预检查",
+            "confirmed" if preflight_confirmed and is_en else ("已确认" if preflight_confirmed else ("locked below" if is_en else "下方确认")),
+            preflight_confirmed,
+        ),
+    ])
+    context_values = [
+        (("Cohort" if is_en else "队列"), contract.get("cohort_label") or ("not selected" if is_en else "未选择")),
+        (("Rows" if is_en else "行数"), f"{rows:,}" if rows else "0"),
+        (("Model" if is_en else "模型"), f"{llm_label} · {model_label}"),
+        (("Mode" if is_en else "模式"), mode_label),
+    ]
+    context_html = "".join(
+        '<div>'
+        f'<span>{html.escape(label)}</span>'
+        f'<b>{html.escape(_short_card_text(value, "-", limit=90))}</b>'
+        '</div>'
+        for label, value in context_values
+    )
+    concept_tray = [
+        "stay-level cohort" if is_en else "住院级队列",
+        "local manifest" if is_en else "本机 manifest",
+        "evidence gate" if is_en else "证据关口",
+        "human review" if is_en else "人工复核",
+    ]
+    tray_html = "".join(
+        f'<span>{html.escape(item)}</span>'
+        for item in concept_tray
+    )
+    workdir_html = html.escape(_short_card_text(str(contract.get("workdir") or ""), "-", limit=120))
+    question_copy = _short_card_text(
+        contract.get("question"),
+        "No request yet. Start with step 1 below." if is_en else "还没有研究请求，请从下方第 1 步开始。",
+        limit=230,
+    )
+    preflight_count = int(question_ready) + int(cohort_ready) + int(llm_ready) + int(preflight_confirmed)
+    gate_state_label = f"{preflight_count} / 4 ready" if is_en else f"{preflight_count} / 4 就绪"
+    gate_message = (
+        "No model call happens until this page confirms the plan, context disclosure, and file impact."
+        if is_en else
+        "在本页确认计划、上下文披露和文件影响之前，不会调用模型。"
+    )
+    gate_action = "Confirm below before launch" if is_en else "启动前在下方确认"
+    st.markdown(
+        f"""
+        <div class="ra-setup-overview ra-pipeline-overview">
+          <div class="ra-setup-operating">
+            <div>
+              <div class="ra-setup-kicker">{"Operating model" if is_en else "运行模型"}</div>
+              <h3>{"An auditable workflow, not a black-box chat" if is_en else "可审计流程，而不是黑箱聊天"}</h3>
+              <p>{"Each stage produces a reviewable artifact. Drafting stays locked until evidence checks pass and you confirm." if is_en else "每个阶段都会产生可复核产物；证据检查通过并由你确认前，手稿起草保持锁定。"}</p>
+            </div>
+          </div>
+          <div class="ra-setup-stage-list">{stage_html}</div>
+          <div class="ra-setup-split">
+            <div class="ra-setup-card context">
+              <div class="ra-setup-card-title">{"Context pack" if is_en else "上下文包"} <span>{"handed off" if is_en else "已交接"}</span></div>
+              <div class="ra-setup-context-grid">{context_html}</div>
+              <div class="ra-setup-card-title tray">{"Concept tray" if is_en else "概念托盘"}</div>
+              <div class="ra-setup-tray">{tray_html}</div>
+              <div class="ra-setup-workdir"><span>{"Output" if is_en else "输出"}</span><b>{workdir_html}</b></div>
+            </div>
+            <div class="ra-setup-main">
+              <div class="ra-setup-card question">
+                <div class="ra-setup-question-head">
+                  <div>
+                    <b>{"Research question" if is_en else "研究问题"}</b>
+                    <span>{"One sentence. The agent drafts a plan first; you confirm before any model call." if is_en else "一句话描述。智能体先生成计划，任何模型调用前都需要你确认。"}</span>
+                  </div>
+                  <em>{html.escape("ready" if question_ready and is_en else ("已就绪" if question_ready else ("missing" if is_en else "未填写")))}</em>
+                </div>
+                <div class="ra-setup-qbox">{html.escape(question_copy)}</div>
+              </div>
+              <div class="ra-setup-card plan">
+                <div class="ra-setup-card-title">{"Plan preview · 6 steps" if is_en else "计划预览 · 6 步"}</div>
+                <div class="ra-setup-plan-list">{plan_html}</div>
+              </div>
+              <div class="ra-setup-gate-strip">
+                <span>{html.escape(gate_state_label)}</span>
+                <div><b>{"Preflight gate" if is_en else "执行前关口"}</b><p>{html.escape(gate_message)}</p></div>
+                <em>{html.escape(gate_action)}</em>
+              </div>
+            </div>
+          </div>
+          <div class="ra-setup-gates compact">{gate_rows}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _preflight_signature(contract: Dict[str, Any]) -> str:
@@ -4002,6 +4964,8 @@ def _preflight_signature(contract: Dict[str, Any]) -> str:
             "llm_choice",
             "model",
             "external_llm",
+            "llm_ready",
+            "llm_issue",
             "workdir",
             "write_targets",
             "mode",
@@ -4023,6 +4987,8 @@ def _render_execution_preflight(
     workdir_text: str,
     stop_after_analysis: bool,
     force_manuscript: bool,
+    llm_ready: bool = True,
+    llm_issue: str = "",
 ) -> bool:
     """Show the human-confirmation contract before a real agent run."""
     lang = st.session_state.get("language", "en")
@@ -4040,6 +5006,8 @@ def _render_execution_preflight(
         force_manuscript=force_manuscript,
         template_key=str(template_key or ""),
         language=lang,
+        llm_ready=llm_ready,
+        llm_issue=llm_issue,
     )
     mode = (
         "Draft continuation" if force_manuscript else
@@ -4049,10 +5017,75 @@ def _render_execution_preflight(
         ("仅分析" if stop_after_analysis else "分析 + 可选手稿关口")
     )
     template_contract = contract["template_contract"]
+    signature = _preflight_signature(contract)
+    prior_signature = st.session_state.get("research_agent_preflight_signature")
+    if prior_signature != signature:
+        st.session_state["research_agent_preflight_confirmed"] = False
+        st.session_state["research_agent_preflight_signature"] = signature
+    confirmed = bool(st.session_state.get("research_agent_preflight_confirmed"))
+
+    request_ready = bool(contract["question"] or force_manuscript)
+    cohort_ready = int(contract["cohort_rows"] or 0) > 0
+    llm_ready = bool(contract.get("llm_ready", True))
+    llm_issue_msg = _llm_readiness_message(str(contract.get("llm_issue") or ""), is_en=is_en)
+    if contract["external_llm"] and not llm_ready:
+        model_state = llm_issue_msg or ("missing settings" if is_en else "配置缺失")
+    else:
+        model_state = "external" if contract["external_llm"] else "offline"
+    gate_state = "confirmed" if confirmed else "locked"
+    ready_label = "ready" if is_en else "已就绪"
+    missing_question_label = "missing" if is_en else "未填写"
+    missing_cohort_label = "missing" if is_en else "未选择"
+    state_steps = [
+        (
+            "01",
+            "Question" if is_en else "问题",
+            ready_label if request_ready else missing_question_label,
+            "required input" if is_en else "必填输入",
+            "ok" if request_ready else "warn",
+        ),
+        (
+            "02",
+            "Cohort" if is_en else "队列",
+            ready_label if cohort_ready else missing_cohort_label,
+            "rows + schema" if is_en else "行数和 schema",
+            "ok" if cohort_ready else "warn",
+        ),
+        (
+            "03",
+            "Model" if is_en else "模型",
+            model_state if is_en else (llm_issue_msg if contract["external_llm"] and not llm_ready else ("外部模型" if contract["external_llm"] else "离线")),
+            "key/model required" if (is_en and contract["external_llm"] and not llm_ready) else ("密钥/模型必填" if contract["external_llm"] and not llm_ready else ("context disclosure" if is_en else "上下文披露")),
+            "warn" if contract["external_llm"] and not llm_ready else ("warn" if contract["external_llm"] else "ok"),
+        ),
+        (
+            "04",
+            "Gate" if is_en else "关口",
+            gate_state if is_en else ("已确认" if confirmed else "锁定"),
+            "human confirmation" if is_en else "人工确认",
+            "ok" if confirmed else "locked",
+        ),
+    ]
+    state_html = "".join(
+        f'<div class="ra-preflight-step {state_class}">'
+        f'<span>{html.escape(index)}</span>'
+        f'<b>{html.escape(label)}</b>'
+        f'<em>{html.escape(state)}</em>'
+        f'<p>{html.escape(detail)}</p>'
+        '</div>'
+        for index, label, state, detail, state_class in state_steps
+    )
+    cohort_value = (
+        f"{contract['cohort_label'] or ('not selected' if is_en else '未选择')} · "
+        f"{contract['cohort_rows']:,} rows"
+    )
+    llm_value = f"{contract['llm_choice']} · {contract['model']}"
+    if not llm_ready and llm_issue_msg:
+        llm_value = f"{llm_value} · {llm_issue_msg}"
     rows = [
         ("Request" if is_en else "请求", contract["question"] or ("not set" if is_en else "未设置")),
-        ("Cohort" if is_en else "队列", f"{contract['cohort_label']} · {contract['cohort_rows']:,} rows"),
-        ("LLM" if is_en else "模型", f"{contract['llm_choice']} · {contract['model']}"),
+        ("Cohort" if is_en else "队列", cohort_value),
+        ("LLM" if is_en else "模型", llm_value),
         ("Write path" if is_en else "写入路径", contract["workdir"]),
         ("Mode" if is_en else "模式", mode),
         ("Template" if is_en else "模板", str(template_contract["label"])),
@@ -4065,20 +5098,29 @@ def _render_execution_preflight(
         for label, value in rows
     )
     checks = [
-        "Evidence manifest and run status are written for every run."
-        if is_en else "每次运行都会写入证据清单和 run status。",
-        "Numeric claims remain gated by evidence and validator findings."
-        if is_en else "数值主张继续受证据和校验发现约束。",
-        "Manuscript drafting is second-stage unless explicitly requested."
-        if is_en else "除非明确请求，手稿写作保持第二阶段。",
-        "External provider will receive the question plus schema/summary context."
-        if (is_en and contract["external_llm"]) else
-        "外部模型会收到研究问题以及 schema/summary 上下文。"
-        if contract["external_llm"] else
-        "Offline mock mode does not send cohort context outside this machine."
-        if is_en else
-        "离线 mock 模式不会把队列上下文发出本机。",
+        "Manifest and run status will be written."
+        if is_en else "将写入 manifest 与 run status。",
+        "Numeric claims stay blocked until evidence checks pass."
+        if is_en else "数值主张需通过证据校验才放行。",
+        "Drafting stays second-stage unless requested."
+        if is_en else "除非明确请求，写作仍在第二阶段。",
     ]
+    if contract["external_llm"] and not llm_ready:
+        checks.append(
+            "Complete LLM settings above or choose MockLLMClient for an offline test run."
+            if is_en else
+            "请先补齐上方 LLM 设置，或选择 MockLLMClient 进行离线测试运行。"
+        )
+    else:
+        checks.append(
+            "External provider receives the question plus schema/summary context."
+            if (is_en and contract["external_llm"]) else
+            "外部模型会收到研究问题以及 schema/summary 上下文。"
+            if contract["external_llm"] else
+            "Offline mode keeps cohort context on this machine."
+            if is_en else
+            "离线模式不会把队列上下文发出本机。"
+        )
     check_html = "".join(
         '<div class="ra-preflight-check"><span></span><p>'
         f'{html.escape(check)}</p></div>'
@@ -4089,11 +5131,12 @@ def _render_execution_preflight(
         <div class="ra-preflight">
           <div class="ra-preflight-head">
             <div>
-              <div class="ra-preflight-kicker">{"Execution preflight" if is_en else "执行前预览"}</div>
-              <b>{"Confirm what the agent will read, write, and gate" if is_en else "确认 agent 将读取、写入和审计什么"}</b>
+              <div class="ra-preflight-kicker">{"Launch review" if is_en else "启动复核"}</div>
+              <b>{"Review the current run contract" if is_en else "复核当前运行契约"}</b>
             </div>
-            <span>{"human confirmation before run" if is_en else "运行前人工确认"}</span>
+            <span>{"confirmed" if confirmed and is_en else ("已确认" if confirmed else ("locked until confirmed" if is_en else "确认前锁定"))}</span>
           </div>
+          <div class="ra-preflight-steps">{state_html}</div>
           <div class="ra-preflight-grid">{row_html}</div>
           <div class="ra-preflight-checks">{check_html}</div>
         </div>
@@ -4112,26 +5155,20 @@ def _render_execution_preflight(
         for target in contract["write_targets"]:
             st.caption(f"WRITE `{target}`")
 
-    signature = _preflight_signature(contract)
-    prior_signature = st.session_state.get("research_agent_preflight_signature")
-    if prior_signature != signature:
-        st.session_state["research_agent_preflight_confirmed"] = False
-        st.session_state["research_agent_preflight_signature"] = signature
-    confirmed = bool(st.session_state.get("research_agent_preflight_confirmed"))
     ack = st.checkbox(
         (
-            "I reviewed the plan, context disclosure, and file impact."
+            "I reviewed the current run contract, context disclosure, and file impact."
             if is_en else
-            "我已复核计划、上下文披露和文件影响。"
+            "我已复核当前运行契约、上下文披露和文件影响。"
         ),
         value=bool(st.session_state.get("research_agent_preflight_ack", False)),
         key="research_agent_preflight_ack",
     )
-    can_confirm = bool(contract["question"] or force_manuscript) and contract["cohort_rows"] > 0
+    can_confirm = request_ready and cohort_ready and llm_ready
     c1, c2 = st.columns([1.2, 1.0])
     with c1:
         if st.button(
-            "Confirm plan" if is_en else "确认计划",
+            "Confirm launch review" if is_en else "确认启动复核",
             type="primary",
             disabled=not ack or not can_confirm,
             use_container_width=True,
@@ -4142,27 +5179,73 @@ def _render_execution_preflight(
             confirmed = True
     with c2:
         if st.button(
-            "Reset confirmation" if is_en else "重置确认",
+            "Reset review" if is_en else "重置复核",
             use_container_width=True,
             key="research_agent_preflight_reset",
         ):
             st.session_state["research_agent_preflight_confirmed"] = False
             confirmed = False
-    if confirmed:
+    external_consent_needed = bool(contract["external_llm"] and not st.session_state.get("llm_enabled", False))
+    if confirmed and external_consent_needed:
+        st.info(
+            "Plan confirmed. Enable external LLM calls below to unlock Run."
+            if is_en else
+            "计划已确认。请在下方启用外部模型调用后再解锁运行。"
+        )
+    elif confirmed:
         st.success("Plan confirmed. The run button is enabled." if is_en else "计划已确认，可以启动运行。")
+    elif not llm_ready:
+        st.info(
+            "Complete LLM settings above or choose MockLLMClient for an offline test run."
+            if is_en else
+            "请先补齐上方 LLM 设置，或选择 MockLLMClient 进行离线测试运行。"
+        )
     else:
-        st.warning("Confirm the preflight before launching the agent." if is_en else "启动 agent 前请先确认执行前预览。")
+        st.warning("Review and confirm the launch gate before running the agent." if is_en else "运行 agent 前请先复核并确认启动关口。")
     return confirmed
 
 
-def render_research_agent_page() -> None:
-    """Top-level entry point used by the main webapp."""
-    render_page_header(
-        _ra_text("header"),
-        _ra_text("subheader"),
-        icon="",
-        kicker=_ra_text("kicker"),
+def _render_setup_controls_intro(*, is_en: bool) -> None:
+    st.markdown(
+        textwrap.dedent(f"""
+        <div class="ra-setup-controls-intro">
+          <div>
+            <div class="ra-setup-kicker">{"Run setup" if is_en else "运行配置"}</div>
+            <h3>{"Complete the missing fields" if is_en else "补齐缺失字段"}</h3>
+            <p>{"The first open panel is the required input. Method, data, model, and output details stay collapsed until needed." if is_en else "第一个展开面板是必填输入；方法、数据、模型和输出细节在需要时再展开。"}</p>
+          </div>
+          <span>{"local setup" if is_en else "本机配置"}</span>
+        </div>
+        """).strip(),
+        unsafe_allow_html=True,
     )
+
+
+def _render_preflight_controls_intro(*, is_en: bool) -> None:
+    st.markdown(
+        textwrap.dedent(f"""
+        <div class="ra-preflight-controls-intro">
+          <div>
+            <div class="ra-setup-kicker">{"Launch gate" if is_en else "启动关口"}</div>
+            <h3>{"Confirm inputs, files, and evidence gates" if is_en else "确认输入、文件和证据关口"}</h3>
+            <p>{"One human check separates setup from execution. The run button stays locked until this contract matches the current question, cohort, model, and write path." if is_en else "一次人工复核把配置和执行分开；只有当前问题、队列、模型和写入路径与契约一致后，运行按钮才会放行。"}</p>
+          </div>
+          <span>{"human-controlled run" if is_en else "人工控制运行"}</span>
+        </div>
+        """).strip(),
+        unsafe_allow_html=True,
+    )
+
+
+def render_research_agent_page(*, show_header: bool = True) -> None:
+    """Top-level entry point used by the main webapp."""
+    if show_header:
+        render_page_header(
+            _ra_text("header"),
+            _ra_text("subheader"),
+            icon="",
+            kicker=_ra_text("kicker"),
+        )
     if st.session_state.pop("_eu_ra_launch_requested", False):
         st.info(
             "Run controls are below. Confirm the research request, cohort, model provider, and preflight plan before launching."
@@ -4192,29 +5275,34 @@ def render_research_agent_page() -> None:
     # legend. Both duplicated the expander headers below — the user
     # learned nothing new from the pills they wouldn't pick up from
     # "1 · Research request", "2 · Study design (optional)", etc.
+    overview_slot = st.container()
 
-    with st.expander(f"1 · {_step_titles[0]}", expanded=True):
-        free_question, target_outcome = _section_request_picker()
-        skill_key = None
-    with st.expander(f"2 · {_step_titles[1]} ({_optional_label})", expanded=False):
-        method_notes, user_preferences = _section_method_preferences(free_question, target_outcome)
-    question_hint = free_question
-    with st.expander(f"3 · {_step_titles[2]}", expanded=True):
-        cohort, cohort_label = _section_cohort_picker(research_question=question_hint)
-    if cohort is not None and not _multi_db_label_is_distinct(cohort_label):
-        tags = _multi_db_label_tags(cohort_label)
-        duplicate_tags = sorted({tag for tag in tags if tags.count(tag) > 1})
-        st.error(_ra_text(
-            "multi_db_duplicate_tags",
-            tags=', '.join(duplicate_tags) if duplicate_tags else ', '.join(tags),
-        ))
-        _clear_research_agent_preflight_confirmation()
-        cohort = None
-        cohort_label = ""
-    with st.expander(f"4 · {_step_titles[3]}", expanded=False):
-        llm_choice, api_key, model, base_url, extra_headers = _section_llm_picker(handles)
-    with st.expander(f"5 · {_step_titles[4]} ({_optional_label})", expanded=False):
-        disable_icu_context, workdir_text, stop_after_analysis = _section_options()
+    with st.container(key="eu_ra_setup_controls"):
+        _render_setup_controls_intro(is_en=_is_en)
+        with st.expander(_step_titles[0], expanded=True):
+            free_question, target_outcome = _section_request_picker()
+            skill_key = None
+        with st.expander(f"{_step_titles[1]} ({_optional_label})", expanded=False):
+            method_notes, user_preferences = _section_method_preferences(free_question, target_outcome)
+        question_hint = free_question
+        focus_module_folder = bool(st.session_state.get("_eu_ra_focus_module_folder", False))
+        with st.expander(_step_titles[2], expanded=bool(question_hint) or focus_module_folder):
+            cohort, cohort_label = _section_cohort_picker(research_question=question_hint)
+        if cohort is not None and not _multi_db_label_is_distinct(cohort_label):
+            tags = _multi_db_label_tags(cohort_label)
+            duplicate_tags = sorted({tag for tag in tags if tags.count(tag) > 1})
+            st.error(_ra_text(
+                "multi_db_duplicate_tags",
+                tags=', '.join(duplicate_tags) if duplicate_tags else ', '.join(tags),
+            ))
+            _clear_research_agent_preflight_confirmation()
+            cohort = None
+            cohort_label = ""
+        with st.expander(_step_titles[3], expanded=False):
+            llm_choice, api_key, model, base_url, extra_headers = _section_llm_picker(handles)
+        with st.expander(f"{_step_titles[4]} ({_optional_label})", expanded=False):
+            disable_icu_context, workdir_text, stop_after_analysis = _section_options()
+    llm_ready, llm_issue = _llm_run_readiness(llm_choice, api_key, model)
     resume_run_id = st.session_state.get("research_agent_resume_run_id")
     force_manuscript = bool(st.session_state.get("research_agent_force_manuscript"))
     resume_mode = str(st.session_state.get("research_agent_resume_mode") or "")
@@ -4222,6 +5310,42 @@ def render_research_agent_page() -> None:
     resume_relax_probe = bool(st.session_state.get("research_agent_resume_relax_probe"))
     if force_manuscript:
         stop_after_analysis = False
+
+    template_key = st.session_state.get("research_agent_template_current") or st.session_state.get("research_agent_example_key")
+    preview_contract = _build_execution_preflight_contract(
+        free_question=free_question or "",
+        target_outcome=target_outcome or "",
+        cohort=cohort,
+        cohort_label=cohort_label or "",
+        llm_choice=llm_choice or "",
+        model=model or "",
+        workdir_text=workdir_text or _default_research_agent_workdir(),
+        stop_after_analysis=stop_after_analysis,
+        force_manuscript=force_manuscript,
+        template_key=str(template_key or ""),
+        language=_lang,
+        llm_ready=llm_ready,
+        llm_issue=llm_issue,
+    )
+    preview_signature = _preflight_signature(preview_contract)
+    if st.session_state.get("research_agent_preflight_signature") != preview_signature:
+        st.session_state["research_agent_preflight_confirmed"] = False
+        st.session_state["research_agent_preflight_signature"] = preview_signature
+
+    with overview_slot:
+        _render_research_agent_setup_overview(
+            free_question=free_question,
+            target_outcome=target_outcome,
+            cohort=cohort,
+            cohort_label=cohort_label,
+            llm_choice=llm_choice,
+            model=model,
+            workdir_text=workdir_text,
+            stop_after_analysis=stop_after_analysis,
+            force_manuscript=force_manuscript,
+            llm_ready=llm_ready,
+            llm_issue=llm_issue,
+        )
 
     # Surface a banner so the user knows the next "Run" click is a
     # resume, not a fresh run, and remembers the toggles they picked
@@ -4249,61 +5373,58 @@ def render_research_agent_page() -> None:
             st.session_state.pop("research_agent_resume_relax_probe", None)
             st.rerun()
 
-    st.divider()
-    history_workdir = Path(workdir_text).expanduser().resolve()
-    _render_run_history(history_workdir)
-
-    # 2026-05 Phase G: paper replication as a sibling action below the
-    # interactive flow. Deterministic, no LLM, no tokens — uses the
-    # lactate × MAP × vasopressor 24-hour package from
-    # easyicu.research_agent.replication.
-    with st.expander(_ra_text("replication_title"), expanded=False):
-        _render_replication_section(default_workdir=history_workdir)
-
-    preflight_confirmed = _render_execution_preflight(
-        free_question=free_question,
-        target_outcome=target_outcome,
-        cohort=cohort,
-        cohort_label=cohort_label,
-        llm_choice=llm_choice,
-        model=model,
-        workdir_text=workdir_text,
-        stop_after_analysis=stop_after_analysis,
-        force_manuscript=force_manuscript,
-    )
-
-    external_llm_selected = "MockLLMClient" not in str(llm_choice) and "offline" not in str(llm_choice).lower()
-    if external_llm_selected and not st.session_state.get("llm_enabled", False):
-        enable_for_run = st.checkbox(
-            (
-                "Enable external LLM calls for this run"
-                if _is_en else
-                "允许本次运行调用外部 LLM"
-            ),
-            key="research_agent_enable_external_llm_for_run",
-            help=(
-                "The research question, cohort schema/summary, generated prompts, and run logs may be sent to the selected provider."
-                if _is_en else
-                "研究问题、队列表结构/摘要、生成提示词和运行日志可能会发送给所选模型服务商。"
-            ),
+    with st.container(key="eu_ra_preflight_panel"):
+        _render_preflight_controls_intro(is_en=_is_en)
+        preflight_confirmed = _render_execution_preflight(
+            free_question=free_question,
+            target_outcome=target_outcome,
+            cohort=cohort,
+            cohort_label=cohort_label,
+            llm_choice=llm_choice,
+            model=model,
+            workdir_text=workdir_text,
+            stop_after_analysis=stop_after_analysis,
+            force_manuscript=force_manuscript,
+            llm_ready=llm_ready,
+            llm_issue=llm_issue,
         )
-        if enable_for_run:
-            st.session_state["llm_enabled"] = True
-            st.session_state["_llm_toggle_sync_pending"] = True
+
+        external_llm_selected = "MockLLMClient" not in str(llm_choice) and "offline" not in str(llm_choice).lower()
+        if external_llm_selected and not st.session_state.get("llm_enabled", False):
+            enable_for_run = st.checkbox(
+                (
+                    "Enable external LLM calls for this run"
+                    if _is_en else
+                    "允许本次运行调用外部 LLM"
+                ),
+                key="research_agent_enable_external_llm_for_run",
+                help=(
+                    "The research question, cohort schema/summary, generated prompts, and run logs may be sent to the selected provider."
+                    if _is_en else
+                    "研究问题、队列表结构/摘要、生成提示词和运行日志可能会发送给所选模型服务商。"
+                ),
+            )
+            if enable_for_run:
+                st.session_state["llm_enabled"] = True
+                st.session_state["_llm_toggle_sync_pending"] = True
+                st.session_state["_eu_ra_external_llm_enabled_notice"] = True
+                st.rerun()
+        if external_llm_selected and st.session_state.pop("_eu_ra_external_llm_enabled_notice", False):
             st.info(
                 "External LLM calls are enabled for this session."
                 if _is_en else
                 "本会话已允许外部 LLM 调用。"
             )
 
-    request_ready = bool(str(free_question or "").strip()) or force_manuscript
-    run_button_clicked = st.button(
-        "▶  " + (_ra_text("draft_button") if force_manuscript else _ra_text("run_button")),
-        type="primary",
-        disabled=cohort is None or not request_ready or not preflight_confirmed,
-        use_container_width=True,
-    )
-    run_clicked = run_button_clicked or (force_manuscript and preflight_confirmed)
+        request_ready = bool(str(free_question or "").strip()) or force_manuscript
+        consent_ready = not external_llm_selected or bool(st.session_state.get("llm_enabled", False))
+        run_button_clicked = st.button(
+            "▶  " + (_ra_text("draft_button") if force_manuscript else _ra_text("run_button")),
+            type="primary",
+            disabled=cohort is None or not request_ready or not preflight_confirmed or not llm_ready or not consent_ready,
+            use_container_width=True,
+        )
+    run_clicked = run_button_clicked
 
     if cohort is None:
         st.info(_ra_text("select_cohort"))
@@ -4320,6 +5441,13 @@ def render_research_agent_page() -> None:
             "The run is locked until the preflight plan is confirmed."
             if _is_en else
             "执行前预览未确认前，运行保持锁定。"
+        )
+        return
+    if not llm_ready:
+        st.info(
+            "Complete LLM settings above or choose MockLLMClient for an offline test run."
+            if _is_en else
+            "请先补齐上方 LLM 设置，或选择 MockLLMClient 进行离线测试运行。"
         )
         return
 
@@ -4554,4 +5682,8 @@ if __name__ == "__main__":  # pragma: no cover
     _standalone_main()
 
 
-__all__ = ["render_research_agent_demo_page", "render_research_agent_page"]
+__all__ = [
+    "render_research_agent_demo_page",
+    "render_research_agent_history_page",
+    "render_research_agent_page",
+]

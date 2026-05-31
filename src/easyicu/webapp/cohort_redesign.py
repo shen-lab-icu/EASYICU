@@ -54,6 +54,30 @@ def _mock_params_n() -> int:
     return int(st.session_state.get("mock_params", {}).get("n_patients", 100))
 
 
+def _demo_mock_params_n() -> int:
+    params = st.session_state.get("mock_params")
+    if not isinstance(params, dict):
+        return 10
+    try:
+        return int(params.get("n_patients") or 10)
+    except (TypeError, ValueError):
+        return 10
+
+
+def _has_bound_cohort_context() -> bool:
+    """Whether the current page has real or demo cohort material to summarize."""
+    if _demographics_df() is not None:
+        return True
+    loaded_concepts = st.session_state.get("loaded_concepts")
+    return isinstance(loaded_concepts, dict) and bool(loaded_concepts)
+
+
+def _cohort_page_title(lang: str) -> tuple[str, str]:
+    if st.session_state.get("entry_mode") != "demo" and not _has_bound_cohort_context():
+        return _T(lang, "Cohort statistics", "队列统计"), _T(lang, "队列统计", "队列统计")
+    return _T(lang, "Sepsis vs Non-sepsis", "脓毒症对照"), _T(lang, "脓毒症对照", "脓毒症对照")
+
+
 def _render_page_header(
     *,
     title_en: str,
@@ -105,6 +129,8 @@ def _render_agent_gate_strip(lang: str, *, context: str) -> None:
     """
     loaded_concepts = st.session_state.get("loaded_concepts") or {}
     context_key = context.lower().replace(' ', '_')
+    input_tone = "ok"
+    evidence_tone = "ok"
     if "cross-db" in context.lower() or "cross_db" in context_key:
         db_count, row_count, concept_count = _crossdb_loaded_counts()
         if db_count:
@@ -114,10 +140,10 @@ def _render_agent_gate_strip(lang: str, *, context: str) -> None:
                 f"{db_count} 个库 · {row_count:,} 行 · {concept_count} 概念",
             )
             evidence_body = _T(lang, "distribution denominators ready", "分布分母已就绪")
-            signature = f"{context_key}:{db_count}:{row_count}:{concept_count}"
+            signature = _T(lang, "current session", "当前会话")
         else:
             df = _demographics_df()
-            patient_count = len(df) if df is not None else _mock_params_n()
+            patient_count = len(df) if df is not None else _demo_mock_params_n()
             concept_count = len(loaded_concepts) if loaded_concepts else 0
             input_body = _T(
                 lang,
@@ -125,28 +151,39 @@ def _render_agent_gate_strip(lang: str, *, context: str) -> None:
                 f"{patient_count:,} 当前会话病例 · 多库数据未加载",
             )
             evidence_body = _T(lang, "open loader for real denominators", "打开加载器以获得真实分母")
-            signature = f"{context_key}:{patient_count}:{concept_count}"
+            signature = _T(lang, "current session", "当前会话")
     else:
         df = _demographics_df()
-        patient_count = len(df) if df is not None else _mock_params_n() * 25
+        if df is not None:
+            patient_count = len(df)
+        elif st.session_state.get("entry_mode") == "demo":
+            patient_count = _demo_mock_params_n()
+        else:
+            patient_count = 0
         concept_count = len(loaded_concepts) if loaded_concepts else 0
-        input_body = (
-            _T(lang, f"{patient_count:,} stays · {concept_count} concepts", f"{patient_count:,} 例 · {concept_count} 概念")
-            if concept_count else
-            _T(lang, f"{patient_count:,} stays · demo concept set", f"{patient_count:,} 例 · 演示概念集")
-        )
-        evidence_body = _T(lang, "coverage + denominators ready", "覆盖率 + 分母已就绪")
-        signature = f"{context_key}:{patient_count}:{concept_count}"
+        if st.session_state.get("entry_mode") != "demo" and patient_count == 0 and concept_count == 0:
+            input_body = _T(lang, "waiting for local cohort", "等待本地队列")
+            evidence_body = _T(lang, "load data for denominators", "加载数据后确认分母")
+            input_tone = "warn"
+            evidence_tone = "warn"
+        else:
+            input_body = (
+                _T(lang, f"{patient_count:,} stays · {concept_count} concepts", f"{patient_count:,} 例 · {concept_count} 概念")
+                if concept_count else
+                _T(lang, f"{patient_count:,} stays · demo concept set", f"{patient_count:,} 例 · 演示概念集")
+            )
+            evidence_body = _T(lang, "coverage + denominators ready", "覆盖率 + 分母已就绪")
+        signature = _T(lang, "current session", "当前会话")
     rows = [
         (
             _T(lang, "Input package", "输入包"),
             input_body,
-            "ok",
+            input_tone,
         ),
         (
             _T(lang, "Evidence checks", "证据检查"),
             evidence_body,
-            "ok",
+            evidence_tone,
         ),
         (
             _T(lang, "Draft gate", "写作关口"),
@@ -541,9 +578,10 @@ def render_cohort_redesign_page(
     Setting ``st.session_state["_eu_shell_only"] = True`` falls back
     to the synthetic design-preview bodies for isolated visual QA.
     """
+    title_en, title_zh = _cohort_page_title(lang)
     _render_page_header(
-        title_en="Sepsis vs Non-sepsis",
-        title_zh="脓毒症对照",
+        title_en=title_en,
+        title_zh=title_zh,
         desc=_T(lang,
             "Group contrast · coverage audit · cohort profile · SOFA reclassification",
             "组间对照 · 覆盖审计 · 队列画像 · SOFA 重分层"),
@@ -697,8 +735,8 @@ def _crossdb_source_notice(lang: str) -> str:
         title = _T(lang, "Demo simulated data", "演示模拟数据")
         body = _T(
             lang,
-            "The summary and matrix below are computed from seeded demo frames, not from a user database.",
-            "下方摘要和矩阵来自内置演示数据计算，不是用户真实数据库结果。",
+            "The summary and matrix below use independent seeded feature frames for each database, not the 10-patient review demo or a user database.",
+            "下方摘要和矩阵使用每个数据库独立的 seeded feature frames，不是 10 例患者审阅演示数据，也不是用户真实数据库结果。",
         )
         level = "info"
     elif is_loaded:
@@ -767,7 +805,7 @@ def _crossdb_active_databases(lang: str) -> list[tuple[str, str, bool, bool]]:
             n_rows = _crossdb_frame_row_count(frame)
             n_patients = _crossdb_frame_patient_count(frame)
             if is_demo:
-                detail = f"{n_rows:,} demo rows"
+                detail = f"{n_rows:,} seeded feature rows"
             else:
                 detail = (
                     f"{n_patients:,} IDs · {n_rows:,} rows"
@@ -848,11 +886,52 @@ def _crossdb_availability_rows(lang: str) -> tuple[tuple[str, ...], list[tuple[s
     return (), []
 
 
+def _render_crossdb_distribution_launcher(
+    lang: str,
+    *,
+    open_now: bool,
+    has_comparison_data: bool,
+) -> None:
+    status = (
+        _T(lang, "open", "已展开")
+        if open_now else
+        _T(lang, "collapsed by default", "默认折叠")
+    )
+    detail = (
+        _T(
+            lang,
+            "Summary and availability stay as the first-screen benchmark; open details only when you need the real loader or per-feature plots.",
+            "首屏保留摘要与可用性矩阵；只有需要真实加载器或逐特征分布图时，再打开详细面板。",
+        )
+        if has_comparison_data else
+        _T(
+            lang,
+            "Open the operational panel to connect real database roots. EasyICU will still require at least two loaded frames before plotting distributions.",
+            "打开操作面板连接真实数据库根目录；EasyICU 仍会要求至少两个数据帧加载成功后才绘制分布。",
+        )
+    )
+    st.markdown(
+        '<div class="eu-crossdb-detail-callout">'
+        '<div>'
+        f'<b>{_T(lang, "Detailed distributions", "详细分布")}</b>'
+        f'<p>{detail}</p>'
+        '</div>'
+        f'<span class="eu-crossdb-detail-status">{status}</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _toggle_crossdb_distribution_panel(state, key: str) -> None:
+    state[key] = not bool(state.get(key))
+
+
 def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
     """Shell-A Cross-DB Benchmark page.
 
-    PageHeader, benchmark summary, availability matrix, and the real
-    multi-DB loader / Plotly distribution view render inline.
+    PageHeader, benchmark summary, and availability matrix render as the
+    first-screen view. The real multi-DB loader / Plotly distribution panel
+    remains available behind an explicit details toggle.
     """
     _clear_demo_crossdb_state_for_real_mode(st.session_state)
 
@@ -939,5 +1018,28 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
         )
 
     if multidb_fn is not None and not st.session_state.get("_eu_shell_only"):
-        st.markdown('<div class="eu-crossdb-distribution-boundary"></div>', unsafe_allow_html=True)
-        multidb_fn(lang)
+        open_key = "_eu_crossdb_distribution_open"
+        open_now = bool(st.session_state.get(open_key))
+        _render_crossdb_distribution_launcher(
+            lang,
+            open_now=open_now,
+            has_comparison_data=has_comparison_data,
+        )
+        toggle_label = (
+            _T(lang, "Hide detailed distributions", "收起详细分布")
+            if open_now else
+            _T(lang, "Open detailed distributions", "打开详细分布")
+        )
+        st.button(
+            toggle_label,
+            key="eu_crossdb_distribution_toggle",
+            use_container_width=True,
+            on_click=_toggle_crossdb_distribution_panel,
+            args=(st.session_state, open_key),
+        )
+        if open_now:
+            st.markdown(
+                '<div class="eu-crossdb-distribution-boundary"></div>',
+                unsafe_allow_html=True,
+            )
+            multidb_fn(lang)

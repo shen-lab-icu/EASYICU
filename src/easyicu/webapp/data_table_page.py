@@ -194,35 +194,50 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
         )
         st.markdown('<div class="dt-section-separator"></div>', unsafe_allow_html=True)
 
-        # 特征选择器（单选或多选合并）- 默认合并全部放第一个
-        # 🔧 放大标题
         view_mode_label = "Preview Mode" if lang == 'en' else "预览模式"
         view_modes = ["Merge All (Wide Table)", "Single Feature"] if lang == 'en' else ["合并全部（宽表）", "单个特征"]
-        with st.container(key="dt_preview_mode"):
-            st.markdown(f'<div class="dt-preview-mode-label">{view_mode_label}</div>', unsafe_allow_html=True)
-            view_mode = st.radio("View Mode", view_modes, horizontal=True, key="data_table_view_mode", index=0, label_visibility="collapsed")
+        max_rows_per_feature = None
+        max_rows = None
+        with st.container(key="dt_preview_controls"):
+            preview_control_cols = st.columns([2.15, 0.85], gap="large")
+            with preview_control_cols[0]:
+                with st.container(key="dt_preview_mode"):
+                    st.markdown(f'<div class="dt-preview-mode-label">{view_mode_label}</div>', unsafe_allow_html=True)
+                    view_mode = st.radio("View Mode", view_modes, horizontal=True, key="data_table_view_mode", index=0, label_visibility="collapsed")
+            with preview_control_cols[1]:
+                if view_mode == view_modes[1]:
+                    st.markdown(
+                        f'<div class="inline-control-label">{"Preview rows" if lang == "en" else "预览行数"}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    max_rows = st.selectbox(
+                        "Preview rows" if lang == 'en' else "预览行数",
+                        options=[500, 1000, 2000, 5000, 10000],
+                        index=1,
+                        key="single_feature_max_rows",
+                        label_visibility="collapsed",
+                    )
+                else:
+                    st.markdown(
+                        f'<div class="inline-control-label">{"Rows per feature" if lang == "en" else "每特征行数"}</div>',
+                        unsafe_allow_html=True,
+                    )
+                    max_rows_per_feature = st.selectbox(
+                        "Max rows" if lang == 'en' else "最大行数",
+                        options=[1000, 2000, 5000, 10000],
+                        index=1,
+                        key="merge_max_rows",
+                        label_visibility="collapsed",
+                    )
 
         if view_mode == view_modes[1]:
             # 单个特征模式 (现在是第二个选项)
-            feature_control_cols = st.columns([1.7, 0.78])
             feature_select_label = "Select Feature" if lang == 'en' else "选择特征"
-            with feature_control_cols[0]:
+            with st.container(key="dt_feature_picker"):
                 selected_feature = st.selectbox(
                     feature_select_label,
                     options=sorted(module_concepts),
-                    key="data_table_feature_select"
-                )
-            with feature_control_cols[1]:
-                st.markdown(
-                    f'<div class="inline-control-label">{"Preview rows" if lang == "en" else "预览行数"}</div>',
-                    unsafe_allow_html=True,
-                )
-                max_rows = st.selectbox(
-                    "Preview rows" if lang == 'en' else "预览行数",
-                    options=[500, 1000, 2000, 5000, 10000],
-                    index=1,
-                    key="single_feature_max_rows",
-                    label_visibility="collapsed",
+                    key="data_table_feature_select",
                 )
 
             if selected_feature and selected_feature in st.session_state.loaded_concepts:
@@ -321,36 +336,22 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
 
         else:
             # 合并全部模式（宽表）
-            merge_control_cols = st.columns([2.5, 0.95])
-            with merge_control_cols[0]:
-                preview_hint = (
-                    "Representative columns are prioritized below. Switch to Single Feature for full detail."
-                    if lang == 'en'
-                    else "下方优先展示代表性列；如需完整细节可切换到单个特征。"
-                )
-                st.markdown(
-                    f'''
-                    <div class="preview-toolbar">
-                        <div class="preview-toolbar-main">
-                            <div class="preview-toolbar-title">{"Merged Preview Table" if lang == "en" else "合并预览表"}</div>
-                            <div class="preview-toolbar-note">{preview_hint}</div>
-                        </div>
+            preview_hint = (
+                "Representative columns are prioritized below. Switch to Single Feature for full detail."
+                if lang == 'en'
+                else "下方优先展示代表性列；如需完整细节可切换到单个特征。"
+            )
+            st.markdown(
+                f'''
+                <div class="preview-toolbar">
+                    <div class="preview-toolbar-main">
+                        <div class="preview-toolbar-title">{"Merged Preview Table" if lang == "en" else "合并预览表"}</div>
+                        <div class="preview-toolbar-note">{preview_hint}</div>
                     </div>
-                    ''',
-                    unsafe_allow_html=True,
-                )
-            with merge_control_cols[1]:
-                st.markdown(
-                    f'<div class="inline-control-label">{"Rows per feature" if lang == "en" else "每特征行数"}</div>',
-                    unsafe_allow_html=True,
-                )
-                max_rows_per_feature = st.selectbox(
-                    "Max rows" if lang == 'en' else "最大行数",
-                    options=[1000, 2000, 5000, 10000],
-                    index=1,
-                    key="merge_max_rows",
-                    label_visibility="collapsed",
-                )
+                </div>
+                ''',
+                unsafe_allow_html=True,
+            )
 
             # 收集该模块的所有数据
             dfs_to_merge = []
@@ -407,7 +408,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                     try:
                         merging_msg = "Merging data..." if lang == 'en' else "正在合并数据..."
                         with st.spinner(merging_msg):
-                            MAX_ROWS_PER_DF = max_rows_per_feature
+                            MAX_ROWS_PER_DF = int(max_rows_per_feature or 2000)
                             total_rows_before = sum(len(df) for df in dfs_to_merge)
 
                             dynamic_frames = []

@@ -108,6 +108,17 @@ AGENT_STATE_KEYS = {
 }
 
 
+AGENT_CONTINUATION_STATE_KEYS = {
+    "research_agent_resume_run_id",
+    "research_agent_force_manuscript",
+    "research_agent_resume_mode",
+    "research_agent_resume_notes",
+    "research_agent_resume_relax_probe",
+    "research_agent_preflight_confirmed",
+    "research_agent_preflight_signature",
+}
+
+
 RUN_STATE_KEYS = {
     "loaded_concepts",
     "loaded_data_origin",
@@ -121,6 +132,12 @@ RUN_STATE_KEYS = {
     "_viz_notices",
     "_scroll_to_tab",
 }
+
+
+def clear_agent_continuation_state(state: MutableMapping[str, Any]) -> None:
+    """Clear resume/draft markers before opening a fresh Agent setup."""
+    for key in AGENT_CONTINUATION_STATE_KEYS:
+        state.pop(key, None)
 
 
 def _drop_many(keys: Iterable[str]) -> None:

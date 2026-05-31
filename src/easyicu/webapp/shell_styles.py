@@ -28,35 +28,39 @@ from typing import Any
 _TOKENS_PATH = Path(__file__).with_name("tokens.css")
 
 
-@lru_cache(maxsize=1)
-def _load_tokens_css() -> str:
-    """Read tokens.css once per process (cached across reruns).
+def _css_mtime_ns(path: Path) -> int:
+    """Return an mtime cache key for hot-reloaded local CSS files."""
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
 
-    Streamlit re-runs the whole script on every interaction; reading
-    this file from disk each time was a needless per-rerun cost.
+
+@lru_cache(maxsize=8)
+def _load_css_file(path_text: str, mtime_ns: int) -> str:
+    """Read a CSS file, invalidating the cache when the file changes.
+
+    Streamlit re-runs the app on every interaction, so the mtime-aware
+    cache avoids repeated reads while still making local design edits
+    visible without restarting the server.
     """
     try:
-        return _TOKENS_PATH.read_text(encoding="utf-8")
+        return Path(path_text).read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+def _load_tokens_css() -> str:
+    """Read tokens.css with mtime-aware caching."""
+    return _load_css_file(str(_TOKENS_PATH), _css_mtime_ns(_TOKENS_PATH))
 
 
 _OVERRIDES_PATH = Path(__file__).with_name("shell_overrides.css")
 
 
-@lru_cache(maxsize=1)
 def _load_shell_overrides_css() -> str:
-    """Read shell_overrides.css once per process (cached across reruns).
-
-    The Streamlit-specific re-skin lives in a sibling .css file so the
-    Python module stays small. Streamlit re-runs the whole script on
-    every interaction; the cache keeps this to a single read per
-    process.
-    """
-    try:
-        return _OVERRIDES_PATH.read_text(encoding="utf-8")
-    except OSError:
-        return ""
+    """Read shell_overrides.css with mtime-aware caching."""
+    return _load_css_file(str(_OVERRIDES_PATH), _css_mtime_ns(_OVERRIDES_PATH))
 
 
 

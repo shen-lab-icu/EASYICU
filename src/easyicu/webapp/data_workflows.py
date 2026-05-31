@@ -592,7 +592,8 @@ def validate_database_path(data_path: str, database: str, app_context: dict[str,
         msg = f'✅ {db_name}: All {total_required} required tables found ({len(parquet_files)} Parquet files{bucket_info})' if lang == 'en' else f'✅ {db_name}: 所有 {total_required} 个必需表已找到 ({len(parquet_files)} 个 Parquet 文件{bucket_info})'
         return {
             'valid': True,
-            'message': msg
+            'message': msg,
+            'resolved_path': str(path),
         }
 
     # 有表仅通过 CSV 找到（无 Parquet）→ 需要转换
@@ -601,17 +602,18 @@ def validate_database_path(data_path: str, database: str, app_context: dict[str,
         if len(csv_only_tables) > 5:
             csv_list += f' (+{len(csv_only_tables)-5} more)'
         if lang == 'en':
-            msg = f'⚠️ {db_name}: {len(csv_only_tables)} tables only found as CSV (no Parquet): {csv_list}. Click Validate & Setup to auto-convert.'
-            sug = '💡 Click "Validate & Setup" to auto-convert CSV files'
+            msg = f'⚠️ {db_name}: {len(csv_only_tables)} tables only found as CSV (no Parquet): {csv_list}. Click Convert & Setup to auto-convert.'
+            sug = '💡 Click "Convert & Setup" to auto-convert CSV files'
         else:
-            msg = f'⚠️ {db_name}: {len(csv_only_tables)} 个表仅有 CSV 格式（无 Parquet）: {csv_list}。点击「验证并设置」自动转换。'
-            sug = '💡 点击「验证并设置」自动转换 CSV 文件'
+            msg = f'⚠️ {db_name}: {len(csv_only_tables)} 个表仅有 CSV 格式（无 Parquet）: {csv_list}。点击「转换并设置」自动转换。'
+            sug = '💡 点击「转换并设置」自动转换 CSV 文件'
         return {
             'valid': False,
             'message': msg,
             'suggestion': sug,
             'can_convert': True,
             'csv_path': str(path),
+            'resolved_path': str(path),
             'download_url': download_info['url'] if download_info else None,
             'download_label': download_info['label'] if download_info else None,
             'download_note': download_info['note'] if download_info else None,
@@ -637,6 +639,7 @@ def validate_database_path(data_path: str, database: str, app_context: dict[str,
             'suggestion': sug,
             'can_convert': True,
             'csv_path': str(path),
+            'resolved_path': str(path),
             'missing_tables': missing_tables + csv_only_tables,
             'download_url': download_info['url'] if download_info else None,
             'download_label': download_info['label'] if download_info else None,
@@ -654,16 +657,17 @@ def validate_database_path(data_path: str, database: str, app_context: dict[str,
         detail_str = '; '.join(parts)
         if lang == 'en':
             msg = f'⚠️ {db_name}: {len(found_tables)}/{total_required} tables ready (Parquet), need conversion: {detail_str}'
-            sug = f'💡 Click "Validate & Setup" to auto-convert missing/CSV tables'
+            sug = f'💡 Click "Convert & Setup" to auto-convert missing/CSV tables'
         else:
             msg = f'⚠️ {db_name}: {len(found_tables)}/{total_required} 个表就绪（Parquet），需要转换: {detail_str}'
-            sug = f'💡 点击「验证并设置」自动转换缺失或CSV格式的表'
+            sug = f'💡 点击「转换并设置」自动转换缺失或CSV格式的表'
         return {
             'valid': False,
             'message': msg,
             'suggestion': sug,
             'can_convert': True,
             'csv_path': str(path),
+            'resolved_path': str(path),
             'missing_tables': all_need_convert,
             'download_url': download_info['url'] if download_info else None,
             'download_label': download_info['label'] if download_info else None,
@@ -683,13 +687,14 @@ def validate_database_path(data_path: str, database: str, app_context: dict[str,
     if len(found_csvs) >= len(required_csvs) // 2:
         # 找到 CSV 文件但没有 Parquet - 需要转换
         msg = f'⚠️ Found {db_name} raw CSV files ({len(csv_files)} files), need to convert to Parquet' if lang == 'en' else f'⚠️ 找到 {db_name} 原始 CSV 文件 ({len(csv_files)} 个)，需要转换为 Parquet 格式'
-        sug = '💡 Click "Validate & Setup" to auto-convert' if lang == 'en' else '💡 点击「验证并设置」自动转换'
+        sug = '💡 Click "Convert & Setup" to auto-convert' if lang == 'en' else '💡 点击「转换并设置」自动转换'
         return {
             'valid': False,
             'message': msg,
             'suggestion': sug,
             'can_convert': True,
             'csv_path': str(path),
+            'resolved_path': str(path),
             'download_url': download_info['url'] if download_info else None,
             'download_label': download_info['label'] if download_info else None,
             'download_note': download_info['note'] if download_info else None,
@@ -708,13 +713,14 @@ def validate_database_path(data_path: str, database: str, app_context: dict[str,
             archive_list = ', '.join(hirid_archives[:5])
             msg = (f'⚠️ {db_name}: Found archives ({archive_list}) that need extraction and conversion' if lang == 'en' else
                    f'⚠️ {db_name}: 发现归档文件 ({archive_list}) 需要解压和转换')
-            sug = '💡 Click "Validate & Setup" to auto-extract and convert' if lang == 'en' else '💡 点击「验证并设置」自动解压和转换'
+            sug = '💡 Click "Convert & Setup" to auto-extract and convert' if lang == 'en' else '💡 点击「转换并设置」自动解压和转换'
             return {
                 'valid': False,
                 'message': msg,
                 'suggestion': sug,
                 'can_convert': True,
-                'csv_path': str(path)
+                'csv_path': str(path),
+                'resolved_path': str(path),
             }
 
     # 检查是否是子目录结构
@@ -739,6 +745,7 @@ def validate_database_path(data_path: str, database: str, app_context: dict[str,
                 'valid': False,
                 'message': msg,
                 'suggestion': sug,
+                'resolved_path': str(path),
                 'download_url': download_info['url'] if download_info else None,
                 'download_label': download_info['label'] if download_info else None,
                 'download_note': download_info['note'] if download_info else None,
@@ -752,6 +759,7 @@ def validate_database_path(data_path: str, database: str, app_context: dict[str,
         'valid': False,
         'message': msg,
         'suggestion': sug,
+        'resolved_path': str(path),
         'download_url': download_info['url'] if download_info else None,
         'download_label': download_info['label'] if download_info else None,
         'download_note': download_info['note'] if download_info else None,

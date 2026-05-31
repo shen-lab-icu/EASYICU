@@ -21,6 +21,10 @@ import streamlit as st
 
 
 _ICON_SVG: dict[str, str] = {
+    "flask":    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v5.2L5.4 17a3 3 0 0 0 2.7 4.4h7.8a3 3 0 0 0 2.7-4.4L14 8.2V3"/><path d="M7.5 15h9"/></svg>',
+    "extract":  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8"/><path d="M8 13h5"/><path d="M8 17h8"/></svg>',
+    "patient":  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 10h8"/><path d="M8 14h4"/></svg>',
+    "help":     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.5 2.5 0 1 1 4.1 1.9c-.9.7-1.5 1.2-1.5 2.4"/><path d="M12 17h.01"/></svg>',
     "book":     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4.5A1.5 1.5 0 0 1 5.5 3H20v15H5.5A1.5 1.5 0 0 0 4 19.5v-15Z"/><path d="M4 19.5A1.5 1.5 0 0 0 5.5 21H20"/></svg>',
     "bars":     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-8"/><path d="M22 20v-5"/></svg>',
     "layers":   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/><path d="m3 18 9 5 9-5"/></svg>',
@@ -107,9 +111,10 @@ def render_section_label(text: str, *, hint: str = "", container=None) -> None:
 
 def render_brand_html(name: str = "EasyICU", sub: str = "ICU 数据分析平台", initials: str = "E") -> str:
     """Sidebar brand block — logo tile + name + bilingual subtitle."""
+    mark = icon("flask") or html.escape(initials)
     return (
         '<div class="eu-brand">'
-        f'<div class="logo">{html.escape(initials)}</div>'
+        f'<div class="logo">{mark}</div>'
         '<div class="text">'
         f'<span class="name">{html.escape(name)}</span>'
         f'<span class="sub">{html.escape(sub)}</span>'

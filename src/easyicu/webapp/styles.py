@@ -559,10 +559,9 @@ def render_global_styles(st: Any) -> None:
             }
         }
         /* Narrow-viewport notice. Dense charts and review tables are best on
-           wider screens, but the shell keeps the active page readable and
-           exposes a compact top navigation on phones/tablets. */
-        body::before {
-            content: "Narrow view: EasyICU keeps the current page readable here. Use a ≥1024 px window for the full sidebar workspace and dense chart comparison.";
+           wider screens, but this notice should only appear on data
+           visualization pages instead of interrupting every workflow. */
+        .eu-narrow-view-note {
             display: none;
             position: sticky;
             top: 0;
@@ -577,7 +576,7 @@ def render_global_styles(st: Any) -> None:
             text-align: center;
         }
         @media (max-width: 1024px) {
-            body::before { display: block; }
+            .eu-narrow-view-note { display: block; }
         }
         /* Tame ~6-10 px horizontal overflow from BaseWeb shadows / gradient
            borders extending past the sidebar+main containers. Cosmetic
