@@ -2,7 +2,25 @@
 
 from __future__ import annotations
 
-from typing import Any
+import html
+import re
+from typing import TYPE_CHECKING, Any, Dict
+
+if TYPE_CHECKING:
+    import pandas as pd
+    import streamlit as st
+
+    CONCEPT_GROUP_NAMES: dict[str, tuple[str, str]] = {}
+    CONCEPT_GROUPS_INTERNAL: dict[str, list[str]] = {}
+    PREVIEW_TIME_COLUMNS: tuple[str, ...] = ()
+
+    def _build_module_preview_metadata(*args: Any, **kwargs: Any) -> dict[str, Any]: ...
+
+    def _get_data_table_page_copy(lang: str) -> dict[str, str]: ...
+
+    def _get_single_feature_preview_copy(feature_name: str, lang: str) -> dict[str, str]: ...
+
+    def _select_preview_columns(*args: Any, **kwargs: Any) -> list[str]: ...
 
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
@@ -19,6 +37,39 @@ def _plain_display_label(label: str) -> str:
     while text and not (text[0].isalnum() or "\u4e00" <= text[0] <= "\u9fff"):
         text = text[1:].lstrip()
     return text or str(label or "")
+
+
+def _safe_download_slug(value: object, *, fallback: str = "table") -> str:
+    """Return a filesystem-friendly slug for deterministic preview exports."""
+    text = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    return text or fallback
+
+
+def _render_preview_csv_download(
+    df: object,
+    *,
+    module_key: str,
+    preview_key: str,
+    key: str,
+    lang: str,
+) -> None:
+    """Render an EasyICU-owned CSV download button for the currently visible preview."""
+    if not hasattr(df, "to_csv") or getattr(df, "empty", True):
+        return
+
+    file_name = (
+        f"easyicu_{_safe_download_slug(module_key, fallback='module')}_"
+        f"{_safe_download_slug(preview_key, fallback='preview')}_preview.csv"
+    )
+    label = "Download preview CSV" if lang == "en" else "下载预览 CSV"
+    st.download_button(
+        label,
+        data=df.to_csv(index=False).encode("utf-8"),
+        file_name=file_name,
+        mime="text/csv",
+        key=key,
+        type="secondary",
+    )
 
 
 def render_data_table_subtab(app_context: dict[str, Any] | None = None):
@@ -320,6 +371,13 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                         dtype_str = str(display_df[col].dtype).lower()
                         if 'bool' in dtype_str:
                             display_df[col] = display_df[col].astype(str)
+                    _render_preview_csv_download(
+                        display_df,
+                        module_key=module_key or selected_module,
+                        preview_key=selected_feature,
+                        key=f"data_table_single_feature_csv_{_safe_download_slug(selected_feature)}",
+                        lang=lang,
+                    )
                     st.dataframe(display_df, use_container_width=True, height=680)
 
                     if len(df) > max_rows:
@@ -396,6 +454,13 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                     dtype_str = str(display_merged[col].dtype).lower()
                     if 'bool' in dtype_str:
                         display_merged[col] = display_merged[col].astype(str)
+                _render_preview_csv_download(
+                    display_merged,
+                    module_key=module_key or selected_module,
+                    preview_key="merged",
+                    key=f"data_table_merged_preview_csv_{_safe_download_slug(module_key or selected_module)}",
+                    lang=lang,
+                )
                 st.dataframe(display_merged, use_container_width=True, height=680)
             else:
                 from functools import reduce
@@ -496,6 +561,13 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                             dtype_str = str(display_df[col].dtype).lower()
                             if 'bool' in dtype_str:
                                 display_df[col] = display_df[col].astype(str)
+                        _render_preview_csv_download(
+                            display_df,
+                            module_key=module_key or selected_module,
+                            preview_key="merged",
+                            key=f"data_table_merged_preview_csv_{_safe_download_slug(module_key or selected_module)}",
+                            lang=lang,
+                        )
                         with st.container(key="dt_preview_summary"):
                             summary_wrap_cols = st.columns([2.15, 1.0])
                             with summary_wrap_cols[0]:
