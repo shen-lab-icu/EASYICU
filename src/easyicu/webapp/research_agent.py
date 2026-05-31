@@ -75,7 +75,7 @@ from easyicu.webapp.llm_config import (
 )
 from easyicu.webapp.data_paths import _directory_input
 from easyicu.webapp.page_header import render_page_header
-from easyicu.webapp.session_state import clear_run_state
+from easyicu.webapp.session_state import clear_agent_continuation_state, clear_run_state
 from easyicu.webapp.ui_helpers import icon as _shell_icon
 
 
@@ -1343,6 +1343,9 @@ def _bind_workbench_state(
     progress_events: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Populate the Shell-A Workbench from a real run manifest."""
+    run_id = str(manifest.get("run_id") or run_dir.name or "").strip()
+    if run_id:
+        st.session_state["research_agent_last_run_id"] = run_id
     try:
         from easyicu.webapp.agent_workbench import build_workbench_state_from_manifest
 
@@ -4113,11 +4116,13 @@ def _render_run_history(workdir: Path) -> None:
                 type="primary",
                 use_container_width=True,
             ):
+                clear_agent_continuation_state(st.session_state)
                 _bind_workbench_state(
                     run_dir=selected_run["run_dir"],
                     manifest=manifest,
                     partial=_partial,
                 )
+                st.session_state["_active_main_page"] = "research_agent"
                 st.session_state["_ra_view"] = "workbench"
                 st.rerun()
             _render_resume_panel(
@@ -4204,6 +4209,7 @@ def render_research_agent_history_page(lang: Optional[str] = None, *, show_heade
         if not rows:
             c1, _c2 = st.columns([1.1, 5.0])
             if c1.button("Back to setup" if is_en else "返回配置", key="research_agent_history_back_empty"):
+                st.session_state["_active_main_page"] = "research_agent"
                 st.session_state["_ra_view"] = "setup"
                 st.rerun()
             return
@@ -4260,11 +4266,13 @@ def render_research_agent_history_page(lang: Optional[str] = None, *, show_heade
                 disabled=not bool(manifest),
             ):
                 if manifest:
+                    clear_agent_continuation_state(st.session_state)
                     _bind_workbench_state(
                         run_dir=selected_run["run_dir"],
                         manifest=manifest,
                         partial=partial,
                     )
+                    st.session_state["_active_main_page"] = "research_agent"
                     st.session_state["_ra_view"] = "workbench"
                     st.rerun()
         with picker_cols[2]:
@@ -4273,6 +4281,7 @@ def render_research_agent_history_page(lang: Optional[str] = None, *, show_heade
                 key=f"research_agent_history_page_setup_{safe_run_id}",
                 use_container_width=True,
             ):
+                st.session_state["_active_main_page"] = "research_agent"
                 st.session_state["_ra_view"] = "setup"
                 st.rerun()
 
@@ -4479,6 +4488,7 @@ def _render_resume_panel(
             st.session_state["research_agent_resume_relax_probe"] = bool(relax_probe)
             if prior_question:
                 st.session_state["research_agent_question"] = prior_question
+            st.session_state["_active_main_page"] = "research_agent"
             st.session_state["_ra_view"] = "setup"
             st.session_state["_research_agent_expand_history"] = False
             st.rerun()
@@ -4497,6 +4507,7 @@ def _render_resume_panel(
             st.session_state["research_agent_resume_relax_probe"] = False
             if prior_question:
                 st.session_state["research_agent_question"] = prior_question
+            st.session_state["_active_main_page"] = "research_agent"
             st.session_state["_ra_view"] = "setup"
             st.session_state["_research_agent_expand_history"] = False
             st.rerun()
@@ -5788,6 +5799,7 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
         st.error(str(exc))
         return
 
+    st.session_state["_active_main_page"] = "research_agent"
     st.session_state["_ra_view"] = "workbench"
     progress = st.empty()
     progress.info(
@@ -5953,6 +5965,7 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
             progress_events=progress_events,
         )
         if "entry_mode" in st.session_state:
+            st.session_state["_active_main_page"] = "research_agent"
             st.session_state["_ra_view"] = "workbench"
             st.rerun()
     _render_run_outputs(result, Path(result.workdir))

@@ -5567,6 +5567,74 @@ def test_settings_diagnostics_payload_omits_secrets_and_patient_rows() -> None:
     assert payload["privacy"]["patient_rows_included"] is False
 
 
+def test_settings_diagnostics_uses_visible_workbench_run_over_stale_resume(tmp_path: Path) -> None:
+    visible_run_dir = tmp_path / "run_visible"
+    visible_run_dir.mkdir()
+    stale_last_dir = tmp_path / "run_last_fallback"
+    stale_last_dir.mkdir()
+
+    payload = json.loads(
+        pages_redesign._settings_diagnostics_json(
+            {
+                "_ra_view": "workbench",
+                "_agent_workbench": {"run_id": "run_visible"},
+                "_agent_workbench_source_run_dir": str(visible_run_dir),
+                "_agent_workbench_is_active_selection": True,
+                "research_agent_resume_run_id": "run_deleted_resume",
+                "research_agent_last_run_id": "run_last_fallback",
+                "llm_provider": "openrouter",
+            },
+            lang="en",
+            workdir=str(tmp_path),
+            export_hint="/tmp/easyicu-export",
+            provider_label="OpenRouter",
+            model_label="openai/gpt-oss-120b:free",
+            base_url_label="https://openrouter.ai/api/v1",
+            provider_needs_key=True,
+            api_key_present=False,
+            agent_run_value="Ready",
+        )
+    )
+
+    assert payload["research_agent"]["last_run_id"] == "run_visible"
+
+
+def test_settings_diagnostics_ignores_deleted_resume_run(tmp_path: Path) -> None:
+    fallback_dir = tmp_path / "run_existing_last"
+    fallback_dir.mkdir()
+
+    payload = json.loads(
+        pages_redesign._settings_diagnostics_json(
+            {
+                "_ra_view": "workbench",
+                "_agent_workbench": {"run_id": "run_deleted_workbench"},
+                "_agent_workbench_source_run_dir": str(tmp_path / "run_deleted_workbench"),
+                "_agent_workbench_is_active_selection": True,
+                "research_agent_resume_run_id": "run_deleted_resume",
+                "research_agent_last_run_id": "run_existing_last",
+            },
+            lang="en",
+            workdir=str(tmp_path),
+            export_hint="/tmp/easyicu-export",
+            provider_label="OpenRouter",
+            model_label="openai/gpt-oss-120b:free",
+            base_url_label="https://openrouter.ai/api/v1",
+            provider_needs_key=True,
+            api_key_present=False,
+            agent_run_value="Ready",
+        )
+    )
+
+    assert payload["research_agent"]["last_run_id"] == "run_existing_last"
+
+
+def test_history_open_workbench_clears_resume_markers_and_records_last_run() -> None:
+    source = Path(research_agent.__file__).read_text(encoding="utf-8")
+
+    assert "clear_agent_continuation_state(st.session_state)" in source
+    assert 'st.session_state["research_agent_last_run_id"] = run_id' in source
+
+
 def test_settings_reset_request_reruns_shell_and_preserves_notice(monkeypatch) -> None:
     class _RerunRequested(Exception):
         pass
