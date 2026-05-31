@@ -1608,25 +1608,29 @@ def _inline_ai_context_payload(state, lang: str) -> dict[str, object]:
         patient_count = len(patient_ids) or inbound_rows or int(
             mock_params.get("n_patients") or state.get("demo_mode_patients") or 10
         )
-        module_count = len(loaded) or len(selected) or 19
+        feature_count = len(loaded) or len(selected)
         context_name = (
             state.get("last_export_name")
             or state.get("research_agent_case_label")
             or "sepsis_mortality_demo"
         )
         mode_label = "demo" if is_en else "演示"
-        detail = f"{mode_label} · {patient_count} stays · {module_count} modules"
+        if feature_count:
+            feature_label = f"{feature_count} features" if is_en else f"{feature_count} 个特征"
+        else:
+            feature_label = "19 modules" if is_en else "19 个模块"
+        detail = f"{mode_label} · {patient_count} stays · {feature_label}"
         tags = selected[:6] if selected else ["vitals", "labs", "sofa", "sepsis-3", "lactate", "outcomes"]
     elif patient_ids or inbound_rows or loaded:
         patient_count = len(patient_ids) or inbound_rows
-        module_count = len(loaded) or len(selected)
+        feature_count = len(loaded) or len(selected)
         context_name = (
             state.get("last_export_name")
             or state.get("research_agent_case_label")
             or ("local cohort loaded" if is_en else "已加载本地队列")
         )
         count_label = f"{patient_count} stays" if patient_count else ("cohort loaded" if is_en else "队列已加载")
-        module_label = f"{module_count} modules" if module_count else ("modules pending" if is_en else "模块待确认")
+        module_label = f"{feature_count} features" if feature_count else ("features pending" if is_en else "特征待确认")
         detail = (
             f"real data · {count_label} · {module_label}"
             if is_en else f"真实数据 · {count_label} · {module_label}"
