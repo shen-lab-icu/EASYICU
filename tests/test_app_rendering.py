@@ -3377,9 +3377,11 @@ def test_research_agent_raw_extract_defaults_to_all_modules_and_hands_off() -> N
     ]
     assert "_default_extract_module_selection(modules)" in raw_extract_source
     assert "_migrate_legacy_extract_module_selection(st.session_state, modules)" in raw_extract_source
-    assert 'st.session_state["_active_main_page"] = "extract"' in raw_extract_source
-    assert 'st.session_state["_scroll_to_tab"] = "export_progress"' in raw_extract_source
-    assert "start_export_disabled = not picked_modules or (db != \"mock\" and not data_path)" in raw_extract_source
+    assert "_queue_raw_extract_handoff(" in raw_extract_source
+    assert 'state["_active_main_page"] = "extract"' in source
+    assert 'state["_scroll_to_tab"] = "export_progress"' in source
+    assert "raw_path_exists = bool(data_path and Path(data_path).expanduser().exists())" in raw_extract_source
+    assert "start_export_disabled = not picked_modules or (db != \"mock\" and not raw_path_exists)" in raw_extract_source
     assert 'st.caption(_ra_text("start_export_needs_path"))' in raw_extract_source
 
 
@@ -5664,6 +5666,32 @@ def test_sidebar_agent_page_keeps_demo_context_when_no_manifest(monkeypatch) -> 
     assert "Last run" in html
     assert "preview" in html
     assert "Local run" not in html
+
+
+def test_sidebar_agent_rail_reports_agent_cohort_not_extraction_step(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit({
+        "_active_main_page": "research_agent",
+        "_agent_workbench": {"is_demo": True, "audit": {"counts": {}}},
+        "step2_confirmed": True,
+        "selected_concepts": ["hr", "death"],
+        "loaded_concepts": {},
+    })
+    monkeypatch.setattr(sidebar, "st", streamlit_stub)
+
+    html = sidebar._agent_state_summary_html("real", "en")
+
+    assert "Cohort" in html
+    assert "not selected" in html
+    assert "configured" not in html
+
+    streamlit_stub.session_state["research_agent_module_built"] = {
+        "df": pd.DataFrame({"stay_id": [1, 2, 3]}),
+    }
+
+    built_html = sidebar._agent_state_summary_html("real", "en")
+
+    assert "3 rows" in built_html
+    assert "not selected" not in built_html
 
 
 def test_sidebar_agent_state_uses_reviewed_warning_and_signoff(monkeypatch) -> None:

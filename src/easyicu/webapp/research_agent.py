@@ -2962,7 +2962,8 @@ def _section_cohort_picker(
             concepts.extend(modules.get(m, []))
         concepts = list(dict.fromkeys(concepts))
         st.caption(_ra_text("selected_modules", modules=len(picked_modules), concepts=len(concepts)))
-        start_export_disabled = not picked_modules or (db != "mock" and not data_path)
+        raw_path_exists = bool(data_path and Path(data_path).expanduser().exists())
+        start_export_disabled = not picked_modules or (db != "mock" and not raw_path_exists)
         if st.button(
             _ra_text("start_export"),
             type="primary",
@@ -2971,24 +2972,21 @@ def _section_cohort_picker(
             disabled=start_export_disabled,
         ):
             Path(output_dir).expanduser().mkdir(parents=True, exist_ok=True)
-            st.session_state.database = db
-            st.session_state.data_path = data_path
-            st.session_state.export_path = output_dir
-            st.session_state.selected_concepts = concepts
-            st.session_state.step3_confirmed = True
-            st.session_state.export_format = "Parquet"
-            st.session_state.patient_limit = max_patients
-            st.session_state.trigger_export = True
-            st.session_state.export_completed = False
-            st.session_state["_exporting_in_progress"] = True
-            st.session_state["_active_main_page"] = "extract"
-            st.session_state["_scroll_to_tab"] = "export_progress"
+            _queue_raw_extract_handoff(
+                st.session_state,
+                database=db,
+                data_path=data_path,
+                output_dir=output_dir,
+                concepts=concepts,
+                modules=picked_modules,
+                patient_limit=max_patients,
+            )
             st.success(_ra_text("export_queued"))
             st.rerun()
         if start_export_disabled:
             if not picked_modules:
                 st.caption(_ra_text("start_export_needs_modules"))
-            elif db != "mock" and not data_path:
+            elif db != "mock" and not raw_path_exists:
                 st.caption(_ra_text("start_export_needs_path"))
         return None, ""
 
@@ -4608,6 +4606,66 @@ def _activate_real_data_mode_from_agent(state: MutableMapping[str, Any]) -> None
     state["selected_concepts"] = []
     state["_active_main_page"] = "research_agent"
     state["_ra_view"] = "setup"
+
+
+def _queue_raw_extract_handoff(
+    state: MutableMapping[str, Any],
+    *,
+    database: str,
+    data_path: str,
+    output_dir: str,
+    concepts: list[str],
+    modules: list[str],
+    patient_limit: int,
+) -> None:
+    """Queue the shared extraction workflow from Research Agent setup.
+
+    The no-data Agent path jumps directly into the export runtime, so the
+    Data Extraction step flags must reflect the already-confirmed source,
+    cohort, and concept choices. Otherwise cancelling an export leaves the
+    user on Step 1 while the sidebar still reports Step 4-ready state.
+    """
+    is_mock = database == "mock"
+    state["entry_mode"] = "real"
+    state["database"] = database
+    state["use_mock_data"] = is_mock
+    state["data_path"] = "" if is_mock else data_path
+    state["path_validated"] = is_mock or bool(data_path and Path(data_path).expanduser().exists())
+    if is_mock:
+        state.pop("last_validated_path", None)
+    elif state["path_validated"]:
+        state["last_validated_path"] = data_path
+    state["export_path"] = output_dir
+    state["selected_concepts"] = list(concepts)
+    state["selected_groups"] = list(modules)
+    state["step1_confirmed"] = True
+    state["step2_confirmed"] = True
+    state["step3_confirmed"] = True
+    state["export_format"] = "Parquet"
+    state["patient_limit"] = int(patient_limit or 0)
+    state["export_completed"] = False
+    state["loaded_concepts"] = {}
+    state["loaded_data_origin"] = "none"
+    state["patient_ids"] = []
+    state["all_patient_count"] = 0
+    state["selected_patient"] = None
+    for key in (
+        "_skipped_modules",
+        "_overwrite_modules",
+        "_existing_modules_list",
+        "_export_conflict_pending",
+        "_export_cancel_notice",
+        "_post_export_navigation_pending",
+        "_post_export_target_panel",
+        "_post_export_guidance_dismissed",
+        "_export_success_result",
+    ):
+        state.pop(key, None)
+    state["trigger_export"] = True
+    state["_exporting_in_progress"] = True
+    state["_active_main_page"] = "extract"
+    state["_main_nav_widget"] = "extract"
+    state["_scroll_to_tab"] = "export_progress"
 
 
 def render_research_agent_demo_page(*, show_header: bool = True) -> None:

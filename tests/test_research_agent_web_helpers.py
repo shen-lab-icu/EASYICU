@@ -114,6 +114,75 @@ def test_agent_demo_to_real_mode_clears_mock_database_context() -> None:
     assert state["_ra_view"] == "setup"
 
 
+def test_raw_extract_handoff_sets_extraction_steps_and_clears_conflict_state(tmp_path: Path) -> None:
+    state: dict[str, object] = {
+        "entry_mode": "real",
+        "use_mock_data": False,
+        "database": "miiv",
+        "data_path": "/old/raw",
+        "path_validated": False,
+        "loaded_concepts": {"hr": object()},
+        "loaded_data_origin": "exported_files",
+        "patient_ids": [1, 2],
+        "all_patient_count": 2,
+        "selected_patient": 1,
+        "_skipped_modules": {"vitals"},
+        "_overwrite_modules": {"outcome"},
+        "_existing_modules_list": ["vitals", "outcome"],
+        "_export_conflict_pending": True,
+        "_export_cancel_notice": "Export stopped by user.",
+        "_post_export_navigation_pending": True,
+        "_post_export_target_panel": "Data Tables",
+        "_post_export_guidance_dismissed": True,
+        "_export_success_result": {"files": []},
+    }
+
+    ra_page._queue_raw_extract_handoff(
+        state,
+        database="mock",
+        data_path="",
+        output_dir=str(tmp_path / "easyicu_export"),
+        concepts=["hr", "death"],
+        modules=["vitals", "outcome"],
+        patient_limit=0,
+    )
+
+    assert state["entry_mode"] == "real"
+    assert state["database"] == "mock"
+    assert state["use_mock_data"] is True
+    assert state["data_path"] == ""
+    assert state["path_validated"] is True
+    assert state["step1_confirmed"] is True
+    assert state["step2_confirmed"] is True
+    assert state["step3_confirmed"] is True
+    assert state["selected_concepts"] == ["hr", "death"]
+    assert state["selected_groups"] == ["vitals", "outcome"]
+    assert state["export_format"] == "Parquet"
+    assert state["patient_limit"] == 0
+    assert state["loaded_concepts"] == {}
+    assert state["loaded_data_origin"] == "none"
+    assert state["patient_ids"] == []
+    assert state["all_patient_count"] == 0
+    assert state["selected_patient"] is None
+    for key in (
+        "_skipped_modules",
+        "_overwrite_modules",
+        "_existing_modules_list",
+        "_export_conflict_pending",
+        "_export_cancel_notice",
+        "_post_export_navigation_pending",
+        "_post_export_target_panel",
+        "_post_export_guidance_dismissed",
+        "_export_success_result",
+    ):
+        assert key not in state
+    assert state["trigger_export"] is True
+    assert state["_exporting_in_progress"] is True
+    assert state["_active_main_page"] == "extract"
+    assert state["_main_nav_widget"] == "extract"
+    assert state["_scroll_to_tab"] == "export_progress"
+
+
 def test_module_file_multiselect_defaults_reset_when_folder_changes(tmp_path: Path) -> None:
     folder_a = tmp_path / "miiv_20260427"
     folder_b = tmp_path / "eicu_20260428"
