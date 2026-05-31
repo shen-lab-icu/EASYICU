@@ -3104,6 +3104,54 @@ def _summary_bundle_icon(kind: str) -> str:
     )
 
 
+def _summary_cohort_denominators_resolved(state: dict[str, Any]) -> bool:
+    """Return whether the run carries enough cohort/table-one evidence for review.
+
+    Normal agent runs often express the denominator step as ``Table One`` or
+    ``Outcome Incidence`` rather than a literal "cohort" step. The Summary gate
+    should follow the registered evidence contract instead of a display label.
+    """
+    denominator_tokens = (
+        "cohort",
+        "cohort_locked",
+        "cohort.parquet",
+        "denominator",
+        "table_one",
+        "table one",
+        "outcome_incidence",
+        "outcome incidence",
+    )
+    steps = [s for s in state.get("steps", []) if isinstance(s, dict)]
+    for step in steps:
+        status = str(step.get("status") or "").lower()
+        if status not in _TERMINAL_OK:
+            continue
+        haystack = " ".join(
+            str(step.get(field) or "")
+            for field in ("label", "step_id", "sub", "subtitle_short")
+        ).lower()
+        if any(token in haystack for token in denominator_tokens):
+            return True
+
+    evidence = [e for e in state.get("evidence", []) if isinstance(e, dict)]
+    for rec in evidence:
+        haystack = " ".join(
+            str(rec.get(field) or "")
+            for field in (
+                "evidence_id",
+                "label",
+                "title",
+                "relative_path",
+                "path",
+                "artifact_path",
+                "file",
+            )
+        ).lower()
+        if any(token in haystack for token in denominator_tokens):
+            return True
+    return False
+
+
 def _summary_review_checks(state: dict[str, Any], lang: str) -> list[dict[str, object]]:
     if state.get("is_demo"):
         return [
@@ -3152,11 +3200,7 @@ def _summary_review_checks(state: dict[str, Any], lang: str) -> list[dict[str, o
         for finding in warning_findings
         if _finding_review_id(finding) in reviewed_ids
     )
-    cohort_ok = any(
-        "cohort" in str(step.get("label") or step.get("step_id") or "").lower()
-        and str(step.get("status") or "").lower() in _TERMINAL_OK
-        for step in steps
-    )
+    cohort_ok = _summary_cohort_denominators_resolved(state)
     findings_reviewed = not error_findings and reviewed_warnings == len(warning_findings)
     findings_status = (
         _T(lang, "error unresolved", "错误未处理")
