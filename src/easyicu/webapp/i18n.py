@@ -384,7 +384,7 @@ TEXTS = {
         'ra_download_md': 'Download manuscript (.md)',
         'ra_download_tex': 'Download manuscript (.tex)',
         'ra_handoff_button': 'Send this cohort to Research Agent',
-        'ra_handoff_success': 'Sent a {rows:,}-row stay-level cohort to Research Agent. Open the Research Agent tab to continue.',
+        'ra_handoff_success': 'Sent a {rows:,}-row stay-level cohort to Research Agent setup.',
         'ra_handoff_error': 'Could not build a stay-level cohort from the currently loaded concepts.',
         'ra_handoff_hint': 'Use the currently loaded {concepts} concept(s) and {patients} patient(s) as a Research Agent cohort without exporting/re-uploading.',
     },
@@ -765,7 +765,7 @@ TEXTS = {
         'ra_download_md': '下载文章 (.md)',
         'ra_download_tex': '下载文章 (.tex)',
         'ra_handoff_button': '发送当前队列到研究智能体',
-        'ra_handoff_success': '已向研究智能体发送 {rows:,} 行 stay-level 队列。打开研究智能体标签页即可继续。',
+        'ra_handoff_success': '已向研究智能体配置页发送 {rows:,} 行 stay-level 队列。',
         'ra_handoff_error': '无法从当前加载的概念构建 stay-level 队列。',
         'ra_handoff_hint': '无需导出或重新上传，直接把当前已加载的 {concepts} 个概念、{patients} 位患者作为研究智能体队列。',
     }

@@ -1219,7 +1219,8 @@ def test_research_agent_shell_header_precedes_view_tabs() -> None:
 
     assert 'def _render_research_agent_reference_header(lang: str, *, view: str = "setup")' in app_source
     assert "state_is_demo = bool(state.get(\"is_demo\"))" in app_source
-    assert "is_static_guide = entry_is_demo if state_is_demo is None else state_is_demo" in app_source
+    assert "handoff_setup_ready = _research_agent_handoff_setup_ready(st.session_state)" in app_source
+    assert "is_static_guide = (entry_is_demo and not handoff_setup_ready) if state_is_demo is None else state_is_demo" in app_source
     assert 'if view == "history":' in app_source
     assert "local history" in app_source
     assert "eu-ra-reference-header" in app_source
@@ -1232,8 +1233,9 @@ def test_research_agent_shell_header_precedes_view_tabs() -> None:
     assert "render_agent_output_summary(lang, show_header=False)" in agent_branch
     assert "render_research_agent_history_page(lang, show_header=False)" in agent_branch
     assert "_draft_resume_pending = bool(" in agent_branch
+    assert "_handoff_setup_pending = _research_agent_handoff_setup_ready(st.session_state)" in agent_branch
     assert "research_agent_force_manuscript" in agent_branch
-    assert "entry_mode') == 'demo' and not _draft_resume_pending" in agent_branch
+    assert "and not _handoff_setup_pending" in agent_branch
     assert "render_research_agent_page(show_header=False)" in agent_branch
     assert "render_research_agent_demo_page(show_header=False)" in agent_branch
     assert "st-key-_eu_ra_tabs" in css

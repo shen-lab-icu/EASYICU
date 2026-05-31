@@ -403,6 +403,72 @@ class _FakeColumn:
         return False
 
 
+def test_research_agent_handoff_from_demo_enters_setup(monkeypatch) -> None:
+    class _RerunRequested(RuntimeError):
+        pass
+
+    class _HandoffStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "language": "en",
+                "entry_mode": "demo",
+                "loaded_concepts": {
+                    "hr": pd.DataFrame({
+                        "stay_id": [1, 1, 2],
+                        "charttime": pd.to_datetime([
+                            "2026-01-01 00:00",
+                            "2026-01-01 01:00",
+                            "2026-01-01 00:00",
+                        ]),
+                        "value": [80, 82, 90],
+                    }),
+                    "death": pd.DataFrame({
+                        "stay_id": [1, 2],
+                        "death": [0, 1],
+                    }),
+                },
+                "patient_ids": [1, 2],
+                "id_col": "stay_id",
+                "research_agent_preflight_confirmed": True,
+                "research_agent_preflight_signature": "old",
+            }
+
+        def columns(self, _spec):
+            return [_FakeColumn(), _FakeColumn()]
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def button(self, label, **kwargs) -> bool:
+            return label == i18n.TEXTS["en"]["ra_handoff_button"] and kwargs["key"] == "ra_handoff_unit"
+
+        def error(self, *_args, **_kwargs) -> None:
+            raise AssertionError("handoff should not error")
+
+        def rerun(self) -> None:
+            raise _RerunRequested()
+
+    streamlit_stub = _HandoffStreamlit()
+    monkeypatch.setattr(app, "st", streamlit_stub)
+
+    with pytest.raises(_RerunRequested):
+        app._render_research_agent_handoff("Loaded concepts", "en", key_suffix="unit")
+
+    state = streamlit_stub.session_state
+    inbound = state["research_agent_inbound_cohort"]
+    assert isinstance(inbound, pd.DataFrame)
+    assert len(inbound) == 2
+    assert set(inbound.columns) >= {"stay_id", "hr", "death"}
+    assert state["research_agent_inbound_cohort_label"] == "Loaded concepts"
+    assert state["research_agent_cohort_source"] == i18n.TEXTS["en"]["ra_source_handoff"]
+    assert state["_eu_ra_force_setup_from_handoff"] is True
+    assert state["_ra_view"] == "setup"
+    assert state["research_agent_preflight_confirmed"] is False
+    assert "research_agent_preflight_signature" not in state
+    assert app._research_agent_handoff_setup_ready(state) is True
+    assert "Research Agent setup" in state["_eu_ra_handoff_success_message"]
+
+
 def test_directory_input_does_not_redeclare_widget_value_for_existing_state(monkeypatch) -> None:
     class _DirectoryInputStreamlit:
         def __init__(self) -> None:
