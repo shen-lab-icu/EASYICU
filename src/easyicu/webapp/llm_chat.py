@@ -19,6 +19,7 @@ import ast
 import html
 import os
 import re
+from collections.abc import MutableMapping
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -35,6 +36,7 @@ from easyicu.webapp.llm_config import (
     public_provider_defaults,
     public_provider_keys,
 )
+from easyicu.webapp.session_state import clear_agent_continuation_state
 
 _FEATURE_COUNT = len(get_all_concepts())
 
@@ -1686,6 +1688,46 @@ def _render_inline_ai_blocked_state(lang: str, *, enabled: bool) -> None:
     )
 
 
+def _latest_ai_handoff_question(state: MutableMapping[str, object]) -> str:
+    """Return the most recent assistant-side user request worth seeding."""
+    pending = str(state.get("_ai_pending_question") or "").strip()
+    if pending:
+        return pending[:1200]
+
+    messages = state.get("llm_messages")
+    if isinstance(messages, list):
+        for message in reversed(messages):
+            if not isinstance(message, dict):
+                continue
+            if str(message.get("role") or "").lower() != "user":
+                continue
+            content = str(message.get("content") or "").strip()
+            if content:
+                return content[:1200]
+    return ""
+
+
+def _prepare_research_agent_handoff_from_ai(state: MutableMapping[str, object]) -> bool:
+    """Route AI Assistant to Agent setup and seed the question when safe."""
+    clear_agent_continuation_state(state)
+    seeded = False
+    if not str(state.get("research_agent_question") or "").strip():
+        handoff_question = _latest_ai_handoff_question(state)
+        if handoff_question:
+            state["research_agent_question"] = handoff_question
+            state["_research_agent_question_handoff_notice"] = True
+            seeded = True
+
+    state["_active_main_page"] = "research_agent"
+    state["_ra_view"] = "setup"
+    state["_scroll_to_top"] = True
+    state["_inline_ai_panel_open"] = False
+    state["_floating_ai_open"] = False
+    state["_sidebar_ai_open"] = False
+    state.pop("_ai_pending_question", None)
+    return seeded
+
+
 def _render_inline_ai_context_and_handoff(lang: str) -> None:
     is_en = lang == "en"
     st.markdown(_inline_ai_context_html(lang), unsafe_allow_html=True)
@@ -1714,12 +1756,7 @@ def _render_inline_ai_context_and_handoff(lang: str) -> None:
             icon=":material/smart_toy:",
             use_container_width=True,
         ):
-            st.session_state["_active_main_page"] = "research_agent"
-            st.session_state["_ra_view"] = "setup"
-            st.session_state["_scroll_to_top"] = True
-            st.session_state["_inline_ai_panel_open"] = False
-            st.session_state["_floating_ai_open"] = False
-            st.session_state.pop("_ai_pending_question", None)
+            _prepare_research_agent_handoff_from_ai(st.session_state)
             st.rerun()
     with col_b:
         if st.button(

@@ -3180,6 +3180,73 @@ def test_open_embedded_ai_assistant_targets_standalone_page() -> None:
     assert state["_ai_pending_question"] == "How should I configure SOFA?"
 
 
+def test_ai_assistant_handoff_seeds_research_agent_question_without_overwriting() -> None:
+    state: dict[str, object] = {
+        "_ai_pending_question": "Does first-24h lactate improve sepsis mortality prediction?",
+        "_inline_ai_panel_open": True,
+        "_floating_ai_open": True,
+        "_sidebar_ai_open": True,
+        "research_agent_resume_run_id": "run_old",
+        "research_agent_preflight_confirmed": True,
+    }
+
+    seeded = llm_chat._prepare_research_agent_handoff_from_ai(state)
+
+    assert seeded is True
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
+    assert state["_scroll_to_top"] is True
+    assert state["research_agent_question"] == (
+        "Does first-24h lactate improve sepsis mortality prediction?"
+    )
+    assert state["_research_agent_question_handoff_notice"] is True
+    assert "_ai_pending_question" not in state
+    assert "research_agent_resume_run_id" not in state
+    assert "research_agent_preflight_confirmed" not in state
+    assert state["_inline_ai_panel_open"] is False
+    assert state["_floating_ai_open"] is False
+    assert state["_sidebar_ai_open"] is False
+
+    existing_state: dict[str, object] = {
+        "research_agent_question": "Keep this manually edited Agent question.",
+        "llm_messages": [
+            {"role": "assistant", "content": "I can help."},
+            {"role": "user", "content": "Replace this if overwrite were allowed."},
+        ],
+    }
+
+    seeded_existing = llm_chat._prepare_research_agent_handoff_from_ai(existing_state)
+
+    assert seeded_existing is False
+    assert existing_state["research_agent_question"] == "Keep this manually edited Agent question."
+    assert "_research_agent_question_handoff_notice" not in existing_state
+
+
+def test_topbar_assistant_open_agent_reuses_ai_handoff_seed() -> None:
+    state: dict[str, object] = {
+        "_eu_topbar_run_request": {"page": "assistant"},
+        "_active_main_page": "assistant",
+        "llm_messages": [
+            {"role": "assistant", "content": "Let's frame the cohort."},
+            {"role": "user", "content": "Does SOFA-2 trajectory predict ICU mortality?"},
+        ],
+        "research_agent_preflight_confirmed": True,
+    }
+
+    result = app._consume_topbar_run_request(state, "assistant", "en")
+
+    assert result == {
+        "level": "info",
+        "message": "Opened Research Agent setup with the latest assistant question.",
+    }
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
+    assert state["research_agent_question"] == "Does SOFA-2 trajectory predict ICU mortality?"
+    assert state["_research_agent_question_handoff_notice"] is True
+    assert "research_agent_preflight_confirmed" not in state
+    assert "_ai_pending_question" not in state
+
+
 def test_research_agent_external_llm_opt_in_defers_sidebar_toggle_sync() -> None:
     source = Path(research_agent.__file__).read_text(encoding="utf-8")
     opt_in_start = source.index("external_llm_selected =")
