@@ -3479,6 +3479,11 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
     assert "Review the current run contract" in ra_source
     assert "ra-preflight-steps" in ra_source
     assert "Confirm launch review" in ra_source
+    assert "ra-context-policy" in ra_source
+    assert "disable_icu_context = False" in ra_source
+    assert "research_agent_disable_icu" not in ra_source
+    assert "Disable ICU-aware context" not in ra_source
+    assert ".ra-context-policy" in css_source
     assert "llm_ready, llm_issue = _llm_run_readiness" in page_source
     assert "preview_signature = _preflight_signature(preview_contract)" in page_source
     assert 'st.session_state["research_agent_preflight_confirmed"] = False' in page_source

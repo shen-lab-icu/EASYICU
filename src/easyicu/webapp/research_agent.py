@@ -10,8 +10,8 @@ or end user click through the full ICU-aware research-agent pipeline:
    method — e.g. SOFA-2 vs mortality association, vasopressor target-trial
    emulation; *not* a generic data-science skill) from the registry, or
    choose the canonical "free-form question" mode.
-3. Optionally turn on the ICU-aware context (default) or the naive
-   ablation arm (T1.4) for live A/B comparison.
+3. Run the ICU-aware context by default. The historical naive ablation
+   remains a CLI-only benchmark path, not a web UI option.
 4. Hit *Run* — the page invokes
    :class:`ResearchAgentPipeline.run` and streams progress + the
    resulting ``results_report.md``, bound manuscript scaffold,
@@ -3622,15 +3622,19 @@ def _default_research_agent_workdir() -> str:
 
 
 def _section_options() -> Tuple[bool, str, bool]:
-    cols = st.columns(3)
+    cols = st.columns([1.05, 1, 1.35])
     default_workdir = _default_research_agent_workdir()
     _hide_prefilled_directory_text("research_agent_workdir", default_workdir)
     with cols[0]:
-        disable_icu_context = st.checkbox(
-            _ra_text("disable_context"),
-            value=False,
-            help=_ra_text("disable_context_help"),
-            key="research_agent_disable_icu",
+        disable_icu_context = False
+        st.markdown(
+            f"""
+            <div class="ra-context-policy">
+              <b>{html.escape(_ra_text("context_policy"))}</b>
+              <span>{html.escape(_ra_text("context_policy_help"))}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
     with cols[1]:
         stop_options = [_ra_text("stop_analysis"), _ra_text("stop_manuscript")]
