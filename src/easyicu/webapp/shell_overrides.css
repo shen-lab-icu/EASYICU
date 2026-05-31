@@ -236,8 +236,23 @@ footer { display: none !important; }
   -webkit-text-fill-color: var(--ink-4) !important;
   opacity: 1 !important;
 }
+.stApp .stButton > button[kind="primary"]:disabled,
+.stApp button[data-testid="stBaseButton-primary"]:disabled,
+.stApp [data-testid="stBaseButton-primary"]:disabled {
+  background: var(--surface-2) !important;
+  border-color: var(--hair) !important;
+  color: var(--ink-4) !important;
+  -webkit-text-fill-color: var(--ink-4) !important;
+  opacity: 1 !important;
+}
 .stApp button:disabled *,
 .stApp [data-testid^="stBaseButton"]:disabled * {
+  color: var(--ink-4) !important;
+  -webkit-text-fill-color: var(--ink-4) !important;
+}
+.stApp .stButton > button[kind="primary"]:disabled *,
+.stApp button[data-testid="stBaseButton-primary"]:disabled *,
+.stApp [data-testid="stBaseButton-primary"]:disabled * {
   color: var(--ink-4) !important;
   -webkit-text-fill-color: var(--ink-4) !important;
 }

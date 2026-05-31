@@ -2509,6 +2509,20 @@ def test_validate_data_path_is_accent_secondary_action() -> None:
     assert "stBaseButton-primary" not in validate_css
 
 
+def test_disabled_primary_buttons_use_disabled_visual_state() -> None:
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert '.stApp .stButton > button[kind="primary"]:disabled' in css_text
+    assert '.stApp button[data-testid="stBaseButton-primary"]:disabled' in css_text
+    disabled_primary_css = css_text[
+        css_text.index('.stApp .stButton > button[kind="primary"]:disabled'):
+        css_text.index('.stApp button:disabled *')
+    ]
+    assert "background: var(--surface-2)" in disabled_primary_css
+    assert "border-color: var(--hair)" in disabled_primary_css
+    assert "color: var(--ink-4)" in disabled_primary_css
+
+
 def test_convertible_path_messages_match_convert_setup_button_label() -> None:
     source = Path(data_workflows.__file__).read_text(encoding="utf-8")
 
