@@ -4432,13 +4432,11 @@ def main():
             # render only a live/imported manifest, never a synthetic demo queue.
             _default_ra_view = 'setup'
             _ra_view = st.session_state.get('_ra_view', _default_ra_view)
-            _render_research_agent_reference_header(lang, view=_ra_view)
             with st.container(key="_eu_ra_tabs"):
                 _seg_l, _seg_m, _seg_h, _seg_r, _ = st.columns([1.15, 1.35, 1.15, 1.15, 5.2])
                 with _seg_l:
                     if st.button(
                         "Setup" if lang == 'en' else "配置",
-                        icon=":material/tune:",
                         key="_eu_ra_view_setup", use_container_width=True,
                         type="primary" if _ra_view == 'setup' else "secondary",
                     ):
@@ -4447,7 +4445,6 @@ def main():
                 with _seg_m:
                     if st.button(
                         "Workbench" if lang == 'en' else "工作台",
-                        icon=":material/view_kanban:",
                         key="_eu_ra_view_workbench", use_container_width=True,
                         type="primary" if _ra_view == 'workbench' else "secondary",
                     ):
@@ -4456,7 +4453,6 @@ def main():
                 with _seg_h:
                     if st.button(
                         "History" if lang == 'en' else "历史",
-                        icon=":material/history:",
                         key="_eu_ra_view_history", use_container_width=True,
                         type="primary" if _ra_view == 'history' else "secondary",
                     ):
@@ -4465,12 +4461,12 @@ def main():
                 with _seg_r:
                     if st.button(
                         "Summary" if lang == 'en' else "总览",
-                        icon=":material/verified_user:",
                         key="_eu_ra_view_summary", use_container_width=True,
                         type="primary" if _ra_view == 'summary' else "secondary",
                     ):
                         st.session_state['_ra_view'] = 'summary'
                         st.rerun()
+            _render_research_agent_reference_header(lang, view=_ra_view)
 
             _ra_handoff_success = st.session_state.pop("_eu_ra_handoff_success_message", "")
             if _ra_handoff_success:

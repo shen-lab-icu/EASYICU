@@ -7089,11 +7089,12 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   z-index: 1 !important;
 }
 .stApp .eu-design-page-header.eu-ra-reference-header {
-  margin: 0 0 14px !important;
-  padding: 8px 0 12px !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
+  margin: 0 0 18px !important;
+  padding: 16px 18px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
 }
 .stApp .app-page-kicker {
   color: var(--ink-4) !important;
@@ -12574,39 +12575,38 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 /* Final Agent tab override.
    This lives at the end of the file because Streamlit's primary/secondary
    button rules are injected after many of our component rules. Desktop follows
-   the polished prototype: quiet underline tabs below the Agent header. */
+   the Claude handoff reference: pill tabs above the Agent identity card. */
 .stApp .stElementContainer[class*="st-key-_eu_ra_view_"] .stButton > button,
 .stApp .stElementContainer[class*="st-key-_eu_ra_view_"] button {
   min-height: 36px !important;
   height: 36px !important;
-  padding: 0 12px 8px !important;
-  border: 0 !important;
-  border-bottom: 2px solid transparent !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  background-color: transparent !important;
+  padding: 0 16px !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--hair-2)) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  background-color: var(--surface) !important;
   box-shadow: none !important;
-  color: var(--ink-3) !important;
-  -webkit-text-fill-color: var(--ink-3) !important;
-  font-size: 12.5px !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+  font-size: 12.75px !important;
   font-weight: 500 !important;
   justify-content: center !important;
 }
 .stApp .stElementContainer[class*="st-key-_eu_ra_view_"] .stButton > button:hover,
 .stApp .stElementContainer[class*="st-key-_eu_ra_view_"] button:hover {
-  border-bottom-color: var(--hair-3) !important;
-  background: transparent !important;
-  background-color: transparent !important;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--hair-3)) !important;
+  background: color-mix(in srgb, var(--accent-soft) 42%, var(--surface)) !important;
+  background-color: color-mix(in srgb, var(--accent-soft) 42%, var(--surface)) !important;
   color: var(--ink) !important;
   -webkit-text-fill-color: var(--ink) !important;
 }
 .stApp .stElementContainer[class*="st-key-_eu_ra_view_"] .stButton > button[data-testid="stBaseButton-primary"],
 .stApp .stElementContainer[class*="st-key-_eu_ra_view_"] button[data-testid="stBaseButton-primary"] {
-  border-bottom-color: var(--ink) !important;
-  background: transparent !important;
-  background-color: transparent !important;
-  color: var(--ink) !important;
-  -webkit-text-fill-color: var(--ink) !important;
+  border-color: var(--ink) !important;
+  background: var(--ink) !important;
+  background-color: var(--ink) !important;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
   font-weight: 600 !important;
 }
 .stApp .stElementContainer[class*="st-key-_eu_ra_view_"] .stButton > button *,
@@ -12616,15 +12616,15 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 }
 
 .stApp [class*="st-key-_eu_ra_tabs"] {
-  margin: 0 0 20px !important;
-  border-bottom: 1px solid var(--hair) !important;
+  margin: 18px 0 0 !important;
+  border-bottom: 0 !important;
 }
 .stApp [class*="st-key-_eu_ra_tabs"] [data-testid="stHorizontalBlock"] {
   display: flex !important;
   flex-direction: row !important;
   flex-wrap: nowrap !important;
   align-items: center !important;
-  gap: 8px !important;
+  gap: 14px !important;
 }
 .stApp [class*="st-key-_eu_ra_tabs"] [data-testid="stColumn"] {
   flex: 0 0 auto !important;
