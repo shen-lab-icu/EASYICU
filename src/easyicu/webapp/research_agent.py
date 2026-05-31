@@ -3307,9 +3307,21 @@ def _section_method_preferences(
     st.caption(headline)
     st.info(hint)
 
+    preference_widget_keys = [
+        "research_agent_method_preferences_text",
+        "research_agent_evaluation_focus",
+        "research_agent_subgroup_sensitivity",
+        "research_agent_timing_design",
+        "research_agent_data_constraints",
+        "research_agent_must_have_outputs",
+        "research_agent_covariates",
+        "research_agent_extra_notes",
+    ]
+    for widget_key in preference_widget_keys:
+        st.session_state.setdefault(widget_key, "")
+
     method_pref = st.text_area(
         _ra_text("methods_freeform"),
-        value=st.session_state.get("research_agent_method_preferences_text", ""),
         height=90,
         key="research_agent_method_preferences_text",
         help=_ra_text("methods_help"),
@@ -3317,35 +3329,30 @@ def _section_method_preferences(
     )
     evaluation_focus = st.text_area(
         _ra_text("evaluation_focus"),
-        value=st.session_state.get("research_agent_evaluation_focus", ""),
         height=80,
         key="research_agent_evaluation_focus",
         help=_ra_text("evaluation_focus_help"),
     )
     subgroup_sensitivity = st.text_area(
         _ra_text("subgroup_sensitivity"),
-        value=st.session_state.get("research_agent_subgroup_sensitivity", ""),
         height=80,
         key="research_agent_subgroup_sensitivity",
         help=_ra_text("subgroup_sensitivity_help"),
     )
     timing_design = st.text_area(
         _ra_text("timing_design"),
-        value=st.session_state.get("research_agent_timing_design", ""),
         height=80,
         key="research_agent_timing_design",
         help=_ra_text("timing_design_help"),
     )
     data_constraints = st.text_area(
         _ra_text("data_constraints"),
-        value=st.session_state.get("research_agent_data_constraints", ""),
         height=70,
         key="research_agent_data_constraints",
         help=_ra_text("data_constraints_help"),
     )
     must_have_outputs = st.text_area(
         _ra_text("must_have_outputs"),
-        value=st.session_state.get("research_agent_must_have_outputs", ""),
         height=70,
         key="research_agent_must_have_outputs",
         help=_ra_text("must_have_outputs_help"),
@@ -3371,13 +3378,11 @@ def _section_method_preferences(
     if family in covariate_families:
         covariates = st.text_input(
             _ra_text("covariates"),
-            value=st.session_state.get("research_agent_covariates", ""),
             key="research_agent_covariates",
             placeholder=covariate_placeholders.get(family, ""),
         )
     extra = st.text_area(
         _ra_text("extra_notes"),
-        value="",
         height=80,
         key="research_agent_extra_notes",
     )

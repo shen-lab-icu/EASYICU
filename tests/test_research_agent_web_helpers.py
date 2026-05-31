@@ -1017,6 +1017,31 @@ def test_research_agent_question_widget_uses_session_state_without_duplicate_def
     assert 'value=st.session_state.get("research_agent_question", "")' not in request_source
 
 
+def test_research_agent_method_widgets_use_session_state_without_duplicate_defaults() -> None:
+    source = Path(ra_page.__file__).read_text(encoding="utf-8")
+    preferences_source = source[
+        source.index("def _section_method_preferences"):
+        source.index("def _section_llm_picker")
+    ]
+
+    for key in (
+        "research_agent_method_preferences_text",
+        "research_agent_evaluation_focus",
+        "research_agent_subgroup_sensitivity",
+        "research_agent_timing_design",
+        "research_agent_data_constraints",
+        "research_agent_must_have_outputs",
+        "research_agent_covariates",
+        "research_agent_extra_notes",
+    ):
+        assert f'"{key}"' in preferences_source
+    assert "preference_widget_keys" in preferences_source
+    assert "st.session_state.setdefault(widget_key, \"\")" in preferences_source
+    assert "value=st.session_state.get(\"research_agent_method_preferences_text\"" not in preferences_source
+    assert "value=st.session_state.get(\"research_agent_evaluation_focus\"" not in preferences_source
+    assert 'value=""' not in preferences_source
+
+
 def test_summary_reference_uses_manifest_evidence_total_and_icons() -> None:
     state = {
         "run_id": "run_demo",
