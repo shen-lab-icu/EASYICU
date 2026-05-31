@@ -6069,6 +6069,12 @@ def test_sidebar_settings_gear_opens_full_settings_page() -> None:
     assert "def _settings_outbound_model_calls_changed" in pages_text
     assert "_settings_outbound_model_calls_changed()\n                st.rerun()" in pages_text
     llm_settings_source = Path(llm_chat.__file__).read_text(encoding="utf-8")
+    assert "provider_changed = provider != current_provider" in llm_settings_source
+    assert 'st.session_state["_llm_base_url_inp"] = default_url' in llm_settings_source
+    assert "st.rerun()" in llm_settings_source[
+        llm_settings_source.index("if provider_changed:"):
+        llm_settings_source.index("desc = p_info")
+    ]
     assert "Shared outbound calls are on; Research Agent still shows a per-run disclosure gate." in llm_settings_source
     assert "Provider details can be prepared here; calls still require the shared outbound toggle." in llm_settings_source
     assert "render_llm_settings(" in pages_text
@@ -6085,7 +6091,10 @@ def test_sidebar_settings_gear_opens_full_settings_page() -> None:
     assert "eu-display-preferences" in app_text
     assert "data-reduce-motion" in app_text
     assert 'state["_llm_provider_sel"] = "easyicu_hosted"' in pages_text
-    assert 'state["_llm_provider_sel"] = "openrouter"' in pages_text
+    assert 'state["_llm_provider_sel"] = external_provider' in settings_external_model_source
+    assert 'state["llm_base_url"] = external_base_url' in settings_external_model_source
+    assert 'state["llm_model"] = external_model' in settings_external_model_source
+    assert 'state["_llm_api_key_inp"] = ""' in settings_external_model_source
     assert 'state["_eu_settings_allow_outbound_model_calls"]' not in settings_external_model_source
     assert "Hosted (assistant)" in pages_text
     assert "gpt-oss · local" not in pages_text

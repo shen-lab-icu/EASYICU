@@ -1204,9 +1204,20 @@ def _render_llm_settings_controls(
         format_func=lambda k: public_provider_defaults(k)[0],
         key="_llm_provider_sel",
     )
+    provider_changed = provider != current_provider
     st.session_state.llm_provider = provider
 
     p_info = public_provider_defaults(provider)
+    if provider_changed:
+        _, default_url, default_model, _, _, _ = p_info
+        st.session_state.llm_api_key = ""
+        st.session_state.llm_base_url = default_url
+        st.session_state.llm_model = default_model
+        st.session_state["_llm_api_key_inp"] = ""
+        st.session_state["_llm_base_url_inp"] = default_url
+        st.session_state["_llm_model_inp"] = default_model
+        st.session_state.llm_configured = False
+        st.rerun()
     desc = p_info[4] if lang == "en" else p_info[5]
     st.caption(desc)
 

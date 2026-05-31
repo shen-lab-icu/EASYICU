@@ -1699,11 +1699,21 @@ def render_settings_redesign_page(lang: str) -> None:
                     type="primary" if not hosted_model_active else "secondary",
                     use_container_width=True,
                 ):
-                    if str(state.get("llm_provider") or "") == "easyicu_hosted":
-                        state["llm_provider"] = "openrouter"
-                        state["_llm_provider_sel"] = "openrouter"
-                        state["_llm_base_url_inp"] = ""
-                        state["_llm_model_inp"] = ""
+                    external_provider = "openrouter" if str(state.get("llm_provider") or "") == "easyicu_hosted" else provider_key
+                    _, external_base_url, external_model, _, _, _ = public_provider_defaults(external_provider)
+                    _, hosted_base_url, hosted_model, _, _, _ = public_provider_defaults("easyicu_hosted")
+                    state["llm_provider"] = external_provider
+                    state["_llm_provider_sel"] = external_provider
+                    if str(state.get("llm_base_url") or "") in {"", hosted_base_url}:
+                        state["llm_base_url"] = external_base_url
+                        state["_llm_base_url_inp"] = external_base_url
+                    if str(state.get("llm_model") or "") in {"", hosted_model}:
+                        state["llm_model"] = external_model
+                        state["_llm_model_inp"] = external_model
+                    if str(state.get("llm_provider") or "") != "easyicu_hosted":
+                        state["llm_api_key"] = ""
+                        state["_llm_api_key_inp"] = ""
+                        state["llm_configured"] = False
                     st.rerun()
             st.markdown(
                 '<div class="eu-settings-route-note">'
