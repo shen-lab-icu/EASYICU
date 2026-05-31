@@ -1164,11 +1164,18 @@ def _render_llm_settings_controls(
         ) if lang == "en" else (
             "已允许模型端调用" if enabled else "模型端调用已关闭"
         )
-        detail = (
-            "Provider details can be prepared here; calls still require the shared outbound toggle."
-            if lang == "en" else
-            "可以先准备服务商配置；是否允许调用由上方共享开关控制。"
-        )
+        if enabled:
+            detail = (
+                "Shared outbound calls are on; Research Agent still shows a per-run disclosure gate."
+                if lang == "en" else
+                "共享模型调用已开启；Research Agent 仍会显示单次运行披露关口。"
+            )
+        else:
+            detail = (
+                "Provider details can be prepared here; calls still require the shared outbound toggle."
+                if lang == "en" else
+                "可以先准备服务商配置；是否允许调用由上方共享开关控制。"
+            )
         klass = "on" if enabled else "off"
         st.markdown(
             f"""

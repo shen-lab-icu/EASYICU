@@ -5372,12 +5372,17 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert 'key="_eu_settings_density_compact"' in page_source
     assert 'key="_eu_settings_reduce_motion"' in page_source
     assert "def _settings_reduce_motion_changed" in page_source
+    assert 'if bool(state.get("_eu_settings_allow_outbound_model_calls", False)) != outbound_enabled:' in page_source
+    assert "_settings_outbound_model_calls_changed()\n                st.rerun()" in page_source
     assert "st-key-_eu_settings_density_" in css_text
     assert "st-key-_eu_settings_reduce_motion" in css_text
     assert "_route_to_research_agent_setup(\n                st.session_state," in page_source
     assert "_route_to_research_agent_setup(state, force_real=True)" in page_source
+    assert 'state["_eu_ra_focus_options"] = True' in page_source
     assert "focus_module_folder=True" in page_source
     assert "_eu_ra_focus_module_folder" in Path(research_agent.__file__).read_text(encoding="utf-8")
+    assert 'pop("_eu_ra_focus_options", False)' in Path(research_agent.__file__).read_text(encoding="utf-8")
+    assert "expanded=focus_options" in Path(research_agent.__file__).read_text(encoding="utf-8")
     assert '"Pick an EasyICU module export folder"' in page_source
     assert "Release notes" in page_source
     assert "Documentation" in page_source
@@ -5409,6 +5414,14 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
         "llm_model": "custom-model",
         "llm_base_url": "https://example.invalid/v1",
         "llm_configured": True,
+        "_eu_settings_allow_outbound_model_calls": True,
+        "_eu_settings_reduce_motion": True,
+        "ui_density": "compact",
+        "reduce_motion": True,
+        "_llm_provider_sel": "openrouter",
+        "_llm_api_key_inp": "sk-test",
+        "_llm_base_url_inp": "https://example.invalid/v1",
+        "_llm_model_inp": "custom-model",
         "data_path": "/tmp/old-real-source",
         "path_validated": True,
         "last_validated_path": "/tmp/old-real-source",
@@ -5431,6 +5444,7 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
         "_eu_ra_module_pick_force_manual": True,
         "_eu_ra_apply_export_file_selection": True,
         "_eu_wb_findings_acked": {"finding-a"},
+        "_eu_wb_findings_acked_run_dir": "/tmp/run_old",
         "_eu_wb_review_details_expanded": True,
         "_eu_wb_action_panel": "plan",
         "_eu_summary_review_note_run_20260531T121512_3a91c8": "stale note",
@@ -5467,6 +5481,14 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert state["llm_configured"] is False
     assert state["_llm_toggle"] is False
     assert state["_llm_toggle_sync_pending"] is True
+    assert state["_eu_settings_allow_outbound_model_calls"] is False
+    assert state["_eu_settings_reduce_motion"] is False
+    assert state["ui_density"] == "comfortable"
+    assert state["reduce_motion"] is False
+    assert state["_llm_provider_sel"] == state["llm_provider"]
+    assert state["_llm_api_key_inp"] == ""
+    assert state["_llm_base_url_inp"] == ""
+    assert state["_llm_model_inp"] == ""
     assert state["data_path"] is None
     assert state["path_validated"] is False
     assert "last_validated_path" not in state
@@ -5496,6 +5518,7 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
         "_eu_ra_module_pick_force_manual",
         "_eu_ra_apply_export_file_selection",
         "_eu_wb_findings_acked",
+        "_eu_wb_findings_acked_run_dir",
         "_eu_wb_review_details_expanded",
         "_eu_wb_action_panel",
         "_eu_summary_review_note_run_20260531T121512_3a91c8",
@@ -6044,6 +6067,10 @@ def test_sidebar_settings_gear_opens_full_settings_page() -> None:
     assert "Run behavior" in pages_text
     assert "key=\"_eu_settings_allow_outbound_model_calls\"" in pages_text
     assert "def _settings_outbound_model_calls_changed" in pages_text
+    assert "_settings_outbound_model_calls_changed()\n                st.rerun()" in pages_text
+    llm_settings_source = Path(llm_chat.__file__).read_text(encoding="utf-8")
+    assert "Shared outbound calls are on; Research Agent still shows a per-run disclosure gate." in llm_settings_source
+    assert "Provider details can be prepared here; calls still require the shared outbound toggle." in llm_settings_source
     assert "render_llm_settings(" in pages_text
     assert "show_status_card=False" in pages_text
     assert "controls_only=True" in pages_text

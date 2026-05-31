@@ -1325,34 +1325,40 @@ def render_settings_redesign_page(lang: str) -> None:
     state["_eu_settings_allow_outbound_model_calls"] = outbound_enabled
     state["_eu_settings_reduce_motion"] = reduce_motion
 
-    if hosted_model_active:
-        agent_run_value = _T(lang, "Mock or per-run override", "离线或单次覆盖")
-        agent_run_detail = _T(
-            lang,
-            "Hosted relay is reserved for assistant/internal use; real Research Agent runs choose Mock or a user endpoint.",
-            "Hosted relay 仅用于助手/内部用途；真实 Research Agent 运行请用 Mock 或用户提供的端点。",
+    def _agent_run_status(current_outbound_enabled: bool) -> tuple[str, str, str]:
+        if hosted_model_active:
+            return (
+                _T(lang, "Mock or per-run override", "离线或单次覆盖"),
+                _T(
+                    lang,
+                    "Hosted relay is reserved for assistant/internal use; real Research Agent runs choose Mock or a user endpoint.",
+                    "Hosted relay 仅用于助手/内部用途；真实 Research Agent 运行请用 Mock 或用户提供的端点。",
+                ),
+                "warn",
+            )
+        if shared_provider_configured and model_label and current_outbound_enabled:
+            return _T(lang, "Shared external ready", "共享外部端点就绪"), f"{provider_label} · {model_label}", "ok"
+        if shared_provider_configured and model_label:
+            return (
+                _T(lang, "Configured, calls off", "已配置，调用关闭"),
+                _T(
+                    lang,
+                    "Turn on outbound model calls before reusing this endpoint in a real run.",
+                    "真实运行复用该端点前，需要打开模型端调用。",
+                ),
+                "warn",
+            )
+        return (
+            _T(lang, "Setup needed", "需要补齐设置"),
+            _T(
+                lang,
+                "Add the API key/model, or choose MockLLMClient in Research Agent setup.",
+                "请补齐 API key/模型，或在 Research Agent 配置中选择 MockLLMClient。",
+            ),
+            "bad",
         )
-        agent_run_tone = "warn"
-    elif shared_provider_configured and model_label and outbound_enabled:
-        agent_run_value = _T(lang, "Shared external ready", "共享外部端点就绪")
-        agent_run_detail = f"{provider_label} · {model_label}"
-        agent_run_tone = "ok"
-    elif shared_provider_configured and model_label:
-        agent_run_value = _T(lang, "Configured, calls off", "已配置，调用关闭")
-        agent_run_detail = _T(
-            lang,
-            "Turn on outbound model calls before reusing this endpoint in a real run.",
-            "真实运行复用该端点前，需要打开模型端调用。",
-        )
-        agent_run_tone = "warn"
-    else:
-        agent_run_value = _T(lang, "Setup needed", "需要补齐设置")
-        agent_run_detail = _T(
-            lang,
-            "Add the API key/model, or choose MockLLMClient in Research Agent setup.",
-            "请补齐 API key/模型，或在 Research Agent 配置中选择 MockLLMClient。",
-        )
-        agent_run_tone = "bad"
+
+    agent_run_value, agent_run_detail, agent_run_tone = _agent_run_status(outbound_enabled)
 
     if provider_needs_key:
         credential_value = _T(lang, "Session key present", "会话 Key 已填写") if api_key_present else _T(lang, "API key missing", "缺少 API Key")
@@ -1439,6 +1445,7 @@ def render_settings_redesign_page(lang: str) -> None:
                     help=_T(lang, "Change in Agent setup", "到 Agent 配置中修改"),
                     use_container_width=True,
                 ):
+                    state["_eu_ra_focus_options"] = True
                     _route_to_research_agent_setup(state, force_real=True)
                     st.rerun()
         st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
@@ -1614,7 +1621,7 @@ def render_settings_redesign_page(lang: str) -> None:
                 unsafe_allow_html=True,
             )
         with right:
-            st.toggle(
+            outbound_widget_value = st.toggle(
                 _T(lang, "Allow outbound model calls", "允许模型端调用"),
                 key="_eu_settings_allow_outbound_model_calls",
                 label_visibility="collapsed",
@@ -1625,6 +1632,19 @@ def render_settings_redesign_page(lang: str) -> None:
                 ),
                 on_change=_settings_outbound_model_calls_changed,
             )
+            if bool(outbound_widget_value) != bool(state.get("llm_enabled", False)):
+                state["llm_enabled"] = bool(outbound_widget_value)
+                state["_llm_toggle"] = bool(outbound_widget_value)
+                state["_llm_toggle_sync_pending"] = True
+                if not outbound_widget_value:
+                    state["_sidebar_ai_open"] = False
+                    state["_floating_ai_open"] = False
+                    state["_inline_ai_panel_open"] = False
+            outbound_enabled = bool(state.get("llm_enabled", False))
+            agent_run_value, agent_run_detail, agent_run_tone = _agent_run_status(outbound_enabled)
+            if bool(state.get("_eu_settings_allow_outbound_model_calls", False)) != outbound_enabled:
+                _settings_outbound_model_calls_changed()
+                st.rerun()
         st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
 
         for title, desc, active, label in static_privacy_rows:
