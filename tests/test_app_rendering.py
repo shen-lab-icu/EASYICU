@@ -3450,6 +3450,10 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
         ra_source.index("def _render_research_agent_setup_overview"):
         ra_source.index("def _preflight_signature")
     ]
+    preflight_source = ra_source[
+        ra_source.index("def _render_execution_preflight"):
+        ra_source.index("def _render_setup_controls_intro")
+    ]
 
     assert 'st.container(key="eu_ra_setup_controls")' in page_source
     assert 'st.container(key="eu_ra_preflight_panel")' in ra_source
@@ -3460,6 +3464,7 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
     assert '<span>{"handed off" if is_en else "已交接"}</span>' not in overview_source
     assert "Plan preview · 6 steps" in overview_source
     assert "Preflight gate" in overview_source
+    assert "Ready to run" in overview_source
     assert "ra-setup-stage-list" in overview_source
     assert "pl-step" not in overview_source
     assert "ra-setup-split" in overview_source
@@ -3484,6 +3489,8 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
     assert "research_agent_disable_icu" not in ra_source
     assert "Disable ICU-aware context" not in ra_source
     assert ".ra-context-policy" in css_source
+    assert 'st.session_state["research_agent_preflight_signature"] = signature\n            st.rerun()' in preflight_source
+    assert 'st.session_state["research_agent_preflight_confirmed"] = False\n            st.rerun()' in preflight_source
     assert "llm_ready, llm_issue = _llm_run_readiness" in page_source
     assert "preview_signature = _preflight_signature(preview_contract)" in page_source
     assert 'st.session_state["research_agent_preflight_confirmed"] = False' in page_source
