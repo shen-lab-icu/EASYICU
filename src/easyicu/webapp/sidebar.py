@@ -6,12 +6,13 @@ but the long Streamlit rendering block no longer lives in app.py.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, MutableMapping
 from pathlib import Path
 import html
 import os
 import re
 
+import pandas as pd
 import streamlit as st
 from easyicu.webapp.concept_catalog import (
     CONCEPT_DESCRIPTIONS,
@@ -854,6 +855,52 @@ def _context_summary_html(entry_mode: str, lang: str) -> str:
     )
 
 
+def _agent_sidebar_cohort_value(
+    state: MutableMapping[str, Any],
+    *,
+    entry_mode: str,
+    lang: str,
+) -> str:
+    """Summarize the cohort bound to Research Agent, not extraction setup."""
+    cached_build = state.get("research_agent_module_built")
+    if isinstance(cached_build, dict):
+        built_df = cached_build.get("df")
+        if isinstance(built_df, pd.DataFrame) and not built_df.empty:
+            return (
+                f"{len(built_df):,} rows"
+                if lang == "en" else
+                f"{len(built_df):,} 行"
+            )
+
+    inbound = state.get("research_agent_inbound_cohort")
+    if isinstance(inbound, pd.DataFrame) and not inbound.empty:
+        return (
+            f"{len(inbound):,} rows"
+            if lang == "en" else
+            f"{len(inbound):,} 行"
+        )
+
+    loaded_concepts = state.get("loaded_concepts")
+    if isinstance(loaded_concepts, dict) and loaded_concepts:
+        patient_count = len(state.get("patient_ids") or [])
+        if patient_count:
+            return (
+                f"{patient_count:,} loaded rows"
+                if lang == "en" else
+                f"已加载 {patient_count:,} 行"
+            )
+        return "loaded data" if lang == "en" else "已加载数据"
+
+    params = state.get("mock_params") or {}
+    if entry_mode == "demo":
+        return (
+            f"sepsis · {params.get('n_patients', 10)}"
+            if lang == "en" else
+            f"sepsis · {params.get('n_patients', 10)}"
+        )
+    return "not selected" if lang == "en" else "未选择"
+
+
 def _agent_state_summary_html(entry_mode: str, lang: str) -> str:
     """Return the Research Agent-specific rail, matching the Claude reference."""
     state = st.session_state
@@ -923,7 +970,6 @@ def _agent_state_summary_html(entry_mode: str, lang: str) -> str:
             "真实" if entry_mode == "real" else "未选择"
         )
 
-    params = state.get("mock_params") or {}
     if real_manifest_bound:
         evidence_total = workbench.get("evidence_total")
         if evidence_total is None:
@@ -938,16 +984,12 @@ def _agent_state_summary_html(entry_mode: str, lang: str) -> str:
             if lang == "en" else
             f"{evidence_count} 条证据"
         )
-    elif entry_mode == "demo":
-        cohort_value = (
-            f"sepsis · {params.get('n_patients', 10)}"
-            if lang == "en" else
-            f"sepsis · {params.get('n_patients', 10)}"
-        )
-    elif state.get("step2_confirmed"):
-        cohort_value = "configured" if lang == "en" else "已配置"
     else:
-        cohort_value = "not configured" if lang == "en" else "未配置"
+        cohort_value = _agent_sidebar_cohort_value(
+            state,
+            entry_mode=entry_mode,
+            lang=lang,
+        )
 
     run_id = run_id_raw
     if not run_id and entry_mode == "demo":
