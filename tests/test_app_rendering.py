@@ -5120,6 +5120,15 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert "focus_module_folder=True" in page_source
     assert "_eu_ra_focus_module_folder" in Path(research_agent.__file__).read_text(encoding="utf-8")
     assert '"Pick an EasyICU module export folder"' in page_source
+    assert "Release notes" in page_source
+    assert "Documentation" in page_source
+    assert "Export diagnostics" in page_source
+    assert "_settings_diagnostics_json" in page_source
+    assert "secrets_included" in page_source
+    assert "patient_rows_included" in page_source
+    assert 'key="_eu_settings_diagnostics_download"' in page_source
+    assert "eu_settings_env_actions" in css_text
+    assert ".stDownloadButton > button" in css_text
 
     assert app._topbar_primary_action_label("settings", "en") == (
         "Reset to defaults",
@@ -5179,6 +5188,42 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert "research_agent_extract_db" not in state
     assert "_research_agent_extract_db_source" not in state
     assert "_eu_topbar_run_request" not in state
+
+
+def test_settings_diagnostics_payload_omits_secrets_and_patient_rows() -> None:
+    payload_text = pages_redesign._settings_diagnostics_json(
+        {
+            "entry_mode": "real",
+            "database": "miiv",
+            "use_mock_data": False,
+            "demo_mode_patients": 50,
+            "demo_mode_hours": 168,
+            "llm_enabled": True,
+            "llm_provider": "openrouter",
+            "llm_api_key": "sk-secret-should-not-export",
+            "llm_model": "anthropic/claude-sonnet",
+            "patient_ids": ["patient-001", "patient-002"],
+            "research_agent_resume_run_id": "run_20260531T000000_demo",
+        },
+        lang="en",
+        workdir="/tmp/easyicu-workspace",
+        export_hint="/tmp/easyicu-export",
+        provider_label="OpenRouter",
+        model_label="anthropic/claude-sonnet",
+        base_url_label="https://openrouter.ai/api/v1",
+        provider_needs_key=True,
+        api_key_present=True,
+        agent_run_value="Ready",
+    )
+
+    payload = json.loads(payload_text)
+
+    assert "sk-secret-should-not-export" not in payload_text
+    assert "llm_api_key" not in payload_text
+    assert "patient-001" not in payload_text
+    assert payload["llm"]["credential_state"] == "present"
+    assert payload["privacy"]["secrets_included"] is False
+    assert payload["privacy"]["patient_rows_included"] is False
 
 
 def test_settings_reset_request_reruns_shell_and_preserves_notice(monkeypatch) -> None:

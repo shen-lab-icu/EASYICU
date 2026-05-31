@@ -2043,6 +2043,21 @@ div[role="listbox"] li {
   font-weight: 650 !important;
   box-shadow: none !important;
 }
+.stApp [class*="st-key-eu_settings_env_actions"] {
+  margin: -18px 0 30px !important;
+}
+.stApp [class*="st-key-eu_settings_env_actions"] .stDownloadButton > button {
+  min-height: 34px !important;
+  border-radius: var(--r-2) !important;
+  border-color: var(--hair-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+  font-size: 12.5px !important;
+  font-weight: 650 !important;
+  box-shadow: none !important;
+  white-space: nowrap !important;
+}
 .stApp [class*="st-key-eu_settings_data_mode_card"] .stButton > button[kind="primary"],
 .stApp [class*="st-key-eu_settings_agent_card"] .stButton > button[kind="primary"],
 .stApp [class*="st-key-eu_settings_language_card"] .stButton > button[kind="primary"] {

@@ -23,7 +23,11 @@ data loading and side effects continue to live in the legacy
 from __future__ import annotations
 
 import html
+import json
+import platform
+import sys
 from collections.abc import MutableMapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -1189,6 +1193,87 @@ def _settings_apply_demo_defaults(patients: int, hours: int) -> None:
     st.session_state["mock_params"] = params
 
 
+def _settings_repo_file_text(relative_path: str, *, fallback: str) -> str:
+    root = Path(__file__).resolve().parents[3]
+    try:
+        return (root / relative_path).read_text(encoding="utf-8")
+    except Exception:
+        return fallback
+
+
+def _settings_release_notes_text(lang: str) -> str:
+    title = "EasyICU release notes" if lang == "en" else "EasyICU 发布说明"
+    return "\n".join([
+        f"# {title}",
+        "",
+        "Version: EasyICU 1.0.0",
+        f"Generated: {datetime.now(timezone.utc).isoformat()}",
+        "",
+        "- Local-first ICU data extraction, review, and research-agent workflow.",
+        "- Demo and real-data modes share the same audited web shell.",
+        "- Research Agent runs are gated by human preflight and evidence review.",
+        "- Patient rows remain local; external model calls require explicit opt-in.",
+        "",
+    ])
+
+
+def _settings_diagnostics_json(
+    state: MutableMapping[str, Any],
+    *,
+    lang: str,
+    workdir: str,
+    export_hint: str,
+    provider_label: str,
+    model_label: str,
+    base_url_label: str,
+    provider_needs_key: bool,
+    api_key_present: bool,
+    agent_run_value: str,
+) -> str:
+    """Return a support bundle that intentionally omits secrets and patient rows."""
+    payload = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "easyicu_version": "1.0.0",
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "language": lang,
+        "workspace": {
+            "entry_mode": str(state.get("entry_mode") or "demo"),
+            "database": str(state.get("database") or "mock"),
+            "use_mock_data": bool(state.get("use_mock_data", True)),
+            "workdir": workdir,
+            "default_export_folder": export_hint,
+            "path_validated": bool(state.get("path_validated", False)),
+        },
+        "demo_defaults": {
+            "patients": int(state.get("demo_mode_patients") or (state.get("mock_params") or {}).get("n_patients") or 10),
+            "hours": int(state.get("demo_mode_hours") or (state.get("mock_params") or {}).get("hours") or 24),
+        },
+        "llm": {
+            "outbound_enabled": bool(state.get("llm_enabled", False)),
+            "provider": str(state.get("llm_provider") or "easyicu_hosted"),
+            "provider_label": provider_label,
+            "model": model_label,
+            "base_url": base_url_label,
+            "credential_state": "present" if (provider_needs_key and api_key_present) else ("missing" if provider_needs_key else "not_required"),
+        },
+        "research_agent": {
+            "run_state": agent_run_value,
+            "workdir": workdir,
+            "module_folder_mode": bool(state.get("_eu_settings_module_folder_mode", False)),
+            "current_view": str(state.get("_ra_view") or "setup"),
+            "last_run_id": str(state.get("research_agent_resume_run_id") or state.get("research_agent_last_run_id") or ""),
+        },
+        "privacy": {
+            "local_only": True,
+            "anonymous_telemetry": False,
+            "secrets_included": False,
+            "patient_rows_included": False,
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+
 def render_settings_redesign_page(lang: str) -> None:
     """Render the print-reference Settings page using live session settings."""
     from easyicu.webapp.llm_config import (
@@ -1754,9 +1839,55 @@ def render_settings_redesign_page(lang: str) -> None:
         '<div><span>Version</span><b class="mono">EasyICU 1.0.0</b></div>'
         '<div><span>Python</span><b class="mono">3.10+</b></div>'
         '<div><span>Databases detected</span><b class="mono">MIMIC-IV · eICU · AUMC · HiRID · MIMIC-III · SICdb</b></div>'
+        f'<div><span>Workspace</span><b class="mono">{_esc(workdir)}</b></div>'
         '</div>',
         unsafe_allow_html=True,
     )
+    docs_text = _settings_repo_file_text(
+        "README.md" if is_en else "README_zh.md",
+        fallback=_T(lang, "EasyICU documentation is not available in this checkout.", "当前 checkout 中没有可用的 EasyICU 文档。"),
+    )
+    diagnostics_json = _settings_diagnostics_json(
+        state,
+        lang=lang,
+        workdir=workdir,
+        export_hint=export_hint,
+        provider_label=provider_label,
+        model_label=model_label,
+        base_url_label=base_url_label,
+        provider_needs_key=provider_needs_key,
+        api_key_present=api_key_present,
+        agent_run_value=agent_run_value,
+    )
+    with st.container(key="eu_settings_env_actions"):
+        c1, c2, c3 = st.columns(3, gap="small")
+        with c1:
+            st.download_button(
+                _T(lang, "Release notes", "发布说明"),
+                data=_settings_release_notes_text(lang),
+                file_name="easyicu-release-notes.md",
+                mime="text/markdown",
+                use_container_width=True,
+                key="_eu_settings_release_notes_download",
+            )
+        with c2:
+            st.download_button(
+                _T(lang, "Documentation", "文档"),
+                data=docs_text,
+                file_name="easyicu-readme.md",
+                mime="text/markdown",
+                use_container_width=True,
+                key="_eu_settings_documentation_download",
+            )
+        with c3:
+            st.download_button(
+                _T(lang, "Export diagnostics", "导出诊断"),
+                data=diagnostics_json,
+                file_name="easyicu-settings-diagnostics.json",
+                mime="application/json",
+                use_container_width=True,
+                key="_eu_settings_diagnostics_download",
+            )
 
 
 # =====================================================================
