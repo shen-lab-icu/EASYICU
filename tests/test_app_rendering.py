@@ -3118,6 +3118,34 @@ def test_research_agent_raw_extract_defaults_to_all_modules_and_hands_off() -> N
     assert "_migrate_legacy_extract_module_selection(st.session_state, modules)" in raw_extract_source
     assert 'st.session_state["_active_main_page"] = "tutorial"' in raw_extract_source
     assert 'st.session_state["_scroll_to_tab"] = "export_progress"' in raw_extract_source
+    assert "start_export_disabled = not picked_modules or (db != \"mock\" and not data_path)" in raw_extract_source
+    assert 'st.caption(_ra_text("start_export_needs_path"))' in raw_extract_source
+
+
+def test_research_agent_raw_extract_db_follows_active_data_source_until_manual_override() -> None:
+    options = ["miiv", "mimic", "eicu", "aumc", "hirid", "sic", "mock"]
+
+    state = {"database": "mimic"}
+    assert research_agent._sync_extract_db_with_active_data_source(state, options) == "mimic"
+    assert "research_agent_extract_db" not in state
+    assert state["_research_agent_extract_db_source"] == "mimic"
+
+    state["research_agent_extract_db"] = "mimic"
+    state["database"] = "eicu"
+    assert research_agent._sync_extract_db_with_active_data_source(state, options) == "eicu"
+    assert "research_agent_extract_db" not in state
+    assert state["_research_agent_extract_db_source"] == "eicu"
+
+    state["research_agent_extract_db"] = "aumc"
+    state["database"] = "hirid"
+    assert research_agent._sync_extract_db_with_active_data_source(state, options) == "aumc"
+    assert state["research_agent_extract_db"] == "aumc"
+    assert state["_research_agent_extract_db_source"] == "eicu"
+
+    old_session_state = {"database": "mimic", "research_agent_extract_db": "miiv"}
+    assert research_agent._sync_extract_db_with_active_data_source(old_session_state, options) == "mimic"
+    assert "research_agent_extract_db" not in old_session_state
+    assert old_session_state["_research_agent_extract_db_source"] == "mimic"
 
 
 def test_research_agent_raw_extract_copy_explains_handoff_and_full_default() -> None:
@@ -3127,11 +3155,15 @@ def test_research_agent_raw_extract_copy_explains_handoff_and_full_default() -> 
     assert "All available modules are selected by default" in en["ra_no_data_info"]
     assert "Data Extraction" in en["ra_no_data_info"]
     assert en["ra_start_export"] == "Open Data Extraction with these settings"
+    assert "Enter a raw database path first" in en["ra_start_export_needs_path"]
+    assert "Select at least one module" in en["ra_start_export_needs_modules"]
     assert "Opening Data Extraction" in en["ra_export_queued"]
 
     assert "默认选择全部可用模块" in zh["ra_no_data_info"]
     assert "数据提取" in zh["ra_no_data_info"]
     assert zh["ra_start_export"] == "用这些设置打开数据提取"
+    assert "请先填写原始数据库路径" in zh["ra_start_export_needs_path"]
+    assert "请至少选择一个模块" in zh["ra_start_export_needs_modules"]
     assert "打开导出流程" in zh["ra_export_queued"]
 
 
@@ -4980,6 +5012,13 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
         "llm_model": "custom-model",
         "llm_base_url": "https://example.invalid/v1",
         "llm_configured": True,
+        "data_path": "/tmp/old-real-source",
+        "path_validated": True,
+        "last_validated_path": "/tmp/old-real-source",
+        "sidebar_data_path_input": "/tmp/old-real-source",
+        "research_agent_extract_data_path": "/tmp/old-agent-source",
+        "research_agent_extract_db": "mimic",
+        "_research_agent_extract_db_source": "mimic",
     }
 
     result = app._consume_topbar_run_request(state, "settings", "en")
@@ -5003,6 +5042,13 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert state["llm_configured"] is False
     assert state["_llm_toggle"] is False
     assert state["_llm_toggle_sync_pending"] is True
+    assert state["data_path"] is None
+    assert state["path_validated"] is False
+    assert "last_validated_path" not in state
+    assert "sidebar_data_path_input" not in state
+    assert "research_agent_extract_data_path" not in state
+    assert "research_agent_extract_db" not in state
+    assert "_research_agent_extract_db_source" not in state
     assert "_eu_topbar_run_request" not in state
 
 

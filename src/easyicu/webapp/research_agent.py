@@ -250,6 +250,31 @@ def _placeholder_path(name: str) -> str:
     return f"/path/to/{name}"
 
 
+def _sync_extract_db_with_active_data_source(
+    state: MutableMapping[str, Any],
+    options: Sequence[str],
+) -> str:
+    """Keep raw-extract defaults aligned with the active validated source."""
+    fallback = "miiv" if "miiv" in options else (str(options[0]) if options else "")
+    active_db = str(state.get("database") or "").strip()
+    if active_db not in options:
+        selected = str(state.get("research_agent_extract_db") or "").strip()
+        return selected if selected in options else fallback
+    selected_db = str(state.get("research_agent_extract_db") or "").strip()
+    synced_from = str(state.get("_research_agent_extract_db_source") or "").strip()
+    should_follow = (
+        not selected_db
+        or selected_db == synced_from
+        or (not synced_from and selected_db == fallback)
+    )
+    if should_follow:
+        if selected_db and selected_db != active_db:
+            state.pop("research_agent_extract_db", None)
+        state["_research_agent_extract_db_source"] = active_db
+        return active_db
+    return selected_db if selected_db in options else fallback
+
+
 def _hide_prefilled_directory_text(input_key: str, mirrored_value: str) -> None:
     pending_key = f"{input_key}__pending_value"
     current = str(st.session_state.get(input_key, "") or "")
@@ -2765,12 +2790,18 @@ def _section_cohort_picker(
     if source == source_no_data:
         modules = _available_extract_modules()
         st.info(_ra_text("no_data_info"))
+        db_options = ["miiv", "mimic", "eicu", "aumc", "hirid", "sic", "mock"]
+        extract_db_value = _sync_extract_db_with_active_data_source(st.session_state, db_options)
+        if extract_db_value not in db_options:
+            extract_db_value = "miiv"
         db = st.selectbox(
             _ra_text("database"),
-            ["miiv", "mimic", "eicu", "aumc", "hirid", "sic", "mock"],
-            index=0,
+            db_options,
+            index=db_options.index(extract_db_value),
             key="research_agent_extract_db",
         )
+        if db == str(st.session_state.get("database") or ""):
+            st.session_state["_research_agent_extract_db_source"] = db
         if st.session_state.get("data_path") and not st.session_state.get("research_agent_extract_data_path"):
             st.session_state.research_agent_extract_data_path = st.session_state.data_path
         default_output_dir = st.session_state.get("export_path", str(Path.home() / "easyicu_export" / f"{db}_research_agent"))
@@ -2811,12 +2842,13 @@ def _section_cohort_picker(
             concepts.extend(modules.get(m, []))
         concepts = list(dict.fromkeys(concepts))
         st.caption(_ra_text("selected_modules", modules=len(picked_modules), concepts=len(concepts)))
+        start_export_disabled = not picked_modules or (db != "mock" and not data_path)
         if st.button(
             _ra_text("start_export"),
             type="primary",
             use_container_width=True,
             key="research_agent_start_export",
-            disabled=not picked_modules or (db != "mock" and not data_path),
+            disabled=start_export_disabled,
         ):
             Path(output_dir).expanduser().mkdir(parents=True, exist_ok=True)
             st.session_state.database = db
@@ -2833,6 +2865,11 @@ def _section_cohort_picker(
             st.session_state["_scroll_to_tab"] = "export_progress"
             st.success(_ra_text("export_queued"))
             st.rerun()
+        if start_export_disabled:
+            if not picked_modules:
+                st.caption(_ra_text("start_export_needs_modules"))
+            elif db != "mock" and not data_path:
+                st.caption(_ra_text("start_export_needs_path"))
         return None, ""
 
     # Cross-DB cohort builder: pick 2+ module export folders, infer each

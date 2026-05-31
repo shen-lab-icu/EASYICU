@@ -957,6 +957,16 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
         'hours': LIGHTWEIGHT_DEMO_HOURS,
         'demo_profile': 'lite',
     }
+    state['data_path'] = None
+    state['path_validated'] = False
+    for key in (
+        'last_validated_path',
+        'sidebar_data_path_input',
+        'research_agent_extract_data_path',
+        'research_agent_extract_db',
+        '_research_agent_extract_db_source',
+    ):
+        state.pop(key, None)
 
     state['llm_enabled'] = False
     state['llm_provider'] = default_provider
