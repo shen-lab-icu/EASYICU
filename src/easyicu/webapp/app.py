@@ -982,6 +982,7 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
         '_eu_ra_module_pick_force_manual',
         '_eu_ra_apply_export_file_selection',
         '_eu_wb_findings_acked',
+        '_eu_wb_findings_acked_run_dir',
         '_eu_wb_review_details_expanded',
         '_eu_wb_action_panel',
     ):
@@ -1005,6 +1006,14 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
     state['llm_configured'] = False
     state['_llm_toggle'] = False
     state['_llm_toggle_sync_pending'] = True
+    state['_eu_settings_allow_outbound_model_calls'] = False
+    state['_eu_settings_reduce_motion'] = False
+    state['ui_density'] = 'comfortable'
+    state['reduce_motion'] = False
+    state['_llm_provider_sel'] = default_provider
+    state['_llm_api_key_inp'] = ''
+    state['_llm_base_url_inp'] = ''
+    state['_llm_model_inp'] = ''
     state['_floating_ai_open'] = False
 
 

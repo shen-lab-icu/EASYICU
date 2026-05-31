@@ -845,6 +845,45 @@ def test_workbench_finding_queue_rows_carry_review_and_step_state() -> None:
     assert stats == {"total": 3, "reviewed": 1, "errors": 1, "warnings": 2, "linked": 2}
 
 
+def test_workbench_reviewed_findings_persist_per_run(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_persisted_review"
+    run_dir.mkdir()
+    findings = [
+        {
+            "severity": "warning",
+            "validator": "critic_agent",
+            "message": "CriticAgent marked 01_plan as needs_revision.",
+        },
+        {
+            "severity": "warning",
+            "validator": "statistical_guard",
+            "message": "Multiplicity check needs manual review.",
+        },
+    ]
+    reviewed_id = wb_page._finding_review_id(findings[0])
+
+    path = wb_page._write_reviewed_finding_ids(
+        run_dir,
+        [reviewed_id],
+        run_id="run_persisted_review",
+    )
+    manifest = {
+        "run_id": "run_persisted_review",
+        "per_step_records": [{"step_id": "01_plan", "status": "ok"}],
+        "evidence": [],
+        "findings": findings,
+    }
+    state = wb_page.build_workbench_state_from_manifest(run_dir, manifest, lang="en")
+    rows = wb_page._finding_queue_rows(state)
+
+    assert path == run_dir / "finding_review_state.json"
+    assert wb_page._load_reviewed_finding_ids(run_dir) == [reviewed_id]
+    assert state["reviewed_finding_ids"] == [reviewed_id]
+    assert state["finding_review_state_path"].endswith("finding_review_state.json")
+    assert rows[0]["reviewed"] is True
+    assert rows[1]["reviewed"] is False
+
+
 def test_workbench_finding_queue_uses_design_queue_surface() -> None:
     source = Path(wb_page.__file__).read_text(encoding="utf-8")
     css = Path(wb_page.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
@@ -857,6 +896,9 @@ def test_workbench_finding_queue_uses_design_queue_surface() -> None:
     assert "Review warnings before Summary sign-off" in render_source
     assert "Triage findings" not in render_source
     assert "_finding_queue_rows(state, reviewed_ids=acked)" in render_source
+    assert "_store_reviewed_findings_for_state(state, acked)" in render_source
+    assert 'st.session_state["_active_main_page"] = "research_agent"' in render_source
+    assert 'st.session_state["_ra_view"] = "workbench"' in render_source
     assert "_finding_queue_stats(rows)" in render_source
     assert "_REVIEW_DETAILS_EXPANDED_KEY" in source
     assert "expanded=details_expanded" in source
@@ -1016,9 +1058,24 @@ def test_empty_workbench_removes_ambiguous_open_latest_run_action() -> None:
         source.index("def _render_workbench_empty_state"):
         source.index("def _step_contract_html")
     ]
-    assert 'st.session_state["_ra_view"] = "history"' in empty_source
+    assert '_route_to_agent_empty_state_target("history")' in empty_source
+    assert '_route_to_agent_empty_state_target("setup")' in empty_source
     assert 'st.session_state["_ra_view"] = "setup"' not in empty_source[empty_source.index("_eu_wb_empty_history"):]
     assert 'st.session_state.pop("_research_agent_expand_history", None)' in empty_source
+
+
+def test_empty_workbench_actions_stay_inside_agent_workspace(monkeypatch) -> None:
+    fake_st = _FakeStreamlit()
+    fake_st.session_state.update({"entry_mode": "none"})
+    monkeypatch.setattr(wb_page, "st", fake_st)
+
+    wb_page._route_to_agent_empty_state_target("history")
+
+    assert fake_st.session_state["entry_mode"] == "real"
+    assert fake_st.session_state["use_mock_data"] is False
+    assert fake_st.session_state["_active_main_page"] == "research_agent"
+    assert "_main_nav_widget" not in fake_st.session_state
+    assert fake_st.session_state["_ra_view"] == "history"
 
 
 def test_research_agent_history_copy_is_local_only() -> None:
@@ -1406,7 +1463,7 @@ def test_workbench_uses_claude_reference_overview_before_detail_inspector() -> N
     ]
 
     assert "_agent_reference_workbench_html(state, lang)" in workbench_source
-    assert 'state["reviewed_finding_ids"] = list(st.session_state.get(_ACKED_FINDINGS_KEY) or [])' in workbench_source
+    assert 'state["reviewed_finding_ids"] = sorted(_sync_reviewed_findings_to_session(state))' in workbench_source
     assert "EasyICU Research Agent" in workbench_source
     assert "An auditable, evidence-bound workflow" in workbench_source
     assert "Review details" in workbench_source

@@ -82,6 +82,8 @@ _TERMINAL_FAIL = {
 }
 
 _ACKED_FINDINGS_KEY = "_eu_wb_findings_acked"
+_ACKED_FINDINGS_RUN_KEY = "_eu_wb_findings_acked_run_dir"
+_FINDING_REVIEW_STATE_FILE = "finding_review_state.json"
 _REVIEW_DETAILS_EXPANDED_KEY = "_eu_wb_review_details_expanded"
 _APPROVED_REVIEW_DECISIONS = {"approved", "accept", "accepted", "signed_off", "ready"}
 
@@ -219,6 +221,82 @@ def _reviewable_findings(audit: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _reviewed_finding_ids(state: dict[str, Any]) -> set[str]:
     return {str(item) for item in (state.get("reviewed_finding_ids") or []) if item}
+
+
+def _finding_review_state_path(run_dir: str | Path | None) -> Path | None:
+    if not run_dir:
+        return None
+    try:
+        return Path(str(run_dir)).expanduser() / _FINDING_REVIEW_STATE_FILE
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_reviewed_finding_ids(run_dir: str | Path | None) -> list[str]:
+    path = _finding_review_state_path(run_dir)
+    if path is None or not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    raw_ids = payload.get("reviewed_finding_ids") if isinstance(payload, dict) else payload
+    if not isinstance(raw_ids, list):
+        return []
+    return sorted({str(item) for item in raw_ids if item})
+
+
+def _write_reviewed_finding_ids(
+    run_dir: str | Path | None,
+    reviewed_ids: Sequence[str],
+    *,
+    run_id: object | None = None,
+) -> Path | None:
+    path = _finding_review_state_path(run_dir)
+    if path is None:
+        return None
+    ids = sorted({str(item) for item in reviewed_ids if item})
+    payload = {
+        "run_id": str(run_id or Path(str(run_dir)).name),
+        "reviewed_finding_ids": ids,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "easyicu_web_research_agent",
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return None
+    return path
+
+
+def _sync_reviewed_findings_to_session(state: dict[str, Any]) -> set[str]:
+    """Keep the review queue scoped to the currently opened real run."""
+    run_dir = str(state.get("run_dir") or "").strip()
+    if not run_dir or state.get("is_demo"):
+        return _reviewed_finding_ids(state) or {
+            str(item) for item in (st.session_state.get(_ACKED_FINDINGS_KEY) or []) if item
+        }
+    if st.session_state.get(_ACKED_FINDINGS_RUN_KEY) != run_dir:
+        loaded = set(_load_reviewed_finding_ids(run_dir))
+        st.session_state[_ACKED_FINDINGS_KEY] = sorted(loaded)
+        st.session_state[_ACKED_FINDINGS_RUN_KEY] = run_dir
+        return loaded
+    return {str(item) for item in (st.session_state.get(_ACKED_FINDINGS_KEY) or []) if item}
+
+
+def _store_reviewed_findings_for_state(state: dict[str, Any], reviewed_ids: set[str]) -> None:
+    ids = sorted({str(item) for item in reviewed_ids if item})
+    run_dir = str(state.get("run_dir") or "").strip()
+    st.session_state[_ACKED_FINDINGS_KEY] = ids
+    if run_dir:
+        st.session_state[_ACKED_FINDINGS_RUN_KEY] = run_dir
+        _write_reviewed_finding_ids(run_dir, ids, run_id=state.get("run_id"))
+    state["reviewed_finding_ids"] = ids
+    existing = st.session_state.get("_agent_workbench")
+    if isinstance(existing, dict) and str(existing.get("run_dir") or "") == run_dir:
+        existing["reviewed_finding_ids"] = ids
+        st.session_state["_agent_workbench"] = existing
 
 
 def _finding_queue_rows(
@@ -1949,6 +2027,7 @@ def build_workbench_state_from_manifest(
         evidence=evidence,
         lang=lang,
     )
+    reviewed_finding_ids = _load_reviewed_finding_ids(run_path)
     execution_contract = {
         "cohort": _compact_label(manifest.get("context_path") or manifest.get("cohort_path") or run_path, max_len=72),
         "provider": _compact_label(
@@ -2001,6 +2080,8 @@ def build_workbench_state_from_manifest(
         "state_lanes": state_lanes,
         "state_segments": state_segments,
         "audit": gates,
+        "reviewed_finding_ids": reviewed_finding_ids,
+        "finding_review_state_path": str(_finding_review_state_path(run_path) or ""),
         "source_label": _T(lang, "Real manifest", "真实 manifest"),
         "is_demo": False,
     }
@@ -3652,7 +3733,7 @@ def render_agent_output_summary(lang: str, *, show_header: bool = True) -> None:
         _render_summary_empty_state(lang, show_header=show_header)
         return
     state = dict(state)
-    state["reviewed_finding_ids"] = list(st.session_state.get(_ACKED_FINDINGS_KEY) or [])
+    state["reviewed_finding_ids"] = sorted(_sync_reviewed_findings_to_session(state))
     state.setdefault("source_label", _T(lang, "Real manifest", "真实 manifest") if not state.get("is_demo") else _T(lang, "Sample workflow", "示例流程"))
     actions = (
         (
@@ -3722,6 +3803,15 @@ def _workbench_empty_html(lang: str) -> str:
     )
 
 
+def _route_to_agent_empty_state_target(view: str) -> None:
+    """Keep empty-state actions inside the Research Agent workspace."""
+    if st.session_state.get("entry_mode", "none") == "none":
+        st.session_state["entry_mode"] = "real"
+        st.session_state["use_mock_data"] = False
+    st.session_state["_active_main_page"] = "research_agent"
+    st.session_state["_ra_view"] = view
+
+
 def _render_workbench_empty_state(lang: str, *, summary: bool = False, show_header: bool = True) -> None:
     if show_header:
         st.markdown(
@@ -3745,11 +3835,11 @@ def _render_workbench_empty_state(lang: str, *, summary: bool = False, show_head
             c1, c2 = st.columns(2)
             with c1:
                 if st.button(_T(lang, "Run preflight", "进入执行前检查"), key=f"_eu_wb_empty_setup_{summary}", type="primary", use_container_width=True):
-                    st.session_state["_ra_view"] = "setup"
+                    _route_to_agent_empty_state_target("setup")
                     st.rerun()
             with c2:
                 if st.button(_T(lang, "Open local saved runs", "查看本机历史运行"), key=f"_eu_wb_empty_history_{summary}", use_container_width=True):
-                    st.session_state["_ra_view"] = "history"
+                    _route_to_agent_empty_state_target("history")
                     st.session_state.pop("_research_agent_expand_history", None)
                     st.rerun()
 
@@ -4783,7 +4873,7 @@ def _render_timeline_jump(state: dict[str, Any], lang: str, select_key: str) -> 
 
 def _render_audit_actions(state: dict[str, Any], lang: str, select_key: str) -> None:
     """Item 4: per-finding Open-step + Mark-reviewed actions."""
-    acked = set(st.session_state.get(_ACKED_FINDINGS_KEY) or [])
+    acked = set(_sync_reviewed_findings_to_session(state))
     rows = _finding_queue_rows(state, reviewed_ids=acked)
     if not rows:
         return
@@ -4859,6 +4949,8 @@ def _render_audit_actions(state: dict[str, Any], lang: str, select_key: str) -> 
                     disabled=target_idx is None,
                 ):
                     _set_selected_step(select_key, int(target_idx))
+                    st.session_state["_active_main_page"] = "research_agent"
+                    st.session_state["_ra_view"] = "workbench"
                     st.session_state[_REVIEW_DETAILS_EXPANDED_KEY] = True
                     rerun_needed = True
             with cols[2]:
@@ -4876,7 +4968,9 @@ def _render_audit_actions(state: dict[str, Any], lang: str, select_key: str) -> 
                         acked.discard(fid)
                     else:
                         acked.add(fid)
-                    st.session_state[_ACKED_FINDINGS_KEY] = list(acked)
+                    _store_reviewed_findings_for_state(state, acked)
+                    st.session_state["_active_main_page"] = "research_agent"
+                    st.session_state["_ra_view"] = "workbench"
                     st.session_state[_REVIEW_DETAILS_EXPANDED_KEY] = True
                     rerun_needed = True
     if rerun_needed:
@@ -4896,7 +4990,7 @@ def render_agent_workbench(lang: str, *, show_header: bool = True) -> None:
     # carry a short subtitle into the results column
     state.setdefault("subtitle_short", "")
     state.setdefault("source_label", _T(lang, "Real manifest", "真实 manifest") if not state.get("is_demo") else _T(lang, "Sample workflow", "示例流程"))
-    state["reviewed_finding_ids"] = list(st.session_state.get(_ACKED_FINDINGS_KEY) or [])
+    state["reviewed_finding_ids"] = sorted(_sync_reviewed_findings_to_session(state))
     select_key, selected_idx = _resolve_selected_step(state)
     active_state = _state_for_selected_step(state, selected_idx)
 
