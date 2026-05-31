@@ -2981,7 +2981,7 @@ def _section_cohort_picker(
             st.session_state.trigger_export = True
             st.session_state.export_completed = False
             st.session_state["_exporting_in_progress"] = True
-            st.session_state["_active_main_page"] = "tutorial"
+            st.session_state["_active_main_page"] = "extract"
             st.session_state["_scroll_to_tab"] = "export_progress"
             st.success(_ra_text("export_queued"))
             st.rerun()

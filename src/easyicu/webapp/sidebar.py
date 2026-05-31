@@ -13,7 +13,12 @@ import os
 import re
 
 import streamlit as st
-from easyicu.webapp.concept_catalog import CONCEPT_GROUP_NAMES, CONCEPT_GROUPS_INTERNAL
+from easyicu.webapp.concept_catalog import (
+    CONCEPT_DESCRIPTIONS,
+    CONCEPT_DICTIONARY,
+    CONCEPT_GROUP_NAMES,
+    CONCEPT_GROUPS_INTERNAL,
+)
 from easyicu.webapp.session_state import clear_agent_continuation_state, clear_run_state
 from easyicu.webapp.ui_helpers import (
     PipelineStep,
@@ -57,6 +62,32 @@ def _module_display_name(module_key_or_label: object, lang: str) -> str:
         en_name, zh_name = CONCEPT_GROUP_NAMES[raw]
         return _clean_module_label(en_name if lang == "en" else zh_name)
     return _clean_module_label(raw.replace("_", " "))
+
+
+def _concept_matches_search(concept: str, search: str) -> bool:
+    """Return whether a query matches a concept id or user-visible metadata."""
+    query = str(search or "").strip().lower()
+    if not query:
+        return True
+    fields: list[str] = [str(concept)]
+    fields.extend(str(item) for item in CONCEPT_DICTIONARY.get(concept, ()) if item)
+    fields.extend(str(item) for item in CONCEPT_DESCRIPTIONS.get(concept, ()) if item)
+    return any(query in field.lower() for field in fields)
+
+
+def _concept_group_matches_search(group_name: str, concepts: list[str], search: str) -> bool:
+    """Return whether the Step 3 module card should be shown for a query."""
+    query = str(search or "").strip().lower()
+    if not query:
+        return True
+    group_fields = [
+        group_name,
+        _module_display_name(group_name, "en"),
+        _module_display_name(group_name, "zh"),
+    ]
+    if any(query in field.lower() for field in group_fields):
+        return True
+    return any(_concept_matches_search(concept, query) for concept in concepts)
 
 
 def _activate_entry_mode(target: str) -> None:
@@ -2359,6 +2390,9 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
         '</div>',
         unsafe_allow_html=True,
     )
+    cancel_notice = st.session_state.pop("_export_cancel_notice", None)
+    if cancel_notice:
+        st.warning(str(cancel_notice))
 
     # 🔧 FIX (2026-02-05): 检查步骤依赖 - Step3必须先确认（点击确认选择按钮）
     step3_complete = st.session_state.get('step3_confirmed', False) and len(st.session_state.get('selected_concepts', [])) > 0
@@ -3322,14 +3356,24 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
         ).strip().lower()
         visible_groups = [
             group_name for group_name, concepts in concept_groups.items()
-            if not search
-            or search in group_name.lower()
-            or any(search in concept.lower() for concept in concepts)
+            if _concept_group_matches_search(group_name, concepts, search)
         ]
         st.markdown(
             f'<div class="eu-section-label"><span>{html.escape("Modules" if lang == "en" else "模块")}</span></div>',
             unsafe_allow_html=True,
         )
+        if not visible_groups:
+            empty_msg = (
+                f'No modules match "{search}". Try a concept code, clinical name, or unit.'
+                if lang == "en"
+                else f'没有匹配“{search}”的模块。可尝试概念代码、临床名称或单位。'
+            )
+            st.markdown(
+                '<div class="compact-inline-notice warn">'
+                f'{html.escape(empty_msg)}'
+                '</div>',
+                unsafe_allow_html=True,
+            )
         card_cols = st.columns(2, gap="small")
         for idx, group_name in enumerate(visible_groups):
             concepts = concept_groups.get(group_name, [])

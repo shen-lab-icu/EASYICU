@@ -160,6 +160,13 @@ def test_concept_selection_design_exposes_all_action() -> None:
     assert "_all_concept_groups(concept_groups)" in source
 
 
+def test_concept_search_matches_display_metadata_and_units() -> None:
+    assert sidebar._concept_matches_search("lact", "lactate") is True
+    assert sidebar._concept_matches_search("lact", "mmol") is True
+    assert sidebar._concept_matches_search("lact", "乳酸") is True
+    assert sidebar._concept_group_matches_search("blood_gas", ["be", "lact"], "lactate") is True
+
+
 def test_concept_selected_feature_chips_stay_readable() -> None:
     css_text = shell_styles._load_shell_overrides_css()
     chip_match = re.search(
@@ -3359,7 +3366,7 @@ def test_research_agent_raw_extract_defaults_to_all_modules_and_hands_off() -> N
     ]
     assert "_default_extract_module_selection(modules)" in raw_extract_source
     assert "_migrate_legacy_extract_module_selection(st.session_state, modules)" in raw_extract_source
-    assert 'st.session_state["_active_main_page"] = "tutorial"' in raw_extract_source
+    assert 'st.session_state["_active_main_page"] = "extract"' in raw_extract_source
     assert 'st.session_state["_scroll_to_tab"] = "export_progress"' in raw_extract_source
     assert "start_export_disabled = not picked_modules or (db != \"mock\" and not data_path)" in raw_extract_source
     assert 'st.caption(_ra_text("start_export_needs_path"))' in raw_extract_source
@@ -4557,6 +4564,7 @@ def test_export_in_progress_uses_quiet_wait_mode_before_main_body() -> None:
 
     assert "if export_in_progress:" in quiet_block
     assert "_handle_sidebar_export_trigger(default_export_container)" in quiet_block
+    assert "or st.session_state.get('_export_conflict_pending', False)" in app_source
     assert "return" in quiet_block
     assert "render_tutorial_redesign_page(lang)" not in quiet_block
     assert "tabs[0].click()" not in helper_source
@@ -4580,6 +4588,26 @@ def test_completed_export_navigation_pending_is_consumed_once() -> None:
     assert "_post_export_target_panel" not in state
     assert "_scroll_to_tab" not in state
     assert app._consume_completed_export_navigation(state) is False
+
+
+def test_export_cancel_queue_keeps_user_on_extraction_page() -> None:
+    state = {
+        "trigger_export": True,
+        "_exporting_in_progress": True,
+        "_export_conflict_pending": True,
+        "_scroll_to_tab": "export_progress",
+    }
+
+    export_workflow._queue_export_cancel(state, lang="en")
+
+    assert state["_export_cancelled"] is False
+    assert state["trigger_export"] is False
+    assert state["_exporting_in_progress"] is False
+    assert "_export_conflict_pending" not in state
+    assert "_scroll_to_tab" not in state
+    assert state["_active_main_page"] == "extract"
+    assert state["_main_nav_widget"] == "extract"
+    assert state["_export_cancel_notice"] == "Export stopped by user."
 
 
 def test_sidebar_pipeline_steps_are_sequential_click_targets() -> None:
