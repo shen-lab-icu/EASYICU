@@ -1011,6 +1011,9 @@ def test_research_agent_question_widget_uses_session_state_without_duplicate_def
 
     assert 'st.session_state.setdefault("research_agent_question", "")' in request_source
     assert 'key="research_agent_question"' in request_source
+    assert 'key="research_agent_apply_question"' in request_source
+    assert '_research_agent_question_applied_notice' in request_source
+    assert '_research_agent_question_empty_notice' in request_source
     assert 'value=st.session_state.get("research_agent_question", "")' not in request_source
 
 
