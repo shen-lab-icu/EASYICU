@@ -1056,6 +1056,37 @@ def test_summary_reference_uses_manifest_evidence_total_and_icons() -> None:
     assert ".eu-summary-bundle-ico svg" in Path(wb_page.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
 
 
+def test_summary_denominator_gate_accepts_table_one_and_locked_cohort_evidence() -> None:
+    state = {
+        "run_id": "run_table_one",
+        "run_dir": "/tmp/run_table_one",
+        "source_label": "Real manifest",
+        "status": "done",
+        "steps": [{"step_id": "01_table_one", "label": "Table One", "status": "ok"}],
+        "evidence": [
+            {"kind": "log", "relative_path": "evidence/cohort_locked__cohort_locked.json"},
+            {"kind": "table", "relative_path": "evidence/table_table_one_74af4152__table_one.csv"},
+        ],
+        "artifact_counts": {"figures": 1, "tables": 1, "code": 1, "evidence": 2},
+        "audit": {
+            "counts": {"errors": 0, "warnings": 0},
+            "findings": [],
+            "review_decision": {},
+        },
+        "reviewed_finding_ids": [],
+        "is_demo": False,
+    }
+
+    checks = wb_page._summary_review_checks(state, "en")
+    html = wb_page._output_summary_html(state, "en")
+
+    cohort_check = next(check for check in checks if check["label"] == "Cohort denominators resolved")
+    assert cohort_check["ok"] is True
+    assert "One reviewer sign-off outstanding" in html
+    assert "1 review checks outstanding" not in html
+    assert "2 review checks outstanding" not in html
+
+
 def test_summary_gate_advances_when_warning_findings_are_marked_reviewed() -> None:
     findings = [
         {"severity": "warning", "validator": "critic", "message": "Check table 1."},
