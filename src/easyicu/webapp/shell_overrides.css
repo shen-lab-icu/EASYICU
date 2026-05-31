@@ -10552,6 +10552,274 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   gap: 8px;
   margin-left: auto;
 }
+.stApp [class*="st-key-eu_states_controls"] {
+  margin: 0 0 22px !important;
+  padding: 16px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--shadow-1) !important;
+}
+.stApp [class*="st-key-eu_states_controls"] .eu-states-control-label {
+  margin: 6px 0 8px;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.stApp [class*="st-key-eu_states_controls"] .stButton > button {
+  min-height: 40px;
+  border-radius: var(--r-2);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+.stApp [class*="st-key-eu_states_controls"] .stButton > button:not([kind="primary"]) {
+  border-color: var(--hair);
+  background: var(--surface-2);
+  color: var(--ink-3);
+}
+.stApp [class*="st-key-eu_states_controls"] .stButton > button[kind="primary"] {
+  background: var(--ink);
+  color: white;
+}
+.stApp [class*="st-key-eu_states_preview_actions"] {
+  margin: 12px 0 30px !important;
+}
+.stApp [class*="st-key-eu_states_preview_actions"] .stButton > button {
+  min-height: 40px;
+  border-radius: var(--r-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+.stApp .eu-state-body-pad {
+  padding: 28px;
+}
+.stApp .eu-state-hero {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  padding: 34px 28px;
+  border: 1px dashed var(--hair-2);
+  border-radius: var(--r-3);
+  background: var(--surface-2);
+  text-align: center;
+}
+.stApp .eu-state-hero.solid {
+  border-style: solid;
+}
+.stApp .eu-state-hero .glyph {
+  width: 50px;
+  height: 50px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-2);
+  background:
+    linear-gradient(90deg, transparent 46%, color-mix(in oklab, var(--accent) 32%, transparent) 47% 53%, transparent 54%),
+    linear-gradient(0deg, transparent 46%, color-mix(in oklab, var(--accent) 32%, transparent) 47% 53%, transparent 54%),
+    var(--accent-soft);
+  box-shadow: inset 0 0 0 8px color-mix(in oklab, var(--accent-soft) 58%, white);
+}
+.stApp .eu-state-hero.error .glyph {
+  border-color: color-mix(in oklab, var(--bad) 38%, white);
+  background:
+    linear-gradient(45deg, transparent 45%, color-mix(in oklab, var(--bad) 62%, transparent) 46% 54%, transparent 55%),
+    linear-gradient(-45deg, transparent 45%, color-mix(in oklab, var(--bad) 62%, transparent) 46% 54%, transparent 55%),
+    color-mix(in oklab, var(--bad-soft) 78%, white);
+}
+.stApp .eu-state-hero.nodata .glyph {
+  border-color: color-mix(in oklab, var(--warn) 38%, white);
+  background:
+    radial-gradient(circle at 50% 50%, color-mix(in oklab, var(--warn) 58%, transparent) 0 4px, transparent 5px),
+    color-mix(in oklab, var(--warn-soft) 78%, white);
+}
+.stApp .eu-state-hero .st-t {
+  max-width: 620px;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.stApp .eu-state-hero .st-d {
+  max-width: 680px;
+  color: var(--ink-3);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.stApp .filter-recap {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.stApp .eu-state-chip {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+.stApp .eu-state-chip.solid {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.stApp .detail-box {
+  width: min(100%, 720px);
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: color-mix(in oklab, var(--ink) 92%, white);
+  color: rgba(255, 255, 255, .86);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  text-align: left;
+}
+.stApp .detail-box span {
+  display: block;
+}
+.stApp .detail-box .ln-key {
+  color: #b8ecdd;
+}
+.stApp .detail-box .ln-bad {
+  color: #ffc8c5;
+}
+.stApp .gate-block {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface-2);
+}
+.stApp .eu-state-callout.warn {
+  border-color: color-mix(in oklab, var(--warn) 34%, white);
+  background: color-mix(in oklab, var(--warn-soft) 76%, white);
+  color: #7b560f;
+}
+.stApp .checks {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+.stApp .check-row {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--hair);
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.stApp .check-row:last-child {
+  border-bottom: 0;
+}
+.stApp .check-row .grow {
+  flex: 1;
+}
+.stApp .check-row em {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+.stApp .check-mk {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--hair-2);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.stApp .check-row.ok .check-mk {
+  border-color: color-mix(in oklab, var(--ok) 48%, white);
+  background:
+    radial-gradient(circle at 50% 50%, var(--ok) 0 4px, transparent 5px),
+    color-mix(in oklab, var(--ok-soft) 76%, white);
+}
+.stApp .check-row.pending .check-mk {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--warn) 48%, white);
+}
+.stApp .ok-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in oklab, var(--ok) 34%, white);
+  border-radius: var(--r-2);
+  background: color-mix(in oklab, var(--ok-soft) 76%, white);
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.stApp .ok-banner strong {
+  color: var(--ink);
+}
+.stApp .ok-banner .mk {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 50%, var(--ok) 0 5px, transparent 6px),
+    white;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ok) 38%, white);
+}
+.stApp .st-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+.stApp .st-stats .stat {
+  min-height: 88px;
+  padding: 16px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+.stApp .st-stats .stat.ok {
+  border-color: color-mix(in oklab, var(--ok) 30%, white);
+  background: color-mix(in oklab, var(--ok-soft) 78%, white);
+}
+.stApp .st-stats .stat.accent {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.stApp .st-stats .label {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.stApp .st-stats .val {
+  margin-top: 8px;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
 .stApp .eu-state-loading-row {
   display: flex;
   align-items: center;
