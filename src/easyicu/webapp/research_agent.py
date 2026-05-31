@@ -939,6 +939,7 @@ def _restore_pending_module_file_selection(
 
 
 _RAW_EXTRACT_MODULES_KEY = "research_agent_extract_modules"
+_RAW_EXTRACT_MODULE_PRESET_KEY = "research_agent_extract_module_preset"
 _LEGACY_RAW_EXTRACT_DEFAULT_MODULES = (
     "demographics",
     "outcome",
@@ -963,6 +964,26 @@ def _migrate_legacy_extract_module_selection(
     legacy_default = [module for module in _LEGACY_RAW_EXTRACT_DEFAULT_MODULES if module in modules]
     if legacy_default and isinstance(current, (list, tuple)) and list(current) == legacy_default:
         state[_RAW_EXTRACT_MODULES_KEY] = _default_extract_module_selection(modules)
+
+
+def _raw_extract_module_selection_for_preset(
+    modules: Dict[str, List[str]],
+    preset: str,
+    custom_modules: Sequence[str] | None = None,
+) -> List[str]:
+    """Return the no-data extraction module list for a compact preset.
+
+    The default remains the full module export because Research Agent runs are
+    context hungry. The preset only keeps the UI calm: the long multiselect is
+    shown when the user deliberately chooses a custom subset.
+    """
+    if preset == "core":
+        core = [module for module in _LEGACY_RAW_EXTRACT_DEFAULT_MODULES if module in modules]
+        return core or _default_extract_module_selection(modules)
+    if preset == "custom":
+        valid = set(modules)
+        return [str(module) for module in custom_modules or [] if str(module) in valid]
+    return _default_extract_module_selection(modules)
 
 
 def _available_extract_modules() -> Dict[str, List[str]]:
@@ -2944,11 +2965,28 @@ def _section_cohort_picker(
         output_dir = output_dir or default_output_dir
         default_modules = _default_extract_module_selection(modules)
         _migrate_legacy_extract_module_selection(st.session_state, modules)
-        picked_modules = st.multiselect(
-            _ra_text("modules_extract"),
-            list(modules.keys()),
-            default=default_modules,
-            key=_RAW_EXTRACT_MODULES_KEY,
+        if _RAW_EXTRACT_MODULE_PRESET_KEY not in st.session_state:
+            st.session_state[_RAW_EXTRACT_MODULE_PRESET_KEY] = "all"
+        module_preset = st.radio(
+            _ra_text("module_preset"),
+            ["all", "core", "custom"],
+            horizontal=True,
+            format_func=lambda value: _ra_text(f"module_preset_{value}"),
+            key=_RAW_EXTRACT_MODULE_PRESET_KEY,
+        )
+        custom_modules: Sequence[str] | None = st.session_state.get(_RAW_EXTRACT_MODULES_KEY)
+        if module_preset == "custom":
+            custom_modules = st.multiselect(
+                _ra_text("modules_extract"),
+                list(modules.keys()),
+                default=custom_modules or default_modules,
+                key=_RAW_EXTRACT_MODULES_KEY,
+            )
+            st.caption(_ra_text("module_preset_custom_help"))
+        picked_modules = _raw_extract_module_selection_for_preset(
+            modules,
+            str(module_preset),
+            custom_modules,
         )
         max_patients = st.selectbox(
             _ra_text("patient_limit"),
@@ -2962,6 +3000,14 @@ def _section_cohort_picker(
             concepts.extend(modules.get(m, []))
         concepts = list(dict.fromkeys(concepts))
         st.caption(_ra_text("selected_modules", modules=len(picked_modules), concepts=len(concepts)))
+        if module_preset != "custom":
+            st.caption(
+                _ra_text(
+                    f"module_preset_{module_preset}_help",
+                    modules=len(picked_modules),
+                    concepts=len(concepts),
+                )
+            )
         raw_path_exists = bool(data_path and Path(data_path).expanduser().exists())
         start_export_disabled = not picked_modules or (db != "mock" and not raw_path_exists)
         if st.button(

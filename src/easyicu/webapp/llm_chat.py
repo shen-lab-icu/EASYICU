@@ -1634,8 +1634,17 @@ def _inline_ai_context_payload(state, lang: str) -> dict[str, object]:
         tags = selected[:6] or list(loaded)[:6] or ["local export", "evidence-bound"]
     else:
         database = str(state.get("database") or "").strip() or ("local data" if is_en else "本地数据")
+        is_mock_source = database.lower() == "mock" or bool(state.get("use_mock_data"))
         context_name = "No cohort loaded" if is_en else "尚未加载队列"
-        detail = "real data · waiting for local export" if is_en else "真实数据 · 等待本地导出"
+        detail = (
+            "mock extraction · waiting for local export"
+            if is_mock_source and is_en else
+            "模拟提取 · 等待本地导出"
+            if is_mock_source else
+            "real data · waiting for local export"
+            if is_en else
+            "真实数据 · 等待本地导出"
+        )
         tags = [
             database.upper(),
             "local-only" if is_en else "仅本地",

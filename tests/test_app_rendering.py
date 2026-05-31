@@ -3366,6 +3366,20 @@ def test_research_agent_raw_extract_defaults_to_all_modules_and_hands_off() -> N
     }
 
     assert research_agent._default_extract_module_selection(modules) == list(modules)
+    assert research_agent._raw_extract_module_selection_for_preset(modules, "all") == list(modules)
+    assert research_agent._raw_extract_module_selection_for_preset(modules, "core") == [
+        "demographics",
+        "outcome",
+        "sofa2_score",
+        "sepsis3_sofa2",
+        "vitals",
+        "blood_gas",
+    ]
+    assert research_agent._raw_extract_module_selection_for_preset(
+        modules,
+        "custom",
+        ["outcome", "unknown", "renal"],
+    ) == ["outcome", "renal"]
 
     legacy_state = {
         "research_agent_extract_modules": [
@@ -3390,6 +3404,7 @@ def test_research_agent_raw_extract_defaults_to_all_modules_and_hands_off() -> N
         source.index("    # Cross-DB cohort builder")
     ]
     assert "_default_extract_module_selection(modules)" in raw_extract_source
+    assert "_raw_extract_module_selection_for_preset(" in raw_extract_source
     assert "_migrate_legacy_extract_module_selection(st.session_state, modules)" in raw_extract_source
     assert "_queue_raw_extract_handoff(" in raw_extract_source
     assert 'state["_active_main_page"] = "extract"' in source
@@ -3435,6 +3450,12 @@ def test_research_agent_raw_extract_copy_explains_handoff_and_full_default() -> 
     assert "Enter a raw database path first" in en["ra_start_export_needs_path"]
     assert "Select at least one module" in en["ra_start_export_needs_modules"]
     assert "Opening Data Extraction" in en["ra_export_queued"]
+    assert en["ra_module_preset"] == "Module preset"
+    assert en["ra_module_preset_all"] == "All modules"
+    assert en["ra_module_preset_core"] == "Core quick set"
+    assert en["ra_module_preset_custom"] == "Custom"
+    assert "full context" in en["ra_module_preset_all_help"]
+    assert "missing modules" in en["ra_module_preset_custom_help"]
 
     assert "默认选择全部可用模块" in zh["ra_no_data_info"]
     assert "数据提取" in zh["ra_no_data_info"]
@@ -3442,6 +3463,12 @@ def test_research_agent_raw_extract_copy_explains_handoff_and_full_default() -> 
     assert "请先填写原始数据库路径" in zh["ra_start_export_needs_path"]
     assert "请至少选择一个模块" in zh["ra_start_export_needs_modules"]
     assert "打开导出流程" in zh["ra_export_queued"]
+    assert zh["ra_module_preset"] == "模块预设"
+    assert zh["ra_module_preset_all"] == "全部模块"
+    assert zh["ra_module_preset_core"] == "核心快速集"
+    assert zh["ra_module_preset_custom"] == "自定义"
+    assert "完整上下文" in zh["ra_module_preset_all_help"]
+    assert "缺失模块" in zh["ra_module_preset_custom_help"]
 
 
 def test_research_agent_crossdb_requires_distinct_database_tags() -> None:
@@ -5928,6 +5955,18 @@ def test_ai_assistant_real_context_card_does_not_invent_demo_counts() -> None:
     assert "10 stays" not in html
     assert "19 modules" not in html
     assert "sepsis_mortality_demo" not in html
+
+    mock_handoff_html = llm_chat._inline_ai_context_html(
+        "en",
+        state={"entry_mode": "real", "database": "mock", "use_mock_data": True},
+    )
+    assert "No cohort loaded" in mock_handoff_html
+    assert "mock extraction · waiting for local export" in mock_handoff_html
+    assert "MOCK" in mock_handoff_html
+    assert "real data · waiting for local export" not in mock_handoff_html
+    assert "10 stays" not in mock_handoff_html
+    assert "19 modules" not in mock_handoff_html
+    assert "sepsis_mortality_demo" not in mock_handoff_html
 
     demo_html = llm_chat._inline_ai_context_html("en", state={"entry_mode": "demo"})
     assert "sepsis_mortality_demo" in demo_html
