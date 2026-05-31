@@ -3590,6 +3590,19 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
     assert "🧪 复现已发表" not in i18n_source
 
 
+def test_research_agent_manifest_step_records_do_not_nest_expanders() -> None:
+    ra_source = Path(research_agent.__file__).read_text(encoding="utf-8")
+    step_source = ra_source[
+        ra_source.index("def _render_step_records"):
+        ra_source.index("def _render_artifact_gallery")
+    ]
+
+    assert "with st.expander(title" in step_source
+    assert 'with st.expander(_ra_text("full_step_summary")' not in step_source
+    assert 'st.markdown(f"**{_ra_text(\'full_step_summary\')}**")' in step_source
+    assert "st.json(summary)" in step_source
+
+
 def test_research_agent_demo_setup_uses_claude_reference_overview() -> None:
     ra_source = Path(research_agent.__file__).read_text(encoding="utf-8")
     css_source = Path(research_agent.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")

@@ -1793,9 +1793,8 @@ def _render_step_records(run_dir: Path, manifest: Dict[str, Any], *, key_prefix:
                         use_container_width=True,
                         hide_index=True,
                     )
-                with st.expander(_ra_text("full_step_summary"), expanded=False):
-                    st.markdown(f"**{_ra_text('full_step_summary')}**")
-                    st.json(summary)
+                st.markdown(f"**{_ra_text('full_step_summary')}**")
+                st.json(summary)
 
             finding_rows: List[Dict[str, Any]] = []
             for group_key in (
