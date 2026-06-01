@@ -1728,6 +1728,7 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
     assert "'tutorial':       ('Run'" not in app_source
     assert 'key="_eu_topbar_history"' not in app_source
     assert 'key="_eu_topbar_agent"' not in app_source
+
     assert "_render_topbar_path_nav" in app_source
     assert "_apply_topbar_breadcrumb_target" in app_source
     assert 'key="eu_extract_breadcrumb_nav"' in app_source
@@ -2018,6 +2019,19 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
     assert '[data-testid="stMetric"]' in css_text
     assert "font-size: 16px" in css_text
     assert '[data-baseweb="tag"]' in css_text
+
+
+def test_patient_feature_snapshot_grid_owns_caption_spacing() -> None:
+    patient_source = Path(patient_page.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "patient-feature-snapshot-grid" in patient_source
+    assert "patient-feature-snapshot-caption" in patient_source
+    assert "st.columns(min(4, len(visible_snapshots)))" not in patient_source
+    assert ".patient-feature-snapshot-grid" in css_text
+    assert ".patient-feature-snapshot-caption" in css_text
+    caption_css = css_text[css_text.index(".stApp .patient-feature-snapshot-caption"):]
+    assert "clear: both !important" in caption_css[:400]
 
 
 def test_page_header_renders_html_without_markdown_code_blocks(monkeypatch) -> None:

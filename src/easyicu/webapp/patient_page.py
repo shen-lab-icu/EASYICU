@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any
 
 from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
@@ -789,16 +790,25 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                     snapshot_title = "#### 🧩 Loaded Feature Snapshot" if lang == 'en' else "#### 🧩 已加载特征快照"
                     st.markdown(snapshot_title)
                     visible_snapshots = snapshot_candidates[:8]
-                    snap_cols = st.columns(min(4, len(visible_snapshots)))
-                    for idx, (concept_name, formatted) in enumerate(visible_snapshots):
-                        with snap_cols[idx % len(snap_cols)]:
-                            st.markdown(
-                                f'<div class="tiny-stat-card"><div class="tiny-label">{concept_name}</div><div class="tiny-value">{formatted}</div></div>',
-                                unsafe_allow_html=True,
-                            )
+                    cards_html = "".join(
+                        (
+                            '<div class="tiny-stat-card">'
+                            f'<div class="tiny-label">{html.escape(str(concept_name))}</div>'
+                            f'<div class="tiny-value">{html.escape(str(formatted))}</div>'
+                            '</div>'
+                        )
+                        for concept_name, formatted in visible_snapshots
+                    )
+                    st.markdown(
+                        f'<div class="patient-feature-snapshot-grid">{cards_html}</div>',
+                        unsafe_allow_html=True,
+                    )
                     if len(snapshot_candidates) > len(visible_snapshots):
                         more_msg = f"Showing {len(visible_snapshots)} of {len(snapshot_candidates)} loaded features for this patient." if lang == 'en' else f"当前展示该患者 {len(snapshot_candidates)} 个已加载特征中的前 {len(visible_snapshots)} 个。"
-                        st.caption(more_msg)
+                        st.markdown(
+                            f'<p class="patient-feature-snapshot-caption">{html.escape(more_msg)}</p>',
+                            unsafe_allow_html=True,
+                        )
 
             except Exception as e:
                 err_msg = f"Dashboard rendering failed: {e}" if lang == 'en' else f"综合仪表盘渲染失败: {e}"
