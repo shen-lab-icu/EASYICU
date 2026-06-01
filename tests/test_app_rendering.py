@@ -6005,6 +6005,37 @@ def test_sidebar_agent_page_uses_reference_agent_state_rail(monkeypatch) -> None
     assert ".eu-agent-guarantee-row" in css_text
 
 
+def test_sidebar_agent_setup_view_describes_new_setup_not_previous_run(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit({
+        "entry_mode": "real",
+        "_active_main_page": "research_agent",
+        "_ra_view": "setup",
+        "_agent_workbench": {
+            "run_id": "run_20260601T090510_c7b109",
+            "evidence_total": 48,
+            "audit": {"counts": {"errors": 3, "warnings": 9}},
+            "is_demo": False,
+        },
+        "research_agent_cohort_source": i18n.TEXTS["en"]["ra_source_synthetic"],
+        "research_agent_synth_n": 800,
+    })
+    monkeypatch.setattr(sidebar, "st", streamlit_stub)
+
+    html = sidebar._agent_state_summary_html("real", "en")
+
+    assert "Setup" in html
+    assert "Mode" in html
+    assert "Real" in html
+    assert "Cohort" in html
+    assert "800 rows" in html
+    assert "Last run" in html
+    assert "run_202…c7b109" in html
+    assert "Local run" not in html
+    assert "Evidence" not in html
+    assert "48 evidence" not in html
+    assert "Review" not in html
+
+
 def test_sidebar_agent_page_keeps_demo_context_when_no_manifest(monkeypatch) -> None:
     streamlit_stub = _SessionStateStreamlit({
         "mock_params": {"n_patients": 10},
