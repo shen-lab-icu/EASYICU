@@ -5498,6 +5498,15 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert "st-key-_eu_settings_module_folder_mode" in css_text
     assert 'key="_eu_settings_density_compact"' in page_source
     assert 'key="_eu_settings_reduce_motion"' in page_source
+    assert "def _settings_start_path_edit" in page_source
+    assert "def _settings_apply_path_edit" in page_source
+    assert 'key="_eu_settings_workdir_input"' in page_source
+    assert 'key="_eu_settings_save_workdir"' in page_source
+    assert 'key="_eu_settings_export_path_input"' in page_source
+    assert 'key="_eu_settings_save_export_path"' in page_source
+    assert 'state_key="research_agent_workdir"' in page_source
+    assert 'state_key="export_path"' in page_source
+    assert 'state["sidebar_export_path_input"] = normalized' in page_source
     assert "def _settings_reduce_motion_changed" in page_source
     assert 'if bool(state.get("_eu_settings_allow_outbound_model_calls", False)) != outbound_enabled:' in page_source
     assert "_settings_outbound_model_calls_changed()\n                st.rerun()" in page_source
@@ -5505,11 +5514,8 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert "st-key-_eu_settings_reduce_motion" in css_text
     assert "_route_to_research_agent_setup(\n                st.session_state," in page_source
     assert "_route_to_research_agent_setup(state, force_real=True)" in page_source
-    assert 'state["_eu_ra_focus_options"] = True' in page_source
     assert "focus_module_folder=True" in page_source
     assert "_eu_ra_focus_module_folder" in Path(research_agent.__file__).read_text(encoding="utf-8")
-    assert 'pop("_eu_ra_focus_options", False)' in Path(research_agent.__file__).read_text(encoding="utf-8")
-    assert "expanded=focus_options" in Path(research_agent.__file__).read_text(encoding="utf-8")
     assert '"Pick an EasyICU module export folder"' in page_source
     assert "Release notes" in page_source
     assert "Documentation" in page_source

@@ -1325,7 +1325,7 @@ def render_settings_redesign_page(lang: str) -> None:
     entry_mode = str(state.get("entry_mode") or "demo")
     demo_patients = int(state.get("demo_mode_patients") or (state.get("mock_params") or {}).get("n_patients") or 10)
     demo_hours = int(state.get("demo_mode_hours") or (state.get("mock_params") or {}).get("hours") or 24)
-    last_export = str(state.get("last_export_dir") or state.get("export_path") or "")
+    last_export = str(state.get("export_path") or state.get("last_export_dir") or "")
     export_hint = last_export or str(Path.home() / "easyicu_export")
     workdir = str(state.get("research_agent_workdir") or (Path.cwd() / "research_output" / "webapp").resolve())
     module_folder = str(state.get("research_agent_module_dir_text") or "")
@@ -1430,6 +1430,32 @@ def render_settings_redesign_page(lang: str) -> None:
             st.session_state.get("_eu_settings_reduce_motion", False)
         )
 
+    def _settings_start_path_edit(edit_key: str, input_key: str, current_value: str) -> None:
+        state[edit_key] = True
+        state[input_key] = str(current_value or "")
+        state["_scroll_to_top"] = True
+
+    def _settings_apply_path_edit(
+        *,
+        edit_key: str,
+        input_key: str,
+        state_key: str,
+        fallback_value: str,
+    ) -> None:
+        raw_value = str(st.session_state.get(input_key) or fallback_value or "").strip()
+        normalized = str(Path(raw_value or fallback_value).expanduser())
+        state[state_key] = normalized
+        state[input_key] = normalized
+        state[edit_key] = False
+        state["_scroll_to_top"] = True
+        if state_key == "export_path":
+            state["sidebar_export_path_input"] = normalized
+            state["_sidebar_export_path_default"] = normalized
+
+    def _settings_cancel_path_edit(edit_key: str) -> None:
+        state[edit_key] = False
+        state["_scroll_to_top"] = True
+
     st.markdown(
         '<div class="eu-settings-page-head">'
         f'<div class="eyebrow">{_T(lang, "Workspace · 设置", "工作区 · 设置")}</div>'
@@ -1459,16 +1485,35 @@ def render_settings_redesign_page(lang: str) -> None:
         with right:
             value_col, action_col = st.columns([0.72, 0.28], gap="small")
             with value_col:
-                st.markdown(_settings_value_pill(workdir, icon="folder"), unsafe_allow_html=True)
+                if state.get("_eu_settings_edit_workdir"):
+                    st.text_input(
+                        _T(lang, "Working directory", "工作目录"),
+                        key="_eu_settings_workdir_input",
+                        label_visibility="collapsed",
+                        placeholder=str((Path.cwd() / "research_output" / "webapp").resolve()),
+                    )
+                else:
+                    st.markdown(_settings_value_pill(workdir, icon="folder"), unsafe_allow_html=True)
             with action_col:
-                if st.button(
+                if state.get("_eu_settings_edit_workdir"):
+                    if st.button(_T(lang, "Save", "保存"), key="_eu_settings_save_workdir", type="primary", use_container_width=True):
+                        _settings_apply_path_edit(
+                            edit_key="_eu_settings_edit_workdir",
+                            input_key="_eu_settings_workdir_input",
+                            state_key="research_agent_workdir",
+                            fallback_value=workdir,
+                        )
+                        st.rerun()
+                    if st.button(_T(lang, "Cancel", "取消"), key="_eu_settings_cancel_workdir", use_container_width=True):
+                        _settings_cancel_path_edit("_eu_settings_edit_workdir")
+                        st.rerun()
+                elif st.button(
                     _T(lang, "Change", "修改"),
                     key="_eu_settings_change_workdir",
-                    help=_T(lang, "Change in Agent setup", "到 Agent 配置中修改"),
+                    help=_T(lang, "Edit the working directory here", "在此处修改工作目录"),
                     use_container_width=True,
                 ):
-                    state["_eu_ra_focus_options"] = True
-                    _route_to_research_agent_setup(state, force_real=True)
+                    _settings_start_path_edit("_eu_settings_edit_workdir", "_eu_settings_workdir_input", workdir)
                     st.rerun()
         st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
 
@@ -1484,16 +1529,35 @@ def render_settings_redesign_page(lang: str) -> None:
         with right:
             value_col, action_col = st.columns([0.72, 0.28], gap="small")
             with value_col:
-                st.markdown(_settings_value_pill(export_hint, icon="download"), unsafe_allow_html=True)
+                if state.get("_eu_settings_edit_export_path"):
+                    st.text_input(
+                        _T(lang, "Default export folder", "默认导出目录"),
+                        key="_eu_settings_export_path_input",
+                        label_visibility="collapsed",
+                        placeholder=str(Path.home() / "easyicu_export"),
+                    )
+                else:
+                    st.markdown(_settings_value_pill(export_hint, icon="download"), unsafe_allow_html=True)
             with action_col:
-                if st.button(
+                if state.get("_eu_settings_edit_export_path"):
+                    if st.button(_T(lang, "Save", "保存"), key="_eu_settings_save_export_path", type="primary", use_container_width=True):
+                        _settings_apply_path_edit(
+                            edit_key="_eu_settings_edit_export_path",
+                            input_key="_eu_settings_export_path_input",
+                            state_key="export_path",
+                            fallback_value=export_hint,
+                        )
+                        st.rerun()
+                    if st.button(_T(lang, "Cancel", "取消"), key="_eu_settings_cancel_export_path", use_container_width=True):
+                        _settings_cancel_path_edit("_eu_settings_edit_export_path")
+                        st.rerun()
+                elif st.button(
                     _T(lang, "Change", "修改"),
                     key="_eu_settings_change_export",
-                    help=_T(lang, "Change in Data Extraction", "到数据抽取中修改"),
+                    help=_T(lang, "Edit the default export folder here", "在此处修改默认导出目录"),
                     use_container_width=True,
                 ):
-                    state["_active_main_page"] = "extract"
-                    state["_scroll_to_top"] = True
+                    _settings_start_path_edit("_eu_settings_edit_export_path", "_eu_settings_export_path_input", export_hint)
                     st.rerun()
         st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
 
