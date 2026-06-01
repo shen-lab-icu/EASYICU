@@ -10766,27 +10766,77 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 .stApp .eu-state-preview-card {
   overflow: hidden;
 }
+.stApp .eu-workspace-status-shell {
+  display: grid;
+  gap: 16px;
+  margin: 2px 0 18px;
+}
+.stApp .eu-workspace-session-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 18px 15px 20px;
+  border: 1px solid var(--hair-2);
+  border-left: 4px solid var(--ink);
+  border-radius: var(--r-3);
+  background:
+    linear-gradient(90deg, color-mix(in oklab, var(--surface) 86%, white), var(--surface));
+  box-shadow: var(--shadow-1);
+}
+.stApp .eu-workspace-session-strip span {
+  display: block;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: .1em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+.stApp .eu-workspace-session-strip b {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 720;
+  line-height: 1.25;
+}
+.stApp .eu-workspace-session-strip em {
+  max-width: 58%;
+  color: var(--ink-3);
+  font-size: 13px;
+  font-style: normal;
+  line-height: 1.45;
+  text-align: right;
+}
 .stApp .eu-workspace-status-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
-  margin: 0 0 16px;
+  margin: 0;
 }
 .stApp .eu-workspace-status-tile {
   min-height: 118px;
   padding: 16px 18px;
   border: 1px solid var(--hair);
+  border-left: 4px solid var(--hair-2);
   border-radius: var(--r-3);
   background: var(--surface);
   box-shadow: var(--shadow-1);
 }
 .stApp .eu-workspace-status-tile.ok {
   border-color: color-mix(in oklab, var(--ok) 30%, white);
+  border-left-color: var(--ok);
   background: color-mix(in oklab, var(--ok-soft) 78%, white);
 }
 .stApp .eu-workspace-status-tile.accent {
   border-color: var(--accent-border);
+  border-left-color: var(--accent);
   background: var(--accent-soft);
+}
+.stApp .eu-workspace-status-tile.neutral {
+  border-left-color: var(--hair-2);
 }
 .stApp .eu-workspace-status-tile span,
 .stApp .eu-workspace-card-head span,
@@ -10813,15 +10863,15 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   line-height: 1.42;
 }
 .stApp .eu-workspace-overview-card {
-  margin: 0 0 16px;
+  margin: 0;
   overflow: hidden;
-  border: 1px solid var(--hair);
+  border: 1px solid var(--hair-2);
   border-radius: var(--r-3);
   background: var(--surface);
   box-shadow: var(--shadow-1);
 }
 .stApp .eu-workspace-overview-card.compact {
-  margin-bottom: 18px;
+  margin-bottom: 0;
 }
 .stApp .eu-workspace-card-head {
   display: flex;
@@ -10890,6 +10940,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   color: var(--ok);
 }
 .stApp .eu-workspace-flow-step.active {
+  border-color: var(--accent-border);
   background: var(--accent-soft);
 }
 .stApp .eu-workspace-flow-step.active i {
@@ -10922,6 +10973,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   padding: 16px 20px;
   border-right: 1px solid var(--hair);
   border-bottom: 1px solid var(--hair);
+  background: color-mix(in oklab, var(--surface) 92%, white);
 }
 .stApp .eu-workspace-handoff > div:nth-child(2n) {
   border-right: 0;
