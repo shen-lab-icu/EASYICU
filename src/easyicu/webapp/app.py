@@ -2317,6 +2317,42 @@ def _research_agent_handoff_setup_ready(state: Dict[str, Any]) -> bool:
     )
 
 
+def _research_agent_active_run_context(state: Dict[str, Any]) -> Dict[str, str]:
+    """Return the active Workbench run that header-level actions can reuse."""
+    workbench = state.get("_agent_workbench")
+    if not isinstance(workbench, dict) or not workbench.get("steps"):
+        return {}
+    run_id = str(workbench.get("run_id") or "").strip()
+    if not run_id:
+        run_dir = str(workbench.get("run_dir") or state.get("_agent_workbench_source_run_dir") or "").strip()
+        if run_dir:
+            run_id = Path(run_dir).name
+    if not run_id:
+        return {}
+    question = str(workbench.get("research_question") or workbench.get("question") or "").strip()
+    return {"run_id": run_id, "question": question}
+
+
+def _prime_research_agent_header_rerun(state: Dict[str, Any], run_context: Dict[str, str]) -> None:
+    """Route the header Re-run CTA to the existing checkpoint-resume setup path."""
+    run_id = str(run_context.get("run_id") or "").strip()
+    if not run_id:
+        return
+    state["research_agent_resume_run_id"] = run_id
+    state["research_agent_force_manuscript"] = False
+    state["research_agent_resume_mode"] = "continue"
+    state["research_agent_resume_notes"] = ""
+    state["research_agent_resume_relax_probe"] = False
+    question = str(run_context.get("question") or "").strip()
+    if question:
+        state["research_agent_question"] = question
+    state["research_agent_preflight_confirmed"] = False
+    state.pop("research_agent_preflight_signature", None)
+    state["_active_main_page"] = "research_agent"
+    state["_ra_view"] = "setup"
+    state["_research_agent_expand_history"] = False
+
+
 def _render_research_agent_reference_header(lang: str, *, view: str = "setup") -> None:
     """Render the shared Agent identity before the view tabs."""
     entry_is_demo = st.session_state.get("entry_mode") == "demo"
@@ -4443,10 +4479,11 @@ def main():
             st.session_state["_active_main_page"] = "research_agent"
             _default_ra_view = 'setup'
             _ra_view = st.session_state.get('_ra_view', _default_ra_view)
+            _ra_run_context = _research_agent_active_run_context(st.session_state)
             _render_research_agent_reference_header(lang, view=_ra_view)
 
             with st.container(key="_eu_ra_tabs"):
-                _seg_l, _seg_m, _seg_h, _seg_r, _ = st.columns([0.88, 1.18, 0.92, 0.98, 6.04])
+                _seg_l, _seg_m, _seg_h, _seg_r, _seg_tail = st.columns([0.88, 1.18, 0.92, 0.98, 6.04])
                 with _seg_l:
                     if st.button(
                         "Setup" if lang == 'en' else "配置",
@@ -4487,6 +4524,22 @@ def main():
                         st.session_state['_active_main_page'] = 'research_agent'
                         st.session_state['_ra_view'] = 'summary'
                         st.rerun()
+                with _seg_tail:
+                    if _ra_run_context:
+                        if st.button(
+                            "Re-run" if lang == 'en' else "重新运行",
+                            icon=":material/replay:",
+                            key="_eu_ra_header_rerun",
+                            type="primary",
+                            use_container_width=False,
+                            help=(
+                                "Open Setup in checkpoint-resume mode for the active run."
+                                if lang == 'en' else
+                                "使用当前 run 打开配置页的 checkpoint 续跑模式。"
+                            ),
+                        ):
+                            _prime_research_agent_header_rerun(st.session_state, _ra_run_context)
+                            st.rerun()
 
             _ra_handoff_success = st.session_state.pop("_eu_ra_handoff_success_message", "")
             if _ra_handoff_success:

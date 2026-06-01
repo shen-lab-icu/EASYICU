@@ -12637,6 +12637,37 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   flex: 1 1 auto !important;
   min-width: 0 !important;
 }
+.stApp [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] {
+  display: flex !important;
+  justify-content: flex-end !important;
+}
+.stApp [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] .stButton > button,
+.stApp [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] button {
+  min-height: 34px !important;
+  height: 34px !important;
+  padding: 0 16px !important;
+  border: 1px solid var(--ink) !important;
+  border-radius: 7px !important;
+  background: var(--ink) !important;
+  background-color: var(--ink) !important;
+  box-shadow: none !important;
+  color: var(--surface) !important;
+  -webkit-text-fill-color: var(--surface) !important;
+  font-size: 12.5px !important;
+  font-weight: 650 !important;
+}
+.stApp [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] .stButton > button:hover,
+.stApp [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] button:hover {
+  background: #20242a !important;
+  background-color: #20242a !important;
+  border-color: #20242a !important;
+  color: var(--surface) !important;
+  -webkit-text-fill-color: var(--surface) !important;
+}
+.stApp [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] button * {
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
+}
 @media (max-width: 640px) {
   .stApp [class*="st-key-_eu_ra_tabs"] {
     overflow-x: auto !important;

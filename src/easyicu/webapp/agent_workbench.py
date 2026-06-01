@@ -3839,7 +3839,7 @@ def _render_workbench_empty_state(lang: str, *, summary: bool = False, show_head
         with st.container(key=f"eu_wb_empty_actions_{summary}"):
             c1, c2 = st.columns(2)
             with c1:
-                if st.button(_T(lang, "Run preflight", "进入执行前检查"), key=f"_eu_wb_empty_setup_{summary}", type="primary", use_container_width=True):
+                if st.button(_T(lang, "Open setup", "打开配置"), key=f"_eu_wb_empty_setup_{summary}", type="primary", use_container_width=True):
                     _route_to_agent_empty_state_target("setup")
                     st.rerun()
             with c2:

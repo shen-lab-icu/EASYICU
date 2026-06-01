@@ -3569,10 +3569,14 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
     assert "_ra_view == 'history'" in app_branch
     assert "_render_research_agent_reference_header(lang, view=_ra_view)" in app_branch
     assert app_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)") < app_branch.index('st.container(key="_eu_ra_tabs")')
+    assert "_research_agent_active_run_context(st.session_state)" in app_branch
+    assert "_eu_ra_header_rerun" in app_branch
+    assert "_prime_research_agent_header_rerun(st.session_state, _ra_run_context)" in app_branch
     assert 'icon=":material/tune:"' in app_branch
     assert 'icon=":material/grid_view:"' in app_branch
     assert 'icon=":material/history:"' in app_branch
     assert 'icon=":material/shield:"' in app_branch
+    assert 'icon=":material/replay:"' in app_branch
     assert "render_research_agent_history_page(lang, show_header=False)" in app_branch
     assert 'view: str = "setup"' in app_source
     assert 'view == "history"' in app_source
@@ -3629,9 +3633,43 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
     assert "grid-template-columns: 78px minmax(0, 1fr)" in css_source
     assert ".ra-history-utilities-head" in css_source
     assert 'st-key-ra_history_utilities' in css_source
+    assert "st-key-_eu_ra_header_rerun" in css_source
     i18n_source = Path(i18n.__file__).read_text(encoding="utf-8")
     assert "🧪 Reproduce published findings" not in i18n_source
     assert "🧪 复现已发表" not in i18n_source
+
+
+def test_research_agent_header_rerun_routes_to_checkpoint_setup() -> None:
+    state = {
+        "_agent_workbench": {
+            "run_id": "run_20260601T010203_abcd",
+            "steps": [{"id": "01"}],
+            "research_question": "Does lactate predict ICU mortality?",
+        },
+        "research_agent_force_manuscript": True,
+        "research_agent_resume_mode": "force_manuscript",
+        "research_agent_preflight_confirmed": True,
+        "research_agent_preflight_signature": "stale",
+        "_ra_view": "summary",
+    }
+
+    context = app._research_agent_active_run_context(state)
+    app._prime_research_agent_header_rerun(state, context)
+
+    assert context == {
+        "run_id": "run_20260601T010203_abcd",
+        "question": "Does lactate predict ICU mortality?",
+    }
+    assert state["research_agent_resume_run_id"] == "run_20260601T010203_abcd"
+    assert state["research_agent_force_manuscript"] is False
+    assert state["research_agent_resume_mode"] == "continue"
+    assert state["research_agent_resume_notes"] == ""
+    assert state["research_agent_resume_relax_probe"] is False
+    assert state["research_agent_question"] == "Does lactate predict ICU mortality?"
+    assert state["research_agent_preflight_confirmed"] is False
+    assert "research_agent_preflight_signature" not in state
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
 
 
 def test_research_agent_manifest_step_records_do_not_nest_expanders() -> None:
