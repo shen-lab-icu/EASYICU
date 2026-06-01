@@ -250,6 +250,24 @@ def _placeholder_path(name: str) -> str:
     return f"/path/to/{name}"
 
 
+def _is_agent_run_artifact_dir(folder: Path) -> bool:
+    """Exclude Research Agent run history from module-export discovery."""
+    try:
+        resolved = folder.expanduser().resolve()
+    except Exception:
+        resolved = folder
+    name = resolved.name.lower()
+    parent_name = resolved.parent.name.lower() if resolved.parent else ""
+    if name == "webapp" and parent_name == "research_output":
+        return True
+    if name.startswith("run_") and any(
+        (resolved / marker).exists()
+        for marker in ("run_status.json", "manifest.json", "cohort.parquet")
+    ):
+        return True
+    return False
+
+
 def _sync_extract_db_with_active_data_source(
     state: MutableMapping[str, Any],
     options: Sequence[str],
@@ -318,7 +336,12 @@ def _scan_workspace_for_module_dirs(roots: List[Path]) -> List[Path]:
             resolved = folder.resolve()
         except Exception:
             return
-        if resolved in seen or not resolved.is_dir() or not _has_parquet(resolved):
+        if (
+            resolved in seen
+            or not resolved.is_dir()
+            or _is_agent_run_artifact_dir(resolved)
+            or not _has_parquet(resolved)
+        ):
             return
         seen.add(resolved)
         out.append(resolved)
@@ -339,7 +362,12 @@ def _scan_workspace_for_module_dirs(roots: List[Path]) -> List[Path]:
             for child in sorted(root.iterdir()):
                 if len(out) >= 50:
                     return out
-                if child.is_dir() and child.name not in _KNOWN_MODULE_DIR_NAMES and _has_parquet(child):
+                if (
+                    child.is_dir()
+                    and child.name not in _KNOWN_MODULE_DIR_NAMES
+                    and not _is_agent_run_artifact_dir(child)
+                    and _has_parquet(child)
+                ):
                     child_export_dirs.append(child)
         except Exception:
             continue
@@ -429,6 +457,66 @@ def _has_child_module_export_dirs(folder: Path) -> bool:
         return False
 
 
+_GENERIC_MODULE_EXPORT_CONTAINER_NAMES = {"easyicu_export", "exports", "output", "outputs"}
+
+
+def _is_generic_module_export_container(folder: Path) -> bool:
+    """Return true for broad export buckets that contain child export runs."""
+    try:
+        resolved = folder.expanduser().resolve()
+    except Exception:
+        resolved = folder
+    return (
+        resolved.name.lower() in _GENERIC_MODULE_EXPORT_CONTAINER_NAMES
+        and _has_child_module_export_dirs(resolved)
+    )
+
+
+def _module_folder_manual_handoff_dir(state: Mapping[str, Any]) -> str:
+    """Return a concrete export folder worth anchoring as a manual handoff.
+
+    ``last_export_dir`` may represent a freshly completed export, so preserve
+    it when we can tie it to the latest export result. ``export_path`` is often
+    only the user's broad export bucket (for example ``~/easyicu_export``);
+    when that bucket contains child folders, let detected-folder ranking choose
+    the best child instead of forcing manual mode.
+    """
+    candidates = (
+        ("last_export_dir", str(state.get("last_export_dir") or "").strip()),
+        ("export_path", str(state.get("export_path") or "").strip()),
+    )
+    for key, raw in candidates:
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        if _is_generic_module_export_container(path):
+            has_current_export_files = (
+                key == "last_export_dir"
+                and bool(_export_result_file_labels_for_folder(state, path))
+            )
+            if not has_current_export_files:
+                continue
+        return str(path)
+    return ""
+
+
+def _clear_generic_module_folder_manual_default(state: MutableMapping[str, Any]) -> None:
+    """Release a stale manual default when it only mirrors a generic export root."""
+    raw_current = str(state.get("research_agent_module_dir_text") or "").strip()
+    raw_export_path = str(state.get("export_path") or "").strip()
+    if not raw_current or not raw_export_path:
+        return
+    try:
+        current = Path(raw_current).expanduser().resolve()
+        export_path = Path(raw_export_path).expanduser().resolve()
+    except Exception:
+        return
+    if current != export_path or not _is_generic_module_export_container(current):
+        return
+    state.pop("research_agent_module_dir_text", None)
+    state.pop("research_agent_module_dir_pick", None)
+
+
 def _default_module_dir_pick_index(options: Sequence[str], dirs: Sequence[Path]) -> int:
     """Return the selectbox index for the most complete detected export.
 
@@ -442,10 +530,7 @@ def _default_module_dir_pick_index(options: Sequence[str], dirs: Sequence[Path])
     best_dir_idx = max(
         range(len(dirs)),
         key=lambda idx: (
-            not (
-                dirs[idx].name.lower() in {"easyicu_export", "exports", "output", "outputs"}
-                and _has_child_module_export_dirs(dirs[idx])
-            ),
+            not _is_generic_module_export_container(dirs[idx]),
             _module_dir_parquet_count(dirs[idx]),
             dirs[idx].stat().st_mtime if dirs[idx].exists() else 0.0,
             str(dirs[idx]),
@@ -507,6 +592,21 @@ def _safe_column_prefix(path: Path, folder: Path) -> str:
     while "__" in prefix:
         prefix = prefix.replace("__", "_")
     return prefix or path.stem
+
+
+def _normalize_module_merge_id(series: pd.Series) -> pd.Series:
+    """Keep numeric ICU ids on one dtype before pandas merge operations."""
+    if not pd.api.types.is_numeric_dtype(series):
+        return series
+    numeric = pd.to_numeric(series, errors="coerce")
+    present = numeric.dropna()
+    if present.empty:
+        return numeric.astype("Int64")
+    try:
+        integral = ((present % 1) == 0).all()
+    except Exception:
+        integral = False
+    return numeric.astype("Int64" if bool(integral) else "Float64")
 
 
 def _unique_column_name(name: str, used: Set[str]) -> str:
@@ -653,6 +753,7 @@ def _read_module_file(
         keep = [file_id, time_col] + value_cols
         sub = df[keep].dropna(subset=[file_id]).copy()
         sub = sub.rename(columns={file_id: id_col, time_col: canonical_time})
+        sub[id_col] = _normalize_module_merge_id(sub[id_col])
         # Sort by time so later duplicates are more recent
         try:
             sub = sub.sort_values([id_col, canonical_time])
@@ -668,6 +769,7 @@ def _read_module_file(
         )
         if file_id != id_col:
             sub = sub.rename(columns={file_id: id_col})
+        sub[id_col] = _normalize_module_merge_id(sub[id_col])
 
     # --- rename value columns to avoid clashes ----------------------------
     rename: Dict[str, str] = {}
@@ -924,7 +1026,8 @@ def _restore_pending_module_folder_path(
     if not folder:
         return
     state["research_agent_module_dir_text"] = folder
-    state["research_agent_module_dir_pick"] = manual_path_label
+    state["_research_agent_module_dir_restore_folder"] = folder
+    state.pop("research_agent_module_dir_pick", None)
 
 
 def _restore_pending_module_file_selection(
@@ -2674,13 +2777,15 @@ def _section_cohort_picker(
         st.session_state["_research_agent_previous_cohort_source"] = source
         _clear_research_agent_preflight_confirmation()
         if source == source_module:
-            export_dir = str(st.session_state.get("last_export_dir") or st.session_state.get("export_path") or "")
+            export_dir = _module_folder_manual_handoff_dir(st.session_state)
             if export_dir:
                 st.session_state["_eu_ra_focus_module_folder"] = True
                 st.session_state["_eu_ra_module_pick_force_manual"] = True
                 st.session_state["_eu_ra_apply_export_file_selection"] = True
                 st.session_state["research_agent_module_dir_text"] = export_dir
                 st.session_state.pop("research_agent_module_dir_pick", None)
+            else:
+                _clear_generic_module_folder_manual_default(st.session_state)
 
     if source == source_handoff:
         df = inbound  # type: ignore[assignment]
@@ -2750,7 +2855,14 @@ def _section_cohort_picker(
                     pass
         dirs = _scan_workspace_for_module_dirs(extra_roots + _candidate_cohort_roots())
         dir_labels = [_display_path(p) for p in dirs]
-        manual_default = str(extra_roots[0]) if extra_roots else ""
+        manual_path_label = _ra_text("manual_path")
+        if dir_labels:
+            _restore_pending_module_folder_path(
+                st.session_state,
+                manual_path_label=manual_path_label,
+            )
+        restore_folder = str(st.session_state.pop("_research_agent_module_dir_restore_folder", "") or "")
+        manual_default = restore_folder or (str(extra_roots[0]) if extra_roots else "")
         force_manual_pick = bool(
             st.session_state.pop("_eu_ra_module_pick_force_manual", False)
             and manual_default
@@ -2760,11 +2872,16 @@ def _section_cohort_picker(
         )
         picked_label = ""
         if dir_labels:
-            manual_path_label = _ra_text("manual_path")
-            _restore_pending_module_folder_path(
-                st.session_state,
-                manual_path_label=manual_path_label,
-            )
+            restore_pick_index: Optional[int] = None
+            if restore_folder:
+                try:
+                    restore_resolved = Path(restore_folder).expanduser().resolve()
+                    for idx, folder_candidate in enumerate(dirs):
+                        if folder_candidate.expanduser().resolve() == restore_resolved:
+                            restore_pick_index = idx + 1
+                            break
+                except Exception:
+                    restore_pick_index = None
             current_pick = str(st.session_state.get("research_agent_module_dir_pick") or "")
             current_manual_text = str(st.session_state.get("research_agent_module_dir_text", "") or "")
             if (
@@ -2774,11 +2891,14 @@ def _section_cohort_picker(
             ):
                 st.session_state.pop("research_agent_module_dir_pick", None)
             folder_options = [manual_path_label] + dir_labels
-            folder_pick_index = (
-                0
-                if force_manual_pick or handoff_manual_active
-                else _default_module_dir_pick_index(folder_options, dirs)
-            )
+            if force_manual_pick or handoff_manual_active:
+                folder_pick_index = 0
+            elif restore_pick_index is not None:
+                folder_pick_index = restore_pick_index
+            elif restore_folder:
+                folder_pick_index = 0
+            else:
+                folder_pick_index = _default_module_dir_pick_index(folder_options, dirs)
             picked_label = st.selectbox(
                 _ra_text("detected_folders"),
                 folder_options,
@@ -2788,10 +2908,10 @@ def _section_cohort_picker(
             )
         selected_folder_value = (
             str(dirs[dir_labels.index(picked_label)])
-            if dir_labels and picked_label not in {"", _ra_text("manual_path")}
+            if dir_labels and picked_label not in {"", manual_path_label}
             else manual_default
         )
-        picked_manual_path = picked_label in {"", _ra_text("manual_path")}
+        picked_manual_path = picked_label in {"", manual_path_label}
         show_handoff_path = bool(
             st.session_state.get("_eu_ra_focus_module_folder")
             and picked_manual_path
