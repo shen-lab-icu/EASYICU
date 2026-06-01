@@ -3149,7 +3149,7 @@ def _render_real_cohort_preview_pending(lang: str, chips: list[str]) -> None:
         '<div class="eu-cohort-chip-card">'
         '<div class="chip-head">'
         f'<span>{html.escape("Active filters" if lang == "en" else "当前筛选")} · {len(chips)}</span>'
-        f'<em>{html.escape("Clear all" if lang == "en" else "清空")}</em></div>'
+        f'<em>{html.escape("preview" if lang == "en" else "预览")}</em></div>'
         f'<div class="chip-wrap">{chips_html}</div></div></div>',
         unsafe_allow_html=True,
     )
@@ -3242,7 +3242,7 @@ def _render_cohort_live_preview(lang: str) -> None:
         '<div class="eu-cohort-chip-card">'
         '<div class="chip-head">'
         f'<span>{html.escape("Active filters" if lang == "en" else "当前筛选")} · {len(chips)}</span>'
-        f'<em>{html.escape("Clear all" if lang == "en" else "清空")}</em></div>'
+        f'<em>{html.escape("preview" if lang == "en" else "预览")}</em></div>'
         f'<div class="chip-wrap">{chips_html}</div></div>'
         '<div class="eu-cohort-sample-card">'
         '<div class="table-head">'
