@@ -120,60 +120,36 @@ def _render_page_header(
     )
 
 
-def _render_agent_gate_strip(lang: str, *, context: str) -> None:
-    """PlanAgent-inspired preflight / evidence gate strip.
-
-    This is intentionally compact: it borrows the useful interaction
-    model from ``agentdesign.pdf`` (input -> checkpoints -> review gate)
-    without turning every analytic page into an agent dashboard.
-    """
+def _render_cohort_readiness_strip(lang: str) -> None:
+    """Compact cohort readiness strip for the statistics page."""
     loaded_concepts = st.session_state.get("loaded_concepts") or {}
-    context_key = context.lower().replace(' ', '_')
     input_tone = "ok"
     evidence_tone = "ok"
-    if "cross-db" in context.lower() or "cross_db" in context_key:
-        db_count, row_count, concept_count = _crossdb_loaded_counts()
-        if db_count:
-            input_body = _T(
-                lang,
-                f"{db_count} DBs · {row_count:,} rows · {concept_count} concepts",
-                f"{db_count} 个库 · {row_count:,} 行 · {concept_count} 概念",
-            )
-            evidence_body = _T(lang, "distribution denominators ready", "分布分母已就绪")
-            signature = _T(lang, "current session", "当前会话")
-        else:
-            df = _demographics_df()
-            patient_count = len(df) if df is not None else _demo_mock_params_n()
-            concept_count = len(loaded_concepts) if loaded_concepts else 0
-            input_body = _T(
-                lang,
-                f"{patient_count:,} current-session stays · multi-DB data not loaded",
-                f"{patient_count:,} 当前会话病例 · 多库数据未加载",
-            )
-            evidence_body = _T(lang, "open loader for real denominators", "打开加载器以获得真实分母")
-            signature = _T(lang, "current session", "当前会话")
+    df = _demographics_df()
+    if df is not None:
+        patient_count = len(df)
+    elif st.session_state.get("entry_mode") == "demo":
+        patient_count = _demo_mock_params_n()
     else:
-        df = _demographics_df()
-        if df is not None:
-            patient_count = len(df)
-        elif st.session_state.get("entry_mode") == "demo":
-            patient_count = _demo_mock_params_n()
-        else:
-            patient_count = 0
-        concept_count = len(loaded_concepts) if loaded_concepts else 0
-        if st.session_state.get("entry_mode") != "demo" and patient_count == 0 and concept_count == 0:
-            input_body = _T(lang, "waiting for local cohort", "等待本地队列")
-            evidence_body = _T(lang, "load data for denominators", "加载数据后确认分母")
-            input_tone = "warn"
-            evidence_tone = "warn"
-        else:
-            input_body = (
-                _T(lang, f"{patient_count:,} stays · {concept_count} concepts", f"{patient_count:,} 例 · {concept_count} 概念")
-                if concept_count else
-                _T(lang, f"{patient_count:,} stays · demo concept set", f"{patient_count:,} 例 · 演示概念集")
-            )
-            evidence_body = _T(lang, "coverage + denominators ready", "覆盖率 + 分母已就绪")
-        signature = _T(lang, "current session", "当前会话")
+        patient_count = 0
+    concept_count = len(loaded_concepts) if loaded_concepts else 0
+    if st.session_state.get("entry_mode") != "demo" and patient_count == 0 and concept_count == 0:
+        input_body = _T(lang, "waiting for local cohort", "等待本地队列")
+        evidence_body = _T(lang, "load data for denominators", "加载数据后确认分母")
+        review_body = _T(lang, "review unlocks after data load", "加载数据后进入复核")
+        input_tone = "warn"
+        evidence_tone = "warn"
+        review_tone = "warn"
+    else:
+        input_body = (
+            _T(lang, f"{patient_count:,} stays · {concept_count} concepts", f"{patient_count:,} 例 · {concept_count} 概念")
+            if concept_count else
+            _T(lang, f"{patient_count:,} stays · demo concept set", f"{patient_count:,} 例 · 演示概念集")
+        )
+        evidence_body = _T(lang, "coverage + denominators ready", "覆盖率 + 分母已就绪")
+        review_body = _T(lang, "ready for cohort review", "可进入队列复核")
+        review_tone = "ok"
+    signature = _T(lang, "current session", "当前会话")
     rows = [
         (
             _T(lang, "Input package", "输入包"),
@@ -186,9 +162,9 @@ def _render_agent_gate_strip(lang: str, *, context: str) -> None:
             evidence_tone,
         ),
         (
-            _T(lang, "Draft gate", "写作关口"),
-            _T(lang, "agent drafts only after review", "复核后才进入草稿"),
-            "warn",
+            _T(lang, "Review state", "复核状态"),
+            review_body,
+            review_tone,
         ),
     ]
     cards = []
@@ -200,12 +176,12 @@ def _render_agent_gate_strip(lang: str, *, context: str) -> None:
             '</div>'
         )
     st.markdown(
-        '<div class="eu-agent-gate">'
-        '<div class="eu-agent-gate-head">'
-        f'<span class="mono">{_T(lang, "Agent preflight", "Agent 预检")}</span>'
+        '<div class="eu-readiness-strip">'
+        '<div class="eu-readiness-strip-head">'
+        f'<span class="mono">{_T(lang, "Cohort readiness", "队列就绪状态")}</span>'
         f'<span class="mono muted">{signature}</span>'
         '</div>'
-        f'<div class="eu-agent-gate-grid">{"".join(cards)}</div>'
+        f'<div class="eu-readiness-strip-grid">{"".join(cards)}</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -593,7 +569,7 @@ def render_cohort_redesign_page(
         lang=lang,
     )
 
-    _render_agent_gate_strip(lang, context="Cohort statistics")
+    _render_cohort_readiness_strip(lang)
 
     tabs_labels = list(_SUBTABS_EN if lang == "en" else _SUBTABS_ZH)
     panel_keys = ["groups", "coverage", "snapshot", "sofa"]

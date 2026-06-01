@@ -2442,14 +2442,16 @@ div[role="listbox"] li {
 .stApp .eu-blink { animation: eu-blink 1s steps(2) infinite; }
 
 /* Research Agent: EasyICU workbench with planagent-inspired density. */
-.eu-agent-gate {
+.eu-agent-gate,
+.eu-readiness-strip {
   margin: 0 0 14px;
   padding: 10px 12px;
   border: 1px solid var(--hair);
   border-radius: 2px;
   background: var(--surface);
 }
-.eu-agent-gate-head {
+.eu-agent-gate-head,
+.eu-readiness-strip-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2458,10 +2460,12 @@ div[role="listbox"] li {
   color: var(--ink-4);
   font-size: 10.5px;
 }
-.eu-agent-gate-head .muted {
+.eu-agent-gate-head .muted,
+.eu-readiness-strip-head .muted {
   opacity: 0.72;
 }
-.eu-agent-gate-grid {
+.eu-agent-gate-grid,
+.eu-readiness-strip-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 8px;
@@ -12503,6 +12507,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   .eu-section-label,
   .eu-context-label,
   .eu-agent-gate-head,
+  .eu-readiness-strip-head,
   .eu-agent-mini-row small,
   .eu-pipe-step .meta,
   .eu-export-card-head small,

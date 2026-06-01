@@ -5334,13 +5334,23 @@ def test_cohort_redesign_defaults_to_real_panel_body(monkeypatch) -> None:
         "SOFA reclassification",
     ]
     page_source = "\n".join(streamlit_stub.markdown_calls)
+    assert "Cohort readiness" in page_source
+    assert "Review state" in page_source
     assert "10 stays · demo concept set" in page_source
+    assert "ready for cohort review" in page_source
     assert "current session" in page_source
+    assert "Agent preflight" not in page_source
+    assert "Draft gate" not in page_source
+    assert "agent drafts only after review" not in page_source
     assert "cohort_statistics:250:0" not in page_source
     assert "250 stays" not in page_source
+    cohort_source = Path(cohort_redesign.__file__).read_text(encoding="utf-8")
+    assert "_render_cohort_readiness_strip(lang)" in cohort_source
+    assert "_render_agent_gate_strip" not in cohort_source
 
     css_text = shell_styles._load_shell_overrides_css()
     assert "st-key-cohort_active_panel" in css_text
+    assert "eu-readiness-strip" in css_text
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in css_text
     cohort_panel_css = css_text[
         css_text.index('[class*="st-key-cohort_active_panel"] div[role="radiogroup"]'):
@@ -5382,8 +5392,13 @@ def test_cohort_redesign_real_unconfigured_does_not_show_demo_denominators(monke
     assert rendered == ["groups"]
     page_source = "\n".join(streamlit_stub.markdown_calls)
     assert "Cohort statistics" in page_source
+    assert "Cohort readiness" in page_source
     assert "waiting for local cohort" in page_source
     assert "load data for denominators" in page_source
+    assert "review unlocks after data load" in page_source
+    assert "Agent preflight" not in page_source
+    assert "Draft gate" not in page_source
+    assert "agent drafts only after review" not in page_source
     assert "demo concept set" not in page_source
     assert "250 stays" not in page_source
     assert "Sepsis vs Non-sepsis" not in page_source
