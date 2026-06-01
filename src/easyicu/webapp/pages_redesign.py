@@ -993,8 +993,24 @@ def _workspace_status_overview_html(state: MutableMapping[str, Any], lang: str) 
         if not exported else
         _T(lang, "Export is complete. You can review patients, inspect cohort statistics, or open the Research Agent with the exported module folder.", "导出已完成。现在可以审阅患者、查看队列统计，或用导出的模块目录打开研究智能体。")
     )
+    session_detail = " · ".join(
+        part for part in (
+            f"{mode_label} · {database_label}",
+            selected_detail,
+            (_T(lang, "export complete", "导出完成") if exported else _T(lang, "export pending", "导出待完成")),
+        )
+        if part
+    )
 
     return (
+        '<div class="eu-workspace-status-shell">'
+        '<div class="eu-workspace-session-strip">'
+        '<div>'
+        f'<span>{_T(lang, "Session snapshot", "会话快照")}</span>'
+        f'<b>{_T(lang, "Operational overview", "工作区运行总览")}</b>'
+        '</div>'
+        f'<em>{_esc(session_detail)}</em>'
+        '</div>'
         '<div class="eu-workspace-status-grid">'
         f'{tiles_html}'
         '</div>'
@@ -1010,6 +1026,7 @@ def _workspace_status_overview_html(state: MutableMapping[str, Any], lang: str) 
         f'<div><span>{_T(lang, "Handoff", "交接")}</span><h2>{_T(lang, "What downstream pages will use", "下游页面会使用什么")}</h2></div>'
         '</div>'
         f'<div class="eu-workspace-handoff">{handoff_html}</div>'
+        '</div>'
         '</div>'
     )
 

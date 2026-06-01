@@ -2486,7 +2486,10 @@ def test_workspace_states_page_is_operational_overview_not_reference_catalog() -
     assert "Status primitives" not in render_source
     assert "Reusable building blocks" not in render_source
     assert "eu-state-primitive-grid" not in render_source
+    assert ".stApp .eu-workspace-status-shell" in css_text
+    assert ".stApp .eu-workspace-session-strip" in css_text
     assert ".stApp .eu-workspace-status-grid" in css_text
+    assert ".stApp .eu-workspace-status-tile.accent" in css_text
     assert ".stApp .eu-workspace-flow-step.active" in css_text
     assert '.stApp [class*="st-key-eu_workspace_status_actions"]' in css_text
 
@@ -2512,6 +2515,14 @@ def test_workspace_status_overview_summarizes_current_session_without_fake_loadi
 
     assert "Real data" in html
     assert "MIMIC-IV" in html
+    assert "eu-workspace-status-shell" in html
+    assert "eu-workspace-session-strip" in html
+    assert "Session snapshot" in html
+    assert "Operational overview" in html
+    assert html.count("eu-workspace-status-tile") == 4
+    assert "eu-workspace-flow-step done" in html
+    assert "eu-workspace-flow-step active" in html
+    assert "eu-workspace-flow-step pending" in html
     assert "2 / 4" in html
     assert "3 / 2" in html
     assert "patients / loaded concepts" in html
