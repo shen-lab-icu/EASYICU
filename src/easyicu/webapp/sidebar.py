@@ -925,6 +925,22 @@ def _agent_sidebar_cohort_value(
                 f"{len(built_df):,} 行"
             )
 
+    if (
+        "module export folder" in cohort_source_lower
+        or "模块导出文件夹" in cohort_source
+    ):
+        folder_text = str(
+            state.get("research_agent_module_dir_text")
+            or state.get("last_export_dir")
+            or ""
+        ).strip()
+        if folder_text:
+            return (
+                "export ready to build"
+                if lang == "en" else
+                "导出待构建"
+            )
+
     inbound = state.get("research_agent_inbound_cohort")
     if isinstance(inbound, pd.DataFrame) and not inbound.empty:
         return (
