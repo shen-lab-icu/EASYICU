@@ -14,6 +14,7 @@ import re
 
 import pandas as pd
 import streamlit as st
+from easyicu.webapp.cohort_filters import _split_query_tokens
 from easyicu.webapp.concept_catalog import (
     CONCEPT_DESCRIPTIONS,
     CONCEPT_DICTIONARY,
@@ -3155,6 +3156,224 @@ def _render_real_cohort_preview_pending(lang: str, chips: list[str]) -> None:
     )
 
 
+def _demo_icd_token_fraction(token: str) -> float:
+    """Return a deterministic demo-only match fraction for an ICD prefix."""
+    normalized = str(token or "").upper().replace(".", "").strip()
+    if not normalized:
+        return 0.0
+    if normalized.startswith(("A40", "A41", "A42")):
+        return 0.40
+    if normalized.startswith(("R57", "785")):
+        return 0.30
+    if normalized.startswith(("J12", "J13", "J14", "J15", "J18")):
+        return 0.24
+    if normalized.startswith(("I50", "428")):
+        return 0.22
+    if normalized.startswith(("N17", "N18")):
+        return 0.18
+    if normalized.startswith(("C", "D0")):
+        return 0.12
+    return 0.14
+
+
+def _estimate_demo_icd_match_count(total_stays: int, tokens: list[str]) -> int:
+    """Estimate demo ICD matches without pretending to query a real diagnosis table."""
+    total = max(int(total_stays or 0), 0)
+    if total == 0 or not tokens:
+        return 0
+    miss_probability = 1.0
+    for token in tokens[:12]:
+        miss_probability *= 1.0 - _demo_icd_token_fraction(token)
+    match_fraction = min(0.88, max(0.0, 1.0 - miss_probability))
+    return min(total, max(1, int(round(total * match_fraction))))
+
+
+def _demo_step2_icd_preview_counts(
+    total_stays: int,
+    include_query: str,
+    exclude_query: str,
+) -> dict[str, Any]:
+    """Return demo-only include/exclude/net ICD preview counts."""
+    include_tokens = _split_query_tokens(include_query)
+    exclude_tokens = _split_query_tokens(exclude_query)
+    include_count = _estimate_demo_icd_match_count(total_stays, include_tokens)
+    exclude_count = _estimate_demo_icd_match_count(total_stays, exclude_tokens)
+    base_for_net = include_count if include_tokens else max(int(total_stays or 0), 0)
+    retained_count = max(base_for_net - min(exclude_count, base_for_net), 0)
+    return {
+        "mode": "demo",
+        "total": max(int(total_stays or 0), 0),
+        "include_tokens": include_tokens,
+        "exclude_tokens": exclude_tokens,
+        "include_count": include_count,
+        "exclude_count": exclude_count,
+        "retained_count": retained_count,
+        "error": "",
+    }
+
+
+def _cached_real_step2_icd_preview(preview_key: str, query: str) -> dict[str, Any] | None:
+    """Return a cached exact ICD preview for local real-data workflows."""
+    tokens = _split_query_tokens(query)
+    cache_key = f"_icd_preview_cache_{preview_key}"
+    if not tokens:
+        st.session_state.pop(cache_key, None)
+        return None
+
+    data_path = st.session_state.get("data_path")
+    database = str(st.session_state.get("database", "miiv") or "miiv")
+    if not data_path:
+        return {
+            "tokens": tokens,
+            "matched_patients": 0,
+            "matched_ids": [],
+            "total_patients": 0,
+            "error": "Data path is not validated yet.",
+        }
+
+    signature = (str(data_path), database, tuple(tokens))
+    cached = st.session_state.get(cache_key)
+    if isinstance(cached, dict) and cached.get("_signature") == signature:
+        return cached
+
+    preview_fn = globals().get("_preview_icd_match")
+    if not callable(preview_fn):
+        return {
+            "tokens": tokens,
+            "matched_patients": 0,
+            "matched_ids": [],
+            "total_patients": 0,
+            "error": "ICD preview helper is unavailable.",
+        }
+
+    result = preview_fn(Path(str(data_path)), database, tokens)
+    if isinstance(result, dict):
+        result = dict(result)
+    else:
+        result = {
+            "tokens": tokens,
+            "matched_patients": 0,
+            "matched_ids": [],
+            "total_patients": 0,
+            "error": "ICD preview returned an unexpected result.",
+        }
+    result["_signature"] = signature
+    st.session_state[cache_key] = result
+    return result
+
+
+def _real_step2_icd_preview_counts(include_query: str, exclude_query: str) -> dict[str, Any]:
+    """Return exact include/exclude/net ICD preview counts when local tables are available."""
+    include_result = _cached_real_step2_icd_preview("include", include_query)
+    exclude_result = _cached_real_step2_icd_preview("exclude", exclude_query)
+    include_tokens = _split_query_tokens(include_query)
+    exclude_tokens = _split_query_tokens(exclude_query)
+    total = 0
+    for result in (include_result, exclude_result):
+        if isinstance(result, dict):
+            total = max(total, int(result.get("total_patients") or 0))
+
+    include_ids = set(include_result.get("matched_ids", [])) if isinstance(include_result, dict) else set()
+    exclude_ids = set(exclude_result.get("matched_ids", [])) if isinstance(exclude_result, dict) else set()
+    include_count = len(include_ids) if include_tokens else 0
+    exclude_count = len(exclude_ids) if exclude_tokens else 0
+    if include_tokens:
+        retained_count = len(include_ids - exclude_ids)
+    else:
+        retained_count = max(total - exclude_count, 0) if exclude_tokens else total
+
+    errors = [
+        str(result.get("error"))
+        for result in (include_result, exclude_result)
+        if isinstance(result, dict) and result.get("error")
+    ]
+    return {
+        "mode": "real",
+        "total": total,
+        "include_tokens": include_tokens,
+        "exclude_tokens": exclude_tokens,
+        "include_count": include_count,
+        "exclude_count": exclude_count,
+        "retained_count": retained_count,
+        "error": " · ".join(errors),
+    }
+
+
+def _step2_icd_preview_html(lang: str, preview: dict[str, Any]) -> str:
+    """Build the compact ICD preview block shown inside the Step 2 design card."""
+    mode = str(preview.get("mode") or "")
+    include_tokens = list(preview.get("include_tokens") or [])
+    exclude_tokens = list(preview.get("exclude_tokens") or [])
+    has_tokens = bool(include_tokens or exclude_tokens)
+    if not has_tokens:
+        prompt = (
+            "Enter ICD prefixes to preview include, exclude, and retained stay counts."
+            if lang == "en" else
+            "输入 ICD 前缀后，会显示包含匹配、排除匹配和最终保留的 stay 数。"
+        )
+        return (
+            '<div class="eu-icd-preview empty">'
+            f'<span>{html.escape("ICD preview" if lang == "en" else "ICD 预览")}</span>'
+            f'<p>{html.escape(prompt)}</p>'
+            '</div>'
+        )
+
+    total = int(preview.get("total") or 0)
+    include_count = int(preview.get("include_count") or 0)
+    exclude_count = int(preview.get("exclude_count") or 0)
+    retained_count = int(preview.get("retained_count") or 0)
+    error = str(preview.get("error") or "").strip()
+    source_label = (
+        "demo estimate" if mode == "demo" and lang == "en" else
+        "演示估算" if mode == "demo" else
+        "exact from local tables" if lang == "en" else
+        "本地表精确预览"
+    )
+    unit = "stays" if lang == "en" else "stay"
+    include_label = "Include match" if lang == "en" else "包含匹配"
+    exclude_label = "Exclude match" if lang == "en" else "排除匹配"
+    retained_label = "Retained after ICD" if lang == "en" else "ICD 净保留"
+    total_label = f"of {total:,}" if lang == "en" else f"共 {total:,}"
+    token_hint = " / ".join(
+        item for item in (
+            f"+ {', '.join(include_tokens[:5])}" if include_tokens else "",
+            f"- {', '.join(exclude_tokens[:5])}" if exclude_tokens else "",
+        )
+        if item
+    )
+    status_class = "error" if error else ("demo" if mode == "demo" else "real")
+    error_html = (
+        f'<div class="eu-icd-preview-error">{html.escape(error)}</div>'
+        if error else
+        ""
+    )
+    return (
+        f'<div class="eu-icd-preview {status_class}">'
+        '<div class="eu-icd-preview-head">'
+        f'<span>{html.escape("ICD filter preview" if lang == "en" else "ICD 条件预览")}</span>'
+        f'<em>{html.escape(source_label)}</em>'
+        '</div>'
+        '<div class="eu-icd-preview-grid">'
+        f'<div><b>{html.escape(include_label)}</b><strong>{include_count:,}</strong><small>{html.escape(unit)}</small></div>'
+        f'<div><b>{html.escape(exclude_label)}</b><strong>{exclude_count:,}</strong><small>{html.escape(unit)}</small></div>'
+        f'<div><b>{html.escape(retained_label)}</b><strong>{retained_count:,}</strong><small>{html.escape(total_label)}</small></div>'
+        '</div>'
+        f'<p class="mono">{html.escape(token_hint)}</p>'
+        f'{error_html}'
+        '</div>'
+    )
+
+
+def _render_step2_icd_preview(lang: str, include_query: str, exclude_query: str) -> None:
+    """Render the Step 2 ICD preview summary under the redesign input row."""
+    if st.session_state.get("entry_mode") == "demo":
+        total = int(st.session_state.get("mock_params", {}).get("n_patients", 100) or 100)
+        preview = _demo_step2_icd_preview_counts(total, include_query, exclude_query)
+    else:
+        preview = _real_step2_icd_preview_counts(include_query, exclude_query)
+    st.markdown(_step2_icd_preview_html(lang, preview), unsafe_allow_html=True)
+
+
 def _render_cohort_live_preview(lang: str) -> None:
     """Render the stateful right-hand preview from the cohort-builder design."""
     cf = st.session_state.get('cohort_filter', {})
@@ -3165,21 +3384,36 @@ def _render_cohort_live_preview(lang: str) -> None:
 
     base_n = int(st.session_state.get('mock_params', {}).get('n_patients', 100) or 100)
     factor = 1.0
+    has_non_icd_filters = False
     if cf.get('age_min') is not None or cf.get('age_max') is not None:
         factor *= 0.86
+        has_non_icd_filters = True
     if cf.get('los_min') is not None:
         factor *= 0.82
+        has_non_icd_filters = True
     if cf.get('first_icu_stay') is not None:
         factor *= 0.74
+        has_non_icd_filters = True
     if cf.get('gender') is not None:
         factor *= 0.50
+        has_non_icd_filters = True
     if cf.get('survived') is not None:
         factor *= 0.58
+        has_non_icd_filters = True
     if cf.get('disease_cohort') and cf.get('disease_cohort') != 'none':
         factor *= 0.50
-    if cf.get('icd_include_query'):
-        factor *= 0.72
-    filtered_n = max(1, int(round(base_n * factor))) if chips else base_n
+        has_non_icd_filters = True
+    non_icd_n = max(1, int(round(base_n * factor))) if has_non_icd_filters else base_n
+    has_icd_filters = bool(cf.get('icd_include_query') or cf.get('icd_exclude_query'))
+    if has_icd_filters:
+        icd_counts = _demo_step2_icd_preview_counts(
+            base_n,
+            str(cf.get('icd_include_query') or ''),
+            str(cf.get('icd_exclude_query') or ''),
+        )
+        filtered_n = min(non_icd_n, int(icd_counts.get('retained_count') or 0))
+    else:
+        filtered_n = non_icd_n if chips else base_n
     pct_drop = 0.0 if base_n == 0 else max(0.0, round((1 - filtered_n / base_n) * 100, 1))
     drop_label = f"-{pct_drop:.1f}%" if pct_drop > 0 else "0.0%"
     ready_label = f"{filtered_n:,} ready" if lang == "en" else f"{filtered_n:,} 可用"
@@ -3447,6 +3681,11 @@ def _render_step2_cohort_builder_design() -> bool:
                     cf['icd_exclude_query'] = exclude_value.strip() if st.session_state.cohort_enabled else ""
                 cf['icd_query'] = cf.get('icd_include_query', '')
                 cf['icd_mode'] = 'include'
+                _render_step2_icd_preview(
+                    lang,
+                    cf.get('icd_include_query', ''),
+                    cf.get('icd_exclude_query', ''),
+                )
         else:
             cf['icd_query'] = ""
             cf['icd_include_query'] = ""
