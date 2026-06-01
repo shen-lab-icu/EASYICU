@@ -1057,7 +1057,8 @@ def test_empty_workbench_removes_ambiguous_open_latest_run_action() -> None:
     assert "打开最近 run" not in source
     assert "_eu_wb_empty_latest" not in source
     assert "_latest_real_workbench_state" not in source
-    assert "Run preflight" in source
+    assert "Open setup" in source
+    assert "打开配置" in source
     assert "Open local saved runs" in source
     assert "查看本机历史运行" in source
     assert "Local run history stays on this machine" in source
@@ -1521,10 +1522,13 @@ def test_research_agent_shell_identity_card_precedes_view_tabs() -> None:
     assert "local history" in app_source
     assert "eu-ra-reference-header" in app_source
     assert agent_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)") < agent_branch.index('st.container(key="_eu_ra_tabs")')
+    assert "_research_agent_active_run_context(st.session_state)" in agent_branch
+    assert "_prime_research_agent_header_rerun(st.session_state, _ra_run_context)" in agent_branch
     assert 'icon=":material/tune:"' in agent_branch
     assert 'icon=":material/grid_view:"' in agent_branch
     assert 'icon=":material/history:"' in agent_branch
     assert 'icon=":material/shield:"' in agent_branch
+    assert 'icon=":material/replay:"' in agent_branch
     assert "render_agent_workbench(lang, show_header=False)" in agent_branch
     assert "render_agent_output_summary(lang, show_header=False)" in agent_branch
     assert "render_research_agent_history_page(lang, show_header=False)" in agent_branch
@@ -1544,6 +1548,7 @@ def test_research_agent_shell_identity_card_precedes_view_tabs() -> None:
     assert "flex: 0 0 auto !important;" in css
     assert "nth-child(-n + 4)" in css
     assert "nth-child(5)" in css
+    assert "st-key-_eu_ra_header_rerun" in css
     assert "return ('Agent guide', 'Agent 导览')" in app_source
     assert '_topbar_type = "secondary"' not in app_source
     assert 'type="primary"' in app_source
