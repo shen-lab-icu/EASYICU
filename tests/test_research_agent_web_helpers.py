@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import inspect
 import json
+import warnings
 from pathlib import Path
 
 import pandas as pd
@@ -66,6 +67,42 @@ def test_module_export_folder_builds_filtered_stay_level_cohort(tmp_path: Path) 
     assert set(cohort["stay_id"]) == {1, 3}
     assert cohort.loc[cohort["stay_id"] == 1, "hr"].iloc[0] == 80
     assert set(["sep3_sofa2", "death", "hr"]) <= set(cohort.columns)
+
+
+def test_module_export_folder_normalizes_numeric_id_dtype_before_merge(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "mock_export"
+    folder.mkdir()
+    left = folder / "vitals.parquet"
+    right = folder / "labs.parquet"
+    pd.DataFrame({
+        "stay_id": pd.Series([1, 2], dtype="int64"),
+        "charttime": pd.to_datetime(["2024-01-01", "2024-01-02"]),
+        "hr": [70, 80],
+    }).to_parquet(left, index=False)
+    pd.DataFrame({
+        "stay_id": pd.Series([1.0, 2.0], dtype="float64"),
+        "charttime": pd.to_datetime(["2024-01-01", "2024-01-02"]),
+        "lactate": [1.2, 2.4],
+    }).to_parquet(right, index=False)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cohort = ra_page._build_stay_level_from_module_folder(
+            folder=folder,
+            selected_files=[left, right],
+            id_col="stay_id",
+        )
+
+    merge_warnings = [
+        warning
+        for warning in caught
+        if "merging on int and float columns" in str(warning.message)
+    ]
+    assert not merge_warnings
+    assert list(cohort["stay_id"]) == [1, 2]
+    assert {"hr", "lactate"} <= set(cohort.columns)
 
 
 def test_agent_demo_to_real_mode_clears_mock_database_context() -> None:
@@ -320,7 +357,8 @@ def test_module_file_selection_survives_apply_question_rerun(tmp_path: Path) -> 
     )
 
     assert state["research_agent_module_dir_text"] == str(folder)
-    assert state["research_agent_module_dir_pick"] == "(type a path manually)"
+    assert state["_research_agent_module_dir_restore_folder"] == str(folder)
+    assert "research_agent_module_dir_pick" not in state
 
     state["research_agent_module_files"] = []
     ra_page._restore_pending_module_file_selection(
@@ -376,6 +414,88 @@ def test_detected_module_folder_avoids_generic_container_root(tmp_path: Path) ->
     options = ["Manual path", str(container), str(complete)]
 
     assert ra_page._default_module_dir_pick_index(options, [container, complete]) == 2
+
+
+def test_module_folder_manual_handoff_skips_generic_export_path_container(
+    tmp_path: Path,
+) -> None:
+    container = tmp_path / "easyicu_export"
+    complete = container / "mock_20260424"
+    complete.mkdir(parents=True)
+    (container / "root.parquet").write_bytes(b"")
+    (complete / "vitals.parquet").write_bytes(b"")
+
+    state = {"export_path": str(container)}
+
+    assert ra_page._module_folder_manual_handoff_dir(state) == ""
+
+
+def test_module_folder_manual_handoff_preserves_latest_export_root_with_manifest(
+    tmp_path: Path,
+) -> None:
+    container = tmp_path / "easyicu_export"
+    complete = container / "mock_20260424"
+    complete.mkdir(parents=True)
+    current = container / "vitals.parquet"
+    current.write_bytes(b"")
+    (complete / "demographics.parquet").write_bytes(b"")
+    state = {
+        "last_export_dir": str(container),
+        "export_path": str(container),
+        "_export_success_result": {"files": [str(current)]},
+    }
+
+    assert ra_page._module_folder_manual_handoff_dir(state) == str(container)
+
+
+def test_generic_module_folder_manual_default_is_released(tmp_path: Path) -> None:
+    container = tmp_path / "easyicu_export"
+    complete = container / "mock_20260424"
+    complete.mkdir(parents=True)
+    (container / "root.parquet").write_bytes(b"")
+    (complete / "vitals.parquet").write_bytes(b"")
+    state = {
+        "export_path": str(container),
+        "research_agent_module_dir_text": str(container),
+        "research_agent_module_dir_pick": "(type a path manually)",
+    }
+
+    ra_page._clear_generic_module_folder_manual_default(state)
+
+    assert "research_agent_module_dir_text" not in state
+    assert "research_agent_module_dir_pick" not in state
+
+
+def test_module_folder_scan_excludes_agent_run_history_container(
+    tmp_path: Path,
+) -> None:
+    research_webapp = tmp_path / "research_output" / "webapp"
+    run_dir = research_webapp / "run_20260601T010101_abcd12"
+    run_dir.mkdir(parents=True)
+    (run_dir / "cohort.parquet").write_bytes(b"")
+    (run_dir / "run_status.json").write_text("{}", encoding="utf-8")
+
+    assert ra_page._scan_workspace_for_module_dirs([tmp_path / "research_output"]) == []
+
+
+def test_module_folder_scan_prefers_export_child_over_agent_history(
+    tmp_path: Path,
+) -> None:
+    export_root = tmp_path / "easyicu_export"
+    export_child = export_root / "mock_20260424"
+    export_child.mkdir(parents=True)
+    for name in ("demographics", "vitals", "outcome"):
+        (export_child / f"{name}.parquet").write_bytes(b"")
+    research_webapp = tmp_path / "research_output" / "webapp"
+    run_dir = research_webapp / "run_20260601T010101_abcd12"
+    run_dir.mkdir(parents=True)
+    for idx in range(12):
+        (run_dir / f"cohort_{idx}.parquet").write_bytes(b"")
+    (run_dir / "run_status.json").write_text("{}", encoding="utf-8")
+
+    dirs = ra_page._scan_workspace_for_module_dirs([export_root, tmp_path / "research_output"])
+
+    assert dirs == [export_child.resolve()]
 
 
 def test_module_parquet_listing_uses_direct_export_files_before_child_runs(tmp_path: Path) -> None:
