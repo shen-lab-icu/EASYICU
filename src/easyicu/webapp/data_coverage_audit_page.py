@@ -17,6 +17,7 @@ _PROTECTED_NAMES = {
     '_get_patient_set',
     '_build_publication_audit_subgroups',
     '_concepts_for_publication_module',
+    '_bounded_coverage',
     '_build_data_coverage_audit',
     'render_data_coverage_audit_subtab',
     '_APP_CONTEXT',
@@ -166,6 +167,13 @@ def _concepts_for_publication_module(module_spec: tuple) -> list[str]:
     return concepts
 
 
+def _bounded_coverage(value: float) -> float:
+    """Return a display-safe percentage for the coverage audit matrix."""
+    if pd.isna(value):
+        return 0.0
+    return round(float(max(0.0, min(100.0, value))), 1)
+
+
 def _build_data_coverage_audit(df: pd.DataFrame, loaded_concepts: Dict[str, Any], lang: str, app_context: dict[str, Any] | None = None) -> Dict[str, Any]:
     """Build the S1B-style coverage matrix and eligibility flow."""
     if app_context is not None:
@@ -239,10 +247,6 @@ def _build_data_coverage_audit(df: pd.DataFrame, loaded_concepts: Dict[str, Any]
                     concept_patient_ids = set(observed_df[id_col].dropna().tolist())
                     concept_coverages.append(len(concept_patient_ids.intersection(denominator_ids)) / denominator * 100)
                 coverage = float(np.mean(concept_coverages)) if concept_coverages else 0.0
-                if subgroup['key'] != 'overall':
-                    # Keep subgroup panels readable while preserving the module-level completeness signal.
-                    jitter_seed = sum(ord(ch) for ch in f"{module_spec[0]}:{subgroup['key']}")
-                    coverage += ((jitter_seed % 7) - 3) * 0.35
             elif present_concepts:
                 # Patient-level fields such as demographics/outcomes are already one row per stay.
                 coverage = 100.0
@@ -251,7 +255,7 @@ def _build_data_coverage_audit(df: pd.DataFrame, loaded_concepts: Dict[str, Any]
             coverage_rows.append({
                 'module': label,
                 'subgroup': subgroup['label'],
-                'coverage': round(float(min(100.0, coverage)), 1),
+                'coverage': _bounded_coverage(coverage),
                 'features': len(present_concepts),
                 'n': denominator,
             })
