@@ -197,6 +197,74 @@ def test_closing_floating_ai_panel_disables_sidebar_toggle_on_next_render(monkey
     assert fake_streamlit.session_state["_llm_toggle_sync_pending"] is True
 
 
+def test_floating_ai_launcher_reopens_panel(monkeypatch) -> None:
+    fake_streamlit = _FakeStreamlit(
+        {
+            "language": "en",
+            "llm_enabled": True,
+            "_floating_ai_open": False,
+            "_floating_ai_size": "m",
+        },
+        clicked_key="_floating_ai_open_btn",
+    )
+    monkeypatch.setattr(llm_chat, "st", fake_streamlit)
+
+    with pytest.raises(_RerunRequested):
+        llm_chat.render_floating_chat_dock()
+
+    assert fake_streamlit.session_state["_floating_ai_open"] is True
+
+
+@pytest.mark.parametrize(
+    ("clicked_key", "expected_size"),
+    [
+        ("_floating_ai_size_s_btn", "s"),
+        ("_floating_ai_size_m_btn", "m"),
+        ("_floating_ai_size_l_btn", "l"),
+    ],
+)
+def test_floating_ai_size_buttons_update_panel_size(monkeypatch, clicked_key, expected_size) -> None:
+    fake_streamlit = _FakeStreamlit(
+        {
+            "language": "en",
+            "llm_enabled": True,
+            "_floating_ai_open": True,
+            "_floating_ai_size": "m",
+        },
+        clicked_key=clicked_key,
+    )
+    monkeypatch.setattr(llm_chat, "st", fake_streamlit)
+
+    with pytest.raises(_RerunRequested):
+        llm_chat.render_floating_chat_dock()
+
+    assert fake_streamlit.session_state["_floating_ai_open"] is True
+    assert fake_streamlit.session_state["_floating_ai_size"] == expected_size
+
+
+def test_minimizing_floating_ai_panel_keeps_assistant_enabled(monkeypatch) -> None:
+    fake_streamlit = _FakeStreamlit(
+        {
+            "language": "en",
+            "llm_enabled": True,
+            "_llm_toggle": True,
+            "_floating_ai_open": True,
+            "_floating_ai_size": "m",
+            "_ai_pending_question": "Explain cohort filters",
+        },
+        clicked_key="_floating_ai_minimize_btn",
+    )
+    monkeypatch.setattr(llm_chat, "st", fake_streamlit)
+
+    with pytest.raises(_RerunRequested):
+        llm_chat.render_floating_chat_dock()
+
+    assert fake_streamlit.session_state["llm_enabled"] is True
+    assert fake_streamlit.session_state["_floating_ai_open"] is False
+    assert fake_streamlit.session_state["_ai_pending_question"] is None
+    assert fake_streamlit.session_state.get("_llm_toggle_sync_pending") is None
+
+
 def test_pending_sidebar_toggle_sync_is_applied_before_toggle_render(monkeypatch) -> None:
     fake_streamlit = _FakeStreamlit(
         {

@@ -4246,6 +4246,40 @@ def test_patient_selector_does_not_mix_session_state_with_default_index(monkeypa
     assert calls["key"] == "patient_view_id"
 
 
+def test_patient_navigation_targets_cover_all_controls() -> None:
+    patient_ids = [10001, 10002, 10003]
+
+    assert patient_page._patient_navigation_target(patient_ids, 10002, "first") == 10001
+    assert patient_page._patient_navigation_target(patient_ids, 10002, "previous") == 10001
+    assert patient_page._patient_navigation_target(patient_ids, 10002, "next") == 10003
+    assert patient_page._patient_navigation_target(patient_ids, 10002, "last") == 10003
+    assert (
+        patient_page._patient_navigation_target(
+            patient_ids,
+            10002,
+            "random",
+            random_choice=10001,
+        )
+        == 10001
+    )
+
+
+def test_patient_navigation_normalizes_stale_current_patient() -> None:
+    patient_ids = [20001, 20002, 20003]
+
+    assert patient_page._normalize_patient_view_id(patient_ids, 99999) == 20001
+    assert patient_page._patient_navigation_target(patient_ids, 99999, "next") == 20002
+    assert (
+        patient_page._patient_navigation_target(
+            patient_ids,
+            20002,
+            "random",
+            random_choice=99999,
+        )
+        == 20002
+    )
+
+
 def test_compute_smd_continuous_uses_pooled_standard_deviation() -> None:
     smd = app._compute_smd_continuous(pd.Series([1, 2, 3]), pd.Series([2, 3, 4]))
 
