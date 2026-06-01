@@ -2314,7 +2314,6 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
             st.session_state["research_agent_preflight_confirmed"] = False
             st.session_state.pop("research_agent_preflight_signature", None)
             message = get_text("ra_handoff_success").format(rows=len(df))
-            st.session_state["_assistant_notice"] = message
             st.session_state["_eu_ra_handoff_success_message"] = message
             st.rerun()
 
