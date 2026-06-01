@@ -486,6 +486,7 @@ def test_research_agent_handoff_from_demo_enters_setup(monkeypatch) -> None:
     assert "research_agent_preflight_signature" not in state
     assert app._research_agent_handoff_setup_ready(state) is True
     assert "Research Agent setup" in state["_eu_ra_handoff_success_message"]
+    assert "_assistant_notice" not in state
 
 
 def test_directory_input_does_not_redeclare_widget_value_for_existing_state(monkeypatch) -> None:
