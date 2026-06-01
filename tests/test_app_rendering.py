@@ -4196,6 +4196,56 @@ def test_cohort_group_table_reports_numeric_smd_without_inline_labels() -> None:
     assert "⚪ small n" not in source
 
 
+def test_cohort_group_survival_split_falls_back_when_outcome_is_degenerate() -> None:
+    all_survived = pd.DataFrame({
+        "stay_id": [1, 2, 3, 4],
+        "age": [42, 58, 71, 83],
+        "gender": ["M", "F", "M", "F"],
+        "los_hours": [24, 48, 96, 120],
+        "survived": [1, 1, 1, 1],
+    })
+
+    ready, zh_notice = cohort_group_page._survival_contrast_status(all_survived, lang="zh")
+
+    assert ready is False
+    assert "没有死亡病例" in zh_notice
+    assert (
+        cohort_group_page._fallback_compare_mode_for_degenerate_survival(
+            all_survived,
+            age_threshold=65,
+        )
+        == "age"
+    )
+
+    death_only = all_survived.drop(columns=["survived"]).assign(death=[0, 0, 0, 0])
+    ready_from_death, death_notice = cohort_group_page._survival_contrast_status(death_only, lang="zh")
+
+    assert ready_from_death is False
+    assert "没有死亡病例" in death_notice
+    assert cohort_group_page._cohort_mortality_display(death_only) == "0.0%"
+    assert cohort_group_page._cohort_mortality_display(all_survived.drop(columns=["survived"])) == "—"
+    assert (
+        cohort_group_page._cohort_resolve_compare_mode(
+            "survival",
+            "age",
+            ["survival", "age", "gender"],
+        )
+        == "age"
+    )
+    assert (
+        cohort_group_page._cohort_resolve_compare_mode(
+            "gender",
+            "stale",
+            ["survival", "age", "gender"],
+        )
+        == "gender"
+    )
+
+    source = Path(cohort_group_page.__file__).read_text(encoding="utf-8")
+    assert "已切换到" in source
+    assert "无存活状态数据" not in source
+
+
 def test_build_group_feature_data_from_loaded_concepts_reuses_loaded_demo_frames() -> None:
     loaded_concepts = {
         "hr": pd.DataFrame(
