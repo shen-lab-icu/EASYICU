@@ -6549,6 +6549,35 @@ def test_export_runtime_states_use_design_system_surfaces() -> None:
     assert 'class*="st-key-_post_export_open_"' in css_text
 
 
+def test_export_patient_limit_hint_tracks_selected_limit() -> None:
+    assert sidebar._export_patient_limit_label(0, "en") == "All"
+    assert sidebar._export_patient_limit_label(1000, "en") == "1k"
+    assert sidebar._export_patient_limit_hint(0, "en") == "All patients for final runs"
+    assert sidebar._export_patient_limit_hint(100, "en") == "Export first 100 patients"
+    assert sidebar._export_patient_limit_hint(5000, "en") == "Export first 5k patients"
+
+
+def test_export_conflicts_are_scoped_to_selected_format() -> None:
+    assert export_workflow._export_extension_for_format("CSV") == ".csv"
+    assert export_workflow._export_extension_for_format("Excel") == ".xlsx"
+    assert export_workflow._export_extension_for_format("Parquet") == ".parquet"
+
+    export_text = Path(export_workflow.__file__).read_text(encoding="utf-8")
+    conflict_block = export_text[
+        export_text.index("existing_modules = {}"):
+        export_text.index("# 如果有已存在的模块，显示让用户选择")
+    ]
+    overwrite_block = export_text[
+        export_text.index("if group_name in _ow_modules or is_viz_import_mode:"):
+        export_text.index("# 跳过检查")
+    ]
+
+    assert "target_ext = _export_extension_for_format(export_format)" in conflict_block
+    assert "glob(f\"{search_prefix}*{target_ext}\")" in conflict_block
+    assert "for ext in ['.parquet', '.csv', '.xlsx']" not in conflict_block
+    assert "glob(f\"{group_name}_*{target_ext}\")" in overwrite_block
+
+
 def test_step2_reset_defers_cohort_enabled_until_next_render(monkeypatch) -> None:
     class _RerunRequested(Exception):
         pass
@@ -6703,6 +6732,42 @@ def test_real_step2_preview_does_not_claim_demo_results(monkeypatch) -> None:
     assert "Sample of demo cohort" not in preview_html
     assert "seed=42" not in preview_html
     assert "18.0%" not in preview_html
+
+
+def test_demo_step2_preview_does_not_render_negative_zero_drop(monkeypatch) -> None:
+    rendered: list[str] = []
+
+    class _PreviewStreamlit:
+        session_state = _AttrSessionState(
+            {
+                "language": "en",
+                "entry_mode": "demo",
+                "mock_params": {"n_patients": 10},
+                "cohort_enabled": True,
+                "cohort_filter": {
+                    "age_min": None,
+                    "age_max": None,
+                    "first_icu_stay": None,
+                    "los_min": None,
+                    "gender": None,
+                    "survived": None,
+                    "disease_cohort": "none",
+                    "icd_include_query": "",
+                },
+            }
+        )
+
+        @staticmethod
+        def markdown(value: str, **_kwargs) -> None:
+            rendered.append(value)
+
+    monkeypatch.setattr(sidebar, "st", _PreviewStreamlit())
+
+    sidebar._render_cohort_live_preview("en")
+    preview_html = "\n".join(rendered)
+
+    assert "of 10 stays · 0.0%" in preview_html
+    assert "-0.0%" not in preview_html
 
 
 def test_step2_database_display_names_cover_real_sources() -> None:
