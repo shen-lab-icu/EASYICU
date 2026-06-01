@@ -220,6 +220,10 @@ def _route_to_research_agent_no_data_setup(state: MutableMapping[str, Any]) -> N
     state["_eu_ra_focus_no_data"] = True
     state["_eu_ra_no_data_entry"] = True
     state.pop("research_agent_cohort_source", None)
+    lang = str(state.get("language") or "en")
+    from easyicu.webapp.research_agent import _seed_default_research_agent_question
+
+    _seed_default_research_agent_question(state, is_en=lang == "en")
 
 
 def _selected_tutorial_module_concepts(state: MutableMapping[str, Any]) -> list[str]:

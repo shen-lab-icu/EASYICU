@@ -90,6 +90,37 @@ def _ra_text(key: str, **kwargs: Any) -> str:
     return text
 
 
+DEFAULT_RESEARCH_AGENT_QUESTION_EN = (
+    "Using the test SOFA cohort, evaluate whether higher SOFA-2 scores are "
+    "associated with ICU mortality, and produce a reproducible table, figure, "
+    "and concise methods/results draft."
+)
+DEFAULT_RESEARCH_AGENT_QUESTION_ZH = (
+    "使用 SOFA 测试队列，评估更高的 SOFA-2 评分是否与 ICU 死亡率相关，"
+    "并生成可复现的表格、图和简洁的 Methods/Results 草稿。"
+)
+
+
+def _default_research_agent_question(*, is_en: bool = True) -> str:
+    """Starter request for the lowest-friction Agent path."""
+    return DEFAULT_RESEARCH_AGENT_QUESTION_EN if is_en else DEFAULT_RESEARCH_AGENT_QUESTION_ZH
+
+
+def _seed_default_research_agent_question(
+    state: MutableMapping[str, object],
+    *,
+    is_en: bool = True,
+    notice: bool = True,
+) -> bool:
+    """Seed a starter question only when the user has not written one."""
+    if str(state.get("research_agent_question") or "").strip():
+        return False
+    state["research_agent_question"] = _default_research_agent_question(is_en=is_en)
+    if notice:
+        state["_research_agent_default_question_notice"] = True
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Lazy-import gates (so a webapp without ``research_agent`` deps still loads)
 # ---------------------------------------------------------------------------
@@ -2810,6 +2841,7 @@ def _activate_research_agent_test_cohort(
     state["research_agent_preflight_confirmed"] = False
     state["research_agent_preflight_ack"] = False
     state.pop("research_agent_preflight_signature", None)
+    _seed_default_research_agent_question(state, is_en=is_en)
 
 
 def _infer_db_tag_from_folder(folder: Path) -> str:
@@ -3927,6 +3959,8 @@ def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
         st.success(_ra_text("question_applied"))
     if st.session_state.pop("_research_agent_question_handoff_notice", False):
         st.success(_ra_text("question_handoff"))
+    if st.session_state.pop("_research_agent_default_question_notice", False):
+        st.success(_ra_text("default_question_added"))
     if st.session_state.pop("_research_agent_question_empty_notice", False):
         st.warning(_ra_text("question_empty"))
     target_outcome = st.text_input(

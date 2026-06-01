@@ -2616,6 +2616,7 @@ def test_entry_no_data_cta_routes_to_real_agent_extraction_setup(tmp_path, monke
     assert at.session_state["database"] == "miiv"
     assert at.session_state["research_agent_cohort_source"] == i18n.TEXTS["en"]["ra_source_no_data"]
     assert at.session_state["_eu_ra_focus_no_data"] is True
+    assert "SOFA-2" in at.session_state["research_agent_question"]
     assert "_eu_ra_no_data_entry" not in at.session_state
     assert "research_agent_resume_run_id" not in at.session_state
     assert "research_agent_force_manuscript" not in at.session_state
@@ -2623,11 +2624,12 @@ def test_entry_no_data_cta_routes_to_real_agent_extraction_setup(tmp_path, monke
 
     page_text = " ".join(
         getattr(element, "value", "")
-        for collection in (at.markdown, at.info, at.warning)
+        for collection in (at.markdown, at.info, at.warning, at.success)
         for element in collection
     )
     assert "Demo Mode is a lightweight preview" not in page_text
     assert "Use this when you start from raw ICU tables" in page_text
+    assert "Added a starter research question" in page_text
 
 
 def test_topbar_render_loads_quick_preview_from_demo_mode(tmp_path, monkeypatch) -> None:

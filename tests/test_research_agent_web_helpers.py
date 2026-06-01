@@ -538,6 +538,28 @@ def test_quick_test_cohort_prepares_ready_session_handoff() -> None:
     assert state["research_agent_question"] == "Does SOFA predict mortality?"
 
 
+def test_quick_test_cohort_seeds_starter_question_when_empty() -> None:
+    state: dict[str, object] = {
+        "research_agent_question": "",
+        "research_agent_preflight_confirmed": True,
+        "research_agent_preflight_ack": True,
+        "research_agent_preflight_signature": "stale",
+    }
+
+    ra_page._activate_research_agent_test_cohort(
+        state,
+        source_handoff="Use cohort prepared elsewhere in this session",
+        is_en=True,
+    )
+
+    assert "SOFA-2" in str(state["research_agent_question"])
+    assert "ICU mortality" in str(state["research_agent_question"])
+    assert state["_research_agent_default_question_notice"] is True
+    assert state["research_agent_preflight_confirmed"] is False
+    assert state["research_agent_preflight_ack"] is False
+    assert "research_agent_preflight_signature" not in state
+
+
 def test_detected_module_folder_defaults_to_most_complete_export(tmp_path: Path) -> None:
     sparse = tmp_path / "miiv_20260427"
     complete = tmp_path / "mock_20260424"
