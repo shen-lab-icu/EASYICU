@@ -5,6 +5,8 @@ from __future__ import annotations
 import html
 from typing import Any
 
+import pandas as pd
+
 from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
 from easyicu.webapp.concept_catalog import (
     CONCEPT_DICTIONARY,
@@ -151,6 +153,137 @@ def _cohort_feature_load_concepts(
             if feature_info:
                 concepts_to_load.append(feature_info[0])
     return list(dict.fromkeys(concepts_to_load))
+
+
+def _cohort_survival_values(cohort: pd.DataFrame) -> pd.Series | None:
+    """Return 1=survived, 0=deceased when an outcome column is available."""
+    if "survived" in cohort.columns:
+        values = pd.to_numeric(cohort["survived"], errors="coerce")
+        normalized = values.where(values.isna(), (values >= 0.5).astype(int))
+        return normalized.rename("survived")
+
+    for death_col in ("death", "died", "mortality"):
+        if death_col not in cohort.columns:
+            continue
+        values = pd.to_numeric(cohort[death_col], errors="coerce")
+        if len(values) == 0:
+            return values.rename("survived")
+        death_values = values.fillna(0)
+        survived_values = (death_values <= 0).astype(int)
+        return survived_values.rename("survived")
+
+    return None
+
+
+def _cohort_mortality_display(cohort: pd.DataFrame) -> str:
+    survival_values = _cohort_survival_values(cohort)
+    if survival_values is None:
+        return "—"
+    known_values = survival_values.dropna()
+    if known_values.empty:
+        return "—"
+    return f"{(1 - known_values.mean()) * 100:.1f}%"
+
+
+def _survival_contrast_status(
+    cohort: pd.DataFrame,
+    *,
+    lang: str,
+) -> tuple[bool, str]:
+    """Return whether survival/death is a usable two-group contrast."""
+    survival_values = _cohort_survival_values(cohort)
+    if survival_values is None:
+        return (
+            False,
+            "Survival status is not available for this cohort."
+            if lang == "en"
+            else "当前队列没有可用于存活/死亡对照的结局字段。",
+        )
+    values = survival_values.dropna()
+    if values.empty:
+        return (
+            False,
+            "Survival status is empty for this cohort."
+            if lang == "en"
+            else "当前队列的存活状态为空。",
+        )
+    survived_n = int((values == 1).sum())
+    deceased_n = int((values == 0).sum())
+    if survived_n > 0 and deceased_n > 0:
+        return True, ""
+    if deceased_n == 0:
+        return (
+            False,
+            f"No deceased stays in the current cohort ({survived_n:,} survived / 0 deceased)."
+            if lang == "en"
+            else f"当前队列没有死亡病例（{survived_n:,} 例存活 / 0 例死亡）。",
+        )
+    return (
+        False,
+        f"No surviving stays in the current cohort (0 survived / {deceased_n:,} deceased)."
+        if lang == "en"
+        else f"当前队列没有存活病例（0 例存活 / {deceased_n:,} 例死亡）。",
+    )
+
+
+def _has_nonempty_numeric_split(
+    cohort: pd.DataFrame,
+    column: str,
+    threshold: float,
+) -> bool:
+    if column not in cohort.columns:
+        return False
+    values = pd.to_numeric(cohort[column], errors="coerce").dropna()
+    if values.empty:
+        return False
+    return bool((values < threshold).any() and (values >= threshold).any())
+
+
+def _has_nonempty_category_split(
+    cohort: pd.DataFrame,
+    column: str,
+    left: Any,
+    right: Any,
+) -> bool:
+    if column not in cohort.columns:
+        return False
+    values = cohort[column].dropna()
+    return bool((values == left).any() and (values == right).any())
+
+
+def _fallback_compare_mode_for_degenerate_survival(
+    cohort: pd.DataFrame,
+    *,
+    age_threshold: float = 65,
+) -> str:
+    """Pick the safest available non-outcome contrast when death is degenerate."""
+    if _has_nonempty_numeric_split(cohort, "age", age_threshold):
+        return "age"
+    if _has_nonempty_category_split(cohort, "gender", "M", "F"):
+        return "gender"
+    if "los_hours" in cohort.columns:
+        los_values = pd.to_numeric(cohort["los_hours"], errors="coerce").dropna()
+        if not los_values.empty and _has_nonempty_numeric_split(
+            cohort,
+            "los_hours",
+            float(los_values.median()),
+        ):
+            return "los"
+    return "survival"
+
+
+def _cohort_resolve_compare_mode(
+    widget_value: str,
+    session_value: Any,
+    options: list[str],
+) -> str:
+    """Keep downstream grouping aligned with Streamlit's rendered widget state."""
+    option_set = set(options)
+    if isinstance(session_value, str) and session_value in option_set:
+        return session_value
+    if widget_value in option_set:
+        return widget_value
+    return "survival"
 
 
 def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None = None):
@@ -378,8 +511,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             male_pct = (demographics_df['gender'] == 'M').mean() * 100 if 'gender' in demographics_df.columns else 0
             st.metric("Male %" if lang == 'en' else "男性占比", f"{male_pct:.1f}%")
         with col4:
-            mortality = (1 - demographics_df['survived'].mean()) * 100 if 'survived' in demographics_df.columns else 0
-            st.metric("Mortality" if lang == 'en' else "死亡率", f"{mortality:.1f}%")
+            st.metric("Mortality" if lang == 'en' else "死亡率", _cohort_mortality_display(demographics_df))
 
         _render_compact_divider()
 
@@ -402,13 +534,41 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
         compare_mode = 'survival'
         st.session_state["group_comp_mode"] = compare_mode
     else:
-        compare_mode = st.radio(
+        survival_ready, survival_notice = _survival_contrast_status(demographics_df, lang=lang)
+        requested_mode = str(st.session_state.get("group_comp_mode") or "survival")
+        if requested_mode == "survival" and not survival_ready:
+            fallback_mode = _fallback_compare_mode_for_degenerate_survival(
+                demographics_df,
+                age_threshold=float(st.session_state.get("group_comp_age_threshold", 65)),
+            )
+            if fallback_mode != "survival":
+                st.session_state["group_comp_mode"] = fallback_mode
+                fallback_label = (
+                    compare_options[fallback_mode][0]
+                    if lang == "en"
+                    else compare_options[fallback_mode][1]
+                )
+                st.info(
+                    (
+                        f"{survival_notice} Switched to {fallback_label}; expand the cohort or choose a cohort with outcome variation to use survival/death."
+                    )
+                    if lang == "en"
+                    else (
+                        f"{survival_notice} 已切换到「{fallback_label}」；扩大样本或选择有死亡结局变异的队列后，可再使用存活/死亡对照。"
+                    )
+                )
+        selected_compare_mode = st.radio(
             "Comparison Mode" if lang == 'en' else "对比模式",
             options=list(compare_options.keys()),
             format_func=lambda x: compare_options[x][0] if lang == 'en' else compare_options[x][1],
             horizontal=True,
             key="group_comp_mode",
             label_visibility="collapsed",
+        )
+        compare_mode = _cohort_resolve_compare_mode(
+            selected_compare_mode,
+            st.session_state.get("group_comp_mode"),
+            list(compare_options.keys()),
         )
 
     # 根据模式显示额外配置
@@ -672,12 +832,16 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                 analysis_df = _merge_feature_frame(analysis_df, concept, feature_data[concept])
 
         if compare_mode == 'survival':
-            if 'survived' not in analysis_df.columns:
-                st.warning("Survival data not available" if lang == 'en' else "无存活状态数据")
+            survival_ready, survival_notice = _survival_contrast_status(analysis_df, lang=lang)
+            if not survival_ready:
+                st.warning(survival_notice)
                 return
 
-            survived_df = analysis_df[analysis_df['survived'] == 1]
-            deceased_df = analysis_df[analysis_df['survived'] == 0]
+            survival_values = _cohort_survival_values(analysis_df)
+            analysis_df = analysis_df.copy()
+            analysis_df['_easyicu_survived'] = survival_values
+            survived_df = analysis_df[analysis_df['_easyicu_survived'] == 1]
+            deceased_df = analysis_df[analysis_df['_easyicu_survived'] == 0]
             group1_ids = survived_df[id_col].tolist()
             group2_ids = deceased_df[id_col].tolist()
             group1_name = 'Survived' if lang == 'en' else '存活'
