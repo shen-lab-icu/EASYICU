@@ -374,6 +374,42 @@ def test_module_file_selection_survives_apply_question_rerun(tmp_path: Path) -> 
     assert "_research_agent_module_pending_selection_restore" not in state
 
 
+def test_quick_cohort_source_shortcut_resets_launch_review_and_focus() -> None:
+    state: dict[str, object] = {
+        "research_agent_preflight_confirmed": True,
+        "research_agent_preflight_ack": True,
+        "research_agent_question": "Does SOFA-2 improve mortality prediction?",
+    }
+
+    ra_page._activate_research_agent_cohort_source(
+        state,
+        "Pick an EasyICU module export folder",
+        focus_module=True,
+    )
+
+    assert state["research_agent_cohort_source"] == "Pick an EasyICU module export folder"
+    assert state["research_agent_preflight_confirmed"] is False
+    assert state["research_agent_preflight_ack"] is False
+    assert state["_eu_ra_focus_module_folder"] is True
+    assert "_eu_ra_focus_no_data" not in state
+    assert state["research_agent_question"] == "Does SOFA-2 improve mortality prediction?"
+
+
+def test_cohort_source_quick_actions_render_before_full_radio() -> None:
+    section_source = inspect.getsource(ra_page._section_cohort_picker)
+    helper_source = inspect.getsource(ra_page._render_cohort_source_quick_actions)
+
+    assert section_source.index("_render_cohort_source_quick_actions(") < section_source.index(
+        "st.radio(",
+    )
+    assert "entry_mode" in section_source
+    assert "research_agent_quick_synthetic" in helper_source
+    assert "research_agent_quick_module_folder" in helper_source
+    assert "research_agent_quick_no_data" in helper_source
+    assert "_activate_research_agent_cohort_source(" in helper_source
+    assert "st.rerun()" in helper_source
+
+
 def test_detected_module_folder_defaults_to_most_complete_export(tmp_path: Path) -> None:
     sparse = tmp_path / "miiv_20260427"
     complete = tmp_path / "mock_20260424"

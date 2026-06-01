@@ -2566,6 +2566,88 @@ def _has_min_distinct_db_tags(chosen: Sequence[Tuple[str, Path]], min_count: int
     return len(tags) >= min_count
 
 
+def _render_cohort_source_quick_actions(
+    *,
+    source_no_data: str,
+    source_module: str,
+    source_synthetic: str,
+    is_en: bool,
+) -> None:
+    """Render low-friction cohort source shortcuts before the full source radio."""
+    title = "Quick cohort choices" if is_en else "快速选择队列"
+    title_copy = (
+        "Pick the most common path first; the full source list stays below."
+        if is_en
+        else "先选最常用途径；完整来源列表仍保留在下方。"
+    )
+    safety_title = "Safe to change" if is_en else "可随时切换"
+    safety_copy = (
+        "Changing the cohort only resets launch review, not your question."
+        if is_en
+        else "切换队列只会重置启动复核，不会清空研究问题。"
+    )
+    st.markdown(
+        textwrap.dedent(f"""
+        <div class="ra-request-brief">
+          <div>
+            <b>{title}</b>
+            <span>{title_copy}</span>
+          </div>
+          <div>
+            <b>{safety_title}</b>
+            <span>{safety_copy}</span>
+          </div>
+        </div>
+        """).strip(),
+        unsafe_allow_html=True,
+    )
+    shortcut_cols = st.columns(3, gap="small")
+    shortcuts = [
+        (
+            "research_agent_quick_synthetic",
+            "Use test cohort" if is_en else "使用测试队列",
+            "Built-in 800-row SOFA cohort" if is_en else "内置 800 行 SOFA 队列",
+            source_synthetic,
+            False,
+            False,
+        ),
+        (
+            "research_agent_quick_module_folder",
+            "Pick export folder" if is_en else "选择导出文件夹",
+            "Use an existing EasyICU export" if is_en else "使用已有 EasyICU 导出",
+            source_module,
+            True,
+            False,
+        ),
+        (
+            "research_agent_quick_no_data",
+            "Prepare data export" if is_en else "准备数据导出",
+            "Start from raw ICU tables" if is_en else "从原始 ICU 表开始",
+            source_no_data,
+            False,
+            True,
+        ),
+    ]
+    for col, (
+        key,
+        label,
+        caption,
+        source,
+        focus_module,
+        focus_no_data,
+    ) in zip(shortcut_cols, shortcuts):
+        with col:
+            if st.button(label, key=key, use_container_width=True):
+                _activate_research_agent_cohort_source(
+                    st.session_state,
+                    source,
+                    focus_module=focus_module,
+                    focus_no_data=focus_no_data,
+                )
+                st.rerun()
+            st.caption(caption)
+
+
 def _multi_db_label_tags(cohort_label: str) -> List[str]:
     label = str(cohort_label or "")
     if not label.startswith("multi_db:"):
@@ -2582,6 +2664,23 @@ def _multi_db_label_is_distinct(cohort_label: str) -> bool:
 def _clear_research_agent_preflight_confirmation() -> None:
     st.session_state["research_agent_preflight_confirmed"] = False
     st.session_state["research_agent_preflight_ack"] = False
+
+
+def _activate_research_agent_cohort_source(
+    state: MutableMapping[str, object],
+    source: str,
+    *,
+    focus_module: bool = False,
+    focus_no_data: bool = False,
+) -> None:
+    """Select a cohort source from a shortcut and invalidate stale launch review."""
+    state["research_agent_cohort_source"] = source
+    state["research_agent_preflight_confirmed"] = False
+    state["research_agent_preflight_ack"] = False
+    if focus_module:
+        state["_eu_ra_focus_module_folder"] = True
+    if focus_no_data:
+        state["_eu_ra_focus_no_data"] = True
 
 
 def _infer_db_tag_from_folder(folder: Path) -> str:
@@ -2800,6 +2899,13 @@ def _section_cohort_picker(
     _restore_pending_module_source(st.session_state, options=options)
     if st.session_state.get("research_agent_cohort_source") not in (None, *options):
         st.session_state.pop("research_agent_cohort_source", None)
+    if st.session_state.get("entry_mode") == "real":
+        _render_cohort_source_quick_actions(
+            source_no_data=source_no_data,
+            source_module=source_module,
+            source_synthetic=source_synthetic,
+            is_en=st.session_state.get("language", "en") == "en",
+        )
     source = st.radio(
         _ra_text("cohort_source"),
         options=options,
