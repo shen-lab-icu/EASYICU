@@ -3568,6 +3568,11 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
     assert "_eu_ra_view_history" in app_branch
     assert "_ra_view == 'history'" in app_branch
     assert "_render_research_agent_reference_header(lang, view=_ra_view)" in app_branch
+    assert app_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)") < app_branch.index('st.container(key="_eu_ra_tabs")')
+    assert 'icon=":material/tune:"' in app_branch
+    assert 'icon=":material/grid_view:"' in app_branch
+    assert 'icon=":material/history:"' in app_branch
+    assert 'icon=":material/shield:"' in app_branch
     assert "render_research_agent_history_page(lang, show_header=False)" in app_branch
     assert 'view: str = "setup"' in app_source
     assert 'view == "history"' in app_source
