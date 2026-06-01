@@ -726,6 +726,39 @@ def _apply_topbar_breadcrumb_target(state: dict[str, Any], target: str) -> None:
         state['_active_main_page'] = target
 
 
+def _auto_seed_cohort_workspace_from_loaded_exports(
+    state: dict[str, Any],
+    *,
+    lang: str = "en",
+) -> tuple[bool, str]:
+    """Bridge loaded module exports into Cohort Statistics when safe.
+
+    The Shell-A cohort page delegates the body to older subpanels. Those
+    subpanels read ``grp_demographics`` / ``dash_demographics`` rather
+    than the Quick Visualization ``loaded_concepts`` state, so a completed
+    export can otherwise look "ready" in the header while the panel still
+    asks the user to configure a raw database. This helper keeps the
+    post-export path single-step without touching raw-schema workflows.
+    """
+    if state.get("entry_mode") != "real":
+        return False, ""
+    if _cohort_real_workspace_ready(state):
+        return False, ""
+    if not state.get("loaded_concepts"):
+        return False, ""
+
+    ok, message = _ensure_cohort_real_workspace_from_loaded_concepts(
+        state,
+        lang=lang,
+    )
+    if ok:
+        state["_cohort_real_exports_auto_seeded"] = message
+        state.pop("_cohort_real_exports_auto_seed_error", None)
+    else:
+        state["_cohort_real_exports_auto_seed_error"] = message
+    return ok, message
+
+
 def _route_completed_export_to_visualization(
     state: dict[str, Any],
     *,
@@ -761,6 +794,7 @@ def _apply_post_export_next_step(
         return
 
     if target == "cohort":
+        _auto_seed_cohort_workspace_from_loaded_exports(state, lang=lang)
         state["_active_main_page"] = "cohort"
         state["_scroll_to_top"] = True
         return
@@ -4442,6 +4476,7 @@ def main():
             # data drives the charts. The synthetic SVG bodies remain
             # available behind st.session_state["_eu_shell_only"] for
             # design QA.
+            _auto_seed_cohort_workspace_from_loaded_exports(st.session_state, lang=lang)
             from easyicu.webapp.cohort_redesign import render_cohort_redesign_page
             render_cohort_redesign_page(
                 lang,

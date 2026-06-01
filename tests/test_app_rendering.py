@@ -4699,10 +4699,23 @@ def test_post_export_next_step_actions_route_to_real_destinations(tmp_path) -> N
     assert "research_agent_force_manuscript" not in agent_state
     assert "research_agent_preflight_confirmed" not in agent_state
 
-    cohort_state = {"export_completed": True}
+    cohort_state = {
+        "export_completed": True,
+        "entry_mode": "real",
+        "database": "miiv",
+        "id_col": "stay_id",
+        "loaded_concepts": {
+            "age": pd.DataFrame({"stay_id": [11, 12], "age": [62, 71]}),
+            "death": pd.DataFrame({"stay_id": [11, 12], "death": [0, 1]}),
+        },
+    }
     app._apply_post_export_next_step(cohort_state, "cohort", lang="en")
     assert cohort_state["_active_main_page"] == "cohort"
     assert "_main_nav_widget" not in cohort_state
+    assert cohort_state["_cohort_real_ws_ready"] is True
+    assert cohort_state["_cohort_real_ws_origin"] == "loaded_exports"
+    assert list(cohort_state["grp_demographics"]["stay_id"]) == [11, 12]
+    assert list(cohort_state["dash_demographics"]["stay_id"]) == [11, 12]
 
 
 def test_post_export_guidance_copy_exposes_visualization_and_agent_actions() -> None:
