@@ -2468,26 +2468,59 @@ def test_get_started_buttons_route_to_real_destinations() -> None:
     assert extract_state["_scroll_to_top"] is True
 
 
-def test_workspace_states_page_includes_reference_primitives() -> None:
+def test_workspace_states_page_is_operational_overview_not_reference_catalog() -> None:
     page_source = Path(pages_redesign.__file__).read_text(encoding="utf-8")
     css_text = shell_styles._load_shell_overrides_css()
 
-    assert "Status primitives" in page_source
-    assert "Reusable building blocks" in page_source
-    assert "key=\"eu_states_controls\"" in page_source
-    assert 'key=f"_eu_states_context_{item[\'key\']}"' in page_source
-    assert 'key=f"_eu_states_state_{item[\'key\']}"' in page_source
-    assert "_eu_states_primary_action" in page_source
-    assert "_workspace_state_preview_html(current_context, current_mode, current_state, lang)" in page_source
-    assert "_workspace_state_action_label(current_context, current_mode, lang)" in page_source
-    assert "_apply_workspace_state_action(st.session_state, current_context, current_mode)" in page_source
-    assert "eu-state-primitive-grid" in page_source
-    assert ".stApp .eu-state-primitive-card" in css_text
-    assert '.stApp [class*="st-key-eu_states_controls"]' in css_text
-    assert ".stApp .eu-state-hero" in css_text
-    assert ".stApp .detail-box" in css_text
-    assert ".stApp .gate-block" in css_text
-    assert ".stApp .eu-state-status-row .passed" in css_text
+    render_source = page_source[
+        page_source.index("def render_workspace_states_reference_page"):
+        page_source.index("def _settings_row_copy")
+    ]
+
+    assert "Current session status" in render_source
+    assert "This page is a control-room overview" in render_source
+    assert "key=\"eu_workspace_status_actions\"" in render_source
+    assert "_workspace_status_overview_html(state, lang)" in render_source
+    assert "_workspace_state_preview_html(current_context, current_mode, current_state, lang)" not in render_source
+    assert "key=\"eu_states_controls\"" not in render_source
+    assert "Status primitives" not in render_source
+    assert "Reusable building blocks" not in render_source
+    assert "eu-state-primitive-grid" not in render_source
+    assert ".stApp .eu-workspace-status-grid" in css_text
+    assert ".stApp .eu-workspace-flow-step.active" in css_text
+    assert '.stApp [class*="st-key-eu_workspace_status_actions"]' in css_text
+
+
+def test_workspace_status_overview_summarizes_current_session_without_fake_loading() -> None:
+    html = pages_redesign._workspace_status_overview_html(
+        {
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "step1_confirmed": True,
+            "step2_confirmed": True,
+            "step3_confirmed": False,
+            "export_completed": False,
+            "selected_concepts": ["hr", "map", "sofa2"],
+            "loaded_concepts": {"hr": object(), "map": object()},
+            "patient_ids": [1, 2, 3],
+            "export_path": "/tmp/easyicu_export",
+            "research_agent_question": "Does SOFA predict mortality?",
+        },
+        "en",
+    )
+
+    assert "Real data" in html
+    assert "MIMIC-IV" in html
+    assert "2 / 4" in html
+    assert "3 / 2" in html
+    assert "patients / loaded concepts" in html
+    assert "3 selected concepts" in html
+    assert "Question ready" in html
+    assert "This page does not generate data or call models." in html
+    assert "Generating demo review data" not in html
+    assert "Status primitives" not in html
+    assert "Reusable building blocks" not in html
 
 
 def test_workspace_state_preview_copy_tracks_selected_context() -> None:

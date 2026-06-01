@@ -10766,6 +10766,188 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 .stApp .eu-state-preview-card {
   overflow: hidden;
 }
+.stApp .eu-workspace-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+.stApp .eu-workspace-status-tile {
+  min-height: 118px;
+  padding: 16px 18px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.stApp .eu-workspace-status-tile.ok {
+  border-color: color-mix(in oklab, var(--ok) 30%, white);
+  background: color-mix(in oklab, var(--ok-soft) 78%, white);
+}
+.stApp .eu-workspace-status-tile.accent {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.stApp .eu-workspace-status-tile span,
+.stApp .eu-workspace-card-head span,
+.stApp .eu-workspace-handoff span {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.stApp .eu-workspace-status-tile b {
+  display: block;
+  margin-top: 12px;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 720;
+  line-height: 1.1;
+}
+.stApp .eu-workspace-status-tile p {
+  margin: 8px 0 0;
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.42;
+}
+.stApp .eu-workspace-overview-card {
+  margin: 0 0 16px;
+  overflow: hidden;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.stApp .eu-workspace-overview-card.compact {
+  margin-bottom: 18px;
+}
+.stApp .eu-workspace-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--hair);
+}
+.stApp .eu-workspace-card-head h2 {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+.stApp .eu-workspace-card-head em {
+  max-width: 560px;
+  color: var(--ink-3);
+  font-size: 13px;
+  font-style: normal;
+  line-height: 1.5;
+}
+.stApp .eu-workspace-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  padding: 18px;
+}
+.stApp .eu-workspace-flow-step {
+  min-height: 108px;
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--hair);
+  border-right: 0;
+  background: var(--surface-2);
+}
+.stApp .eu-workspace-flow-step:first-child {
+  border-radius: var(--r-2) 0 0 var(--r-2);
+}
+.stApp .eu-workspace-flow-step:last-child {
+  border-right: 1px solid var(--hair);
+  border-radius: 0 var(--r-2) var(--r-2) 0;
+}
+.stApp .eu-workspace-flow-step i {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--hair-2);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 760;
+}
+.stApp .eu-workspace-flow-step.done i {
+  border-color: color-mix(in oklab, var(--ok) 42%, white);
+  background: color-mix(in oklab, var(--ok-soft) 70%, white);
+  color: var(--ok);
+}
+.stApp .eu-workspace-flow-step.active {
+  background: var(--accent-soft);
+}
+.stApp .eu-workspace-flow-step.active i {
+  border-color: var(--accent-border);
+  background: var(--surface);
+  color: var(--accent);
+}
+.stApp .eu-workspace-flow-step b {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.stApp .eu-workspace-flow-step span {
+  display: block;
+  margin-top: 7px;
+  color: var(--ink-4);
+  font-size: 12px;
+  line-height: 1.42;
+}
+.stApp .eu-workspace-handoff {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  padding: 0;
+}
+.stApp .eu-workspace-handoff > div {
+  min-height: 74px;
+  padding: 16px 20px;
+  border-right: 1px solid var(--hair);
+  border-bottom: 1px solid var(--hair);
+}
+.stApp .eu-workspace-handoff > div:nth-child(2n) {
+  border-right: 0;
+}
+.stApp .eu-workspace-handoff > div:nth-last-child(-n+2) {
+  border-bottom: 0;
+}
+.stApp .eu-workspace-handoff b {
+  display: block;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.stApp [class*="st-key-eu_workspace_status_actions"] {
+  margin: 8px 0 28px !important;
+}
+.stApp [class*="st-key-eu_workspace_status_actions"] .stButton > button {
+  min-height: 42px;
+  border-radius: var(--r-2);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
 .stApp .eu-state-preview-head {
   display: flex;
   align-items: center;

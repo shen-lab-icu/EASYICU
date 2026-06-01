@@ -817,6 +817,199 @@ def _workspace_state_action_label(context: str, mode: str, lang: str) -> str:
     )
 
 
+def _workspace_status_mode(state: MutableMapping[str, Any], lang: str) -> tuple[str, str, bool]:
+    entry_mode = str(state.get("entry_mode") or ("demo" if state.get("use_mock_data", True) else "real"))
+    is_demo = entry_mode != "real" and bool(state.get("use_mock_data", True))
+    db_labels = {
+        "mock": _T(lang, "Demo mock ICU", "演示模拟 ICU"),
+        "miiv": "MIMIC-IV",
+        "eicu": "eICU-CRD",
+        "aumc": "AmsterdamUMCdb",
+        "hirid": "HiRID",
+        "mimic": "MIMIC-III",
+        "sic": "SICdb",
+    }
+    database = str(state.get("database") or ("mock" if is_demo else "miiv"))
+    mode_label = _T(lang, "Demo", "演示") if is_demo else _T(lang, "Real data", "真实数据")
+    return mode_label, db_labels.get(database, database.upper()), is_demo
+
+
+def _workspace_status_extract_step(state: MutableMapping[str, Any], lang: str) -> dict[str, object]:
+    done = [
+        bool(state.get("step1_confirmed")),
+        bool(state.get("step2_confirmed")),
+        bool(state.get("step3_confirmed")),
+        bool(state.get("export_completed")),
+    ]
+    labels = [
+        _T(lang, "Data source", "数据源"),
+        _T(lang, "Cohort", "队列"),
+        _T(lang, "Concepts", "概念变量"),
+        _T(lang, "Export", "导出"),
+    ]
+    hints = [
+        _T(lang, "Choose demo or local data.", "选择演示或本地数据。"),
+        _T(lang, "Confirm inclusion and filters.", "确认纳排与筛选。"),
+        _T(lang, "Select modules and concepts.", "选择模块和变量。"),
+        _T(lang, "Package tables and manifest.", "打包表格与 manifest。"),
+    ]
+    completed = sum(1 for item in done if item)
+    active_index = min(completed, 3)
+    return {
+        "completed": completed,
+        "labels": labels,
+        "hints": hints,
+        "done": done,
+        "active": active_index,
+        "current": labels[active_index],
+    }
+
+
+def _workspace_status_count(value: object) -> int:
+    if value is None:
+        return 0
+    try:
+        return int(len(value))  # type: ignore[arg-type]
+    except Exception:
+        return 0
+
+
+def _workspace_status_overview_html(state: MutableMapping[str, Any], lang: str) -> str:
+    mode_label, database_label, is_demo = _workspace_status_mode(state, lang)
+    extract = _workspace_status_extract_step(state, lang)
+    loaded_concepts = state.get("loaded_concepts")
+    selected_concepts = state.get("selected_concepts")
+    patient_ids = state.get("patient_ids")
+    cohort_stats = state.get("_cohort_stats") if isinstance(state.get("_cohort_stats"), dict) else {}
+    exported = bool(state.get("export_completed"))
+    loaded_count = _workspace_status_count(loaded_concepts) if isinstance(loaded_concepts, dict) else 0
+    selected_count = _workspace_status_count(selected_concepts)
+    patient_count = _workspace_status_count(patient_ids)
+    if not patient_count and isinstance(cohort_stats, dict):
+        patient_count = int(cohort_stats.get("after") or cohort_stats.get("before") or 0)
+    if not patient_count and is_demo:
+        patient_count = int(state.get("demo_mode_patients") or (state.get("mock_params") or {}).get("n_patients") or 10)
+
+    extract_detail = (
+        _T(lang, "Export complete", "导出完成")
+        if exported else
+        _T(lang, "Continue the four-step extraction flow", "继续四步数据提取流程")
+    )
+    review_value = (
+        f"{patient_count:,} / {loaded_count:,}"
+        if loaded_count else
+        _T(lang, "Not loaded", "未加载")
+    )
+    review_detail = (
+        _T(lang, "patients / loaded concepts", "患者 / 已加载变量")
+        if loaded_count else
+        _T(lang, "Open Patient Review or Cohort Statistics when data is ready.", "数据准备好后进入患者审阅或队列统计。")
+    )
+    agent_question = str(state.get("research_agent_question") or "").strip()
+    agent_run = str(state.get("research_agent_last_run_id") or state.get("research_agent_resume_run_id") or "").strip()
+    agent_value = (
+        _T(lang, "Run ready", "已有运行")
+        if agent_run else
+        (_T(lang, "Question ready", "问题已准备") if agent_question else _T(lang, "Setup needed", "需要配置"))
+    )
+    agent_detail = (
+        agent_run
+        if agent_run else
+        (_T(lang, "Research question is staged.", "研究问题已暂存。") if agent_question else _T(lang, "Define question, cohort, and launch gate.", "配置研究问题、队列和启动闸门。"))
+    )
+
+    tiles = [
+        (
+            _T(lang, "Data mode", "数据模式"),
+            mode_label,
+            database_label,
+            "ok" if is_demo else "accent",
+        ),
+        (
+            _T(lang, "Extraction", "数据提取"),
+            f"{extract['completed']} / 4",
+            extract_detail,
+            "ok" if exported else "accent",
+        ),
+        (
+            _T(lang, "Review workspace", "审阅工作区"),
+            review_value,
+            review_detail,
+            "ok" if loaded_count else "neutral",
+        ),
+        (
+            _T(lang, "Research Agent", "研究智能体"),
+            agent_value,
+            agent_detail,
+            "ok" if agent_run else "neutral",
+        ),
+    ]
+    tiles_html = "".join(
+        '<div class="eu-workspace-status-tile {tone}">'
+        '<span>{label}</span><b>{value}</b><p>{detail}</p></div>'.format(
+            tone=_esc(tone),
+            label=_esc(label),
+            value=_esc(value),
+            detail=_esc(detail),
+        )
+        for label, value, detail, tone in tiles
+    )
+
+    steps_html = ""
+    done = extract["done"]
+    labels = extract["labels"]
+    hints = extract["hints"]
+    active = int(extract["active"])
+    for idx, label in enumerate(labels):
+        cls = "done" if done[idx] else ("active" if idx == active else "pending")
+        steps_html += (
+            f'<div class="eu-workspace-flow-step {cls}">'
+            f'<i>{idx + 1}</i><div><b>{_esc(label)}</b><span>{_esc(hints[idx])}</span></div></div>'
+        )
+
+    selected_detail = (
+        f"{selected_count:,} " + (_T(lang, "selected concepts", "个已选变量"))
+        if selected_count else
+        _T(lang, "No concept selection yet", "尚未选择变量")
+    )
+    export_path = str(state.get("last_export_dir") or state.get("export_path") or "")
+    handoff_rows = [
+        (_T(lang, "Current source", "当前来源"), f"{mode_label} · {database_label}"),
+        (_T(lang, "Selection", "变量选择"), selected_detail),
+        (_T(lang, "Export folder", "导出目录"), export_path or _T(lang, "Not set", "未设置")),
+        (_T(lang, "Safety", "安全边界"), _T(lang, "This page does not generate data or call models.", "本页不生成数据，也不会调用模型。")),
+    ]
+    handoff_html = "".join(
+        f'<div><span>{_esc(label)}</span><b>{_esc(value)}</b></div>'
+        for label, value in handoff_rows
+    )
+
+    next_copy = (
+        _T(lang, "Finish export, then open Patient Review or hand the module folder to the Research Agent.", "先完成导出，再进入患者审阅，或把模块目录交给研究智能体。")
+        if not exported else
+        _T(lang, "Export is complete. You can review patients, inspect cohort statistics, or open the Research Agent with the exported module folder.", "导出已完成。现在可以审阅患者、查看队列统计，或用导出的模块目录打开研究智能体。")
+    )
+
+    return (
+        '<div class="eu-workspace-status-grid">'
+        f'{tiles_html}'
+        '</div>'
+        '<div class="eu-workspace-overview-card">'
+        '<div class="eu-workspace-card-head">'
+        f'<div><span>{_T(lang, "Workflow", "工作流")}</span><h2>{_T(lang, "Where the current session stands", "当前会话进展")}</h2></div>'
+        f'<em>{_esc(next_copy)}</em>'
+        '</div>'
+        f'<div class="eu-workspace-flow">{steps_html}</div>'
+        '</div>'
+        '<div class="eu-workspace-overview-card compact">'
+        '<div class="eu-workspace-card-head">'
+        f'<div><span>{_T(lang, "Handoff", "交接")}</span><h2>{_T(lang, "What downstream pages will use", "下游页面会使用什么")}</h2></div>'
+        '</div>'
+        f'<div class="eu-workspace-handoff">{handoff_html}</div>'
+        '</div>'
+    )
+
+
 def _route_to_extract_step(
     state: MutableMapping[str, Any],
     step: int,
@@ -1024,143 +1217,67 @@ def render_tutorial_redesign_page(lang: str) -> None:
 
 
 def render_workspace_states_reference_page(lang: str) -> None:
-    """Render the latest print-reference workspace state catalogue."""
-    contexts = _workspace_state_contexts(lang)
-    modes = _workspace_state_modes(lang)
-    states = _workspace_state_options(lang)
-    current_context = str(st.session_state.get("_eu_states_context") or "patient")
-    current_mode = str(st.session_state.get("_eu_states_mode") or "demo")
-    current_state = str(st.session_state.get("_eu_states_state") or "loading")
-    valid_contexts = {item["key"] for item in contexts}
-    valid_modes = {item["key"] for item in modes}
-    valid_states = {item["key"] for item in states}
-    if current_context not in valid_contexts:
-        current_context = "patient"
-        st.session_state["_eu_states_context"] = current_context
-    if current_mode not in valid_modes:
-        current_mode = "demo"
-        st.session_state["_eu_states_mode"] = current_mode
-    if current_state not in valid_states:
-        current_state = "loading"
-        st.session_state["_eu_states_state"] = current_state
-
+    """Render the operational workspace overview page."""
+    state = st.session_state
+    _mode_label, _database_label, is_demo = _workspace_status_mode(state, lang)
     st.markdown(
         '<div class="eu-states-head">'
-        f'<div class="eyebrow">{_T(lang, "Design system · 状态库", "设计系统 · 状态库")}</div>'
-        f'<h1>{_T(lang, "Workspace states", "工作区状态")}</h1>'
-        f'<p>{_T(lang, "Every data surface in EasyICU passes through the same six states. Switch context, mode, and state to preview the polished treatment for each — all reference-only, with no invented results.", "EasyICU 的每个数据界面都经过同一组六种状态。切换上下文、模式和状态即可预览每种状态的视觉处理；这里仅作参考，不生成任何结果。")}</p>'
+        f'<div class="eyebrow">{_T(lang, "Workspace overview", "工作区总览")}</div>'
+        f'<h1>{_T(lang, "Current session status", "当前会话状态")}</h1>'
+        f'<p>{_T(lang, "This page is a control-room overview: it summarizes the current data mode, extraction progress, review workspace, and Research Agent readiness. It does not generate data, preview fake loading states, or run model calls.", "这是一个控制室式总览页：汇总当前数据模式、提取进度、审阅工作区和研究智能体准备状态。它不会生成数据、展示假的加载态，也不会调用模型。")}</p>'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    with st.container(key="eu_states_controls"):
-        st.markdown('<div class="eu-states-control-label">Context</div>', unsafe_allow_html=True)
-        cols = st.columns(len(contexts), gap="small")
-        for idx, item in enumerate(contexts):
-            with cols[idx]:
-                if st.button(
-                    item["label"],
-                    key=f"_eu_states_context_{item['key']}",
-                    type="primary" if current_context == item["key"] else "secondary",
-                    use_container_width=True,
-                ):
-                    st.session_state["_eu_states_context"] = item["key"]
-                    st.rerun()
-        st.markdown('<div class="eu-states-control-label">Mode</div>', unsafe_allow_html=True)
-        cols = st.columns(len(modes), gap="small")
-        for idx, item in enumerate(modes):
-            with cols[idx]:
-                if st.button(
-                    item["label"],
-                    key=f"_eu_states_mode_{item['key']}",
-                    type="primary" if current_mode == item["key"] else "secondary",
-                    use_container_width=True,
-                ):
-                    st.session_state["_eu_states_mode"] = item["key"]
-                    st.rerun()
-        st.markdown('<div class="eu-states-control-label">State</div>', unsafe_allow_html=True)
-        state_cols = st.columns(3, gap="small")
-        for idx, item in enumerate(states):
-            with state_cols[idx % 3]:
-                if st.button(
-                    item["label"],
-                    key=f"_eu_states_state_{item['key']}",
-                    type="primary" if current_state == item["key"] else "secondary",
-                    use_container_width=True,
-                ):
-                    st.session_state["_eu_states_state"] = item["key"]
-                    st.rerun()
-
     st.markdown(
-        _workspace_state_preview_html(current_context, current_mode, current_state, lang),
+        _workspace_status_overview_html(state, lang),
         unsafe_allow_html=True,
     )
 
-    with st.container(key="eu_states_preview_actions"):
-        action_cols = st.columns([0.38, 0.22, 0.40], gap="small")
+    with st.container(key="eu_workspace_status_actions"):
+        action_cols = st.columns([0.25, 0.25, 0.25, 0.25], gap="small")
         with action_cols[0]:
             if st.button(
-                _workspace_state_action_label(current_context, current_mode, lang),
-                key="_eu_states_primary_action",
+                _T(lang, "Continue extraction", "继续数据提取"),
+                key="_eu_workspace_continue_extract",
                 type="primary",
+                icon=":material/tune:",
                 use_container_width=True,
             ):
-                _apply_workspace_state_action(st.session_state, current_context, current_mode)
+                state["_active_main_page"] = "extract"
+                state["_scroll_to_top"] = True
                 st.rerun()
         with action_cols[1]:
             if st.button(
-                _T(lang, "Reset preview", "重置预览"),
-                key="_eu_states_reset_preview",
+                _T(lang, "Patient Review", "患者审阅"),
+                key="_eu_workspace_open_review",
+                icon=":material/table_view:",
                 use_container_width=True,
             ):
-                st.session_state["_eu_states_context"] = "patient"
-                st.session_state["_eu_states_mode"] = "demo"
-                st.session_state["_eu_states_state"] = "loading"
+                _apply_workspace_state_action(state, "patient", "demo" if is_demo else "real")
                 st.rerun()
-
-    primitive_html = (
-        '<div class="eu-guide-section eu-state-primitive-head">'
-        '<div class="eyebrow">Status primitives</div>'
-        '<h2>Reusable building blocks</h2>'
-        '</div>'
-        '<div class="eu-state-primitive-grid">'
-        '<div class="eu-state-primitive-card">'
-        '<span>Spinner · inline</span>'
-        '<div class="eu-state-primitive-inline">'
-        '<i class="eu-state-spinner"></i><i class="eu-state-spinner ghost"></i><b>working...</b>'
-        '</div>'
-        '</div>'
-        '<div class="eu-state-primitive-card">'
-        '<span>Indeterminate bar</span>'
-        '<div class="eu-state-progress primitive"><span></span></div>'
-        '</div>'
-        '<div class="eu-state-primitive-card">'
-        '<span>Skeleton rows</span>'
-        '<div class="eu-state-skel-lines"><i></i><i></i><i></i></div>'
-        '</div>'
-        '<div class="eu-state-primitive-card">'
-        '<span>Status pills</span>'
-        '<div class="eu-state-status-row">'
-        '<b class="passed">passed</b><b class="blocked">blocked</b><b class="error">error</b><b class="queued">queued</b>'
-        '</div>'
-        '</div>'
-        '<div class="eu-state-primitive-card">'
-        '<span>Callouts</span>'
-        '<div class="eu-state-callout ok">Success</div>'
-        '<div class="eu-state-callout bad">Error</div>'
-        '</div>'
-        '<div class="eu-state-primitive-card">'
-        '<span>Empty glyph</span>'
-        '<div class="eu-state-empty-glyph">'
-        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="m12 4 8 4-8 4-8-4 8-4Z"/><path d="m4 12 8 4 8-4"/>'
-        '</svg>'
-        '</div>'
-        '</div>'
-        '</div>'
-    )
-    st.markdown(primitive_html, unsafe_allow_html=True)
+        with action_cols[2]:
+            if st.button(
+                _T(lang, "Cohort Statistics", "队列统计"),
+                key="_eu_workspace_open_cohort",
+                icon=":material/query_stats:",
+                use_container_width=True,
+            ):
+                if is_demo:
+                    _apply_demo_defaults_for_tutorial(state)
+                    state["_eu_topbar_run_request"] = {"page": "cohort", "requested_at": "workspace_states"}
+                state["_active_main_page"] = "cohort"
+                state["_scroll_to_top"] = True
+                st.rerun()
+        with action_cols[3]:
+            if st.button(
+                _T(lang, "Research Agent", "研究智能体"),
+                key="_eu_workspace_open_agent",
+                icon=":material/auto_awesome:",
+                use_container_width=True,
+            ):
+                _route_to_research_agent_setup(state, force_real=not is_demo)
+                st.rerun()
 
 
 def _settings_row_copy(title: str, desc: str) -> str:
