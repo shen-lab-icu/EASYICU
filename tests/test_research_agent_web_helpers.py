@@ -312,6 +312,16 @@ def test_module_file_selection_survives_apply_question_rerun(tmp_path: Path) -> 
     )
     assert state["research_agent_cohort_source"] == "Pick an EasyICU module export folder"
 
+    state["research_agent_module_dir_text"] = str(tmp_path / "easyicu_export")
+    state["research_agent_module_dir_pick"] = "some detected export"
+    ra_page._restore_pending_module_folder_path(
+        state,
+        manual_path_label="(type a path manually)",
+    )
+
+    assert state["research_agent_module_dir_text"] == str(folder)
+    assert state["research_agent_module_dir_pick"] == "(type a path manually)"
+
     state["research_agent_module_files"] = []
     ra_page._restore_pending_module_file_selection(
         state,
