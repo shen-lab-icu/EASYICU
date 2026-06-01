@@ -3429,7 +3429,7 @@ def _render_step2_cohort_builder_design() -> bool:
                 _clear_icd_preview_state()
                 concept_groups = get_concept_groups()
                 st.session_state.pop("_eu_concept_defaults_seeded", None)
-                _reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))
+                _reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))
                 st.session_state.step2_confirmed = True
                 st.session_state["_scroll_to_top"] = True
                 st.rerun()
@@ -3484,6 +3484,7 @@ def _reset_concepts_to_groups(concept_groups: dict[str, list[str]], groups: list
         concept_groups,
         st.session_state.selected_groups,
     )
+    st.session_state.step3_confirmed = False
     st.session_state["_eu_concept_defaults_seeded"] = True
 
 
@@ -3505,9 +3506,6 @@ def _toggle_concept_group_for_design(
     st.session_state.selected_groups = groups
     st.session_state.selected_concepts = _collect_selected_concepts(concept_groups)
     st.session_state.step3_confirmed = False
-    rerun = getattr(st, "rerun", None)
-    if callable(rerun):
-        rerun()
 
 
 def _collect_selected_concepts(concept_groups: dict[str, list[str]]) -> list[str]:
@@ -3567,7 +3565,7 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
     st.session_state.setdefault("concept_checkboxes", {})
     st.session_state.setdefault("selected_groups", [])
     if not st.session_state.selected_groups and not st.session_state.get("_eu_concept_defaults_seeded"):
-        _reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))
+        _reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))
 
     header_l, header_r = st.columns([1.4, 0.9], gap="large")
     with header_l:
@@ -3581,11 +3579,27 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
         )
     with header_r:
         st.write("")
-        defaults_spacer, defaults_col = st.columns([1.0, 0.78], gap="small")
-        with defaults_col:
+        all_col, clear_col, rec_col = st.columns(3, gap="small")
+        with all_col:
             if st.button(
-                "Reset to core" if lang == "en" else "重置核心模块",
-                key="concept_defaults_design",
+                "Select all" if lang == "en" else "全选",
+                key="concept_select_all_top",
+                use_container_width=True,
+            ):
+                _reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))
+                st.rerun()
+        with clear_col:
+            if st.button(
+                "Clear" if lang == "en" else "清空",
+                key="concept_clear_all_top",
+                use_container_width=True,
+            ):
+                _reset_concepts_to_groups(concept_groups, [])
+                st.rerun()
+        with rec_col:
+            if st.button(
+                "Recommended" if lang == "en" else "推荐",
+                key="concept_recommended_design",
                 use_container_width=True,
             ):
                 _reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))
@@ -3593,10 +3607,26 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
     selected_concepts = _collect_selected_concepts(concept_groups)
     st.session_state.selected_concepts = selected_concepts
     selected_groups_now = [g for g in st.session_state.get("selected_groups", []) if g in concept_groups]
+    all_groups = _all_concept_groups(concept_groups)
+    recommended_groups = _default_concept_groups(concept_groups)
+    selected_group_set = set(selected_groups_now)
+    if not selected_groups_now:
+        selection_mode = "none" if lang == "en" else "未选择"
+    elif selected_group_set == set(all_groups):
+        selection_mode = "all" if lang == "en" else "全选"
+    elif selected_group_set == set(recommended_groups):
+        selection_mode = "recommended" if lang == "en" else "推荐"
+    else:
+        selection_mode = "custom" if lang == "en" else "自定义"
+    selection_summary = (
+        f"{len(selected_groups_now)} modules · {len(selected_concepts)} concepts selected"
+        if lang == "en"
+        else f"{len(selected_groups_now)} 个模块 · 已选 {len(selected_concepts)} 个变量"
+    )
     st.markdown(
         '<div class="eu-concept-status-strip">'
-        '<span class="eu-mini-pill">auto</span>'
-        f'<strong>{len(selected_groups_now)} modules · {len(selected_concepts)} concepts selected</strong>'
+        f'<span class="eu-mini-pill">{html.escape(selection_mode)}</span>'
+        f'<strong>{html.escape(selection_summary)}</strong>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -3635,7 +3665,11 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
             active = group_name in st.session_state.selected_groups
             display_name = _clean_module_label(group_name)
             module_key_prefix = "concept_module_active" if active else "concept_module_add"
-            module_status = "on" if active else "add"
+            module_status = (
+                ("selected" if lang == "en" else "已选")
+                if active
+                else ("add" if lang == "en" else "添加")
+            )
             with card_cols[idx % 2]:
                 st.button(
                     f"{display_name} · {module_status}",
@@ -3681,8 +3715,8 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
                 unsafe_allow_html=True,
             )
         with reset_col:
-            if st.button("Select all" if lang == "en" else "全选", key="concept_reset_design", use_container_width=True):
-                _reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))
+            if st.button("Clear all" if lang == "en" else "清空", key="concept_clear_design", use_container_width=True):
+                _reset_concepts_to_groups(concept_groups, [])
                 st.rerun()
         with confirm_col:
             if st.button(

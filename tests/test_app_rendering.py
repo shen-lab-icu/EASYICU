@@ -148,26 +148,30 @@ def test_concept_selection_helpers_select_all_by_default(monkeypatch) -> None:
         "sofa2": True,
         "sofa2_resp": True,
     }
+    assert state["step3_confirmed"] is False
     assert state["_eu_concept_defaults_seeded"] is True
 
 
 def test_concept_selection_design_exposes_all_action() -> None:
     source = Path(sidebar.__file__).read_text(encoding="utf-8")
 
-    assert 'key="concept_reset_design"' in source
+    assert 'key="concept_select_all_top"' in source
+    assert 'key="concept_clear_all_top"' in source
+    assert 'key="concept_recommended_design"' in source
     assert '"Select all" if lang == "en" else "全选"' in source
-    assert '"Reset to core" if lang == "en" else "重置核心模块"' in source
+    assert '"Clear" if lang == "en" else "清空"' in source
+    assert '"Recommended" if lang == "en" else "推荐"' in source
     assert "_all_concept_groups(concept_groups)" in source
 
 
-def test_step2_confirm_seeds_default_concepts_before_rerun() -> None:
+def test_step2_confirm_seeds_all_concepts_before_rerun() -> None:
     source = Path(sidebar.__file__).read_text(encoding="utf-8")
     confirm_block = source[
         source.index('key="step2_confirm_design"'):
         source.index("with right:\n        _render_cohort_live_preview")
     ]
 
-    assert "_reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))" in confirm_block
+    assert "_reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))" in confirm_block
     assert confirm_block.index("_reset_concepts_to_groups") < confirm_block.index("st.rerun()")
 
 
@@ -5045,16 +5049,22 @@ def test_sidebar_pipeline_concept_meta_uses_fresh_group_selection(monkeypatch) -
 
 
 def test_concept_module_toggle_callback_updates_summary_before_render(monkeypatch) -> None:
-    streamlit_stub = _SessionStateStreamlit(
-        _AttrSessionState(
-            {
-                "selected_groups": ["Core"],
-                "selected_concepts": ["hr"],
-                "concept_checkboxes": {"hr": True},
-                "step3_confirmed": True,
-            }
-        )
-    )
+    class _ConceptToggleStreamlit:
+        def __init__(self) -> None:
+            self.session_state = _AttrSessionState(
+                {
+                    "selected_groups": ["Core"],
+                    "selected_concepts": ["hr"],
+                    "concept_checkboxes": {"hr": True},
+                    "step3_confirmed": True,
+                }
+            )
+            self.rerun_called = False
+
+        def rerun(self) -> None:
+            self.rerun_called = True
+
+    streamlit_stub = _ConceptToggleStreamlit()
     monkeypatch.setattr(sidebar, "st", streamlit_stub)
     concept_groups = {"Core": ["hr"], "Renal": ["creatinine", "urine_output"]}
 
@@ -5063,6 +5073,7 @@ def test_concept_module_toggle_callback_updates_summary_before_render(monkeypatc
     assert streamlit_stub.session_state["selected_groups"] == ["Core", "Renal"]
     assert streamlit_stub.session_state["selected_concepts"] == ["creatinine", "hr", "urine_output"]
     assert streamlit_stub.session_state["step3_confirmed"] is False
+    assert streamlit_stub.rerun_called is False
 
 
 def test_topbar_crossdb_real_action_opens_loader_when_data_missing() -> None:
@@ -6913,6 +6924,7 @@ def test_dataframe_toolbar_is_kept_inside_clickable_table_surface() -> None:
     assert "top: 6px !important" in toolbar_rule
     assert "right: 8px !important" in toolbar_rule
     assert "z-index: 120 !important" in toolbar_rule
+    assert 'button[aria-label="Download as CSV"]' in toolbar_rule
     assert ':has([data-testid="search-input"]) [data-testid="stElementToolbar"]' in toolbar_rule
     assert "display: none !important" in toolbar_rule
 
