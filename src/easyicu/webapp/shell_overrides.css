@@ -7325,14 +7325,17 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   opacity: 0.86;
   line-height: 1.45;
 }
-.eu-source-banner .learn {
+.eu-source-banner .source-note {
   height: 24px;
   display: inline-flex;
   align-items: center;
   padding: 0 8px;
-  border-radius: var(--r-2);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.52);
   color: var(--accent-ink);
   font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
 }
 .stApp [class*="st-key-eu_generation_card"] {

@@ -164,6 +164,18 @@ def test_concept_selection_design_exposes_all_action() -> None:
     assert "_all_concept_groups(concept_groups)" in source
 
 
+def test_step1_source_banner_uses_noninteractive_status_note() -> None:
+    source = Path(sidebar.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert '<span class="source-note">' in source
+    assert '"Local demo" if lang == "en" else "本机演示"' in source
+    assert "Learn more" not in source
+    assert "了解更多" not in source
+    assert ".eu-source-banner .source-note" in css_text
+    assert ".eu-source-banner .learn" not in css_text
+
+
 def test_step2_confirm_seeds_all_concepts_before_rerun() -> None:
     source = Path(sidebar.__file__).read_text(encoding="utf-8")
     confirm_block = source[
