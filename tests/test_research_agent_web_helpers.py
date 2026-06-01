@@ -498,11 +498,44 @@ def test_cohort_source_quick_actions_render_before_full_radio() -> None:
         "st.radio(",
     )
     assert "entry_mode" in section_source
+    assert "source_handoff=source_handoff" in section_source
     assert "research_agent_quick_synthetic" in helper_source
     assert "research_agent_quick_module_folder" in helper_source
     assert "research_agent_quick_no_data" in helper_source
+    assert "_activate_research_agent_test_cohort(" in helper_source
     assert "_activate_research_agent_cohort_source(" in helper_source
     assert "st.rerun()" in helper_source
+
+
+def test_quick_test_cohort_prepares_ready_session_handoff() -> None:
+    state: dict[str, object] = {
+        "research_agent_question": "Does SOFA predict mortality?",
+        "research_agent_preflight_confirmed": True,
+        "research_agent_preflight_ack": True,
+        "research_agent_preflight_signature": "stale",
+        "_eu_ra_focus_module_folder": True,
+        "_eu_ra_focus_no_data": True,
+    }
+
+    ra_page._activate_research_agent_test_cohort(
+        state,
+        source_handoff="Use cohort prepared elsewhere in this session",
+        is_en=True,
+    )
+
+    cohort = state["research_agent_inbound_cohort"]
+    assert isinstance(cohort, pd.DataFrame)
+    assert cohort.shape[0] == 800
+    assert {"stay_id", "sofa2", "death"} <= set(cohort.columns)
+    assert state["research_agent_inbound_cohort_label"] == "Test SOFA cohort"
+    assert state["research_agent_cohort_source"] == "Use cohort prepared elsewhere in this session"
+    assert state["_research_agent_previous_cohort_source"] is None
+    assert state["research_agent_preflight_confirmed"] is False
+    assert state["research_agent_preflight_ack"] is False
+    assert "research_agent_preflight_signature" not in state
+    assert "_eu_ra_focus_module_folder" not in state
+    assert "_eu_ra_focus_no_data" not in state
+    assert state["research_agent_question"] == "Does SOFA predict mortality?"
 
 
 def test_detected_module_folder_defaults_to_most_complete_export(tmp_path: Path) -> None:

@@ -2661,6 +2661,7 @@ def _has_min_distinct_db_tags(chosen: Sequence[Tuple[str, Path]], min_count: int
 
 def _render_cohort_source_quick_actions(
     *,
+    source_handoff: str,
     source_no_data: str,
     source_module: str,
     source_synthetic: str,
@@ -2731,12 +2732,19 @@ def _render_cohort_source_quick_actions(
     ) in zip(shortcut_cols, shortcuts):
         with col:
             if st.button(label, key=key, use_container_width=True):
-                _activate_research_agent_cohort_source(
-                    st.session_state,
-                    source,
-                    focus_module=focus_module,
-                    focus_no_data=focus_no_data,
-                )
+                if key == "research_agent_quick_synthetic":
+                    _activate_research_agent_test_cohort(
+                        st.session_state,
+                        source_handoff=source_handoff,
+                        is_en=is_en,
+                    )
+                else:
+                    _activate_research_agent_cohort_source(
+                        st.session_state,
+                        source,
+                        focus_module=focus_module,
+                        focus_no_data=focus_no_data,
+                    )
                 st.rerun()
             st.caption(caption)
 
@@ -2774,6 +2782,34 @@ def _activate_research_agent_cohort_source(
         state["_eu_ra_focus_module_folder"] = True
     if focus_no_data:
         state["_eu_ra_focus_no_data"] = True
+
+
+def _activate_research_agent_test_cohort(
+    state: MutableMapping[str, object],
+    *,
+    source_handoff: str,
+    is_en: bool = True,
+    n: int = 800,
+    seed: int = 7,
+) -> None:
+    """Prepare the built-in test cohort in one click.
+
+    The full source radio still exposes the configurable synthetic cohort.
+    This shortcut is deliberately lower-friction: it creates the default
+    deterministic SOFA cohort and routes it through the existing session
+    handoff path so the preflight gate immediately sees a ready cohort.
+    """
+    state["research_agent_inbound_cohort"] = _build_synthetic_cohort(n=n, seed=seed)
+    state["research_agent_inbound_cohort_label"] = (
+        "Test SOFA cohort" if is_en else "SOFA 测试队列"
+    )
+    state["research_agent_cohort_source"] = source_handoff
+    state["_research_agent_previous_cohort_source"] = None
+    state.pop("_eu_ra_focus_module_folder", None)
+    state.pop("_eu_ra_focus_no_data", None)
+    state["research_agent_preflight_confirmed"] = False
+    state["research_agent_preflight_ack"] = False
+    state.pop("research_agent_preflight_signature", None)
 
 
 def _infer_db_tag_from_folder(folder: Path) -> str:
@@ -2994,6 +3030,7 @@ def _section_cohort_picker(
         st.session_state.pop("research_agent_cohort_source", None)
     if st.session_state.get("entry_mode") == "real":
         _render_cohort_source_quick_actions(
+            source_handoff=source_handoff,
             source_no_data=source_no_data,
             source_module=source_module,
             source_synthetic=source_synthetic,
