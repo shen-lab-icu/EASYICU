@@ -1461,7 +1461,12 @@ def _resume_run_dir_from_state(state: Dict[str, Any], run_id: str) -> Optional[P
         if not raw:
             continue
         path = Path(raw).expanduser()
-        if path.exists() and path.is_dir() and (not run_id or path.name == run_id):
+        if not path.exists() or not path.is_dir():
+            continue
+        if not run_id or path.name == run_id:
+            return path.resolve()
+        manifest, _manifest_path, _partial = _load_run_manifest(path)
+        if str(manifest.get("run_id") or "").strip() == run_id:
             return path.resolve()
     if run_id:
         candidate = Path(_default_research_agent_workdir()).expanduser() / run_id
@@ -1501,7 +1506,8 @@ def _cohort_path_from_resume_run(run_dir: Path) -> Optional[Path]:
 def _restore_resume_cohort_handoff(state: Dict[str, Any]) -> bool:
     """Seed the cohort picker from the active resume run's local cohort artifact."""
     run_id = str(state.get("research_agent_resume_run_id") or "").strip()
-    if not run_id or str(state.get("research_agent_resume_mode") or "") != "continue":
+    resume_mode = str(state.get("research_agent_resume_mode") or "")
+    if not run_id or resume_mode not in {"continue", "force_manuscript"}:
         return False
     inbound = state.get("research_agent_inbound_cohort")
     existing_signature = str(state.get("research_agent_resume_cohort_signature") or "")
@@ -5819,7 +5825,7 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
     _is_en = _lang == "en"
     resume_run_id = st.session_state.get("research_agent_resume_run_id")
     resume_mode = str(st.session_state.get("research_agent_resume_mode") or "")
-    if resume_run_id and resume_mode == "continue":
+    if resume_run_id and resume_mode in {"continue", "force_manuscript"}:
         _restore_resume_cohort_handoff(st.session_state)
     _step_titles = [
         _ra_text("step1_title"),
