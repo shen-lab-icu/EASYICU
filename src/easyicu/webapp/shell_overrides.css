@@ -7687,6 +7687,109 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   font-style: normal;
   font-size: 10.5px;
 }
+.eu-icd-preview {
+  margin-top: 12px;
+  padding: 11px 12px 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+}
+.eu-icd-preview.demo {
+  border-color: #c8e2e6;
+  background: #f1fafb;
+}
+.eu-icd-preview.real {
+  border-color: #d7dfda;
+  background: #f7faf7;
+}
+.eu-icd-preview.error {
+  border-color: #e4d2aa;
+  background: #fffaf0;
+}
+.eu-icd-preview.empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink-4);
+}
+.eu-icd-preview.empty span {
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.eu-icd-preview.empty p {
+  margin: 0;
+  color: var(--ink-4);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.eu-icd-preview-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+.eu-icd-preview-head span {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.eu-icd-preview-head em {
+  color: var(--ink-4);
+  font-style: normal;
+  font-size: 10.5px;
+}
+.eu-icd-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.eu-icd-preview-grid div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(21, 28, 35, 0.06);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+.eu-icd-preview-grid b {
+  display: block;
+  color: var(--ink-4);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.eu-icd-preview-grid strong {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+}
+.eu-icd-preview-grid small {
+  display: inline-block;
+  margin-left: 5px;
+  color: var(--ink-4);
+  font-size: 10.5px;
+}
+.eu-icd-preview > p.mono {
+  margin: 8px 0 0 !important;
+  color: var(--ink-4);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.eu-icd-preview-error {
+  margin-top: 8px;
+  color: #7a4d00;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
 .stApp [class*="st-key-cohort_disease_card_"] button {
   min-height: 35px !important;
   height: 35px !important;

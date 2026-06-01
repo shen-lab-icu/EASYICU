@@ -7011,10 +7011,125 @@ def test_demo_step2_preview_does_not_render_negative_zero_drop(monkeypatch) -> N
     assert "-0.0%" not in preview_html
 
 
+def test_demo_step2_live_preview_applies_icd_exclude_estimate(monkeypatch) -> None:
+    rendered: list[str] = []
+
+    class _PreviewStreamlit:
+        session_state = _AttrSessionState(
+            {
+                "language": "en",
+                "entry_mode": "demo",
+                "mock_params": {"n_patients": 10},
+                "cohort_enabled": True,
+                "cohort_filter": {
+                    "age_min": None,
+                    "age_max": None,
+                    "first_icu_stay": None,
+                    "los_min": None,
+                    "gender": None,
+                    "survived": None,
+                    "disease_cohort": "none",
+                    "icd_include_query": "A41",
+                    "icd_exclude_query": "I50,C34",
+                },
+            }
+        )
+
+        @staticmethod
+        def markdown(value: str, **_kwargs) -> None:
+            rendered.append(value)
+
+    monkeypatch.setattr(sidebar, "st", _PreviewStreamlit())
+
+    sidebar._render_cohort_live_preview("en")
+    preview_html = "\n".join(rendered)
+
+    assert "of 10 stays · -90.0%" in preview_html
+    assert "after filters: 1" in preview_html
+    assert "ICD + A41" in preview_html
+    assert "ICD - I50,C34" in preview_html
+
+
 def test_step2_database_display_names_cover_real_sources() -> None:
     assert sidebar._step2_database_display_name("miiv") == "MIMIC-IV"
     assert sidebar._step2_database_display_name("mimic") == "MIMIC-III"
     assert sidebar._step2_database_display_name("eicu") == "eICU-CRD"
+
+
+def test_demo_step2_icd_preview_summarizes_include_exclude_and_net_counts() -> None:
+    preview = sidebar._demo_step2_icd_preview_counts(10, "A41", "I50,C34")
+
+    assert preview["mode"] == "demo"
+    assert preview["total"] == 10
+    assert preview["include_tokens"] == ["A41"]
+    assert preview["exclude_tokens"] == ["I50", "C34"]
+    assert preview["include_count"] == 4
+    assert preview["exclude_count"] == 3
+    assert preview["retained_count"] == 1
+
+    preview_html = sidebar._step2_icd_preview_html("zh", preview)
+    assert "ICD 条件预览" in preview_html
+    assert "演示估算" in preview_html
+    assert "包含匹配" in preview_html
+    assert "排除匹配" in preview_html
+    assert "ICD 净保留" in preview_html
+
+
+def test_real_step2_icd_preview_uses_local_match_id_sets(tmp_path, monkeypatch) -> None:
+    class _PreviewStreamlit:
+        session_state = _AttrSessionState(
+            {
+                "data_path": str(tmp_path),
+                "database": "miiv",
+            }
+        )
+
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def _fake_preview(_path: Path, database: str, tokens: list[str]) -> dict:
+        calls.append((database, tuple(tokens)))
+        if tokens == ["A41"]:
+            return {
+                "tokens": tokens,
+                "matched_patients": 3,
+                "matched_ids": [101, 102, 103],
+                "total_patients": 10,
+                "top_codes": None,
+                "error": None,
+            }
+        if tokens == ["I50"]:
+            return {
+                "tokens": tokens,
+                "matched_patients": 2,
+                "matched_ids": [102, 200],
+                "total_patients": 10,
+                "top_codes": None,
+                "error": None,
+            }
+        raise AssertionError(tokens)
+
+    monkeypatch.setattr(sidebar, "st", _PreviewStreamlit())
+    monkeypatch.setattr(sidebar, "_preview_icd_match", _fake_preview, raising=False)
+
+    preview = sidebar._real_step2_icd_preview_counts("A41", "I50")
+
+    assert preview["mode"] == "real"
+    assert preview["total"] == 10
+    assert preview["include_count"] == 3
+    assert preview["exclude_count"] == 2
+    assert preview["retained_count"] == 2
+    assert calls == [("miiv", ("A41",)), ("miiv", ("I50",))]
+
+    sidebar._real_step2_icd_preview_counts("A41", "I50")
+    assert calls == [("miiv", ("A41",)), ("miiv", ("I50",))]
+
+
+def test_step2_icd_preview_css_is_present() -> None:
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert ".eu-icd-preview" in css_text
+    assert ".eu-icd-preview-grid" in css_text
+    assert "exact from local tables" not in css_text
 
 
 def test_dataframe_toolbar_is_kept_inside_clickable_table_surface() -> None:
