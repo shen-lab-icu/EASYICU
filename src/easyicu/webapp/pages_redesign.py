@@ -796,6 +796,26 @@ def _apply_workspace_state_action(state: MutableMapping[str, Any], context: str,
     state["_scroll_to_top"] = True
 
 
+def _workspace_state_action_label(context: str, mode: str, lang: str) -> str:
+    if context == "crossdb":
+        return (
+            _T(lang, "Open Cross-DB demo", "打开跨库演示")
+            if mode == "demo"
+            else _T(lang, "Open Cross-DB setup", "打开跨库配置")
+        )
+    if context == "agent":
+        return (
+            _T(lang, "Preview Research Agent demo", "预览研究智能体演示")
+            if mode == "demo"
+            else _T(lang, "Open Research Agent setup", "打开研究智能体配置")
+        )
+    return (
+        _T(lang, "Open Patient Review demo", "打开患者审阅演示")
+        if mode == "demo"
+        else _T(lang, "Open Patient Review", "打开患者审阅")
+    )
+
+
 def _route_to_extract_step(
     state: MutableMapping[str, Any],
     step: int,
@@ -1075,12 +1095,11 @@ def render_workspace_states_reference_page(lang: str) -> None:
         unsafe_allow_html=True,
     )
 
-    copy = _workspace_state_copy(current_context, current_mode, current_state, lang)
     with st.container(key="eu_states_preview_actions"):
         action_cols = st.columns([0.38, 0.22, 0.40], gap="small")
         with action_cols[0]:
             if st.button(
-                str(copy.get("empty_action") or _T(lang, "Open current context", "打开当前上下文")),
+                _workspace_state_action_label(current_context, current_mode, lang),
                 key="_eu_states_primary_action",
                 type="primary",
                 use_container_width=True,
