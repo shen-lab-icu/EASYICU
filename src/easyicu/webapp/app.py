@@ -2323,14 +2323,16 @@ def _research_agent_active_run_context(state: Dict[str, Any]) -> Dict[str, str]:
     if not isinstance(workbench, dict) or not workbench.get("steps"):
         return {}
     run_id = str(workbench.get("run_id") or "").strip()
-    if not run_id:
-        run_dir = str(workbench.get("run_dir") or state.get("_agent_workbench_source_run_dir") or "").strip()
-        if run_dir:
-            run_id = Path(run_dir).name
+    run_dir = str(workbench.get("run_dir") or state.get("_agent_workbench_source_run_dir") or "").strip()
+    if not run_id and run_dir:
+        run_id = Path(run_dir).name
     if not run_id:
         return {}
     question = str(workbench.get("research_question") or workbench.get("question") or "").strip()
-    return {"run_id": run_id, "question": question}
+    out = {"run_id": run_id, "question": question}
+    if run_dir:
+        out["run_dir"] = run_dir
+    return out
 
 
 def _prime_research_agent_header_rerun(state: Dict[str, Any], run_context: Dict[str, str]) -> None:
@@ -2339,6 +2341,8 @@ def _prime_research_agent_header_rerun(state: Dict[str, Any], run_context: Dict[
     if not run_id:
         return
     state["research_agent_resume_run_id"] = run_id
+    if run_context.get("run_dir"):
+        state["research_agent_resume_run_dir"] = str(run_context["run_dir"])
     state["research_agent_force_manuscript"] = False
     state["research_agent_resume_mode"] = "continue"
     state["research_agent_resume_notes"] = ""

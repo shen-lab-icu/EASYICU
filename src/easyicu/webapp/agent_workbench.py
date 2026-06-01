@@ -1075,6 +1075,8 @@ def _prime_summary_draft_setup(state: dict[str, Any]) -> None:
         return
     st.session_state["_active_main_page"] = "research_agent"
     st.session_state["research_agent_resume_run_id"] = run_id
+    if run_dir_text:
+        st.session_state["research_agent_resume_run_dir"] = run_dir_text
     st.session_state["research_agent_force_manuscript"] = True
     st.session_state["research_agent_resume_mode"] = "force_manuscript"
     st.session_state["research_agent_resume_notes"] = ""

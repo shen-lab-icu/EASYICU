@@ -1230,12 +1230,63 @@ def test_summary_draft_cta_routes_to_force_manuscript_setup(monkeypatch) -> None
     })
 
     assert fake_st.session_state["research_agent_resume_run_id"] == "run_20260528T184052_adaf4d"
+    assert fake_st.session_state["research_agent_resume_run_dir"] == "/tmp/run_20260528T184052_adaf4d"
     assert fake_st.session_state["research_agent_force_manuscript"] is True
     assert fake_st.session_state["research_agent_resume_mode"] == "force_manuscript"
     assert fake_st.session_state["research_agent_question"] == "Does lactate predict mortality?"
     assert fake_st.session_state["_active_main_page"] == "research_agent"
     assert fake_st.session_state["_ra_view"] == "setup"
     assert fake_st.session_state["_research_agent_expand_history"] is False
+
+
+def test_resume_run_seeds_cohort_from_local_run_artifact(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_20260601T010203_abcd"
+    run_dir.mkdir()
+    cohort_path = run_dir / "cohort.parquet"
+    pd.DataFrame({
+        "stay_id": [1, 2],
+        "death": [0, 1],
+        "sofa2": [3, 8],
+    }).to_parquet(cohort_path, index=False)
+    (run_dir / "manifest.json").write_text(
+        json.dumps({
+            "run_id": "run_20260601T010203_abcd",
+            "research_question": "Does SOFA predict mortality?",
+        }),
+        encoding="utf-8",
+    )
+
+    state: dict[str, object] = {
+        "research_agent_resume_run_id": "run_20260601T010203_abcd",
+        "research_agent_resume_run_dir": str(run_dir),
+        "research_agent_resume_mode": "continue",
+    }
+
+    restored = ra_page._restore_resume_cohort_handoff(state)
+
+    assert restored is True
+    assert isinstance(state["research_agent_inbound_cohort"], pd.DataFrame)
+    assert state["research_agent_inbound_cohort"].shape == (2, 3)
+    assert state["research_agent_inbound_cohort_label"] == "resume:run_20260601T010203_abcd:cohort.parquet"
+    assert str(state["research_agent_resume_cohort_signature"]).startswith("resume:run_20260601T010203_abcd:")
+    assert state["research_agent_inbound_signature"] == state["research_agent_resume_cohort_signature"]
+
+
+def test_cancel_resume_clears_only_resume_loaded_cohort() -> None:
+    df = pd.DataFrame({"stay_id": [1]})
+    state: dict[str, object] = {
+        "research_agent_inbound_cohort": df,
+        "research_agent_inbound_cohort_label": "resume:run_1:cohort.parquet",
+        "research_agent_inbound_signature": "resume:run_1:/tmp/cohort.parquet:1:2",
+        "research_agent_resume_cohort_signature": "resume:run_1:/tmp/cohort.parquet:1:2",
+    }
+
+    ra_page._clear_resume_cohort_handoff(state)
+
+    assert "research_agent_inbound_cohort" not in state
+    assert "research_agent_inbound_cohort_label" not in state
+    assert "research_agent_inbound_signature" not in state
+    assert "research_agent_resume_cohort_signature" not in state
 
 
 def test_research_agent_question_widget_uses_session_state_without_duplicate_default() -> None:

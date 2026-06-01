@@ -1351,6 +1351,106 @@ def _load_run_manifest(run_dir: Path) -> Tuple[Dict[str, Any], Optional[Path], b
     return manifest, manifest_path, manifest_path.name == "manifest_partial.json"
 
 
+def _resume_run_dir_from_state(state: Dict[str, Any], run_id: str) -> Optional[Path]:
+    """Resolve a resume run directory without guessing outside the local workdir."""
+    for key in ("research_agent_resume_run_dir", "_agent_workbench_source_run_dir"):
+        raw = str(state.get(key) or "").strip()
+        if not raw:
+            continue
+        path = Path(raw).expanduser()
+        if path.exists() and path.is_dir() and (not run_id or path.name == run_id):
+            return path.resolve()
+    if run_id:
+        candidate = Path(_default_research_agent_workdir()).expanduser() / run_id
+        if candidate.exists() and candidate.is_dir():
+            return candidate.resolve()
+    return None
+
+
+def _cohort_path_from_resume_run(run_dir: Path) -> Optional[Path]:
+    """Find the stay-level cohort parquet recorded for a prior web run."""
+    candidates: List[Path] = []
+    for rel in (
+        "data_extraction_result.json",
+        "evidence/data_extraction_result__data_extraction_result.json",
+    ):
+        payload = _read_json_file(run_dir / rel)
+        raw = str(payload.get("cohort_path") or "").strip()
+        if raw:
+            path = Path(raw).expanduser()
+            candidates.append(path if path.is_absolute() else run_dir / path)
+    manifest, _manifest_path, _partial = _load_run_manifest(run_dir)
+    raw_manifest = str(manifest.get("cohort_path") or "").strip()
+    if raw_manifest:
+        path = Path(raw_manifest).expanduser()
+        candidates.append(path if path.is_absolute() else run_dir / path)
+    candidates.append(run_dir / "cohort.parquet")
+    for path in candidates:
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path
+        if resolved.exists() and resolved.is_file() and resolved.suffix.lower() in {".parquet", ".pq", ".csv", ".tsv"}:
+            return resolved
+    return None
+
+
+def _restore_resume_cohort_handoff(state: Dict[str, Any]) -> bool:
+    """Seed the cohort picker from the active resume run's local cohort artifact."""
+    run_id = str(state.get("research_agent_resume_run_id") or "").strip()
+    if not run_id or str(state.get("research_agent_resume_mode") or "") != "continue":
+        return False
+    inbound = state.get("research_agent_inbound_cohort")
+    existing_signature = str(state.get("research_agent_resume_cohort_signature") or "")
+    current_signature = str(state.get("research_agent_inbound_signature") or "")
+    if (
+        isinstance(inbound, pd.DataFrame)
+        and not inbound.empty
+        and existing_signature.startswith(f"resume:{run_id}:")
+        and current_signature == existing_signature
+    ):
+        return True
+    run_dir = _resume_run_dir_from_state(state, run_id)
+    if run_dir is None:
+        return False
+    cohort_path = _cohort_path_from_resume_run(run_dir)
+    if cohort_path is None:
+        return False
+    try:
+        if cohort_path.suffix.lower() in {".parquet", ".pq"}:
+            df = pd.read_parquet(cohort_path)
+        else:
+            sep = "\t" if cohort_path.suffix.lower() == ".tsv" else ","
+            df = pd.read_csv(cohort_path, sep=sep)
+    except Exception:
+        return False
+    if df.empty:
+        return False
+    try:
+        stat = cohort_path.stat()
+        signature = f"resume:{run_id}:{cohort_path}:{stat.st_mtime_ns}:{stat.st_size}"
+    except OSError:
+        signature = f"resume:{run_id}:{cohort_path}"
+    state["research_agent_inbound_cohort"] = df
+    state["research_agent_inbound_cohort_label"] = f"resume:{run_id}:{cohort_path.name}"
+    state["research_agent_inbound_signature"] = signature
+    state["research_agent_resume_cohort_signature"] = signature
+    state["research_agent_cohort_source"] = _ra_text("source_handoff")
+    return True
+
+
+def _clear_resume_cohort_handoff(state: Dict[str, Any]) -> None:
+    """Remove only the cohort handoff that was loaded from a resume run."""
+    signature = state.pop("research_agent_resume_cohort_signature", None)
+    if signature and state.get("research_agent_inbound_signature") == signature:
+        for key in (
+            "research_agent_inbound_cohort",
+            "research_agent_inbound_cohort_label",
+            "research_agent_inbound_signature",
+        ):
+            state.pop(key, None)
+
+
 def _bind_workbench_state(
     *,
     run_dir: Path,
@@ -4502,6 +4602,7 @@ def _render_resume_panel(
             disabled=not can_resume,
         ):
             st.session_state["research_agent_resume_run_id"] = run_id
+            st.session_state["research_agent_resume_run_dir"] = str(run_dir)
             st.session_state["research_agent_force_manuscript"] = False
             st.session_state["research_agent_resume_mode"] = "continue"
             st.session_state["research_agent_resume_notes"] = extra_notes
@@ -4521,6 +4622,7 @@ def _render_resume_panel(
             disabled=not can_resume,
         ):
             st.session_state["research_agent_resume_run_id"] = run_id
+            st.session_state["research_agent_resume_run_dir"] = str(run_dir)
             st.session_state["research_agent_force_manuscript"] = True
             st.session_state["research_agent_resume_mode"] = "force_manuscript"
             st.session_state["research_agent_resume_notes"] = ""
@@ -5595,6 +5697,10 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
 
     _lang = st.session_state.get("language", "en")
     _is_en = _lang == "en"
+    resume_run_id = st.session_state.get("research_agent_resume_run_id")
+    resume_mode = str(st.session_state.get("research_agent_resume_mode") or "")
+    if resume_run_id and resume_mode == "continue":
+        _restore_resume_cohort_handoff(st.session_state)
     _step_titles = [
         _ra_text("step1_title"),
         _ra_text("step2_title"),
@@ -5638,9 +5744,7 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
         with st.expander(f"{_step_titles[4]} ({_optional_label})", expanded=focus_options):
             disable_icu_context, workdir_text, stop_after_analysis = _section_options()
     llm_ready, llm_issue = _llm_run_readiness(llm_choice, api_key, model)
-    resume_run_id = st.session_state.get("research_agent_resume_run_id")
     force_manuscript = bool(st.session_state.get("research_agent_force_manuscript"))
-    resume_mode = str(st.session_state.get("research_agent_resume_mode") or "")
     resume_notes = str(st.session_state.get("research_agent_resume_notes") or "")
     resume_relax_probe = bool(st.session_state.get("research_agent_resume_relax_probe"))
     if force_manuscript:
@@ -5702,10 +5806,12 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
             key="research_agent_cancel_resume",
         ):
             st.session_state.pop("research_agent_resume_run_id", None)
+            st.session_state.pop("research_agent_resume_run_dir", None)
             st.session_state.pop("research_agent_force_manuscript", None)
             st.session_state.pop("research_agent_resume_mode", None)
             st.session_state.pop("research_agent_resume_notes", None)
             st.session_state.pop("research_agent_resume_relax_probe", None)
+            _clear_resume_cohort_handoff(st.session_state)
             st.rerun()
 
     with st.container(key="eu_ra_preflight_panel"):
@@ -5964,10 +6070,12 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
     live_workbench.empty()
     if force_manuscript or resume_mode == "continue":
         st.session_state.pop("research_agent_resume_run_id", None)
+        st.session_state.pop("research_agent_resume_run_dir", None)
         st.session_state.pop("research_agent_force_manuscript", None)
         st.session_state.pop("research_agent_resume_mode", None)
         st.session_state.pop("research_agent_resume_notes", None)
         st.session_state.pop("research_agent_resume_relax_probe", None)
+        _clear_resume_cohort_handoff(st.session_state)
 
     st.session_state["research_agent_last_result"] = {
         "run_id": result.run_id,

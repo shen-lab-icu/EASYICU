@@ -3643,6 +3643,7 @@ def test_research_agent_header_rerun_routes_to_checkpoint_setup() -> None:
     state = {
         "_agent_workbench": {
             "run_id": "run_20260601T010203_abcd",
+            "run_dir": "/tmp/run_20260601T010203_abcd",
             "steps": [{"id": "01"}],
             "research_question": "Does lactate predict ICU mortality?",
         },
@@ -3659,8 +3660,10 @@ def test_research_agent_header_rerun_routes_to_checkpoint_setup() -> None:
     assert context == {
         "run_id": "run_20260601T010203_abcd",
         "question": "Does lactate predict ICU mortality?",
+        "run_dir": "/tmp/run_20260601T010203_abcd",
     }
     assert state["research_agent_resume_run_id"] == "run_20260601T010203_abcd"
+    assert state["research_agent_resume_run_dir"] == "/tmp/run_20260601T010203_abcd"
     assert state["research_agent_force_manuscript"] is False
     assert state["research_agent_resume_mode"] == "continue"
     assert state["research_agent_resume_notes"] == ""
