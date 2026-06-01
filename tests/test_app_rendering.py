@@ -6049,6 +6049,15 @@ def test_sidebar_agent_rail_reports_agent_cohort_not_extraction_step(monkeypatch
     assert "3 rows" in built_html
     assert "not selected" not in built_html
 
+    streamlit_stub.session_state.pop("research_agent_module_built", None)
+    streamlit_stub.session_state["research_agent_cohort_source"] = i18n.TEXTS["en"]["ra_source_synthetic"]
+    streamlit_stub.session_state["research_agent_synth_n"] = 800
+
+    synthetic_html = sidebar._agent_state_summary_html("real", "en")
+
+    assert "800 rows" in synthetic_html
+    assert "not selected" not in synthetic_html
+
 
 def test_sidebar_agent_state_uses_reviewed_warning_and_signoff(monkeypatch) -> None:
     finding = {"severity": "warning", "validator": "critic", "message": "Check table 1."}
