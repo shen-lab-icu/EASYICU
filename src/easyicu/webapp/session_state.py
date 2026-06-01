@@ -98,18 +98,21 @@ COHORT_STATE_KEYS = {
 AGENT_STATE_KEYS = {
     "research_agent_last_result",
     "research_agent_resume_run_id",
+    "research_agent_resume_run_dir",
     "research_agent_force_manuscript",
     "research_agent_cohort_source",
     "research_agent_module_built",
     "research_agent_inbound_cohort",
     "research_agent_inbound_cohort_label",
     "research_agent_inbound_signature",
+    "research_agent_resume_cohort_signature",
     "research_agent_progress_events",
 }
 
 
 AGENT_CONTINUATION_STATE_KEYS = {
     "research_agent_resume_run_id",
+    "research_agent_resume_run_dir",
     "research_agent_force_manuscript",
     "research_agent_resume_mode",
     "research_agent_resume_notes",
