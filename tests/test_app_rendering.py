@@ -5917,6 +5917,11 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert 'key="_eu_settings_reduce_motion"' in page_source
     assert "def _settings_start_path_edit" in page_source
     assert "def _settings_apply_path_edit" in page_source
+    apply_source = page_source[
+        page_source.index("def _settings_apply_path_edit"):
+        page_source.index("def _settings_cancel_path_edit")
+    ]
+    assert "state[input_key] = normalized" not in apply_source
     assert 'key="_eu_settings_workdir_input"' in page_source
     assert 'key="_eu_settings_save_workdir"' in page_source
     assert 'key="_eu_settings_export_path_input"' in page_source
