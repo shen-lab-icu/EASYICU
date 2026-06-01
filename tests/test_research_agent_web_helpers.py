@@ -1363,6 +1363,7 @@ def test_summary_draft_cta_routes_to_force_manuscript_setup(monkeypatch) -> None
 
     assert fake_st.session_state["research_agent_resume_run_id"] == "run_20260528T184052_adaf4d"
     assert fake_st.session_state["research_agent_resume_run_dir"] == "/tmp/run_20260528T184052_adaf4d"
+    assert fake_st.session_state["research_agent_workdir"] == str(Path("/tmp").resolve())
     assert fake_st.session_state["research_agent_force_manuscript"] is True
     assert fake_st.session_state["research_agent_resume_mode"] == "force_manuscript"
     assert fake_st.session_state["research_agent_question"] == "Does lactate predict mortality?"
@@ -1402,6 +1403,49 @@ def test_resume_run_seeds_cohort_from_local_run_artifact(tmp_path: Path) -> None
     assert state["research_agent_inbound_cohort_label"] == "resume:run_20260601T010203_abcd:cohort.parquet"
     assert str(state["research_agent_resume_cohort_signature"]).startswith("resume:run_20260601T010203_abcd:")
     assert state["research_agent_inbound_signature"] == state["research_agent_resume_cohort_signature"]
+
+
+def test_force_manuscript_seeds_cohort_from_copied_run_dir(tmp_path: Path) -> None:
+    run_dir = tmp_path / "copied_reviewed_run"
+    run_dir.mkdir()
+    cohort_path = run_dir / "cohort.parquet"
+    pd.DataFrame({
+        "stay_id": [1, 2, 3],
+        "death": [0, 1, 0],
+        "sofa2": [2, 9, 5],
+    }).to_parquet(cohort_path, index=False)
+    (run_dir / "manifest.json").write_text(
+        json.dumps({
+            "run_id": "run_20260601T035358_d282cb",
+            "research_question": "Does SOFA predict mortality?",
+        }),
+        encoding="utf-8",
+    )
+
+    state: dict[str, object] = {
+        "research_agent_resume_run_id": "run_20260601T035358_d282cb",
+        "research_agent_resume_run_dir": str(run_dir),
+        "research_agent_resume_mode": "force_manuscript",
+    }
+
+    restored = ra_page._restore_resume_cohort_handoff(state)
+
+    assert restored is True
+    assert isinstance(state["research_agent_inbound_cohort"], pd.DataFrame)
+    assert state["research_agent_inbound_cohort"].shape == (3, 3)
+    assert state["research_agent_inbound_cohort_label"] == "resume:run_20260601T035358_d282cb:cohort.parquet"
+    assert str(state["research_agent_resume_cohort_signature"]).startswith("resume:run_20260601T035358_d282cb:")
+
+
+def test_research_agent_page_restores_cohort_for_force_manuscript_resume() -> None:
+    source = Path(ra_page.__file__).read_text(encoding="utf-8")
+    render_source = source[
+        source.index("def render_research_agent_page"):
+        source.index("_step_titles = [", source.index("def render_research_agent_page"))
+    ]
+
+    assert 'resume_mode in {"continue", "force_manuscript"}' in render_source
+    assert "_restore_resume_cohort_handoff(st.session_state)" in render_source
 
 
 def test_cancel_resume_clears_only_resume_loaded_cohort() -> None:
