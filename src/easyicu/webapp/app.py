@@ -1174,6 +1174,17 @@ def _consume_topbar_run_request(
     return None
 
 
+_TOPBAR_STATE_RERUN_PAGES = {
+    "assistant",
+    "states",
+    "settings",
+    "quick_viz",
+    "cohort",
+    "cross_db",
+    "research_agent",
+}
+
+
 def _handle_topbar_run_request(active_page: str, lang: str) -> dict[str, str] | None:
     """Consume a queued topbar request and surface a small user notice."""
     pending_notice = st.session_state.pop('_eu_topbar_notice_pending', None)
@@ -1184,9 +1195,9 @@ def _handle_topbar_run_request(active_page: str, lang: str) -> dict[str, str] | 
             pass
 
     result = _consume_topbar_run_request(st.session_state, active_page, lang)
-    if result and active_page == 'settings':
-        # The reset is consumed after the sidebar has rendered. Re-run once
-        # so its Current setup summary immediately reflects Demo / Mock too.
+    if result and active_page in _TOPBAR_STATE_RERUN_PAGES:
+        # The request is consumed after the sidebar/topbar have rendered.
+        # Re-run once so those shell regions reflect the new page state too.
         st.session_state['_eu_topbar_notice_pending'] = result.get('message', '')
         st.rerun()
 
