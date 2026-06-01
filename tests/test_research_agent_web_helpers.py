@@ -176,11 +176,12 @@ def test_raw_extract_handoff_sets_extraction_steps_and_clears_conflict_state(tmp
         "_export_success_result",
     ):
         assert key not in state
-    assert state["trigger_export"] is True
-    assert state["_exporting_in_progress"] is True
+    assert state["trigger_export"] is False
+    assert state["_exporting_in_progress"] is False
     assert state["_active_main_page"] == "extract"
-    assert state["_main_nav_widget"] == "extract"
-    assert state["_scroll_to_tab"] == "export_progress"
+    assert "_main_nav_widget" not in state
+    assert "_scroll_to_tab" not in state
+    assert state["_scroll_to_top"] is True
 
 
 def test_module_file_multiselect_defaults_reset_when_folder_changes(tmp_path: Path) -> None:

@@ -3445,7 +3445,9 @@ def test_research_agent_raw_extract_defaults_to_all_modules_and_hands_off() -> N
     assert "_migrate_legacy_extract_module_selection(st.session_state, modules)" in raw_extract_source
     assert "_queue_raw_extract_handoff(" in raw_extract_source
     assert 'state["_active_main_page"] = "extract"' in source
-    assert 'state["_scroll_to_tab"] = "export_progress"' in source
+    assert 'state["trigger_export"] = False' in source
+    assert 'state["_exporting_in_progress"] = False' in source
+    assert 'state["_scroll_to_top"] = True' in source
     assert "raw_path_exists = bool(data_path and Path(data_path).expanduser().exists())" in raw_extract_source
     assert "start_export_disabled = not picked_modules or (db != \"mock\" and not raw_path_exists)" in raw_extract_source
     assert 'st.caption(_ra_text("start_export_needs_path"))' in raw_extract_source
@@ -3486,7 +3488,7 @@ def test_research_agent_raw_extract_copy_explains_handoff_and_full_default() -> 
     assert en["ra_start_export"] == "Open Data Extraction with these settings"
     assert "Enter a raw database path first" in en["ra_start_export_needs_path"]
     assert "Select at least one module" in en["ra_start_export_needs_modules"]
-    assert "Opening Data Extraction" in en["ra_export_queued"]
+    assert "final review" in en["ra_export_queued"]
     assert en["ra_module_preset"] == "Module preset"
     assert en["ra_module_preset_all"] == "All modules"
     assert en["ra_module_preset_core"] == "Core quick set"
@@ -3499,7 +3501,7 @@ def test_research_agent_raw_extract_copy_explains_handoff_and_full_default() -> 
     assert zh["ra_start_export"] == "用这些设置打开数据提取"
     assert "请先填写原始数据库路径" in zh["ra_start_export_needs_path"]
     assert "请至少选择一个模块" in zh["ra_start_export_needs_modules"]
-    assert "打开导出流程" in zh["ra_export_queued"]
+    assert "最终复核" in zh["ra_export_queued"]
     assert zh["ra_module_preset"] == "模块预设"
     assert zh["ra_module_preset_all"] == "全部模块"
     assert zh["ra_module_preset_core"] == "核心快速集"
