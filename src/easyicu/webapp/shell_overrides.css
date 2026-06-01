@@ -223,8 +223,10 @@ footer { display: none !important; }
 .stApp [class*="st-key-cohort_builder_reset"] button,
 .stApp [class*="st-key-cohort_builder_save_preset"] button,
 .stApp [class*="st-key-cohort_builder_restore_preset"] button,
+.stApp [class*="st-key-cohort_builder_previous_step"] button,
 .stApp [class*="st-key-step2_confirm_design"] button,
 .stApp [class*="st-key-concept_reset_design"] button,
+.stApp [class*="st-key-concept_previous_step"] button,
 .stApp [class*="st-key-step3_confirm_design"] button {
   min-height: 45px !important;
   height: 45px !important;
@@ -7702,6 +7704,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 .stApp [class*="st-key-step2_confirm_design"] button,
 .stApp [class*="st-key-cohort_builder_save_preset"] button,
 .stApp [class*="st-key-cohort_builder_restore_preset"] button,
+.stApp [class*="st-key-cohort_builder_previous_step"] button,
 .stApp [class*="st-key-cohort_builder_reset"] button {
   white-space: nowrap !important;
   min-height: 34px !important;
@@ -8024,6 +8027,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 }
 .stApp [class*="st-key-concept_defaults_design"] button,
 .stApp [class*="st-key-concept_reset_design"] button,
+.stApp [class*="st-key-concept_previous_step"] button,
 .stApp [class*="st-key-step3_confirm_design"] button {
   min-height: 32px !important;
   height: 32px !important;

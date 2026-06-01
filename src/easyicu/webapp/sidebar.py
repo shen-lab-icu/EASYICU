@@ -2901,7 +2901,7 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
                 key="sanity_back_btn",
                 icon=":material/arrow_back:",
             ):
-                st.session_state.step3_confirmed = False
+                _sidebar_set_extract_step_state(st.session_state, 3)
                 st.rerun()
         with footer_right:
             if st.button(
@@ -3454,12 +3454,24 @@ def _render_step2_cohort_builder_design() -> bool:
             cf['icd_mode'] = 'include'
             _clear_icd_preview_state()
 
-        footer_l, reset_col, preset_col, restore_col, confirm_col = st.columns([2.0, 1.25, 1.35, 1.35, 1.45], gap="small")
+        footer_l, prev_col, reset_col, preset_col, restore_col, confirm_col = st.columns(
+            [1.65, 1.25, 1.1, 1.25, 1.25, 1.45],
+            gap="small",
+        )
         with footer_l:
             st.markdown(
                 f'<div class="eu-source-footer-note">{html.escape("Step 2 of 4" if lang == "en" else "第 2 步 / 共 4 步")}</div>',
                 unsafe_allow_html=True,
             )
+        with prev_col:
+            if st.button(
+                "Previous step" if lang == "en" else "上一步",
+                key="cohort_builder_previous_step",
+                use_container_width=True,
+                icon=":material/arrow_back:",
+            ):
+                _sidebar_set_extract_step_state(st.session_state, 1)
+                st.rerun()
         with reset_col:
             if st.button("Reset" if lang == "en" else "重置", key="cohort_builder_reset", use_container_width=True):
                 st.session_state[_STEP2_RESET_PENDING_KEY] = True
@@ -3804,15 +3816,20 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
 
         selected_concepts = _collect_selected_concepts(concept_groups)
         st.session_state.selected_concepts = selected_concepts
-        footer_l, reset_col, confirm_col = st.columns([4.2, 1.45, 1.45], gap="small")
+        footer_l, prev_col, confirm_col = st.columns([4.2, 1.45, 1.45], gap="small")
         with footer_l:
             st.markdown(
                 f'<div class="eu-source-footer-note">{html.escape("Step 3 of 4" if lang == "en" else "第 3 步 / 共 4 步")}</div>',
                 unsafe_allow_html=True,
             )
-        with reset_col:
-            if st.button("Clear all" if lang == "en" else "清空", key="concept_clear_design", use_container_width=True):
-                _reset_concepts_to_groups(concept_groups, [])
+        with prev_col:
+            if st.button(
+                "Previous step" if lang == "en" else "上一步",
+                key="concept_previous_step",
+                use_container_width=True,
+                icon=":material/arrow_back:",
+            ):
+                _sidebar_set_extract_step_state(st.session_state, 2)
                 st.rerun()
         with confirm_col:
             if st.button(

@@ -158,9 +158,13 @@ def test_concept_selection_design_exposes_all_action() -> None:
     assert 'key="concept_select_all_top"' in source
     assert 'key="concept_clear_all_top"' in source
     assert 'key="concept_recommended_design"' in source
+    assert 'key="concept_previous_step"' in source
+    assert 'key="concept_clear_design"' not in source
     assert '"Select all" if lang == "en" else "全选"' in source
     assert '"Clear" if lang == "en" else "清空"' in source
     assert '"Recommended" if lang == "en" else "推荐"' in source
+    assert '"Previous step" if lang == "en" else "上一步"' in source
+    assert "_sidebar_set_extract_step_state(st.session_state, 2)" in source
     assert "_all_concept_groups(concept_groups)" in source
 
 
@@ -6691,7 +6695,8 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert '"🤖 Ask AI about Sepsis settings"' not in app_text
     assert 'icon=":material/smart_toy:"' in app_text
     assert sidebar_text.count("st.columns([5, 1.45, 2.25], gap=\"small\")") == 2
-    assert "st.columns([2.0, 1.25, 1.35, 1.35, 1.45], gap=\"small\")" in sidebar_text
+    assert "footer_l, prev_col, reset_col, preset_col, restore_col, confirm_col = st.columns(" in sidebar_text
+    assert "[1.65, 1.25, 1.1, 1.25, 1.25, 1.45]" in sidebar_text
     assert "st.columns([4.2, 1.45, 1.45], gap=\"small\")" in sidebar_text
     assert 'key="step1_reset_real"' in sidebar_text
     assert 'key="step1_confirm_real"' in sidebar_text
@@ -6707,7 +6712,11 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert 'class*="st-key-step1_confirm_real"' in css_text
     assert 'class*="st-key-step2_confirm_design"' in css_text
     assert 'class*="st-key-cohort_builder_restore_preset"' in css_text
+    assert 'class*="st-key-cohort_builder_previous_step"' in css_text
+    assert 'key="cohort_builder_previous_step"' in sidebar_text
+    assert "_sidebar_set_extract_step_state(st.session_state, 1)" in sidebar_text
     assert 'class*="st-key-step3_confirm_design"' in css_text
+    assert 'class*="st-key-concept_previous_step"' in css_text
     assert "height: 45px !important" in css_text
 
 
@@ -6723,6 +6732,9 @@ def test_step4_export_footer_actions_have_overlap_guard() -> None:
     assert "Agent code, figures, evidence ledger" in sidebar_text
     assert 'icon=":material/arrow_back:"' in sidebar_text
     assert 'icon=":material/check:"' in sidebar_text
+    assert "'sanity_back': 'Previous step'" in i18n_text
+    assert "'sanity_back': '上一步'" in i18n_text
+    assert "_sidebar_set_extract_step_state(st.session_state, 3)" in sidebar_text
     assert "✅ Confirm & Export" not in i18n_text
     assert "↩️ Go Back & Modify" not in i18n_text
     assert 'browse_label = ""' in data_paths_text
