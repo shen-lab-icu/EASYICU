@@ -791,6 +791,9 @@ div[role="listbox"] li {
   right: 8px !important;
   z-index: 120 !important;
 }
+.stApp [data-testid="stDataFrame"] [data-testid="stElementToolbar"] button[aria-label="Download as CSV"] {
+  display: none !important;
+}
 .stApp [data-testid="stDataFrame"]:has([data-testid="search-input"]) [data-testid="stElementToolbar"] {
   display: none !important;
 }
