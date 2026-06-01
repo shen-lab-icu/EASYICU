@@ -590,7 +590,7 @@ def _sync_real_data_panel_defaults(
 
 def render_directory_structure_guide(lang: str = 'en'):
     """渲染目录结构指南弹窗"""
-    with st.popover("📂 " + ("Directory Structure Guide" if lang == 'en' else "目录结构指南")):
+    with st.popover("Directory Structure Guide" if lang == 'en' else "目录结构指南"):
         struct_info = """
 **Expected directory structure:**
 

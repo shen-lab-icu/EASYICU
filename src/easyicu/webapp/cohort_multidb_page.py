@@ -98,7 +98,7 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
 
             if lang == 'en':
                 base = (
-                    f"💡 **Cross-DB compares multiple databases.** Your loaded "
+                    f"**Cross-DB compares multiple databases.** Your loaded "
                     f"module exports cover only **{db_label_for_msg or 'one database'}**, "
                     "so a fair cross-database comparison needs additional DB roots. "
                     "Fill **ICU Data Root** below with a folder that contains "
@@ -107,7 +107,7 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
                 )
                 if sibling_dbs:
                     base += (
-                        f"\n\n🔎 Detected near your sidebar path: "
+                        f"\n\nDetected near your sidebar path: "
                         f"`{sibling_root}` with subfolders "
                         + ", ".join(f"`{n}`" for n in sibling_dbs[:6])
                         + ". You can paste that into **ICU Data Root** below."
@@ -115,7 +115,7 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
                 st.info(base)
             else:
                 base = (
-                    f"💡 **跨数据库对比需要至少两个数据库。** 你加载的模块导出只覆盖 "
+                    f"**跨数据库对比需要至少两个数据库。** 你加载的模块导出只覆盖 "
                     f"**{db_label_for_msg or '单个数据库'}**，因此还需要其它数据库根目录。"
                     "请在下方 **ICU 数据根目录** 中填入包含 "
                     "**≥2 个数据库子目录**（如 `mimiciv/`、`eicu/`、`aumc/`）的文件夹，"
@@ -123,7 +123,7 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
                 )
                 if sibling_dbs:
                     base += (
-                        f"\n\n🔎 在你侧边栏路径附近发现：`{sibling_root}` 包含子目录 "
+                        f"\n\n在你侧边栏路径附近发现：`{sibling_root}` 包含子目录 "
                         + "、".join(f"`{n}`" for n in sibling_dbs[:6])
                         + "。可直接粘贴到下方 **ICU 数据根目录**。"
                     )
@@ -139,7 +139,7 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
 
         with col1:
             data_root = _directory_input(
-                "🗂️ " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
+                "ICU Data Root" if lang == 'en' else "ICU 数据根目录",
                 value=st.session_state.get('multidb_data_root', ''),
                 input_key="multidb_data_root",
                 button_key="multidb_data_root_browse",
@@ -152,9 +152,9 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
         with col2:
             # 数据库选择
             db_options = ['miiv', 'eicu', 'aumc', 'hirid', 'mimic', 'sic']
-            db_labels = {'miiv': 'MIMIC-IV 🟢', 'eicu': 'eICU 🟠', 'aumc': 'Amsterdam 🔵', 'hirid': 'HiRID 🔴', 'mimic': 'MIMIC-III 🟣', 'sic': 'SICdb ⚫'}
+            db_labels = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'Amsterdam', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
             multiselect_kwargs = {
-                "label": "🏥 " + ("Databases" if lang == 'en' else "数据库"),
+                "label": "Databases" if lang == 'en' else "数据库",
                 "options": db_options,
                 "format_func": lambda x: db_labels.get(x, x),
                 "key": "multidb_selected",
@@ -166,7 +166,7 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
 
         with col3:
             max_patients = st.number_input(
-                "👥 " + ("Max Patients" if lang == 'en' else "最大患者数"),
+                "Max Patients" if lang == 'en' else "最大患者数",
                 min_value=100,
                 max_value=2000,
                 value=500,
@@ -186,7 +186,7 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
         col1, col2 = st.columns([1, 3])
         with col1:
             selected_group = st.selectbox(
-                "📋 " + ("Feature Group" if lang == 'en' else "特征分组"),
+                "Feature Group" if lang == 'en' else "特征分组",
                 options=list(feature_groups.keys()),
                 key="multidb_group"
             )
@@ -194,7 +194,7 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
         with col2:
             available_features = feature_groups.get(selected_group, [])
             selected_features = st.multiselect(
-                "🔬 " + ("Select Features" if lang == 'en' else "选择特征"),
+                "Select Features" if lang == 'en' else "选择特征",
                 options=available_features,
                 default=available_features[:4],
                 key="multidb_features"
@@ -206,17 +206,17 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
         # (2026-05 Phase D polish).
         if len(selected_features) >= 6:
             st.caption(
-                (f"💡 You selected {len(selected_features)} features — the grid will get crowded. "
+                (f"Tip: you selected {len(selected_features)} features; the grid will get crowded. "
                  "For a focused side-by-side comparison, scroll down to "
                  "**Detailed Single Feature View** after generation."
                  if lang == 'en' else
-                 f"💡 你选择了 {len(selected_features)} 个特征——网格会比较密集。"
+                 f"提示：你选择了 {len(selected_features)} 个特征，网格会比较密集。"
                  "若想专注对比，请在生成后滚动到下方的 **单特征详细视图**。")
             )
 
         # 加载按钮
         load_btn = st.button(
-            "🚀 " + ("Load & Generate" if lang == 'en' else "加载并生成"),
+            "Load & Generate" if lang == 'en' else "加载并生成",
             type="primary",
             key="multidb_load"
         )
@@ -379,7 +379,7 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
     else:
         # 占位提示
         st.info(
-            "👆 Select databases and features, then click 'Load & Generate'"
+            "Select databases and features, then click 'Load & Generate'"
             if lang == 'en' else
-            "👆 选择数据库和特征，然后点击'加载并生成'"
+            "选择数据库和特征，然后点击“加载并生成”"
         )
