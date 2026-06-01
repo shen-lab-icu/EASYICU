@@ -9,6 +9,39 @@ from typing import Any
 from easyicu.webapp.compat import _dataframe_compat as _st_dataframe_compat
 
 
+_DB_FOLDER_HINTS = (
+    'mimiciv', 'mimic-iv', 'mimic_iv',
+    'eicu', 'eicu-crd',
+    'aumc', 'amsterdamumcdb',
+    'hirid',
+    'mimiciii', 'mimic-iii', 'mimic_iii', 'mimic3',
+    'sic',
+)
+
+
+def _detect_sibling_database_root(sidebar_path: str) -> tuple[str, list[str]]:
+    """Return a nearby root path and DB-like child folders, if any."""
+    if not sidebar_path:
+        return "", []
+    try:
+        p = Path(sidebar_path)
+        parent = p if p.is_dir() and any(
+            (p / name).is_dir() for name in _DB_FOLDER_HINTS
+        ) else p.parent
+        if not parent.is_dir():
+            return "", []
+        sibling_dbs: list[str] = []
+        for name in parent.iterdir():
+            if not name.is_dir():
+                continue
+            lower = name.name.lower()
+            if any(tag in lower for tag in _DB_FOLDER_HINTS):
+                sibling_dbs.append(name.name)
+        return (str(parent), sibling_dbs) if sibling_dbs else ("", [])
+    except (OSError, PermissionError, ValueError):
+        return "", []
+
+
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to this extracted renderer."""
     protected = {'render_multidb_distribution_subtab', "_install_app_context"}
@@ -61,32 +94,7 @@ def render_multidb_distribution_subtab(lang: str, app_context: dict[str, Any] | 
 
             # Best-effort: detect sibling DB folders next to the sidebar path.
             sidebar_path = st.session_state.get('data_path') or ''
-            sibling_dbs: list[str] = []
-            sibling_root: str = ''
-            if sidebar_path:
-                try:
-                    p = Path(sidebar_path)
-                    parent = p if p.is_dir() and any(
-                        (p / name).is_dir() for name in
-                        ('mimiciv', 'mimic-iv', 'eicu', 'eicu-crd', 'aumc',
-                         'amsterdamumcdb', 'hirid', 'mimic', 'mimiciii', 'sic')
-                    ) else p.parent
-                    if parent.is_dir():
-                        for name in parent.iterdir():
-                            if not name.is_dir():
-                                continue
-                            lower = name.name.lower()
-                            for tag in ('mimiciv', 'mimic-iv', 'mimic_iv',
-                                        'eicu', 'aumc', 'amsterdamumcdb',
-                                        'hirid', 'mimiciii', 'mimic-iii',
-                                        'mimic_iii', 'mimic3', 'sic'):
-                                if tag in lower:
-                                    sibling_dbs.append(name.name)
-                                    break
-                        if len(sibling_dbs) >= 2:
-                            sibling_root = str(parent)
-                except (OSError, PermissionError, ValueError):
-                    pass
+            sibling_root, sibling_dbs = _detect_sibling_database_root(sidebar_path)
 
             if lang == 'en':
                 base = (
