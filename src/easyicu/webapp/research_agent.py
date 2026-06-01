@@ -911,6 +911,22 @@ def _restore_pending_module_source(
         state["research_agent_cohort_source"] = source
 
 
+def _restore_pending_module_folder_path(
+    state: MutableMapping[str, Any],
+    *,
+    manual_path_label: str,
+) -> None:
+    """Restore the module folder path saved before an early setup rerun."""
+    pending = state.get("_research_agent_module_pending_selection_restore")
+    if not isinstance(pending, dict):
+        return
+    folder = str(pending.get("folder") or "").strip()
+    if not folder:
+        return
+    state["research_agent_module_dir_text"] = folder
+    state["research_agent_module_dir_pick"] = manual_path_label
+
+
 def _restore_pending_module_file_selection(
     state: MutableMapping[str, Any],
     *,
@@ -2645,6 +2661,10 @@ def _section_cohort_picker(
         picked_label = ""
         if dir_labels:
             manual_path_label = _ra_text("manual_path")
+            _restore_pending_module_folder_path(
+                st.session_state,
+                manual_path_label=manual_path_label,
+            )
             current_pick = str(st.session_state.get("research_agent_module_dir_pick") or "")
             current_manual_text = str(st.session_state.get("research_agent_module_dir_text", "") or "")
             if (
