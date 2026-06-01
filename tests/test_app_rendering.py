@@ -1429,8 +1429,10 @@ def test_legacy_export_page_download_buttons_produce_payloads(monkeypatch) -> No
     import easyicu.webapp.export_page as export_page
 
     class _ExportPageStreamlit:
-        def __init__(self) -> None:
+        def __init__(self, *, export_format: str = "CSV", merge_mode: str = "Merge Into One") -> None:
             self.expander_depth = 0
+            self.export_format = export_format
+            self.merge_mode = merge_mode
             self.session_state = _AttrSessionState({
                 "language": "en",
                 "database": "miiv",
@@ -1464,7 +1466,9 @@ def test_legacy_export_page_download_buttons_produce_payloads(monkeypatch) -> No
 
         def selectbox(self, label, options, **_kwargs):
             if "Merge Mode" in str(label):
-                return "Merge Into One"
+                return self.merge_mode
+            if "Export Format" in str(label):
+                return self.export_format
             return options[0]
 
         def checkbox(self, _label, value=False, **_kwargs) -> bool:
@@ -1481,7 +1485,11 @@ def test_legacy_export_page_download_buttons_produce_payloads(monkeypatch) -> No
 
     streamlit_stub = _ExportPageStreamlit()
 
-    export_page.render_export_page({"st": streamlit_stub, "pd": pd})
+    export_page.render_export_page({
+        "st": streamlit_stub,
+        "pd": pd,
+        "_build_quick_viz_pdf_report": lambda **_kwargs: b"%PDF-1.4 easyicu test",
+    })
 
     labels = [download["label"] for download in streamlit_stub.downloads]
     assert "📄 All CSV" in labels
@@ -1495,6 +1503,107 @@ def test_legacy_export_page_download_buttons_produce_payloads(monkeypatch) -> No
     assert merged_csv["mime"] == "text/csv"
     assert "concept" in str(all_csv["data"])
     assert "hr" in str(merged_csv["data"])
+
+    pdf = next(download for download in streamlit_stub.downloads if download["label"] == "📑 PDF Report")
+    assert pdf["mime"] == "application/pdf"
+    assert pdf["data"].startswith(b"%PDF-1.4")
+
+
+def test_legacy_export_page_custom_format_downloads_cover_zip_excel_and_parquet(monkeypatch) -> None:
+    import easyicu.webapp.export_page as export_page
+
+    class _ExportPageStreamlit:
+        def __init__(self, *, export_format: str, merge_mode: str = "Separate Files") -> None:
+            self.expander_depth = 0
+            self.export_format = export_format
+            self.merge_mode = merge_mode
+            self.session_state = _AttrSessionState({
+                "language": "en",
+                "database": "miiv",
+                "id_col": "stay_id",
+                "selected_patient": 1,
+                "patient_ids": [1, 2],
+                "loaded_concepts": {
+                    "hr": pd.DataFrame({"stay_id": [1, 2], "hr": [80, 90]}),
+                    "bili": pd.DataFrame({"stay_id": [1, 2], "bili": [0.8, 1.1]}),
+                },
+            })
+            self.downloads: list[dict[str, object]] = []
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def columns(self, spec):
+            count = spec if isinstance(spec, int) else len(spec)
+            return [_FakeColumn() for _ in range(count)]
+
+        def download_button(self, label, **kwargs) -> None:
+            self.downloads.append({"label": str(label), **kwargs})
+
+        def button(self, label, **_kwargs) -> bool:
+            return str(label) == "📥 Export Data"
+
+        def multiselect(self, _label, *, options, default=None, **_kwargs):
+            return list(default if default is not None else options)
+
+        def selectbox(self, label, options, **_kwargs):
+            if "Merge Mode" in str(label):
+                return self.merge_mode
+            if "Export Format" in str(label):
+                return self.export_format
+            return options[0]
+
+        def checkbox(self, _label, value=False, **_kwargs) -> bool:
+            return bool(value)
+
+        def expander(self, *_args, **_kwargs):
+            return _FakeExpander(self)
+
+        def dataframe(self, *_args, **_kwargs) -> None:
+            pass
+
+        def spinner(self, *_args, **_kwargs):
+            return _FakeColumn()
+
+    original_to_parquet = pd.DataFrame.to_parquet
+
+    def _fake_to_parquet(self, buffer, *args, **kwargs) -> None:
+        buffer.write(b"PAR1 easyicu test parquet")
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", _fake_to_parquet)
+
+    cases = [
+        ("CSV", "Separate Files", "⬇️ Download ZIP (Multiple CSVs)", "application/zip", ".zip"),
+        ("Excel", "Separate Files", "⬇️ Download Excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xlsx"),
+        ("Parquet", "Merge Into One", "⬇️ Download Parquet", "application/octet-stream", ".parquet"),
+    ]
+    for export_format, merge_mode, label, mime, suffix in cases:
+        streamlit_stub = _ExportPageStreamlit(export_format=export_format, merge_mode=merge_mode)
+        export_page.render_export_page({
+            "st": streamlit_stub,
+            "pd": pd,
+            "_build_quick_viz_pdf_report": lambda **_kwargs: b"%PDF-1.4 easyicu test",
+        })
+        download = next(item for item in streamlit_stub.downloads if item["label"] == label)
+        assert download["mime"] == mime
+        assert download["file_name"].endswith(suffix)
+        assert len(download["data"]) > 0
+
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", original_to_parquet)
+
+
+def test_legacy_cohort_dashboard_load_button_still_drives_data_load() -> None:
+    source = (Path(app.__file__).parent / "visualizations" / "cohort_dashboard.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'load_button = st.button(' in source
+    assert '"🚀 Load Cohort Data"' in source
+    assert 'type="primary"' in source
+    assert "use_container_width=True" in source
+    assert "if load_button:" in source
+    assert "st.session_state.cohort_data = load_cohort_data(data_path, database, max_patients)" in source
+    assert "st.session_state.current_db = database" in source
 
 
 def test_preview_icd_match_counts_hadm_level_matches_across_icu_stays(tmp_path) -> None:
