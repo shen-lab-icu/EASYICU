@@ -16,6 +16,41 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
             globals()[name] = value
 
 
+def _normalize_patient_view_id(patient_ids: list[Any], current_patient: Any) -> Any | None:
+    """Return a valid patient id for the current workspace."""
+    if not patient_ids:
+        return None
+    if current_patient in patient_ids:
+        return current_patient
+    return patient_ids[0]
+
+
+def _patient_navigation_target(
+    patient_ids: list[Any],
+    current_patient: Any,
+    action: str,
+    *,
+    random_choice: Any | None = None,
+) -> Any | None:
+    """Resolve patient navigation buttons without depending on Streamlit state."""
+    current = _normalize_patient_view_id(patient_ids, current_patient)
+    if current is None:
+        return None
+
+    current_idx = patient_ids.index(current)
+    if action == "first":
+        return patient_ids[0]
+    if action == "previous":
+        return patient_ids[max(0, current_idx - 1)]
+    if action == "next":
+        return patient_ids[min(len(patient_ids) - 1, current_idx + 1)]
+    if action == "last":
+        return patient_ids[-1]
+    if action == "random":
+        return random_choice if random_choice in patient_ids else current
+    raise ValueError(f"Unknown patient navigation action: {action}")
+
+
 def render_patient_page(app_context: dict[str, Any] | None = None):
     """渲染患者视图页面。"""
     if app_context is not None:
@@ -148,7 +183,13 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
     last_help = "Jump to last patient" if lang == 'en' else "跳转到最后一位患者"
     rand_help = "Random select a patient" if lang == 'en' else "随机选择一位患者"
 
-    current_idx = st.session_state.patient_ids.index(st.session_state.get('patient_view_id', st.session_state.patient_ids[0]))
+    current_patient_id = _normalize_patient_view_id(
+        st.session_state.patient_ids,
+        st.session_state.get('patient_view_id', st.session_state.patient_ids[0]),
+    )
+    if current_patient_id is not None:
+        st.session_state.patient_view_id = current_patient_id
+    current_idx = st.session_state.patient_ids.index(current_patient_id)
     if screenshot_mode:
         focus_msg = (
             f"Figure preset: focusing the dashboard on patient {current_idx + 1}/{len(st.session_state.patient_ids)}. Use the selector below to switch cases."
@@ -160,26 +201,48 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
         nav_cols = st.columns(6)
         with nav_cols[0]:
             if st.button(first_btn, use_container_width=True, help=first_help):
-                st.session_state.patient_view_id = st.session_state.patient_ids[0]
+                st.session_state.patient_view_id = _patient_navigation_target(
+                    st.session_state.patient_ids,
+                    st.session_state.get('patient_view_id'),
+                    "first",
+                )
                 st.rerun()
         with nav_cols[1]:
             if st.button(prev_btn, use_container_width=True, help=prev_help):
                 if current_idx > 0:
-                    st.session_state.patient_view_id = st.session_state.patient_ids[current_idx - 1]
+                    st.session_state.patient_view_id = _patient_navigation_target(
+                        st.session_state.patient_ids,
+                        st.session_state.get('patient_view_id'),
+                        "previous",
+                    )
                     st.rerun()
         with nav_cols[2]:
             if st.button(next_btn, use_container_width=True, help=next_help):
                 if current_idx < len(st.session_state.patient_ids) - 1:
-                    st.session_state.patient_view_id = st.session_state.patient_ids[current_idx + 1]
+                    st.session_state.patient_view_id = _patient_navigation_target(
+                        st.session_state.patient_ids,
+                        st.session_state.get('patient_view_id'),
+                        "next",
+                    )
                     st.rerun()
         with nav_cols[3]:
             if st.button(last_btn, use_container_width=True, help=last_help):
-                st.session_state.patient_view_id = st.session_state.patient_ids[-1]
+                st.session_state.patient_view_id = _patient_navigation_target(
+                    st.session_state.patient_ids,
+                    st.session_state.get('patient_view_id'),
+                    "last",
+                )
                 st.rerun()
         with nav_cols[4]:
             if st.button(rand_btn, use_container_width=True, help=rand_help):
                 import random
-                st.session_state.patient_view_id = random.choice(st.session_state.patient_ids)
+
+                st.session_state.patient_view_id = _patient_navigation_target(
+                    st.session_state.patient_ids,
+                    st.session_state.get('patient_view_id'),
+                    "random",
+                    random_choice=random.choice(st.session_state.patient_ids),
+                )
                 st.rerun()
         with nav_cols[5]:
             st.markdown(f"<div style='text-align:center;padding:0.5rem;background:rgba(30,40,50,0.6);border-radius:4px'>{current_idx + 1}/{len(st.session_state.patient_ids)}</div>", unsafe_allow_html=True)
