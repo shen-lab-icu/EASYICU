@@ -207,6 +207,7 @@ def _demo_module_catalog_html(lang: str) -> str:
 def _confirm_demo_data_source() -> None:
     """Confirm Step 1 for demo mode and move to the cohort setup step."""
     st.session_state.step1_confirmed = True
+    st.session_state["_scroll_to_top"] = True
 
 
 def _confirm_real_data_source() -> None:
@@ -216,6 +217,7 @@ def _confirm_real_data_source() -> None:
     st.session_state.step2_confirmed = False
     st.session_state.step3_confirmed = False
     st.session_state.export_completed = False
+    st.session_state["_scroll_to_top"] = True
 
 
 def _render_demo_preview_table(n_patients: int, hours: int) -> None:
@@ -1466,6 +1468,7 @@ def _sidebar_set_extract_step_state(state: dict[str, Any], step: int) -> None:
     state["step1_confirmed"] = step > 1
     state["step2_confirmed"] = step > 2
     state["step3_confirmed"] = step > 3
+    state["_scroll_to_top"] = True
     if step < 4:
         state["export_completed"] = False
 
@@ -2270,6 +2273,7 @@ def _render_step2_cohort_selection() -> bool:
         if st.button(step2_confirm_label, type="primary", use_container_width=True, key="step2_confirm"):
             _clear_icd_preview_state()
             st.session_state.step2_confirmed = True
+            st.session_state["_scroll_to_top"] = True
             step2_done_msg = "✅ Step 2 completed!" if st.session_state.language == 'en' else "✅ 步骤2已完成！"
             st.success(step2_done_msg)
     else:
@@ -2281,6 +2285,7 @@ def _render_step2_cohort_selection() -> bool:
         step2_confirm_label = "✅ Confirm (No Filtering)" if st.session_state.language == 'en' else "✅ 确认（不筛选）"
         if st.button(step2_confirm_label, type="primary", use_container_width=True, key="step2_confirm_no_filter"):
             st.session_state.step2_confirmed = True
+            st.session_state["_scroll_to_top"] = True
             step2_done_msg = "✅ Step 2 completed! Proceed to Step 3: Select Features" if st.session_state.language == 'en' else "✅ 步骤2已完成！请继续步骤3: 选择特征"
             st.success(step2_done_msg)
 
@@ -2403,6 +2408,7 @@ def _render_step3_concept_selection(concept_groups: dict[str, list[str]]) -> lis
         step3_confirm_label = "✅ Confirm Selection" if st.session_state.language == 'en' else "✅ 确认选择"
         if st.button(step3_confirm_label, type="primary", use_container_width=True, key="step3_confirm_selection"):
             st.session_state.step3_confirmed = True
+            st.session_state["_scroll_to_top"] = True
             step3_done_msg = "✅ Step 3 completed! Proceed to Step 4: Export Data" if st.session_state.language == 'en' else "✅ 步骤3已完成！请继续步骤4: 导出数据"
             st.success(step3_done_msg)
             st.rerun()
@@ -3296,6 +3302,7 @@ def _render_step2_cohort_builder_design() -> bool:
                 st.session_state.pop("_eu_concept_defaults_seeded", None)
                 _reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))
                 st.session_state.step2_confirmed = True
+                st.session_state["_scroll_to_top"] = True
                 st.rerun()
 
     with right:
@@ -3557,6 +3564,7 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
                 use_container_width=True,
             ):
                 st.session_state.step3_confirmed = True
+                st.session_state["_scroll_to_top"] = True
                 st.rerun()
 
     with right:
