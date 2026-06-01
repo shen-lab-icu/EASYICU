@@ -1191,6 +1191,8 @@ def test_workbench_finding_queue_uses_design_queue_surface() -> None:
     assert "_finding_queue_rows(state, reviewed_ids=acked)" in render_source
     assert "_visible_finding_queue_rows(rows, show_all=show_all)" in render_source
     assert "Show all" in render_source
+    assert "No linked step" in render_source
+    assert "manual review across the run evidence" in render_source
     assert "_store_reviewed_findings_for_state(state, acked)" in render_source
     assert 'st.session_state["_active_main_page"] = "research_agent"' in render_source
     assert 'st.session_state["_ra_view"] = "workbench"' in render_source
