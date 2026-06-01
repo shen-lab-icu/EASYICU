@@ -7068,6 +7068,112 @@ def test_export_runtime_states_use_design_system_surfaces() -> None:
     assert 'class*="st-key-_post_export_open_"' in css_text
 
 
+def test_low_memory_export_gate_stops_before_export_work(monkeypatch, tmp_path) -> None:
+    import easyicu.memory_manager as memory_manager
+
+    class _LowMemoryStreamlit:
+        def __init__(self) -> None:
+            self.session_state = _AttrSessionState({
+                "language": "en",
+                "export_path": str(tmp_path),
+                "export_format": "Parquet",
+                "selected_concepts": ["hr"],
+                "use_mock_data": True,
+                "loaded_concepts": {},
+                "loaded_data_origin": "none",
+                "_exporting_in_progress": True,
+            })
+            self.warnings: list[str] = []
+            self.buttons: list[tuple[str, str | None]] = []
+            self.progress_called = False
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def warning(self, text, *_args, **_kwargs) -> None:
+            self.warnings.append(str(text))
+
+        def columns(self, spec):
+            count = spec if isinstance(spec, int) else len(spec)
+            return [_FakeColumn() for _ in range(count)]
+
+        def button(self, label, **kwargs) -> bool:
+            self.buttons.append((str(label), kwargs.get("key")))
+            return False
+
+        def progress(self, *_args, **_kwargs):
+            self.progress_called = True
+            raise AssertionError("low-memory gate should return before progress starts")
+
+        def error(self, message, *_args, **_kwargs) -> None:
+            raise AssertionError(f"low-memory gate should not enter export failure path: {message}")
+
+    streamlit_stub = _LowMemoryStreamlit()
+    monkeypatch.setattr(export_workflow, "st", streamlit_stub)
+    monkeypatch.setattr(memory_manager, "get_available_memory_mb", lambda: 512)
+
+    export_workflow.execute_sidebar_export()
+
+    assert streamlit_stub.session_state["_exporting_in_progress"] is False
+    assert streamlit_stub.session_state.get("_low_mem_export_confirmed") is not True
+    assert any("Low available memory detected" in warning for warning in streamlit_stub.warnings)
+    assert ("🔄 Check Again", "_low_mem_recheck") in streamlit_stub.buttons
+    assert ("⚡ Continue Anyway (slow)", "_low_mem_confirm") in streamlit_stub.buttons
+    assert streamlit_stub.progress_called is False
+
+
+def test_low_memory_export_continue_button_sets_resume_flags(monkeypatch, tmp_path) -> None:
+    import easyicu.memory_manager as memory_manager
+
+    class _RerunRequested(BaseException):
+        pass
+
+    class _LowMemoryContinueStreamlit:
+        def __init__(self) -> None:
+            self.session_state = _AttrSessionState({
+                "language": "en",
+                "export_path": str(tmp_path),
+                "export_format": "Parquet",
+                "selected_concepts": ["hr"],
+                "use_mock_data": True,
+                "loaded_concepts": {},
+                "loaded_data_origin": "none",
+                "_exporting_in_progress": True,
+            })
+            self.buttons: list[str] = []
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def warning(self, *_args, **_kwargs) -> None:
+            pass
+
+        def columns(self, spec):
+            count = spec if isinstance(spec, int) else len(spec)
+            return [_FakeColumn() for _ in range(count)]
+
+        def button(self, label, **kwargs) -> bool:
+            self.buttons.append(str(label))
+            return kwargs.get("key") == "_low_mem_confirm"
+
+        def rerun(self) -> None:
+            raise _RerunRequested
+
+        def error(self, message, *_args, **_kwargs) -> None:
+            raise AssertionError(f"low-memory continue should rerun before export failure path: {message}")
+
+    streamlit_stub = _LowMemoryContinueStreamlit()
+    monkeypatch.setattr(export_workflow, "st", streamlit_stub)
+    monkeypatch.setattr(memory_manager, "get_available_memory_mb", lambda: 512)
+
+    with pytest.raises(_RerunRequested):
+        export_workflow.execute_sidebar_export()
+
+    assert streamlit_stub.session_state["_low_mem_export_confirmed"] is True
+    assert streamlit_stub.session_state["_exporting_in_progress"] is True
+    assert "⚡ Continue Anyway (slow)" in streamlit_stub.buttons
+
+
 def test_export_patient_limit_hint_tracks_selected_limit() -> None:
     assert sidebar._export_patient_limit_label(0, "en") == "All"
     assert sidebar._export_patient_limit_label(1000, "en") == "1k"
