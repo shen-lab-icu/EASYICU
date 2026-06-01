@@ -4674,12 +4674,12 @@ def _queue_raw_extract_handoff(
     modules: list[str],
     patient_limit: int,
 ) -> None:
-    """Queue the shared extraction workflow from Research Agent setup.
+    """Copy raw-extraction settings into Data Extraction for review.
 
-    The no-data Agent path jumps directly into the export runtime, so the
-    Data Extraction step flags must reflect the already-confirmed source,
-    cohort, and concept choices. Otherwise cancelling an export leaves the
-    user on Step 1 while the sidebar still reports Step 4-ready state.
+    The no-data Agent path prepares the same source, cohort, and concept
+    choices the extraction workflow would collect manually, then opens the
+    Step 4 review screen. Export still requires the user to press
+    ``Confirm & Export`` in Data Extraction.
     """
     is_mock = database == "mock"
     state["entry_mode"] = "real"
@@ -4717,11 +4717,11 @@ def _queue_raw_extract_handoff(
         "_export_success_result",
     ):
         state.pop(key, None)
-    state["trigger_export"] = True
-    state["_exporting_in_progress"] = True
+    state["trigger_export"] = False
+    state["_exporting_in_progress"] = False
     state["_active_main_page"] = "extract"
-    state["_main_nav_widget"] = "extract"
-    state["_scroll_to_tab"] = "export_progress"
+    state.pop("_scroll_to_tab", None)
+    state["_scroll_to_top"] = True
 
 
 def render_research_agent_demo_page(*, show_header: bool = True) -> None:
