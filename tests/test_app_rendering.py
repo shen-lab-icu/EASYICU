@@ -1386,6 +1386,7 @@ def test_feature_definition_panel_defaults_to_collapsed(monkeypatch) -> None:
                 "database": "miiv",
             }
             self.expander_kwargs = None
+            self.downloads: list[dict[str, object]] = []
 
         def expander(self, label, **kwargs):
             self.expander_kwargs = {"label": label, **kwargs}
@@ -1397,8 +1398,8 @@ def test_feature_definition_panel_defaults_to_collapsed(monkeypatch) -> None:
         def info(self, *_args, **_kwargs) -> None:
             pass
 
-        def download_button(self, *_args, **_kwargs) -> None:
-            pass
+        def download_button(self, label, **kwargs) -> None:
+            self.downloads.append({"label": label, **kwargs})
 
         def dataframe(self, *_args, **_kwargs) -> None:
             pass
@@ -1418,6 +1419,82 @@ def test_feature_definition_panel_defaults_to_collapsed(monkeypatch) -> None:
         "label": "🧬 Feature Definition Transparency",
         "expanded": False,
     }
+    assert streamlit_stub.downloads
+    assert streamlit_stub.downloads[0]["label"] == "⬇️ Download Definition CSV"
+    assert streamlit_stub.downloads[0]["file_name"] == "easyicu_feature_definition_miiv.csv"
+    assert "hr" in str(streamlit_stub.downloads[0]["data"])
+
+
+def test_legacy_export_page_download_buttons_produce_payloads(monkeypatch) -> None:
+    import easyicu.webapp.export_page as export_page
+
+    class _ExportPageStreamlit:
+        def __init__(self) -> None:
+            self.expander_depth = 0
+            self.session_state = _AttrSessionState({
+                "language": "en",
+                "database": "miiv",
+                "id_col": "stay_id",
+                "selected_patient": 1,
+                "patient_ids": [1, 2],
+                "loaded_concepts": {
+                    "hr": pd.DataFrame({"stay_id": [1, 2], "hr": [80, 90]}),
+                    "bili": pd.DataFrame({"stay_id": [1, 2], "bili": [0.8, 1.1]}),
+                },
+            })
+            self.buttons: list[str] = []
+            self.downloads: list[dict[str, object]] = []
+
+        def markdown(self, *_args, **_kwargs) -> None:
+            pass
+
+        def columns(self, spec):
+            count = spec if isinstance(spec, int) else len(spec)
+            return [_FakeColumn() for _ in range(count)]
+
+        def download_button(self, label, **kwargs) -> None:
+            self.downloads.append({"label": str(label), **kwargs})
+
+        def button(self, label, **_kwargs) -> bool:
+            self.buttons.append(str(label))
+            return str(label) == "📥 Export Data"
+
+        def multiselect(self, _label, *, options, default=None, **_kwargs):
+            return list(default if default is not None else options)
+
+        def selectbox(self, label, options, **_kwargs):
+            if "Merge Mode" in str(label):
+                return "Merge Into One"
+            return options[0]
+
+        def checkbox(self, _label, value=False, **_kwargs) -> bool:
+            return bool(value)
+
+        def expander(self, *_args, **_kwargs):
+            return _FakeExpander(self)
+
+        def dataframe(self, *_args, **_kwargs) -> None:
+            pass
+
+        def spinner(self, *_args, **_kwargs):
+            return _FakeColumn()
+
+    streamlit_stub = _ExportPageStreamlit()
+
+    export_page.render_export_page({"st": streamlit_stub, "pd": pd})
+
+    labels = [download["label"] for download in streamlit_stub.downloads]
+    assert "📄 All CSV" in labels
+    assert "👤 患者1" in labels
+    assert "💓 Vitals" in labels
+    assert "🧪 Labs" in labels
+    assert "⬇️ Download CSV" in labels
+    all_csv = next(download for download in streamlit_stub.downloads if download["label"] == "📄 All CSV")
+    merged_csv = next(download for download in streamlit_stub.downloads if download["label"] == "⬇️ Download CSV")
+    assert all_csv["mime"] == "text/csv"
+    assert merged_csv["mime"] == "text/csv"
+    assert "concept" in str(all_csv["data"])
+    assert "hr" in str(merged_csv["data"])
 
 
 def test_preview_icd_match_counts_hadm_level_matches_across_icu_stays(tmp_path) -> None:
