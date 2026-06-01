@@ -1498,14 +1498,14 @@ def test_workbench_uses_claude_reference_overview_before_detail_inspector() -> N
     assert ".eu-ref-note-meta" in css
     assert ".eu-ref-ledger-ico svg" in css
     assert ".stApp .stElementContainer[class*=\"st-key-_eu_ra_view_\"] .stButton > button" in css
-    assert "pill tabs above the Agent identity card" in css
-    assert "border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--hair-2)) !important" in css
-    assert "border-radius: var(--r-2) !important" in css
-    assert "background: var(--ink) !important" in css
-    assert "color: #fff !important" in css
+    assert "title card first, then icon tabs with an" in css
+    assert "border-bottom: 2px solid transparent !important" in css
+    assert "border-bottom-color: var(--ink) !important" in css
+    assert "background: transparent !important" in css
+    assert "color: var(--ink) !important" in css
 
 
-def test_research_agent_shell_view_tabs_precede_identity_card() -> None:
+def test_research_agent_shell_identity_card_precedes_view_tabs() -> None:
     app_source = Path(ra_page.__file__).with_name("app.py").read_text(encoding="utf-8")
     css = Path(wb_page.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
     agent_branch = app_source[
@@ -1520,11 +1520,11 @@ def test_research_agent_shell_view_tabs_precede_identity_card() -> None:
     assert 'if view == "history":' in app_source
     assert "local history" in app_source
     assert "eu-ra-reference-header" in app_source
-    assert agent_branch.index('st.container(key="_eu_ra_tabs")') < agent_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)")
-    assert 'icon=":material/tune:"' not in agent_branch
-    assert 'icon=":material/view_kanban:"' not in agent_branch
-    assert 'icon=":material/history:"' not in agent_branch
-    assert 'icon=":material/verified_user:"' not in agent_branch
+    assert agent_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)") < agent_branch.index('st.container(key="_eu_ra_tabs")')
+    assert 'icon=":material/tune:"' in agent_branch
+    assert 'icon=":material/grid_view:"' in agent_branch
+    assert 'icon=":material/history:"' in agent_branch
+    assert 'icon=":material/shield:"' in agent_branch
     assert "render_agent_workbench(lang, show_header=False)" in agent_branch
     assert "render_agent_output_summary(lang, show_header=False)" in agent_branch
     assert "render_research_agent_history_page(lang, show_header=False)" in agent_branch
@@ -1538,9 +1538,9 @@ def test_research_agent_shell_view_tabs_precede_identity_card() -> None:
     assert "render_research_agent_demo_page(show_header=False)" in agent_branch
     assert "st-key-_eu_ra_tabs" in css
     assert ".eu-design-page-header.eu-ra-reference-header" in css
-    assert "margin: 18px 0 0 !important" in css
-    assert "border-bottom: 0 !important" in css
-    assert "background: var(--surface) !important" in css
+    assert "margin: -2px 0 18px !important" in css
+    assert "border-bottom: 1px solid var(--hair) !important" in css
+    assert "border-bottom-color: var(--ink) !important" in css
     assert "flex: 0 0 auto !important;" in css
     assert "nth-child(-n + 4)" in css
     assert "nth-child(5)" in css
