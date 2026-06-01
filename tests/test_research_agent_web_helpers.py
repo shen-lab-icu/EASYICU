@@ -976,6 +976,16 @@ def test_workbench_finding_queue_rows_carry_review_and_step_state() -> None:
     assert stats == {"total": 3, "reviewed": 1, "errors": 1, "warnings": 2, "linked": 2}
 
 
+def test_workbench_finding_queue_defaults_to_compact_preview() -> None:
+    rows = [{"index": i, "review_id": f"finding-{i}"} for i in range(12)]
+
+    preview = wb_page._visible_finding_queue_rows(rows, show_all=False, limit=5)
+    expanded = wb_page._visible_finding_queue_rows(rows, show_all=True, limit=5)
+
+    assert [row["index"] for row in preview] == [0, 1, 2, 3, 4]
+    assert expanded == rows
+
+
 def test_workbench_reviewed_findings_persist_per_run(tmp_path: Path) -> None:
     run_dir = tmp_path / "run_persisted_review"
     run_dir.mkdir()
@@ -1027,6 +1037,8 @@ def test_workbench_finding_queue_uses_design_queue_surface() -> None:
     assert "Review warnings before Summary sign-off" in render_source
     assert "Triage findings" not in render_source
     assert "_finding_queue_rows(state, reviewed_ids=acked)" in render_source
+    assert "_visible_finding_queue_rows(rows, show_all=show_all)" in render_source
+    assert "Show all" in render_source
     assert "_store_reviewed_findings_for_state(state, acked)" in render_source
     assert 'st.session_state["_active_main_page"] = "research_agent"' in render_source
     assert 'st.session_state["_ra_view"] = "workbench"' in render_source
