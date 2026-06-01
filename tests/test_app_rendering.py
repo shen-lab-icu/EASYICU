@@ -4709,10 +4709,11 @@ def test_post_export_guidance_copy_exposes_visualization_and_agent_actions() -> 
     assert "_post_export_open_review" in app_source
     assert "_post_export_open_agent" in app_source
     assert "Review tables" in app_source
-    assert "Research Agent" in app_source
+    assert "Use export in Agent" in app_source
     assert "eu-post-export-hero" in app_source
     assert "post_export_completed_open_review" in sidebar_source
     assert "post_export_completed_open_agent" in sidebar_source
+    assert "Use export in Agent" in sidebar_source
     assert "_main_nav_widget" not in app_handoff_source
     assert "_main_nav_widget" not in sidebar_handoff_source
     assert "research_agent_module_dir_pick" in app_handoff_source
