@@ -4868,6 +4868,63 @@ def test_sidebar_cohort_meta_counts_only_effective_filters(monkeypatch) -> None:
     assert steps[1].meta == "3 filters"
 
 
+def test_sidebar_pipeline_concept_meta_uses_fresh_group_selection(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit(
+        _AttrSessionState(
+            {
+                "language": "en",
+                "entry_mode": "demo",
+                "mock_params": {"n_patients": 10},
+                "step1_confirmed": True,
+                "step2_confirmed": True,
+                "step3_confirmed": False,
+                "export_completed": False,
+                "selected_groups": ["Core", "Renal"],
+                "selected_concepts": ["hr"],
+                "concept_checkboxes": {
+                    "hr": True,
+                    "map": True,
+                    "creatinine": True,
+                    "urine_output": True,
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(sidebar, "st", streamlit_stub)
+    monkeypatch.setattr(
+        sidebar,
+        "get_concept_groups",
+        lambda: {"Core": ["hr", "map"], "Renal": ["creatinine", "urine_output"]},
+        raising=False,
+    )
+
+    steps = sidebar._compute_pipeline_steps()
+
+    assert steps[2].key == "concepts"
+    assert steps[2].meta == "4 features"
+
+
+def test_concept_module_toggle_callback_updates_summary_before_render(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit(
+        _AttrSessionState(
+            {
+                "selected_groups": ["Core"],
+                "selected_concepts": ["hr"],
+                "concept_checkboxes": {"hr": True},
+                "step3_confirmed": True,
+            }
+        )
+    )
+    monkeypatch.setattr(sidebar, "st", streamlit_stub)
+    concept_groups = {"Core": ["hr"], "Renal": ["creatinine", "urine_output"]}
+
+    sidebar._toggle_concept_group_for_design(concept_groups, "Renal")
+
+    assert streamlit_stub.session_state["selected_groups"] == ["Core", "Renal"]
+    assert streamlit_stub.session_state["selected_concepts"] == ["creatinine", "hr", "urine_output"]
+    assert streamlit_stub.session_state["step3_confirmed"] is False
+
+
 def test_topbar_crossdb_real_action_opens_loader_when_data_missing() -> None:
     state = {
         "_eu_topbar_run_request": {"page": "cross_db"},

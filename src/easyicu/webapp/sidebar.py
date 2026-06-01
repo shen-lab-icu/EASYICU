@@ -1369,6 +1369,20 @@ def _render_shell_aux_nav() -> None:
     )
 
 
+def _current_pipeline_selected_concepts() -> list[str]:
+    """Return the freshest Step 3 selection for the sidebar pipeline rail."""
+    selected_groups = list(st.session_state.get("selected_groups") or [])
+    concept_groups_fn = globals().get("get_concept_groups")
+    if selected_groups and callable(concept_groups_fn):
+        try:
+            concept_groups = concept_groups_fn()
+        except Exception:
+            concept_groups = {}
+        if isinstance(concept_groups, dict) and concept_groups:
+            return _collect_selected_concepts(concept_groups)
+    return sorted(set(st.session_state.get("selected_concepts", []) or []))
+
+
 def _compute_pipeline_steps() -> list[PipelineStep]:
     """Compute the 4-step extraction pipeline status from session_state."""
     lang = st.session_state.get("language", "en")
@@ -1413,7 +1427,7 @@ def _compute_pipeline_steps() -> list[PipelineStep]:
     filter_n = len(_active_step2_filter_chips(lang))
     cohort_meta = _format_step2_filter_meta(filter_n, lang, empty_confirmed=s2)
 
-    selected = st.session_state.get("selected_concepts", []) or []
+    selected = _current_pipeline_selected_concepts()
     concept_meta = (
         f"{len(selected)} features" if lang == "en" else f"{len(selected)} 个特征"
     ) if selected else ("auto from cohort" if lang == "en" else "随队列自动")
@@ -3337,6 +3351,29 @@ def _reset_concepts_to_groups(concept_groups: dict[str, list[str]], groups: list
     st.session_state["_eu_concept_defaults_seeded"] = True
 
 
+def _toggle_concept_group_for_design(
+    concept_groups: dict[str, list[str]],
+    group_name: str,
+) -> None:
+    """Toggle a Step 3 module before the sidebar pipeline is rendered."""
+    concepts = concept_groups.get(group_name, [])
+    groups = list(st.session_state.get("selected_groups", []))
+    if group_name in groups:
+        groups = [g for g in groups if g != group_name]
+        for concept in concepts:
+            st.session_state.concept_checkboxes.pop(concept, None)
+    else:
+        groups.append(group_name)
+        for concept in concepts:
+            st.session_state.concept_checkboxes[concept] = True
+    st.session_state.selected_groups = groups
+    st.session_state.selected_concepts = _collect_selected_concepts(concept_groups)
+    st.session_state.step3_confirmed = False
+    rerun = getattr(st, "rerun", None)
+    if callable(rerun):
+        rerun()
+
+
 def _collect_selected_concepts(concept_groups: dict[str, list[str]]) -> list[str]:
     selected: list[str] = []
     for group_name in st.session_state.get("selected_groups", []):
@@ -3464,24 +3501,15 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
             module_key_prefix = "concept_module_active" if active else "concept_module_add"
             module_status = "on" if active else "add"
             with card_cols[idx % 2]:
-                if st.button(
+                st.button(
                     f"{display_name} · {module_status}",
                     key=f"{module_key_prefix}_{idx}",
                     type="secondary",
                     use_container_width=True,
                     icon=":material/layers:",
-                ):
-                    groups = list(st.session_state.selected_groups)
-                    if active:
-                        groups = [g for g in groups if g != group_name]
-                        for concept in concepts:
-                            st.session_state.concept_checkboxes.pop(concept, None)
-                    else:
-                        groups.append(group_name)
-                        for concept in concepts:
-                            st.session_state.concept_checkboxes[concept] = True
-                    st.session_state.selected_groups = groups
-                    st.rerun()
+                    on_click=_toggle_concept_group_for_design,
+                    args=(concept_groups, group_name),
+                )
                 caption = (
                     f"{len(concepts)} concepts" if lang == "en" else f"{len(concepts)} 个概念"
                 )
