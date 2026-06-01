@@ -2030,6 +2030,37 @@ def test_workbench_reference_overview_surfaces_finding_review_progress() -> None
     assert 'eu-ref-pill review">1/2 reviewed' in html
 
 
+def test_workbench_reference_overview_routes_reviewed_warnings_to_summary() -> None:
+    findings = [
+        {"severity": "warning", "validator": "critic", "step_id": "02_model", "message": "Check model card."},
+        {"severity": "warning", "validator": "critic", "message": "Check table 1."},
+    ]
+    state = {
+        "steps": [
+            {"label": "Cohort", "step_id": "01_cohort", "status": "ok"},
+            {"label": "Model", "step_id": "02_model", "status": "ok"},
+        ],
+        "evidence": [{"label": "row"}],
+        "audit": {
+            "counts": {"errors": 0, "warnings": 2},
+            "findings": findings,
+        },
+        "reviewed_finding_ids": [wb_page._finding_review_id(finding) for finding in findings],
+        "summary_outputs": [],
+        "run_id": "run_reviewed_warnings",
+        "is_demo": False,
+    }
+
+    html = wb_page._agent_reference_workbench_html(state, "en")
+
+    assert "Summary sign-off" in html
+    assert "Warnings reviewed · Summary sign-off next" in html
+    assert "Open Summary to record reviewer sign-off before drafting." in html
+    assert 'eu-ref-pill ok">2/2 reviewed' in html
+    assert "Review needed" not in html
+    assert "Findings · review before drafting" not in html
+
+
 def test_workbench_reference_overview_status_reflects_blocked_gates() -> None:
     state = {
         "steps": [{"label": "Plan", "status": "ok"}],

@@ -1313,6 +1313,7 @@ def _agent_reference_workbench_html(state: dict[str, Any], lang: str) -> str:
     finding_total = int(finding_stats.get("total") or 0)
     finding_reviewed = int(finding_stats.get("reviewed") or 0)
     finding_linked = int(finding_stats.get("linked") or 0)
+    warnings_reviewed = bool(warnings and finding_total and finding_reviewed >= finding_total)
     blocked_gates = [
         gate for gate in audit.get("gates") or []
         if isinstance(gate, dict) and gate.get("ok") is False
@@ -1330,6 +1331,9 @@ def _agent_reference_workbench_html(state: dict[str, Any], lang: str) -> str:
     elif errors:
         status_label = _T(lang, "Review blocked", "复核阻断")
         status_class = "gated"
+    elif warnings_reviewed:
+        status_label = _T(lang, "Summary sign-off", "Summary 签字")
+        status_class = "ok"
     elif warnings:
         status_label = _T(lang, "Review needed", "需要复核")
         status_class = "review"
@@ -1472,14 +1476,26 @@ def _agent_reference_workbench_html(state: dict[str, Any], lang: str) -> str:
                 "至少一个失败即拦截的证据关口被阻断；请先处理后再写作。",
             )
     elif warnings:
-        note_class = "warn"
-        note_icon = "!"
-        note_title = _T(lang, "Findings · review before drafting", "发现 · 写作前复核")
-        note_pill_class = "review"
-        note_pill = (
-            _T(lang, f"{finding_reviewed}/{finding_total} reviewed", f"{finding_reviewed}/{finding_total} 已复核")
-            if finding_total else _T(lang, "review needed", "需要复核")
-        )
+        if warnings_reviewed:
+            note_class = "ok"
+            note_icon = "i"
+            note_title = _T(lang, "Warnings reviewed · Summary sign-off next", "警告已复核 · 下一步 Summary 签字")
+            note_pill_class = "ok"
+            note_pill = _T(lang, f"{finding_reviewed}/{finding_total} reviewed", f"{finding_reviewed}/{finding_total} 已复核")
+            finding = _T(
+                lang,
+                "Open Summary to record reviewer sign-off before drafting. The draft gate still checks denominators, artifacts, and the local review decision.",
+                "请打开 Summary 写入审核签字后再生成草稿；草稿关口仍会检查队列分母、产物和本地审核决定。",
+            )
+        else:
+            note_class = "warn"
+            note_icon = "!"
+            note_title = _T(lang, "Findings · review before drafting", "发现 · 写作前复核")
+            note_pill_class = "review"
+            note_pill = (
+                _T(lang, f"{finding_reviewed}/{finding_total} reviewed", f"{finding_reviewed}/{finding_total} 已复核")
+                if finding_total else _T(lang, "review needed", "需要复核")
+            )
     elif blocked_gates:
         note_class = "warn"
         note_icon = "!"
