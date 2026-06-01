@@ -194,6 +194,27 @@ def test_step1_source_banner_uses_noninteractive_status_note() -> None:
     assert ".eu-source-banner .learn" not in css_text
 
 
+def test_step1_demo_reset_defers_slider_key_updates_until_next_render() -> None:
+    source = Path(sidebar.__file__).read_text(encoding="utf-8")
+    pending_block = source[
+        source.index('st.session_state.pop("_eu_demo_source_reset_pending", False)'):
+        source.index('with st.container(key="eu_generation_card")')
+    ]
+    reset_block = source[
+        source.index('key="step1_reset_demo"'):
+        source.index("step1_confirm_label")
+    ]
+
+    assert source.index('st.session_state.pop("_eu_demo_source_reset_pending", False)') < source.index(
+        'key="demo_mode_patients"'
+    )
+    assert "st.session_state.demo_mode_patients = demo_patients_default" in pending_block
+    assert "st.session_state.demo_mode_hours = demo_hours_default" in pending_block
+    assert 'st.session_state["_eu_demo_source_reset_pending"] = True' in reset_block
+    assert "st.session_state.demo_mode_patients = demo_patients_default" not in reset_block
+    assert "st.session_state.demo_mode_hours = demo_hours_default" not in reset_block
+
+
 def test_step2_confirm_seeds_all_concepts_before_rerun() -> None:
     source = Path(sidebar.__file__).read_text(encoding="utf-8")
     confirm_block = source[

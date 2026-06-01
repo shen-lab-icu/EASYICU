@@ -477,6 +477,14 @@ def _render_step1_data_source(entry_mode: str) -> None:
                 resolved = fallback
             return min(high, max(low, resolved))
 
+        if st.session_state.pop("_eu_demo_source_reset_pending", False):
+            st.session_state.demo_mode_patients = demo_patients_default
+            st.session_state.demo_mode_hours = demo_hours_default
+            st.session_state.mock_params = {
+                "n_patients": demo_patients_default,
+                "hours": demo_hours_default,
+            }
+
         if 'demo_mode_patients' not in st.session_state:
             st.session_state.demo_mode_patients = _clamped_int(
                 current_mock_params.get('n_patients'),
@@ -572,9 +580,7 @@ def _render_step1_data_source(entry_mode: str) -> None:
             )
         with reset_col:
             if st.button("Reset" if lang == "en" else "重置", use_container_width=True, key="step1_reset_demo"):
-                st.session_state.demo_mode_patients = demo_patients_default
-                st.session_state.demo_mode_hours = demo_hours_default
-                st.session_state.mock_params = {"n_patients": demo_patients_default, "hours": demo_hours_default}
+                st.session_state["_eu_demo_source_reset_pending"] = True
                 st.rerun()
         step1_confirm_label = "Confirm data source" if st.session_state.language == 'en' else "确认数据源"
         with confirm_col:
