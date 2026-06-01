@@ -1815,7 +1815,7 @@ def _render_export_completed_panel() -> bool:
             st.rerun()
     with next_cols[2]:
         if st.button(
-            "Research Agent" if lang == "en" else "研究智能体",
+            "Use export in Agent" if lang == "en" else "用导出数据打开智能体",
             key="post_export_completed_open_agent",
             use_container_width=True,
             icon=":material/auto_awesome:",

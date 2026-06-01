@@ -847,7 +847,7 @@ def _render_post_export_guidance(
 
     review_label = "Review tables" if lang == "en" else "查看导出表格"
     cohort_label = "Cohort stats" if lang == "en" else "队列统计"
-    agent_label = "Research Agent" if lang == "en" else "研究智能体"
+    agent_label = "Use export in Agent" if lang == "en" else "用导出数据打开智能体"
     dismiss_label = "Dismiss" if lang == "en" else "收起"
     cols = st.columns([1.1, 1.1, 1.1, 0.8], gap="small")
     with cols[0]:
