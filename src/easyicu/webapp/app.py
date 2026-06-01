@@ -2879,12 +2879,7 @@ def _build_cohort_dashboard_review_stats(
             severity_source['death'] = mortality_series.fillna(False).astype(bool)
         else:
             severity_source['death'] = False
-        severity_source['sofa_group'] = pd.cut(
-            severity_source['sofa'],
-            bins=[-np.inf, 3, 6, 10, np.inf],
-            labels=['0-2', '3-5', '6-9', '>=10'],
-            right=False,
-        )
+        severity_source['sofa_group'] = _sofa_severity_group(severity_source['sofa'])
         severity_df = severity_source.groupby('sofa_group', observed=False).agg(
             patients=('sofa', 'count'),
             deaths=('death', 'sum'),
@@ -2892,7 +2887,7 @@ def _build_cohort_dashboard_review_stats(
         severity_df['mortality'] = np.where(
             severity_df['patients'] > 0,
             (severity_df['deaths'] / severity_df['patients'] * 100).round(1),
-            0.0,
+            np.nan,
         )
 
     features_count = len(loaded_concepts) if loaded_concepts else max(0, len([c for c in df.columns if c not in ['stay_id', 'patient_id', 'subject_id']]))
@@ -2930,6 +2925,8 @@ def render_data_coverage_audit_subtab(lang: str):
 
 SOFA_RECLASS_ORGANS = _sofa_reclassification_impl.SOFA_RECLASS_ORGANS
 SOFA_RECLASS_ANALYSIS_MODES = _sofa_reclassification_impl.SOFA_RECLASS_ANALYSIS_MODES
+SOFA_SEVERITY_BINS = _sofa_reclassification_impl.SOFA_SEVERITY_BINS
+SOFA_SEVERITY_LABELS = _sofa_reclassification_impl.SOFA_SEVERITY_LABELS
 
 def _sofa_reclassification_call(name: str, *args, **kwargs):
     _sofa_reclassification_impl._install_app_context(globals())
