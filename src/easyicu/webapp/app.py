@@ -652,6 +652,7 @@ def _set_extract_step_state(state: dict[str, Any], step: int) -> None:
     state['step1_confirmed'] = step > 1
     state['step2_confirmed'] = step > 2
     state['step3_confirmed'] = step > 3
+    state['_scroll_to_top'] = True
     if step < 4:
         state['export_completed'] = False
 
@@ -4601,11 +4602,32 @@ def main():
     # scroll-to-top request still needs a small script — and this one does not
     # depend on Streamlit's internal DOM structure.
     if st.session_state.pop('_scroll_to_top', False):
+        js_scroll_to_top = """
+        <script>
+        (function() {
+            function scrollEasyICUToTop() {
+                var doc = window.parent.document;
+                window.parent.scrollTo({top: 0, left: 0, behavior: 'auto'});
+                doc.documentElement.scrollTop = 0;
+                doc.body.scrollTop = 0;
+                [
+                    'section.main',
+                    'section.stMain',
+                    '[data-testid="stMain"]',
+                    '[data-testid="stAppViewContainer"]'
+                ].forEach(function(sel) {
+                    var node = doc.querySelector(sel);
+                    if (node) node.scrollTo({top: 0, left: 0, behavior: 'auto'});
+                });
+            }
+            [0, 80, 240, 600, 1200].forEach(function(delay) {
+                setTimeout(scrollEasyICUToTop, delay);
+            });
+        })();
+        </script>
+        """
         st.components.v1.html(
-            "<script>window.parent.scrollTo({top:0});"
-            "['section.main','section.stMain','[data-testid=\"stMain\"]'].forEach(function(sel){"
-            "window.parent.document.querySelector(sel)?.scrollTo({top:0});"
-            "});</script>",
+            js_scroll_to_top,
             height=0,
         )
 

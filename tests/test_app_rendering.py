@@ -2186,7 +2186,7 @@ def test_get_started_buttons_route_to_real_destinations() -> None:
     assert 'render_workspace_states_reference_page(lang)' in app_source
     assert 'render_settings_redesign_page(lang)' in app_source
     assert "'section.stMain'" in app_source
-    assert '[data-testid=\\"stMain\\"]' in app_source
+    assert '[data-testid="stMain"]' in app_source
     assert 'eu-resource-row' not in page_source
     assert 'st-key-_eu_tutorial_resource_' in css_text
     assert "st-key-eu_getstarted_faq_card" in css_text
@@ -4542,6 +4542,7 @@ def test_topbar_breadcrumb_targets_navigate_to_parent_paths(monkeypatch) -> None
 
 
 def test_extract_workflow_helpers_keep_state_consistent() -> None:
+    source = Path(app.__file__).read_text(encoding="utf-8")
     state = {
         "_active_main_page": "quick_viz",
         "entry_mode": "demo",
@@ -4560,8 +4561,11 @@ def test_extract_workflow_helpers_keep_state_consistent() -> None:
     assert state["step1_confirmed"] is True
     assert state["step2_confirmed"] is False
     assert state["step3_confirmed"] is False
+    assert state["_scroll_to_top"] is True
     assert state["export_completed"] is False
     assert app._extract_step_unlocked(state, 3) is False
+    assert "scrollEasyICUToTop" in source
+    assert "[0, 80, 240, 600, 1200]" in source
 
     app._switch_extract_entry_mode(state, "real")
     assert state["entry_mode"] == "real"
