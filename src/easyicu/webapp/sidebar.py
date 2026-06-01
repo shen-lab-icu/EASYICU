@@ -437,7 +437,7 @@ def _render_step1_data_source(entry_mode: str) -> None:
             f'<div class="title">{html.escape("Demo mode" if lang == "en" else "演示模式")}</div>'
             f'<div class="sub">{html.escape("Automatically generates reproducible mock ICU data for tutorials and feature demos. No real database, token, or working directory is used." if lang == "en" else "自动生成可重复的模拟 ICU 数据，用于教程和功能演示。不连接任何真实数据库，token 与工作目录都不会被使用。")}</div>'
             '</div>'
-            f'<span class="learn">{html.escape("Learn more" if lang == "en" else "了解更多")}</span>'
+            f'<span class="source-note">{html.escape("Local demo" if lang == "en" else "本机演示")}</span>'
             '</div>',
             unsafe_allow_html=True,
         )
