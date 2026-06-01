@@ -5824,6 +5824,46 @@ def test_settings_reset_request_reruns_shell_and_preserves_notice(monkeypatch) -
     assert "_eu_topbar_notice_pending" not in streamlit_stub.session_state
 
 
+def test_topbar_quick_viz_request_reruns_shell_after_state_change(monkeypatch) -> None:
+    class _RerunRequested(Exception):
+        pass
+
+    class _QuickVizStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "_eu_topbar_run_request": {"page": "quick_viz"},
+                "entry_mode": "demo",
+            }
+            self.toasts: list[str] = []
+
+        def toast(self, message: str) -> None:
+            self.toasts.append(message)
+
+        def rerun(self) -> None:
+            raise _RerunRequested
+
+    def _consume_request(state, active_page, lang):
+        assert active_page == "quick_viz"
+        assert lang == "en"
+        state.pop("_eu_topbar_run_request", None)
+        state["loaded_concepts"] = {"age": object(), "hr": object()}
+        state["selected_concepts"] = ["age", "hr"]
+        return {"level": "success", "message": "Loaded lightweight demo review workspace."}
+
+    streamlit_stub = _QuickVizStreamlit()
+    monkeypatch.setattr(app, "st", streamlit_stub)
+    monkeypatch.setattr(app, "_consume_topbar_run_request", _consume_request)
+
+    with pytest.raises(_RerunRequested):
+        app._handle_topbar_run_request("quick_viz", "en")
+
+    assert streamlit_stub.session_state["selected_concepts"] == ["age", "hr"]
+    assert streamlit_stub.session_state["_eu_topbar_notice_pending"] == (
+        "Loaded lightweight demo review workspace."
+    )
+    assert streamlit_stub.toasts == []
+
+
 def test_sidebar_brand_home_button_returns_to_entry(monkeypatch) -> None:
     class _AttrState(dict):
         def __getattr__(self, key):
