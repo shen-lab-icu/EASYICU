@@ -5219,6 +5219,16 @@ def test_crossdb_loader_avoids_streamlit_app_import_side_effects() -> None:
     assert "st.session_state.pop('multidb_data'" in multidb_source
 
 
+def test_crossdb_sidebar_path_hint_keeps_single_detected_root(tmp_path) -> None:
+    mimiciv = tmp_path / "mimic-iv-3.1"
+    mimiciv.mkdir()
+
+    root, siblings = cohort_multidb_page._detect_sibling_database_root(str(mimiciv))
+
+    assert root == str(tmp_path)
+    assert siblings == ["mimic-iv-3.1"]
+
+
 def test_crossdb_distribution_section_has_spacing_guard() -> None:
     redesign_source = Path(cohort_redesign.__file__).read_text(encoding="utf-8")
     multidb_source = Path(cohort_multidb_page.__file__).read_text(encoding="utf-8")
