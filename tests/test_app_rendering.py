@@ -187,6 +187,43 @@ def test_step2_confirm_seeds_all_concepts_before_rerun() -> None:
     assert confirm_block.index("_reset_concepts_to_groups") < confirm_block.index("st.rerun()")
 
 
+def test_step2_cohort_preset_is_restorable_and_visible() -> None:
+    source = Path(sidebar.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+    filters = {
+        "age_min": 45,
+        "disease_cohort": "sepsis",
+        "icd_include_query": "A41",
+        "unexpected": "ignored",
+    }
+
+    snapshot = sidebar._snapshot_step2_cohort_filter(filters)
+    restored = sidebar._restore_step2_cohort_filter(snapshot)
+
+    assert snapshot == {
+        "age_min": 45,
+        "age_max": None,
+        "first_icu_stay": None,
+        "los_min": None,
+        "gender": None,
+        "survived": None,
+        "has_sepsis": None,
+        "disease_cohort": "sepsis",
+        "icd_query": "",
+        "icd_include_query": "A41",
+        "icd_exclude_query": "",
+        "icd_mode": "include",
+    }
+    assert restored["age_min"] == 45
+    assert restored["disease_cohort"] == "sepsis"
+    assert restored["icd_include_query"] == "A41"
+    assert "unexpected" not in restored
+    assert 'key="cohort_builder_restore_preset"' in source
+    assert "_STEP2_SAVED_PRESET_KEY" in source
+    assert "eu-cohort-preset-status" in source
+    assert "st-key-cohort_builder_restore_preset" in css_text
+
+
 def test_concept_search_matches_display_metadata_and_units() -> None:
     assert sidebar._concept_matches_search("lact", "lactate") is True
     assert sidebar._concept_matches_search("lact", "mmol") is True
@@ -6624,7 +6661,7 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert '"🤖 Ask AI about Sepsis settings"' not in app_text
     assert 'icon=":material/smart_toy:"' in app_text
     assert sidebar_text.count("st.columns([5, 1.45, 2.25], gap=\"small\")") == 2
-    assert "st.columns([2.2, 1.45, 1.45, 1.45], gap=\"small\")" in sidebar_text
+    assert "st.columns([2.0, 1.25, 1.35, 1.35, 1.45], gap=\"small\")" in sidebar_text
     assert "st.columns([4.2, 1.45, 1.45], gap=\"small\")" in sidebar_text
     assert 'key="step1_reset_real"' in sidebar_text
     assert 'key="step1_confirm_real"' in sidebar_text
@@ -6639,6 +6676,7 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert 'class*="st-key-step1_reset_real"' in css_text
     assert 'class*="st-key-step1_confirm_real"' in css_text
     assert 'class*="st-key-step2_confirm_design"' in css_text
+    assert 'class*="st-key-cohort_builder_restore_preset"' in css_text
     assert 'class*="st-key-step3_confirm_design"' in css_text
     assert "height: 45px !important" in css_text
 

@@ -34,6 +34,8 @@ from easyicu.webapp.ui_helpers import (
 _PROTECTED_CONTEXT_NAMES = {"render_sidebar", "render_extract_page", "_install_app_context"}
 
 _STEP2_RESET_PENDING_KEY = "_step2_cohort_builder_reset_pending"
+_STEP2_SAVED_PRESET_KEY = "_step2_cohort_builder_saved_preset"
+_STEP2_SAVED_PRESET_META_KEY = "_step2_cohort_builder_saved_preset_meta"
 _STEP2_WIDGET_KEYS = (
     "cohort_enabled",
     "cohort_age_min_design",
@@ -44,6 +46,20 @@ _STEP2_WIDGET_KEYS = (
     "cohort_survival_design",
     "cohort_icd_include_query_design",
     "cohort_icd_exclude_query_design",
+)
+_STEP2_COHORT_FILTER_KEYS = (
+    "age_min",
+    "age_max",
+    "first_icu_stay",
+    "los_min",
+    "gender",
+    "survived",
+    "has_sepsis",
+    "disease_cohort",
+    "icd_query",
+    "icd_include_query",
+    "icd_exclude_query",
+    "icd_mode",
 )
 
 _MODULE_LABEL_PREFIX_RE = re.compile(r"^[^\w\u4e00-\u9fff]+\s*")
@@ -3064,6 +3080,32 @@ def _format_step2_filter_meta(
     return "not set" if lang == "en" else "未设置"
 
 
+def _snapshot_step2_cohort_filter(filters: MutableMapping[str, Any]) -> dict[str, Any]:
+    """Return a small session-safe copy of the current Step 2 cohort recipe."""
+    normalized = _restore_step2_cohort_filter(filters)
+    return {key: normalized.get(key) for key in _STEP2_COHORT_FILTER_KEYS}
+
+
+def _restore_step2_cohort_filter(snapshot: MutableMapping[str, Any]) -> dict[str, Any]:
+    """Merge a saved Step 2 preset with the default cohort-filter shape."""
+    restored = {
+        "age_min": None,
+        "age_max": None,
+        "first_icu_stay": None,
+        "los_min": None,
+        "gender": None,
+        "survived": None,
+        "has_sepsis": None,
+        "disease_cohort": "none",
+        "icd_query": "",
+        "icd_include_query": "",
+        "icd_exclude_query": "",
+        "icd_mode": "include",
+    }
+    restored.update({key: snapshot.get(key) for key in _STEP2_COHORT_FILTER_KEYS if key in snapshot})
+    return restored
+
+
 def _step2_database_display_name(database: str) -> str:
     """Return the compact clinical name shown in the Step 2 builder."""
     return {
@@ -3412,7 +3454,7 @@ def _render_step2_cohort_builder_design() -> bool:
             cf['icd_mode'] = 'include'
             _clear_icd_preview_state()
 
-        footer_l, reset_col, preset_col, confirm_col = st.columns([2.2, 1.45, 1.45, 1.45], gap="small")
+        footer_l, reset_col, preset_col, restore_col, confirm_col = st.columns([2.0, 1.25, 1.35, 1.35, 1.45], gap="small")
         with footer_l:
             st.markdown(
                 f'<div class="eu-source-footer-note">{html.escape("Step 2 of 4" if lang == "en" else "第 2 步 / 共 4 步")}</div>',
@@ -3424,7 +3466,31 @@ def _render_step2_cohort_builder_design() -> bool:
                 st.rerun()
         with preset_col:
             if st.button("Save preset" if lang == "en" else "保存预设", key="cohort_builder_save_preset", use_container_width=True):
+                chips = _active_step2_filter_chips(lang)
+                st.session_state[_STEP2_SAVED_PRESET_KEY] = _snapshot_step2_cohort_filter(cf)
+                st.session_state[_STEP2_SAVED_PRESET_META_KEY] = {
+                    "filter_count": len(chips),
+                    "enabled": bool(st.session_state.get("cohort_enabled")),
+                }
                 st.toast("Preset saved for this session." if lang == "en" else "已保存为当前会话预设。")
+        with restore_col:
+            saved_preset = st.session_state.get(_STEP2_SAVED_PRESET_KEY)
+            restore_clicked = st.button(
+                "Restore preset" if lang == "en" else "恢复预设",
+                key="cohort_builder_restore_preset",
+                use_container_width=True,
+                disabled=not isinstance(saved_preset, dict),
+            )
+            if restore_clicked and isinstance(saved_preset, dict):
+                st.session_state.cohort_filter = _restore_step2_cohort_filter(saved_preset)
+                for widget_key in _STEP2_WIDGET_KEYS:
+                    st.session_state.pop(widget_key, None)
+                st.session_state.step2_confirmed = False
+                st.session_state.step3_confirmed = False
+                st.session_state.export_completed = False
+                _clear_icd_preview_state()
+                st.toast("Preset restored." if lang == "en" else "已恢复会话预设。")
+                st.rerun()
         with confirm_col:
             if st.button(
                 "Confirm cohort" if lang == "en" else "确认队列",
@@ -3439,6 +3505,30 @@ def _render_step2_cohort_builder_design() -> bool:
                 st.session_state.step2_confirmed = True
                 st.session_state["_scroll_to_top"] = True
                 st.rerun()
+
+        preset_meta = st.session_state.get(_STEP2_SAVED_PRESET_META_KEY)
+        if isinstance(preset_meta, dict):
+            try:
+                filter_count = int(preset_meta.get("filter_count") or 0)
+            except (TypeError, ValueError):
+                filter_count = 0
+            enabled = bool(preset_meta.get("enabled"))
+            if lang == "en":
+                saved_copy = (
+                    f"Session preset saved · {filter_count} active filter"
+                    if filter_count == 1 else
+                    f"Session preset saved · {filter_count} active filters"
+                )
+                if not enabled:
+                    saved_copy = "Session preset saved · filtering disabled"
+            else:
+                saved_copy = f"已保存会话预设 · {filter_count} 条启用筛选"
+                if not enabled:
+                    saved_copy = "已保存会话预设 · 筛选关闭"
+            st.markdown(
+                f'<div class="eu-cohort-preset-status">{html.escape(saved_copy)}</div>',
+                unsafe_allow_html=True,
+            )
 
     with right:
         _render_cohort_live_preview(lang)
