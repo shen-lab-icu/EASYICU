@@ -417,6 +417,56 @@ def test_module_file_selection_survives_apply_question_rerun(tmp_path: Path) -> 
     assert "_research_agent_module_pending_selection_restore" not in state
 
 
+def test_question_filter_suggestion_keeps_existing_unfiltered_build() -> None:
+    base_signature = {
+        "folder": "/tmp/easyicu_export",
+        "files": ["/tmp/easyicu_export/sepsis3_sofa2.csv"],
+        "id_col": "stay_id",
+        "join_how": "outer",
+    }
+    cached_build = {
+        "signature": {
+            **base_signature,
+            "filter": None,
+        },
+        "df": pd.DataFrame({"stay_id": [1, 2]}),
+    }
+
+    assert not ra_page._module_filter_default_for_question(
+        filter_suggested=True,
+        state={},
+        cached_build=cached_build,
+        base_signature=base_signature,
+    )
+    assert ra_page._module_build_signature_matches_base(
+        cached_build,
+        base_signature,
+        filter_value=None,
+    )
+
+
+def test_question_filter_suggestion_applies_before_first_build() -> None:
+    base_signature = {
+        "folder": "/tmp/easyicu_export",
+        "files": ["/tmp/easyicu_export/sepsis3_sofa2.csv"],
+        "id_col": "stay_id",
+        "join_how": "outer",
+    }
+
+    assert ra_page._module_filter_default_for_question(
+        filter_suggested=True,
+        state={},
+        cached_build=None,
+        base_signature=base_signature,
+    )
+    assert not ra_page._module_filter_default_for_question(
+        filter_suggested=True,
+        state={"research_agent_module_filter_enabled": False},
+        cached_build=None,
+        base_signature=base_signature,
+    )
+
+
 def test_quick_cohort_source_shortcut_resets_launch_review_and_focus() -> None:
     state: dict[str, object] = {
         "research_agent_preflight_confirmed": True,

@@ -1115,6 +1115,41 @@ def _restore_pending_module_file_selection(
         state[signature_key] = str(folder)
 
 
+def _module_build_signature_matches_base(
+    cached_build: Any,
+    base_signature: Mapping[str, Any],
+    *,
+    filter_value: Optional[Tuple[str, str, str, str]] = None,
+) -> bool:
+    if not isinstance(cached_build, Mapping):
+        return False
+    signature = cached_build.get("signature")
+    if not isinstance(signature, Mapping):
+        return False
+    for key in ("folder", "files", "id_col", "join_how"):
+        if signature.get(key) != base_signature.get(key):
+            return False
+    return signature.get("filter") == filter_value
+
+
+def _module_filter_default_for_question(
+    *,
+    filter_suggested: bool,
+    state: Mapping[str, Any],
+    cached_build: Any,
+    base_signature: Mapping[str, Any],
+    key: str = "research_agent_module_filter_enabled",
+) -> bool:
+    """Default a question-suggested filter without invalidating a built cohort."""
+    if not filter_suggested:
+        return False
+    if key in state:
+        return bool(state.get(key))
+    if _module_build_signature_matches_base(cached_build, base_signature, filter_value=None):
+        return False
+    return True
+
+
 _RAW_EXTRACT_MODULES_KEY = "research_agent_extract_modules"
 _RAW_EXTRACT_MODULE_PRESET_KEY = "research_agent_extract_module_preset"
 _LEGACY_RAW_EXTRACT_DEFAULT_MODULES = (
@@ -3226,21 +3261,49 @@ def _section_cohort_picker(
                 )
             )
 
+        # Merge strategy is fixed to outer — keeps all patient IDs from
+        # every selected file, which is the correct default for ICU cohorts.
+        join_how = "outer"
+        base_build_signature = {
+            "folder": str(folder),
+            "files": [str(p) for p in selected_files],
+            "id_col": id_col,
+            "join_how": join_how,
+        }
+        cached_build = st.session_state.get("research_agent_module_built")
         default_filter_path, default_filter_col = _infer_filter_defaults(
             selected_summaries,
             question=research_question,
         )
-        use_filter_default = default_filter_path is not None and (
+        filter_suggested = default_filter_path is not None and (
             "sepsis" in (research_question or "").lower()
             or "脓毒" in (research_question or "")
             or "感染" in (research_question or "")
         )
+        filter_key = "research_agent_module_filter_enabled"
+        use_filter_default = _module_filter_default_for_question(
+            filter_suggested=filter_suggested,
+            state=st.session_state,
+            cached_build=cached_build,
+            base_signature=base_build_signature,
+            key=filter_key,
+        )
         use_filter = st.checkbox(
             _ra_text("filter_before_merge"),
             value=use_filter_default,
-            key="research_agent_module_filter_enabled",
+            key=filter_key,
             help=_ra_text("filter_help"),
         )
+        if (
+            filter_suggested
+            and not use_filter
+            and _module_build_signature_matches_base(
+                cached_build,
+                base_build_signature,
+                filter_value=None,
+            )
+        ):
+            st.info(_ra_text("module_filter_suggestion_kept_build"))
         filter_spec: Optional[Tuple[Path, str, str, str]] = None
         if use_filter:
             filter_labels = selected_labels
@@ -3285,9 +3348,6 @@ def _section_cohort_picker(
                 )
             filter_spec = (filter_path, filter_col, mode, value)
 
-        # Merge strategy is fixed to outer — keeps all patient IDs from
-        # every selected file, which is the correct default for ICU cohorts.
-        join_how = "outer"
         filter_signature: Optional[Tuple[str, str, str, str]] = None
         if filter_spec is not None:
             filter_signature = (
@@ -3303,7 +3363,6 @@ def _section_cohort_picker(
             "filter": filter_signature,
             "join_how": join_how,
         }
-        cached_build = st.session_state.get("research_agent_module_built")
         if (
             isinstance(cached_build, dict)
             and cached_build.get("signature") == build_signature
