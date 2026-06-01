@@ -69,6 +69,49 @@ def test_module_export_folder_builds_filtered_stay_level_cohort(tmp_path: Path) 
     assert set(["sep3_sofa2", "death", "hr"]) <= set(cohort.columns)
 
 
+def test_module_export_folder_builds_from_csv_exports(tmp_path: Path) -> None:
+    folder = tmp_path / "csv_export"
+    folder.mkdir()
+    sepsis = folder / "sepsis3_sofa2_sep3_sofa2.csv"
+    outcome = folder / "outcome_death.csv"
+    vitals = folder / "vitals_hr.csv"
+    pd.DataFrame({
+        "stay_id": [1, 2, 3],
+        "sep3_sofa2": [1, 0, 1],
+    }).to_csv(sepsis, index=False)
+    pd.DataFrame({
+        "stay_id": [1, 2, 3],
+        "death": [1, 0, 0],
+    }).to_csv(outcome, index=False)
+    pd.DataFrame({
+        "stay_id": [1, 1, 2, 3],
+        "charttime": [
+            "2024-01-01 00:00",
+            "2024-01-01 01:00",
+            "2024-01-01 00:00",
+            "2024-01-01 00:00",
+        ],
+        "hr": [70, 80, 90, 100],
+    }).to_csv(vitals, index=False)
+
+    assert ra_page._list_module_parquets(folder) == [
+        outcome.resolve(),
+        sepsis.resolve(),
+        vitals.resolve(),
+    ]
+
+    cohort = ra_page._build_stay_level_from_module_folder(
+        folder=folder,
+        selected_files=[sepsis, outcome, vitals],
+        id_col="stay_id",
+        filter_spec=(sepsis, "sep3_sofa2", "nonzero / true", ""),
+    )
+
+    assert set(cohort["stay_id"]) == {1, 3}
+    assert cohort.loc[cohort["stay_id"] == 1, "hr"].iloc[0] == 80
+    assert {"sep3_sofa2", "death", "hr"} <= set(cohort.columns)
+
+
 def test_module_export_folder_normalizes_numeric_id_dtype_before_merge(
     tmp_path: Path,
 ) -> None:
@@ -572,6 +615,27 @@ def test_latest_export_file_labels_only_include_current_export_folder(tmp_path: 
     labels = ra_page._export_result_file_labels_for_folder(state, export_root)
 
     assert labels == ["vitals_hr.parquet", "nested/outcome.parquet"]
+
+
+def test_latest_export_file_labels_include_current_csv_export(tmp_path: Path) -> None:
+    export_root = tmp_path / "easyicu_export"
+    export_root.mkdir()
+    current_csv = export_root / "vitals_hr.csv"
+    stale_parquet = export_root / "vitals_hr.parquet"
+    current_csv.write_text("stay_id,hr\n1,80\n", encoding="utf-8")
+    stale_parquet.write_bytes(b"")
+    state = {
+        "_export_success_result": {
+            "files": [
+                str(current_csv),
+                str(export_root / "easyicu_export_manifest.json"),
+            ]
+        }
+    }
+
+    labels = ra_page._export_result_file_labels_for_folder(state, export_root)
+
+    assert labels == ["vitals_hr.csv"]
 
 
 def test_module_folder_filter_defaults_are_limited_to_selected_files() -> None:
