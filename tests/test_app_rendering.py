@@ -2325,6 +2325,7 @@ def test_workspace_states_page_includes_reference_primitives() -> None:
     assert 'key=f"_eu_states_state_{item[\'key\']}"' in page_source
     assert "_eu_states_primary_action" in page_source
     assert "_workspace_state_preview_html(current_context, current_mode, current_state, lang)" in page_source
+    assert "_workspace_state_action_label(current_context, current_mode, lang)" in page_source
     assert "_apply_workspace_state_action(st.session_state, current_context, current_mode)" in page_source
     assert "eu-state-primitive-grid" in page_source
     assert ".stApp .eu-state-primitive-card" in css_text
@@ -2346,6 +2347,10 @@ def test_workspace_state_preview_copy_tracks_selected_context() -> None:
 
 
 def test_workspace_state_primary_action_routes_selected_context() -> None:
+    assert pages_redesign._workspace_state_action_label("patient", "demo", "en") == "Open Patient Review demo"
+    assert pages_redesign._workspace_state_action_label("crossdb", "real", "en") == "Open Cross-DB setup"
+    assert pages_redesign._workspace_state_action_label("agent", "real", "en") == "Open Research Agent setup"
+
     patient_demo: dict[str, object] = {}
     pages_redesign._apply_workspace_state_action(patient_demo, "patient", "demo")
     assert patient_demo["_active_main_page"] == "quick_viz"
