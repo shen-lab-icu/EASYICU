@@ -1475,6 +1475,34 @@ def _resume_run_dir_from_state(state: Dict[str, Any], run_id: str) -> Optional[P
     return None
 
 
+def _store_resume_run_dir_context(
+    state: Dict[str, Any],
+    run_dir: Path | str,
+    *,
+    defer_workdir: bool = False,
+) -> None:
+    """Remember a selected run and keep follow-up writes beside it."""
+    run_dir_text = str(run_dir or "").strip()
+    if not run_dir_text:
+        return
+    state["research_agent_resume_run_dir"] = run_dir_text
+    try:
+        workdir_text = str(Path(run_dir_text).expanduser().resolve().parent)
+    except Exception:
+        workdir_text = str(Path(run_dir_text).expanduser().parent)
+    if defer_workdir:
+        state["_research_agent_workdir_pending"] = workdir_text
+    else:
+        state["research_agent_workdir"] = workdir_text
+
+
+def _apply_pending_research_agent_workdir(state: Dict[str, Any]) -> None:
+    """Apply a deferred workdir before Streamlit creates the matching widget."""
+    pending = str(state.pop("_research_agent_workdir_pending", "") or "").strip()
+    if pending:
+        state["research_agent_workdir"] = pending
+
+
 def _cohort_path_from_resume_run(run_dir: Path) -> Optional[Path]:
     """Find the stay-level cohort parquet recorded for a prior web run."""
     candidates: List[Path] = []
@@ -4391,6 +4419,7 @@ def _render_run_history(workdir: Path) -> None:
 
 def render_research_agent_history_page(lang: Optional[str] = None, *, show_header: bool = True) -> None:
     """Render saved local Research Agent runs as a project picker."""
+    _apply_pending_research_agent_workdir(st.session_state)
     lang = lang or st.session_state.get("language", "en")
     is_en = lang == "en"
     title = "EasyICU Research Agent" if is_en else "EasyICU 研究智能体"
@@ -4728,7 +4757,7 @@ def _render_resume_panel(
             disabled=not can_resume,
         ):
             st.session_state["research_agent_resume_run_id"] = run_id
-            st.session_state["research_agent_resume_run_dir"] = str(run_dir)
+            _store_resume_run_dir_context(st.session_state, run_dir, defer_workdir=True)
             st.session_state["research_agent_force_manuscript"] = False
             st.session_state["research_agent_resume_mode"] = "continue"
             st.session_state["research_agent_resume_notes"] = extra_notes
@@ -4748,7 +4777,7 @@ def _render_resume_panel(
             disabled=not can_resume,
         ):
             st.session_state["research_agent_resume_run_id"] = run_id
-            st.session_state["research_agent_resume_run_dir"] = str(run_dir)
+            _store_resume_run_dir_context(st.session_state, run_dir, defer_workdir=True)
             st.session_state["research_agent_force_manuscript"] = True
             st.session_state["research_agent_resume_mode"] = "force_manuscript"
             st.session_state["research_agent_resume_notes"] = ""
@@ -5800,6 +5829,7 @@ def _render_preflight_controls_intro(*, is_en: bool) -> None:
 
 def render_research_agent_page(*, show_header: bool = True) -> None:
     """Top-level entry point used by the main webapp."""
+    _apply_pending_research_agent_workdir(st.session_state)
     if show_header:
         render_page_header(
             _ra_text("header"),

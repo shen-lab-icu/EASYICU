@@ -11486,6 +11486,39 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   color: var(--ink) !important;
   letter-spacing: -0.01em !important;
 }
+.stApp .patient-feature-snapshot-grid {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 8px 10px !important;
+  margin: 8px 0 8px !important;
+}
+.stApp .patient-feature-snapshot-grid .tiny-stat-card {
+  min-width: 0 !important;
+  min-height: 52px !important;
+  padding: 9px 11px !important;
+}
+.stApp .patient-feature-snapshot-grid .tiny-label,
+.stApp .patient-feature-snapshot-grid .tiny-value {
+  overflow-wrap: anywhere !important;
+}
+.stApp .patient-feature-snapshot-caption {
+  display: block !important;
+  clear: both !important;
+  margin: 8px 0 0 !important;
+  color: var(--ink-4) !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+}
+@media (max-width: 1100px) {
+  .stApp .patient-feature-snapshot-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 640px) {
+  .stApp .patient-feature-snapshot-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
 
 /* Preview toolbar + badges */
 .stApp .preview-toolbar-title {

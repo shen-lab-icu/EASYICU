@@ -1437,6 +1437,42 @@ def test_force_manuscript_seeds_cohort_from_copied_run_dir(tmp_path: Path) -> No
     assert str(state["research_agent_resume_cohort_signature"]).startswith("resume:run_20260601T035358_d282cb:")
 
 
+def test_resume_run_context_sets_followup_workdir_to_run_parent(tmp_path: Path) -> None:
+    run_dir = tmp_path / "external_history" / "copied_run_folder"
+    run_dir.mkdir(parents=True)
+    state: dict[str, object] = {}
+
+    ra_page._store_resume_run_dir_context(state, run_dir)
+
+    assert state["research_agent_resume_run_dir"] == str(run_dir)
+    assert state["research_agent_workdir"] == str(run_dir.resolve().parent)
+
+
+def test_resume_run_context_can_defer_workdir_until_next_render(tmp_path: Path) -> None:
+    run_dir = tmp_path / "external_history" / "copied_run_folder"
+    run_dir.mkdir(parents=True)
+    state: dict[str, object] = {}
+
+    ra_page._store_resume_run_dir_context(state, run_dir, defer_workdir=True)
+
+    assert state["research_agent_resume_run_dir"] == str(run_dir)
+    assert "research_agent_workdir" not in state
+    assert state["_research_agent_workdir_pending"] == str(run_dir.resolve().parent)
+    ra_page._apply_pending_research_agent_workdir(state)
+    assert state["research_agent_workdir"] == str(run_dir.resolve().parent)
+    assert "_research_agent_workdir_pending" not in state
+
+
+def test_history_resume_buttons_use_selected_run_workdir_context() -> None:
+    source = Path(ra_page.__file__).read_text(encoding="utf-8")
+    panel_source = source[
+        source.index("def _render_resume_panel"):
+        source.index("def _render_research_agent_demo_visuals")
+    ]
+
+    assert panel_source.count("_store_resume_run_dir_context(st.session_state, run_dir, defer_workdir=True)") == 2
+
+
 def test_research_agent_page_restores_cohort_for_force_manuscript_resume() -> None:
     source = Path(ra_page.__file__).read_text(encoding="utf-8")
     render_source = source[
