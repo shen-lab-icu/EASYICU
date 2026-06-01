@@ -881,6 +881,23 @@ def _agent_sidebar_cohort_value(
     lang: str,
 ) -> str:
     """Summarize the cohort bound to Research Agent, not extraction setup."""
+    cohort_source = str(state.get("research_agent_cohort_source") or "")
+    cohort_source_lower = cohort_source.lower()
+    if (
+        "synthetic sofa" in cohort_source_lower
+        or "内置 sofa" in cohort_source_lower
+        or "模拟队列" in cohort_source
+    ):
+        try:
+            n_rows = int(state.get("research_agent_synth_n") or 800)
+        except (TypeError, ValueError):
+            n_rows = 800
+        return (
+            f"{n_rows:,} rows"
+            if lang == "en" else
+            f"{n_rows:,} 行"
+        )
+
     cached_build = state.get("research_agent_module_built")
     if isinstance(cached_build, dict):
         built_df = cached_build.get("df")
