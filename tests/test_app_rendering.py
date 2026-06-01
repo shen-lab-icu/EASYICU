@@ -323,6 +323,11 @@ def test_concept_checkbox_and_selection_states_do_not_use_black_token_fills() ->
     assert ".stApp [data-testid=\"stExpander\"] label *" in final_guard_css
     assert ".stApp [data-testid=\"stExpanderDetails\"] label code" in final_guard_css
     assert ".stApp details label code" in final_guard_css
+    assert ".stApp [data-testid=\"stExpanderDetails\"] *::selection" in final_guard_css
+    assert ".stApp details .stCheckbox *::selection" in final_guard_css
+    assert ".stApp [data-testid=\"stExpanderDetails\"] *::-moz-selection" in final_guard_css
+    assert "background: #DDF1F3 !important" in final_guard_css
+    assert "-webkit-text-fill-color: #0F1A23 !important" in final_guard_css
     assert "text-shadow: none !important" in final_guard_css
     assert 'label[data-baseweb="checkbox"]:has(input[aria-checked="true"]) > div:first-child' not in css_text
     assert '.stApp label[data-baseweb="checkbox"] span' in css_text

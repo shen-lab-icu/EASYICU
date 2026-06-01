@@ -13071,3 +13071,32 @@ html, body, .stApp, .stApp * {
   box-shadow: none !important;
   text-shadow: none !important;
 }
+.stApp label[data-baseweb="checkbox"] ::selection,
+.stApp label[data-baseweb="checkbox"] *::selection,
+.stApp .stCheckbox ::selection,
+.stApp .stCheckbox *::selection,
+.stApp [data-testid="stExpanderDetails"] ::selection,
+.stApp [data-testid="stExpanderDetails"] *::selection,
+.stApp details label ::selection,
+.stApp details label *::selection,
+.stApp details .stCheckbox ::selection,
+.stApp details .stCheckbox *::selection {
+  background: #DDF1F3 !important;
+  color: #0F1A23 !important;
+  -webkit-text-fill-color: #0F1A23 !important;
+  text-shadow: none !important;
+}
+.stApp label[data-baseweb="checkbox"] ::-moz-selection,
+.stApp label[data-baseweb="checkbox"] *::-moz-selection,
+.stApp .stCheckbox ::-moz-selection,
+.stApp .stCheckbox *::-moz-selection,
+.stApp [data-testid="stExpanderDetails"] ::-moz-selection,
+.stApp [data-testid="stExpanderDetails"] *::-moz-selection,
+.stApp details label ::-moz-selection,
+.stApp details label *::-moz-selection,
+.stApp details .stCheckbox ::-moz-selection,
+.stApp details .stCheckbox *::-moz-selection {
+  background: #DDF1F3 !important;
+  color: #0F1A23 !important;
+  text-shadow: none !important;
+}
