@@ -940,6 +940,8 @@ def _agent_sidebar_cohort_value(
 def _agent_state_summary_html(entry_mode: str, lang: str) -> str:
     """Return the Research Agent-specific rail, matching the Claude reference."""
     state = st.session_state
+    ra_view = str(state.get("_ra_view") or "").strip().lower()
+    setup_view = ra_view == "setup"
     workbench = state.get("_agent_workbench")
     workbench = workbench if isinstance(workbench, dict) else {}
     audit = workbench.get("audit") if isinstance(workbench.get("audit"), dict) else {}
@@ -974,7 +976,14 @@ def _agent_state_summary_html(entry_mode: str, lang: str) -> str:
         isinstance(gate, dict) and gate.get("ok") is False
         for gate in (audit.get("gates") or [])
     )
-    if errors:
+    run_id_raw = str(workbench.get("run_id") or "").strip()
+    real_manifest_bound = bool(run_id_raw) and workbench.get("is_demo") is not True
+    show_manifest_state = real_manifest_bound and not setup_view
+
+    if setup_view:
+        status_label = "Setup" if lang == "en" else "设置"
+        status_class = ""
+    elif errors:
         status_label = "Review" if lang == "en" else "复核"
         status_class = "warn"
     elif warning_review_pending:
@@ -990,23 +999,20 @@ def _agent_state_summary_html(entry_mode: str, lang: str) -> str:
         status_label = "Ready" if lang == "en" else "就绪"
         status_class = "ready"
 
-    run_id_raw = str(workbench.get("run_id") or "").strip()
-    real_manifest_bound = bool(run_id_raw) and workbench.get("is_demo") is not True
-
     mode_value = (
-        "Local run" if real_manifest_bound else
+        "Local run" if show_manifest_state else
         "Demo" if entry_mode == "demo" else
         "Real" if entry_mode == "real" else
         "Not selected"
     )
     if lang != "en":
         mode_value = (
-            "本机运行" if real_manifest_bound else
+            "本机运行" if show_manifest_state else
             "演示" if entry_mode == "demo" else
             "真实" if entry_mode == "real" else "未选择"
         )
 
-    if real_manifest_bound:
+    if show_manifest_state:
         evidence_total = workbench.get("evidence_total")
         if evidence_total is None:
             evidence_items = workbench.get("evidence")
@@ -1037,7 +1043,12 @@ def _agent_state_summary_html(entry_mode: str, lang: str) -> str:
 
     rows = [
         ("Mode" if lang == "en" else "模式", mode_value),
-        (("Evidence" if lang == "en" else "证据") if real_manifest_bound else ("Cohort" if lang == "en" else "队列"), cohort_value),
+        (
+            ("Evidence" if lang == "en" else "证据")
+            if show_manifest_state else
+            ("Cohort" if lang == "en" else "队列"),
+            cohort_value,
+        ),
         ("Last run" if lang == "en" else "最近运行", run_id),
     ]
     row_html = "".join(
