@@ -5008,11 +5008,21 @@ def _render_audit_actions(state: dict[str, Any], lang: str, select_key: str) -> 
                     unsafe_allow_html=True,
                 )
             with cols[1]:
+                open_label = (
+                    _T(lang, "Open step", "打开步骤")
+                    if target_idx is not None
+                    else _T(lang, "No linked step", "无关联步骤")
+                )
                 if st.button(
-                    _T(lang, "Open step", "打开步骤"),
+                    open_label,
                     key=f"_eu_wb_finding_open_{idx}_{fid[:32]}",
                     use_container_width=True,
                     disabled=target_idx is None,
+                    help=(
+                        _T(lang, "Open the step linked to this finding.", "打开与该发现关联的步骤。")
+                        if target_idx is not None
+                        else _T(lang, "This finding requires manual review across the run evidence.", "这条发现需要结合整轮证据人工复核。")
+                    ),
                 ):
                     _set_selected_step(select_key, int(target_idx))
                     st.session_state["_active_main_page"] = "research_agent"
