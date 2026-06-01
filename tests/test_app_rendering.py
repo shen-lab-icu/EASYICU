@@ -1616,6 +1616,16 @@ def test_coverage_audit_heatmap_uses_shell_style_and_hides_modebar() -> None:
     assert "var(--figure-orange)" not in global_audit_css
 
 
+def test_coverage_audit_percentages_are_bounded_and_not_jittered() -> None:
+    source = Path(data_coverage_audit_page.__file__).read_text(encoding="utf-8")
+
+    assert data_coverage_audit_page._bounded_coverage(-1.0) == 0.0
+    assert data_coverage_audit_page._bounded_coverage(100.7) == 100.0
+    assert data_coverage_audit_page._bounded_coverage(float("nan")) == 0.0
+    assert "jitter_seed" not in source
+    assert "coverage += ((jitter_seed % 7) - 3)" not in source
+
+
 def test_quality_panel_switcher_renders_one_lazy_panel(monkeypatch) -> None:
     class _Panel:
         def __enter__(self):
