@@ -135,6 +135,15 @@ def _render_export_conflict_panel(
     )
 
 
+def _export_extension_for_format(export_format: str) -> str:
+    fmt = str(export_format or "").strip().lower()
+    if fmt == "csv":
+        return ".csv"
+    if fmt in {"excel", "xlsx"}:
+        return ".xlsx"
+    return ".parquet"
+
+
 def _terminate_process_tree(proc: Any, *, timeout: float = 2.0) -> None:
     """Terminate a multiprocessing worker and any child processes it spawned."""
     if proc is None:
@@ -439,14 +448,13 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
         for group_key, group_concepts in selected_modules.items():
             # 🔧 按模块名开头查找已存在的文件
             search_prefix = f"{group_key}_"
+            target_ext = _export_extension_for_format(export_format)
 
             # 检查是否有匹配该模块的文件存在
-            for ext in ['.parquet', '.csv', '.xlsx']:
-                matching_files = list(export_dir.glob(f"{search_prefix}*{ext}"))
-                if matching_files:
-                    # 找到匹配的文件
-                    existing_modules[group_key] = matching_files[0]
-                    break
+            matching_files = list(export_dir.glob(f"{search_prefix}*{target_ext}"))
+            if matching_files:
+                # 找到匹配当前目标格式的文件
+                existing_modules[group_key] = matching_files[0]
 
         # 如果有已存在的模块，显示让用户选择
         # 🔧 FIX (2026-02-03): 在 viz_import_mode 下自动覆盖，跳过对话框
@@ -1297,12 +1305,12 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                     # 覆盖模式
                     _ow_modules = st.session_state.get('_overwrite_modules', set())
                     if group_name in _ow_modules or is_viz_import_mode:
-                        for ext in ['.parquet', '.csv', '.xlsx']:
-                            for old_file in export_dir.glob(f"{group_name}_*{ext}"):
-                                try:
-                                    old_file.unlink()
-                                except Exception:
-                                    pass
+                        target_ext = _export_extension_for_format(export_format)
+                        for old_file in export_dir.glob(f"{group_name}_*{target_ext}"):
+                            try:
+                                old_file.unlink()
+                            except Exception:
+                                pass
 
                     # 跳过检查
                     if not use_mock and not is_viz_import_mode and file_path.exists():

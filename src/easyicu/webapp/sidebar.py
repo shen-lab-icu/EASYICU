@@ -2500,6 +2500,29 @@ def _render_step3_concept_selection(concept_groups: dict[str, list[str]]) -> lis
     return selected_concepts
 
 
+def _export_patient_limit_label(patient_limit: int, lang: str) -> str:
+    if patient_limit and patient_limit > 0:
+        if patient_limit >= 1000 and patient_limit % 1000 == 0:
+            return f"{patient_limit // 1000}k"
+        return f"{patient_limit:,}"
+    return "All" if lang == "en" else "全部"
+
+
+def _export_patient_limit_hint(patient_limit: int, lang: str) -> str:
+    if patient_limit and patient_limit > 0:
+        label = _export_patient_limit_label(patient_limit, lang)
+        return (
+            f"Export first {label} patients"
+            if lang == "en" else
+            f"导出前 {label} 位患者"
+        )
+    return (
+        "All patients for final runs"
+        if lang == "en" else
+        "正式运行建议全部患者"
+    )
+
+
 def _render_step4_export(selected_concepts: list[str]) -> bool:
     """Render Step 4 and return whether the sidebar should keep rendering."""
     lang = st.session_state.get("language", "en")
@@ -2656,18 +2679,13 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
             st.markdown(
                 '<div class="eu-export-control-label">'
                 f'{html.escape("Patient limit" if lang == "en" else "患者数量限制")}'
-                f'<small>{html.escape("All patients for final runs" if lang == "en" else "正式运行建议全部患者")}</small>'
+                f'<small>{html.escape(_export_patient_limit_hint(st.session_state.patient_limit, lang))}</small>'
                 '</div>',
                 unsafe_allow_html=True,
             )
             limit_labels = {
-                0: "All" if lang == "en" else "全部",
-                100: "100",
-                1000: "1k",
-                5000: "5k",
-                10000: "10k",
-                20000: "20k",
-                50000: "50k",
+                limit: _export_patient_limit_label(limit, lang)
+                for limit in patient_limit_options
             }
             limit_cols = st.columns(len(patient_limit_options), gap="small")
             for limit_col, limit_value in zip(limit_cols, patient_limit_options):
@@ -2699,7 +2717,7 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
 
     _n_feats = len(selected_concepts)
     _n_mods = len(set(g for g, cs in CONCEPT_GROUPS_INTERNAL.items() if any(c in selected_concepts for c in cs)))
-    _pat_str = str(patient_limit) if patient_limit and patient_limit > 0 else ("All" if lang == 'en' else "全部")
+    _pat_str = _export_patient_limit_label(patient_limit, lang)
     _selected_groups = [
         g for g, cs in CONCEPT_GROUPS_INTERNAL.items() if any(c in selected_concepts for c in cs)
     ]
@@ -3032,12 +3050,13 @@ def _render_cohort_live_preview(lang: str) -> None:
     if cf.get('icd_include_query'):
         factor *= 0.72
     filtered_n = max(1, int(round(base_n * factor))) if chips else base_n
-    pct_drop = 0 if base_n == 0 else round((1 - filtered_n / base_n) * 100, 1)
+    pct_drop = 0.0 if base_n == 0 else max(0.0, round((1 - filtered_n / base_n) * 100, 1))
+    drop_label = f"-{pct_drop:.1f}%" if pct_drop > 0 else "0.0%"
     ready_label = f"{filtered_n:,} ready" if lang == "en" else f"{filtered_n:,} 可用"
     of_label = (
-        f"of {base_n:,} stays · -{pct_drop}%"
+        f"of {base_n:,} stays · {drop_label}"
         if lang == "en" else
-        f"共 {base_n:,} 个 stay · -{pct_drop}%"
+        f"共 {base_n:,} 个 stay · {drop_label}"
     )
     bar_w = max(6, min(300, int(300 * filtered_n / max(base_n, 1))))
     los_w = max(6, min(300, int(300 * 0.82)))
