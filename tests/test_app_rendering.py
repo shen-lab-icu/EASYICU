@@ -6926,6 +6926,7 @@ def test_real_step2_preview_does_not_claim_demo_results(monkeypatch) -> None:
     assert "Local source · MIMIC-III" in preview_html
     assert "Preview available after extraction" in preview_html
     assert "pending extraction" in preview_html
+    assert "Clear all" not in preview_html
     assert "Sample of demo cohort" not in preview_html
     assert "seed=42" not in preview_html
     assert "18.0%" not in preview_html
@@ -6964,6 +6965,7 @@ def test_demo_step2_preview_does_not_render_negative_zero_drop(monkeypatch) -> N
     preview_html = "\n".join(rendered)
 
     assert "of 10 stays · 0.0%" in preview_html
+    assert "Clear all" not in preview_html
     assert "-0.0%" not in preview_html
 
 
