@@ -296,14 +296,30 @@ def test_concept_checkbox_and_selection_states_do_not_use_black_token_fills() ->
         css_text,
         re.S,
     )
+    final_guard_css = css_text[css_text.index("/* Final contrast guard.") :]
+    inline_code_blocks = re.findall(
+        r"\.stApp \[data-testid=\"stMarkdownContainer\"\] code,\n"
+        r"\.stApp code:not\(pre code\) \{(?P<body>.*?)\n\}",
+        final_guard_css,
+        re.S,
+    )
 
     assert checkbox_code_block is not None
     assert checkbox_label_block is not None
     assert cohort_chip_block is not None
     assert concept_module_block is not None
+    assert inline_code_blocks
     assert "background: transparent !important" in checkbox_code_block.group("body")
     assert "background: transparent !important" in checkbox_label_block.group("body")
     assert "-webkit-text-fill-color: var(--ink-2) !important" in checkbox_label_block.group("body")
+    inline_code_body = inline_code_blocks[-1]
+    assert "background: #F4F4F0 !important" in inline_code_body
+    assert "color: #2E3338 !important" in inline_code_body
+    assert "-webkit-text-fill-color: #2E3338 !important" in inline_code_body
+    assert ".stApp [data-testid=\"stExpander\"] label *" in final_guard_css
+    assert ".stApp [data-testid=\"stExpanderDetails\"] label code" in final_guard_css
+    assert ".stApp details label code" in final_guard_css
+    assert "text-shadow: none !important" in final_guard_css
     assert 'label[data-baseweb="checkbox"]:has(input[aria-checked="true"]) > div:first-child' not in css_text
     assert '.stApp label[data-baseweb="checkbox"] span' in css_text
     assert "background: #eef6f7" in cohort_chip_block.group("body")

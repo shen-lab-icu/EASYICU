@@ -12854,3 +12854,55 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
     -webkit-text-fill-color: #fff !important;
   }
 }
+
+/* Final contrast guard.
+   Streamlit/BaseWeb can re-apply browser/theme code styles inside
+   markdown labels, especially checkbox labels rendered inside details
+   expanders. Keep inline tokens readable even when the host browser is
+   in dark mode, while leaving code blocks and purpose-built dark
+   previews alone. */
+html, body, .stApp, .stApp * {
+  color-scheme: light !important;
+}
+.stApp [data-testid="stMarkdownContainer"] code,
+.stApp code:not(pre code) {
+  background: #F4F4F0 !important;
+  border-color: #E7E5DF !important;
+  color: #2E3338 !important;
+  -webkit-text-fill-color: #2E3338 !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+.stApp label[data-baseweb="checkbox"],
+.stApp label[data-baseweb="checkbox"] *,
+.stApp .stCheckbox label,
+.stApp .stCheckbox label *,
+.stApp .stCheckbox [data-baseweb="checkbox"],
+.stApp .stCheckbox [data-baseweb="checkbox"] *,
+.stApp [data-testid="stExpander"] label,
+.stApp [data-testid="stExpander"] label *,
+.stApp [data-testid="stExpanderDetails"] label,
+.stApp [data-testid="stExpanderDetails"] label *,
+.stApp details label,
+.stApp details label * {
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+  text-shadow: none !important;
+}
+.stApp label[data-baseweb="checkbox"] code,
+.stApp .stCheckbox [data-baseweb="checkbox"] code,
+.stApp .stCheckbox code,
+.stApp [data-testid="stExpander"] label code,
+.stApp [data-testid="stExpander"] .stCheckbox code,
+.stApp [data-testid="stExpanderDetails"] label code,
+.stApp [data-testid="stExpanderDetails"] .stCheckbox code,
+.stApp details label code,
+.stApp details .stCheckbox code {
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
