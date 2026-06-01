@@ -1626,6 +1626,43 @@ def test_coverage_audit_percentages_are_bounded_and_not_jittered() -> None:
     assert "coverage += ((jitter_seed % 7) - 3)" not in source
 
 
+def test_coverage_audit_hides_eligibility_flow_without_extraction_stats(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit({"cohort_enabled": False})
+    monkeypatch.setattr(data_coverage_audit_page, "st", streamlit_stub)
+    source = Path(data_coverage_audit_page.__file__).read_text(encoding="utf-8")
+
+    assert data_coverage_audit_page._build_extraction_eligibility_flow(10, "en") == []
+    assert "Age 18-120 years" not in source
+    assert "ICU stay >= 24 h" not in source
+    assert "Severity anchor available" not in source
+
+
+def test_coverage_audit_eligibility_flow_uses_recorded_step2_filters(monkeypatch) -> None:
+    streamlit_stub = _SessionStateStreamlit({
+        "_cohort_stats": {
+            "before": 100,
+            "after": 72,
+            "excluded": 28,
+            "filter_details": [
+                ("Age 18-80", "年龄 18-80", 10),
+                ("ICD include (A41)", "ICD 包含 (A41)", 18),
+            ],
+        }
+    })
+    monkeypatch.setattr(data_coverage_audit_page, "st", streamlit_stub)
+
+    flow = data_coverage_audit_page._build_extraction_eligibility_flow(72, "zh")
+
+    assert [step["label"] for step in flow] == [
+        "候选 ICU 住院",
+        "年龄 18-80",
+        "ICD 包含 (A41)",
+        "最终提取队列",
+    ]
+    assert [step["count"] for step in flow] == [100, 90, 72, 72]
+    assert [step["excluded"] for step in flow] == [0, 10, 18, 0]
+
+
 def test_quality_panel_switcher_renders_one_lazy_panel(monkeypatch) -> None:
     class _Panel:
         def __enter__(self):

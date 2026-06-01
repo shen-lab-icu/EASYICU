@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any, Dict, Optional
 
 import numpy as np
@@ -18,6 +19,8 @@ _PROTECTED_NAMES = {
     '_build_publication_audit_subgroups',
     '_concepts_for_publication_module',
     '_bounded_coverage',
+    '_safe_int',
+    '_build_extraction_eligibility_flow',
     '_build_data_coverage_audit',
     'render_data_coverage_audit_subtab',
     '_APP_CONTEXT',
@@ -29,6 +32,7 @@ _PROTECTED_NAMES = {
     'np',
     'pd',
     'st',
+    'html',
 }
 _APP_CONTEXT: dict[str, Any] = {}
 
@@ -174,6 +178,89 @@ def _bounded_coverage(value: float) -> float:
     return round(float(max(0.0, min(100.0, value))), 1)
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_extraction_eligibility_flow(total_patients: int, lang: str) -> list[dict[str, Any]]:
+    """Return the real Step 2 extraction flow, or nothing when no cohort filter ran."""
+    stats = st.session_state.get('_cohort_stats')
+    if not isinstance(stats, dict):
+        return []
+
+    raw_details = stats.get('filter_details') or []
+    details: list[tuple[str, str, int]] = []
+    for detail in raw_details:
+        if isinstance(detail, dict):
+            label_en = str(detail.get('label_en') or detail.get('label') or '').strip()
+            label_zh = str(detail.get('label_zh') or detail.get('label_cn') or label_en).strip()
+            excluded = _safe_int(detail.get('excluded'), 0)
+        elif isinstance(detail, (list, tuple)) and len(detail) >= 3:
+            label_en = str(detail[0] or '').strip()
+            label_zh = str(detail[1] or label_en).strip()
+            excluded = _safe_int(detail[2], 0)
+        else:
+            continue
+        if label_en or label_zh:
+            details.append((label_en, label_zh or label_en, max(excluded, 0)))
+
+    excluded_total = max(_safe_int(stats.get('excluded'), 0), 0)
+    if not details and excluded_total <= 0:
+        return []
+
+    after = max(_safe_int(stats.get('after'), 0), 0)
+    before = max(_safe_int(stats.get('before'), 0), 0)
+    if before <= 0:
+        before = max(after + excluded_total, int(total_patients or 0), after)
+    if after <= 0 and before > 0:
+        after = max(before - excluded_total, 0)
+
+    steps: list[dict[str, Any]] = [{
+        'label': 'Candidate ICU stays' if lang == 'en' else '候选 ICU 住院',
+        'count': before,
+        'excluded': 0,
+        'note': 'before Step 2 filters' if lang == 'en' else '第 2 步筛选前',
+    }]
+    current = before
+    if details:
+        for label_en, label_zh, excluded in details:
+            current = max(current - excluded, 0)
+            steps.append({
+                'label': label_en if lang == 'en' else label_zh,
+                'count': current,
+                'excluded': excluded,
+                'note': 'Step 2 cohort filter' if lang == 'en' else '第 2 步队列筛选',
+            })
+    else:
+        current = max(before - excluded_total, 0)
+        steps.append({
+            'label': 'Applied cohort filters' if lang == 'en' else '已应用队列筛选',
+            'count': current,
+            'excluded': excluded_total,
+            'note': 'Step 2 cohort filter' if lang == 'en' else '第 2 步队列筛选',
+        })
+
+    if after != current:
+        steps.append({
+            'label': 'Final extracted cohort' if lang == 'en' else '最终提取队列',
+            'count': after,
+            'excluded': max(current - after, 0),
+            'note': 'after extraction' if lang == 'en' else '提取后',
+        })
+    else:
+        retained = after / before * 100 if before else 0.0
+        steps.append({
+            'label': 'Final extracted cohort' if lang == 'en' else '最终提取队列',
+            'count': after,
+            'excluded': 0,
+            'note': f'{retained:.1f}%',
+        })
+    return steps
+
+
 def _build_data_coverage_audit(df: pd.DataFrame, loaded_concepts: Dict[str, Any], lang: str, app_context: dict[str, Any] | None = None) -> Dict[str, Any]:
     """Build the S1B-style coverage matrix and eligibility flow."""
     if app_context is not None:
@@ -262,67 +349,7 @@ def _build_data_coverage_audit(df: pd.DataFrame, loaded_concepts: Dict[str, Any]
 
     coverage_df = pd.DataFrame(coverage_rows)
 
-    age = _cohort_numeric_series(df, ['age'])
-    los_hours = _cohort_numeric_series(df, ['los_hours'])
-    los_days = _cohort_numeric_series(df, ['los_days'])
-    if los_hours is None and los_days is not None:
-        los_hours = los_days * 24
-    sofa = _cohort_numeric_series(df, ['sofa_max', 'sofa2', 'sofa'])
-    id_col = _cohort_id_col(df)
-    base_mask = pd.Series(True, index=df.index)
-    current_mask = base_mask.copy()
-
-    flow_steps: list[dict[str, Any]] = []
-
-    def add_flow_step(label: str, next_mask: pd.Series, note: str = '') -> None:
-        nonlocal current_mask
-        previous_count = int(current_mask.sum())
-        current_mask = current_mask & next_mask.reindex(df.index).fillna(False).astype(bool)
-        current_count = int(current_mask.sum())
-        flow_steps.append({
-            'label': label,
-            'count': current_count,
-            'excluded': max(previous_count - current_count, 0),
-            'note': note,
-        })
-
-    if id_col:
-        unique_count = df[id_col].nunique()
-        flow_steps.append({
-            'label': 'All ICU stays' if lang == 'en' else '全部 ICU 住院',
-            'count': int(unique_count),
-            'excluded': 0,
-            'note': 'from current session' if lang == 'en' else '来自当前会话',
-        })
-    else:
-        flow_steps.append({
-            'label': 'All rows' if lang == 'en' else '全部记录',
-            'count': int(len(df)),
-            'excluded': 0,
-            'note': 'patient ID unavailable' if lang == 'en' else '未识别患者ID',
-        })
-
-    if age is not None:
-        add_flow_step('Age 18-120 years' if lang == 'en' else '年龄 18-120 岁', age.between(18, 120, inclusive='both'), 'metadata check' if lang == 'en' else '元数据检查')
-    else:
-        add_flow_step('Metadata available' if lang == 'en' else '元数据可用', base_mask, 'age column absent' if lang == 'en' else '未找到年龄列')
-
-    if los_hours is not None:
-        add_flow_step('ICU stay >= 24 h' if lang == 'en' else 'ICU 住院 >= 24 h', los_hours >= 24, 'time-window check' if lang == 'en' else '时间窗检查')
-    else:
-        add_flow_step('Time window available' if lang == 'en' else '时间窗可用', base_mask, 'LOS column absent' if lang == 'en' else '未找到 LOS 列')
-
-    if sofa is not None:
-        add_flow_step('Severity anchor available' if lang == 'en' else '严重程度锚点可用', sofa.notna(), 'SOFA / SOFA-2' if lang == 'en' else 'SOFA / SOFA-2')
-    else:
-        add_flow_step('Cohort criteria retained' if lang == 'en' else '保留队列条件', base_mask, 'no severity filter' if lang == 'en' else '无严重程度筛选')
-
-    flow_steps.append({
-        'label': 'Final analysis cohort' if lang == 'en' else '最终分析队列',
-        'count': int(current_mask.sum()),
-        'excluded': 0,
-        'note': f"{(current_mask.sum() / max(len(df), 1) * 100):.1f}%" if len(df) else '0.0%',
-    })
+    flow_steps = _build_extraction_eligibility_flow(total_patients, lang)
 
     median_coverage = float(coverage_df['coverage'].median()) if not coverage_df.empty else 0.0
     low_coverage = int((coverage_df.groupby('module')['coverage'].mean() < 80).sum()) if not coverage_df.empty else 0
@@ -351,9 +378,9 @@ def render_data_coverage_audit_subtab(lang: str, app_context: dict[str, Any] | N
     screenshot_mode = _is_screenshot_mode()
     title = "Data Coverage & Eligibility Audit" if lang == 'en' else "数据覆盖度与纳排审计"
     subtitle = (
-        "Module-level coverage across clinically meaningful subgroups plus an eligibility-flow sanity check."
+        "Module-level coverage across clinically meaningful subgroups; real Step 2 extraction flow appears only when filters were applied."
         if lang == 'en' else
-        "按临床相关亚组展示模块覆盖度，并提供纳排流程一致性检查。"
+        "按临床相关亚组展示模块覆盖度；只有实际应用第 2 步筛选时才显示真实纳排流程。"
     )
     if not screenshot_mode:
         st.markdown(f"""
@@ -388,8 +415,13 @@ def render_data_coverage_audit_subtab(lang: str, app_context: dict[str, Any] | N
     )
     st.markdown(f'<div class="audit-summary-grid">{summary_html}</div>', unsafe_allow_html=True)
 
-    left_col, right_col = st.columns([1.45, 0.9])
     coverage_df = audit['coverage']
+    flow_steps = audit.get('flow_steps') or []
+    if flow_steps:
+        left_col, right_col = st.columns([1.45, 0.9])
+    else:
+        left_col = st.container()
+        right_col = None
     subgroup_labels = [item['label'] for item in audit['subgroups']]
     module_labels = [_publication_module_label(module_spec, lang) for module_spec in PUBLICATION_AUDIT_MODULES]
 
@@ -466,28 +498,33 @@ def render_data_coverage_audit_subtab(lang: str, app_context: dict[str, Any] | N
         chart_config = {**_get_plotly_chart_config(), "displayModeBar": False}
         st.plotly_chart(fig, use_container_width=True, key="audit_coverage_heatmap", config=chart_config)
 
-    with right_col:
-        st.markdown(
-            '<div class="audit-panel-title">'
-            + ("Eligibility flow" if lang == 'en' else "纳排流程")
-            + '</div>',
-            unsafe_allow_html=True,
-        )
-        step_html = ''
-        for step in audit['flow_steps']:
-            excluded = ''
-            if step.get('excluded'):
-                excluded = (
-                    f'<div class="audit-flow-excluded">Excluded {step["excluded"]:,}</div>'
-                    if lang == 'en' else
-                    f'<div class="audit-flow-excluded">排除 {step["excluded"]:,}</div>'
-                )
-            note = f'<div class="audit-flow-label">{step.get("note", "")}</div>' if step.get('note') else ''
-            step_html += (
-                f'<div class="audit-flow-step"><div class="audit-flow-label">{step["label"]}</div>'
-                f'<div class="audit-flow-value">{step["count"]:,}</div>{note}{excluded}</div>'
+    if right_col is not None:
+        with right_col:
+            st.markdown(
+                '<div class="audit-panel-title">'
+                + ("Eligibility flow" if lang == 'en' else "纳排流程")
+                + '</div>',
+                unsafe_allow_html=True,
             )
-        st.markdown(f'<div class="audit-flow">{step_html}</div>', unsafe_allow_html=True)
+            step_html = ''
+            for step in flow_steps:
+                excluded = ''
+                if step.get('excluded'):
+                    excluded = (
+                        f'<div class="audit-flow-excluded">Excluded {int(step["excluded"]):,}</div>'
+                        if lang == 'en' else
+                        f'<div class="audit-flow-excluded">排除 {int(step["excluded"]):,}</div>'
+                    )
+                note = (
+                    f'<div class="audit-flow-label">{html.escape(str(step.get("note", "")))}</div>'
+                    if step.get('note') else
+                    ''
+                )
+                step_html += (
+                    f'<div class="audit-flow-step"><div class="audit-flow-label">{html.escape(str(step["label"]))}</div>'
+                    f'<div class="audit-flow-value">{int(step["count"]):,}</div>{note}{excluded}</div>'
+                )
+            st.markdown(f'<div class="audit-flow">{step_html}</div>', unsafe_allow_html=True)
 
     note = (
         "<b>Missingness denominators</b>: d=LOS uses patient-specific ICU stay; d=72h uses a fallback time window; "
