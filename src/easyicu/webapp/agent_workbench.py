@@ -41,6 +41,7 @@ adapter. Starting the pipeline itself still lives in ``research_agent.py``.
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import re
 import base64
@@ -222,6 +223,73 @@ def _reviewable_findings(audit: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _reviewed_finding_ids(state: dict[str, Any]) -> set[str]:
     return {str(item) for item in (state.get("reviewed_finding_ids") or []) if item}
+
+
+def _finding_review_state_summary(state: dict[str, Any]) -> dict[str, Any]:
+    """Describe the current review queue for stale sign-off detection."""
+    audit = state.get("audit") if isinstance(state.get("audit"), dict) else {}
+    reviewed_ids = _reviewed_finding_ids(state)
+    reviewable_findings = _reviewable_findings(audit)
+    reviewable_ids = sorted({_finding_review_id(finding) for finding in reviewable_findings})
+    reviewed_reviewable_ids = sorted(reviewed_ids.intersection(reviewable_ids))
+    warning_ids = sorted(
+        {
+            _finding_review_id(finding)
+            for finding in reviewable_findings
+            if str(finding.get("severity") or "").lower() == "warning"
+        }
+    )
+    error_ids = sorted(
+        {
+            _finding_review_id(finding)
+            for finding in reviewable_findings
+            if str(finding.get("severity") or "").lower() == "error"
+        }
+    )
+    reviewed_warning_ids = sorted(reviewed_ids.intersection(warning_ids))
+    signature_payload = {
+        "reviewable_finding_ids": reviewable_ids,
+        "reviewed_finding_ids": reviewed_reviewable_ids,
+    }
+    signature = hashlib.sha256(
+        json.dumps(signature_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return {
+        "reviewable_finding_ids": reviewable_ids,
+        "reviewed_finding_ids": reviewed_reviewable_ids,
+        "warning_finding_ids": warning_ids,
+        "reviewed_warning_ids": reviewed_warning_ids,
+        "error_finding_ids": error_ids,
+        "reviewable_finding_count": len(reviewable_ids),
+        "reviewed_finding_count": len(reviewed_reviewable_ids),
+        "warning_finding_count": len(warning_ids),
+        "reviewed_warning_count": len(reviewed_warning_ids),
+        "error_finding_count": len(error_ids),
+        "finding_review_signature": signature,
+    }
+
+
+def _review_decision_matches_current_findings(
+    review_decision: dict[str, Any],
+    state: dict[str, Any],
+) -> bool:
+    """Return whether a saved approval still applies to this finding set."""
+    review_status = str(review_decision.get("decision") or review_decision.get("status") or "").lower()
+    if review_status not in _APPROVED_REVIEW_DECISIONS:
+        return False
+    finding_state = _finding_review_state_summary(state)
+    if finding_state["error_finding_count"]:
+        return False
+    if finding_state["reviewed_warning_count"] != finding_state["warning_finding_count"]:
+        return False
+    saved_signature = str(
+        review_decision.get("finding_review_signature")
+        or review_decision.get("review_signature")
+        or ""
+    ).strip()
+    if saved_signature:
+        return saved_signature == finding_state["finding_review_signature"]
+    return finding_state["reviewable_finding_count"] == 0
 
 
 def _finding_review_state_path(run_dir: str | Path | None) -> Path | None:
@@ -1045,6 +1113,7 @@ def _write_summary_review_decision(
     decision: str,
     note: str,
     run_id: object | None = None,
+    finding_review_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist the Summary gate decision using the history-page schema."""
     path = Path(run_dir) / "review_decision.json"
@@ -1056,6 +1125,17 @@ def _write_summary_review_decision(
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "source": "easyicu_web_research_agent",
     }
+    if isinstance(finding_review_state, dict):
+        for key in (
+            "finding_review_signature",
+            "reviewable_finding_count",
+            "reviewed_finding_count",
+            "warning_finding_count",
+            "reviewed_warning_count",
+            "error_finding_count",
+        ):
+            if key in finding_review_state:
+                payload[key] = finding_review_state[key]
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return payload
 
@@ -1073,10 +1153,9 @@ def _sync_review_decision_to_workbench_state(
     audit = dict(audit)
     audit["review_decision"] = dict(review_decision)
     existing["audit"] = audit
-    existing["review_decisions"] = _review_decisions_from_audit(
-        audit,
+    existing["review_decisions"] = _review_decisions_for_state(
+        existing,
         lang=lang,
-        is_demo=bool(existing.get("is_demo")),
     )
     st.session_state["_agent_workbench"] = existing
 
@@ -1743,6 +1822,29 @@ def _review_decisions_from_audit(audit: dict[str, Any], *, lang: str, is_demo: b
             "detail": _T(lang, "Mark generated figures as review-ready.", "将生成图件标记为可审阅。"),
         },
     ]
+
+
+def _review_decisions_for_state(state: dict[str, Any], *, lang: str) -> list[dict[str, str]]:
+    audit = state.get("audit") if isinstance(state.get("audit"), dict) else {}
+    review = audit.get("review_decision") if isinstance(audit.get("review_decision"), dict) else {}
+    if review:
+        review_status = str(review.get("decision") or review.get("status") or "").lower()
+        if (
+            review_status in _APPROVED_REVIEW_DECISIONS
+            and not _review_decision_matches_current_findings(review, state)
+        ):
+            return [
+                {
+                    "label": _T(lang, "Saved sign-off needs refresh", "已保存签字需刷新"),
+                    "state": "warning",
+                    "detail": _T(
+                        lang,
+                        "Findings changed after the saved decision; reopen Summary to sign off the current review state.",
+                        "保存签字后 findings 已变化；请回到 Summary 重新签字当前复核状态。",
+                    ),
+                }
+            ]
+    return _review_decisions_from_audit(audit, lang=lang, is_demo=bool(state.get("is_demo")))
 
 
 def _audit_tasks_from_audit(audit: dict[str, Any], *, lang: str, is_demo: bool = False) -> list[dict[str, str]]:
@@ -3301,30 +3403,25 @@ def _summary_review_checks(state: dict[str, Any], lang: str) -> list[dict[str, o
     bundle_counts = _summary_bundle_counts(state)
     review = audit.get("review_decision") if isinstance(audit.get("review_decision"), dict) else {}
     review_status = str(review.get("decision") or review.get("status") or "").lower()
-    reviewed_ids = _reviewed_finding_ids(state)
-    reviewable_findings = _reviewable_findings(audit)
-    error_findings = [
-        finding
-        for finding in reviewable_findings
-        if str(finding.get("severity") or "").lower() == "error"
-    ]
-    warning_findings = [
-        finding
-        for finding in reviewable_findings
-        if str(finding.get("severity") or "").lower() == "warning"
-    ]
-    reviewed_warnings = sum(
-        1
-        for finding in warning_findings
-        if _finding_review_id(finding) in reviewed_ids
-    )
+    finding_state = _finding_review_state_summary(state)
+    error_count = int(finding_state["error_finding_count"])
+    warning_count = int(finding_state["warning_finding_count"])
+    reviewed_warnings = int(finding_state["reviewed_warning_count"])
     cohort_ok = _summary_cohort_denominators_resolved(state)
-    findings_reviewed = not error_findings and reviewed_warnings == len(warning_findings)
+    findings_reviewed = not error_count and reviewed_warnings == warning_count
+    reviewer_current = _review_decision_matches_current_findings(review, state)
+    reviewer_status = (
+        _T(lang, "passed", "通过")
+        if reviewer_current else
+        _T(lang, "refresh required", "需重新签字")
+        if review_status in _APPROVED_REVIEW_DECISIONS else
+        _T(lang, "pending", "待确认")
+    )
     findings_status = (
         _T(lang, "error unresolved", "错误未处理")
-        if error_findings else
-        _T(lang, f"{reviewed_warnings}/{len(warning_findings)} reviewed", f"已复核 {reviewed_warnings}/{len(warning_findings)}")
-        if warning_findings else
+        if error_count else
+        _T(lang, f"{reviewed_warnings}/{warning_count} reviewed", f"已复核 {reviewed_warnings}/{warning_count}")
+        if warning_count else
         _T(lang, "passed", "通过")
     )
     return [
@@ -3347,7 +3444,8 @@ def _summary_review_checks(state: dict[str, Any], lang: str) -> list[dict[str, o
         },
         {
             "label": _T(lang, "Reviewer sign-off", "审核者签字"),
-            "ok": review_status in _APPROVED_REVIEW_DECISIONS,
+            "ok": reviewer_current,
+            "status": reviewer_status,
         },
     ]
 
@@ -3395,8 +3493,7 @@ def _output_summary_html(state: dict[str, Any], lang: str) -> str:
     total = len(checks)
     has_blocker = passed < total
     pending_count = max(0, total - passed)
-    pending_labels = [str(check.get("label") or "") for check in checks if check.get("ok") is not True]
-    only_reviewer_pending = pending_count == 1 and any("Reviewer sign-off" in label for label in pending_labels)
+    only_reviewer_pending = pending_count == 1 and bool(checks) and checks[-1].get("ok") is not True
     error_count = int(counts.get("errors") or 0)
     warning_count = int(counts.get("warnings") or 0)
     draft_title = (
@@ -3636,9 +3733,12 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
     if not checks:
         return
     non_reviewer_ready = all(check.get("ok") is True for check in checks[:-1])
-    reviewer_ready = checks[-1].get("ok") is True
+    reviewer_ready = non_reviewer_ready and checks[-1].get("ok") is True
     audit = state.get("audit") if isinstance(state.get("audit"), dict) else {}
     review = audit.get("review_decision") if isinstance(audit.get("review_decision"), dict) else {}
+    review_status = str(review.get("decision") or review.get("status") or "").lower()
+    saved_approval_stale = review_status in _APPROVED_REVIEW_DECISIONS and not reviewer_ready
+    finding_review_state = _finding_review_state_summary(state)
     safe_run = re.sub(r"[^A-Za-z0-9_]+", "_", str(state.get("run_id") or run_dir.name))
     note_key = f"_eu_summary_review_note_{safe_run}"
     default_note = str(review.get("note") or "")
@@ -3655,11 +3755,23 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
         )
         control_tone = "ready"
     elif non_reviewer_ready:
-        control_title = _T(lang, "One reviewer sign-off outstanding", "仍需一位审核者签字")
-        control_detail = _T(
-            lang,
-            "The review decision writes to local review_decision.json and unlocks the draft gate.",
-            "审核决定会写入本地 review_decision.json，并解锁草稿关口。",
+        control_title = (
+            _T(lang, "Reviewer sign-off needs refresh", "审核签字需要刷新")
+            if saved_approval_stale else
+            _T(lang, "One reviewer sign-off outstanding", "仍需一位审核者签字")
+        )
+        control_detail = (
+            _T(
+                lang,
+                "Findings changed after the saved decision. Sign off again to bind the current review state.",
+                "保存签字后 findings 已变化；请重新签字以绑定当前复核状态。",
+            )
+            if saved_approval_stale else
+            _T(
+                lang,
+                "The review decision writes to local review_decision.json and unlocks the draft gate.",
+                "审核决定会写入本地 review_decision.json，并解锁草稿关口。",
+            )
         )
         control_tone = "pending"
     else:
@@ -3714,6 +3826,7 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
                     decision="approved",
                     note=note or _T(lang, "Approved from Summary gate.", "从 Summary gate 签字通过。"),
                     run_id=state.get("run_id"),
+                    finding_review_state=finding_review_state,
                 )
                 _sync_review_decision_to_workbench_state(payload, lang=lang)
                 st.session_state["_active_main_page"] = "research_agent"
@@ -3737,6 +3850,7 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
                     decision="locked",
                     note=note or _T(lang, "Reviewer kept the draft gate locked.", "审核者保持草稿关口锁定。"),
                     run_id=state.get("run_id"),
+                    finding_review_state=finding_review_state,
                 )
                 _sync_review_decision_to_workbench_state(payload, lang=lang)
                 st.session_state["_active_main_page"] = "research_agent"
@@ -5067,6 +5181,7 @@ def render_agent_workbench(lang: str, *, show_header: bool = True) -> None:
     state.setdefault("subtitle_short", "")
     state.setdefault("source_label", _T(lang, "Real manifest", "真实 manifest") if not state.get("is_demo") else _T(lang, "Sample workflow", "示例流程"))
     state["reviewed_finding_ids"] = sorted(_sync_reviewed_findings_to_session(state))
+    state["review_decisions"] = _review_decisions_for_state(state, lang=lang)
     select_key, selected_idx = _resolve_selected_step(state)
     active_state = _state_for_selected_step(state, selected_idx)
 

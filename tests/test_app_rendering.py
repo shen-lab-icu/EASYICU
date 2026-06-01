@@ -6245,19 +6245,28 @@ def test_sidebar_agent_rail_reports_agent_cohort_not_extraction_step(monkeypatch
 
 def test_sidebar_agent_state_uses_reviewed_warning_and_signoff(monkeypatch) -> None:
     finding = {"severity": "warning", "validator": "critic", "message": "Check table 1."}
-    from easyicu.webapp.agent_workbench import _finding_review_id
+    from easyicu.webapp.agent_workbench import _finding_review_id, _finding_review_state_summary
+
+    reviewed_id = _finding_review_id(finding)
+    workbench = {
+        "run_id": "run_20260528T184052_adaf4d",
+        "audit": {
+            "counts": {"warnings": 1},
+            "findings": [finding],
+            "review_decision": {},
+        },
+        "reviewed_finding_ids": [reviewed_id],
+    }
+    finding_state = _finding_review_state_summary(workbench)
+    workbench["audit"]["review_decision"] = {
+        "decision": "approved",
+        "finding_review_signature": finding_state["finding_review_signature"],
+    }
 
     streamlit_stub = _SessionStateStreamlit({
         "mock_params": {"n_patients": 10},
-        "_eu_wb_findings_acked": [_finding_review_id(finding)],
-        "_agent_workbench": {
-            "run_id": "run_20260528T184052_adaf4d",
-            "audit": {
-                "counts": {"warnings": 1},
-                "findings": [finding],
-                "review_decision": {"decision": "approved"},
-            },
-        },
+        "_eu_wb_findings_acked": [reviewed_id],
+        "_agent_workbench": workbench,
     })
     monkeypatch.setattr(sidebar, "st", streamlit_stub)
 

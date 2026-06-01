@@ -1823,6 +1823,14 @@ def test_summary_gate_unlocks_after_saved_reviewer_signoff() -> None:
         "reviewed_finding_ids": reviewed,
         "is_demo": False,
     }
+    finding_state = wb_page._finding_review_state_summary(state)
+    state["audit"]["review_decision"] = {
+        "decision": "approved",
+        "note": "Checked evidence.",
+        "finding_review_signature": finding_state["finding_review_signature"],
+        "reviewable_finding_count": finding_state["reviewable_finding_count"],
+        "reviewed_finding_count": finding_state["reviewed_finding_count"],
+    }
 
     checks = wb_page._summary_review_checks(state, "en")
     html = wb_page._output_summary_html(state, "en")
@@ -1838,6 +1846,53 @@ def test_summary_gate_unlocks_after_saved_reviewer_signoff() -> None:
     assert payload["review_checks"][3]["status"] == "2/2 reviewed"
 
 
+def test_summary_gate_invalidates_saved_signoff_when_findings_change() -> None:
+    old_finding = {"severity": "warning", "validator": "critic", "message": "Check table 1."}
+    new_finding = {"severity": "warning", "validator": "critic", "message": "Check figure canvas."}
+    old_reviewed = [wb_page._finding_review_id(old_finding)]
+    old_state = {
+        "audit": {"findings": [old_finding]},
+        "reviewed_finding_ids": old_reviewed,
+    }
+    old_signature = wb_page._finding_review_state_summary(old_state)["finding_review_signature"]
+    state = {
+        "run_id": "run_stale_signoff",
+        "run_dir": "/tmp/run_stale_signoff",
+        "source_label": "Real manifest",
+        "status": "done",
+        "steps": [{"label": "Cohort summary", "status": "ok"}],
+        "evidence": [{"label": "row", "tag": "table"}],
+        "artifact_counts": {"figures": 1, "tables": 1, "code": 1, "evidence": 1},
+        "audit": {
+            "counts": {"errors": 0, "warnings": 2},
+            "findings": [old_finding, new_finding],
+            "review_decision": {
+                "decision": "approved",
+                "note": "Previous review.",
+                "finding_review_signature": old_signature,
+            },
+        },
+        "reviewed_finding_ids": old_reviewed,
+        "is_demo": False,
+    }
+
+    checks = wb_page._summary_review_checks(state, "en")
+    html = wb_page._output_summary_html(state, "en")
+    validator_check = next(check for check in checks if check["label"] == "Validator findings reviewed")
+    reviewer_check = next(check for check in checks if check["label"] == "Reviewer sign-off")
+    review_decisions = wb_page._review_decisions_for_state(state, lang="en")
+
+    assert validator_check["ok"] is False
+    assert validator_check["status"] == "1/2 reviewed"
+    assert reviewer_check["ok"] is False
+    assert reviewer_check["status"] == "refresh required"
+    assert review_decisions[0]["label"] == "Saved sign-off needs refresh"
+    assert review_decisions[0]["state"] == "warning"
+    assert "2 / 5 checks" not in html
+    assert "2 review checks outstanding" in html
+    assert "eu-summary-action-token disabled\">Draft methods + results" in html
+
+
 def test_summary_review_decision_writer_uses_shared_schema(tmp_path: Path) -> None:
     run_dir = tmp_path / "run_20260530T010101_test"
     payload = wb_page._write_summary_review_decision(
@@ -1845,6 +1900,14 @@ def test_summary_review_decision_writer_uses_shared_schema(tmp_path: Path) -> No
         decision="approved",
         note="Summary gate reviewed.",
         run_id="run_signed_off",
+        finding_review_state={
+            "finding_review_signature": "abc123",
+            "reviewable_finding_count": 2,
+            "reviewed_finding_count": 2,
+            "warning_finding_count": 2,
+            "reviewed_warning_count": 2,
+            "error_finding_count": 0,
+        },
     )
     saved = json.loads((run_dir / "review_decision.json").read_text(encoding="utf-8"))
 
@@ -1854,6 +1917,9 @@ def test_summary_review_decision_writer_uses_shared_schema(tmp_path: Path) -> No
     assert saved["run_id"] == "run_signed_off"
     assert saved["source"] == "easyicu_web_research_agent"
     assert saved["updated_at"]
+    assert saved["finding_review_signature"] == "abc123"
+    assert saved["reviewable_finding_count"] == 2
+    assert saved["reviewed_finding_count"] == 2
 
 
 def test_summary_gate_keeps_error_findings_blocked_even_if_reviewed() -> None:

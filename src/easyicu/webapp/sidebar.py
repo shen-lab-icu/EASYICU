@@ -956,10 +956,16 @@ def _agent_state_summary_html(entry_mode: str, lang: str) -> str:
         try:
             from easyicu.webapp.agent_workbench import (
                 _finding_review_id,
+                _review_decision_matches_current_findings,
                 _reviewable_findings,
             )
 
             reviewed_ids = set(state.get("_eu_wb_findings_acked") or [])
+            review_state = dict(workbench)
+            review_state["reviewed_finding_ids"] = sorted(
+                set(review_state.get("reviewed_finding_ids") or []) | reviewed_ids
+            )
+            reviewer_signed = _review_decision_matches_current_findings(review, review_state)
             warning_findings = [
                 finding
                 for finding in _reviewable_findings(audit)
