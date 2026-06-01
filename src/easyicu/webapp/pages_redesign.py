@@ -1582,7 +1582,6 @@ def render_settings_redesign_page(lang: str) -> None:
         raw_value = str(st.session_state.get(input_key) or fallback_value or "").strip()
         normalized = str(Path(raw_value or fallback_value).expanduser())
         state[state_key] = normalized
-        state[input_key] = normalized
         state[edit_key] = False
         state["_scroll_to_top"] = True
         if state_key == "export_path":
