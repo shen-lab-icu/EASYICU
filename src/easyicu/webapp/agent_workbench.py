@@ -86,6 +86,7 @@ _ACKED_FINDINGS_RUN_KEY = "_eu_wb_findings_acked_run_dir"
 _FINDING_REVIEW_STATE_FILE = "finding_review_state.json"
 _REVIEW_DETAILS_EXPANDED_KEY = "_eu_wb_review_details_expanded"
 _APPROVED_REVIEW_DECISIONS = {"approved", "accept", "accepted", "signed_off", "ready"}
+_FINDING_QUEUE_PREVIEW_LIMIT = 8
 
 
 def _file_fingerprint(path: Path) -> tuple[str, int, int]:
@@ -348,6 +349,19 @@ def _finding_queue_stats(rows: Sequence[dict[str, Any]]) -> dict[str, int]:
         "warnings": sum(1 for row in rows if str(row.get("severity") or "").lower() == "warning"),
         "linked": sum(1 for row in rows if row.get("target_index") is not None),
     }
+
+
+def _visible_finding_queue_rows(
+    rows: Sequence[dict[str, Any]],
+    *,
+    show_all: bool,
+    limit: int = _FINDING_QUEUE_PREVIEW_LIMIT,
+) -> list[dict[str, Any]]:
+    """Limit first-pass rendering while preserving the full audit queue."""
+    items = list(rows)
+    if show_all or len(items) <= limit:
+        return items
+    return items[:max(0, limit)]
 
 
 def _wb_status(raw: object, *, partial: bool = False) -> str:
@@ -4920,8 +4934,33 @@ def _render_audit_actions(state: dict[str, Any], lang: str, select_key: str) -> 
         '</div>',
         unsafe_allow_html=True,
     )
+    show_all = False
+    if total > _FINDING_QUEUE_PREVIEW_LIMIT:
+        show_all = st.checkbox(
+            _T(
+                lang,
+                f"Show all {total} findings",
+                f"显示全部 {total} 条发现",
+            ),
+            value=False,
+            key=f"_eu_wb_finding_show_all_{select_key}_{total}",
+            help=_T(
+                lang,
+                "The first pass shows a compact queue so the Workbench stays responsive.",
+                "默认只显示紧凑队列，避免工作台展开后过慢。",
+            ),
+        )
+        if not show_all:
+            st.caption(
+                _T(
+                    lang,
+                    f"Showing the first {_FINDING_QUEUE_PREVIEW_LIMIT} findings. Turn on Show all to review the remaining {total - _FINDING_QUEUE_PREVIEW_LIMIT}.",
+                    f"当前显示前 {_FINDING_QUEUE_PREVIEW_LIMIT} 条；打开“显示全部”可继续复核剩余 {total - _FINDING_QUEUE_PREVIEW_LIMIT} 条。",
+                )
+            )
+    visible_rows = _visible_finding_queue_rows(rows, show_all=show_all)
     rerun_needed = False
-    for row in rows:
+    for row in visible_rows:
         fid = str(row["review_id"])
         idx = int(row["index"])
         is_acked = bool(row["reviewed"])
