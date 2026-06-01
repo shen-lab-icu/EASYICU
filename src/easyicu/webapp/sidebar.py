@@ -1850,6 +1850,7 @@ def _render_export_completed_panel() -> bool:
         st.session_state.pop('_post_export_guidance_dismissed', None)
         st.session_state.pop('_post_export_navigation_pending', None)
         st.session_state.pop('_post_export_target_panel', None)
+        st.session_state.pop('_export_failure_result', None)
         st.session_state.pop('_export_success_result', None)
         # 🔧 FIX (2026-02-15): 清除 easyicu 内部缓存，避免上次提取的数据影响新提取
         try:
@@ -2523,6 +2524,85 @@ def _export_patient_limit_hint(patient_limit: int, lang: str) -> str:
     )
 
 
+def _render_export_failure_notice(lang: str) -> None:
+    failure = st.session_state.get("_export_failure_result")
+    if not isinstance(failure, dict):
+        return
+
+    title = str(
+        failure.get("title")
+        or ("No data was exported" if lang == "en" else "没有数据被导出")
+    )
+    message = str(
+        failure.get("message")
+        or (
+            "Adjust the selected modules, patient limit, or source path, then retry."
+            if lang == "en" else
+            "请调整模块、患者数量或数据路径后重试。"
+        )
+    )
+    unsupported = list(failure.get("unsupported_concepts") or [])
+    empty = list(failure.get("empty_data_concepts") or [])
+    failed = list(failure.get("failed_concepts") or [])
+    selected_count = int(failure.get("selected_count") or 0)
+
+    stats = [
+        (
+            "Selected" if lang == "en" else "已选",
+            str(selected_count),
+        ),
+        (
+            "No source mapping" if lang == "en" else "无来源映射",
+            str(len(unsupported)),
+        ),
+        (
+            "Empty data" if lang == "en" else "空数据",
+            str(len(empty)),
+        ),
+        (
+            "Failed" if lang == "en" else "失败",
+            str(len(failed)),
+        ),
+    ]
+    stats_html = "".join(
+        '<span>'
+        f'<b>{html.escape(value)}</b>'
+        f'<small>{html.escape(label)}</small>'
+        '</span>'
+        for label, value in stats
+    )
+    st.markdown(
+        '<div class="eu-export-failure-card">'
+        '<div class="glyph">!</div>'
+        '<div>'
+        f'<b>{html.escape(title)}</b>'
+        f'<p>{html.escape(message)}</p>'
+        f'<div class="eu-export-failure-stats">{stats_html}</div>'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    detail_items: list[tuple[str, list[str]]] = [
+        ("Not configured for this database" if lang == "en" else "该数据库未配置", unsupported),
+        ("Returned empty for this cohort" if lang == "en" else "当前队列返回空值", empty),
+        ("Calculation failed" if lang == "en" else "计算失败", failed),
+    ]
+    if any(values for _, values in detail_items):
+        with st.expander(
+            "Show missing concept details" if lang == "en" else "查看缺失概念详情",
+            expanded=False,
+        ):
+            for heading, values in detail_items:
+                if not values:
+                    continue
+                st.markdown(f"**{heading} ({len(values)})**")
+                preview = ", ".join(str(value) for value in values[:40])
+                if len(values) > 40:
+                    preview += f", +{len(values) - 40}"
+                st.caption(preview)
+
+
 def _render_step4_export(selected_concepts: list[str]) -> bool:
     """Render Step 4 and return whether the sidebar should keep rendering."""
     lang = st.session_state.get("language", "en")
@@ -2542,6 +2622,7 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
     cancel_notice = st.session_state.pop("_export_cancel_notice", None)
     if cancel_notice:
         st.warning(str(cancel_notice))
+    _render_export_failure_notice(lang)
 
     # 🔧 FIX (2026-02-05): 检查步骤依赖 - Step3必须先确认（点击确认选择按钮）
     step3_complete = st.session_state.get('step3_confirmed', False) and len(st.session_state.get('selected_concepts', [])) > 0
@@ -2809,6 +2890,7 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
                 disabled=not can_export,
                 icon=":material/check:",
             ):
+                st.session_state.pop("_export_failure_result", None)
                 st.session_state.trigger_export = True
                 st.session_state.export_completed = False
                 st.session_state['_exporting_in_progress'] = True

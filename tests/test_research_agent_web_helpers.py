@@ -215,6 +215,7 @@ def test_raw_extract_handoff_sets_extraction_steps_and_clears_conflict_state(tmp
         "_post_export_target_panel": "Data Tables",
         "_post_export_guidance_dismissed": True,
         "_export_success_result": {"files": []},
+        "_export_failure_result": {"type": "no_data"},
     }
 
     ra_page._queue_raw_extract_handoff(
@@ -254,6 +255,7 @@ def test_raw_extract_handoff_sets_extraction_steps_and_clears_conflict_state(tmp
         "_post_export_target_panel",
         "_post_export_guidance_dismissed",
         "_export_success_result",
+        "_export_failure_result",
     ):
         assert key not in state
     assert state["trigger_export"] is False

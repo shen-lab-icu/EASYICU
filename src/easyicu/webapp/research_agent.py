@@ -5215,6 +5215,7 @@ def _queue_raw_extract_handoff(
         "_post_export_target_panel",
         "_post_export_guidance_dismissed",
         "_export_success_result",
+        "_export_failure_result",
     ):
         state.pop(key, None)
     state["trigger_export"] = False
