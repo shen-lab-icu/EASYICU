@@ -9,6 +9,8 @@ import pandas as pd
 import streamlit as st
 
 _PROTECTED_NAMES = {
+    'SOFA_SEVERITY_BINS',
+    'SOFA_SEVERITY_LABELS',
     'SOFA_RECLASS_ORGANS',
     'SOFA_RECLASS_ANALYSIS_MODES',
     '_generate_mock_sofa_timeseries_concepts',
@@ -50,6 +52,9 @@ SOFA_RECLASS_ORGANS = [
     ('cns', 'Neurological', '神经'),
     ('renal', 'Renal', '肾脏'),
 ]
+
+SOFA_SEVERITY_BINS = (-np.inf, 3, 6, 9, 12, 16, np.inf)
+SOFA_SEVERITY_LABELS = ('0-2', '3-5', '6-8', '9-11', '12-15', '>=16')
 
 SOFA_RECLASS_ANALYSIS_MODES = {
     'worst_icu': {
@@ -250,8 +255,8 @@ def _sofa_severity_group(series: pd.Series) -> pd.Series:
     """Map SOFA scores to compact severity groups used across cohort plots."""
     return pd.cut(
         pd.to_numeric(series, errors='coerce'),
-        bins=[-np.inf, 3, 6, 10, np.inf],
-        labels=['0-2', '3-5', '6-9', '>=10'],
+        bins=SOFA_SEVERITY_BINS,
+        labels=SOFA_SEVERITY_LABELS,
         right=False,
     )
 

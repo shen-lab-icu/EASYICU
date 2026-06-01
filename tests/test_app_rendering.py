@@ -4352,8 +4352,9 @@ def test_build_cohort_dashboard_review_stats_summarizes_clinical_signal() -> Non
     assert stats["metrics"]["median_sofa"] == "5.5"
     assert phenotype.loc[phenotype["label"] == "Sepsis", "pct"].item() == pytest.approx(50.0)
     assert phenotype.loc[phenotype["label"] == "RRT", "count"].item() == 1
-    assert severity.loc[severity["sofa_group"] == "6-9", "mortality"].item() == pytest.approx(100.0)
-    assert severity.loc[severity["sofa_group"] == ">=10", "patients"].item() == 1
+    assert severity["sofa_group"].astype(str).tolist() == list(app.SOFA_SEVERITY_LABELS)
+    assert severity.loc[severity["sofa_group"] == "6-8", "mortality"].item() == pytest.approx(100.0)
+    assert severity.loc[severity["sofa_group"] == "9-11", "patients"].item() == 1
 
 
 def test_build_cohort_dashboard_review_stats_reports_loaded_module_coverage(monkeypatch) -> None:
@@ -4397,8 +4398,9 @@ def test_build_cohort_dashboard_review_stats_uses_loaded_concepts_for_clinical_p
     assert stats["metrics"]["median_sofa"] == "7.0"
     assert phenotype.loc[phenotype["label"] == "AKI", "pct"].item() == pytest.approx(66.7)
     assert phenotype.loc[phenotype["label"] == "Vasopressors", "count"].item() == 1
-    assert severity.loc[severity["sofa_group"] == "6-9", "mortality"].item() == pytest.approx(100.0)
-    assert severity.loc[severity["sofa_group"] == ">=10", "patients"].item() == 1
+    assert severity["sofa_group"].astype(str).tolist() == list(app.SOFA_SEVERITY_LABELS)
+    assert severity.loc[severity["sofa_group"] == "6-8", "mortality"].item() == pytest.approx(100.0)
+    assert severity.loc[severity["sofa_group"] == "9-11", "patients"].item() == 1
 
 
 def test_generate_mock_cohort_dashboard_data_includes_sofa_reclassification_inputs() -> None:
@@ -4412,10 +4414,32 @@ def test_generate_mock_cohort_dashboard_data_includes_sofa_reclassification_inpu
     severity = review["severity"].set_index("sofa_group")
     reclass = review["reclassification"]["summary"].set_index("group")
 
-    assert severity.loc["6-9", "mortality"] > severity.loc["3-5", "mortality"]
-    assert severity.loc[">=10", "mortality"] > severity.loc["6-9", "mortality"]
+    assert list(severity.index.astype(str)) == list(app.SOFA_SEVERITY_LABELS)
+    assert severity.loc["6-8", "mortality"] > severity.loc["3-5", "mortality"]
+    assert severity.loc["12-15", "patients"] > 0
+    assert severity.loc[">=16", "patients"] == 0
+    assert pd.isna(severity.loc[">=16", "mortality"])
     assert reclass.loc["Up-classified", "pct"] == pytest.approx(48.4)
     assert reclass.loc["Up-classified", "mortality"] > reclass.loc["Same", "mortality"]
+
+
+def test_sofa_severity_group_uses_six_clinical_bands() -> None:
+    groups = app._sofa_severity_group(pd.Series([0, 2, 3, 5, 6, 8, 9, 11, 12, 15, 16, 24]))
+
+    assert groups.astype(str).tolist() == [
+        "0-2",
+        "0-2",
+        "3-5",
+        "3-5",
+        "6-8",
+        "6-8",
+        "9-11",
+        "9-11",
+        "12-15",
+        "12-15",
+        ">=16",
+        ">=16",
+    ]
 
 
 def test_build_sofa_reclassification_stats_classifies_patient_level_changes() -> None:
@@ -4443,7 +4467,7 @@ def test_build_sofa_reclassification_stats_classifies_patient_level_changes() ->
     assert summary.loc[summary["group"] == "Down-classified", "patients"].item() == 1
     assert summary.loc[summary["group"] == "Same", "patients"].item() == 1
     assert summary.loc[summary["group"] == "Up-classified", "mortality"].item() == pytest.approx(100.0)
-    assert matrix.loc[(matrix["SOFA-1"] == "6-9") & (matrix["SOFA-2"] == "3-5"), "patients"].item() == 1
+    assert matrix.loc[(matrix["SOFA-1"] == "6-8") & (matrix["SOFA-2"] == "3-5"), "patients"].item() == 1
     assert organ.loc[organ["organ"] == "Respiratory", "mean_abs_delta"].item() == pytest.approx(0.75)
 
 

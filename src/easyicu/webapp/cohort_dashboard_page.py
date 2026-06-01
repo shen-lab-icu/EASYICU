@@ -435,7 +435,7 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                         y=severity_df['mortality'],
                         name="Mortality %" if lang == 'en' else "死亡率 %",
                         mode='lines+markers+text',
-                        text=severity_df['mortality'].map(lambda x: f"{x:.1f}%"),
+                        text=severity_df['mortality'].map(lambda x: "" if pd.isna(x) else f"{x:.1f}%"),
                         textposition='top center',
                         textfont=dict(size=11, color=SHELL_CHART["rose"]),
                         marker=dict(
