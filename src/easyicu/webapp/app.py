@@ -1257,7 +1257,7 @@ def _topbar_primary_action_label(
     label_map = {
         'assistant': ('Open Agent', '打开 Agent'),
         'states': ('Patient Review', '患者审阅'),
-        'quick_viz': ('Render', '渲染'),
+        'quick_viz': ('Prepare review', '准备审阅'),
         'cohort': ('Re-run', '重新运行'),
         'cross_db': ('Run', '运行'),
         'settings': ('Reset to defaults', '恢复默认'),

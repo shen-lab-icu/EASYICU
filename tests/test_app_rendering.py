@@ -5336,6 +5336,13 @@ def test_topbar_crossdb_real_action_opens_loader_when_data_missing() -> None:
     assert "_eu_topbar_run_request" not in state
 
 
+def test_topbar_patient_review_action_copy_describes_loading_review() -> None:
+    assert app._topbar_primary_action_label("quick_viz", "en") == (
+        "Prepare review",
+        "准备审阅",
+    )
+
+
 def test_crossdb_page_defaults_to_summary_with_opt_in_details(monkeypatch) -> None:
     class _FakeStreamlit:
         def __init__(self, session_state) -> None:
@@ -5399,6 +5406,31 @@ def test_crossdb_page_defaults_to_summary_with_opt_in_details(monkeypatch) -> No
     assert streamlit_stub.button_labels == ["Hide detailed distributions"]
     page_source = "\n".join(streamlit_stub.markdown_calls)
     assert "open" in page_source
+
+
+def test_crossdb_detailed_loader_uses_plain_desktop_labels() -> None:
+    loader_source = Path(cohort_multidb_page.__file__).read_text(encoding="utf-8")
+    data_path_source = Path(data_paths.__file__).read_text(encoding="utf-8")
+
+    for stale_label in (
+        "🗂️ ICU Data Root",
+        "🏥 Databases",
+        "👥 Max Patients",
+        "📋 Feature Group",
+        "🔬 Select Features",
+        "🚀 Load & Generate",
+        "MIMIC-IV 🟢",
+        "eICU 🟠",
+        "Amsterdam 🔵",
+        "HiRID 🔴",
+    ):
+        assert stale_label not in loader_source
+    assert '"ICU Data Root" if lang == ' in loader_source
+    assert '"Databases" if lang == ' in loader_source
+    assert '"Load & Generate" if lang == ' in loader_source
+    assert "Tip: you selected" in loader_source
+    assert "Directory Structure Guide" in data_path_source
+    assert "📂 \" + (\"Directory Structure Guide\"" not in data_path_source
 
 
 def test_crossdb_chinese_copy_uses_natural_product_labels(monkeypatch) -> None:
