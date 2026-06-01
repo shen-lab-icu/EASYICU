@@ -3150,6 +3150,33 @@ def _section_cohort_picker(
             and picked_manual_path
             and manual_default
         )
+        if show_handoff_path:
+            handoff_folder_for_note = Path(selected_folder_value).expanduser()
+            handoff_export_labels = _export_result_file_labels_for_folder(
+                st.session_state,
+                handoff_folder_for_note,
+            )
+            handoff_file_copy = (
+                _ra_text(
+                    "post_export_handoff_files",
+                    count=len(handoff_export_labels),
+                )
+                if handoff_export_labels
+                else _ra_text("post_export_handoff_no_files")
+            )
+            st.markdown(
+                f"""
+                <div class="ra-export-handoff">
+                  <div>
+                    <b>{html.escape(_ra_text("post_export_handoff_title"))}</b>
+                    <p>{html.escape(_ra_text("post_export_handoff_body"))}</p>
+                    <span>{html.escape(handoff_file_copy)}</span>
+                  </div>
+                  <code>{html.escape(_ra_text("post_export_handoff_path"))}: {html.escape(str(handoff_folder_for_note))}</code>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         if (
             not handoff_manual_active
             and not picked_manual_path

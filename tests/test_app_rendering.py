@@ -4842,6 +4842,9 @@ def test_post_export_guidance_copy_exposes_visualization_and_agent_actions() -> 
     assert "_eu_ra_apply_export_file_selection" in app_handoff_source
     assert "_eu_ra_apply_export_file_selection" in sidebar_handoff_source
     assert "show_handoff_path" in research_agent_source
+    assert "ra-export-handoff" in research_agent_source
+    assert "post_export_handoff_title" in research_agent_source
+    assert "post_export_handoff_files" in research_agent_source
     assert "_eu_ra_focus_module_folder" in research_agent_source
     assert "_export_result_file_labels_for_folder" in research_agent_source
 
@@ -6306,6 +6309,19 @@ def test_sidebar_agent_rail_reports_agent_cohort_not_extraction_step(monkeypatch
     assert "Cohort" in html
     assert "not selected" in html
     assert "configured" not in html
+
+    streamlit_stub.session_state.update({
+        "loaded_concepts": {"hr": object()},
+        "patient_ids": [1, 2, 3, 4],
+        "research_agent_cohort_source": i18n.TEXTS["en"]["ra_source_module_folder"],
+        "research_agent_module_dir_text": "/tmp/easyicu_export",
+    })
+
+    module_pending_html = sidebar._agent_state_summary_html("real", "en")
+
+    assert "export ready to build" in module_pending_html
+    assert "4 loaded rows" not in module_pending_html
+    assert "not selected" not in module_pending_html
 
     streamlit_stub.session_state["research_agent_module_built"] = {
         "df": pd.DataFrame({"stay_id": [1, 2, 3]}),

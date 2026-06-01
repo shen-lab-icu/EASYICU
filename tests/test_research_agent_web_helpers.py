@@ -726,6 +726,29 @@ def test_module_folder_handoff_anchor_survives_setup_reruns() -> None:
     assert "on_change=_clear_module_folder_handoff_focus" in module_source
 
 
+def test_module_folder_handoff_notice_explains_export_preselection() -> None:
+    source = Path(ra_page.__file__).read_text(encoding="utf-8")
+    module_source = source[
+        source.index('if source == source_module:'):
+        source.index('if source == source_no_data:')
+    ]
+    webapp_dir = Path(ra_page.__file__).parent
+    i18n_source = (webapp_dir / "i18n.py").read_text(encoding="utf-8")
+    css_source = (webapp_dir / "shell_overrides.css").read_text(encoding="utf-8")
+
+    assert "ra-export-handoff" in module_source
+    assert "post_export_handoff_title" in module_source
+    assert "post_export_handoff_body" in module_source
+    assert "post_export_handoff_files" in module_source
+    assert "post_export_handoff_path" in module_source
+    assert "handoff_folder_for_note = Path(selected_folder_value)" in module_source
+    assert "_export_result_file_labels_for_folder(" in module_source
+    assert "_ra_text(\"post_export_handoff_no_files\")" in module_source
+    assert "已接收导出数据" in i18n_source
+    assert "Export handoff received" in i18n_source
+    assert ".ra-export-handoff" in css_source
+
+
 def test_clear_module_folder_handoff_focus_releases_export_file_anchor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

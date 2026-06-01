@@ -12962,6 +12962,64 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   }
 }
 
+.stApp .ra-export-handoff {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  margin: 4px 0 12px;
+  padding: 13px 15px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--hair)) !important;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface)) !important;
+  color: var(--ink) !important;
+}
+.stApp .ra-export-handoff b {
+  display: block;
+  margin: 0 0 4px;
+  color: var(--ink) !important;
+  font-size: 13px;
+  font-weight: 720;
+  line-height: 1.25;
+}
+.stApp .ra-export-handoff p,
+.stApp .ra-export-handoff span {
+  display: block;
+  margin: 0;
+  color: var(--ink-2) !important;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.stApp .ra-export-handoff span {
+  margin-top: 5px;
+  color: var(--accent-strong) !important;
+  font-weight: 650;
+}
+.stApp .ra-export-handoff code {
+  display: block;
+  max-width: 360px;
+  padding: 6px 8px !important;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--hair)) !important;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.65) !important;
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1100px) {
+  .stApp .ra-export-handoff {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .stApp .ra-export-handoff code {
+    max-width: none;
+  }
+}
+
 /* Final contrast guard.
    Streamlit/BaseWeb can re-apply browser/theme code styles inside
    markdown labels, especially checkbox labels rendered inside details
