@@ -222,6 +222,7 @@ footer { display: none !important; }
 .stApp [class*="st-key-step1_confirm_real"] button,
 .stApp [class*="st-key-cohort_builder_reset"] button,
 .stApp [class*="st-key-cohort_builder_save_preset"] button,
+.stApp [class*="st-key-cohort_builder_restore_preset"] button,
 .stApp [class*="st-key-step2_confirm_design"] button,
 .stApp [class*="st-key-concept_reset_design"] button,
 .stApp [class*="st-key-step3_confirm_design"] button {
@@ -7700,10 +7701,21 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 }
 .stApp [class*="st-key-step2_confirm_design"] button,
 .stApp [class*="st-key-cohort_builder_save_preset"] button,
+.stApp [class*="st-key-cohort_builder_restore_preset"] button,
 .stApp [class*="st-key-cohort_builder_reset"] button {
   white-space: nowrap !important;
   min-height: 34px !important;
   height: 34px !important;
+}
+.eu-cohort-preset-status {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.35;
 }
 .stApp [class*="st-key-cohort_disease_card_"] button[kind="primary"],
 .stApp [class*="st-key-cohort_disease_card_"] [data-testid="stBaseButton-primary"] {
