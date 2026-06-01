@@ -451,7 +451,7 @@ def _render_step1_data_source(entry_mode: str) -> None:
             '</div>'
             '<div class="banner-copy">'
             f'<div class="title">{html.escape("Demo mode" if lang == "en" else "演示模式")}</div>'
-            f'<div class="sub">{html.escape("Automatically generates reproducible mock ICU data for tutorials and feature demos. No real database, token, or working directory is used." if lang == "en" else "自动生成可重复的模拟 ICU 数据，用于教程和功能演示。不连接任何真实数据库，token 与工作目录都不会被使用。")}</div>'
+            f'<div class="sub">{html.escape("Use built-in mock ICU data to preview the extraction flow. Adjust the sample size and time window below, then confirm to continue." if lang == "en" else "使用内置模拟 ICU 数据预览提取流程。下方参数只影响本次演示样本，确认后继续设置队列。")}</div>'
             '</div>'
             f'<span class="source-note">{html.escape("Local demo" if lang == "en" else "本机演示")}</span>'
             '</div>',

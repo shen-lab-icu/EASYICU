@@ -170,6 +170,20 @@ def test_step1_source_banner_uses_noninteractive_status_note() -> None:
 
     assert '<span class="source-note">' in source
     assert '"Local demo" if lang == "en" else "本机演示"' in source
+    assert "preview the extraction flow" in source
+    assert "预览提取流程" in source
+    assert "token" not in source[
+        source.index('<div class="eu-source-banner">'):
+        source.index("st.session_state.database = 'mock'")
+    ]
+    assert "工作目录" not in source[
+        source.index('<div class="eu-source-banner">'):
+        source.index("st.session_state.database = 'mock'")
+    ]
+    assert "working directory" not in source[
+        source.index('<div class="eu-source-banner">'):
+        source.index("st.session_state.database = 'mock'")
+    ]
     assert "Learn more" not in source
     assert "了解更多" not in source
     assert ".eu-source-banner .source-note" in css_text
