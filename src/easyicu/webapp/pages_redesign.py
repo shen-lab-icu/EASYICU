@@ -176,6 +176,7 @@ def _route_to_extract_entry_mode(
     state.pop("quick_viz_active_panel", None)
     state.pop("_preview_requested", None)
     state.pop("_viz_import_export_auto_trigger", None)
+    state.pop("_export_failure_result", None)
     state.pop("_scroll_to_tab", None)
     state["_active_main_page"] = "extract"
 

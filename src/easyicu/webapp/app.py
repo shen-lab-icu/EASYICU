@@ -705,6 +705,7 @@ def _switch_extract_entry_mode(state: dict[str, Any], target: str) -> None:
     state.pop('quick_viz_active_panel', None)
     state.pop('_preview_requested', None)
     state.pop('_viz_import_export_auto_trigger', None)
+    state.pop('_export_failure_result', None)
     state.pop('_scroll_to_tab', None)
     state['_active_main_page'] = 'extract'
 
@@ -1003,6 +1004,7 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
         '_post_export_navigation_pending',
         '_post_export_target_panel',
         '_export_cancel_notice',
+        '_export_failure_result',
     ):
         state.pop(key, None)
     state['_post_export_guidance_dismissed'] = True
@@ -3328,6 +3330,7 @@ def _prime_export_completion(export_dir: Path, files: list[str], *, auto_load: b
     st.session_state.export_completed = True
     st.session_state.trigger_export = False
     st.session_state['_exporting_in_progress'] = False
+    st.session_state.pop('_export_failure_result', None)
     st.session_state.last_export_dir = str(export_dir)
     st.session_state.last_export_full_dir = str(export_dir)
     st.session_state.viz_export_path = str(export_dir)

@@ -223,11 +223,55 @@ def _queue_export_cancel(state: Any, *, lang: str = 'en') -> None:
     state['_export_cancelled'] = False
     state['trigger_export'] = False
     state['_exporting_in_progress'] = False
+    state.pop('_export_failure_result', None)
     state.pop('_export_conflict_pending', None)
     state.pop('_scroll_to_tab', None)
     state['_active_main_page'] = 'extract'
     state['_main_nav_widget'] = 'extract'
     state['_export_cancel_notice'] = _export_cancel_message(lang)
+
+
+def _record_no_data_export_failure(
+    state: Any,
+    *,
+    export_dir: Path,
+    selected_concepts: list[str],
+    unsupported_concepts: list[str],
+    empty_concepts: list[str],
+    failed_concepts: list[str],
+    lang: str = 'en',
+) -> dict[str, Any]:
+    """Persist a recoverable Step 4 failure when extraction writes no tables."""
+    title = "No data was exported" if lang == 'en' else "没有数据被导出"
+    message = (
+        "EasyICU finished the extraction attempt, but every selected concept was unavailable, empty, or failed for the current cohort. Adjust the selected modules, patient limit, or source path, then retry."
+        if lang == 'en'
+        else "EasyICU 已完成本次提取尝试，但当前队列下所有已选概念都不可用、为空或计算失败。请调整模块、患者数量或数据路径后重试。"
+    )
+    failure = {
+        'type': 'no_data',
+        'title': title,
+        'message': message,
+        'export_dir': str(export_dir),
+        'selected_count': len(selected_concepts or []),
+        'unsupported_concepts': list(unsupported_concepts or []),
+        'empty_data_concepts': list(empty_concepts or []),
+        'failed_concepts': list(failed_concepts or []),
+    }
+    state['_export_failure_result'] = failure
+    state['export_completed'] = False
+    state['trigger_export'] = False
+    state['_exporting_in_progress'] = False
+    state.pop('_export_success_result', None)
+    state.pop('_viz_auto_load_export', None)
+    state.pop('_post_export_navigation_pending', None)
+    state.pop('_post_export_target_panel', None)
+    state.pop('_post_export_guidance_dismissed', None)
+    state.pop('_scroll_to_tab', None)
+    state['_active_main_page'] = 'extract'
+    state['_main_nav_widget'] = 'extract'
+    state['_scroll_to_top'] = True
+    return failure
 
 
 def _install_app_context(app_context: dict[str, Any]) -> None:
@@ -2272,9 +2316,16 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
             st.session_state['_export_success_result']['manifest_files'] = manifest_paths
             st.rerun()  # 🆕 立即刷新页面，让 Step 4 变为 DONE
         else:
-            st.session_state['_exporting_in_progress'] = False  # 🆕 清除导出进行中标记
-            no_data_msg = "⚠️ No data was exported" if lang == 'en' else "⚠️ 没有数据被导出"
-            st.warning(no_data_msg)
+            _record_no_data_export_failure(
+                st.session_state,
+                export_dir=export_dir,
+                selected_concepts=selected_concepts,
+                unsupported_concepts=unsupported_concepts,
+                empty_concepts=empty_concepts,
+                failed_concepts=failed_concepts,
+                lang=lang,
+            )
+            st.rerun()
 
     except Exception as e:
         st.session_state['_exporting_in_progress'] = False  # 🆕 清除导出进行中标记

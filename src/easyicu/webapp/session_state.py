@@ -130,6 +130,7 @@ RUN_STATE_KEYS = {
     "trigger_export",
     "export_completed",
     "_exporting_in_progress",
+    "_export_failure_result",
     "_preview_requested",
     "_viz_import_export_auto_trigger",
     "_viz_notices",

@@ -4514,6 +4514,7 @@ def test_real_entry_cta_resets_demo_progress_and_database() -> None:
         "selected_patient": 10001,
         "selected_concepts": ["hr"],
         "quick_viz_active_panel": "Time Series",
+        "_export_failure_result": {"type": "no_data"},
         "_active_main_page": "quick_viz",
     }
 
@@ -4537,6 +4538,7 @@ def test_real_entry_cta_resets_demo_progress_and_database() -> None:
     assert state["selected_patient"] is None
     assert state["selected_concepts"] == []
     assert "quick_viz_active_panel" not in state
+    assert "_export_failure_result" not in state
     assert state["_active_main_page"] == "extract"
 
 
@@ -4599,6 +4601,7 @@ def test_extract_workflow_helpers_keep_state_consistent() -> None:
     assert "scrollEasyICUToTop" in source
     assert "[0, 80, 240, 600, 1200]" in source
 
+    state["_export_failure_result"] = {"type": "no_data"}
     app._switch_extract_entry_mode(state, "real")
     assert state["entry_mode"] == "real"
     assert state["use_mock_data"] is False
@@ -4609,6 +4612,7 @@ def test_extract_workflow_helpers_keep_state_consistent() -> None:
     assert state["loaded_concepts"] == {}
     assert state["loaded_data_origin"] == "none"
     assert state["patient_ids"] == []
+    assert "_export_failure_result" not in state
     assert state["_active_main_page"] == "extract"
 
     app._switch_extract_entry_mode(state, "demo")
@@ -4621,6 +4625,7 @@ def test_export_completion_routes_to_visualization_data_tables(monkeypatch, tmp_
     state = _AttrSessionState({
         "viz_max_patients": 10,
         "_post_export_guidance_dismissed": True,
+        "_export_failure_result": {"type": "no_data"},
     })
     monkeypatch.setattr(app, "st", _SessionStateStreamlit(state))
     exported_files = [
@@ -4635,6 +4640,7 @@ def test_export_completion_routes_to_visualization_data_tables(monkeypatch, tmp_
     assert state["_exporting_in_progress"] is False
     assert state["last_export_dir"] == str(tmp_path)
     assert state["viz_export_path"] == str(tmp_path)
+    assert "_export_failure_result" not in state
     assert state["viz_data_source_mode"] == "exported"
     assert state["_prefer_exported_viz"] is True
     assert state["_active_main_page"] == "quick_viz"
@@ -4810,6 +4816,49 @@ def test_export_cancel_queue_keeps_user_on_extraction_page() -> None:
     assert state["_active_main_page"] == "extract"
     assert state["_main_nav_widget"] == "extract"
     assert state["_export_cancel_notice"] == "Export stopped by user."
+
+
+def test_no_data_export_failure_returns_to_recoverable_step4(tmp_path) -> None:
+    state = _AttrSessionState({
+        "export_completed": True,
+        "trigger_export": True,
+        "_exporting_in_progress": True,
+        "_export_success_result": {"files": [str(tmp_path / "old.parquet")]},
+        "_viz_auto_load_export": {"path": "/tmp/old"},
+        "_post_export_navigation_pending": True,
+        "_post_export_target_panel": "Data Tables",
+        "_post_export_guidance_dismissed": False,
+        "_scroll_to_tab": "export_progress",
+        "_active_main_page": "quick_viz",
+    })
+
+    failure = export_workflow._record_no_data_export_failure(
+        state,
+        export_dir=tmp_path,
+        selected_concepts=["vent_start", "age", "death"],
+        unsupported_concepts=["vent_start"],
+        empty_concepts=["age"],
+        failed_concepts=["death"],
+        lang="en",
+    )
+
+    assert failure["type"] == "no_data"
+    assert failure["selected_count"] == 3
+    assert state["export_completed"] is False
+    assert state["trigger_export"] is False
+    assert state["_exporting_in_progress"] is False
+    assert state["_active_main_page"] == "extract"
+    assert state["_main_nav_widget"] == "extract"
+    assert state["_scroll_to_top"] is True
+    assert "_export_success_result" not in state
+    assert "_viz_auto_load_export" not in state
+    assert "_post_export_navigation_pending" not in state
+    assert "_post_export_target_panel" not in state
+    assert "_post_export_guidance_dismissed" not in state
+    assert "_scroll_to_tab" not in state
+    assert state["_export_failure_result"]["unsupported_concepts"] == ["vent_start"]
+    assert state["_export_failure_result"]["empty_data_concepts"] == ["age"]
+    assert state["_export_failure_result"]["failed_concepts"] == ["death"]
 
 
 def test_completed_export_restart_resets_all_extraction_steps() -> None:
