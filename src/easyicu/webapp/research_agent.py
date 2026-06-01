@@ -318,16 +318,30 @@ def _detect_id_columns(columns: Sequence[str]) -> List[str]:
     return found
 
 
+_MODULE_TABLE_EXTS = {".parquet", ".pq", ".csv", ".tsv", ".xlsx", ".xls", ".feather"}
+
+
+def _is_module_table_file(path: Path) -> bool:
+    return path.is_file() and path.suffix.lower() in _MODULE_TABLE_EXTS
+
+
+def _module_file_sort_key(path: Path, folder: Path) -> str:
+    try:
+        return str(path.relative_to(folder))
+    except Exception:
+        return str(path)
+
+
 def _scan_workspace_for_module_dirs(roots: List[Path]) -> List[Path]:
-    """Return candidate EasyICU export folders containing parquet modules."""
+    """Return candidate EasyICU export folders containing module table files."""
     out: List[Path] = []
     seen: Set[Path] = set()
 
-    def _has_parquet(folder: Path) -> bool:
+    def _has_module_files(folder: Path) -> bool:
         try:
-            if any(folder.glob("*.parquet")):
+            if any(_is_module_table_file(p) for p in folder.iterdir()):
                 return True
-            return any(folder.glob("*/*.parquet"))
+            return any(_is_module_table_file(p) for p in folder.glob("*/*"))
         except Exception:
             return False
 
@@ -340,7 +354,7 @@ def _scan_workspace_for_module_dirs(roots: List[Path]) -> List[Path]:
             resolved in seen
             or not resolved.is_dir()
             or _is_agent_run_artifact_dir(resolved)
-            or not _has_parquet(resolved)
+            or not _has_module_files(resolved)
         ):
             return
         seen.add(resolved)
@@ -366,7 +380,7 @@ def _scan_workspace_for_module_dirs(roots: List[Path]) -> List[Path]:
                     child.is_dir()
                     and child.name not in _KNOWN_MODULE_DIR_NAMES
                     and not _is_agent_run_artifact_dir(child)
-                    and _has_parquet(child)
+                    and _has_module_files(child)
                 ):
                     child_export_dirs.append(child)
         except Exception:
@@ -374,7 +388,7 @@ def _scan_workspace_for_module_dirs(roots: List[Path]) -> List[Path]:
         if child_export_dirs:
             for child in child_export_dirs:
                 _add(child)
-            if any(root.glob("*.parquet")):
+            if any(_is_module_table_file(p) for p in root.iterdir()):
                 _add(root)
         else:
             _add(root)
@@ -383,15 +397,12 @@ def _scan_workspace_for_module_dirs(roots: List[Path]) -> List[Path]:
 
 def _list_module_parquets(folder: Path) -> List[Path]:
     try:
-        direct = [p.resolve() for p in folder.glob("*.parquet") if p.is_file()]
+        direct = [p.resolve() for p in folder.iterdir() if _is_module_table_file(p)]
         if direct:
-            return sorted(
-                direct,
-                key=lambda p: str(p.relative_to(folder)) if p.is_relative_to(folder) else str(p),
-            )
+            return sorted(direct, key=lambda p: _module_file_sort_key(p, folder))
         return sorted(
-            (p.resolve() for p in folder.rglob("*.parquet") if p.is_file()),
-            key=lambda p: str(p.relative_to(folder)) if p.is_relative_to(folder) else str(p),
+            (p.resolve() for p in folder.rglob("*") if _is_module_table_file(p)),
+            key=lambda p: _module_file_sort_key(p, folder),
         )
     except Exception:
         return []
@@ -420,7 +431,7 @@ def _export_result_file_labels_for_folder(
             path = Path(str(raw_path)).expanduser().resolve()
         except Exception:
             path = Path(str(raw_path))
-        if path.suffix.lower() != ".parquet":
+        if path.suffix.lower() not in _MODULE_TABLE_EXTS:
             continue
         try:
             label = str(path.relative_to(folder_resolved))
@@ -437,12 +448,12 @@ def _export_result_file_labels_for_folder(
 
 
 def _module_dir_parquet_count(folder: Path) -> int:
-    """Count immediate parquet modules for ranking detected export folders."""
+    """Count immediate module tables for ranking detected export folders."""
     try:
-        direct = [p for p in folder.glob("*.parquet") if p.is_file()]
+        direct = [p for p in folder.iterdir() if _is_module_table_file(p)]
         if direct:
             return len(direct)
-        return len([p for p in folder.rglob("*.parquet") if p.is_file()])
+        return len([p for p in folder.rglob("*") if _is_module_table_file(p)])
     except Exception:
         return 0
 
@@ -522,7 +533,7 @@ def _default_module_dir_pick_index(options: Sequence[str], dirs: Sequence[Path])
 
     ``options`` includes the manual-path sentinel at index 0. The Research
     Agent needs broad context, so the first automatic choice should be the
-    detected folder with the most parquet modules, not whichever sibling sorts
+    detected folder with the most module files, not whichever sibling sorts
     first alphabetically.
     """
     if not dirs or len(options) <= 1:
@@ -539,26 +550,81 @@ def _default_module_dir_pick_index(options: Sequence[str], dirs: Sequence[Path])
     return best_dir_idx + 1
 
 
+def _read_module_table(
+    path: Path,
+    columns: Optional[Sequence[str]] = None,
+    *,
+    nrows: Optional[int] = None,
+) -> pd.DataFrame:
+    suffix = path.suffix.lower()
+    cols = list(dict.fromkeys(str(c) for c in columns if c)) if columns else None
+    if suffix in {".parquet", ".pq"}:
+        if cols:
+            try:
+                df = pd.read_parquet(path, columns=cols)
+            except Exception:
+                df = pd.read_parquet(path)
+                keep = [c for c in cols if c in df.columns]
+                df = df[keep].copy() if keep else df
+        else:
+            df = pd.read_parquet(path)
+        return df.head(nrows) if nrows is not None else df
+    if suffix == ".feather":
+        df = pd.read_feather(path)
+    elif suffix == ".tsv":
+        read_kwargs: Dict[str, Any] = {"sep": "\t"}
+        if nrows is not None:
+            read_kwargs["nrows"] = nrows
+        if cols:
+            read_kwargs["usecols"] = lambda c: str(c) in set(cols)
+        try:
+            return pd.read_csv(path, **read_kwargs)
+        except Exception:
+            df = pd.read_csv(path, sep="\t")
+    elif suffix in {".xlsx", ".xls"}:
+        df = pd.read_excel(path, nrows=nrows)
+    else:
+        read_kwargs = {}
+        if nrows is not None:
+            read_kwargs["nrows"] = nrows
+        if cols:
+            read_kwargs["usecols"] = lambda c: str(c) in set(cols)
+        try:
+            return pd.read_csv(path, **read_kwargs)
+        except Exception:
+            df = pd.read_csv(path)
+    if cols:
+        keep = [c for c in cols if c in df.columns]
+        df = df[keep].copy() if keep else df
+    return df.head(nrows) if nrows is not None else df
+
+
 def _parquet_file_summary(path: Path) -> Dict[str, Any]:
-    """Small metadata summary without loading the whole parquet when possible."""
+    """Small metadata summary for supported module table files."""
     rows: Optional[int] = None
     columns: List[str] = []
     error: Optional[str] = None
-    try:
-        import pyarrow.parquet as pq  # type: ignore
-
-        pf = pq.ParquetFile(path)
-        rows = int(pf.metadata.num_rows) if pf.metadata is not None else None
-        columns = [str(c) for c in pf.schema_arrow.names]
-    except Exception as exc:
+    if path.suffix.lower() in {".parquet", ".pq"}:
         try:
-            df = pd.read_parquet(path)
-            rows = int(len(df))
+            import pyarrow.parquet as pq  # type: ignore
+
+            pf = pq.ParquetFile(path)
+            rows = int(pf.metadata.num_rows) if pf.metadata is not None else None
+            columns = [str(c) for c in pf.schema_arrow.names]
+        except Exception as exc:
+            try:
+                df = pd.read_parquet(path)
+                rows = int(len(df))
+                columns = [str(c) for c in df.columns]
+            except Exception as read_exc:
+                error = f"{type(read_exc).__name__}: {read_exc}" or f"{type(exc).__name__}: {exc}"
+    else:
+        try:
+            df = _read_module_table(path, nrows=0)
+            rows = None
             columns = [str(c) for c in df.columns]
         except Exception as read_exc:
             error = f"{type(read_exc).__name__}: {read_exc}"
-            if not error:
-                error = f"{type(exc).__name__}: {exc}"
     return {
         "path": path,
         "rows": rows,
@@ -569,15 +635,7 @@ def _parquet_file_summary(path: Path) -> Dict[str, Any]:
 
 
 def _read_parquet_columns(path: Path, columns: Optional[Sequence[str]] = None) -> pd.DataFrame:
-    if columns:
-        cols = list(dict.fromkeys(str(c) for c in columns if c))
-        try:
-            return pd.read_parquet(path, columns=cols)
-        except Exception:
-            df = pd.read_parquet(path)
-            keep = [c for c in cols if c in df.columns]
-            return df[keep].copy() if keep else df
-    return pd.read_parquet(path)
+    return _read_module_table(path, columns=columns)
 
 
 def _safe_column_prefix(path: Path, folder: Path) -> str:
@@ -706,7 +764,7 @@ def _read_module_file(
     used_columns: Set[str],
     canonical_time: str = "charttime",
 ) -> Optional[Tuple[pd.DataFrame, bool]]:
-    """Read one module parquet and return ``(df, is_temporal)``.
+    """Read one module table file and return ``(df, is_temporal)``.
 
     * **Temporal** files have at least one time column.  The first detected
       time column is renamed to *canonical_time* so all temporal files share
@@ -716,7 +774,7 @@ def _read_module_file(
 
     Returns ``None`` when the file cannot yield usable columns.
     """
-    df = pd.read_parquet(path)
+    df = _read_module_table(path)
     if df.empty:
         return None
 
@@ -796,7 +854,7 @@ def _build_stay_level_from_module_folder(
     filter_spec: Optional[Tuple[Path, str, str, str]] = None,
     join_how: str = "outer",
 ) -> pd.DataFrame:
-    """Merge selected module parquet files into a single cohort dataframe.
+    """Merge selected module table files into a single cohort dataframe.
 
     Merging strategy:
     * **Temporal files** (contain a time column such as ``charttime``,
@@ -2867,9 +2925,9 @@ def _section_cohort_picker(
     source_multi_db = _ra_text("source_multi_db")
     source_synthetic = _ra_text("source_synthetic")
 
-    # 2026-05 Phase G: removed `source_workspace` (pick a parquet from
+    # 2026-05 Phase G: removed `source_workspace` (pick a single file from
     # workspace) — it was a strict subset of `source_module` (pick a
-    # folder, then pick a parquet inside it). Added `source_multi_db` to
+    # folder, then pick module files inside it). Added `source_multi_db` to
     # surface the cross-database cohort builder that the experiment_spec
     # already supports via cross_database_validation.
     options: List[str] = []
