@@ -2675,6 +2675,18 @@ def test_quick_viz_data_table_overlap_guards_are_in_shell_css() -> None:
     assert "st-key-dt_preview_summary" in css
 
 
+def test_patient_feature_snapshot_caption_keeps_bottom_buffer() -> None:
+    css = shell_styles._load_shell_overrides_css()
+    caption_block = re.search(
+        r"\.stApp \.patient-feature-snapshot-caption \{(?P<body>.*?)\n\}",
+        css,
+        re.S,
+    )
+
+    assert caption_block is not None
+    assert "margin: 8px 0 32px !important" in caption_block.group("body")
+
+
 def test_quick_viz_loader_header_stacks_on_mobile() -> None:
     css = shell_styles._load_shell_overrides_css()
 
@@ -3245,7 +3257,7 @@ def test_quick_viz_export_recovery_finds_recent_export_folders(tmp_path) -> None
     quick_visualization_page._apply_quick_viz_export_candidate(state, str(recent_child))
     assert state["viz_export_path"] == str(recent_child)
     assert state["viz_export_path_input"] == str(recent_child)
-    assert state["viz_data_source_mode"] == "exported"
+    assert "viz_data_source_mode" not in state
 
 
 def test_quick_viz_loader_surfaces_export_path_recovery_controls() -> None:
@@ -5403,6 +5415,47 @@ def test_cohort_redesign_real_unconfigured_does_not_show_demo_denominators(monke
     assert "demo concept set" not in page_source
     assert "250 stays" not in page_source
     assert "Sepsis vs Non-sepsis" not in page_source
+
+
+def test_cohort_redesign_real_loaded_export_uses_patient_ids_for_readiness(monkeypatch) -> None:
+    class _FakeStreamlit:
+        def __init__(self) -> None:
+            self.session_state = {
+                "entry_mode": "real",
+                "cohort_active_panel": "coverage",
+                "patient_ids": [10001, 10002, 10003],
+                "loaded_concepts": {
+                    "hr": pd.DataFrame({"stay_id": [10001, 10002, 10003]}),
+                    "map": pd.DataFrame({"stay_id": [10001, 10002, 10003]}),
+                },
+            }
+            self.markdown_calls: list[str] = []
+
+        def markdown(self, body, *_args, **_kwargs) -> None:
+            self.markdown_calls.append(str(body))
+
+        def radio(self, _label, *, options, key, format_func=None, **_kwargs):
+            assert options == ["groups", "coverage", "snapshot", "sofa"]
+            return self.session_state[key]
+
+    streamlit_stub = _FakeStreamlit()
+    rendered: list[str] = []
+    monkeypatch.setattr(cohort_redesign, "st", streamlit_stub)
+
+    cohort_redesign.render_cohort_redesign_page(
+        "en",
+        group_fn=lambda _lang: rendered.append("groups"),
+        coverage_fn=lambda _lang: rendered.append("coverage"),
+        snapshot_fn=lambda _lang: rendered.append("snapshot"),
+        sofa_fn=lambda _lang: rendered.append("sofa"),
+    )
+
+    page_source = "\n".join(streamlit_stub.markdown_calls)
+    assert rendered == ["coverage"]
+    assert "3 stays · 2 concepts" in page_source
+    assert "coverage + denominators ready" in page_source
+    assert "ready for cohort review" in page_source
+    assert "0 stays" not in page_source
 
 
 def test_cohort_redesign_shell_only_keeps_design_preview_available(monkeypatch) -> None:

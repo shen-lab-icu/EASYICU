@@ -131,7 +131,6 @@ def _apply_quick_viz_export_candidate(state: dict[str, Any], path: str) -> None:
     """Fill the exported-data path controls from a recovered candidate."""
     state["viz_export_path"] = path
     state["viz_export_path_input"] = path
-    state["viz_data_source_mode"] = "exported"
     state["_prefer_exported_viz"] = False
 
 

@@ -72,6 +72,17 @@ def _has_bound_cohort_context() -> bool:
     return isinstance(loaded_concepts, dict) and bool(loaded_concepts)
 
 
+def _patient_count_from_state() -> int:
+    """Best-effort stay count for loaded review workspaces without demographics."""
+    patient_ids = st.session_state.get("patient_ids")
+    if isinstance(patient_ids, (list, tuple, set)):
+        return len(patient_ids)
+    try:
+        return len(patient_ids) if patient_ids is not None else 0
+    except TypeError:
+        return 0
+
+
 def _cohort_page_title(lang: str) -> tuple[str, str]:
     if st.session_state.get("entry_mode") != "demo" and not _has_bound_cohort_context():
         return _T(lang, "Cohort statistics", "队列统计"), _T(lang, "队列统计", "队列统计")
@@ -126,14 +137,17 @@ def _render_cohort_readiness_strip(lang: str) -> None:
     input_tone = "ok"
     evidence_tone = "ok"
     df = _demographics_df()
+    state_patient_count = _patient_count_from_state()
     if df is not None:
         patient_count = len(df)
+    elif state_patient_count > 0:
+        patient_count = state_patient_count
     elif st.session_state.get("entry_mode") == "demo":
         patient_count = _demo_mock_params_n()
     else:
         patient_count = 0
     concept_count = len(loaded_concepts) if loaded_concepts else 0
-    if st.session_state.get("entry_mode") != "demo" and patient_count == 0 and concept_count == 0:
+    if st.session_state.get("entry_mode") != "demo" and (patient_count == 0 or concept_count == 0):
         input_body = _T(lang, "waiting for local cohort", "等待本地队列")
         evidence_body = _T(lang, "load data for denominators", "加载数据后确认分母")
         review_body = _T(lang, "review unlocks after data load", "加载数据后进入复核")

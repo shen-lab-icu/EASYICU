@@ -11508,7 +11508,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 .stApp .patient-feature-snapshot-caption {
   display: block !important;
   clear: both !important;
-  margin: 8px 0 0 !important;
+  margin: 8px 0 32px !important;
   color: var(--ink-4) !important;
   font-size: 12px !important;
   line-height: 1.45 !important;
