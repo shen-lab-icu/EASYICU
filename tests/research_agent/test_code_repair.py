@@ -22,8 +22,6 @@ Pure / IO-free entries from ``pipeline.py``'s import list:
 * ``_extract_missing_index_columns``
 * ``_strip_columns_from_list_literals``
 * ``_patch_json_dump_numpy_key_sanitizer``
-* ``_generic_clustering_fallback_code``
-* ``_infer_generic_v15_fallback_key``
 
 The two heavier symbols (``_deterministic_runner_repair`` and
 ``_deterministic_summary_repair``) read/write run directories and are
@@ -42,8 +40,6 @@ from easyicu.research_agent.code_repair import (
     _NAME_ERROR_HELPER_RE,
     _deterministic_runner_repair,
     _extract_missing_index_columns,
-    _generic_clustering_fallback_code,
-    _infer_generic_v15_fallback_key,
     _patch_json_dump_numpy_key_sanitizer,
     _strip_columns_from_list_literals,
 )
@@ -168,93 +164,6 @@ class TestPatchJsonDumpNumpyKeySanitizer:
         code = "import json\njson.dumps({'k': 1})"
         patched = _patch_json_dump_numpy_key_sanitizer(code)
         ast.parse(patched)
-
-
-# ---------------------------------------------------------------------------
-# _generic_clustering_fallback_code
-# ---------------------------------------------------------------------------
-
-
-def test_generic_clustering_fallback_returns_executable_python():
-    code = _generic_clustering_fallback_code()
-    assert isinstance(code, str) and code.strip()
-    # If the template ever becomes un-parseable Python, the runner will
-    # silently emit a broken fallback step. Pin parseability here.
-    ast.parse(code)
-
-
-def test_generic_clustering_fallback_reads_runner_contract_env_vars():
-    """The fallback template depends on the runner's env-var contract.
-
-    ``STEP_OUT_DIR`` and ``COHORT_PARQUET`` are set by the runner; if
-    either is renamed without updating this template, the fallback
-    silently crashes when invoked. Lock the contract in a test.
-    """
-    code = _generic_clustering_fallback_code()
-    assert 'os.environ["STEP_OUT_DIR"]' in code
-    assert 'os.environ["COHORT_PARQUET"]' in code
-
-
-# ---------------------------------------------------------------------------
-# _infer_generic_v15_fallback_key
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "haystack, expected",
-    [
-        ("cluster_labels = ...", "clustering"),
-        ("trajectory_clustering pipeline", "clustering"),
-        ("聚类分析输出", "clustering"),
-        ("t14_creatinine_trajectory_kdigo step", "creatinine"),
-        ("t05_kdigo_renal_sensitivity audit", "kdigo"),
-        ("t04_lactate_mortality_association run", "lactate"),
-        ("t03_severity_score_correlation summary", "severity_correlation"),
-        ("t13_admission_vital_summary export", "vitals"),
-        ("t01_table_one_descriptive draft", "table_one"),
-        ("lactate_max_24h scatter", "lactate"),
-        ("plain code with no markers", None),
-    ],
-)
-def test_infer_generic_v15_fallback_key_dispatches_by_marker(
-    haystack: str, expected
-):
-    assert _infer_generic_v15_fallback_key(haystack) == expected
-
-
-def test_infer_generic_v15_fallback_key_skips_norepi_task():
-    # Documented: norepi tasks must NOT route to the generic fallback,
-    # because they have task-specific logic the generic version would skip.
-    assert (
-        _infer_generic_v15_fallback_key(
-            "norepi_equiv_max_24h column present", ""
-        )
-        is None
-    )
-    assert (
-        _infer_generic_v15_fallback_key(
-            "step t15_norepinephrine_dose_response", ""
-        )
-        is None
-    )
-
-
-def test_infer_generic_v15_fallback_key_skips_prediction_tasks():
-    # When ≥2 prediction-style markers appear, the dispatcher bows out
-    # so prediction scripts don't get rerouted as association/cluster runs.
-    code = "stratifiedkfold cv with roc_auc_score and calibration"
-    assert _infer_generic_v15_fallback_key(code, "") is None
-
-
-def test_infer_generic_v15_fallback_key_uses_diagnostic_text_too():
-    # The function combines code + diagnostic_text; either source can
-    # supply the marker that triggers a dispatch decision.
-    assert (
-        _infer_generic_v15_fallback_key(
-            code="", diagnostic_text="cluster_mortality outputs missing"
-        )
-        == "clustering"
-    )
 
 
 def test_runner_repair_does_not_trigger_case_fallbacks_by_default():

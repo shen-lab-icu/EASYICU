@@ -25,8 +25,7 @@ Hook surface (all optional, all may return ``None``)
 ``column_aliases()``
     Map of canonical concept name → accepted column-name aliases the
     plugin understands. The pipeline merges these into its column
-    detection layer (currently a hardcoded list in
-    ``_generic_clustering_fallback_code``).
+    detection layer.
 
 ``v15_task_template(task_key)``
     Inline Python template for one of the v15 task families
