@@ -2515,7 +2515,11 @@ def _render_step3_concept_selection(concept_groups: dict[str, list[str]]) -> lis
                 for cidx, concept in enumerate(group_concepts):
                     with cols[cidx % 3]:
                         default_val = st.session_state.concept_checkboxes.get(concept, True)
-                        checked = st.checkbox(concept, value=default_val, key=f"cb_{key_hash}_{concept}")
+                        checked = _render_concept_checkbox_row(
+                            concept,
+                            value=default_val,
+                            key=f"cb_{key_hash}_{concept}",
+                        )
                         st.session_state.concept_checkboxes[concept] = checked
                 st.markdown("---")
 
@@ -3971,6 +3975,24 @@ def _render_concept_summary(lang: str, concept_groups: dict[str, list[str]], sel
     )
 
 
+def _render_concept_checkbox_row(concept: str, *, value: bool, key: str) -> bool:
+    """Render a concept checkbox with a separate readable visible label."""
+    cb_col, label_col = st.columns([0.16, 0.84], gap="small")
+    with cb_col:
+        checked = st.checkbox(
+            concept,
+            value=value,
+            key=key,
+            label_visibility="collapsed",
+        )
+    with label_col:
+        st.markdown(
+            f'<div class="eu-concept-checkbox-text">{html.escape(concept)}</div>',
+            unsafe_allow_html=True,
+        )
+    return checked
+
+
 def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]]) -> list[str] | None:
     """Render Step 3 as the concept-selection artboard."""
     lang = st.session_state.get("language", "en")
@@ -4120,7 +4142,11 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
                     for cidx, concept in enumerate(concept_groups.get(group_name, [])):
                         with cols[cidx % 3]:
                             default_val = st.session_state.concept_checkboxes.get(concept, True)
-                            checked = st.checkbox(concept, value=default_val, key=f"cb_design_{key_hash}_{concept}")
+                            checked = _render_concept_checkbox_row(
+                                concept,
+                                value=default_val,
+                                key=f"cb_design_{key_hash}_{concept}",
+                            )
                             st.session_state.concept_checkboxes[concept] = checked
 
         selected_concepts = _collect_selected_concepts(concept_groups)

@@ -300,6 +300,7 @@ def test_concept_selected_feature_chips_stay_readable() -> None:
 
 def test_concept_checkbox_and_selection_states_do_not_use_black_token_fills() -> None:
     css_text = shell_styles._load_shell_overrides_css()
+    sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
 
     checkbox_code_block = re.search(
         r"\.stApp label\[data-baseweb=\"checkbox\"\] code,\n"
@@ -347,9 +348,21 @@ def test_concept_checkbox_and_selection_states_do_not_use_black_token_fills() ->
     assert ".stApp [data-testid=\"stExpanderDetails\"] *::selection" in final_guard_css
     assert ".stApp details .stCheckbox *::selection" in final_guard_css
     assert ".stApp [data-testid=\"stExpanderDetails\"] *::-moz-selection" in final_guard_css
+    assert ".stApp ::selection" in final_guard_css
+    assert ".stApp *::selection" in final_guard_css
+    assert ".stApp ::-moz-selection" in final_guard_css
+    assert ".stApp *::-moz-selection" in final_guard_css
+    assert ".stApp .eu-concept-checkbox-text" in css_text
+    assert ".stApp .eu-concept-checkbox-text::selection" in css_text
+    assert "user-select: text;" in css_text
     assert "background: #DDF1F3 !important" in final_guard_css
     assert "-webkit-text-fill-color: #0F1A23 !important" in final_guard_css
     assert "text-shadow: none !important" in final_guard_css
+    assert "def _render_concept_checkbox_row" in sidebar_text
+    assert 'label_visibility="collapsed"' in sidebar_text
+    assert 'f\'<div class="eu-concept-checkbox-text">{html.escape(concept)}</div>\'' in sidebar_text
+    assert 'checked = st.checkbox(concept, value=default_val, key=f"cb_{key_hash}_{concept}")' not in sidebar_text
+    assert 'checked = st.checkbox(concept, value=default_val, key=f"cb_design_{key_hash}_{concept}")' not in sidebar_text
     assert 'label[data-baseweb="checkbox"]:has(input[aria-checked="true"]) > div:first-child' not in css_text
     assert '.stApp label[data-baseweb="checkbox"] span' in css_text
     assert "background: #eef6f7" in cohort_chip_block.group("body")
@@ -7842,6 +7855,11 @@ def test_dataframe_toolbar_is_kept_inside_clickable_table_surface() -> None:
 def test_large_desktop_density_keeps_sidebar_readable() -> None:
     css_text = shell_styles._load_shell_overrides_css()
 
+    sidebar_shell_css = css_text[
+        css_text.index("/* 3. Sidebar surface. */"):
+        css_text.index("/* 4. Re-skin native widgets")
+    ]
+    assert 'transform: translateX(0) !important' in sidebar_shell_css
     assert "@media (min-width: 1500px)" in css_text
     large_density_css = css_text[
         css_text.index("/* Large desktop comfort density."):
