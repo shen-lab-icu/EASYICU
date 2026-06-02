@@ -7223,6 +7223,18 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert "height: 45px !important" in css_text
 
 
+def test_step2_disease_cohort_buttons_use_compact_centered_labels() -> None:
+    sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "'mech_vent': ('Mech ventilation', 'vent exposure')" in sidebar_text
+    assert "'mech_vent': ('Mechanical ventilation', 'vent exposure')" not in sidebar_text
+    assert '.stApp [class*="st-key-cohort_disease_card_"] button *' in css_text
+    assert '[data-testid^="stBaseButton"] *' in css_text
+    assert "min-width: 0 !important;" in css_text
+    assert "text-align: center !important;" in css_text
+
+
 def test_real_data_confirm_defaults_step2_filtering_on(monkeypatch) -> None:
     state = _AttrSessionState(
         {

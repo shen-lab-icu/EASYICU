@@ -3417,11 +3417,13 @@ def _render_step2_icd_preview(lang: str, include_query: str, exclude_query: str)
     st.markdown(_step2_icd_preview_html(lang, preview), unsafe_allow_html=True)
 
 
-def _render_step2_icd_match_preview_panel(lang: str) -> None:
+def _render_step2_icd_match_preview_panel(lang: str) -> bool:
     """Render detailed ICD match results next to the Step 2 ICD controls."""
     preview_panel = globals().get("_render_icd_preview_main_panel")
     if callable(preview_panel):
         preview_panel(lang)
+        return True
+    return False
 
 
 def _render_cohort_live_preview(lang: str) -> None:
@@ -3661,7 +3663,7 @@ def _render_step2_cohort_builder_design() -> bool:
                 'sepsis': ('Sepsis-3', 'SOFA delta >=2 + suspected infection'),
                 'aki': ('AKI · KDIGO', 'stage >=1 within 48h'),
                 'circ_failure': ('Circulatory failure', 'shock / vaso support'),
-                'mech_vent': ('Mechanical ventilation', 'vent exposure'),
+                'mech_vent': ('Mech ventilation', 'vent exposure'),
                 'rrt': ('RRT', 'renal replacement therapy'),
                 'ards': ('ARDS', 'ICD respiratory cohort'),
                 'pneumonia': ('Pneumonia', 'ICD infection cohort'),
@@ -3731,12 +3733,18 @@ def _render_step2_cohort_builder_design() -> bool:
                     cf['icd_exclude_query'] = exclude_value.strip() if st.session_state.cohort_enabled else ""
                 cf['icd_query'] = cf.get('icd_include_query', '')
                 cf['icd_mode'] = 'include'
-                _render_step2_icd_preview(
-                    lang,
-                    cf.get('icd_include_query', ''),
-                    cf.get('icd_exclude_query', ''),
+                include_query = str(cf.get('icd_include_query', '') or '')
+                exclude_query = str(cf.get('icd_exclude_query', '') or '')
+                has_real_icd_tokens = (
+                    st.session_state.get("entry_mode") != "demo"
+                    and bool(_split_query_tokens(include_query) or _split_query_tokens(exclude_query))
                 )
-                _render_step2_icd_match_preview_panel(lang)
+                if has_real_icd_tokens:
+                    _real_step2_icd_preview_counts(include_query, exclude_query)
+                    if not _render_step2_icd_match_preview_panel(lang):
+                        _render_step2_icd_preview(lang, include_query, exclude_query)
+                else:
+                    _render_step2_icd_preview(lang, include_query, exclude_query)
         else:
             cf['icd_query'] = ""
             cf['icd_include_query'] = ""
