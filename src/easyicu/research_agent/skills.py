@@ -10,18 +10,22 @@ DataFrame, declares:
 * the *time window* and *aggregation rules* the skill cares about;
 * a stable list of expected variables (with light validation against
   the cohort);
-* a pre-canned ``AnalysisPlan`` that the planner can fall through to
-  when the user picks the skill instead of writing a free-form
+* a deterministic plan assembled by the shared skill template when the
+  user explicitly picks the skill instead of writing a free-form
   research question.
 
 Skills make the user-facing API substantially cheaper — a researcher
-who wants the canonical "admission-SOFA → ICU mortality" analysis
+who wants the canonical "admission-SOFA -> ICU mortality" analysis
 shouldn't need to spend tokens prompting a planner agent for it.
-The skill emits a deterministic, reviewable plan and the rest of
-the pipeline runs unchanged. The outer research loop is stable, but
-the inner analysis steps are now assembled dynamically from the
-research question and context instead of forcing the same descriptive
-checks for every task.
+The skill emits a deterministic, reviewable plan through the shared
+template and the rest of the pipeline runs unchanged. The outer
+research loop is stable, but the inner analysis steps are assembled
+dynamically from the research question and context instead of forcing
+the same descriptive checks for every task.
+
+``plan_factory`` remains available for explicit extension points, but
+the built-in registry must stay case-neutral and must not bundle
+bespoke paper-specific analysis plans.
 """
 
 from __future__ import annotations
@@ -774,167 +778,6 @@ def _default_skill_plan(skill: ClinicalSkill, context: ResearchContext) -> Analy
     )
 
 
-_SHOCK_EXPECTED_VARIABLES = [
-    "stay_id",
-    "age",
-    "sex",
-    "death",
-    "los_icu",
-    "lactate_max_24h",
-    "lactate_median_24h",
-    "lactate_first_24h",
-    "lactate_measured_24h",
-    "hyperlactatemia_24h",
-    "lactate_gt4_24h",
-    "map_min_24h",
-    "map_median_24h",
-    "map_low_any_24h",
-    "map_ge65_all_24h",
-    "vaso_any_24h",
-    "vaso_hours_24h",
-    "norepi_equiv_max_24h",
-]
-
-
-def _lactate_map_vaso_plan(context: ResearchContext) -> AnalysisPlan:
-    """Shock-physiology plan: lactate signal beyond MAP and vasopressors."""
-    target_outcome = context.target_outcome or "death"
-    steps = [
-        AnalysisStep(
-            step_id="01_table_one",
-            intent=(
-                "Describe the EasyICU shock physiology cohort with age, sex, "
-                "mortality, lactate measurement, MAP summaries, vasopressor "
-                "exposure and circulatory-failure markers."
-            ),
-            inputs=_SHOCK_EXPECTED_VARIABLES,
-            expected_outputs=["table:table_one"],
-            method="descriptive",
-            icu_rule_refs=["aggregation_rule_for", "lactate_right_skew"],
-        ),
-        AnalysisStep(
-            step_id="02_outcome_incidence",
-            intent=(
-                "Estimate hospital mortality overall and by early lactate "
-                "measurement status because lactate missingness is clinically "
-                "informative in ICU data."
-            ),
-            inputs=[target_outcome, "lactate_measured_24h"],
-            expected_outputs=["table:outcome_incidence", "statistic:outcome_rate"],
-            method="incidence_with_missingness_strata",
-        ),
-        AnalysisStep(
-            step_id="03_missingness_audit",
-            intent=(
-                "Audit missingness for lactate, MAP, vasopressor and outcome "
-                "variables, emphasizing that unmeasured lactate is not MCAR."
-            ),
-            inputs=_SHOCK_EXPECTED_VARIABLES,
-            expected_outputs=["table:missingness", "figure:missingness_heatmap"],
-            method="missingness",
-        ),
-        AnalysisStep(
-            step_id="04_lactate_map_vaso_discordance",
-            intent=(
-                "Quantify clinically important discordance strata: elevated "
-                "lactate despite minimum MAP >=65 mmHg, with and without "
-                "vasopressor exposure, and report mortality in each stratum."
-            ),
-            inputs=[
-                "lactate_max_24h",
-                "map_min_24h",
-                "vaso_any_24h",
-                target_outcome,
-            ],
-            expected_outputs=[
-                "table:shock_strata",
-                "figure:lactate_map_vaso_heatmap",
-                "statistic:discordance_mortality_gradient",
-            ],
-            method="stratified_incidence",
-            icu_rule_refs=["time_window_first_24h", "vasopressor_confounding_by_indication"],
-        ),
-        AnalysisStep(
-            step_id="05_primary_association",
-            intent=(
-                "Fit an adjusted association model for mortality using early "
-                "lactate as the primary predictor with age, sex, MAP and "
-                "vasopressor exposure as covariates; avoid causal language."
-            ),
-            inputs=[
-                "lactate_max_24h",
-                target_outcome,
-                "age",
-                "sex",
-                "map_min_24h",
-                "vaso_any_24h",
-            ],
-            expected_outputs=[
-                "table:primary_association",
-                "figure:primary_association_curve",
-                "statistic:primary_or",
-            ],
-            method="logistic_regression_complete_case_or_missing_indicator",
-            icu_rule_refs=["lactate_right_skew", "outcome_definition", "confounding_by_indication"],
-        ),
-    ]
-    if context.cross_database_validation:
-        steps.append(
-            AnalysisStep(
-                step_id="06_cross_database_protocol",
-                intent=(
-                    "Emit a cross-database replication protocol for eICU/HiRID: "
-                    "concept mapping, time-window harmonisation, lactate/MAP/vaso "
-                    "aggregation rules and required audit checks."
-                ),
-                inputs=[
-                    "lactate_max_24h",
-                    "map_min_24h",
-                    "vaso_any_24h",
-                    target_outcome,
-                ],
-                expected_outputs=["table:cross_database_protocol", "log:replication_checklist"],
-                method="replication_protocol",
-                icu_rule_refs=["cross_database_validation"],
-            )
-        )
-    steps.append(
-        AnalysisStep(
-            step_id=(
-                "07_publication_figure_generation"
-                if context.cross_database_validation
-                else "06_publication_figure_generation"
-            ),
-            intent=(
-                "Generate a claim-first, manuscript-ready publication figure for the "
-                "shock-physiology analysis using easyicu.research_agent.publication_figures."
-            ),
-            inputs=[
-                "lactate_max_24h",
-                "map_min_24h",
-                "vaso_any_24h",
-                target_outcome,
-            ],
-            expected_outputs=[
-                "figure:publication_figure",
-                "log:figure_contract",
-            ],
-            method="publication_figure_generation",
-        )
-    )
-    return AnalysisPlan(
-        research_question=context.research_question,
-        steps=steps,
-        rationale=(
-            "Pre-canned EasyICU shock physiology skill. It uses the agent for "
-            "code, interpretation and manuscript scaffolding, while pinning the "
-            "clinical plan to ICU concept metadata: lactate is skewed and "
-            "measurement-informed, MAP is windowed, and vasopressor exposure is "
-            "an intervention marker rather than a causal treatment effect."
-        ),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Built-in skill registry
 # ---------------------------------------------------------------------------
@@ -1020,52 +863,6 @@ def _seed_builtin_skills() -> None:
         primary_predictor="lact",
         expected_variables=["age", "sex", "lact", "death"],
         time_windows=[TimeWindow(name="first_6h", start_hours=0, end_hours=6)],
-    ))
-    register_skill(ClinicalSkill(
-        key="lactate_map_vaso_shock_mortality",
-        name="Lactate-MAP-vasopressor discordance → mortality",
-        description=(
-            "ICU shock physiology case: early lactate risk beyond apparent MAP "
-            "adequacy and vasopressor exposure, with lactate missingness audited."
-        ),
-        research_question_template=(
-            "In adult first ICU stays from {database}, does early lactate identify "
-            "hospital mortality risk beyond MAP and vasopressor exposure?"
-        ),
-        target_outcome="death",
-        primary_predictor="lactate_max_24h",
-        expected_variables=[
-            "stay_id",
-            "age",
-            "sex",
-            "death",
-            "los_icu",
-            "lactate_max_24h",
-            "lactate_median_24h",
-            "lactate_first_24h",
-            "lactate_measured_24h",
-            "hyperlactatemia_24h",
-            "lactate_gt4_24h",
-            "map_min_24h",
-            "map_median_24h",
-            "map_low_any_24h",
-            "map_ge65_all_24h",
-            "vaso_any_24h",
-            "vaso_hours_24h",
-            "norepi_equiv_max_24h",
-        ],
-        time_windows=[
-            TimeWindow(
-                name="first_24h",
-                start_hours=0,
-                end_hours=24,
-                rationale=(
-                    "Admission resuscitation window for lactate, MAP and "
-                    "vasopressor exposure."
-                ),
-            ),
-        ],
-        plan_factory=_lactate_map_vaso_plan,
     ))
 
 

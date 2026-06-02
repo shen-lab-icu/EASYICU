@@ -177,7 +177,7 @@ print(result.report_path)
 print(result.manuscript_path)
 ```
 
-### Pre-canned ClinicalSkill
+### Deterministic ClinicalSkill Template
 
 ```python
 from easyicu.research_agent import OpenAIClient, ResearchAgentPipeline, list_skills
@@ -191,7 +191,7 @@ pipeline = ResearchAgentPipeline(
     llm=OpenAIClient(model="gpt-4o-mini"),
 )
 result = pipeline.run(
-    skill="sofa_mortality",                 # short-circuits the planner
+    skill="sofa_mortality",                 # uses the shared skill template
     cohort="path/to/cohort.parquet",
     database="miiv",
     cross_database_validation=["eicu", "hirid"],
