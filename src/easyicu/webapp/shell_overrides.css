@@ -131,6 +131,7 @@ footer { display: none !important; }
   min-width: var(--eu-sidebar-w) !important;
   max-width: var(--eu-sidebar-w) !important;
   width: var(--eu-sidebar-w) !important;
+  transform: translateX(0) !important;
   overflow: visible !important;
   z-index: 50 !important;
 }
@@ -8308,6 +8309,27 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   -webkit-text-fill-color: var(--ink-3) !important;
   border: 1px solid var(--hair);
 }
+.stApp .eu-concept-checkbox-text {
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  padding-top: 1px;
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+  background: transparent !important;
+  font-size: 12px;
+  line-height: 1.25;
+  white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.stApp .eu-concept-checkbox-text::selection,
+.stApp .eu-concept-checkbox-text *::selection {
+  background: #DDF1F3 !important;
+  color: #0F1A23 !important;
+  -webkit-text-fill-color: #0F1A23 !important;
+  text-shadow: none !important;
+}
 
 /* Export page — real controls with a design-level review surface. */
 .eu-export-progress-shell,
@@ -13367,6 +13389,23 @@ html, body, .stApp, .stApp * {
 .stApp details label *::-moz-selection,
 .stApp details .stCheckbox ::-moz-selection,
 .stApp details .stCheckbox *::-moz-selection {
+  background: #DDF1F3 !important;
+  color: #0F1A23 !important;
+  text-shadow: none !important;
+}
+html ::selection,
+body ::selection,
+.stApp ::selection,
+.stApp *::selection {
+  background: #DDF1F3 !important;
+  color: #0F1A23 !important;
+  -webkit-text-fill-color: #0F1A23 !important;
+  text-shadow: none !important;
+}
+html ::-moz-selection,
+body ::-moz-selection,
+.stApp ::-moz-selection,
+.stApp *::-moz-selection {
   background: #DDF1F3 !important;
   color: #0F1A23 !important;
   text-shadow: none !important;
