@@ -3756,9 +3756,11 @@ def _publication_figure_image_path(panel: str) -> Optional[Path]:
     if env_dir:
         candidates.append(Path(env_dir).expanduser() / filename)
 
+    # Repo-relative fallback. Authors keep the manuscript composites in a
+    # private workspace; point EASYICU_PUBLICATION_FIGURE_DIR at it (or drop
+    # the images under <repo>/final_figure_layout/image2_generated_review/).
     candidates.extend([
-        Path(__file__).resolve().parents[4]
-        / 'easyicu写作'
+        Path(__file__).resolve().parents[3]
         / 'final_figure_layout'
         / 'image2_generated_review'
         / filename,

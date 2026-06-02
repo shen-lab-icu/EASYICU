@@ -2,7 +2,7 @@
 
 # EasyICU
 
-> 面向跨公开 ICU 数据库研究的可复现基础设施，提供标准化临床概念提取、面向临床用户的 Web 工作流，以及可编程的 Python API。
+> 面向跨公开 ICU 数据库研究的可复现基础设施：标准化临床概念提取、面向临床用户的 Web 工作流、可编程的 Python API，以及一个**证据绑定研究 Agent**——让每个被报告的数字都可追溯，并把无法核验的声明在稿件边界拦下。
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -12,8 +12,12 @@ EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包�
 
 ## 为什么是 EasyICU
 
-- **用一套临床概念层覆盖六个公开 ICU 数据库**：EasyICU 以临床概念而不是数据库专属变量表作为核心抽象，更适合跨数据库研究、复用和同行审阅。
+EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 结果有多可信？* **概念层**约束「产生这个数字的临床定义」，**证据绑定 Agent 层**约束「记录这个数字的证据链」。
+
+- **用一套临床概念层覆盖六个公开 ICU 数据库**：EasyICU 以临床概念而不是数据库专属变量表作为核心抽象，更适合跨数据库研究、复用和同行审阅。跨库分析的单位是「概念」（`hr`、`crea`、`sofa2`…），而不是某个数据库的私有字段名。
 - **同时支持代码与图形界面的可复现工作流**：同一份准备完成的数据既可用于 Web 界面，也可用于 Python 脚本和 notebook。
+- **证据绑定、可审计的分析 Agent**：可选的 research-agent 层把「问题 + 队列」变成可审计的分析——每个产物（脚本、日志、表格、统计量、图形）都以 SHA-256 登记进证据库，每个被报告的数字都会和其登记值比对。无法核验的声明会在**稿件边界被拦下**而不是直接发表——即 *fail-closed* 设计。
+- **用跨库复制验证可靠性**：同一个研究问题可作为 replication protocol 在多个数据库上各跑一遍，让一个结论的稳健性可以被*检查*，而不是被假定。
 - **围绕有临床意义的研究任务设计**：框架内置 **SOFA-2** 自动计算，并提供标准化概念提取、专业模块和队列分析能力。
 
 ## 这个仓库适合谁
@@ -23,6 +27,8 @@ EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包�
 - **Python 用户**：希望通过脚本或 notebook 构建可复现的特征提取与队列分析流程。
 
 ## 从这里开始
+
+> **调用任何 API 前的唯一铁律：** 所有提取 API 接收的都是**已转换（prepared）**的数据集，而不是原始下载包。如果你还没转换过这个数据库，请**先做转换**（Web 界面 *Validate Data Path → Convert & Setup*，或 `DataConverter(...).convert_all()` —— 见 [Python API](#-python-api)）。下文每个示例里的 `data_path` 指的都是*转换后的目录*。
 
 ### 快速查表:"我想…… → 运行……"
 
@@ -34,8 +40,21 @@ EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包�
 | 让 research-agent 跑一个研究问题 + 队列 | `easyicu-research-agent` |
 | 用 agent 复现一篇外部论文 | `easyicu-research-replication` |
 | 启动 research-agent 用的 LLM 代理服务 | `easyicu-llm-server` |
+| 可直接复制运行的脚本 | [`examples/`](examples/) —— 从 [`quickstart_convert_and_load.py`](examples/quickstart_convert_and_load.py) 开始 |
 
 所有控制台脚本都在 `pyproject.toml` 的 `[project.scripts]` 里声明,执行 `pip install -e ".[dev,webapp]"`(或 `".[all]"`)后即可使用。
+
+### 文档地图
+
+本 README 是入口。每个主要分层都在自己代码旁维护一份聚焦的 README：
+
+| 阅读 | 用于 |
+|------|------|
+| [`src/easyicu/README.md`](src/easyicu/README.md) | 包级模块地图——~75 个模块如何分层(概念抽象 → 转换 → API → 评分)。代码贡献者从这里开始。 |
+| [`src/easyicu/webapp/README.md`](src/easyicu/webapp/README.md) | Streamlit Web 层:标签页、AI opt-in 门控不变量,以及如何新增页面。 |
+| [`src/easyicu/research_agent/README.md`](src/easyicu/research_agent/README.md) | 证据绑定的 research-agent 层:四层设计、就绪门控、跨库复现协议。 |
+| [`src/easyicu/data/README.md`](src/easyicu/data/README.md) | 驱动跨库提取的概念字典(`concept-dict.json` 与 SOFA-2 overlay)。 |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 提交改动时的预期工作流。 |
 
 ### 路线 A：Web 界面
 
@@ -165,13 +184,23 @@ Research Agent 把"问题 + EasyICU 准备好的数据"通过 4 阶段流水线 
 
 ![Research Agent pipeline](docs/images/05_research_agent.jpg)
 
-## 可选的 Research-Agent 层
+## 证据绑定 Research-Agent 层
 
-对于高级用户，EasyICU 还提供一个可选的
-`easyicu.research_agent` 层，用于 ICU 语义感知的分析规划、
-证据绑定式结果整理，以及 manuscript scaffold 生成。它不是临床决策支持工具，也不是无需人工审阅的自动投稿系统；它不是
-标准 Web 工作流或 Python 提取 API 的必需部分。详情见
+`easyicu.research_agent` 是一个可选层，把研究问题 + 已确认的队列导出变成**可审计**的分析。它不是标准 Web 工作流或 Python 提取 API 的必需部分。完整设计见
 [src/easyicu/research_agent/README.md](src/easyicu/research_agent/README.md)。
+
+**为什么它不只是「编排」。** 通用分析 agent 擅长规划和写代码，但弱于 ICU 语义——会把有序的 SOFA 子分当连续量平均、把缺失的 PaO₂ 静默填补、掉进 `SOFA==0` 高死亡率假象、把 ICU 死亡和院内死亡混用。EasyICU 用四层来补这个缺口：
+
+1. **ICU 数据底座** —— 复用上面的概念字典，作为 agent 对数据的*唯一*视图（它不通过 prompt 看到原始行，因此无法发明变量或非法聚合）。
+2. **安全分析运行时** —— SHA-256 `EvidenceStore`、数值声明注册表、确定性验证器、执行回放。
+3. **Agent 编排** —— planner / replanner / coder / analyzer / writer / critic，每个 LLM 步骤之间都有确定性门。
+4. **候选假设排序** —— 一个有界、人工策展的预规划阶段（**不是**自主「科学发现」系统）。
+
+**Fail-closed，而非放任自流。** `ResearchContext` 把每个变量的角色、单位、允许聚合、时间窗、缺失语义和 ICU 陷阱同时带进 agent 循环*和*验证器。每个产物被哈希登记；每个被报告的数字被注册为数值声明并与来源重新核对。四道 readiness gate ——**execution-complete / evidence-complete / numeric-verified / analysis-validated**——由代码机械计算（任何人复算得同一标签），把输出分成三态：**gate-reportable**、**analysis-only**、**diagnostic-only**。一个无法核验的声明（例如草稿里 `AUROC 0.8` 与登记的 `0.842` 不符）会在稿件边界被拦下，按类型路由到 rewrite / 代码重跑 / 人工复核——**重过同一套门**才能进入可报告稿件。
+
+**用跨库复制验证可靠性。** 跨数据库工作默认走 replication protocol：同一问题在其它支持的数据库上重跑（`cross_database_validation=["eicu", "hirid"]`），让一个结论在 case-mix、覆盖度和缺失模式上的稳健性可被检查——而不是声称哪个库「更好」。
+
+**确定性审计，而非 LLM 当评委。** 硬性检查（`concept_usage`、统计、因果、报告清单、多重比较、公平性）都是确定性、规则化的，系统不依赖一个 LLM 给另一个 LLM 打分。历史模块 `icu_agent_bench` 是**内部评估协议**，不是已冻结的公开 benchmark，应据此描述。
 
 ## 🚀 进阶使用（开发者 / 高级用户）
 
@@ -260,6 +289,8 @@ vitals.to_parquet('miiv_vitals_1h.parquet', index=False)
 
 ### Easy API — 一行代码
 
+> ⚠️ 下面的 `data_path` 必须指向**已转换/准备完成**的目录（见 [先做数据转换](#api-前置条件先做数据转换)）。传入原始下载包会报错。
+
 ```python
 from easyicu import load_sofa, load_sofa2, load_vitals, load_labs
 
@@ -286,6 +317,8 @@ labs = load_labs(database='miiv', data_path='/path/to/data')
 ```
 
 ### Concept API — 灵活自定义
+
+> ⚠️ 下面的 `data_path` 必须指向**已转换/准备完成**的目录（见 [先做数据转换](#api-前置条件先做数据转换)）。
 
 ```python
 from easyicu import load_concepts
@@ -343,6 +376,8 @@ all_features = load_concepts(
 > 子进程超时会被强制杀掉，避免父进程永远等下去。
 
 ### 专业模块
+
+> ⚠️ 下面的 `data_path` 必须指向**已转换/准备完成**的目录（见 [先做数据转换](#api-前置条件先做数据转换)）。
 
 ```python
 from easyicu import (

@@ -16,7 +16,7 @@ Usage:
   pytest tests/test_real_ui_smoke.py -v
 
   # Full run (requires MIIV data at EASYICU_DATA_PATH)
-  EASYICU_DATA_PATH=/Users/haibo/Downloads/miiv pytest tests/test_real_ui_smoke.py -v --run-real
+  EASYICU_DATA_PATH=/path/to/miiv pytest tests/test_real_ui_smoke.py -v --run-real
 """
 import os
 import sys

@@ -12,6 +12,29 @@ the **deterministic hashed evidence store** (`evidence.py`,
 `validators.py`) that every agent output must pass through before it
 can affect the manuscript.
 
+In one line: the LLM has wide creative latitude, but it **cannot push an
+unverified number into a reportable manuscript**. Concretely, this layer
+adds:
+
+- **Evidence binding** — every artefact (script, log, table, statistic,
+  figure) is hashed into a SHA-256 `EvidenceStore`, and every reported
+  number is registered as a numeric claim and re-checked against the
+  value it was produced with.
+- **Fail-closed, three-state output** — four readiness gates
+  (`execution-complete` / `evidence-complete` / `numeric-verified` /
+  `analysis-validated`) are computed mechanically and sort the run into
+  **gate-reportable**, **analysis-only**, or **diagnostic-only**. An
+  unverifiable claim is intercepted at the manuscript boundary and routed
+  for repair / code re-run / human review, then must pass the same gates
+  again — it is closed-loop correction, not a one-shot kill switch.
+- **Cross-database replication for reliability** — cross-database work
+  defaults to a replication protocol (re-run the same question on other
+  supported databases) so a conclusion's robustness can be inspected,
+  rather than a claim that one database is "better".
+- **Deterministic auditing, not LLM-as-judge** — the hard checks are
+  rule-based and reproducible, so the system does not rely on one LLM
+  grading another.
+
 ## Why this exists
 
 Many general-purpose analysis pipelines are strong at orchestration
