@@ -41,6 +41,28 @@ def test_every_builtin_produces_nonempty_plan(ra):
             )
 
 
+def test_no_builtin_ships_a_bespoke_canned_plan(ra):
+    """Built-in skills must stay case-neutral.
+
+    A skill that hard-codes a paper-specific ``AnalysisPlan`` via
+    ``plan_factory`` launders human-authored analysis as autonomous
+    agent output - the same integrity problem we removed from
+    ``code_repair`` and the bundled ``case_plugins``. Generic skills
+    must reach a plan through the shared ``_default_skill_plan``
+    template (``plan_factory is None``); a registered plan_factory is a
+    bundled canned plan and is not allowed in the built-in registry.
+    """
+    offenders = [
+        s.key for s in ra.list_skills()
+        if getattr(s, "plan_factory", None) is not None
+    ]
+    assert offenders == [], (
+        "built-in skills must not bundle a bespoke canned plan "
+        f"(case-specific plans belong behind an explicit replication "
+        f"entry point, not in the shared registry); offenders: {offenders}"
+    )
+
+
 def test_skill_validate_against_missing_var(ra):
     skill = ra.get_skill("sofa_mortality")
     df = pd.DataFrame({"stay_id": [1, 2], "age": [60, 70], "death": [0, 1]})
