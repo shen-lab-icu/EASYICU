@@ -7804,15 +7804,25 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   line-height: 1.45;
 }
 .stApp [class*="st-key-cohort_disease_card_"] button {
-  min-height: 35px !important;
-  height: 35px !important;
+  min-height: 36px !important;
+  height: 36px !important;
   border-radius: var(--r-2) !important;
-  justify-content: flex-start !important;
-  padding: 0 10px !important;
+  justify-content: center !important;
+  padding: 0 8px !important;
   font-size: 12px !important;
   font-weight: 500 !important;
-  text-align: left !important;
+  letter-spacing: 0 !important;
+  text-align: center !important;
   box-shadow: none !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+.stApp [class*="st-key-cohort_disease_card_"] button *,
+.stApp [class*="st-key-cohort_disease_card_"] [data-testid^="stBaseButton"] * {
+  min-width: 0 !important;
+  letter-spacing: 0 !important;
+  text-align: center !important;
   white-space: nowrap !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;
