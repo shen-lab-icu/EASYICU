@@ -1190,7 +1190,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ],
       "miiv": [
@@ -1692,7 +1693,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ],
       "sic": [
@@ -1702,7 +1704,8 @@
           ],
           "table": "medication",
           "sub_var": "DrugID",
-          "_comment": "2026-05-27 added via SIC d_references audit"
+          "_comment": "2026-05-27 added via SIC d_references audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -2255,7 +2258,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ],
       "aumc": [
@@ -2266,7 +2270,8 @@
           ],
           "table": "drugitems",
           "sub_var": "itemid",
-          "_comment": "2026-05-27 Round 3 added via AUMC drugitems audit"
+          "_comment": "2026-05-27 Round 3 added via AUMC drugitems audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -3313,7 +3318,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ],
       "miiv": [
@@ -3353,7 +3359,8 @@
           ],
           "table": "drugitems",
           "sub_var": "itemid",
-          "_comment": "2026-05-27 Round 3 added via AUMC drugitems audit"
+          "_comment": "2026-05-27 Round 3 added via AUMC drugitems audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -3517,7 +3524,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -3603,7 +3611,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -4345,7 +4354,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -4742,7 +4752,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -5194,16 +5205,6 @@
           "grp_var": "infusionid",
           "callback": "hirid_rate_mass(target_unit = \"mcg/hour\")"
         }
-      ],
-      "sic": [
-        {
-          "ids": [
-            1480
-          ],
-          "table": "medication",
-          "sub_var": "DrugID",
-          "_comment": "2026-05-27 added via SIC d_references audit"
-        }
       ]
     }
   },
@@ -5276,7 +5277,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ],
       "aumc": [
@@ -5286,7 +5288,8 @@
           ],
           "table": "drugitems",
           "sub_var": "itemid",
-          "_comment": "2026-05-27 Round 3 added via AUMC drugitems audit"
+          "_comment": "2026-05-27 Round 3 added via AUMC drugitems audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -6572,7 +6575,8 @@
           ],
           "table": "medication",
           "sub_var": "DrugID",
-          "_comment": "2026-05-27 added via SIC d_references audit"
+          "_comment": "2026-05-27 added via SIC d_references audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -6795,7 +6799,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -6881,7 +6886,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -7043,7 +7049,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -7136,7 +7143,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -7419,7 +7427,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -8118,7 +8127,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -8567,16 +8577,6 @@
           "sub_var": "pharmaid",
           "grp_var": "infusionid",
           "callback": "hirid_rate_mass(target_unit = \"mg/hour\")"
-        }
-      ],
-      "sic": [
-        {
-          "ids": [
-            1495
-          ],
-          "table": "medication",
-          "sub_var": "DrugID",
-          "_comment": "2026-05-27 added via SIC d_references audit"
         }
       ]
     }
@@ -9279,7 +9279,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -9814,7 +9815,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -9927,7 +9929,8 @@
           ],
           "table": "medication",
           "sub_var": "DrugID",
-          "_comment": "2026-05-27 added via SIC d_references audit"
+          "_comment": "2026-05-27 added via SIC d_references audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -10213,7 +10216,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ],
       "eicu": [
@@ -10595,7 +10599,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -11053,7 +11058,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 audit + 2026-05-27 correction: verified 7 Disoprivan items (replaced fabricated 1001114-1001117 IDs)"
+          "_comment": "2026-05-27 audit + 2026-05-27 correction: verified 7 Disoprivan items (replaced fabricated 1001114-1001117 IDs)",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -11138,36 +11144,6 @@
           "sub_var": "itemid",
           "stop_var": "endtime",
           "callback": "mimic_rate_mv"
-        }
-      ],
-      "hirid": [
-        {
-          "ids": [
-            208,
-            1000491,
-            1000691,
-            1000699,
-            1001050,
-            1001052,
-            1001053
-          ],
-          "table": "pharma",
-          "sub_var": "pharmaid",
-          "class_name": "hrd_itm",
-          "_comment": "2026-05-27 audit + 2026-05-27 correction: verified 7 Disoprivan items (replaced fabricated 1001114-1001117 IDs)"
-        }
-      ],
-      "sic": [
-        {
-          "ids": [
-            1499,
-            1549,
-            2073,
-            3056
-          ],
-          "table": "medication",
-          "sub_var": "DrugID",
-          "_comment": "2026-05-27 added via SIC d_references audit"
         }
       ]
     }
@@ -13854,7 +13830,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -13954,7 +13931,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }
@@ -14533,7 +14511,8 @@
           "table": "pharma",
           "sub_var": "pharmaid",
           "class_name": "hrd_itm",
-          "_comment": "2026-05-27 added via HiRID Pharma reference table audit"
+          "_comment": "2026-05-27 added via HiRID Pharma reference table audit",
+          "callback": "transform_fun(set_val(TRUE))"
         }
       ]
     }

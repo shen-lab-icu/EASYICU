@@ -5,8 +5,8 @@ Added: warfarin, apixaban, enoxaparin, aspirin.
 Coverage notes:
   - apixaban only in SIC (1/6) — MIMIC/AUMC/eICU all use prescriptions/PO charting
     that's outside inputevents/medication scope; HiRID has no entry.
-  - aspirin 3/6 (no MIIV/MIMIC inputevents — aspirin in MIMIC is in prescriptions);
-    AUMC has IV/PO acetylsalicylic acid.
+  - aspirin 6/6 after the 2026-05-27 prescriptions/HiRID audit; MIIV/MIMIC
+    still use prescriptions, not inputevents.
 """
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 
 BATCH8 = [
-    ("warfarin",   {"miiv", "mimic", "eicu", "sic"}, 4),
+    ("warfarin",   {"miiv", "mimic", "eicu", "hirid", "sic"}, 5),
     ("apixaban",   {"sic"},                          1),
-    ("enoxaparin", {"miiv", "mimic", "eicu", "sic"}, 4),
-    ("aspirin",    {"aumc", "eicu", "sic"},          3),
+    ("enoxaparin", {"miiv", "mimic", "eicu", "hirid", "sic"}, 5),
+    ("aspirin",    {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
 ]
 
 
@@ -97,18 +97,15 @@ def test_enoxaparin_sic_includes_both_doses(cdict):
     assert ids == {1536, 1923}
 
 
-def test_aspirin_no_mimic_no_miiv(cdict):
-    """Aspirin in MIMIC is in prescriptions table (not inputevents);
-    deliberately absent from those sources."""
-    sources = set(cdict["aspirin"]["sources"])
-    assert "miiv" not in sources
-    assert "mimic" not in sources
+def test_aspirin_mimic_and_miiv_use_prescriptions(cdict):
+    assert cdict["aspirin"]["sources"]["miiv"][0]["table"] == "prescriptions"
+    assert cdict["aspirin"]["sources"]["mimic"][0]["table"] == "prescriptions"
 
 
-def test_batch8_all_hirid_absent(cdict):
-    """HiRID has no pharma entries for any of these drugs."""
-    for c in ["warfarin", "apixaban", "enoxaparin", "aspirin"]:
-        assert "hirid" not in cdict[c]["sources"]
+def test_batch8_hirid_scope_matches_audit(cdict):
+    assert "hirid" not in cdict["apixaban"]["sources"]
+    for c in ["warfarin", "enoxaparin", "aspirin"]:
+        assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(set_val(TRUE))"
 
 
 def test_anticoagulation_group_includes_batch8(cdict):

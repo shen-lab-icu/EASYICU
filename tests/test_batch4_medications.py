@@ -2,11 +2,11 @@
 
 Added: potassium_iv, magnesium_iv, albumin_iv, packed_rbc.
 
-All are lgl_cncpt with set_val(TRUE). Coverage 4-5/6:
+All are lgl_cncpt with set_val(TRUE). Coverage after the 2026-05-27 audit:
   - potassium_iv: 5/6 (no HiRID)
-  - magnesium_iv: 5/6 (no HiRID)
+  - magnesium_iv: 6/6 (HiRID added)
   - albumin_iv:   4/6 (no HiRID, no AUMC)
-  - packed_rbc:   4/6 (no HiRID, no eICU; eICU intake charted outside medication)
+  - packed_rbc:   5/6 (HiRID added; no eICU; eICU intake charted outside medication)
 
 Specific design decisions enforced by tests:
   - packed_rbc has NO eICU source (intake charting is in intakeOutput, not
@@ -28,9 +28,9 @@ MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 BATCH4 = [
     ("potassium_iv", {"miiv", "mimic", "eicu", "aumc", "sic"}, 5),
-    ("magnesium_iv", {"miiv", "mimic", "eicu", "aumc", "sic"}, 5),
+    ("magnesium_iv", {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("albumin_iv",   {"miiv", "mimic", "eicu", "sic"},         4),
-    ("packed_rbc",   {"miiv", "mimic", "aumc", "sic"},         4),
+    ("packed_rbc",   {"miiv", "mimic", "aumc", "hirid", "sic"}, 5),
 ]
 
 
@@ -129,10 +129,12 @@ def test_packed_rbc_includes_or_pacu_intake(cdict):
     assert {225168, 226368, 227070} <= ids
 
 
-def test_all_batch4_hirid_absent(cdict):
-    """HiRID pharma_ref has no matching entries for any of these (fluids,
-    blood products, electrolytes). Documented explicitly."""
-    for c in ["potassium_iv", "magnesium_iv", "albumin_iv", "packed_rbc"]:
+def test_batch4_hirid_scope_matches_audit(cdict):
+    for c in ["potassium_iv", "albumin_iv"]:
         assert "hirid" not in cdict[c]["sources"], (
             f"{c}: HiRID source added without callback validation"
         )
+    assert cdict["magnesium_iv"]["sources"]["hirid"][0]["ids"] == [1000421]
+    assert cdict["packed_rbc"]["sources"]["hirid"][0]["ids"] == [1000100, 1000743]
+    for c in ["magnesium_iv", "packed_rbc"]:
+        assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(set_val(TRUE))"

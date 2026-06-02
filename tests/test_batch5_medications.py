@@ -2,11 +2,11 @@
 
 Added: bicarbonate, dextrose50, ffp, platelets.
 
-Coverage:
-  - bicarbonate: 4/6 (no HiRID, no SIC — SIC only has lab bicarbonate entries)
-  - dextrose50:  4/6 (no HiRID, no AUMC; distinct from the dex rec_cncpt)
-  - ffp:         3/6 (no HiRID, no AUMC, no SIC — no matching Drug/Fluid entry)
-  - platelets:   4/6 (no HiRID, no eICU — transfusions in blood bank not med table)
+Coverage after the 2026-05-27 audit:
+  - bicarbonate: 6/6 (HiRID/SIC added)
+  - dextrose50:  5/6 (HiRID added; no AUMC; distinct from the dex rec_cncpt)
+  - ffp:         5/6 (HiRID/AUMC added; no SIC)
+  - platelets:   5/6 (HiRID added; no eICU)
 
 Design decisions enforced by tests:
   - ``dextrose50`` is separate from existing ``dex`` (rec_cncpt for D10);
@@ -27,10 +27,10 @@ MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 
 BATCH5 = [
-    ("bicarbonate", {"miiv", "mimic", "eicu", "aumc"},   4),
-    ("dextrose50",  {"miiv", "mimic", "eicu", "sic"},    4),
-    ("ffp",         {"miiv", "mimic", "eicu"},           3),
-    ("platelets",   {"miiv", "mimic", "aumc", "sic"},    4),
+    ("bicarbonate", {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
+    ("dextrose50",  {"miiv", "mimic", "eicu", "hirid", "sic"},         5),
+    ("ffp",         {"miiv", "mimic", "eicu", "aumc", "hirid"},        5),
+    ("platelets",   {"miiv", "mimic", "aumc", "hirid", "sic"},         5),
 ]
 
 
@@ -114,10 +114,10 @@ def test_dextrose50_distinct_from_dex_rec(cdict):
         assert dex_unit == "ml/hr"
 
 
-def test_ffp_has_no_aumc_no_sic(cdict):
-    """AUMC drugitems and SIC d_references lack Fresh Frozen Plasma entries."""
+def test_ffp_aumc_added_but_sic_still_absent(cdict):
+    """AUMC FFP was added by the 2026-05-27 audit; SIC remains absent."""
     sources = set(cdict["ffp"]["sources"])
-    assert "aumc" not in sources
+    assert cdict["ffp"]["sources"]["aumc"][0]["ids"] == [7367]
     assert "sic" not in sources
 
 
@@ -127,15 +127,7 @@ def test_platelets_has_no_eicu(cdict):
     assert "eicu" not in cdict["platelets"]["sources"]
 
 
-def test_bicarbonate_hirid_absent(cdict):
-    """HiRID has no bicarbonate pharma entry."""
-    assert "hirid" not in cdict["bicarbonate"]["sources"]
-
-
-def test_batch5_all_hirid_absent(cdict):
-    """Guard: HiRID consistently unable to match these concepts. If any is
-    added without explicit verification, trip this test."""
+def test_batch5_hirid_sources_use_boolean_callback(cdict):
     for c in ["bicarbonate", "dextrose50", "ffp", "platelets"]:
-        assert "hirid" not in cdict[c]["sources"], (
-            f"{c}: HiRID source added without callback validation"
-        )
+        hirid = cdict[c]["sources"]["hirid"][0]
+        assert hirid["callback"] == "transform_fun(set_val(TRUE))"

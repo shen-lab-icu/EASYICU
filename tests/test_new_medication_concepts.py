@@ -18,7 +18,7 @@ with open(DICT_PATH) as f:
 
 # Expected: (concept_name, expected_main_db_count, required_dbs)
 MEDICATIONS = [
-    ("propofol",         5, {"miiv", "mimic", "eicu", "aumc", "sic"}),
+    ("propofol",         6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),
     ("midazolam",        6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),
     ("dexmedetomidine",  4, {"miiv", "mimic", "eicu", "hirid"}),
     ("fentanyl",         6, {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}),

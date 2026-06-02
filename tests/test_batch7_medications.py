@@ -2,11 +2,11 @@
 
 Added: phenytoin, labetalol, esmolol, diltiazem, nicardipine.
 
-Coverage:
-  - phenytoin:   3/6 (MIIV+MIMIC+SIC; AUMC has no entry, eICU only PO)
-  - labetalol:   5/6 (no HiRID)
-  - esmolol:     5/6 (no HiRID; eICU is in infusionDrug not medication)
-  - diltiazem:   5/6 (no HiRID)
+Coverage after the 2026-05-27 audit:
+  - phenytoin:   5/6 (eICU admissionDrug + HiRID added; AUMC still absent)
+  - labetalol:   6/6 (HiRID added)
+  - esmolol:     6/6 (HiRID added; eICU is in infusionDrug not medication)
+  - diltiazem:   6/6 (HiRID added)
   - nicardipine: 4/6 (no HiRID, no SIC)
 """
 from __future__ import annotations
@@ -21,10 +21,10 @@ MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 
 BATCH7 = [
-    ("phenytoin",   {"miiv", "mimic", "sic"},                  3),
-    ("labetalol",   {"miiv", "mimic", "eicu", "aumc", "sic"},  5),
-    ("esmolol",     {"miiv", "mimic", "eicu", "aumc", "sic"},  5),
-    ("diltiazem",   {"miiv", "mimic", "eicu", "aumc", "sic"},  5),
+    ("phenytoin",   {"miiv", "mimic", "eicu", "hirid", "sic"},        5),
+    ("labetalol",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
+    ("esmolol",     {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
+    ("diltiazem",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("nicardipine", {"miiv", "mimic", "eicu", "aumc"},         4),
 ]
 
@@ -96,15 +96,14 @@ def test_nicardipine_excludes_sic(cdict):
     assert "sic" not in cdict["nicardipine"]["sources"]
 
 
-def test_phenytoin_excludes_aumc_eicu(cdict):
-    """AUMC drugitems has no phenytoin entry; eICU has only PO tabs
-    (which we deliberately exclude from systemic-administration concepts)."""
+def test_phenytoin_uses_eicu_admissiondrug_but_excludes_aumc(cdict):
     sources = set(cdict["phenytoin"]["sources"])
     assert "aumc" not in sources
-    assert "eicu" not in sources
+    assert cdict["phenytoin"]["sources"]["eicu"][0]["table"] == "admissiondrug"
+    assert cdict["phenytoin"]["sources"]["hirid"][0]["callback"] == "transform_fun(set_val(TRUE))"
 
 
-def test_batch7_all_hirid_absent(cdict):
-    """HiRID has no pharma reference for any of these drugs."""
-    for c in ["phenytoin", "labetalol", "esmolol", "diltiazem", "nicardipine"]:
-        assert "hirid" not in cdict[c]["sources"]
+def test_batch7_hirid_scope_matches_audit(cdict):
+    assert "hirid" not in cdict["nicardipine"]["sources"]
+    for c in ["phenytoin", "labetalol", "esmolol", "diltiazem"]:
+        assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(set_val(TRUE))"

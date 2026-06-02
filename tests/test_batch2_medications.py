@@ -2,10 +2,10 @@
 
 Added: lorazepam, ketamine, vecuronium, cisatracurium, nitroglycerin.
 
-All are lgl_cncpt with set_val(TRUE) callbacks (no rate extraction). HiRID has
-no reliable pharma entry for any of these drugs; vecuronium also lacks a SIC
-reference; cisatracurium has no AUMC entry — so coverage is 4-5/6 rather than
-6/6, and the per-concept contract test keeps this explicit.
+All are lgl_cncpt with set_val(TRUE) callbacks (no rate extraction). The
+2026-05-27 audit added verified HiRID entries for lorazepam, ketamine,
+vecuronium, and nitroglycerin; vecuronium still lacks a SIC reference and
+cisatracurium still lacks AUMC/HiRID entries.
 
 Ground-truth IDs and regex patterns verified against local reference tables
 on 2026-05-13.
@@ -23,11 +23,11 @@ MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 BATCH2 = [
     # (name, required_dbs, expected_coverage)
-    ("lorazepam",     {"miiv", "mimic", "eicu", "aumc", "sic"},      5),
-    ("ketamine",      {"miiv", "mimic", "eicu", "aumc", "sic"},      5),
-    ("vecuronium",    {"miiv", "mimic", "eicu", "aumc"},             4),
+    ("lorazepam",     {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
+    ("ketamine",      {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
+    ("vecuronium",    {"miiv", "mimic", "eicu", "aumc", "hirid"},        5),
     ("cisatracurium", {"miiv", "mimic", "eicu", "sic"},              4),
-    ("nitroglycerin", {"miiv", "mimic", "eicu", "aumc", "sic"},      5),
+    ("nitroglycerin", {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
 ]
 
 
@@ -115,7 +115,9 @@ def test_nitroglycerin_aumc_excludes_spray(cdict):
     assert 20169 not in id_set, "Nitro spray itemid 20169 must be excluded"
 
 
-def test_vecuronium_has_no_sic_no_hirid(cdict):
+def test_vecuronium_hirid_added_but_sic_still_absent(cdict):
     sources = set(cdict["vecuronium"]["sources"])
     assert "sic" not in sources
-    assert "hirid" not in sources
+    hirid = cdict["vecuronium"]["sources"]["hirid"][0]
+    assert hirid["ids"] == [198]
+    assert hirid["callback"] == "transform_fun(set_val(TRUE))"

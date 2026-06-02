@@ -2,10 +2,9 @@
 
 Added: levetiracetam, dexamethasone, octreotide, neostigmine.
 
-Coverage:
-  - levetiracetam: 5/6 (no HiRID)
-  - dexamethasone: 2/6 (eICU + SIC only — MIMIC dex is in chartevents/
-                  prescriptions, not inputevents; AUMC drugitems regex no hit)
+Coverage after the 2026-05-27 audit:
+  - levetiracetam: 6/6 (HiRID added)
+  - dexamethasone: 6/6 (prescriptions/AUMC/HiRID added; still no inputevents)
   - octreotide:    5/6 (no HiRID)
   - neostigmine:   4/6 (no HiRID, no MIMIC-III MV)
 """
@@ -21,8 +20,8 @@ MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 
 BATCH6 = [
-    ("levetiracetam", {"miiv", "mimic", "eicu", "aumc", "sic"}, 5),
-    ("dexamethasone", {"eicu", "sic"},                          2),
+    ("levetiracetam", {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
+    ("dexamethasone", {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
     ("octreotide",    {"miiv", "mimic", "eicu", "aumc", "sic"}, 5),
     ("neostigmine",   {"miiv", "eicu", "aumc", "sic"},          4),
 ]
@@ -78,20 +77,16 @@ def test_registered_in_webapp_catalog(name, _dbs, expected_cov):
 
 
 # ── design contracts ──
-def test_dexamethasone_excludes_mimic_inputevents(cdict):
+def test_dexamethasone_uses_prescriptions_not_inputevents(cdict):
     """MIMIC-III CV has dex eye/nasal drops (chartevents); MIMIC-IV's
     inputevents has no dex itemid — systemic dex is in prescriptions which
     is outside inputevents-based concept extraction."""
     sources = set(cdict["dexamethasone"]["sources"])
-    assert "miiv" not in sources, (
-        "dexamethasone has no MIIV inputevents itemid — adding one without "
-        "verifying the systemic vs topical route would silently mix concepts"
-    )
-    assert "mimic" not in sources
-    assert "aumc" not in sources, (
-        "AUMC drugitems regex returned no matches; do not add without "
-        "explicit itemid lookup"
-    )
+    assert sources >= {"miiv", "mimic", "aumc", "hirid"}
+    assert cdict["dexamethasone"]["sources"]["miiv"][0]["table"] == "prescriptions"
+    assert cdict["dexamethasone"]["sources"]["mimic"][0]["table"] == "prescriptions"
+    assert cdict["dexamethasone"]["sources"]["aumc"][0]["ids"] == [6995]
+    assert cdict["dexamethasone"]["sources"]["hirid"][0]["callback"] == "transform_fun(set_val(TRUE))"
 
 
 def test_neostigmine_no_mimic_iii_mv(cdict):
@@ -118,7 +113,8 @@ def test_octreotide_consistent_across_miiv_mimic(cdict):
     assert mv_src["ids"] == [225155]
 
 
-def test_batch6_all_hirid_absent(cdict):
-    """HiRID pharma reference has no matches for these drugs."""
-    for c in ["levetiracetam", "dexamethasone", "octreotide", "neostigmine"]:
+def test_batch6_hirid_scope_matches_audit(cdict):
+    for c in ["octreotide", "neostigmine"]:
         assert "hirid" not in cdict[c]["sources"]
+    for c in ["levetiracetam", "dexamethasone"]:
+        assert cdict[c]["sources"]["hirid"][0]["callback"] == "transform_fun(set_val(TRUE))"

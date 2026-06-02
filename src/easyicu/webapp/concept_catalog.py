@@ -452,6 +452,7 @@ COMPOSITE_CONCEPT_OUTPUT_SOURCES = {
 # whose outputs are surfaced through canonical web concepts above.
 HIDDEN_DICTIONARY_CONCEPTS = {
     'bicarb',
+    'cvp',
     'kdigo_aki',
     'kdigo_creat',
     'kdigo_uo',
@@ -594,7 +595,7 @@ CONCEPT_DB_COVERAGE = {
     'peep': 4, 'tidal_vol': 4, 'ins': 4,
     'mech_vent': 3, 'vent_ind': 3, 'ecmo': 2, 'rrt': 4,
     'furosemide': 6,
-    'propofol': 5, 'midazolam': 6, 'dexmedetomidine': 4,
+    'propofol': 6, 'midazolam': 6, 'dexmedetomidine': 4,
     'fentanyl': 6, 'morphine': 6, 'heparin': 6,
     'mannitol': 5, 'amiodarone': 6, 'milrinone': 5, 'rocuronium': 5,
     # Rate concepts (2026-05-13): HiRID pharma has no propofol reference;
@@ -604,43 +605,43 @@ CONCEPT_DB_COVERAGE = {
     # MIIV+MIMIC only for now; other DBs need non-kg mass-rate callback (TODO)
     'fentanyl_rate': 5,
     'midazolam_rate': 5,
-    # Batch 2 (2026-05-13)
-    'lorazepam': 5,
-    'ketamine': 5,
-    'vecuronium': 4,
+    # Batch 2 (2026-05-13; HiRID additions audited 2026-05-27)
+    'lorazepam': 6,
+    'ketamine': 6,
+    'vecuronium': 5,
     'cisatracurium': 4,
-    'nitroglycerin': 5,
-    # Batch 3 (2026-05-13)
-    'pantoprazole': 4,
-    'vancomycin': 5,
-    'meropenem': 5,
-    'calcium_iv': 4,
-    # Batch 4 (2026-05-13)
+    'nitroglycerin': 6,
+    # Batch 3 (2026-05-13; round-3 additions audited 2026-05-27)
+    'pantoprazole': 5,
+    'vancomycin': 6,
+    'meropenem': 6,
+    'calcium_iv': 6,
+    # Batch 4 (2026-05-13; HiRID additions audited 2026-05-27)
     'potassium_iv': 5,
-    'magnesium_iv': 5,
+    'magnesium_iv': 6,
     'albumin_iv': 4,
-    'packed_rbc': 4,
-    # Batch 5 (2026-05-13)
-    'bicarbonate': 4,
-    'dextrose50': 4,
-    'ffp': 3,
-    'platelets': 4,
-    # Batch 6 (2026-05-13)
-    'levetiracetam': 5,
-    'dexamethasone': 2,
+    'packed_rbc': 5,
+    # Batch 5 (2026-05-13; round-3 additions audited 2026-05-27)
+    'bicarbonate': 6,
+    'dextrose50': 5,
+    'ffp': 5,
+    'platelets': 5,
+    # Batch 6 (2026-05-13; prescriptions/HiRID/AUMC additions audited 2026-05-27)
+    'levetiracetam': 6,
+    'dexamethasone': 6,
     'octreotide': 5,
     'neostigmine': 4,
-    # Batch 7 (2026-05-14)
-    'phenytoin': 3,
-    'labetalol': 5,
-    'esmolol': 5,
-    'diltiazem': 5,
+    # Batch 7 (2026-05-14; HiRID/eICU additions audited 2026-05-27)
+    'phenytoin': 5,
+    'labetalol': 6,
+    'esmolol': 6,
+    'diltiazem': 6,
     'nicardipine': 4,
-    # Batch 8 (2026-05-14)
-    'warfarin': 4,
+    # Batch 8 (2026-05-14; prescriptions/HiRID additions audited 2026-05-27)
+    'warfarin': 5,
     'apixaban': 1,
-    'enoxaparin': 4,
-    'aspirin': 3,
+    'enoxaparin': 5,
+    'aspirin': 6,
     'insulin': 5,  # MIIV+MIMIC+eICU+AUMC+HiRID
     # Fluid balance (2026-05-14)
     'total_input_ml': 4,  # MIIV + MIMIC-III MV + AUMC
