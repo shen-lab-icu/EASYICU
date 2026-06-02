@@ -147,18 +147,6 @@ from .audits.manuscript_claims import (  # noqa: E402,F401
 )
 _audit_manuscript_numeric_claims = audit_manuscript_numeric_claims  # noqa: F841 (legacy alias)
 
-# Case-specific fallback code generators (lactate / MAP / vasopressor study)
-# now live in the dedicated plugin module. Re-import them under their
-# historical underscore-prefixed names so existing pipeline.py callsites and
-# any external tests keep working. P4 will switch the callsites to go through
-# ``CasePluginRegistry`` instead, at which point these aliases can retire.
-from .case_plugins.lactate_map_vaso.fallbacks import (  # noqa: E402,F401
-    _primary_association_fallback_code,
-    _age_stratified_mortality_fallback_code,
-    _norepinephrine_dose_response_fallback_code,
-    _generic_v15_task_fallback_code,
-)
-
 from .evidence import (
     EvidenceEnforcementError,
     EvidenceEnforcementMode,

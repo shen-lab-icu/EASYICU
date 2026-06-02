@@ -6,11 +6,10 @@ a specific paper or study design. Plugins are **opt-in** — a default
 ``ResearchAgentPipeline()`` constructs with no plugins registered, so
 it carries no case-specific bias.
 
-Bundled plugins:
-
-* :mod:`.lactate_map_vaso` — the original lactate / mean arterial
-  pressure / vasopressor → mortality study, whose deterministic
-  fallbacks were previously hardcoded directly into ``pipeline.py``.
+No case-specific plugins are bundled with the package: paper-specific
+fallback scripts are dead weight for general users and risk laundering
+hand-written analyses as autonomous agent output. This package ships
+only the *mechanism*; users supply their own plugins.
 
 Adding a new plugin
 -------------------

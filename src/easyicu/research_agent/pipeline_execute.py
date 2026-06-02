@@ -1229,11 +1229,23 @@ def run_execute_phase(
                 )
             if pipeline._enable_deterministic_runner_repair:
                 before_repair_code = code
-                runner_repair = _deterministic_runner_repair(
+                plugin_repair = pipeline._case_plugin_registry.repair_code(
+                    context=context,
+                    step=step,
                     code=code,
                     run_log=run_log,
-                    previous_repair=runner_repair_name,
                 )
+                if (
+                    plugin_repair is not None
+                    and plugin_repair[0] != runner_repair_name
+                ):
+                    runner_repair = plugin_repair
+                else:
+                    runner_repair = _deterministic_runner_repair(
+                        code=code,
+                        run_log=run_log,
+                        previous_repair=runner_repair_name,
+                    )
             else:
                 runner_repair = None
             if runner_repair is not None:

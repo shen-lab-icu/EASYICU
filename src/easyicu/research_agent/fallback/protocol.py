@@ -14,7 +14,8 @@ Hook surface (all optional, all may return ``None``)
 
 ``repair_code(step, code, run_log)``
     Targeted repair of LLM-generated code given the original script
-    and its run log / traceback.
+    and its run log / traceback. Returns ``(repair_id, repaired_code)``
+    so the caller can write the provenance ledger.
 
 ``summary_repair(step, step_summary, df)``
     Deterministically patch missing numeric fields in a step's
@@ -49,6 +50,7 @@ from typing import (
     Optional,
     Protocol,
     Sequence,
+    Tuple,
     runtime_checkable,
 )
 
@@ -56,6 +58,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     import pandas as pd
 
     from ..schema import AnalysisStep, ResearchContext
+
+
+RepairCodeResult = Tuple[str, str]
 
 
 @runtime_checkable
@@ -178,8 +183,8 @@ class CasePluginRegistry:
         step: "AnalysisStep",
         code: str,
         run_log: str,
-    ) -> Optional[str]:
-        """First plugin that produces a repaired Python script for a
+    ) -> Optional[RepairCodeResult]:
+        """First plugin that produces ``(repair_id, repaired_code)`` for a
         specific failure mode of the original LLM-generated code.
         """
         for plugin in self._matching(context=context, step=step):

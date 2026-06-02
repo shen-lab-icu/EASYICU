@@ -2159,7 +2159,7 @@ cohort = pd.read_csv(os.environ['COHORT_PARQUET'])
     assert "pd.read_parquet(os.environ['COHORT_PARQUET'])" in patched
 
 
-def test_deterministic_runner_repair_falls_back_for_age_tertile_observed(ra):
+def test_deterministic_runner_repair_removes_qcut_observed_without_case_fallback(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
     code = """
@@ -2173,12 +2173,13 @@ summary = {"mortality_rate": df["death"].mean()}
     )
     assert repaired is not None
     name, patched = repaired
-    assert name == "age_stratified_mortality_dependency_free_v1"
-    assert "age_tertile_mortality.csv" in patched
+    assert name == "remove_pandas_cut_observed_keyword_v1"
+    assert "age_tertile_mortality.csv" not in patched
+    assert "observed=True" not in patched
     compile(patched, "<patched>", "exec")
 
 
-def test_deterministic_runner_repair_falls_back_for_norepi_optional_deps(ra):
+def test_deterministic_runner_repair_does_not_default_to_norepi_case_fallback(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
     code = """
@@ -2190,12 +2191,7 @@ summary = {"primary_or": None}
         code=code,
         run_log="ModuleNotFoundError: No module named 'statsmodels'",
     )
-    assert repaired is not None
-    name, patched = repaired
-    assert name == "norepinephrine_dose_response_dependency_free_v1"
-    assert "norepinephrine_quartile_mortality.csv" in patched
-    assert "statistic:primary_or" in patched
-    compile(patched, "<patched>", "exec")
+    assert repaired is None
 
 
 def test_deterministic_runner_repair_sanitizes_numpy_json_keys(ra):
@@ -5257,100 +5253,3 @@ def test_pipeline_run_from_spec_writes_runtime_artifacts(ra, tmp_path: Path):
     assert (run_dir / "workflow_graph.json").exists()
     assert (run_dir / "execution_replay.json").exists()
     assert (run_dir / "audit_log.jsonl").exists()
-
-
-def test_generic_creatinine_fallback_writes_clustering_contract(ra, tmp_path: Path, monkeypatch):
-    from easyicu.research_agent.pipeline import _generic_v15_task_fallback_code
-
-    cohort = pd.DataFrame({
-        "creat_max_24h": [1.0, 1.2, 1.5, 2.2, 2.5, 3.0],
-        "creat_median_24h": [1.0, 1.0, 1.1, 1.4, 1.6, 1.8],
-        "kdigo_stage_max_24h": [0, 0, 1, 1, 2, 3],
-        "sofa2_renal_max_24h": [0, 1, 1, 2, 3, 4],
-    })
-    cohort_path = tmp_path / "cohort.parquet"
-    out_dir = tmp_path / "outputs"
-    out_dir.mkdir()
-    cohort.to_parquet(cohort_path, index=False)
-    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
-    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
-
-    code = _generic_v15_task_fallback_code("creatinine")
-    assert code is not None
-    compile(code, "<creatinine_fallback>", "exec")
-    exec(code, {"__name__": "__main__"})
-
-    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
-    assert summary["cluster_count"] >= 2
-    assert -1 <= summary["silhouette_score"] <= 1
-    assert summary["statistic:cluster_count"] == summary["cluster_count"]
-    assert summary["statistic:silhouette_score"] == summary["silhouette_score"]
-    assert summary["cluster_characteristics"]
-    assert summary["cluster_mortality"]
-    assert summary["manifest:clustering_methodology"]["sklearn_required"] is False
-    for name in [
-        "cluster_characteristics.csv",
-        "cluster_mortality.csv",
-        "clustering_methodology.json",
-        "clustering_algorithm_details.json",
-        "clustering_visualization.png",
-        "clustering_visualization.svg",
-    ]:
-        assert (out_dir / name).exists()
-
-
-def test_generic_clustering_fallback_writes_tables_and_figures(ra, tmp_path: Path, monkeypatch):
-    from easyicu.research_agent.pipeline import (
-        _generic_v15_task_fallback_code,
-        _infer_generic_v15_fallback_key,
-    )
-
-    cohort = pd.DataFrame({
-        "stay_id": [1, 2, 3, 4, 5, 6],
-        "sofa2_max_24h": [1, 2, 4, 7, 9, 11],
-        "lactate_max_24h": [1.1, 1.4, 2.8, 3.1, 4.5, 5.0],
-        "map_min_24h": [82, 78, 70, 62, 55, 51],
-        "hr_max_24h": [88, 92, 104, 115, 122, 130],
-        "creat_max_24h": [0.8, 1.0, 1.3, 1.8, 2.1, 2.6],
-        "vaso_any_24h": [0, 0, 1, 1, 1, 1],
-        "death": [0, 0, 0, 1, 1, 1],
-    })
-    cohort_path = tmp_path / "cohort.parquet"
-    out_dir = tmp_path / "outputs"
-    out_dir.mkdir()
-    cohort.to_parquet(cohort_path, index=False)
-    monkeypatch.setenv("COHORT_PARQUET", str(cohort_path))
-    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
-
-    assert _infer_generic_v15_fallback_key(
-        "Generate cluster_characteristics and cluster_mortality for SOFA/lactate clustering",
-        "KeyError: cluster_labels",
-    ) == "clustering"
-
-    code = _generic_v15_task_fallback_code("clustering")
-    assert code is not None
-    compile(code, "<clustering_fallback>", "exec")
-    exec(code, {"__name__": "__main__"})
-
-    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
-    assert summary["cluster_count"] >= 2
-    assert {"sofa2", "lactate", "map", "heart_rate", "creatinine", "vasopressor"} <= set(
-        summary["features_used"]
-    )
-    assert summary["cluster_characteristics"]
-    assert summary["cluster_mortality"]
-    assert summary["table:cluster_characteristics"].endswith("cluster_characteristics.csv")
-    assert summary["table:cluster_mortality"].endswith("cluster_mortality.csv")
-    assert summary["figure:clustering_visualization"].endswith("clustering_visualization.png")
-    for name in [
-        "cluster_labels.csv",
-        "cluster_characteristics.csv",
-        "cluster_mortality.csv",
-        "clustering_methodology.json",
-        "clustering_algorithm_details.json",
-        "clustering_visualization.png",
-        "clustering_visualization.svg",
-        "cluster_profiles.png",
-        "cluster_profiles.svg",
-    ]:
-        assert (out_dir / name).exists()

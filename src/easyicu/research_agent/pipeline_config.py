@@ -195,8 +195,8 @@ class PipelineConfig:
     # Opt-in deterministic-fallback plugins for specific research designs.
     # Default is empty: a pipeline constructed without case plugins carries
     # no bias toward any particular paper's column names or fallback scripts.
-    # See ``easyicu.research_agent.fallback.CasePluginRegistry`` and the
-    # bundled ``case_plugins.lactate_map_vaso`` plugin.
+    # See ``easyicu.research_agent.fallback.CasePluginRegistry``. No
+    # case-specific plugins are bundled; users supply their own.
     case_plugin_registry: Optional[Any] = None
 
     # ------------------------------------------------------------------
