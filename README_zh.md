@@ -180,7 +180,7 @@ EasyICU Web 主界面包含 5 个顶级 tab：
 - **Cross-DB Benchmark（跨库对照）** — 多数据库间的标准化特征分布对比（独立出来是因为它需要 ≥ 2 个数据库的原始 schema）。
 - **Research Agent（研究智能体）** — 可选模块：以研究问题为入口的分析与证据绑定稿件框架生成，内置确定性的论文复现入口。
 
-Research Agent 把"问题 + EasyICU 准备好的数据"通过 4 阶段流水线 **Plan → Build → Analyze → Gate** 变成证据绑定的研究产物，并只在 Evidence Gate 通过后才生成可审稿件框架；它不是全自动论文写作或自主科学发现系统。
+Research Agent 把"问题 + EasyICU 准备好的数据"通过 4 阶段流水线 **Plan → Build → Analyze → Gate** 变成证据绑定的研究产物，并只在 Evidence Gate 通过后才生成可审稿件框架；它不是全自动论文写作或自主科学发现系统，也不是临床决策支持工具。
 
 ![Research Agent pipeline](docs/images/05_research_agent.jpg)
 

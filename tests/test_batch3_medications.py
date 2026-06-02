@@ -4,10 +4,10 @@ Added: pantoprazole, vancomycin, meropenem, calcium_iv.
 
 All are lgl_cncpt with set_val(TRUE) callbacks. Coverage 4-5/6:
 
-  - pantoprazole: 4/6 (no HiRID, no SIC)
-  - vancomycin:   5/6 (no HiRID; MIMIC-III CV only has enema/rectal — excluded)
-  - meropenem:    5/6 (no HiRID; MIMIC-III CV has no infusion itemid)
-  - calcium_iv:   4/6 (no HiRID, no AUMC)
+  - pantoprazole: 5/6 (no HiRID; SIC added after 2026-05-27 audit)
+  - vancomycin:   6/6 (HiRID added; MIMIC-III CV only has enema/rectal — excluded)
+  - meropenem:    6/6 (HiRID added; MIMIC-III CV has no infusion itemid)
+  - calcium_iv:   6/6 (HiRID/AUMC added after 2026-05-27 audit)
 
 Specific design decisions enforced by tests:
 
@@ -33,10 +33,10 @@ MAIN_DBS = {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
 BATCH3 = [
     # (name, required_dbs, expected_coverage)
-    ("pantoprazole", {"miiv", "mimic", "eicu", "aumc"},        4),
-    ("vancomycin",   {"miiv", "mimic", "eicu", "aumc", "sic"}, 5),
-    ("meropenem",    {"miiv", "mimic", "eicu", "aumc", "sic"}, 5),
-    ("calcium_iv",   {"miiv", "mimic", "eicu", "sic"},         4),
+    ("pantoprazole", {"miiv", "mimic", "eicu", "aumc", "sic"},          5),
+    ("vancomycin",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
+    ("meropenem",    {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
+    ("calcium_iv",   {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}, 6),
 ]
 
 
@@ -140,16 +140,16 @@ def test_calcium_iv_excludes_crrt_only_variants(cdict):
     )
 
 
-def test_calcium_iv_has_no_aumc(cdict):
-    """AUMC d_references has no calcium gluconate/chloride entry. Guard rail:
-    if someone adds AUMC without re-auditing, flag it."""
-    sources = set(cdict["calcium_iv"]["sources"])
-    assert "aumc" not in sources
+def test_calcium_iv_aumc_round3_source_is_audited(cdict):
+    """AUMC calcium source was added in the 2026-05-27 Round 3 audit."""
+    aumc = cdict["calcium_iv"]["sources"]["aumc"][0]
+    assert set(aumc["ids"]) == {18783, 19164}
+    assert aumc["callback"] == "transform_fun(set_val(TRUE))"
 
 
-def test_pantoprazole_and_vancomycin_hirid_absent(cdict):
-    """HiRID pharma reference has no PPI or antibiotic entries we can match."""
-    for c in ["pantoprazole", "vancomycin", "meropenem"]:
-        assert "hirid" not in cdict[c]["sources"], (
-            f"{c}: HiRID source added without callback validation"
-        )
+def test_batch3_hirid_and_sic_sources_match_audited_scope(cdict):
+    assert "hirid" not in cdict["pantoprazole"]["sources"]
+    assert cdict["pantoprazole"]["sources"]["sic"][0]["callback"] == "transform_fun(set_val(TRUE))"
+    for c in ["vancomycin", "meropenem", "calcium_iv"]:
+        hirid = cdict[c]["sources"]["hirid"][0]
+        assert hirid["callback"] == "transform_fun(set_val(TRUE))"
