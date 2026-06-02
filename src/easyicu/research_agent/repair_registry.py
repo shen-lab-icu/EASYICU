@@ -286,17 +286,13 @@ _CONTRACT_FILL_REPAIRS = {
 }
 
 _METHOD_SUBSTITUTION_REPAIRS = {
-    "age_stratified_mortality_dependency_free_v1",
     "formula_dummy_name_fallback_v1",
     "logit_regularized_fit_v1",
     "logreg_impute_v1",
-    "norepinephrine_dose_response_dependency_free_v1",
     "ordinal_primary_association_fallback_v1",
     "outcome_incidence_descriptive_repair_v1",
     "prediction_discrimination_template_v1",
     "prediction_split_minimal_v1",
-    "robustness_complete_case_or_fallback_v1",
-    "shock_primary_assoc_sklearn_v1",
     "table_one_descriptive_repair_v1",
     "validation_nonconvergence_fallback_v1",
 }
@@ -338,17 +334,6 @@ REPAIR_METADATA: Dict[str, RepairMetadata] = {
 
 
 _PATTERN_METADATA: Tuple[Tuple[str, RepairMetadata], ...] = (
-    (
-        "generic_v15_",
-        _meta(
-            "generic_v15_*_fallback_v1",
-            RepairClass.METHOD_SUBSTITUTION,
-            invariants=METHOD_SUBSTITUTION_INVARIANTS,
-            introduces_numbers=True,
-            requires_disclosure=True,
-            description="Generic fallback analysis template.",
-        ),
-    ),
     (
         "strip_fake_easyicu_import_",
         _meta("strip_fake_easyicu_import_*_v1", RepairClass.SYNTACTIC),

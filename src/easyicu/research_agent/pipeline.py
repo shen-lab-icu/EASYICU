@@ -177,8 +177,6 @@ from .code_repair import (
     _deterministic_runner_repair,
     _deterministic_summary_repair,
     _extract_missing_index_columns,
-    _generic_clustering_fallback_code,
-    _infer_generic_v15_fallback_key,
     _patch_json_dump_numpy_key_sanitizer,
     _patch_primary_predictor_into_design_matrix,
     _strip_columns_from_list_literals,

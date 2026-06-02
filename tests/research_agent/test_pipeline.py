@@ -1666,32 +1666,6 @@ if len(rv_df) > 0:
     assert "    if 'sex' in X_mi.columns:" in patched
 
 
-def test_deterministic_summary_repair_adds_complete_case_or_fallback(ra):
-    from easyicu.research_agent.pipeline import _deterministic_summary_repair
-
-    code = """
-predictor_var = 'lactate_max_24h'
-step_summary = {
-    'statistic:primary_or': None,
-    'statistic:complete_case_n': 450,
-}
-"""
-    repaired = _deterministic_summary_repair(
-        code=code,
-        step_summary={
-            "statistic:primary_or": None,
-            "statistic:complete_case_n": 450,
-            "note": "Complete-case model failed: exog contains inf or nans",
-        },
-        previous_repair="sex_numeric_coercion_before_dropna_v1",
-    )
-    assert repaired is not None
-    name, patched = repaired
-    assert name == "robustness_complete_case_or_fallback_v1"
-    assert "_easyicu_complete_case_or_fallback_v1" in patched
-    compile(patched, "<patched>", "exec")
-
-
 def test_deterministic_runner_repair_replaces_hallucinated_figure_utils_import(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
@@ -2085,26 +2059,6 @@ result = model.fit(disp=0, method='newton')
     assert "result = _easyicu_safe_logit_fit_v1(model)" in patched
 
 
-def test_deterministic_runner_repair_falls_back_to_sklearn_after_regularized_singular(ra):
-    from easyicu.research_agent.pipeline import _deterministic_runner_repair
-
-    code = """
-required_cols = ['lactate_max_24h', 'death', 'age', 'sex', 'map_min_24h', 'vaso_any_24h']
-model = sm.Logit(y, X)
-result = _easyicu_safe_logit_fit_v1(model)
-"""
-    repaired = _deterministic_runner_repair(
-        code=code,
-        run_log="numpy.linalg.LinAlgError: Singular matrix",
-        previous_repair="logit_regularized_fit_v1",
-    )
-    assert repaired is not None
-    name, patched = repaired
-    assert name == "shock_primary_assoc_sklearn_v1"
-    assert "LogisticRegression(" in patched
-    assert "logistic_regression_sklearn_bootstrap" in patched
-
-
 def test_deterministic_runner_repair_promotes_publication_bundle_script(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
@@ -2264,7 +2218,6 @@ step_summary = {"n_total_stays": int(n_total), "odds_ratio": lactate_or}
     assert name == "primary_predictor_omitted_from_design_v1"
     assert "X = model_df[['lactate_max_24h'," in patched
     assert "n_total = int(len(df))" in patched
-    assert "lactate_or = None" in patched
 
 
 def test_deterministic_runner_repair_restores_primary_predictor_with_indented_x_line(ra):
@@ -3955,22 +3908,6 @@ def test_semantic_aliases_include_step_id_and_prediction_aliases(ra, tmp_path: P
     assert "baseline_prevalence" in aliases
     assert "primary_association" not in aliases
     assert "outcome_rate" not in aliases
-
-
-def test_infer_generic_v15_fallback_key_skips_prediction_tasks(ra):
-    from easyicu.research_agent.pipeline import _infer_generic_v15_fallback_key
-
-    key = _infer_generic_v15_fallback_key(
-        code=(
-            "from sklearn.model_selection import StratifiedKFold\n"
-            "y_pred = model.predict_proba(X)[:, 1]\n"
-            "roc_auc_score(y, y_pred)\n"
-            "brier_score_loss(y, y_pred)\n"
-            "lactate_max_24h\n"
-        ),
-        diagnostic_text="Prediction model for t07_mortality_prediction_auroc calibration plot",
-    )
-    assert key is None
 
 
 def test_semantic_aliases_bind_cohort_summary_outcome_rate(ra, tmp_path: Path):

@@ -35,10 +35,6 @@ def test_literal_code_repair_ids_are_classified() -> None:
 
 def test_dynamic_repair_id_patterns_are_classified() -> None:
     assert (
-        repair_metadata_for("generic_v15_table_one_fallback_v1").repair_class
-        is RepairClass.METHOD_SUBSTITUTION
-    )
-    assert (
         repair_metadata_for("strip_fake_easyicu_import_easyicu_foo_v1").repair_class
         is RepairClass.SYNTACTIC
     )
@@ -46,6 +42,22 @@ def test_dynamic_repair_id_patterns_are_classified() -> None:
         repair_metadata_for("undefined_helper_stub_to_json_serializable_v1").repair_class
         is RepairClass.STRUCTURAL
     )
+
+
+def test_retired_case_specific_repair_ids_are_not_registered() -> None:
+    retired = [
+        "generic_v15_table_one_fallback_v1",
+        "age_stratified_mortality_dependency_free_v1",
+        "norepinephrine_dose_response_dependency_free_v1",
+        "robustness_complete_case_or_fallback_v1",
+        "shock_primary_assoc_sklearn_v1",
+    ]
+
+    for repair_id in retired:
+        metadata = repair_metadata_for(repair_id)
+        assert metadata.repair_class is RepairClass.METHOD_SUBSTITUTION
+        assert metadata.classification_source == "fallback:unknown_method_substitution"
+        assert metadata.requires_disclosure is True
 
 
 def test_nonconvergence_fallback_is_method_substitution() -> None:
