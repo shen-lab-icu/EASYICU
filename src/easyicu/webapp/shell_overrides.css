@@ -324,6 +324,19 @@ div[role="listbox"] li {
 .stApp .stNumberInput input:focus {
   border-color: var(--accent) !important;
 }
+.stApp .stTextInput input::placeholder,
+.stApp .stNumberInput input::placeholder,
+.stApp [data-baseweb="input"] input::placeholder {
+  color: var(--ink-4) !important;
+  -webkit-text-fill-color: var(--ink-4) !important;
+  opacity: 1 !important;
+}
+.stApp .stTextInput input:placeholder-shown,
+.stApp .stNumberInput input:placeholder-shown,
+.stApp [data-baseweb="input"] input:placeholder-shown {
+  color: var(--ink-4) !important;
+  -webkit-text-fill-color: var(--ink-4) !important;
+}
 .stApp .stSelectbox label,
 .stApp .stMultiSelect label,
 .stApp .stTextInput label,
@@ -7809,9 +7822,23 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 .stApp [class*="st-key-cohort_builder_restore_preset"] button,
 .stApp [class*="st-key-cohort_builder_previous_step"] button,
 .stApp [class*="st-key-cohort_builder_reset"] button {
-  white-space: nowrap !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
   min-height: 34px !important;
-  height: 34px !important;
+  height: auto !important;
+  line-height: 1.15 !important;
+  padding: 6px 8px !important;
+}
+.stApp [class*="st-key-step2_confirm_design"] button *,
+.stApp [class*="st-key-cohort_builder_save_preset"] button *,
+.stApp [class*="st-key-cohort_builder_restore_preset"] button *,
+.stApp [class*="st-key-cohort_builder_previous_step"] button *,
+.stApp [class*="st-key-cohort_builder_reset"] button * {
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+  line-height: 1.15 !important;
 }
 .eu-cohort-preset-status {
   margin: 10px 0 0;

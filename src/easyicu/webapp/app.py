@@ -702,6 +702,21 @@ def _switch_extract_entry_mode(state: dict[str, Any], target: str) -> None:
     state['all_patient_count'] = 0
     state['selected_patient'] = None
     state['selected_concepts'] = []
+    state.pop('cohort_filter', None)
+    for key in (
+        'cohort_age_min_design',
+        'cohort_age_max_design',
+        'cohort_first_icu_design',
+        'cohort_los_min_design',
+        'cohort_gender_design',
+        'cohort_survival_design',
+        'cohort_icd_include_query',
+        'cohort_icd_exclude_query',
+        'cohort_icd_include_query_design',
+        'cohort_icd_exclude_query_design',
+    ):
+        state.pop(key, None)
+    state['cohort_enabled'] = True
     state.pop('quick_viz_active_panel', None)
     state.pop('_preview_requested', None)
     state.pop('_viz_import_export_auto_trigger', None)
@@ -4221,8 +4236,6 @@ def main():
     assistant_notice = st.session_state.pop('_assistant_notice', None)
     if assistant_notice:
         st.success(assistant_notice)
-
-    _render_icd_preview_main_panel(lang)
 
     page_registry = build_main_page_registry(get_text)
     page_keys = [page["key"] for page in page_registry]

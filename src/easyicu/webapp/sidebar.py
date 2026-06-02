@@ -37,6 +37,7 @@ _PROTECTED_CONTEXT_NAMES = {"render_sidebar", "render_extract_page", "_install_a
 _STEP2_RESET_PENDING_KEY = "_step2_cohort_builder_reset_pending"
 _STEP2_SAVED_PRESET_KEY = "_step2_cohort_builder_saved_preset"
 _STEP2_SAVED_PRESET_META_KEY = "_step2_cohort_builder_saved_preset_meta"
+_STEP2_DEFAULT_COHORT_ENABLED = True
 _STEP2_WIDGET_KEYS = (
     "cohort_enabled",
     "cohort_age_min_design",
@@ -45,6 +46,8 @@ _STEP2_WIDGET_KEYS = (
     "cohort_los_min_design",
     "cohort_gender_design",
     "cohort_survival_design",
+    "cohort_icd_include_query",
+    "cohort_icd_exclude_query",
     "cohort_icd_include_query_design",
     "cohort_icd_exclude_query_design",
 )
@@ -62,8 +65,68 @@ _STEP2_COHORT_FILTER_KEYS = (
     "icd_exclude_query",
     "icd_mode",
 )
+_STEP2_ICD_INCLUDE_PLACEHOLDERS = {
+    "A41,A42 or A41-42",
+    "A41,A42 或 A41-42",
+}
+_STEP2_ICD_EXCLUDE_PLACEHOLDERS = {
+    "I50,C34 or I50-51",
+    "I50,C34 或 I50-51",
+}
 
 _MODULE_LABEL_PREFIX_RE = re.compile(r"^[^\w\u4e00-\u9fff]+\s*")
+
+
+def _default_step2_cohort_filter() -> dict[str, Any]:
+    return {
+        "age_min": None,
+        "age_max": None,
+        "first_icu_stay": None,
+        "los_min": None,
+        "los_max": None,
+        "gender": None,
+        "survived": None,
+        "has_sepsis": None,
+        "disease_cohort": "none",
+        "icd_query": "",
+        "icd_include_query": "",
+        "icd_exclude_query": "",
+        "icd_mode": "include",
+    }
+
+
+def _reset_step2_cohort_builder_state() -> None:
+    """Start Step 2 with empty user filters while preserving placeholder hints."""
+    st.session_state["cohort_filter"] = _default_step2_cohort_filter()
+    for widget_key in _STEP2_WIDGET_KEYS:
+        st.session_state.pop(widget_key, None)
+    st.session_state["cohort_enabled"] = _STEP2_DEFAULT_COHORT_ENABLED
+    st.session_state["filtered_patient_count"] = None
+    clear_icd_preview = globals().get("_clear_icd_preview_state")
+    if callable(clear_icd_preview):
+        clear_icd_preview()
+
+
+def _clear_step2_placeholder_icd_values(cf: MutableMapping[str, Any]) -> None:
+    """Remove example ICD strings that were accidentally stored as values."""
+    include_value = str(cf.get("icd_include_query") or "").strip()
+    exclude_value = str(cf.get("icd_exclude_query") or "").strip()
+    if include_value in _STEP2_ICD_INCLUDE_PLACEHOLDERS:
+        cf["icd_include_query"] = ""
+    if exclude_value in _STEP2_ICD_EXCLUDE_PLACEHOLDERS:
+        cf["icd_exclude_query"] = ""
+    if str(cf.get("icd_query") or "").strip() in _STEP2_ICD_INCLUDE_PLACEHOLDERS:
+        cf["icd_query"] = ""
+
+    placeholder_widget_keys = (
+        ("cohort_icd_include_query", _STEP2_ICD_INCLUDE_PLACEHOLDERS),
+        ("cohort_icd_include_query_design", _STEP2_ICD_INCLUDE_PLACEHOLDERS),
+        ("cohort_icd_exclude_query", _STEP2_ICD_EXCLUDE_PLACEHOLDERS),
+        ("cohort_icd_exclude_query_design", _STEP2_ICD_EXCLUDE_PLACEHOLDERS),
+    )
+    for widget_key, placeholders in placeholder_widget_keys:
+        if str(st.session_state.get(widget_key) or "").strip() in placeholders:
+            st.session_state.pop(widget_key, None)
 
 
 def _clean_module_label(label: object) -> str:
@@ -138,6 +201,7 @@ def _activate_entry_mode(target: str) -> None:
     st.session_state["all_patient_count"] = 0
     st.session_state["selected_patient"] = None
     st.session_state["selected_concepts"] = []
+    _reset_step2_cohort_builder_state()
     st.session_state["_active_main_page"] = "extract"
 
 
@@ -223,6 +287,7 @@ def _demo_module_catalog_html(lang: str) -> str:
 
 def _confirm_demo_data_source() -> None:
     """Confirm Step 1 for demo mode and move to the cohort setup step."""
+    _reset_step2_cohort_builder_state()
     st.session_state.step1_confirmed = True
     st.session_state["_scroll_to_top"] = True
 
@@ -230,6 +295,7 @@ def _confirm_demo_data_source() -> None:
 def _confirm_real_data_source() -> None:
     """Confirm Step 1 for a validated real-data source."""
     st.session_state.use_mock_data = False
+    _reset_step2_cohort_builder_state()
     st.session_state.step1_confirmed = True
     st.session_state.step2_confirmed = False
     st.session_state.step3_confirmed = False
@@ -1960,21 +2026,7 @@ def _render_step2_cohort_selection() -> bool:
 
     # 初始化队列筛选的 session state
     if 'cohort_filter' not in st.session_state:
-        st.session_state.cohort_filter = {
-            'age_min': None,
-            'age_max': None,
-            'first_icu_stay': None,
-            'los_min': None,
-            'los_max': None,
-            'gender': None,
-            'survived': None,
-            'has_sepsis': None,
-            'disease_cohort': 'none',
-            'icd_query': '',
-            'icd_include_query': '',
-            'icd_exclude_query': '',
-            'icd_mode': 'include',
-        }
+        st.session_state.cohort_filter = _default_step2_cohort_filter()
     # Upgrade older sessions that only had a single ICD box.
     if 'icd_include_query' not in st.session_state.cohort_filter:
         legacy_query = str(st.session_state.cohort_filter.get('icd_query', '')).strip()
@@ -1986,12 +2038,13 @@ def _render_step2_cohort_selection() -> bool:
     # Keep legacy keys for backward compatibility with existing export/session logic.
     st.session_state.cohort_filter.setdefault('icd_query', '')
     st.session_state.cohort_filter.setdefault('icd_mode', 'include')
+    _clear_step2_placeholder_icd_values(st.session_state.cohort_filter)
     st.session_state.setdefault('sepsis_si_mode', 'auto')
     st.session_state.setdefault('sepsis_abx_win_hours', 24)
     st.session_state.setdefault('sepsis_samp_win_hours', 72)
     st.session_state.setdefault('sepsis_positive_cultures', False)
     if 'cohort_enabled' not in st.session_state:
-        st.session_state.cohort_enabled = False
+        st.session_state.cohort_enabled = _STEP2_DEFAULT_COHORT_ENABLED
     if 'filtered_patient_count' not in st.session_state:
         st.session_state.filtered_patient_count = None
 
@@ -2289,6 +2342,7 @@ def _render_step2_cohort_selection() -> bool:
                             _icd_tokens_preview,
                         )
                         st.session_state[f'_icd_preview_cache_{preview_key}'] = _icd_preview_result
+                _render_step2_icd_match_preview_panel(st.session_state.language)
         else:
             st.session_state.cohort_filter['icd_query'] = ""
             st.session_state.cohort_filter['icd_include_query'] = ""
@@ -2999,21 +3053,7 @@ def _ensure_step2_state_defaults() -> None:
     _apply_pending_step2_reset()
 
     if 'cohort_filter' not in st.session_state:
-        st.session_state.cohort_filter = {
-            'age_min': None,
-            'age_max': None,
-            'first_icu_stay': None,
-            'los_min': None,
-            'los_max': None,
-            'gender': None,
-            'survived': None,
-            'has_sepsis': None,
-            'disease_cohort': 'none',
-            'icd_query': '',
-            'icd_include_query': '',
-            'icd_exclude_query': '',
-            'icd_mode': 'include',
-        }
+        st.session_state.cohort_filter = _default_step2_cohort_filter()
     cf = st.session_state.cohort_filter
     if 'icd_include_query' not in cf:
         legacy_query = str(cf.get('icd_query', '')).strip()
@@ -3023,12 +3063,13 @@ def _ensure_step2_state_defaults() -> None:
     cf.setdefault('icd_exclude_query', '')
     cf.setdefault('icd_query', '')
     cf.setdefault('icd_mode', 'include')
+    _clear_step2_placeholder_icd_values(cf)
     st.session_state.setdefault('sepsis_si_mode', 'auto')
     st.session_state.setdefault('sepsis_abx_win_hours', 24)
     st.session_state.setdefault('sepsis_samp_win_hours', 72)
     st.session_state.setdefault('sepsis_positive_cultures', False)
     if 'cohort_enabled' not in st.session_state:
-        st.session_state.cohort_enabled = st.session_state.get("entry_mode") == "demo"
+        st.session_state.cohort_enabled = _STEP2_DEFAULT_COHORT_ENABLED
     if 'filtered_patient_count' not in st.session_state:
         st.session_state.filtered_patient_count = None
 
@@ -3036,14 +3077,7 @@ def _ensure_step2_state_defaults() -> None:
 def _apply_pending_step2_reset() -> None:
     """Apply a queued Step 2 reset before Step 2 widgets are rendered."""
     if st.session_state.pop(_STEP2_RESET_PENDING_KEY, False):
-        st.session_state.pop('cohort_filter', None)
-        for widget_key in _STEP2_WIDGET_KEYS:
-            st.session_state.pop(widget_key, None)
-        st.session_state.cohort_enabled = st.session_state.get("entry_mode") == "demo"
-        st.session_state.filtered_patient_count = None
-        clear_icd_preview = globals().get("_clear_icd_preview_state")
-        if callable(clear_icd_preview):
-            clear_icd_preview()
+        _reset_step2_cohort_builder_state()
 
 
 def _step2_filter_chips(lang: str) -> list[str]:
@@ -3111,20 +3145,7 @@ def _snapshot_step2_cohort_filter(filters: MutableMapping[str, Any]) -> dict[str
 
 def _restore_step2_cohort_filter(snapshot: MutableMapping[str, Any]) -> dict[str, Any]:
     """Merge a saved Step 2 preset with the default cohort-filter shape."""
-    restored = {
-        "age_min": None,
-        "age_max": None,
-        "first_icu_stay": None,
-        "los_min": None,
-        "gender": None,
-        "survived": None,
-        "has_sepsis": None,
-        "disease_cohort": "none",
-        "icd_query": "",
-        "icd_include_query": "",
-        "icd_exclude_query": "",
-        "icd_mode": "include",
-    }
+    restored = _default_step2_cohort_filter()
     restored.update({key: snapshot.get(key) for key in _STEP2_COHORT_FILTER_KEYS if key in snapshot})
     return restored
 
@@ -3394,6 +3415,13 @@ def _render_step2_icd_preview(lang: str, include_query: str, exclude_query: str)
     else:
         preview = _real_step2_icd_preview_counts(include_query, exclude_query)
     st.markdown(_step2_icd_preview_html(lang, preview), unsafe_allow_html=True)
+
+
+def _render_step2_icd_match_preview_panel(lang: str) -> None:
+    """Render detailed ICD match results next to the Step 2 ICD controls."""
+    preview_panel = globals().get("_render_icd_preview_main_panel")
+    if callable(preview_panel):
+        preview_panel(lang)
 
 
 def _render_cohort_live_preview(lang: str) -> None:
@@ -3708,6 +3736,7 @@ def _render_step2_cohort_builder_design() -> bool:
                     cf.get('icd_include_query', ''),
                     cf.get('icd_exclude_query', ''),
                 )
+                _render_step2_icd_match_preview_panel(lang)
         else:
             cf['icd_query'] = ""
             cf['icd_include_query'] = ""
@@ -3715,30 +3744,39 @@ def _render_step2_cohort_builder_design() -> bool:
             cf['icd_mode'] = 'include'
             _clear_icd_preview_state()
 
-        footer_l, prev_col, reset_col, preset_col, restore_col, confirm_col = st.columns(
-            [1.65, 1.25, 1.1, 1.25, 1.25, 1.45],
+        st.markdown(
+            f'<div class="eu-source-footer-note">{html.escape("Step 2 of 4" if lang == "en" else "第 2 步 / 共 4 步")}</div>',
+            unsafe_allow_html=True,
+        )
+        prev_col, reset_col, preset_col, restore_col, confirm_col = st.columns(
+            [1.05, 1.15, 1.15, 1.3, 1.75],
             gap="small",
         )
-        with footer_l:
-            st.markdown(
-                f'<div class="eu-source-footer-note">{html.escape("Step 2 of 4" if lang == "en" else "第 2 步 / 共 4 步")}</div>',
-                unsafe_allow_html=True,
-            )
         with prev_col:
             if st.button(
-                "Previous step" if lang == "en" else "上一步",
+                "Back" if lang == "en" else "上一步",
                 key="cohort_builder_previous_step",
                 use_container_width=True,
-                icon=":material/arrow_back:",
+                help="Return to data source" if lang == "en" else "返回数据源步骤",
             ):
                 _sidebar_set_extract_step_state(st.session_state, 1)
                 st.rerun()
         with reset_col:
-            if st.button("Reset" if lang == "en" else "重置", key="cohort_builder_reset", use_container_width=True):
+            if st.button(
+                "Reset" if lang == "en" else "重置",
+                key="cohort_builder_reset",
+                use_container_width=True,
+                help="Reset cohort filters" if lang == "en" else "重置队列筛选",
+            ):
                 st.session_state[_STEP2_RESET_PENDING_KEY] = True
                 st.rerun()
         with preset_col:
-            if st.button("Save preset" if lang == "en" else "保存预设", key="cohort_builder_save_preset", use_container_width=True):
+            if st.button(
+                "Save" if lang == "en" else "保存",
+                key="cohort_builder_save_preset",
+                use_container_width=True,
+                help="Save this cohort preset" if lang == "en" else "保存当前队列预设",
+            ):
                 chips = _active_step2_filter_chips(lang)
                 st.session_state[_STEP2_SAVED_PRESET_KEY] = _snapshot_step2_cohort_filter(cf)
                 st.session_state[_STEP2_SAVED_PRESET_META_KEY] = {
@@ -3749,10 +3787,11 @@ def _render_step2_cohort_builder_design() -> bool:
         with restore_col:
             saved_preset = st.session_state.get(_STEP2_SAVED_PRESET_KEY)
             restore_clicked = st.button(
-                "Restore preset" if lang == "en" else "恢复预设",
+                "Restore" if lang == "en" else "恢复",
                 key="cohort_builder_restore_preset",
                 use_container_width=True,
                 disabled=not isinstance(saved_preset, dict),
+                help="Restore the saved cohort preset" if lang == "en" else "恢复已保存的队列预设",
             )
             if restore_clicked and isinstance(saved_preset, dict):
                 st.session_state.cohort_filter = _restore_step2_cohort_filter(saved_preset)
@@ -3766,10 +3805,11 @@ def _render_step2_cohort_builder_design() -> bool:
                 st.rerun()
         with confirm_col:
             if st.button(
-                "Confirm cohort" if lang == "en" else "确认队列",
+                "Confirm" if lang == "en" else "确认",
                 key="step2_confirm_design",
                 type="primary",
                 use_container_width=True,
+                help="Confirm cohort and continue" if lang == "en" else "确认队列并继续",
             ):
                 _clear_icd_preview_state()
                 concept_groups = get_concept_groups()
