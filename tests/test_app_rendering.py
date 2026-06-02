@@ -5016,12 +5016,22 @@ def test_real_entry_cta_resets_demo_progress_and_database() -> None:
         "quick_viz_active_panel": "Time Series",
         "_export_failure_result": {"type": "no_data"},
         "_active_main_page": "quick_viz",
+        "cohort_filter": {
+            "icd_query": "A41",
+            "icd_include_query": "A41",
+            "icd_exclude_query": "I50",
+        },
+        "cohort_icd_include_query": "A41,A42 or A41-42",
+        "cohort_icd_exclude_query": "I50,C34 or I50-51",
+        "cohort_icd_include_query_design": "A41,A42 or A41-42",
+        "cohort_icd_exclude_query_design": "I50,C34 or I50-51",
     }
 
     pages_redesign._route_to_extract_entry_mode(state, "real")
 
     assert state["entry_mode"] == "real"
     assert state["use_mock_data"] is False
+    assert state["cohort_enabled"] is True
     assert state["database"] == "miiv"
     assert state["path_validated"] is False
     assert "last_validated_path" not in state
@@ -5037,6 +5047,11 @@ def test_real_entry_cta_resets_demo_progress_and_database() -> None:
     assert state["all_patient_count"] == 0
     assert state["selected_patient"] is None
     assert state["selected_concepts"] == []
+    assert "cohort_filter" not in state
+    assert "cohort_icd_include_query" not in state
+    assert "cohort_icd_exclude_query" not in state
+    assert "cohort_icd_include_query_design" not in state
+    assert "cohort_icd_exclude_query_design" not in state
     assert "quick_viz_active_panel" not in state
     assert "_export_failure_result" not in state
     assert state["_active_main_page"] == "extract"
@@ -5102,6 +5117,15 @@ def test_extract_workflow_helpers_keep_state_consistent() -> None:
     assert "[0, 80, 240, 600, 1200]" in source
 
     state["_export_failure_result"] = {"type": "no_data"}
+    state["cohort_filter"] = {
+        "icd_query": "A41",
+        "icd_include_query": "A41",
+        "icd_exclude_query": "I50",
+    }
+    state["cohort_icd_include_query"] = "A41,A42 or A41-42"
+    state["cohort_icd_exclude_query"] = "I50,C34 or I50-51"
+    state["cohort_icd_include_query_design"] = "A41,A42 or A41-42"
+    state["cohort_icd_exclude_query_design"] = "I50,C34 or I50-51"
     app._switch_extract_entry_mode(state, "real")
     assert state["entry_mode"] == "real"
     assert state["use_mock_data"] is False
@@ -5112,12 +5136,18 @@ def test_extract_workflow_helpers_keep_state_consistent() -> None:
     assert state["loaded_concepts"] == {}
     assert state["loaded_data_origin"] == "none"
     assert state["patient_ids"] == []
+    assert "cohort_filter" not in state
+    assert "cohort_icd_include_query" not in state
+    assert "cohort_icd_exclude_query" not in state
+    assert "cohort_icd_include_query_design" not in state
+    assert "cohort_icd_exclude_query_design" not in state
     assert "_export_failure_result" not in state
     assert state["_active_main_page"] == "extract"
 
     app._switch_extract_entry_mode(state, "demo")
     assert state["entry_mode"] == "demo"
     assert state["use_mock_data"] is True
+    assert state["cohort_enabled"] is True
     assert state["database"] == "mock"
 
 
@@ -7161,12 +7191,19 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert '"🤖 Ask AI about Sepsis settings"' not in app_text
     assert 'icon=":material/smart_toy:"' in app_text
     assert sidebar_text.count("st.columns([5, 1.45, 2.25], gap=\"small\")") == 2
-    assert "footer_l, prev_col, reset_col, preset_col, restore_col, confirm_col = st.columns(" in sidebar_text
-    assert "[1.65, 1.25, 1.1, 1.25, 1.25, 1.45]" in sidebar_text
+    assert "prev_col, reset_col, preset_col, restore_col, confirm_col = st.columns(" in sidebar_text
+    assert "[1.05, 1.15, 1.15, 1.3, 1.75]" in sidebar_text
+    assert '"Back" if lang == "en" else "上一步"' in sidebar_text
+    assert '"Confirm" if lang == "en" else "确认"' in sidebar_text
     assert "st.columns([4.2, 1.45, 1.45], gap=\"small\")" in sidebar_text
     assert 'key="step1_reset_real"' in sidebar_text
     assert 'key="step1_confirm_real"' in sidebar_text
     assert "disabled=not real_ready" in sidebar_text
+    assert "_render_icd_preview_main_panel(lang)" not in app_text
+    assert 'preview_panel = globals().get("_render_icd_preview_main_panel")' in sidebar_text
+    assert "_render_step2_icd_match_preview_panel(lang)" in sidebar_text
+    assert ".stApp .stTextInput input::placeholder" in css_text
+    assert "-webkit-text-fill-color: var(--ink-4) !important" in css_text
     assert "_confirm_real_data_source()" in sidebar_text
     assert "st.columns([5, 1.7, 1.7], gap=\"small\")" not in sidebar_text
     assert "st.columns([5, 1, 2.4], gap=\"small\")" not in sidebar_text
@@ -7184,6 +7221,77 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert 'class*="st-key-step3_confirm_design"' in css_text
     assert 'class*="st-key-concept_previous_step"' in css_text
     assert "height: 45px !important" in css_text
+
+
+def test_real_data_confirm_defaults_step2_filtering_on(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "use_mock_data": True,
+            "cohort_enabled": False,
+            "step1_confirmed": False,
+            "step2_confirmed": True,
+            "step3_confirmed": True,
+            "export_completed": True,
+            "cohort_filter": {
+                "age_min": 65,
+                "disease_cohort": "sepsis",
+                "icd_query": "A41",
+                "icd_include_query": "A41,A42 or A41-42",
+                "icd_exclude_query": "I50,C34 or I50-51",
+            },
+            "cohort_icd_include_query": "A41,A42 or A41-42",
+            "cohort_icd_exclude_query": "I50,C34 or I50-51",
+            "cohort_icd_include_query_design": "A41,A42 or A41-42",
+            "cohort_icd_exclude_query_design": "I50,C34 or I50-51",
+        }
+    )
+    monkeypatch.setattr(sidebar, "st", _SessionStateStreamlit(state))
+
+    sidebar._confirm_real_data_source()
+
+    assert state.use_mock_data is False
+    assert state.cohort_enabled is True
+    assert state.step1_confirmed is True
+    assert state.step2_confirmed is False
+    assert state.step3_confirmed is False
+    assert state.export_completed is False
+    assert state.cohort_filter["icd_query"] == ""
+    assert state.cohort_filter["icd_include_query"] == ""
+    assert state.cohort_filter["icd_exclude_query"] == ""
+    assert "cohort_icd_include_query" not in state
+    assert "cohort_icd_exclude_query" not in state
+    assert "cohort_icd_include_query_design" not in state
+    assert "cohort_icd_exclude_query_design" not in state
+
+
+def test_step2_defaults_scrub_icd_placeholder_values(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "entry_mode": "real",
+            "cohort_filter": {
+                "icd_query": "A41,A42 or A41-42",
+                "icd_include_query": "A41,A42 or A41-42",
+                "icd_exclude_query": "I50,C34 or I50-51",
+            },
+            "cohort_icd_include_query": "A41,A42 or A41-42",
+            "cohort_icd_exclude_query": "I50,C34 or I50-51",
+            "cohort_icd_include_query_design": "A41,A42 or A41-42",
+            "cohort_icd_exclude_query_design": "I50,C34 or I50-51",
+        }
+    )
+    monkeypatch.setattr(sidebar, "st", _SessionStateStreamlit(state))
+
+    sidebar._ensure_step2_state_defaults()
+
+    assert state.cohort_enabled is True
+    assert state.cohort_filter["icd_query"] == ""
+    assert state.cohort_filter["icd_include_query"] == ""
+    assert state.cohort_filter["icd_exclude_query"] == ""
+    assert "cohort_icd_include_query" not in state
+    assert "cohort_icd_exclude_query" not in state
+    assert "cohort_icd_include_query_design" not in state
+    assert "cohort_icd_exclude_query_design" not in state
 
 
 def test_step4_export_footer_actions_have_overlap_guard() -> None:
@@ -7496,7 +7604,7 @@ def test_step2_reset_defers_cohort_enabled_until_next_render(monkeypatch) -> Non
     sidebar._ensure_step2_state_defaults()
 
     assert sidebar._STEP2_RESET_PENDING_KEY not in streamlit_stub.session_state
-    assert streamlit_stub.session_state["cohort_enabled"] is False
+    assert streamlit_stub.session_state["cohort_enabled"] is True
     assert "cohort_age_min_design" not in streamlit_stub.session_state
     assert "cohort_icd_include_query_design" not in streamlit_stub.session_state
     assert streamlit_stub.session_state["cohort_filter"]["age_min"] is None
