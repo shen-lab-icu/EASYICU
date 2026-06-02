@@ -18,7 +18,13 @@ loaded.
 |---|---|---|
 | `concept_name` → callbacks per data source | `hr` → `{miiv: {…}, eicu: {…}, …}` | Per-database extraction rules |
 
-**Around 197 concepts** (as of 2026-05) covering:
+**198 concepts in `concept-dict.json`** (verified count, as of 2026-06).
+This is the number of *entries in this file*; the web-side catalog reports
+a larger loadable total (see the root `README.md`) because it also exposes
+derived/special concepts — KDIGO AKI staging, circulatory-failure
+indicators, and the SOFA-2 overlay below — that are computed by callbacks
+rather than stored as their own dictionary entries. The 198 break down
+roughly as:
 
 - 6 demographics, 3 outcomes
 - 8 vitals, 14 respiratory, 12 ventilator, 9 blood gas

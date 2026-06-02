@@ -72,7 +72,9 @@ src/easyicu/data/*.bak_before_*
 demo.py
 demo/
 dictionary/
-examples/
+# examples/ is now shipped (curated onboarding scripts); keep only its caches out
+examples/__pycache__/
+examples/**/__pycache__/
 hl_sepsis_newborn/
 hl_sepsis_newborn_model/
 tools/archived
@@ -108,6 +110,10 @@ tools/build_nm_v16_tool_manuscript.py
 tools/create_v15_review_package.py
 tools/organize_v15_final_deliverables.py
 tools/render_nature_figure_from_run.py
+tools/aggregate_v19_benchmark_results.py
+tools/run_tier2_jury.py
+tools/run_lactate_map_vaso_export_fullflow.py
+tools/run_pilot_phase1.sh
 
 # 测试文件 - 不上传测试代码
 # test_main.py
@@ -116,11 +122,12 @@ CLEANUP_PLAN.md
 tests/
 !tests/
 !tests/**/*.py
+# Internal-only tests coupled to manuscript/pilot tooling kept out of the package
+tests/research_agent/test_pilot_exit_status_capture.py
+tests/research_agent/test_case_b_bootstrap.py
+tests/research_agent/test_tier2_jury.py
 scripts/*
 !scripts/launch_easyicu.py
-!scripts/pilot_real_llm.py
-!scripts/audit/
-!scripts/audit/**
 
 # 环境文件
 .env
@@ -138,10 +145,14 @@ pilot_runs/
 !CONTRIBUTING.md
 !baselines/REGISTRY.md
 !docs/architecture_glossary.md
-!docs/concept_dict_audit_log.md
-!docs/research_agent_module_map_20260527.md
-!docs/user_added_concepts_tracker.md
+# Internal audit dumps — kept locally, not part of the public docs tree.
+# The public docs/ tree is markdown-only; keep audit JSON/TXT dumps out.
+docs/_internal/
+docs/*.json
+docs/*.txt
 .easyicu-runtime/
+# Local IDE / Claude Code launch configs (machine-specific paths)
+.claude/
 
 # Root-level run debris (analysis scripts that mistakenly use cwd)
 /nohup.out

@@ -431,9 +431,8 @@ def _render_writer_evidence_digest(
 #
 # v2 is opt-in via ``PipelineConfig.writer_digest_widened`` (default
 # False). v1's behaviour is byte-for-byte preserved for callers that
-# don't flip the flag. See
-# ``easyicu写作/00_当前投稿_20260516/03_phase0_baseline_study/spec_autonomous_refactor_20260527.md``
-# §2 for the design.
+# don't flip the flag. See the writer-digest widening design note in the
+# project's internal design docs §2.
 
 
 def _claim_step_field_covered_by_primary(

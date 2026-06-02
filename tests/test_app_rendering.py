@@ -928,7 +928,7 @@ def test_hide_prefilled_directory_text_keeps_user_absolute_path(monkeypatch) -> 
     class _SidebarStreamlit:
         def __init__(self) -> None:
             self.session_state = {
-                "sidebar_data_path_input": "/Users/haibo/.mounty/新加卷/databases/mimic-iv-3.1",
+                "sidebar_data_path_input": "/data/icu/mimic-iv-3.1",
             }
 
     streamlit_stub = _SidebarStreamlit()
@@ -936,7 +936,7 @@ def test_hide_prefilled_directory_text_keeps_user_absolute_path(monkeypatch) -> 
 
     sidebar._hide_prefilled_directory_text(
         "sidebar_data_path_input",
-        "/Users/haibo/.mounty/新加卷/databases/eicu",
+        "/data/icu/eicu",
     )
 
     assert streamlit_stub.session_state["sidebar_data_path_input"].endswith("mimic-iv-3.1")
@@ -946,7 +946,7 @@ def test_hide_prefilled_directory_text_clears_only_mirrored_value(monkeypatch) -
     class _SidebarStreamlit:
         def __init__(self) -> None:
             self.session_state = {
-                "sidebar_data_path_input": "/Users/haibo/.mounty/新加卷/databases/eicu",
+                "sidebar_data_path_input": "/data/icu/eicu",
             }
 
     streamlit_stub = _SidebarStreamlit()
@@ -954,7 +954,7 @@ def test_hide_prefilled_directory_text_clears_only_mirrored_value(monkeypatch) -
 
     sidebar._hide_prefilled_directory_text(
         "sidebar_data_path_input",
-        "/Users/haibo/.mounty/新加卷/databases/eicu",
+        "/data/icu/eicu",
     )
 
     assert streamlit_stub.session_state["sidebar_data_path_input"] == ""

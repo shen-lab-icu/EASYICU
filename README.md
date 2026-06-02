@@ -2,7 +2,7 @@
 
 # EasyICU
 
-> A reproducible infrastructure for cross-database ICU research, with standardized concept extraction, clinician-friendly web workflows, and scriptable Python APIs.
+> A reproducible infrastructure for cross-database ICU research: standardized concept extraction, clinician-friendly web workflows, scriptable Python APIs, and an **evidence-bound research agent** that keeps every reported number traceable and holds back claims it cannot verify.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -12,8 +12,12 @@ EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It prov
 
 ## Why EasyICU
 
-- **One concept layer across six public ICU databases**: EasyICU uses clinical concepts rather than database-specific variable lists, making cross-database analysis easier to write, review, and reuse.
+EasyICU has two layers that answer the two halves of one question — *how trustworthy is a reported ICU result?* The **concept layer** governs the clinical definition that produces a number; the **evidence-bound agent layer** governs the trail that records it.
+
+- **One concept layer across six public ICU databases**: EasyICU uses clinical concepts rather than database-specific variable lists, making cross-database analysis easier to write, review, and reuse. The unit of cross-database analysis is the *concept* (`hr`, `crea`, `sofa2`…), not a database's private field name.
 - **Reproducible from both code and UI**: the same prepared data can be used in the web app and in Python scripts or notebooks.
+- **Evidence-bound, auditable analysis agent**: an optional research-agent layer turns a question + cohort into analysis where every produced artefact (script, log, table, statistic, figure) is hashed into a SHA-256 evidence store, and every reported number is checked against the value it was registered with. Claims that cannot be verified are **held back at the manuscript boundary** rather than published — a *fail-closed* design.
+- **Cross-database replication for reliability**: the same research question can be re-run across databases as a replication protocol, so a conclusion's robustness can be *inspected* rather than assumed.
 - **Validated on clinically meaningful use cases**: the framework includes automated computation of **SOFA-2**, alongside standardized concepts, domain-specific loaders, and cohort analytics.
 
 ## Who This Repository Is For
@@ -23,6 +27,8 @@ EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It prov
 - **Python users** who want to build scripted, reproducible extraction and feature engineering pipelines.
 
 ## Start Here
+
+> **One rule before any API call:** every extraction API expects a **prepared (converted)** dataset, not a raw download. If you have never converted this database, run the **Convert step first** (Web UI *Validate Data Path → Convert & Setup*, or `DataConverter(...).convert_all()` — see [Python API](#-python-api)). `data_path` in every snippet below means *the prepared directory*.
 
 ### Quick Lookup: "I want to ... → run ..."
 
@@ -34,8 +40,21 @@ EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It prov
 | Run the research-agent on a question + cohort | `easyicu-research-agent` |
 | Reproduce an external paper through the agent | `easyicu-research-replication` |
 | Host the LLM proxy used by the research-agent | `easyicu-llm-server` |
+| Copy-paste runnable scripts | [`examples/`](examples/) — start with [`quickstart_convert_and_load.py`](examples/quickstart_convert_and_load.py) |
 
 All console scripts are declared in `pyproject.toml` under `[project.scripts]` and become available after `pip install -e ".[dev,webapp]"` (or `".[all]"`).
+
+### Documentation Map
+
+This README is the front door. Each major layer keeps a focused README next to its code:
+
+| Read this | For |
+|-----------|-----|
+| [`src/easyicu/README.md`](src/easyicu/README.md) | Package module map — how the ~75 modules layer (concept abstraction → convert → API → scores). Start here as a code contributor. |
+| [`src/easyicu/webapp/README.md`](src/easyicu/webapp/README.md) | The Streamlit web layer: tabs, the AI opt-in gate invariant, and where to add a page. |
+| [`src/easyicu/research_agent/README.md`](src/easyicu/research_agent/README.md) | The evidence-bound research-agent layer: four-layer design, readiness gates, replication protocol. |
+| [`src/easyicu/data/README.md`](src/easyicu/data/README.md) | The concept dictionaries (`concept-dict.json`, the SOFA-2 overlay) that drive cross-database extraction. |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | The expected workflow for proposing changes. |
 
 ### Path A: Web Interface
 
@@ -166,15 +185,57 @@ The Research Agent layer turns a question + prepared EasyICU data into an eviden
 
 ![Research Agent pipeline](docs/images/05_research_agent.jpg)
 
-## Optional Research-Agent Layer
+## Evidence-Bound Research-Agent Layer
 
-For advanced users, EasyICU also includes an optional
-`easyicu.research_agent` layer for ICU-aware analysis planning,
-evidence-bound reporting, manuscript scaffold generation, and
-paper-aware replication mode for retrospective ICU studies. It is not
-required for the standard web workflow or Python extraction APIs.
+`easyicu.research_agent` is an optional layer that turns a research
+question + a confirmed cohort export into an **auditable** analysis. It
+is not required for the standard web workflow or Python extraction APIs.
 See [src/easyicu/research_agent/README.md](src/easyicu/research_agent/README.md)
-for details.
+for the full design.
+
+**Why it is more than orchestration.** Generic analysis agents are
+strong at planning and code generation but weak on ICU semantics — they
+average ordinal SOFA components, silently impute missing PaO₂, fall for
+the `SOFA==0` high-mortality artefact, and confuse ICU with hospital
+mortality. EasyICU closes that gap with four layers:
+
+1. **ICU Data Foundation** — the concept dictionary above, reused as the
+   agent's only view of the data (it never sees raw rows through the
+   prompt, so it cannot invent variables or invalid aggregations).
+2. **Safe Analytical Runtime** — a SHA-256 `EvidenceStore`, a numeric
+   claim registry, deterministic validators, and execution replay.
+3. **Agent Orchestration** — planner / replanner / coder / analyzer /
+   writer / critic, with deterministic gates between every LLM step.
+4. **Candidate Hypothesis Ranking** — a bounded, human-curated pre-plan
+   stage (not an autonomous "scientific discovery" system).
+
+**Fail-closed, not free-running.** A `ResearchContext` carries each
+variable's role, units, allowed aggregations, time windows, missingness
+semantics and ICU pitfalls into the agent loop *and* into the
+validators. Every artefact is hashed into the evidence store; every
+reported number is registered as a numeric claim and re-checked against
+its source. Four readiness gates — **execution-complete /
+evidence-complete / numeric-verified / analysis-validated** — are
+computed mechanically (anyone can recompute the same label) and sort the
+output into three states: **gate-reportable**, **analysis-only**, or
+**diagnostic-only**. An unverifiable claim (e.g. a draft `AUROC 0.8`
+that does not match the registered `0.842`) is intercepted at the
+manuscript boundary and routed for repair, code re-run, or human review
+— it must pass the same gates again before it can enter a reportable
+manuscript.
+
+**Cross-database replication for reliability.** Cross-database work
+defaults to a replication protocol: the same question is re-run on other
+supported databases (`cross_database_validation=["eicu", "hirid"]`) so a
+conclusion's robustness across case-mix, coverage and missingness can be
+inspected — not to claim one database is "better".
+
+**Deterministic auditing, not LLM-as-judge.** The hard checks
+(`concept_usage`, statistical, causal, reporting-checklist, multiple
+testing, fairness) are deterministic and rule-based, so the system does
+not rely on one LLM grading another. The historical `icu_agent_bench`
+module is an **internal evaluation protocol**, not a frozen public
+benchmark, and should be described that way.
 
 ## 🚀 Going Further (Developers / Advanced Users)
 
@@ -261,6 +322,8 @@ What this example assumes:
 
 ### Easy API — One-Liners
 
+> ⚠️ `data_path` below must point to a **converted/prepared** directory (see [Convert Data First](#api-prerequisite-convert-data-first)). Passing a raw download here will fail.
+
 ```python
 from easyicu import load_sofa, load_sofa2, load_vitals, load_labs
 
@@ -287,6 +350,8 @@ labs = load_labs(database='miiv', data_path='/path/to/data')
 ```
 
 ### Concept API — Flexible & Customizable
+
+> ⚠️ `data_path` below must point to a **converted/prepared** directory (see [Convert Data First](#api-prerequisite-convert-data-first)).
 
 ```python
 from easyicu import load_concepts
@@ -346,6 +411,8 @@ all_features = load_concepts(
 > case a worker hangs.
 
 ### Domain-Specific Loaders
+
+> ⚠️ `data_path` below must point to a **converted/prepared** directory (see [Convert Data First](#api-prerequisite-convert-data-first)).
 
 ```python
 from easyicu import (
