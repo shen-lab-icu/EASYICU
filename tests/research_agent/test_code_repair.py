@@ -40,6 +40,7 @@ import pytest
 from easyicu.research_agent.code_repair import (
     _KEYERROR_NOT_IN_INDEX_RE,
     _NAME_ERROR_HELPER_RE,
+    _deterministic_runner_repair,
     _extract_missing_index_columns,
     _generic_clustering_fallback_code,
     _infer_generic_v15_fallback_key,
@@ -254,3 +255,31 @@ def test_infer_generic_v15_fallback_key_uses_diagnostic_text_too():
         )
         == "clustering"
     )
+
+
+def test_runner_repair_does_not_trigger_case_fallbacks_by_default():
+    """Default repair path must stay case-neutral.
+
+    Lactate / MAP / vasopressor study fallbacks are allowed only through an
+    explicitly registered CasePluginRegistry, never from shared code_repair.
+    """
+
+    probes = [
+        (
+            "norepi_equiv_max_24h = 1\n",
+            "ModuleNotFoundError: No module named 'statsmodels'",
+        ),
+        (
+            "age = df['age']\ndeath = df['death']\n# tertile mortality\n",
+            "TypeError: got an unexpected keyword argument 'observed'",
+        ),
+        (
+            "# t04_lactate_mortality_association\nlactate_max_24h = 1\n",
+            "Traceback\nKeyError: required columns",
+        ),
+    ]
+    for code, run_log in probes:
+        assert (
+            _deterministic_runner_repair(code=code, run_log=run_log)
+            is None
+        )

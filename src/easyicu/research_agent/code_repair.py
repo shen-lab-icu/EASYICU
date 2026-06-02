@@ -12,9 +12,8 @@ These functions sit *below* the LLM coder layer. They run when:
   we can transform the source script to a working form without re-asking
   the LLM (:func:`_deterministic_runner_repair`);
 * a step generation completely failed and we want to drop in a hand-coded
-  generic clustering / KDIGO / table-one analysis as the last-resort
-  fallback (:func:`_generic_clustering_fallback_code`,
-  :func:`_infer_generic_v15_fallback_key`).
+  generic clustering analysis as the last-resort fallback
+  (:func:`_generic_clustering_fallback_code`).
 
 The split between this module and :mod:`.summary_repair` is by *target*:
 ``summary_repair`` rewrites ``step_summary.json`` from raw artefacts on
@@ -37,12 +36,6 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from .case_plugins.lactate_map_vaso.fallbacks import (
-    _age_stratified_mortality_fallback_code,
-    _generic_v15_task_fallback_code,
-    _norepinephrine_dose_response_fallback_code,
-    _primary_association_fallback_code,
-)
 from .scalar_utils import (
     _coerce_scalar,
     _first_numeric_effect_from_text,
@@ -50,6 +43,91 @@ from .scalar_utils import (
     _first_present_scalar,
     _flatten_scalar_dict,
 )
+
+
+def _primary_association_fallback_code(
+    *,
+    predictor: str,
+    outcome: str = "death",
+    reason: str,
+) -> str:
+    """Appendable case-neutral rescue block for common regression failures."""
+
+    predictor_lit = json.dumps(predictor)
+    outcome_lit = json.dumps(outcome or "death")
+    reason_lit = json.dumps(reason)
+    return textwrap.dedent(
+        f"""
+        def _easyicu_primary_association_fallback_v1():
+            import json
+            import os
+            import numpy as np
+            import pandas as pd
+            import statsmodels.api as sm
+
+            cohort_path = os.environ.get("COHORT_PARQUET")
+            out_dir = os.environ.get("STEP_OUT_DIR", ".")
+            if not cohort_path:
+                return
+            df_fallback = pd.read_parquet(cohort_path)
+            predictor_col = {predictor_lit}
+            outcome_col = {outcome_lit}
+            if predictor_col not in df_fallback.columns or outcome_col not in df_fallback.columns:
+                return
+            model_df = df_fallback[[outcome_col, predictor_col]].copy()
+            for col in model_df.columns:
+                model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
+            model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
+            if len(model_df) < 20 or model_df[outcome_col].nunique() < 2:
+                return
+            y = model_df[outcome_col].astype(float)
+            X = sm.add_constant(model_df[[predictor_col]].astype(float), has_constant="add")
+            result = sm.Logit(y, X).fit(disp=0)
+            coef = float(result.params[predictor_col])
+            ci = np.exp(result.conf_int().loc[predictor_col]).tolist()
+            primary_or = float(np.exp(coef))
+            p_value = float(result.pvalues[predictor_col])
+            table_path = os.path.join(out_dir, "primary_association.csv")
+            pd.DataFrame([{{
+                "variable": predictor_col,
+                "odds_ratio": primary_or,
+                "or_lower": float(ci[0]),
+                "or_upper": float(ci[1]),
+                "p_value": p_value,
+                "n_complete": int(len(model_df)),
+                "method": "deterministic_logistic_regression_fallback",
+            }}]).to_csv(table_path, index=False)
+            summary_path = os.path.join(out_dir, "step_summary.json")
+            summary = {{}}
+            if os.path.exists(summary_path):
+                try:
+                    with open(summary_path, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        summary.update(loaded)
+                except Exception:
+                    summary = {{}}
+            summary.update({{
+                "primary_predictor": predictor_col,
+                "outcome": outcome_col,
+                "primary_or": primary_or,
+                "statistic:primary_or": primary_or,
+                "primary_or_ci": [float(ci[0]), float(ci[1])],
+                "p_value": p_value,
+                "n_complete": int(len(model_df)),
+                "method": "deterministic_logistic_regression_fallback",
+                "fallback_reason": {reason_lit},
+            }})
+            with open(summary_path, "w", encoding="utf-8") as f:
+                json.dump(summary, f, indent=2, ensure_ascii=False)
+            print(json.dumps(summary, ensure_ascii=False))
+
+        try:
+            _easyicu_primary_association_fallback_v1()
+        except Exception as _easyicu_primary_fallback_exc:
+            print(f"primary_association_fallback_failed: {{_easyicu_primary_fallback_exc}}")
+        """
+    ).strip("\n")
 
 
 def _infer_overexpanded_categorical_predictor(step_summary: Dict[str, Any], code: str) -> Optional[str]:
@@ -429,25 +507,6 @@ def _deterministic_summary_repair(
     if not isinstance(step_summary, dict) or not step_summary:
         return None
     summary_text = json.dumps(step_summary, ensure_ascii=False, default=str).lower()
-    generic_key = _infer_generic_v15_fallback_key(code, summary_text)
-    generic_summary_failure = (
-        generic_key is not None
-        and (
-            '"error"' in summary_text
-            or "traceback" in summary_text
-            or "failed" in summary_text
-            or "no such file or directory" in summary_text
-            or "fixedlocator" in summary_text
-            or "xerr" in summary_text
-            or "required columns" in summary_text
-            or "bad file descriptor" in summary_text
-            or "module not found" in summary_text
-            or '"primary_or": null' in summary_text
-            or '"statistic:primary_or": null' in summary_text
-            or '"spearman_rho": null' in summary_text
-        )
-    )
-    # NOTE: generic fallback moved to end of function so specific repairs have priority
     simple_imputer_bool = (
         "simpleimputer does not support data with dtype bool" in summary_text
         and "X_sklearn = model_df[x_cols].copy()" in code
@@ -945,15 +1004,6 @@ def _deterministic_summary_repair(
                 ).strip("\n")
                 return repair_name, code.rstrip() + "\n\n" + fallback + "\n"
         return None
-
-    # --- Generic v15 fallback as last resort ---
-    # Only fires if no specific repair matched above
-    if generic_summary_failure:
-        repair_name = f"generic_v15_{generic_key}_fallback_v1"
-        if previous_repair != repair_name:
-            fallback = _generic_v15_task_fallback_code(generic_key)
-            if fallback is not None:
-                return repair_name, fallback
 
     return None
 
@@ -1619,27 +1669,6 @@ def _deterministic_runner_repair(
     """
     lowered = (run_log or "").lower()
 
-    generic_key = _infer_generic_v15_fallback_key(code, run_log)
-    generic_runtime_failure = (
-        generic_key is not None
-        and (
-            "traceback" in lowered
-            or "modulenotfounderror" in lowered
-            or "keyerror" in lowered
-            or "valueerror" in lowered
-            or "typeerror" in lowered
-            or "attributeerror" in lowered
-            or "syntaxerror" in lowered
-            or "indentationerror" in lowered
-            or "bad file descriptor" in lowered
-            or "fixedlocator" in lowered
-            or "xerr" in lowered
-            or "required columns" in lowered
-            or "no such file or directory" in lowered
-        )
-    )
-    # NOTE: generic fallback moved to end of function so specific repairs have priority
-
     # 🔧 2026-05-17: defend against LLM hallucinating non-existent easyicu
     # sub-modules (e.g. deepseek-v4-flash emitted
     # `from easyicu.research_agent.rcs import restricted_cubic_spline`,
@@ -1699,33 +1728,6 @@ def _deterministic_runner_repair(
                         break
                 lines.insert(insert_at, "\n# auto-stubs for stripped fake imports\n" + _stub_lines + "\n")
                 return repair_name, "\n".join(lines)
-
-    missing_optional_v15_dependency = (
-        "modulenotfounderror: no module named 'statsmodels'" in lowered
-        or "modulenotfounderror: no module named 'sklearn'" in lowered
-        or "cannot import name 'proportion_confint' from 'scipy.stats'" in lowered
-        or "modulenotfounderror: no module named 'seaborn'" in lowered
-        or "keys must be str, int, float, bool or none" in lowered
-    )
-    if missing_optional_v15_dependency and "norepi_equiv_max_24h" in code:
-        repair_name = "norepinephrine_dose_response_dependency_free_v1"
-        if previous_repair != repair_name:
-            return repair_name, _norepinephrine_dose_response_fallback_code()
-
-    age_stratified_runtime_failure = (
-        (
-            "got an unexpected keyword argument 'observed'" in lowered
-            or "modulenotfounderror: no module named 'seaborn'" in lowered
-            or "'str' object has no attribute 'keys'" in lowered
-        )
-        and "age" in code
-        and "death" in code
-        and ("tertile" in code.lower() or "mortality" in code.lower())
-    )
-    if age_stratified_runtime_failure:
-        repair_name = "age_stratified_mortality_dependency_free_v1"
-        if previous_repair != repair_name:
-            return repair_name, _age_stratified_mortality_fallback_code()
 
     pandas_cut_observed_keyword = (
         "got an unexpected keyword argument 'observed'" in lowered
@@ -3433,14 +3435,5 @@ def _deterministic_runner_repair(
         )
         if repaired != code:
             return repair_name, repaired
-
-    # --- Generic v15 fallback as last resort ---
-    # Only fires if no specific repair matched above
-    if generic_runtime_failure:
-        repair_name = f"generic_v15_{generic_key}_fallback_v1"
-        if previous_repair != repair_name:
-            fallback = _generic_v15_task_fallback_code(generic_key)
-            if fallback is not None:
-                return repair_name, fallback
 
     return None

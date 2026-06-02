@@ -18,9 +18,8 @@ protocol:
   ``ResearchAgentPipeline()`` carries no plugins and therefore no bias
   toward any specific paper's design.
 
-Concrete plugins live under :mod:`easyicu.research_agent.case_plugins`.
-Bundled today: ``lactate_map_vaso`` (the original hardcoded paper, now
-opt-in).
+Concrete plugins can live under :mod:`easyicu.research_agent.case_plugins`,
+but the package intentionally bundles no paper-specific plugins.
 """
 
 from __future__ import annotations
