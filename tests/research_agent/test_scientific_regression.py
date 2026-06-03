@@ -37,7 +37,7 @@ import pytest
 _GOLDEN = {
     "n_rows": (800, 800),
     "death_rate": (0.10, 0.15),
-    "sofa2_zero_frac": (0.10, 0.16),
+    "sofa2_low_component_frac": (0.08, 0.11),
     "sofa2_mean": (6.0, 6.5),
     "sofa2_max": (12, 14),
     "age_mean": (62.0, 65.0),
@@ -68,18 +68,17 @@ def _compute_cohort_stats(df: pd.DataFrame) -> dict[str, float]:
         death_low = death_high = float("nan")
 
     return {
-        # ---- anomaly audit task ------------------------------------
+        # ---- component-completeness QC task ------------------------
         "n_rows": float(len(df)),
         "death_rate": float(df["death"].mean()),
-        "sofa2_zero_frac": float((df["sofa2"] == 0).mean()),
+        "sofa2_low_component_frac": float((df["sofa2_n_components"] < 6).mean()),
         "sofa2_mean": float(df["sofa2"].mean()),
         "sofa2_max": float(df["sofa2"].max()),
         "age_mean": float(df["age"].mean()),
         "vaso_rate": float(df["vaso"].mean()),
         "los_mean": float(df["los_icu"].mean()),
-        # ---- structural signal locked in its own test --------------
-        "death_when_sofa2_zero": float(df.loc[df["sofa2"] == 0, "death"].mean()),
-        "death_when_sofa2_nonzero": float(df.loc[df["sofa2"] != 0, "death"].mean()),
+        # ---- outcome-blind structural signal locked in its own test -
+        "sofa2_low_component_count": float((df["sofa2_n_components"] < 6).sum()),
         # ---- table-one task ----------------------------------------
         "age_median": float(df["age"].median()),
         "age_p25": float(df["age"].quantile(0.25)),
@@ -113,22 +112,14 @@ def test_synthetic_cohort_locked_statistics(synthetic_cohort):
         )
 
 
-def test_synthetic_cohort_preserves_sofa2_zero_anomaly(synthetic_cohort):
-    """SOFA2==0 patients are *less* likely to die than SOFA2>0 patients.
-
-    This inversion is the missing-data-as-zero anomaly the fixture
-    was designed to expose. A refactor that smooths the cohort and
-    erases this signal would make every downstream anomaly-detection
-    test pass vacuously — we don't want that, so we lock the signal
-    here.
-    """
+def test_synthetic_cohort_preserves_component_completeness_signal(synthetic_cohort):
+    """The fixture keeps an outcome-blind SOFA-2 component-completeness signal."""
 
     stats = _compute_cohort_stats(synthetic_cohort)
-    assert stats["death_when_sofa2_zero"] < stats["death_when_sofa2_nonzero"], (
-        "The synthetic cohort no longer exhibits the SOFA2==0 anomaly "
-        "(death rate among sofa2==0 patients should be LOWER than among "
-        "sofa2>0 patients in this fixture). This is a structural "
-        "regression — investigate before updating the golden values."
+    assert stats["sofa2_low_component_count"] > 0, (
+        "The synthetic cohort no longer contains low-component SOFA-2 rows. "
+        "That removes the outcome-blind component-completeness signal the "
+        "self-check task is supposed to exercise."
     )
 
 
@@ -140,7 +131,7 @@ def test_synthetic_cohort_preserves_sofa2_zero_anomaly(synthetic_cohort):
 def _frozen_synthetic_task(ra):
     suite = ra.default_icu_agent_bench_suite()
     return next(
-        t for t in suite.tasks if t.task_id == "synthetic_cohort_anomaly_audit"
+        t for t in suite.tasks if t.task_id == "synthetic_cohort_completeness_qc"
     )
 
 
@@ -157,12 +148,12 @@ def test_grade_bench_task_passes_on_well_formed_run(ra, synthetic_cohort):
     result = ra.grade_bench_task(
         task,
         observed_metrics=observed,
-        observed_warnings=["sofa2_zero_anomaly: detected 0.13 fraction zeros"],
+        observed_warnings=["component_completeness_qc: low component rows present"],
         observed_outputs=["descriptive stats produced"],
         run_id="regression-honest",
     )
 
-    assert result.task_id == "synthetic_cohort_anomaly_audit"
+    assert result.task_id == "synthetic_cohort_completeness_qc"
     assert result.correctness == 1.0
     assert result.provenance_completeness == 1.0
     assert result.hallucination_rate == 0.0
@@ -183,7 +174,7 @@ def test_grade_bench_task_penalises_out_of_bound_metric(ra, synthetic_cohort):
     result = ra.grade_bench_task(
         task,
         observed_metrics=observed,
-        observed_warnings=["sofa2_zero_anomaly"],
+        observed_warnings=["component_completeness_qc"],
         observed_outputs=[],
     )
     assert result.correctness is not None
@@ -192,7 +183,7 @@ def test_grade_bench_task_penalises_out_of_bound_metric(ra, synthetic_cohort):
 
 
 def test_grade_bench_task_flags_missing_guardrail_warning(ra, synthetic_cohort):
-    """A run that hides the SOFA2==0 anomaly loses provenance_completeness."""
+    """A run that hides component completeness loses provenance_completeness."""
 
     task = _frozen_synthetic_task(ra)
     stats = _compute_cohort_stats(synthetic_cohort)
@@ -222,7 +213,7 @@ def test_grade_bench_task_flags_forbidden_output_substring(ra, synthetic_cohort)
     result = ra.grade_bench_task(
         task,
         observed_metrics=observed,
-        observed_warnings=["sofa2_zero_anomaly"],
+        observed_warnings=["component_completeness_qc"],
         observed_outputs=["values were silently imputed for missing rows"],
     )
     assert result.hallucination_rate == 1.0
@@ -336,14 +327,14 @@ def test_aggregate_bench_report_averages_only_non_null_metrics(ra, synthetic_coh
     honest = ra.grade_bench_task(
         task,
         observed_metrics=observed,
-        observed_warnings=["sofa2_zero_anomaly"],
+        observed_warnings=["component_completeness_qc"],
         observed_outputs=[],
         run_id="honest",
     )
     half = ra.grade_bench_task(
         task,
         observed_metrics={**observed, "death_rate": 0.95},
-        observed_warnings=["sofa2_zero_anomaly"],
+        observed_warnings=["component_completeness_qc"],
         observed_outputs=[],
         run_id="half",
     )
@@ -351,7 +342,7 @@ def test_aggregate_bench_report_averages_only_non_null_metrics(ra, synthetic_coh
     suite = ra.default_icu_agent_bench_suite()
     report = ra.aggregate_bench_report(suite, [honest, half])
 
-    # synthetic_cohort_anomaly_audit is a self_check task → headline
+    # synthetic_cohort_completeness_qc is a self_check task → headline
     # aggregate must stay clean of these results.
     assert "correctness" not in report.aggregate, (
         "Self-check tasks must not pollute the evaluation headline."

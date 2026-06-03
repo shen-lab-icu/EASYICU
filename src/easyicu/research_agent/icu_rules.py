@@ -247,7 +247,7 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         aggregation_default=AggregationRule.MAX_LAST,
         pitfalls=(
             "SOFA-2 follows the same 0–4 component structure as SOFA; treat as ordinal.",
-            "A SOFA-2 total of 0 may reflect component-level missingness rather than truly absent organ dysfunction; cross-check component availability before drawing clinical conclusions about the zero stratum.",
+            "SOFA-2 totals may reflect component-level missingness; cross-check component completeness before drawing clinical conclusions.",
         ),
     ),
     "sirs": ConceptHint(

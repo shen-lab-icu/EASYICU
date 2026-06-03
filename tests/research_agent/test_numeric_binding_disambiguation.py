@@ -10,7 +10,7 @@ def _register_pilot7_candidates(store) -> None:
         value="0.555556",
         canonical=0.555556,
         evidence_id="e_mortality",
-        step_id="01_sofa_stratum_audit",
+        step_id="01_score_stratification",
         source_field="strata[8].mortality_rate",
     )
     store.register_numeric_claim(

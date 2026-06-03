@@ -426,24 +426,21 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
         do_table_one = "table_one" in step_kind
         do_outcome_incidence = "outcome_incidence" in step_kind
         do_missingness = "missingness" in step_kind
-        do_stratum_audit = any(token in step_kind for token in ("stratum_audit", "composite"))
         do_protocol_only = any(token in step_kind for token in ("protocol", "plan"))
 
         outcome_col = {outcome!r} if {outcome!r} in df.columns else None
         score_col = {score_var!r} if {score_var!r} else None
         if score_col and score_col not in df.columns:
             score_col = None
-        if not any((do_table_one, do_outcome_incidence, do_missingness, do_stratum_audit)):
+        if not any((do_table_one, do_outcome_incidence, do_missingness)):
             if do_protocol_only:
                 do_table_one = False
                 do_outcome_incidence = False
                 do_missingness = False
-                do_stratum_audit = False
             else:
                 do_table_one = True
                 do_outcome_incidence = True
                 do_missingness = True
-                do_stratum_audit = False
 
         summary = {{}}
 
@@ -535,25 +532,6 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
                 summary["missingness_figure_path"] = "missingness_heatmap.png"
             except Exception:
                 pass
-
-        # ---- Explicit score stratum audit ----
-        if do_stratum_audit and score_col is not None and outcome_col is not None:
-            sub = df[[score_col, outcome_col]].dropna()
-            sub[score_col] = sub[score_col].astype(int)
-            grp = sub.groupby(score_col)[outcome_col].agg(["count", "mean"]).reset_index()
-            grp.columns = [score_col, "n", "outcome_rate"]
-            grp.to_csv(out_dir / "stratum_audit.csv", index=False)
-            summary["stratum_audit_path"] = "stratum_audit.csv"
-
-            fig, ax = plt.subplots(figsize=(5, 3.2))
-            ax.plot(grp[score_col], grp["outcome_rate"], marker="o", color="#1f77b4")
-            ax.set_xlabel(score_col)
-            ax.set_ylabel(f"{{outcome_col}} rate")
-            ax.set_title(f"Outcome rate by {{score_col}} stratum")
-            fig.tight_layout()
-            fig.savefig(out_dir / "stratum_audit.png", dpi=160)
-            plt.close(fig)
-            summary["stratum_audit_figure_path"] = "stratum_audit.png"
 
         # ---- Persist machine-readable summary ----
         with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:

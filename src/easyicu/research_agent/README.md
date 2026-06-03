@@ -506,21 +506,21 @@ from easyicu.research_agent import (
 
 contract = make_figure_contract(
     figure_id="Figure2",
-    core_claim="SOFA2=0 is an audit target, not a simple low-risk group.",
+    core_claim="Composite-score component completeness is checked before analysis.",
     panels=[
         {
             "panel_id": "a",
-            "title": "Mortality by SOFA-2 stratum",
+            "title": "Pre-analysis completeness",
             "role": "overview",
-            "claim": "Mortality rises with SOFA-2 but score zero is non-monotonic.",
-            "evidence_ids": ["outcome_rate", "sofa_strata"],
+            "claim": "Composite-score rows with low component completeness are flagged before outcome modeling.",
+            "evidence_ids": ["score_completeness", "missingness"],
         },
         {
             "panel_id": "b",
             "title": "Component missingness",
-            "role": "audit",
-            "claim": "The zero stratum concentrates missing SOFA-2 components.",
-            "evidence_ids": ["missingness", "stratum_missingness_comparison"],
+            "role": "qc",
+            "claim": "Component missingness is summarized before outcome modeling.",
+            "evidence_ids": ["missingness", "score_completeness"],
         },
     ],
     export_formats=["svg", "pdf", "png", "tiff"],
@@ -558,7 +558,7 @@ A snippet:
   "source_concept": "sofa2",
   "pitfalls": [
     "SOFA-2 follows the same 0-4 component structure as SOFA; treat as ordinal.",
-    "A SOFA-2 total of 0 may reflect component-level missingness rather than truly absent organ dysfunction; cross-check component availability before drawing clinical conclusions about the zero stratum."
+    "SOFA-2 totals may reflect component-level missingness; cross-check component completeness before drawing clinical conclusions."
   ],
   "missingness": {"fraction_missing": 0.0, "n_missing": 0, "n_total": 1500, "missingness_kind": "MCAR_likely"}
 }
@@ -581,7 +581,7 @@ Hard rules currently encoded:
 - Lab columns summarised by mean with no `median(...)` reference in
   the same script trigger a warning.
 - Composite/ordinal score completeness is checked before analysis when
-  the cohort exposes component availability such as `<score>_n_components`;
+  the cohort exposes component completeness such as `<score>_n_components`;
   this quality-control signal is outcome-blind and does not require a
   score-specific audit step.
 - Reported `outcome_rate` that disagrees with a cohort recompute by

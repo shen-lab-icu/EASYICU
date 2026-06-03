@@ -951,9 +951,6 @@ class ProbeSummary(BaseModel):
     target_outcome: Optional[str] = None
     top_missing_columns: List[Dict[str, Any]] = Field(default_factory=list)
     score_completeness: List[Dict[str, Any]] = Field(default_factory=list)
-    # Backward-compatible legacy field. New probes should use
-    # ``score_completeness`` and avoid outcome-peeking anomaly flags.
-    score_anomalies: List[Dict[str, Any]] = Field(default_factory=list)
     outcome_rate: Optional[float] = None
 
 

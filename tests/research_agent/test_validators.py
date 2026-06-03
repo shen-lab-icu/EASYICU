@@ -138,7 +138,10 @@ def test_statistical_validator_flags_outcome_mismatch(ra, tmp_path: Path):
     assert "outcome rate" in msgs.lower() or "disagrees" in msgs.lower()
 
 
-def test_statistical_validator_flags_sofa_zero_anomaly(ra, tmp_path: Path):
+def test_statistical_validator_ignores_outcome_blind_component_qc_table(
+    ra,
+    tmp_path: Path,
+):
     ctx = _ctx_with_sofa(ra)
     cohort_path = tmp_path / "cohort.parquet"
     df = pd.DataFrame({
@@ -153,85 +156,27 @@ def test_statistical_validator_flags_sofa_zero_anomaly(ra, tmp_path: Path):
     df.to_parquet(cohort_path, index=False)
     out_dir = tmp_path / "out"
     out_dir.mkdir()
-    # Build a sofa_strata.csv with the anomaly: rate@0 > rate@1
-    pd.DataFrame({"sofa2": [0, 1, 2, 3], "n": [5, 5, 5, 5],
-                  "outcome_rate": [0.8, 0.0, 0.2, 1.0]}).to_csv(
-        out_dir / "sofa_strata.csv", index=False)
+    pd.DataFrame({
+        "variable": ["sofa2"],
+        "n_rows": [20],
+        "n_low_completeness": [5],
+        "frac_low_completeness": [0.25],
+    }).to_csv(out_dir / "component_completeness_qc.csv", index=False)
 
     schema = ra.schema
-    step = schema.AnalysisStep(step_id="05_sofa_zero_audit", intent="audit")
+    step = schema.AnalysisStep(
+        step_id="05_component_completeness_qc",
+        intent="component completeness QC",
+    )
     validator = ra.StatisticalValidator()
     findings = validator.audit(
         context=ctx, cohort_path=cohort_path, step=step,
         out_dir=out_dir, step_summary={},
     )
-    assert any("non-monotonic" in f.message.lower() or "exceeds" in f.message.lower()
-               for f in findings), findings
-    assert any(f.severity == "warning" for f in findings)
-
-
-def test_statistical_validator_accepts_real_llm_stratum_audit_shape(ra, tmp_path: Path):
-    ctx = _ctx_with_sofa(ra)
-    cohort_path = tmp_path / "cohort.parquet"
-    pd.DataFrame({
-        "stay_id": [1, 2, 3, 4],
-        "age": [60, 61, 62, 63],
-        "sofa2": [0, 0, 1, 1],
-        "death": [1, 0, 0, 0],
-    }).to_parquet(cohort_path, index=False)
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
-    pd.DataFrame({
-        "sofa2_score": [0, 1],
-        "n_total": [2, 2],
-        "n_death": [1, 0],
-        "mortality_rate": [0.5, 0.0],
-        "mortality_rate_ci_low": [0.1, 0.0],
-        "mortality_rate_ci_high": [0.9, 0.7],
-    }).to_csv(out_dir / "stratum_audit.csv", index=False)
-
-    step = ra.schema.AnalysisStep(step_id="05_stratum_level_audit", intent="audit")
-    findings = ra.StatisticalValidator().audit(
-        context=ctx, cohort_path=cohort_path, step=step,
-        out_dir=out_dir, step_summary={},
-    )
-    assert any("stratum_audit.csv" in str(f.detail) for f in findings), findings
-    assert any("non-monotonic" in f.message.lower() for f in findings), findings
-
-
-def test_statistical_validator_recomputes_sofa_zero_when_audit_omits_mortality(
-    ra, tmp_path: Path
-):
-    ctx = _ctx_with_sofa(ra)
-    cohort_path = tmp_path / "cohort.parquet"
-    pd.DataFrame({
-        "stay_id": [1, 2, 3, 4],
-        "age": [60, 61, 62, 63],
-        "sofa2": [0, 0, 1, 1],
-        "death": [1, 0, 0, 0],
-        "lact": [2.0, 2.2, 1.5, 1.7],
-    }).to_parquet(cohort_path, index=False)
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
-    pd.DataFrame({
-        "variable": ["lact"],
-        "sofa2_0_median": [2.1],
-        "sofa2_1_median": [1.6],
-    }).to_csv(out_dir / "table:sofa2_stratum_audit.csv", index=False)
-
-    step = ra.schema.AnalysisStep(
-        step_id="05_stratum_level_audit",
-        intent="Audit SOFA-2 score==0 vs score==1.",
-    )
-    findings = ra.StatisticalValidator().audit(
-        context=ctx, cohort_path=cohort_path, step=step,
-        out_dir=out_dir, step_summary={},
-    )
-    assert any(
-        f.detail and f.detail.get("source") == "cohort_recompute"
+    assert not any(
+        "non-monotonic" in f.message.lower() or "exceeds" in f.message.lower()
         for f in findings
     ), findings
-    assert any("non-monotonic" in f.message.lower() for f in findings), findings
 
 
 def test_statistical_validator_no_artefacts_is_error(ra, tmp_path: Path):

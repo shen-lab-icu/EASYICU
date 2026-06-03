@@ -156,8 +156,6 @@ class PublicationFigureSkill:
             strata = _first_existing_record(
                 evidence,
                 [
-                    "sofa_strata",
-                    "stratum_audit",
                     "stratified_mortality",
                     "stratified_mortality_incidence",
                 ],
@@ -238,7 +236,7 @@ class PublicationFigureSkill:
                 if not strata_df.empty:
                     source_records.append(strata_record)
                     strata_df.to_csv(
-                        out_dir / "publication_figure_source_sofa_strata.csv",
+                        out_dir / "publication_figure_source_stratified_mortality.csv",
                         index=False,
                     )
             except Exception:

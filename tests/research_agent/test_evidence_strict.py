@@ -62,13 +62,13 @@ def test_strict_mode_raises_on_bold_section_result_sentence(ra, tmp_path: Path):
     store = ra.EvidenceStore(root=tmp_path, enforcement_mode="strict")
     scaffold = (
         "**Background:** The relation between early SOFA-2 severity and ICU mortality "
-        "remains sensitive to missingness and score-zero artefacts.\n"
+        "remains sensitive to missingness and component-completeness artefacts.\n"
     )
     with pytest.raises(ra.EvidenceEnforcementError) as exc_info:
         store.enforce_evidence_bound_scaffold(scaffold)
     assert "STRICT evidence mode" in str(exc_info.value)
     assert any(
-        "missingness and score-zero artefacts" in sentence
+        "missingness and component-completeness artefacts" in sentence
         for sentence in exc_info.value.detail["removed_sentences"]
     )
 

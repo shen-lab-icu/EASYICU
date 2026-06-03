@@ -363,25 +363,6 @@ def _build_clinician_comments(
             )
         )
 
-    sofa = [
-        f for f in _finding_msg(findings, "statistical_validator")
-        if "sofa" in (f["message"] or "").lower() and "==0" in (f["message"] or "")
-    ]
-    if sofa:
-        comments.append(
-            ReviewerComment(
-                reviewer="clinician",
-                severity="minor",
-                topic="sofa_zero_artefact",
-                message=(
-                    "The SOFA-2 stratum at score zero shows non-monotone "
-                    "mortality. Please discuss the component-missingness vs "
-                    "true-low-severity ambiguity explicitly in Results and "
-                    "Discussion rather than footnoting it."
-                ),
-                evidence_ids=["sofa_strata"] if "sofa_strata" in aliases else [],
-            )
-        )
     return comments
 
 

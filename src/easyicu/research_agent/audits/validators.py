@@ -827,169 +827,7 @@ class StatisticalValidator:
                     message=f"Could not recompute outcome rate: {exc}",
                 ))
 
-        # 2. SOFA-zero anomaly cross-check. Mock code writes
-        #    ``sofa_strata.csv``; real LLMs often choose names such as
-        #    ``stratum_audit.csv`` with ``mortality_rate`` columns. Accept
-        #    both shapes so the deterministic guard stays active.
-        sofa_anomaly_seen = False
-        for sofa_csv in (
-            out_dir / "sofa_strata.csv",
-            out_dir / "stratum_audit.csv",
-            out_dir / "sofa2_mortality.csv",
-        ):
-            if not sofa_csv.exists():
-                continue
-            try:
-                strata = pd.read_csv(sofa_csv)
-                rate_col = next(
-                    (
-                        c for c in (
-                            "outcome_rate",
-                            "mortality_rate",
-                            "death_rate",
-                            "icu_mortality_rate",
-                        )
-                        if c in strata.columns
-                    ),
-                    None,
-                )
-                if rate_col is None:
-                    continue
-                excluded = {
-                    rate_col,
-                    "n", "count", "total", "n_total", "n_death",
-                    "death", "deaths", "sum",
-                    "outcome_ci_low", "outcome_ci_high",
-                    "mortality_ci_low", "mortality_ci_high",
-                    "mortality_rate_ci_low", "mortality_rate_ci_high",
-                }
-                score_cols = [
-                    c for c in strata.columns
-                    if c not in excluded
-                    and pd.api.types.is_numeric_dtype(strata[c])
-                ]
-                score_cols.sort(key=lambda c: (0 if "sofa" in c.lower() else 1, c))
-                if not score_cols:
-                    continue
-                sc = score_cols[0]
-                scores = pd.to_numeric(strata[sc], errors="coerce")
-                rates = pd.to_numeric(strata[rate_col], errors="coerce")
-                r0_values = rates.loc[scores == 0].dropna()
-                r1_values = rates.loc[scores == 1].dropna()
-                if r0_values.empty or r1_values.empty:
-                    continue
-                r0 = float(r0_values.iloc[0])
-                r1 = float(r1_values.iloc[0])
-                if r0 > r1:
-                    findings.append(ValidationFinding(
-                        validator=self.name, severity="warning",
-                        message=(
-                            f"{sc}==0 outcome rate ({r0:.3f}) exceeds {sc}==1 "
-                            f"({r1:.3f}). This is non-monotonic and is a known "
-                            "signature of component-level missingness rather than "
-                            "absent organ dysfunction. Verify component "
-                            "availability before interpreting clinically."
-                        ),
-                        detail={
-                            "score": sc,
-                            "rate_at_zero": r0,
-                            "rate_at_one": r1,
-                            "source_file": sofa_csv.name,
-                        },
-                    ))
-                    sofa_anomaly_seen = True
-                    break
-            except Exception as exc:
-                findings.append(ValidationFinding(
-                    validator=self.name, severity="warning",
-                    message=f"Could not parse {sofa_csv.name}: {exc}",
-                ))
-
-        if not sofa_anomaly_seen:
-            try:
-                zero_one_pairs = (
-                    ("sofa2_zero_rate", "sofa2_one_rate"),
-                    ("mortality_sofa0", "mortality_sofa1"),
-                    ("sofa0_mortality_rate", "sofa1_mortality_rate"),
-                )
-                for zero_key, one_key in zero_one_pairs:
-                    if zero_key not in step_summary or one_key not in step_summary:
-                        continue
-                    r0 = float(step_summary[zero_key])
-                    r1 = float(step_summary[one_key])
-                    if r0 > r1:
-                        findings.append(ValidationFinding(
-                            validator=self.name, severity="warning",
-                            message=(
-                                f"SOFA score==0 outcome rate ({r0:.3f}) exceeds "
-                                f"score==1 ({r1:.3f}). This is non-monotonic and "
-                                "is a known signature of component-level missingness."
-                            ),
-                            detail={
-                                "score": "sofa",
-                                "rate_at_zero": r0,
-                                "rate_at_one": r1,
-                                "source": "step_summary",
-                            },
-                        ))
-                        sofa_anomaly_seen = True
-                        break
-            except (TypeError, ValueError):
-                pass
-
-        if not sofa_anomaly_seen and outcome:
-            step_text = f"{step.step_id} {step.intent}".lower()
-            if (
-                "stratum" in step_text
-                or "score==0" in step_text
-                or "sofa_zero" in step_text
-            ):
-                try:
-                    df = pd.read_parquet(cohort_path)
-                    score_candidates = [
-                        v.name for v in context.variables
-                        if "sofa" in v.name.lower()
-                    ]
-                    for sc in score_candidates:
-                        if sc not in df.columns or outcome not in df.columns:
-                            continue
-                        sub = df[[sc, outcome]].dropna().copy()
-                        if sub.empty:
-                            continue
-                        sub[sc] = pd.to_numeric(sub[sc], errors="coerce")
-                        sub[outcome] = pd.to_numeric(sub[outcome], errors="coerce")
-                        sub = sub.dropna(subset=[sc, outcome])
-                        grouped = sub.groupby(sc)[outcome].mean()
-                        if 0 not in grouped.index or 1 not in grouped.index:
-                            continue
-                        r0 = float(grouped.loc[0])
-                        r1 = float(grouped.loc[1])
-                        if r0 > r1:
-                            findings.append(ValidationFinding(
-                                validator=self.name, severity="warning",
-                                message=(
-                                    f"{sc}==0 outcome rate ({r0:.3f}) exceeds "
-                                    f"{sc}==1 ({r1:.3f}). This is non-monotonic "
-                                    "and was recomputed directly from the cohort "
-                                    "because the stratum audit artefact omitted "
-                                    "mortality rates."
-                                ),
-                                detail={
-                                    "score": sc,
-                                    "rate_at_zero": r0,
-                                    "rate_at_one": r1,
-                                    "source": "cohort_recompute",
-                                },
-                            ))
-                            sofa_anomaly_seen = True
-                            break
-                except Exception as exc:
-                    findings.append(ValidationFinding(
-                        validator=self.name, severity="warning",
-                        message=f"Could not recompute SOFA-zero anomaly: {exc}",
-                    ))
-
-        # 3. Primary-association OR cross-check (T1.6).
+        # 2. Primary-association OR cross-check (T1.6).
         #    The mock pipeline writes ``primary_association.csv`` with one
         #    row per coefficient (variable, coef, odds_ratio, ...). The
         #    step_summary records ``primary_or`` for the predictor. Re-
@@ -1023,14 +861,14 @@ class StatisticalValidator:
                     message=f"Could not parse primary_association.csv: {exc}",
                 ))
 
-        # 4. Sanity: the script must have produced some artefact.
+        # 3. Sanity: the script must have produced some artefact.
         if not any(out_dir.iterdir()):
             findings.append(ValidationFinding(
                 validator=self.name, severity="error",
                 message=f"Step '{step.step_id}' produced no output artefacts.",
             ))
 
-        # 5. Codex-grade train/test performance metrics (T1.8). Whenever a
+        # 4. Codex-grade train/test performance metrics (T1.8). Whenever a
         #    step writes ``model_performance_train_test.csv``, re-validate
         #    AUC ∈ [0.5, 1.0], Brier ∈ [0, 0.5] and calibration slope
         #    ∈ [0.5, 2.0]. Out-of-range values are *errors* — they
@@ -1077,33 +915,6 @@ class StatisticalValidator:
                     validator=self.name, severity="warning",
                     message=f"Could not parse {perf_csv.name}: {exc}",
                 ))
-
-        # 6. T1.8 score-0 elevated-mortality data-quality signal. When
-        #    a step's summary reports a sofa2_zero_rate that exceeds the
-        #    overall mortality_rate, surface this as a *data_quality_signal*
-        #    finding rather than an error — codex's central scientific
-        #    claim was exactly this kind of finding.
-        try:
-            zero_rate = step_summary.get("sofa2_zero_rate")
-            overall = step_summary.get("mortality_rate")
-            if zero_rate is not None and overall is not None:
-                z, o = float(zero_rate), float(overall)
-                if z == z and o == o and z > o + 1e-6:
-                    findings.append(ValidationFinding(
-                        validator=self.name, severity="warning",
-                        message=(
-                            "Data-quality signal: SOFA-2 score==0 stratum "
-                            f"mortality {z:.3f} exceeds overall mortality "
-                            f"{o:.3f}. Consistent with a component-availability "
-                            "artefact in upstream concept construction."
-                        ),
-                        detail={
-                            "sofa2_zero_rate": z, "overall_rate": o,
-                            "category": "data_quality_signal",
-                        },
-                    ))
-        except (TypeError, ValueError):
-            pass
 
         return findings
 

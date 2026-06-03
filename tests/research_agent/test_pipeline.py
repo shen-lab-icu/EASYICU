@@ -86,12 +86,10 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
     assert probe_paths, "no probe_summary.json was produced"
     probe = json.loads(probe_paths[0].read_text(encoding="utf-8"))
     assert "outcome_rate" not in probe
-    assert "sofa_zero_anomaly" not in probe
-    assert probe["score_anomalies"] == []
     completeness = probe["score_completeness"]
     assert completeness
     sofa_report = next(item for item in completeness if item["variable"] == "sofa2")
-    assert sofa_report["completeness"]["n_zero_stratum_incomplete"] > 0
+    assert sofa_report["completeness"]["n_low_completeness"] > 0
 
 
 def test_pipeline_with_clinical_skill(ra, synthetic_cohort, tmp_path: Path):
@@ -723,7 +721,7 @@ def test_mock_planner_honours_sofa2_when_sofa_is_also_present(ra, synthetic_coho
     plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
     by_id = {step["step_id"]: step for step in plan["steps"]}
     assert by_id["04_primary_association"]["inputs"][:2] == ["sofa2", "death"]
-    assert "05_sofa_zero_audit" not in by_id
+    assert "05_outcome_stratification" not in by_id
 
 
 def test_pipeline_run_requires_explicit_llm(tmp_path: Path):
@@ -2438,11 +2436,11 @@ def test_step_contract_findings_does_not_require_or_for_data_quality_association
     from easyicu.research_agent.pipeline import _step_contract_findings
 
     step = ra.AnalysisStep(
-        step_id="01_sofa_zero_audit",
-        intent="Audit SOFA-zero co-occurrence and missingness.",
+        step_id="01_component_completeness_qc",
+        intent="Check composite-score component completeness.",
         expected_outputs=[
-            "table:sofa_zero_component_distribution",
-            "table:sofa_zero_associations",
+            "table:component_completeness",
+            "table:missing_component_distribution",
             "log:missingness_summary",
         ],
     )
@@ -2450,7 +2448,7 @@ def test_step_contract_findings_does_not_require_or_for_data_quality_association
     findings = _step_contract_findings(
         step=step,
         step_summary={
-            "sofa_zero_count": 41,
+            "low_completeness_count": 41,
             "guardrail_warning": True,
             "primary_association_estimate": None,
         },
@@ -3998,18 +3996,24 @@ def test_semantic_aliases_do_not_bind_primary_association_for_robustness_without
     assert "primary_association" not in aliases
 
 
-def test_semantic_aliases_bind_sofa_zero_audit_outcome_rate(ra, tmp_path: Path):
+def test_semantic_aliases_bind_stratified_mortality_table(
+    ra,
+    tmp_path: Path,
+):
     from easyicu.research_agent.pipeline import _semantic_aliases_for
 
     step = ra.AnalysisStep(
-        step_id="01_sofa_zero_audit",
-        intent="Audit SOFA-zero mortality and missingness.",
-        expected_outputs=["statistic:sofa_zero_count", "statistic:mortality_rate"],
+        step_id="01_stratified_mortality",
+        intent="Report explicitly requested stratified mortality.",
+        expected_outputs=["table:stratified_mortality"],
     )
 
-    aliases = _semantic_aliases_for(step, tmp_path / "step_summary.json")
+    aliases = _semantic_aliases_for(
+        step,
+        tmp_path / "stratified_mortality_incidence.csv",
+    )
 
-    assert "sofa_zero_count" in aliases
+    assert "stratified_mortality" in aliases
     assert "outcome_rate" in aliases
 
 
@@ -5020,7 +5024,7 @@ def test_advanced_plan_contract_normalizes_bias_audit_steps(ra):
     assert findings and findings[0].validator == "plan_contract"
 
 
-def test_advanced_plan_contract_does_not_rewrite_sofa_data_quality_audit(ra):
+def test_advanced_plan_contract_does_not_rewrite_component_data_quality_audit(ra):
     from easyicu.research_agent.pipeline import _enforce_advanced_plan_contract
     from easyicu.research_agent.schema import (
         AnalysisPlan,
@@ -5032,14 +5036,17 @@ def test_advanced_plan_contract_does_not_rewrite_sofa_data_quality_audit(ra):
 
     plan = AnalysisPlan(
         research_question=(
-            "Audit whether SOFA-2 equal to zero co-occurs with high lactate, "
-            "low MAP, vasopressor exposure, or mortality."
+            "Audit whether composite-score rows have enough measured components "
+            "before any outcome model is fit."
         ),
         steps=[
             AnalysisStep(
-                step_id="01_sofa_zero_audit",
-                intent="Audit SOFA zero rows and missing components.",
-                expected_outputs=["statistic:sofa_zero_count", "table:sofa_zero_audit"],
+                step_id="01_component_completeness_qc",
+                intent="Check composite-score component completeness.",
+                expected_outputs=[
+                    "statistic:low_completeness_count",
+                    "table:component_completeness",
+                ],
             )
         ],
     )
@@ -5058,7 +5065,9 @@ def test_advanced_plan_contract_does_not_rewrite_sofa_data_quality_audit(ra):
 
     revised, findings = _enforce_advanced_plan_contract(plan=plan, context=context)
 
-    assert [step.step_id for step in revised.steps] == ["01_sofa_zero_audit"]
+    assert [step.step_id for step in revised.steps] == [
+        "01_component_completeness_qc"
+    ]
     assert findings == []
 
 
@@ -5130,13 +5139,13 @@ def test_salvage_named_json_step_summary(ra, tmp_path: Path):
 
     out_dir = tmp_path / "outputs"
     out_dir.mkdir()
-    summary_json = out_dir / "sofa_zero_artefact_audit_summary.json"
+    summary_json = out_dir / "component_completeness_qc_summary.json"
     summary_json.write_text(
-        json.dumps({"sofa_zero_count": 41, "guardrail_warning": True}),
+        json.dumps({"low_completeness_count": 41, "guardrail_warning": True}),
         encoding="utf-8",
     )
     result = RunResult(
-        step_id="01_sofa_zero_audit",
+        step_id="01_component_completeness_qc",
         script_path=tmp_path / "analysis.py",
         cwd=tmp_path,
         out_dir=out_dir,
@@ -5149,7 +5158,7 @@ def test_salvage_named_json_step_summary(ra, tmp_path: Path):
 
     assert _salvage_named_json_step_summary(result) is True
     saved = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
-    assert saved["sofa_zero_count"] == 41
+    assert saved["low_completeness_count"] == 41
     assert saved["guardrail_warning"] is True
 
 

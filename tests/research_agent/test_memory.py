@@ -116,7 +116,7 @@ def test_run_memory_distills_strategy_cards(ra, tmp_path: Path):
         target_outcome="death",
     )
     assert cards
-    assert cards[0].strategy_id == "ordinal_score_missingness_audit"
+    assert cards[0].strategy_id == "ordinal_score_completeness_qc"
     assert "miiv" in cards[0].applicable_databases
     assert "sofa2" in cards[0].concept_dependencies
 
@@ -126,7 +126,7 @@ def test_run_memory_distills_strategy_cards(ra, tmp_path: Path):
         target_outcome="death",
     )
     assert "StrategyCards" in digest
-    assert "component availability" in digest
+    assert "component completeness" in digest
     assert "databases: miiv" in digest
 
 

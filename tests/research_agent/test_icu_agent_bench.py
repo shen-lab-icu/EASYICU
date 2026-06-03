@@ -40,7 +40,7 @@ def test_icu_agent_bench_includes_cross_database_replication_task(ra):
 # ---------------------------------------------------------------------------
 
 
-def test_synthetic_anomaly_task_ships_with_frozen_gold_answer(ra):
+def test_synthetic_completeness_task_ships_with_frozen_gold_answer(ra):
     """The synthetic-cohort task is the first frozen ICUAgentBench task.
 
     It declares numeric bounds, a required guardrail warning, and a
@@ -49,18 +49,19 @@ def test_synthetic_anomaly_task_ships_with_frozen_gold_answer(ra):
     """
     suite = ra.default_icu_agent_bench_suite()
     task = next(
-        t for t in suite.tasks if t.task_id == "synthetic_cohort_anomaly_audit"
+        t for t in suite.tasks if t.task_id == "synthetic_cohort_completeness_qc"
     )
 
     assert task.gold_answer_status == "frozen"
     assert task.gold_answer is not None
     assert task.gold_answer.data_fixture == "synthetic_cohort"
     assert "death_rate" in task.gold_answer.numeric_targets
-    assert "sofa2_zero_anomaly" in task.gold_answer.required_warnings
+    assert "sofa2_low_component_frac" in task.gold_answer.numeric_targets
+    assert "component_completeness_qc" in task.gold_answer.required_warnings
     assert any(
         "imputed" in s for s in task.gold_answer.forbidden_outputs
     )
-    assert "synthetic_cohort_anomaly_audit" in suite.frozen_task_ids()
+    assert "synthetic_cohort_completeness_qc" in suite.frozen_task_ids()
 
 
 def test_numeric_bound_contains_handles_open_intervals(ra):
@@ -95,13 +96,13 @@ def test_grade_bench_task_zero_correctness_when_metrics_missing(ra):
     """If every required metric is missing, correctness collapses to 0."""
     suite = ra.default_icu_agent_bench_suite()
     task = next(
-        t for t in suite.tasks if t.task_id == "synthetic_cohort_anomaly_audit"
+        t for t in suite.tasks if t.task_id == "synthetic_cohort_completeness_qc"
     )
 
     result = ra.grade_bench_task(
         task,
         observed_metrics={},  # nothing reported
-        observed_warnings=["sofa2_zero_anomaly"],
+        observed_warnings=["component_completeness_qc"],
         observed_outputs=[],
     )
     # observed_metrics empty → execution_success_rate=0 and correctness=0.0
@@ -114,7 +115,7 @@ def test_icu_agent_bench_markdown_lists_frozen_count(ra):
     """The rendered markdown surfaces how many tasks have gold answers."""
     md = ra.icu_agent_bench_markdown()
     assert "Frozen tasks:" in md
-    assert "synthetic_cohort_anomaly_audit" in md
+    assert "synthetic_cohort_completeness_qc" in md
     # the synthetic task declares numeric targets — they must show up
     assert "death_rate" in md
 
@@ -127,7 +128,7 @@ def test_synthetic_tasks_are_marked_self_check(ra):
     suite = ra.default_icu_agent_bench_suite()
     self_check_ids = set(suite.self_check_task_ids())
     assert {
-        "synthetic_cohort_anomaly_audit",
+        "synthetic_cohort_completeness_qc",
         "synthetic_cohort_table_one",
         "synthetic_cohort_stratified_sofa_mortality",
     } <= self_check_ids
