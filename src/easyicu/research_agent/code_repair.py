@@ -2067,19 +2067,11 @@ def _deterministic_runner_repair(
                     "variables": list(df.columns.astype(str)),
                 }
                 outcome_col = os.environ.get("OUTCOME_COL")
-                if not outcome_col or outcome_col not in df.columns:
-                    outcome_col = next(
-                        (c for c in ("death", "death_icu", "death_hosp", "mortality", "outcome") if c in df.columns),
-                        None,
-                    )
-                if outcome_col:
+                if outcome_col and outcome_col in df.columns:
                     outcome = pd.to_numeric(df[outcome_col], errors="coerce").dropna()
                     summary["outcome_col"] = outcome_col
                     summary["outcome_n"] = int(outcome.sum()) if len(outcome) else 0
                     summary["outcome_rate"] = float(outcome.mean()) if len(outcome) else None
-                    if outcome_col == "death":
-                        summary["death_n"] = summary["outcome_n"]
-                        summary["death_rate"] = summary["outcome_rate"]
                 if "age" in df.columns:
                     age = pd.to_numeric(df["age"], errors="coerce").dropna()
                     summary["age_median"] = float(age.median()) if len(age) else None
@@ -2138,13 +2130,10 @@ def _deterministic_runner_repair(
 
                 df = pd.read_parquet(cohort_path)
                 outcome_col = os.environ.get("OUTCOME_COL")
-                if not outcome_col or outcome_col not in df.columns:
-                    outcome_col = next(
-                        (c for c in ("death", "death_icu", "death_hosp", "mortality", "outcome") if c in df.columns),
-                        None,
-                    )
                 if not outcome_col:
-                    raise KeyError("No binary outcome column found for outcome incidence repair")
+                    raise KeyError("OUTCOME_COL is required for outcome incidence repair")
+                if outcome_col not in df.columns:
+                    raise KeyError(f"OUTCOME_COL={outcome_col!r} is not present in the cohort")
                 outcome = pd.to_numeric(df[outcome_col], errors="coerce")
                 rows = []
 
@@ -2165,21 +2154,8 @@ def _deterministic_runner_repair(
                         "ci_low": None if ci_low is None else float(ci_low),
                         "ci_high": None if ci_high is None else float(ci_high),
                     })
-                    if outcome_col == "death":
-                        rows[-1]["n_death"] = events
-                        rows[-1]["mortality_rate"] = rate
 
                 add_row("overall", outcome.notna())
-                measured_cols = [
-                    c for c in df.columns
-                    if str(c).endswith("_measured_24h") or str(c).endswith("_measured")
-                ]
-                for measured_col in measured_cols[:3]:
-                    measured = pd.to_numeric(df[measured_col], errors="coerce")
-                    non_missing = measured.dropna()
-                    if len(non_missing) and set(non_missing.astype(float).unique()) <= {0.0, 1.0}:
-                        add_row(f"{measured_col}=0", measured.eq(0) & outcome.notna())
-                        add_row(f"{measured_col}=1", measured.eq(1) & outcome.notna())
 
                 table = pd.DataFrame(rows)
                 table_path = os.path.join(out_dir, "outcome_incidence.csv")
@@ -2207,9 +2183,6 @@ def _deterministic_runner_repair(
                     "overall_ci_low": overall["ci_low"],
                     "overall_ci_high": overall["ci_high"],
                 }
-                if outcome_col == "death":
-                    statistic["n_death"] = int(overall["n_death"])
-                    statistic["overall_mortality_rate"] = overall["mortality_rate"]
                 statistic_path = os.path.join(out_dir, "outcome_rate.json")
                 with open(statistic_path, "w", encoding="utf-8") as f:
                     json.dump(statistic, f, indent=2, default=to_jsonable)
@@ -2381,15 +2354,11 @@ def _deterministic_runner_repair(
 
                 df = pd.read_parquet(cohort_path)
                 X_test = df[feature_cols].copy()
-                # Resolve the outcome column case-neutrally: explicit env / model
-                # bundle hint first, then common binary outcome names. No single
-                # benchmark outcome is hard-coded as the only option.
                 outcome_col = os.environ.get("OUTCOME_COL") or model_bundle.get("outcome_col")
-                if not outcome_col or outcome_col not in df.columns:
-                    outcome_col = next(
-                        (c for c in ("death", "death_icu", "death_hosp", "mortality") if c in df.columns),
-                        outcome_col or "death",
-                    )
+                if not outcome_col:
+                    raise KeyError("OUTCOME_COL or model_bundle['outcome_col'] is required for prediction evaluation")
+                if outcome_col not in df.columns:
+                    raise KeyError(f"Outcome column {outcome_col!r} is not present in the cohort")
                 y_test = pd.to_numeric(df[outcome_col], errors="coerce").fillna(0).astype(int).values
                 for col in X_test.columns:
                     series = pd.to_numeric(X_test[col], errors="ignore")

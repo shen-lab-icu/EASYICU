@@ -124,7 +124,11 @@ def run_execute_phase(
         visualization=VisualizationAgent(),
         critic=CriticAgent(role_resolver("analyzer")),
     )
-    runner = pipeline._build_runner(run_dir=run_dir, cohort_path=cohort_path)
+    runner = pipeline._build_runner(
+        run_dir=run_dir,
+        cohort_path=cohort_path,
+        target_outcome=context.target_outcome,
+    )
     usage_auditor = ConceptUsageAuditor()
     from .audits.patterns import AnalysisPatternAuditor
 

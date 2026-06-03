@@ -607,7 +607,13 @@ class ResearchAgentPipeline:
         self._runner_kwargs = dict(runner_kwargs or {})
         self._memory = RunMemory(self.workdir) if enable_memory else None
 
-    def _build_runner(self, *, run_dir: Path, cohort_path: Path):
+    def _build_runner(
+        self,
+        *,
+        run_dir: Path,
+        cohort_path: Path,
+        target_outcome: Optional[str] = None,
+    ):
         """Return the configured runner backend for a single ``run()``.
 
         Kept as a method (not a closure) so subclasses or tests can
@@ -621,6 +627,10 @@ class ResearchAgentPipeline:
                 timeout_seconds=self._timeout_seconds,
                 **self._runner_kwargs,
             )
+        runner_kwargs = dict(self._runner_kwargs)
+        extra_env = dict(runner_kwargs.pop("extra_env", {}) or {})
+        if target_outcome:
+            extra_env.setdefault("OUTCOME_COL", target_outcome)
         if self._runner_kind == "docker":
             return DockerRunner(
                 workdir=run_dir,
@@ -628,14 +638,16 @@ class ResearchAgentPipeline:
                 timeout_seconds=self._timeout_seconds,
                 image=self._runner_image,
                 network=self._runner_network,
-                **self._runner_kwargs,
+                extra_env=extra_env,
+                **runner_kwargs,
             )
         return CodeRunner(
             workdir=run_dir,
             cohort_parquet=cohort_path,
             timeout_seconds=self._timeout_seconds,
             python_executable=self._python_executable,
-            **self._runner_kwargs,
+            extra_env=extra_env,
+            **runner_kwargs,
         )
 
     def _run_plan_phase(
