@@ -13,6 +13,7 @@ try:
     from run_research_agent_bench import (  # type: ignore[import-not-found]
         _benchmark_pipeline_options,
         _enforce_submission_profile_arms,
+        _enforce_submission_profile_runner,
     )
 finally:
     sys.path.pop(0)
@@ -50,6 +51,39 @@ def test_submission_profile_requires_aware_only_arm() -> None:
             ["naive", "aware"],
             profile=NPJ_DM_2026_05,
         )
+
+
+def test_submission_profile_requires_docker_runner() -> None:
+    # No profile: host subprocess stays the default.
+    assert _enforce_submission_profile_runner(None, profile=None) == "subprocess"
+    # Profile + no explicit runner defaults to the required docker runner.
+    assert _enforce_submission_profile_runner(
+        None, profile=NPJ_DM_2026_05
+    ) == "docker"
+    assert _enforce_submission_profile_runner(
+        "docker", profile=NPJ_DM_2026_05
+    ) == "docker"
+    # Profile + host runner with no escape hatch is rejected.
+    with pytest.raises(SystemExit, match="--runner docker"):
+        _enforce_submission_profile_runner("subprocess", profile=NPJ_DM_2026_05)
+    # The development escape hatch is honoured but yields a non-canonical run.
+    assert _enforce_submission_profile_runner(
+        "subprocess", profile=NPJ_DM_2026_05, allow_host_runner=True
+    ) == "subprocess"
+
+
+def test_benchmark_options_record_runner_kind() -> None:
+    options = _benchmark_pipeline_options(
+        max_total_steps=None,
+        disable_replanning=False,
+        max_code_repair_attempts=None,
+        enable_repro_envelope=False,
+        submission_profile=NPJ_DM_2026_05,
+        runner_kind="docker",
+    )
+    assert options["runner_kind"] == "docker"
+    # runner_kind stays out of the profile's own option bundle.
+    assert "runner_kind" not in NPJ_DM_2026_05.as_pipeline_options()
 
 
 def test_submission_profile_registry_is_versioned() -> None:

@@ -23,6 +23,13 @@ class SubmissionProfile:
     writer_digest_widened: bool
     enable_reproducibility_envelope: bool
     requires_arm: str
+    # Paper-facing runs must execute agent-generated code in a
+    # network-isolated container (``docker run --network none`` with a
+    # read-only cohort mount), not on the host subprocess. Enforced by
+    # the benchmark runner; ``requires_runner`` itself stays out of the
+    # profile's pipeline option bundle, while the resolved ``runner_kind``
+    # is recorded separately by the bench wrapper.
+    requires_runner: str = "docker"
     expected_concept_dict_sha: Optional[str] = None
     expected_sofa2_dict_sha: Optional[str] = None
 
@@ -69,6 +76,7 @@ NPJ_DM_2026_05 = SubmissionProfile(
     writer_digest_widened=True,
     enable_reproducibility_envelope=True,
     requires_arm="aware",
+    requires_runner="docker",
     # Locked 2026-05-27 after the user's 77/77 user-added concept audit and
     # 112/112 itemid verification (see docs/concept_dict_audit_log.md).
     expected_concept_dict_sha="9ef52ed3ec51652f235c92a1394d4f4b91318cbd46e3915a5eacbbed2754e179",
