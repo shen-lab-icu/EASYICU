@@ -142,12 +142,14 @@ between every LLM step and the next, so the LLM has wide creative
 latitude but cannot push unverified numbers into the manuscript.
 
 The plan is intentionally dynamic. Table 1, outcome incidence,
-missingness, score-specific audits and cross-database steps are
+missingness, score-completeness checks and cross-database steps are
 included only when the question, analysis type and available context
-justify them. For example, SOFA-specific quality control appears as a
-`sofa_zero_audit` step only when SOFA is central to the question, and
-cross-database work defaults to a replication protocol unless an
-external cohort is actually available.
+justify them. Composite-score completeness is treated as pre-analysis,
+outcome-blind quality control: cohorts may expose a generic
+`<score>_n_components` column, and the deterministic probe reports
+whether low score strata are under-measured without looking at the
+outcome. Cross-database work defaults to a replication protocol unless
+an external cohort is actually available.
 
 ## Quick start
 
@@ -177,23 +179,24 @@ print(result.report_path)
 print(result.manuscript_path)
 ```
 
-### Deterministic ClinicalSkill Template
+### Deterministic Analysis-Family Skills
 
 ```python
 from easyicu.research_agent import OpenAIClient, ResearchAgentPipeline, list_skills
 
 print([s.key for s in list_skills()])
-# → ['sofa_mortality', 'aki_kdigo_mortality',
-#    'vaso_exposure_mortality', 'lactate_trajectory_mortality']
+# → ['association_analysis', 'prediction_model', 'data_quality_audit']
 
 pipeline = ResearchAgentPipeline(
     workdir="./research_output",
     llm=OpenAIClient(model="gpt-4o-mini"),
 )
 result = pipeline.run(
-    skill="sofa_mortality",                 # uses the shared skill template
+    skill="association_analysis",           # binds variables from this context
     cohort="path/to/cohort.parquet",
     database="miiv",
+    question="Is the selected ICU exposure associated with the selected outcome?",
+    target_outcome="death",
     cross_database_validation=["eicu", "hirid"],
     manuscript_authors=["A. Researcher", "B. Clinician"],
 )
@@ -418,7 +421,7 @@ replication manuscript:
 ```bash
 easyicu-research-replication \
     --paper ./papers/critical_care_example.md \
-    --cohort ./cohorts/miiv_sofa_mortality.parquet \
+    --cohort ./cohorts/miiv_analysis_cohort.parquet \
     --database miiv \
     --mode manuscript \
     --llm openai \
@@ -577,9 +580,10 @@ Hard rules currently encoded:
   script also documents the imputation.
 - Lab columns summarised by mean with no `median(...)` reference in
   the same script trigger a warning.
-- A `sofa_zero_audit` / stratum-audit output with `score==0` outcome
-  rate exceeding `score==1` triggers a warning citing the
-  missingness-vs-severity ambiguity.
+- Composite/ordinal score completeness is checked before analysis when
+  the cohort exposes component availability such as `<score>_n_components`;
+  this quality-control signal is outcome-blind and does not require a
+  score-specific audit step.
 - Reported `outcome_rate` that disagrees with a cohort recompute by
   more than 0.001 is an error.
 

@@ -159,7 +159,7 @@ def test_pipeline_writes_strobe_by_default(ra, synthetic_cohort, tmp_path):
         llm=ra.MockLLMClient(),
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )
@@ -185,7 +185,7 @@ def test_pipeline_checklist_can_be_disabled(ra, synthetic_cohort, tmp_path):
         enable_reporting_checklist=False,
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )
@@ -201,7 +201,7 @@ def test_pipeline_explicit_override_selects_tripod_too(ra, synthetic_cohort, tmp
         reporting_checklist_names=["strobe", "tripod_ai"],
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )

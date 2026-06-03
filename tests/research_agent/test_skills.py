@@ -1,8 +1,8 @@
-"""ClinicalSkill registry: every built-in must produce a valid plan.
+"""ClinicalSkill registry invariants.
 
-The skills are how non-LLM users (and the webapp T1.7) reach the
-pipeline. If a built-in skill stops emitting a plan, the demo and the
-webapp regress silently, so we pin a few invariants.
+Built-in skills may describe analysis families (association, prediction,
+data-quality audit), but not one concrete clinical question such as
+``sofa_mortality``. User-registered skills can still bind concrete variables.
 """
 
 from __future__ import annotations
@@ -10,8 +10,22 @@ from __future__ import annotations
 import pandas as pd
 
 
-def _empty_context_for_skill(ra, skill) -> "ra.ResearchContext":
-    """Build a ResearchContext with the skill's expected variables."""
+def _generic_skill(ra):
+    """A case-neutral skill built locally (never registered globally)."""
+    return ra.ClinicalSkill(
+        key="generic_exposure_outcome",
+        name="Generic exposure → outcome association",
+        description="Case-neutral association template used only in tests.",
+        research_question_template=(
+            "Is exposure_x associated with endpoint_y in {database}?"
+        ),
+        target_outcome="endpoint_y",
+        primary_predictor="exposure_x",
+        expected_variables=["age", "sex", "exposure_x", "endpoint_y"],
+    )
+
+
+def _context_for_skill(ra, skill) -> "ra.ResearchContext":
     cols = {v: [0] * 3 for v in skill.expected_variables}
     cols.setdefault("stay_id", [1, 2, 3])
     df = pd.DataFrame(cols)
@@ -22,53 +36,67 @@ def _empty_context_for_skill(ra, skill) -> "ra.ResearchContext":
     )
 
 
-def test_every_builtin_produces_nonempty_plan(ra):
-    skills = ra.list_skills()
-    assert skills, "the skill registry is unexpectedly empty"
-    for skill in skills:
-        ctx = _empty_context_for_skill(ra, skill)
-        plan = skill.plan(ctx)
-        assert plan.research_question
-        assert plan.steps, f"skill '{skill.key}' produced an empty plan"
-        # Every step must have a step_id and a non-empty intent.
-        for step in plan.steps:
-            assert step.step_id and step.intent
-        # Skills with a SOFA predictor must also include the SOFA-zero audit.
-        if skill.primary_predictor.lower() in {"sofa", "sofa2"}:
-            ids = [s.step_id for s in plan.steps]
-            assert any("sofa_zero" in sid for sid in ids), (
-                f"skill '{skill.key}' missing the sofa_zero audit step"
-            )
+def test_registry_ships_only_analysis_family_builtin_skills(ra):
+    """Built-ins are workflow families, not score/outcome-specific questions."""
+    skills = {s.key: s for s in ra.list_skills()}
+    assert set(skills) == {
+        "association_analysis",
+        "prediction_model",
+        "data_quality_audit",
+    }
+    forbidden_tokens = {
+        "sofa",
+        "aki",
+        "kdigo",
+        "vaso",
+        "lactate",
+        "mortality",
+        "death",
+    }
+    for skill in skills.values():
+        blob = " ".join([skill.key, skill.name, skill.description]).lower()
+        assert not any(token in blob for token in forbidden_tokens)
+        assert skill.target_outcome is None
+        assert skill.primary_predictor is None
+        assert skill.expected_variables == []
+
+
+def test_user_registered_skill_produces_nonempty_plan(ra):
+    """The registry mechanism still works for a case-neutral skill."""
+    skill = _generic_skill(ra)
+    ctx = _context_for_skill(ra, skill)
+    plan = skill.plan(ctx)
+    assert plan.research_question
+    assert plan.steps, "a registered skill produced an empty plan"
+    for step in plan.steps:
+        assert step.step_id and step.intent
 
 
 def test_no_builtin_ships_a_bespoke_canned_plan(ra):
-    """Built-in skills must stay case-neutral.
+    """Built-in skills (if any are ever re-added) must stay case-neutral.
 
     A skill that hard-codes a paper-specific ``AnalysisPlan`` via
-    ``plan_factory`` launders human-authored analysis as autonomous
-    agent output - the same integrity problem we removed from
-    ``code_repair`` and the bundled ``case_plugins``. Generic skills
-    must reach a plan through the shared ``_default_skill_plan``
-    template (``plan_factory is None``); a registered plan_factory is a
-    bundled canned plan and is not allowed in the built-in registry.
+    ``plan_factory`` launders human-authored analysis as autonomous agent
+    output - the same integrity problem removed from ``code_repair`` and the
+    bundled ``case_plugins``. Generic skills must reach a plan through the
+    shared ``_default_skill_plan`` template (``plan_factory is None``).
     """
     offenders = [
         s.key for s in ra.list_skills()
         if getattr(s, "plan_factory", None) is not None
     ]
     assert offenders == [], (
-        "built-in skills must not bundle a bespoke canned plan "
-        f"(case-specific plans belong behind an explicit replication "
-        f"entry point, not in the shared registry); offenders: {offenders}"
+        "built-in skills must not bundle a bespoke canned plan; "
+        f"offenders: {offenders}"
     )
 
 
 def test_skill_validate_against_missing_var(ra):
-    skill = ra.get_skill("sofa_mortality")
-    df = pd.DataFrame({"stay_id": [1, 2], "age": [60, 70], "death": [0, 1]})
+    skill = _generic_skill(ra)
+    df = pd.DataFrame({"stay_id": [1, 2], "age": [60, 70], "endpoint_y": [0, 1]})
     issues = skill.validate_against(df)
-    # sofa2 is required by the skill but absent from the df → issue raised
-    assert any("sofa2" in s for s in issues), issues
+    # exposure_x is required by the skill but absent from df → issue raised
+    assert any("exposure_x" in s for s in issues), issues
 
 
 def test_get_unknown_skill_raises(ra):

@@ -216,7 +216,7 @@ def test_pipeline_fairness_subgroups_when_synthetic_cohort(
         llm=ra.MockLLMClient(),
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )
@@ -240,7 +240,7 @@ def test_pipeline_hypothesis_generator_opt_in(ra, synthetic_cohort, tmp_path):
         hypothesis_generator_top_k=3,
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )

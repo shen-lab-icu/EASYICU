@@ -91,8 +91,16 @@ def test_resume_reruns_missing_step(ra, synthetic_cohort, tmp_path: Path):
     partial_path = run_dir / "manifest_partial.json"
     partial = json.loads(partial_path.read_text(encoding="utf-8"))
 
-    assert len(partial["per_step_records"]) >= 2, "need ≥2 steps to test partial resume"
-    dropped = partial["per_step_records"].pop()
+    records = partial["per_step_records"]
+    assert len(records) >= 2, "need ≥2 steps to test partial resume"
+    drop_index = next(
+        (
+            i for i, record in enumerate(records)
+            if record.get("step_id") == "04_primary_association"
+        ),
+        len(records) - 1,
+    )
+    dropped = records.pop(drop_index)
     partial_path.write_text(
         json.dumps(partial, indent=2, ensure_ascii=False), encoding="utf-8"
     )

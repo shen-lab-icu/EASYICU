@@ -83,12 +83,12 @@ def test_cache_invalidates_on_skill_change(ra, synthetic_cohort, tmp_path: Path)
     a = pipeline.run(
         cohort=synthetic_cohort,
         cohort_name="cache_test", database="synthetic",
-        target_outcome="death", skill="sofa_mortality",
+        target_outcome="death", skill="association_analysis",
     )
     b = pipeline.run(
         cohort=synthetic_cohort,
         cohort_name="cache_test", database="synthetic",
-        target_outcome="death", skill="sofa_mortality",
+        target_outcome="death", skill="association_analysis",
     )
     # Same skill → hit
     assert b.run_id == a.run_id
@@ -97,7 +97,7 @@ def test_cache_invalidates_on_skill_change(ra, synthetic_cohort, tmp_path: Path)
     c = pipeline.run(
         cohort=synthetic_cohort,
         cohort_name="cache_test", database="synthetic",
-        target_outcome="death", skill="aki_kdigo_mortality",
+        target_outcome="death", skill="prediction_model",
     )
     assert c.run_id != a.run_id
 

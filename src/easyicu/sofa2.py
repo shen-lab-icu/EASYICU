@@ -611,7 +611,14 @@ def sofa2_score(data_dict: Dict[str, pd.DataFrame], *, keep_components: bool = F
             id_cols = [col for col in df.columns if col in result.columns and col != comp]
             result = pd.merge(result, df, on=id_cols, how="outer")
 
+    # Score value: faithful to MIMIC-IV official / ricu (missing component -> 0).
     result["sofa2"] = result[required].fillna(0).sum(axis=1).astype(int)
+    # Outcome-blind completeness signal: how many of the 6 components were
+    # actually measured for this row (0-6). The score above coalesces missing
+    # to 0, so a sofa2==0 row may be a fully-measured low-severity patient OR a
+    # row with unmeasured components; this column lets pre-analysis QC tell them
+    # apart WITHOUT changing the standard score semantics.
+    result["sofa2_n_components"] = result[required].notna().sum(axis=1).astype(int)
 
     if keep_components:
         for comp in required:

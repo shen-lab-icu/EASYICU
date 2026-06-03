@@ -62,7 +62,7 @@ def ra():
 
 @pytest.fixture(scope="session")
 def synthetic_cohort():
-    """Small synthetic cohort that triggers the SOFA2==0 anomaly.
+    """Small synthetic cohort with a composite-score completeness signal.
 
     Built as a self-contained closed-form generator so this fixture
     has no dependency on the demo script in ``examples/``.
@@ -88,6 +88,8 @@ def synthetic_cohort():
     return pd.DataFrame({
         "stay_id": np.arange(1, n + 1),
         "age": age, "sex": rng.choice(["M", "F"], size=n),
-        "sofa2": sofa2, "lact": lact, "creat": creat,
+        "sofa2": sofa2,
+        "sofa2_n_components": np.where(miss, 0, 6),
+        "lact": lact, "creat": creat,
         "map": map_v, "vaso": vaso, "los_icu": los, "death": death,
     })

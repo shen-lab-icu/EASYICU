@@ -84,6 +84,7 @@ def test_probe_summary_required_fields(ra):
     assert summary.n_rows == 1234
     assert summary.target_outcome is None
     assert summary.top_missing_columns == []
+    assert summary.score_completeness == []
 
 
 def test_probe_summary_round_trip(ra):
@@ -92,11 +93,10 @@ def test_probe_summary_round_trip(ra):
         "n_columns": 42,
         "target_outcome": "death",
         "top_missing_columns": [{"variable": "lactate", "fraction_missing": 0.32}],
-        "score_anomalies": [],
-        "outcome_rate": 0.18,
+        "score_completeness": [{"variable": "severity_score"}],
     }
     summary = ra.ProbeSummary.model_validate(raw)
-    assert summary.outcome_rate == pytest.approx(0.18)
+    assert summary.score_completeness[0]["variable"] == "severity_score"
     assert summary.top_missing_columns[0]["variable"] == "lactate"
 
 

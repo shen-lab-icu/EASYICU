@@ -620,17 +620,21 @@ class ResearchAgentPipeline:
         stub it cleanly. Returns any object that exposes
         ``run(step_id=..., code=...) -> RunResult``.
         """
-        if self._runner_factory is not None:
-            return self._runner_factory(
-                workdir=run_dir,
-                cohort_parquet=cohort_path,
-                timeout_seconds=self._timeout_seconds,
-                **self._runner_kwargs,
-            )
         runner_kwargs = dict(self._runner_kwargs)
         extra_env = dict(runner_kwargs.pop("extra_env", {}) or {})
         if target_outcome:
             extra_env.setdefault("OUTCOME_COL", target_outcome)
+        if self._runner_factory is not None:
+            # A user-supplied factory (OpenHands, firecracker, ...) also needs
+            # the run's outcome column so deterministic repairs resolve it from
+            # OUTCOME_COL rather than guessing a column name.
+            return self._runner_factory(
+                workdir=run_dir,
+                cohort_parquet=cohort_path,
+                timeout_seconds=self._timeout_seconds,
+                extra_env=extra_env,
+                **runner_kwargs,
+            )
         if self._runner_kind == "docker":
             return DockerRunner(
                 workdir=run_dir,
@@ -2297,6 +2301,9 @@ def _build_probe_summary(
         "n_columns": int(df.shape[1]),
         "target_outcome": context.target_outcome,
         "top_missing_columns": [],
+        "score_completeness": [],
+        # Retained as an empty legacy field for old readers; the probe no
+        # longer computes outcome-peeking score anomalies.
         "score_anomalies": [],
     }
     missing_rows = []
@@ -2319,13 +2326,7 @@ def _build_probe_summary(
     missing_df.to_csv(missing_path, index=False)
     files.append(missing_path)
 
-    outcome = context.target_outcome
-    if outcome and outcome in df.columns:
-        series = df[outcome].dropna()
-        if not series.empty:
-            uniq = set(series.unique())
-            if uniq <= {0, 1, True, False, 0.0, 1.0}:
-                summary["outcome_rate"] = float(series.astype(float).mean())
+    from easyicu.data_quality import composite_score_completeness
 
     for variable in context.variables:
         if variable.role not in {
@@ -2348,36 +2349,14 @@ def _build_probe_summary(
                 else None
             ),
         }
-        if (
-            outcome
-            and outcome in df.columns
-            and 0 in set(observed.unique())
-            and 1 in set(observed.unique())
-        ):
-            zero_mask = df[variable.name] == 0
-            one_mask = df[variable.name] == 1
-            zero_rate = (
-                float(df.loc[zero_mask, outcome].mean()) if zero_mask.any() else None
+        n_components_col = f"{variable.name}_n_components"
+        if n_components_col in df.columns:
+            stats["completeness"] = composite_score_completeness(
+                df,
+                variable.name,
+                n_components_col=n_components_col,
             )
-            one_rate = (
-                float(df.loc[one_mask, outcome].mean()) if one_mask.any() else None
-            )
-            stats.update(
-                {
-                    "zero_outcome_rate": zero_rate,
-                    "one_outcome_rate": one_rate,
-                    "sofa_zero_anomaly": bool(
-                        zero_rate is not None
-                        and one_rate is not None
-                        and zero_rate > one_rate
-                    ),
-                }
-            )
-        if stats.get("sofa_zero_anomaly"):
-            summary["score_anomalies"].append(stats)
-    summary["sofa_zero_anomaly"] = any(
-        item.get("sofa_zero_anomaly") for item in summary["score_anomalies"]
-    )
+            summary["score_completeness"].append(stats)
     summary_path = out_dir / "probe_summary.json"
     summary_path.write_text(
         json.dumps(summary, indent=2, ensure_ascii=False, default=str),
@@ -2745,7 +2724,7 @@ def _render_prediction_publication_bundle_from_prior_outputs(
 # A mapping of (step_id_substring, artefact_basename) -> tuple of aliases.
 # step_id_substring is matched as ``in step.step_id`` so that step ids
 # the planner generates with arbitrary ordering ("01_table_one",
-# "02_outcome_incidence", "04_primary_association", "05_sofa_zero_audit")
+# "02_outcome_incidence", "04_primary_association", "05_stratum_audit")
 # all resolve correctly.
 _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
     # Cohort/table-one summaries often carry the same mortality

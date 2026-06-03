@@ -264,34 +264,6 @@ def _mock_replan_json(ctx: ResearchContext, prompt: str) -> str:
             plan = current
     except Exception:
         pass
-    outcome = ctx.target_outcome or _pick_outcome(ctx) or "outcome"
-    analysis_type = infer_analysis_type(
-        ctx,
-        primary_predictor=_pick_primary_predictor(ctx, outcome=outcome),
-        target_outcome=outcome,
-    )
-    probe_text = prompt.lower()
-    allows_score_audit = analysis_type.key in {
-        "association_study",
-        "descriptive_epidemiology",
-        "cross_database_replication",
-    }
-    if (
-        allows_score_audit
-        and "sofa_zero_anomaly" in probe_text
-        and not any("sofa_zero" in s.step_id for s in plan.steps)
-    ):
-        score = _pick_primary_predictor(ctx, outcome=outcome) or "sofa2"
-        plan.steps.append(
-            AnalysisStep(
-                step_id="05_sofa_zero_audit",
-                intent=f"Audit whether {score}==0 behaves anomalously relative to adjacent strata.",
-                inputs=[score, outcome],
-                expected_outputs=["table:sofa_strata", "statistic:stratum_audit"],
-                method="stratum_audit",
-                icu_rule_refs=["aggregation_rule_for"],
-            )
-        )
     return plan.model_copy(update={"revision": plan.revision + 1}).model_dump_json(indent=2)
 
 
@@ -336,16 +308,16 @@ def _question_mentions_variable(ctx: ResearchContext, variable_name: str) -> boo
 def _score_preference_key(ctx: ResearchContext, name: str) -> tuple[int, int, str]:
     lower = name.lower()
     mentioned_rank = 0 if _question_mentions_variable(ctx, name) else 1
-    sofa_rank = 0 if lower == "sofa2" else 1 if lower == "sofa" else 2
-    return (mentioned_rank, sofa_rank, lower)
+    # Prefer the more specific variable name when multiple candidates match the
+    # same question text (e.g. ``score2`` should beat ``score``).
+    return (mentioned_rank, -len(_normalise_for_question_match(name)), lower)
 
 
-def _pick_sofa_score(ctx: ResearchContext) -> Optional[str]:
-    """Choose the SOFA-family variable, preferring the question and SOFA-2."""
+def _pick_score(ctx: ResearchContext) -> Optional[str]:
+    """Choose a composite/ordinal score without naming a particular score."""
     candidates = [
         v.name for v in ctx.variables
-        if v.name.lower() in {"sofa", "sofa2"}
-        and v.role in {VariableRole.COMPOSITE_SCORE, VariableRole.ORDINAL_SCORE}
+        if v.role in {VariableRole.COMPOSITE_SCORE, VariableRole.ORDINAL_SCORE}
     ]
     if not candidates:
         return None
@@ -371,10 +343,6 @@ def _pick_primary_predictor(ctx: ResearchContext, outcome: Optional[str]) -> Opt
     ]
     if mentioned:
         return sorted(mentioned, key=lambda name: _score_preference_key(ctx, name))[0]
-
-    sofa_score = _pick_sofa_score(ctx)
-    if sofa_score and sofa_score != outcome:
-        return sofa_score
 
     by_role: Dict[VariableRole, List[str]] = {r: [] for r in pref_order}
     for v in ctx.variables:
@@ -402,12 +370,10 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
     """
     step_id = _extract_step_id(prompt) or "step"
     outcome = ctx.target_outcome or _pick_outcome(ctx) or "death"
-    # Mirror the planner's role-aware detection so the naive arm of T1.4
-    # never produces a sofa_strata.csv it lacks the rule for.
-    sofa_var = _pick_sofa_score(ctx)
+    score_var = _pick_score(ctx)
 
     if "primary_association" in step_id:
-        primary_pred = _pick_primary_predictor(ctx, outcome=outcome) or sofa_var or "age"
+        primary_pred = _pick_primary_predictor(ctx, outcome=outcome) or score_var or "age"
         return _mock_code_primary_association(
             ctx=ctx,
             step_id=step_id,
@@ -460,24 +426,24 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
         do_table_one = "table_one" in step_kind
         do_outcome_incidence = "outcome_incidence" in step_kind
         do_missingness = "missingness" in step_kind
-        do_sofa_audit = any(token in step_kind for token in ("sofa_zero_audit", "stratum_audit", "composite"))
+        do_stratum_audit = any(token in step_kind for token in ("stratum_audit", "composite"))
         do_protocol_only = any(token in step_kind for token in ("protocol", "plan"))
 
         outcome_col = {outcome!r} if {outcome!r} in df.columns else None
-        sofa_col = {sofa_var!r} if {sofa_var!r} else None
-        if sofa_col and sofa_col not in df.columns:
-            sofa_col = None
-        if not any((do_table_one, do_outcome_incidence, do_missingness, do_sofa_audit)):
+        score_col = {score_var!r} if {score_var!r} else None
+        if score_col and score_col not in df.columns:
+            score_col = None
+        if not any((do_table_one, do_outcome_incidence, do_missingness, do_stratum_audit)):
             if do_protocol_only:
                 do_table_one = False
                 do_outcome_incidence = False
                 do_missingness = False
-                do_sofa_audit = False
+                do_stratum_audit = False
             else:
                 do_table_one = True
                 do_outcome_incidence = True
                 do_missingness = True
-                do_sofa_audit = sofa_col is not None and outcome_col is not None
+                do_stratum_audit = False
 
         summary = {{}}
 
@@ -505,7 +471,7 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
                     "frac_missing": (n_miss / n) if n else 0.0,
                 }}
                 if pd.api.types.is_numeric_dtype(s):
-                    if sofa_col is not None and col == sofa_col:
+                    if score_col is not None and col == score_col:
                         # ordinal: report mode + range, never mean
                         s_int = s.dropna().astype("Int64")
                         if len(s_int) > 0:
@@ -570,34 +536,24 @@ def _mock_code_for_step(ctx: ResearchContext, prompt: str) -> str:
             except Exception:
                 pass
 
-        # ---- SOFA stratum audit (the key sofa==0 / sofa2==0 check) ----
-        if do_sofa_audit and sofa_col is not None and outcome_col is not None:
-            sub = df[[sofa_col, outcome_col]].dropna()
-            sub[sofa_col] = sub[sofa_col].astype(int)
-            grp = sub.groupby(sofa_col)[outcome_col].agg(["count", "mean"]).reset_index()
-            grp.columns = [sofa_col, "n", "outcome_rate"]
-            grp.to_csv(out_dir / "sofa_strata.csv", index=False)
-            summary["sofa_strata_path"] = "sofa_strata.csv"
-
-            # Anomaly flag: if sofa==0 outcome rate exceeds sofa==1 rate, flag.
-            try:
-                rate_at_zero = float(grp.loc[grp[sofa_col] == 0, "outcome_rate"].iloc[0])
-                rate_at_one = float(grp.loc[grp[sofa_col] == 1, "outcome_rate"].iloc[0])
-                summary["sofa_zero_anomaly"] = rate_at_zero > rate_at_one
-                summary["sofa_zero_rate"] = rate_at_zero
-                summary["sofa_one_rate"] = rate_at_one
-            except (IndexError, KeyError):
-                summary["sofa_zero_anomaly"] = False
+        # ---- Explicit score stratum audit ----
+        if do_stratum_audit and score_col is not None and outcome_col is not None:
+            sub = df[[score_col, outcome_col]].dropna()
+            sub[score_col] = sub[score_col].astype(int)
+            grp = sub.groupby(score_col)[outcome_col].agg(["count", "mean"]).reset_index()
+            grp.columns = [score_col, "n", "outcome_rate"]
+            grp.to_csv(out_dir / "stratum_audit.csv", index=False)
+            summary["stratum_audit_path"] = "stratum_audit.csv"
 
             fig, ax = plt.subplots(figsize=(5, 3.2))
-            ax.plot(grp[sofa_col], grp["outcome_rate"], marker="o", color="#1f77b4")
-            ax.set_xlabel(sofa_col)
+            ax.plot(grp[score_col], grp["outcome_rate"], marker="o", color="#1f77b4")
+            ax.set_xlabel(score_col)
             ax.set_ylabel(f"{{outcome_col}} rate")
-            ax.set_title(f"Outcome rate by {{sofa_col}} stratum")
+            ax.set_title(f"Outcome rate by {{score_col}} stratum")
             fig.tight_layout()
-            fig.savefig(out_dir / "sofa_strata.png", dpi=160)
+            fig.savefig(out_dir / "stratum_audit.png", dpi=160)
             plt.close(fig)
-            summary["sofa_figure_path"] = "sofa_strata.png"
+            summary["stratum_audit_figure_path"] = "stratum_audit.png"
 
         # ---- Persist machine-readable summary ----
         with open(out_dir / "step_summary.json", "w", encoding="utf-8") as f:
@@ -1463,22 +1419,12 @@ def _extract_step_id(prompt: str) -> Optional[str]:
 
 def _mock_interpretation(ctx: ResearchContext, prompt: str) -> str:
     """Brief, evidence-grounded interpretation paragraph."""
-    sofa_var = _pick_sofa_score(ctx)
     outcome = ctx.target_outcome or _pick_outcome(ctx) or "the primary outcome"
     parts: List[str] = []
     parts.append(
         f"The cohort of {ctx.cohort.n_stays:,} ICU stays from {ctx.cohort.database} "
         f"was analysed against the question: '{ctx.research_question}'."
     )
-    if sofa_var:
-        parts.append(
-            f"As planned, we audited {sofa_var}-stratum incidence of {outcome}. "
-            f"If the {sofa_var}==0 stratum has an elevated {outcome} rate compared "
-            f"with {sofa_var}==1, the most parsimonious explanation is component-"
-            f"level missingness rather than truly absent organ dysfunction; the "
-            f"missingness audit table should be consulted before drawing clinical "
-            "conclusions."
-        )
     parts.append(
         "All numerical claims in this paragraph are bound to entries in the evidence "
         "store; reviewers can verify each value against its generating script and run log."
@@ -1607,8 +1553,8 @@ def _mock_manuscript_scaffold(ctx: ResearchContext, *, language: str = "en") -> 
     from the evidence store. Discussion and clinical claims are left
     blank — that is policy, not laziness.
     """
-    sofa_var = _pick_sofa_score(ctx)
     outcome = ctx.target_outcome or _pick_outcome(ctx) or "the primary outcome"
+    predictor = _pick_primary_predictor(ctx, outcome=outcome) or "the primary predictor"
     cross_db = ", ".join(ctx.cross_database_validation) if ctx.cross_database_validation else "(none planned)"
     if language == "zh":
         return textwrap.dedent(f"""
@@ -1618,7 +1564,7 @@ def _mock_manuscript_scaffold(ctx: ResearchContext, *, language: str = "en") -> 
         > `{{evidence:<id>}}` 证据占位符；未绑定证据的句子会被后处理拦截。
 
         ## 标题
-        {ctx.cohort.database} ICU 患者中 {sofa_var or "主要预测变量"} 与 {outcome} 的关系：
+        {ctx.cohort.database} ICU 患者中 {predictor} 与 {outcome} 的关系：
         一项可追溯的 agent 辅助分析。
 
         ## 方法
@@ -1638,7 +1584,6 @@ def _mock_manuscript_scaffold(ctx: ResearchContext, *, language: str = "en") -> 
         结局发生率：{{evidence:outcome_rate}}。
         缺失情况：{{evidence:missingness}}。
         主要关联：{{evidence:primary_association}}。
-        {sofa_var + " 分层审计：{evidence:sofa_strata}。" if sofa_var else ""}
 
         ## 讨论
         *(留给人类作者；writer agent 不在没有人工确认的情况下生成临床主张或建议。)*
@@ -1651,7 +1596,7 @@ def _mock_manuscript_scaffold(ctx: ResearchContext, *, language: str = "en") -> 
     > Sentences without an evidence id are blocked by the writer.
 
     ## Title
-    Association between {sofa_var or "the primary predictor"} and {outcome}
+    Association between {predictor} and {outcome}
     in {ctx.cohort.database} ICU patients: a traceable agent-assisted analysis.
 
     ## Methods
@@ -1673,7 +1618,6 @@ def _mock_manuscript_scaffold(ctx: ResearchContext, *, language: str = "en") -> 
     Outcome incidence: {{evidence:outcome_rate}}.
     Missingness profile: {{evidence:missingness}}.
     Primary association: {{evidence:primary_association}}.
-    {sofa_var + "-stratum audit: {evidence:sofa_strata}." if sofa_var else ""}
 
     ## Discussion
     *(left to the human author; the writer agent declines to generate clinical

@@ -4,7 +4,7 @@ This module provides comprehensive data quality checks for ICU data,
 including missing value analysis, range validation, and consistency checks.
 """
 
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List, Union, Sequence
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -408,5 +408,112 @@ def print_quality_summary(report: Dict[str, Any]) -> None:
         if tc.get('n_time_issues', 0) > 0:
             print("\nTime Consistency Issues:")
             print(f"  {tc['n_time_issues']} patients with time issues")
-    
+
     print("=" * 60)
+
+
+def composite_score_completeness(
+    data: pd.DataFrame,
+    score_col: str,
+    component_cols: Optional[Sequence[str]] = None,
+    *,
+    n_components_col: Optional[str] = None,
+    min_components: Optional[int] = None,
+    zero_value: float = 0.0,
+) -> Dict[str, Any]:
+    """Outcome-blind, pre-analysis completeness QC for a composite score.
+
+    A composite/ordinal severity score that coalesces missing components to a
+    neutral value (e.g. SOFA / SOFA-2 / APACHE-style scores collapse a missing
+    component to 0) cannot, on its own, tell a genuinely low-severity patient
+    apart from one whose components were simply never measured. That ambiguity
+    biases the lowest stratum and is *sampling-dependent* (it is far larger in
+    sparsely-sampled databases), so it belongs in pre-analysis QC — measured
+    BEFORE any outcome model is fit and WITHOUT looking at the outcome.
+
+    This function is deliberately generic: it takes the score column and its
+    component columns (or a precomputed component-count column) as arguments and
+    hard-codes no particular score, variable, or database.
+
+    Args:
+        data: cohort DataFrame (one analytic unit per row, e.g. one ICU stay).
+        score_col: name of the composite score column to audit.
+        component_cols: component columns whose non-null count defines
+            completeness. Either this or ``n_components_col`` must be supplied.
+        n_components_col: name of a precomputed per-row available-component
+            count (e.g. ``sofa2_n_components``); used when ``component_cols`` is
+            not given.
+        min_components: rows with fewer available components than this are
+            flagged as low-completeness. Defaults to ``len(component_cols)``
+            (require all components) when components are given, else 1.
+        zero_value: the score value a fully-missing row collapses to (default
+            0); the report quantifies how much of this stratum is incomplete.
+
+    Returns:
+        Dict of completeness metrics. Contains no outcome/label by design.
+    """
+    if score_col not in data.columns:
+        raise KeyError(f"score_col {score_col!r} not in data")
+
+    if component_cols is not None:
+        present = [c for c in component_cols if c in data.columns]
+        missing_cols = [c for c in component_cols if c not in data.columns]
+        n_available = data[present].notna().sum(axis=1) if present else pd.Series(
+            0, index=data.index
+        )
+        n_total_components = len(component_cols)
+        if min_components is None:
+            min_components = len(component_cols)
+    elif n_components_col is not None:
+        if n_components_col not in data.columns:
+            raise KeyError(f"n_components_col {n_components_col!r} not in data")
+        n_available = pd.to_numeric(data[n_components_col], errors="coerce").fillna(0)
+        missing_cols = []
+        n_total_components = int(n_available.max()) if len(n_available) else 0
+        if min_components is None:
+            min_components = max(1, n_total_components)
+    else:
+        raise ValueError(
+            "Provide either component_cols or n_components_col to define completeness"
+        )
+
+    n_rows = int(len(data))
+    low_mask = n_available < min_components
+    n_low = int(low_mask.sum())
+
+    score = pd.to_numeric(data[score_col], errors="coerce")
+    zero_mask = score == zero_value
+    n_zero = int(zero_mask.sum())
+    n_zero_incomplete = int((zero_mask & low_mask).sum())
+
+    dist = (
+        n_available.value_counts().sort_index().astype(int).to_dict()
+        if n_rows
+        else {}
+    )
+
+    return {
+        "score_col": score_col,
+        "n_rows": n_rows,
+        "n_total_components": n_total_components,
+        "min_components": int(min_components),
+        "components_not_in_data": missing_cols,
+        "n_components_distribution": {int(k): int(v) for k, v in dist.items()},
+        "median_components_available": (
+            float(n_available.median()) if n_rows else None
+        ),
+        "n_low_completeness": n_low,
+        "frac_low_completeness": (n_low / n_rows) if n_rows else None,
+        # The crux: how much of the lowest (zero) stratum is actually just
+        # unmeasured rather than truly low-severity. Outcome-blind.
+        "zero_value": zero_value,
+        "n_zero_stratum": n_zero,
+        "n_zero_stratum_incomplete": n_zero_incomplete,
+        "frac_zero_stratum_incomplete": (
+            (n_zero_incomplete / n_zero) if n_zero else None
+        ),
+        # Advisory flag only — the caller / human decides how to handle it.
+        "flag_zero_stratum_missingness": bool(
+            n_zero and (n_zero_incomplete / n_zero) > 0.0
+        ),
+    }

@@ -78,14 +78,14 @@ def test_meta_planner_digest_ranks_skill_keys(ra, tmp_path: Path):
         workdir=tmp_path / "run_sofa",
     )
     ranking = mem.rank_skill_keys(
-        skill_keys=["sofa_mortality", "aki_kdigo_mortality"],
+        skill_keys=["association_analysis", "prediction_model"],
         research_question="SOFA mortality",
         database="miiv",
         target_outcome="death",
     )
-    assert ranking[0][0] == "sofa_mortality"
+    assert ranking[0][0] == "association_analysis"
     digest = mem.meta_planner_digest(
-        skill_keys=["sofa_mortality", "aki_kdigo_mortality"],
+        skill_keys=["association_analysis", "prediction_model"],
         research_question="SOFA mortality",
         database="miiv",
         target_outcome="death",

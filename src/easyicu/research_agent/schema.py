@@ -938,10 +938,10 @@ class ProbeSummary(BaseModel):
 
     Built once per run by ``_build_probe_summary``. Represents the cohort
     snapshot the planner sees before the first analysis step runs:
-    row/column counts, top-missing columns, and any per-score
-    distribution anomalies (e.g. SOFA components with a degenerate
-    range). ``extra='allow'`` so future probe metrics can be added
-    without churning this schema.
+    row/column counts, top-missing columns, and outcome-blind
+    per-score completeness summaries when the cohort exposes component
+    availability. ``extra='allow'`` so future probe metrics can be
+    added without churning this schema.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -950,6 +950,9 @@ class ProbeSummary(BaseModel):
     n_columns: int
     target_outcome: Optional[str] = None
     top_missing_columns: List[Dict[str, Any]] = Field(default_factory=list)
+    score_completeness: List[Dict[str, Any]] = Field(default_factory=list)
+    # Backward-compatible legacy field. New probes should use
+    # ``score_completeness`` and avoid outcome-peeking anomaly flags.
     score_anomalies: List[Dict[str, Any]] = Field(default_factory=list)
     outcome_rate: Optional[float] = None
 
