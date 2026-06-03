@@ -12,6 +12,7 @@ sys.path.insert(0, str(TOOLS_DIR))
 try:
     from run_research_agent_bench import (  # type: ignore[import-not-found]
         _benchmark_pipeline_options,
+        _enforce_mock_aware_provider,
         _enforce_submission_profile_arms,
         _enforce_submission_profile_runner,
     )
@@ -84,6 +85,16 @@ def test_benchmark_options_record_runner_kind() -> None:
     assert options["runner_kind"] == "docker"
     # runner_kind stays out of the profile's own option bundle.
     assert "runner_kind" not in NPJ_DM_2026_05.as_pipeline_options()
+
+
+def test_mock_provider_aware_arm_requires_explicit_smoke_opt_in() -> None:
+    _enforce_mock_aware_provider(["naive"], provider="mock")
+    _enforce_mock_aware_provider(["aware"], provider="openrouter")
+    _enforce_mock_aware_provider(
+        ["aware"], provider="mock", allow_mock_aware=True,
+    )
+    with pytest.raises(SystemExit, match="--allow-mock-aware"):
+        _enforce_mock_aware_provider(["aware"], provider="mock")
 
 
 def test_submission_profile_registry_is_versioned() -> None:
