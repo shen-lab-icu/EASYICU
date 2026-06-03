@@ -992,10 +992,17 @@ def _benchmark_pipeline_options(
     writer_digest_widened: bool = False,
     strict_evidence: bool = False,
     submission_profile: Optional["SubmissionProfile"] = None,
+    runner_kind: Optional[str] = None,
 ) -> Dict[str, Any]:
     options: Dict[str, Any] = {}
     if submission_profile:
         options.update(submission_profile.pipeline_options())
+    if runner_kind:
+        # Code-execution backend. ``docker`` swaps in DockerRunner
+        # (``--network none`` + read-only cohort mount); recorded here so
+        # the run manifest / bench_results.json document the execution
+        # isolation the manuscript Methods section cites.
+        options["runner_kind"] = runner_kind
     if max_total_steps is not None:
         options["max_total_steps"] = int(max_total_steps)
     if disable_replanning:
@@ -1031,6 +1038,37 @@ def _enforce_submission_profile_arms(
             "reviewer-response run."
         )
     return selected
+
+
+def _enforce_submission_profile_runner(
+    runner: Optional[str],
+    *,
+    profile: Optional["SubmissionProfile"],
+    allow_host_runner: bool = False,
+) -> str:
+    """Resolve and gate the code-execution backend for a benchmark run.
+
+    Paper-facing submission profiles require a containerised runner so
+    agent-generated code executes under ``docker run --network none``
+    with a read-only cohort mount, never on the host subprocess. With no
+    profile, the host ``subprocess`` runner stays the default. The
+    ``--allow-host-runner`` escape hatch exists for offline development
+    and is never valid for an archival/canonical batch.
+    """
+    if profile is None:
+        return (runner or "subprocess").lower()
+    required = (profile.requires_runner or "docker").lower()
+    resolved = (runner or required).lower()
+    if resolved != required and not allow_host_runner:
+        raise SystemExit(
+            f"Submission profile '{profile.ref}' is paper-facing and must "
+            f"execute agent-generated code in a network-isolated sandbox: "
+            f"pass '--runner {required}'. Build the image first with "
+            "`docker build -t easyicu-research-agent:latest -f "
+            "src/easyicu/research_agent/runner_image/Dockerfile .`. For a "
+            "non-archival development run only, pass '--allow-host-runner'."
+        )
+    return resolved
 
 
 def _run_suite(
@@ -1286,6 +1324,27 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--runner",
+        choices=["subprocess", "docker"],
+        default=None,
+        help=(
+            "Code-execution backend for agent-generated scripts. "
+            "'subprocess' runs on the host (default for dev). 'docker' uses "
+            "the network-isolated container runner. A submission profile "
+            "requires 'docker'; omit this flag under --submission-profile to "
+            "default to it."
+        ),
+    )
+    parser.add_argument(
+        "--allow-host-runner",
+        action="store_true",
+        help=(
+            "Development escape hatch: permit the host subprocess runner "
+            "under --submission-profile. Never valid for an archival/"
+            "canonical batch."
+        ),
+    )
+    parser.add_argument(
         "--case",
         default=None,
         help=(
@@ -1329,6 +1388,20 @@ def main() -> int:
         args.arms,
         profile=submission_profile,
     )
+    runner_kind = _enforce_submission_profile_runner(
+        getattr(args, "runner", None),
+        profile=submission_profile,
+        allow_host_runner=bool(getattr(args, "allow_host_runner", False)),
+    )
+    if (
+        submission_profile is not None
+        and runner_kind != submission_profile.requires_runner
+    ):
+        print(
+            f"[research_agent] WARNING: submission profile "
+            f"'{submission_profile.ref}' run on host '{runner_kind}' runner via "
+            "--allow-host-runner; this batch is NOT archival/canonical."
+        )
     pipeline_options = _benchmark_pipeline_options(
         max_total_steps=args.max_total_steps,
         disable_replanning=bool(args.disable_replanning),
@@ -1338,6 +1411,7 @@ def main() -> int:
         writer_digest_widened=bool(args.writer_digest_widened),
         strict_evidence=bool(args.strict_evidence),
         submission_profile=submission_profile,
+        runner_kind=runner_kind,
     )
 
     if args.ehrflowbench_jsonl:
