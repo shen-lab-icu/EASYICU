@@ -26,7 +26,6 @@ __all__ = [
     "_resolve_writer_aux_path",
     "_summarise_table_one_rows",
     "_summarise_primary_association_table",
-    "_summarise_sofa_zero_audit",
     "_preferred_writer_evidence_names",
     "_render_writer_evidence_digest",
     "_render_writer_evidence_digest_v2",
@@ -128,32 +127,6 @@ def _summarise_primary_association_table(path: Optional[Path]) -> Dict[str, Any]
     return digest
 
 
-def _summarise_sofa_zero_audit(path: Optional[Path]) -> Dict[str, Any]:
-    if path is None or not path.exists():
-        return {}
-    try:
-        frame = pd.read_csv(path)
-    except Exception:
-        return {}
-    cols = {str(c).lower(): c for c in frame.columns}
-    sofa_col = cols.get("sofa2") or cols.get("score") or cols.get("stratum")
-    rate_col = cols.get("death_rate") or cols.get("outcome_rate") or cols.get("mortality_rate")
-    if sofa_col is None or rate_col is None:
-        return {}
-    digest: Dict[str, Any] = {}
-    for level in (0, 1):
-        try:
-            row = frame.loc[pd.to_numeric(frame[sofa_col], errors="coerce") == level]
-        except Exception:
-            row = pd.DataFrame()
-        if row.empty:
-            continue
-        value = _first_present_scalar(row.iloc[0], (rate_col,))
-        if value is not None:
-            digest[f"sofa2_{level}_death_rate"] = value
-    return digest
-
-
 def _preferred_writer_evidence_names(evidence: EvidenceStore) -> List[str]:
     aliases = evidence.aliases()
     preferred = [
@@ -163,8 +136,6 @@ def _preferred_writer_evidence_names(evidence: EvidenceStore) -> List[str]:
         "outcome_rate",
         "mortality_rate",
         "primary_association",
-        "sofa_strata",
-        "stratum_audit",
         "multiple_testing_report",
         "fairness_subgroups",
         "literature_prisma",
@@ -395,14 +366,6 @@ def _render_writer_evidence_digest(
         )
         if not has_panel_primary:
             digest_row.update(_summarise_primary_association_table(primary_path))
-        strata_path = _resolve_writer_aux_path(
-            run_dir=run_dir,
-            step_id=step_id,
-            candidate=summary.get("table") if "sofa_zero_audit" in step_id.lower() else None,
-        )
-        if strata_path is None and "sofa_zero_audit" in step_id.lower():
-            strata_path = run_dir / "steps" / step_id / "outputs" / "sofa_strata.csv"
-        digest_row.update(_summarise_sofa_zero_audit(strata_path))
         lines.append(
             "  " + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
         )

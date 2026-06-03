@@ -1139,8 +1139,8 @@ def test_workbench_finding_open_step_infers_target_from_message() -> None:
     steps = [
         {"step_id": "00_probe", "label": "Probe 1"},
         {"step_id": "00_probe", "label": "Probe 2"},
-        {"step_id": "04_sofa_zero_audit", "label": "Sofa Zero Audit"},
-        {"step_id": "04_sofa_zero_audit_figure", "label": "Sofa Zero Audit Figure"},
+        {"step_id": "04_component_qc", "label": "Component QC"},
+        {"step_id": "04_component_qc_figure", "label": "Component QC Figure"},
     ]
     step_ids = list(wb_page._step_id_to_first_index(steps))
 
@@ -1155,10 +1155,10 @@ def test_workbench_finding_open_step_infers_target_from_message() -> None:
     assert wb_page._finding_target_step_id(
         {
             "validator": "critic_agent",
-            "message": "CriticAgent marked 04_sofa_zero_audit_figure as needs_revision.",
+            "message": "CriticAgent marked 04_component_qc_figure as needs_revision.",
         },
         step_ids,
-    ) == "04_sofa_zero_audit_figure"
+    ) == "04_component_qc_figure"
     assert wb_page._finding_target_step_id(
         {"validator": "critic_agent", "message": "No step marker here."},
         step_ids,
@@ -1170,7 +1170,7 @@ def test_workbench_finding_queue_rows_carry_review_and_step_state() -> None:
         {
             "severity": "warning",
             "validator": "critic_agent",
-            "message": "CriticAgent marked 04_sofa_zero_audit_figure as needs_revision.",
+            "message": "CriticAgent marked 04_component_qc_figure as needs_revision.",
         },
         {
             "severity": "warning",
@@ -1187,8 +1187,8 @@ def test_workbench_finding_queue_rows_carry_review_and_step_state() -> None:
     reviewed = {wb_page._finding_review_id(findings[0])}
     state = {
         "steps": [
-            {"step_id": "04_sofa_zero_audit", "label": "Sofa Zero Audit"},
-            {"step_id": "04_sofa_zero_audit_figure", "label": "Sofa Zero Audit Figure"},
+            {"step_id": "04_component_qc", "label": "Component QC"},
+            {"step_id": "04_component_qc_figure", "label": "Component QC Figure"},
             {"step_id": "05_primary_association", "label": "Primary Association"},
         ],
         "audit": {"findings": findings},
@@ -1200,7 +1200,7 @@ def test_workbench_finding_queue_rows_carry_review_and_step_state() -> None:
     assert len(rows) == 3
     assert rows[0]["reviewed"] is True
     assert rows[0]["target_index"] == 1
-    assert rows[0]["target_label"] == "02 · Sofa Zero Audit Figure"
+    assert rows[0]["target_label"] == "02 · Component QC Figure"
     assert rows[1]["target_index"] is None
     assert rows[2]["severity"] == "error"
     assert stats == {"total": 3, "reviewed": 1, "errors": 1, "warnings": 2, "linked": 2}

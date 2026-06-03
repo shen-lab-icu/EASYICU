@@ -220,7 +220,7 @@ class RunMemory:
         ):
             cards.append(
                 StrategyCard(
-                    strategy_id="ordinal_score_missingness_audit",
+                    strategy_id="ordinal_score_completeness_qc",
                     task_family="ordinal_score_outcome_association",
                     trigger_tokens=[
                         "sofa",
@@ -231,18 +231,18 @@ class RunMemory:
                         "missingness",
                     ],
                     recommended_plan=[
-                        "Audit component availability and score-zero strata "
-                        "before association modeling.",
-                        "Report score-level outcome rates and denominator "
-                        "counts before adjusted estimates.",
+                        "Check component completeness before association modeling.",
+                        "Report denominators and missing-component counts before "
+                        "adjusted estimates.",
                         "Use median/IQR or level distributions for ordinal "
                         "scores; avoid mean-based claims.",
                     ],
                     guardrails=[
                         "A zero score can encode missing components, not "
                         "absence of organ dysfunction.",
-                        "Do not let manuscript claims use score strata unless "
-                        "the stratum audit is registered evidence.",
+                        "Do not let manuscript claims rely on score-derived "
+                        "groups unless component completeness is registered "
+                        "evidence.",
                     ],
                     supporting_run_ids=[record.run_id],
                     updated_at=now,

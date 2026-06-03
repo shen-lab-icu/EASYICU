@@ -62,10 +62,10 @@ def test_composite_score_completeness_is_generic_non_sofa():
     rep = composite_score_completeness(df, "frailty_index", ["c1", "c2", "c3", "c4"])
     assert rep["n_total_components"] == 4
     assert rep["min_components"] == 4
-    assert rep["n_zero_stratum"] == 3                  # rows 1, 2, 4
-    assert rep["n_zero_stratum_incomplete"] == 2       # rows 2, 4 fully unmeasured
-    assert rep["frac_zero_stratum_incomplete"] == 2 / 3
-    assert rep["flag_zero_stratum_missingness"] is True
+    assert rep["n_low_completeness"] == 2
+    assert rep["frac_low_completeness"] == 0.5
+    assert rep["n_complete_components"] == 2
+    assert rep["frac_complete_components"] == 0.5
     # outcome-blind: report carries no outcome/label key
     assert not any("death" in k or "mortality" in k or "outcome" in k for k in rep)
 
@@ -79,6 +79,6 @@ def test_composite_score_completeness_accepts_precomputed_count():
     rep = composite_score_completeness(
         df, "sofa2", n_components_col="sofa2_n_components"
     )
-    assert rep["n_zero_stratum"] == 2
-    assert rep["n_zero_stratum_incomplete"] == 1       # the 0-component zero row
-    assert rep["frac_zero_stratum_incomplete"] == 0.5
+    assert rep["n_low_completeness"] == 1
+    assert rep["frac_low_completeness"] == 1 / 3
+    assert rep["n_complete_components"] == 2

@@ -3,8 +3,8 @@ Replanning contract:
 - Use probe summaries, validation findings, and observed artefacts to decide
   whether the current plan is still appropriate.
 - Prefer small, explicit plan repairs over rewriting everything.
-- If the probe or completed steps reveal missingness artefacts, score-zero
-  anomalies, outcome mismatches, or impossible cross-database assumptions,
+- If the probe or completed steps reveal missingness artefacts, component
+  completeness failures, outcome mismatches, or impossible cross-database assumptions,
   insert targeted audit or protocol steps rather than ignoring the issue.
 - Do not drop a completed step from the returned plan. Preserve completed
   steps exactly as they were and increment the plan revision.

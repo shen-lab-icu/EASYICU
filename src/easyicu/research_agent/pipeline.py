@@ -208,7 +208,6 @@ from .pipeline_writer_aux import (
     _render_writer_evidence_digest_v2,
     _resolve_writer_aux_path,
     _summarise_primary_association_table,
-    _summarise_sofa_zero_audit,
     _summarise_table_one_rows,
 )
 from .plan_utils import (
@@ -2302,9 +2301,6 @@ def _build_probe_summary(
         "target_outcome": context.target_outcome,
         "top_missing_columns": [],
         "score_completeness": [],
-        # Retained as an empty legacy field for old readers; the probe no
-        # longer computes outcome-peeking score anomalies.
-        "score_anomalies": [],
     }
     missing_rows = []
     for col in df.columns:
@@ -2724,7 +2720,7 @@ def _render_prediction_publication_bundle_from_prior_outputs(
 # A mapping of (step_id_substring, artefact_basename) -> tuple of aliases.
 # step_id_substring is matched as ``in step.step_id`` so that step ids
 # the planner generates with arbitrary ordering ("01_table_one",
-# "02_outcome_incidence", "04_primary_association", "05_stratum_audit")
+    # "02_outcome_incidence", "04_primary_association")
 # all resolve correctly.
 _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
     # Cohort/table-one summaries often carry the same mortality
@@ -2812,17 +2808,7 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
         "mortality_rate",
         "robustness_summary",
     ),
-    # Some hosted models name the association/safety step
-    # "composite_audit" while still emitting the SOFA stratum mortality
-    # and score-0-vs-1 association summary that the manuscript cites as
-    # the primary association.
-    ("composite", "step_summary.json"): ("primary_association", "stratum_audit"),
-    ("sofa_zero_audit", "step_summary.json"): (
-        "sofa_zero_audit",
-        "sofa_zero_count",
-        "outcome_rate",
-        "mortality_rate",
-    ),
+    ("composite", "step_summary.json"): ("primary_association",),
     ("mortality_association", "step_summary.json"): (
         "primary_association",
         "outcome_rate",
@@ -2831,19 +2817,14 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
     # Generic table outputs from any step.
     ("", "table_one.csv"): ("table_one",),
     ("", "missingness.csv"): ("missingness",),
-    ("", "sofa_strata.csv"): ("sofa_strata",),
-    ("", "stratum_audit.csv"): ("stratum_audit", "table_stratum_audit", "sofa_strata"),
     ("", "sofa2_stratum_balance.csv"): (
         "primary_association_table",
-        "stratum_audit",
-        "sofa_strata",
     ),
     ("", "stratified_mortality_incidence.csv"): (
         "stratified_mortality_incidence",
         "stratified_mortality",
         "outcome_rate",
         "mortality_rate",
-        "sofa_strata",
     ),
     ("", "primary_association.csv"): ("primary_association_table",),
     ("", "correlation_matrix.csv"): (
@@ -2866,13 +2847,10 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
         "cluster_summary",
     ),
     # Figures.
-    ("", "sofa_strata.png"): ("sofa_strata_figure",),
     ("", "mortality_by_sofa2_stratum.png"): (
         "mortality_by_sofa2_stratum",
         "figure_mortality_by_sofa2_stratum",
-        "sofa_strata_figure",
     ),
-    ("", "stratum_audit.png"): ("stratum_audit_figure", "sofa_strata_figure"),
     ("", "missingness_heatmap.png"): ("missingness_heatmap",),
     ("", "primary_association_curve.png"): ("primary_association_figure",),
     ("", "sofa2_correlation_heatmap.png"): (

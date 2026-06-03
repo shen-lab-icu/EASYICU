@@ -211,8 +211,8 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   and missingness before modelling. If treatment timing is unavailable,
   describe the analysis as an observed association or selection
   diagnostic only, never as a treatment effect.
-- If a missingness or score-zero audit finds that interpretation is
-  unsafe, write the audit artefacts and stop cleanly with null primary
+- If a missingness or component-completeness QC check finds that interpretation is
+  unsafe, write the QC artefacts and stop cleanly with null primary
   estimates. Do not repair by silently changing the clinical estimand
   or by dropping the audit concern from the summary.
 

@@ -419,17 +419,16 @@ def composite_score_completeness(
     *,
     n_components_col: Optional[str] = None,
     min_components: Optional[int] = None,
-    zero_value: float = 0.0,
 ) -> Dict[str, Any]:
     """Outcome-blind, pre-analysis completeness QC for a composite score.
 
     A composite/ordinal severity score that coalesces missing components to a
     neutral value (e.g. SOFA / SOFA-2 / APACHE-style scores collapse a missing
     component to 0) cannot, on its own, tell a genuinely low-severity patient
-    apart from one whose components were simply never measured. That ambiguity
-    biases the lowest stratum and is *sampling-dependent* (it is far larger in
-    sparsely-sampled databases), so it belongs in pre-analysis QC — measured
-    BEFORE any outcome model is fit and WITHOUT looking at the outcome.
+    apart from one whose components were simply never measured. That ambiguity is
+    *sampling-dependent* (it is far larger in sparsely-sampled databases), so the
+    component completeness belongs in pre-analysis QC — measured BEFORE any
+    outcome model is fit and WITHOUT looking at the outcome.
 
     This function is deliberately generic: it takes the score column and its
     component columns (or a precomputed component-count column) as arguments and
@@ -446,8 +445,6 @@ def composite_score_completeness(
         min_components: rows with fewer available components than this are
             flagged as low-completeness. Defaults to ``len(component_cols)``
             (require all components) when components are given, else 1.
-        zero_value: the score value a fully-missing row collapses to (default
-            0); the report quantifies how much of this stratum is incomplete.
 
     Returns:
         Dict of completeness metrics. Contains no outcome/label by design.
@@ -480,11 +477,7 @@ def composite_score_completeness(
     n_rows = int(len(data))
     low_mask = n_available < min_components
     n_low = int(low_mask.sum())
-
-    score = pd.to_numeric(data[score_col], errors="coerce")
-    zero_mask = score == zero_value
-    n_zero = int(zero_mask.sum())
-    n_zero_incomplete = int((zero_mask & low_mask).sum())
+    n_complete = int((~low_mask).sum())
 
     dist = (
         n_available.value_counts().sort_index().astype(int).to_dict()
@@ -504,16 +497,6 @@ def composite_score_completeness(
         ),
         "n_low_completeness": n_low,
         "frac_low_completeness": (n_low / n_rows) if n_rows else None,
-        # The crux: how much of the lowest (zero) stratum is actually just
-        # unmeasured rather than truly low-severity. Outcome-blind.
-        "zero_value": zero_value,
-        "n_zero_stratum": n_zero,
-        "n_zero_stratum_incomplete": n_zero_incomplete,
-        "frac_zero_stratum_incomplete": (
-            (n_zero_incomplete / n_zero) if n_zero else None
-        ),
-        # Advisory flag only — the caller / human decides how to handle it.
-        "flag_zero_stratum_missingness": bool(
-            n_zero and (n_zero_incomplete / n_zero) > 0.0
-        ),
+        "n_complete_components": n_complete,
+        "frac_complete_components": (n_complete / n_rows) if n_rows else None,
     }

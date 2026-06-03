@@ -14,7 +14,7 @@ this the **EasyICU evaluation protocol** or **evaluation scaffold**.
 Specifically:
 
 * The default suite contains exactly **one** partially frozen task
-  (``synthetic_cohort_anomaly_audit``) with a checkable gold answer; all
+  (``synthetic_cohort_completeness_qc``) with a checkable gold answer; all
   other tasks are descriptive specifications, not adjudicated benchmark
   items.
 * No external adjudication, peer-reviewed task curation, or frozen public
@@ -368,19 +368,22 @@ def default_icu_agent_bench_suite() -> ICUAgentBenchSuite:
             # ``np.random.default_rng(7), n=800`` and widened by ~5% to
             # tolerate floating-point drift across platforms.
             ICUAgentBenchTask(
-                task_id="synthetic_cohort_anomaly_audit",
+                task_id="synthetic_cohort_completeness_qc",
                 kind="sofa_extraction",
                 category="self_check",
-                title="SOFA-2==0 anomaly audit on synthetic cohort",
+                title="SOFA-2 component-completeness QC on synthetic cohort",
                 objective=(
-                    "Surface the missing-data-as-zero anomaly in the synthetic "
-                    "cohort fixture and confirm descriptive statistics fall "
-                    "within frozen golden bounds. Acts as a self-checkable "
-                    "smoke task for ICUAgentBench grading machinery."
+                    "Surface the outcome-blind component-completeness signal in "
+                    "the synthetic cohort fixture and confirm descriptive "
+                    "statistics fall within frozen golden bounds. Acts as a "
+                    "self-checkable smoke task for ICUAgentBench grading machinery."
                 ),
-                expected_outputs=["descriptive statistics", "anomaly note"],
+                expected_outputs=[
+                    "descriptive statistics",
+                    "component completeness note",
+                ],
                 semantic_guardrails=[
-                    "Surface the sofa2==0 fraction explicitly.",
+                    "Surface SOFA-2 component completeness before outcome modeling.",
                     "Do not silently impute missing SOFA-2.",
                 ],
                 target_databases=[],  # synthetic; no real DB
@@ -391,11 +394,11 @@ def default_icu_agent_bench_suite() -> ICUAgentBenchSuite:
                     numeric_targets={
                         "n_rows": ICUAgentBenchNumericBound(lower=800, upper=800),
                         "death_rate": ICUAgentBenchNumericBound(lower=0.10, upper=0.15),
-                        "sofa2_zero_frac": ICUAgentBenchNumericBound(lower=0.10, upper=0.16),
+                        "sofa2_low_component_frac": ICUAgentBenchNumericBound(lower=0.08, upper=0.11),
                         "sofa2_mean": ICUAgentBenchNumericBound(lower=6.0, upper=6.5),
                         "vaso_rate": ICUAgentBenchNumericBound(lower=0.40, upper=0.48),
                     },
-                    required_warnings=["sofa2_zero_anomaly"],
+                    required_warnings=["component_completeness_qc"],
                     forbidden_outputs=["silently imputed"],
                     derivation=(
                         "Bounds measured from synthetic_cohort fixture "

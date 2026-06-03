@@ -37,8 +37,6 @@ def _expected_numeric_annotations_for_step(
         keys = ["primary_or", "primary_ci_low", "primary_ci_high"]
     elif "outcome_incidence" in step_id:
         keys = ["outcome_rate"]
-    elif "sofa_zero_audit" in step_id or "stratum" in step_id:
-        keys = ["sofa_zero_rate", "sofa_one_rate"]
     expected: Dict[str, float] = {}
     for key in keys:
         value = step_summary.get(key)
