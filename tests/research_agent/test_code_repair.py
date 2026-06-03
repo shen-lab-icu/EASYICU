@@ -23,9 +23,8 @@ Pure / IO-free entries from ``pipeline.py``'s import list:
 * ``_strip_columns_from_list_literals``
 * ``_patch_json_dump_numpy_key_sanitizer``
 
-The two heavier symbols (``_deterministic_runner_repair`` and
-``_deterministic_summary_repair``) read/write run directories and are
-left for a follow-up suite with fixtures.
+The heavier runner-repair path is exercised only through narrow,
+IO-free probes here; full pipeline fixtures cover integration behaviour.
 """
 
 from __future__ import annotations
@@ -192,3 +191,36 @@ def test_runner_repair_does_not_trigger_case_fallbacks_by_default():
             _deterministic_runner_repair(code=code, run_log=run_log)
             is None
         )
+
+
+def test_prediction_discrimination_template_is_case_neutral():
+    repaired = _deterministic_runner_repair(
+        code="model_bundle = ...\n",
+        run_log="SyntaxError: invalid syntax near placeholder ellipsis",
+    )
+
+    assert repaired is not None
+    repair_id, generated = repaired
+    assert repair_id == "prediction_discrimination_template_v1"
+    ast.parse(generated)
+    assert "OUTCOME_COL" in generated
+    assert 'model_bundle.get("outcome_col")' in generated
+    assert 'df["death"]' not in generated
+    assert "sofa2" not in generated.lower()
+
+
+def test_outcome_incidence_repair_uses_generic_outcome_and_missingness():
+    repaired = _deterministic_runner_repair(
+        code="# outcome_incidence\n...\n",
+        run_log="SyntaxError: invalid syntax",
+    )
+
+    assert repaired is not None
+    repair_id, generated = repaired
+    assert repair_id == "outcome_incidence_descriptive_repair_v1"
+    ast.parse(generated)
+    assert "OUTCOME_COL" in generated
+    assert 'df["death"]' not in generated
+    assert "lactate_measured_24h" not in generated
+    assert "_measured_24h" in generated
+    assert "outcome_rate" in generated

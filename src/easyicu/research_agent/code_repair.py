@@ -2066,10 +2066,20 @@ def _deterministic_runner_repair(
                     "table_one_path": table_path,
                     "variables": list(df.columns.astype(str)),
                 }
-                if "death" in df.columns:
-                    death = pd.to_numeric(df["death"], errors="coerce").dropna()
-                    summary["death_n"] = int(death.sum())
-                    summary["death_rate"] = float(death.mean()) if len(death) else None
+                outcome_col = os.environ.get("OUTCOME_COL")
+                if not outcome_col or outcome_col not in df.columns:
+                    outcome_col = next(
+                        (c for c in ("death", "death_icu", "death_hosp", "mortality", "outcome") if c in df.columns),
+                        None,
+                    )
+                if outcome_col:
+                    outcome = pd.to_numeric(df[outcome_col], errors="coerce").dropna()
+                    summary["outcome_col"] = outcome_col
+                    summary["outcome_n"] = int(outcome.sum()) if len(outcome) else 0
+                    summary["outcome_rate"] = float(outcome.mean()) if len(outcome) else None
+                    if outcome_col == "death":
+                        summary["death_n"] = summary["outcome_n"]
+                        summary["death_rate"] = summary["outcome_rate"]
                 if "age" in df.columns:
                     age = pd.to_numeric(df["age"], errors="coerce").dropna()
                     summary["age_median"] = float(age.median()) if len(age) else None
@@ -2127,11 +2137,19 @@ def _deterministic_runner_repair(
                 os.makedirs(out_dir, exist_ok=True)
 
                 df = pd.read_parquet(cohort_path)
-                death = pd.to_numeric(df["death"], errors="coerce")
+                outcome_col = os.environ.get("OUTCOME_COL")
+                if not outcome_col or outcome_col not in df.columns:
+                    outcome_col = next(
+                        (c for c in ("death", "death_icu", "death_hosp", "mortality", "outcome") if c in df.columns),
+                        None,
+                    )
+                if not outcome_col:
+                    raise KeyError("No binary outcome column found for outcome incidence repair")
+                outcome = pd.to_numeric(df[outcome_col], errors="coerce")
                 rows = []
 
                 def add_row(label, mask):
-                    y = death[mask].dropna().astype(int)
+                    y = outcome[mask].dropna().astype(int)
                     n = int(len(y))
                     events = int(y.sum()) if n else 0
                     rate = float(events / n) if n else None
@@ -2142,17 +2160,26 @@ def _deterministic_runner_repair(
                     rows.append({
                         "stratum": label,
                         "n": n,
-                        "n_death": events,
-                        "mortality_rate": rate,
+                        "n_events": events,
+                        "outcome_rate": rate,
                         "ci_low": None if ci_low is None else float(ci_low),
                         "ci_high": None if ci_high is None else float(ci_high),
                     })
+                    if outcome_col == "death":
+                        rows[-1]["n_death"] = events
+                        rows[-1]["mortality_rate"] = rate
 
-                add_row("overall", death.notna())
-                if "lactate_measured_24h" in df.columns:
-                    measured = pd.to_numeric(df["lactate_measured_24h"], errors="coerce")
-                    add_row("lactate_measured_24h=0", measured.eq(0) & death.notna())
-                    add_row("lactate_measured_24h=1", measured.eq(1) & death.notna())
+                add_row("overall", outcome.notna())
+                measured_cols = [
+                    c for c in df.columns
+                    if str(c).endswith("_measured_24h") or str(c).endswith("_measured")
+                ]
+                for measured_col in measured_cols[:3]:
+                    measured = pd.to_numeric(df[measured_col], errors="coerce")
+                    non_missing = measured.dropna()
+                    if len(non_missing) and set(non_missing.astype(float).unique()) <= {0.0, 1.0}:
+                        add_row(f"{measured_col}=0", measured.eq(0) & outcome.notna())
+                        add_row(f"{measured_col}=1", measured.eq(1) & outcome.notna())
 
                 table = pd.DataFrame(rows)
                 table_path = os.path.join(out_dir, "outcome_incidence.csv")
@@ -2162,8 +2189,8 @@ def _deterministic_runner_repair(
                 plot_df = table[table["stratum"] != "overall"].copy()
                 if plot_df.empty:
                     plot_df = table.copy()
-                ax.bar(plot_df["stratum"], plot_df["mortality_rate"] * 100, color="#4C78A8")
-                ax.set_ylabel("Mortality (%)")
+                ax.bar(plot_df["stratum"], plot_df["outcome_rate"] * 100, color="#4C78A8")
+                ax.set_ylabel("Outcome rate (%)")
                 ax.set_xlabel("")
                 ax.tick_params(axis="x", rotation=20)
                 fig.tight_layout()
@@ -2173,12 +2200,16 @@ def _deterministic_runner_repair(
 
                 overall = table.iloc[0].to_dict()
                 statistic = {
+                    "outcome_col": outcome_col,
                     "n_total": int(overall["n"]),
-                    "n_death": int(overall["n_death"]),
-                    "overall_mortality_rate": overall["mortality_rate"],
+                    "n_events": int(overall["n_events"]),
+                    "outcome_rate": overall["outcome_rate"],
                     "overall_ci_low": overall["ci_low"],
                     "overall_ci_high": overall["ci_high"],
                 }
+                if outcome_col == "death":
+                    statistic["n_death"] = int(overall["n_death"])
+                    statistic["overall_mortality_rate"] = overall["mortality_rate"]
                 statistic_path = os.path.join(out_dir, "outcome_rate.json")
                 with open(statistic_path, "w", encoding="utf-8") as f:
                     json.dump(statistic, f, indent=2, default=to_jsonable)
@@ -2350,7 +2381,16 @@ def _deterministic_runner_repair(
 
                 df = pd.read_parquet(cohort_path)
                 X_test = df[feature_cols].copy()
-                y_test = pd.to_numeric(df["death"], errors="coerce").fillna(0).astype(int).values
+                # Resolve the outcome column case-neutrally: explicit env / model
+                # bundle hint first, then common binary outcome names. No single
+                # benchmark outcome is hard-coded as the only option.
+                outcome_col = os.environ.get("OUTCOME_COL") or model_bundle.get("outcome_col")
+                if not outcome_col or outcome_col not in df.columns:
+                    outcome_col = next(
+                        (c for c in ("death", "death_icu", "death_hosp", "mortality") if c in df.columns),
+                        outcome_col or "death",
+                    )
+                y_test = pd.to_numeric(df[outcome_col], errors="coerce").fillna(0).astype(int).values
                 for col in X_test.columns:
                     series = pd.to_numeric(X_test[col], errors="ignore")
                     if getattr(series, "dtype", None) is not None and str(series.dtype) != "object" and series.isna().any():
@@ -2361,7 +2401,6 @@ def _deterministic_runner_repair(
                 y_pred_proba = model.predict_proba(X_test)[:, 1]
                 held_out_auroc = roc_auc_score(y_test, y_pred_proba)
                 prob_true, prob_pred = calibration_curve(y_test, y_pred_proba, n_bins=min(10, max(5, int(len(y_test) * 0.1))), strategy="quantile")
-                zero_stratum_mask = df["sofa2"] == 0 if "sofa2" in df.columns else pd.Series(False, index=df.index)
 
                 fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
                 apply_publication_style(fig)
@@ -2381,7 +2420,7 @@ def _deterministic_runner_repair(
 
                 contract = make_figure_contract(
                     figure_id="prediction_discrimination_evaluation",
-                    core_claim="Held-out discrimination and calibration are summarized for the mortality model.",
+                    core_claim="Held-out discrimination and calibration are summarized for the prediction model.",
                     panels=[
                         {"panel_id": "A", "title": "ROC", "role": "validation", "claim": "Held-out AUROC is reported.", "evidence_ids": ["held_out_auroc"]},
                         {"panel_id": "B", "title": "Calibration", "role": "validation", "claim": "Calibration is visualized on held-out data.", "evidence_ids": ["calibration_curve"]},
@@ -2393,7 +2432,7 @@ def _deterministic_runner_repair(
                 step_summary = {
                     "held_out_auroc": float(held_out_auroc),
                     "n_test": int(len(y_test)),
-                    "n_sofa2_zero": int(zero_stratum_mask.sum()),
+                    "outcome": outcome_col,
                     "calibration_status": "ok",
                 }
                 with open(os.path.join(step_out_dir, "step_summary.json"), "w", encoding="utf-8") as f:

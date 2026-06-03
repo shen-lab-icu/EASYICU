@@ -26,12 +26,16 @@ panel in the paper.
 
 Usage::
 
-    python tools/run_research_agent_bench.py
-    python tools/run_research_agent_bench.py --items sofa2_mortality gcs_mortality
-    python tools/run_research_agent_bench.py --seed 42 --out-root ./bench_runs
-    python tools/run_research_agent_bench.py --bench-kind analysis --arms aware
-    python tools/run_research_agent_bench.py --provider openrouter --model openai/gpt-oss-120b:free
+    # Offline plumbing smoke test (mock LLM). The 'aware' arm on mock returns
+    # canned responses, so offline runs use the naive arm:
+    python tools/run_research_agent_bench.py --arms naive
+    python tools/run_research_agent_bench.py --items sofa2_mortality gcs_mortality --arms naive
+    python tools/run_research_agent_bench.py --seed 42 --out-root ./bench_runs --arms naive
+    # Paper-facing ICU-aware runs (Figure 4 / Case B) require a real provider:
+    python tools/run_research_agent_bench.py --bench-kind analysis --arms aware --provider openrouter --model openai/gpt-oss-120b:free
     python tools/run_research_agent_bench.py --provider openrouter --models openai/gpt-oss-120b:free deepseek/deepseek-chat-v3-0324:free
+    # Offline 'aware' plumbing check only (non-substantive, canned results):
+    python tools/run_research_agent_bench.py --arms aware --allow-mock-aware
 
 The original bench was mock-LLM only so the comparison isolated the
 *context layer's* contribution from the LLM's. This script now also
@@ -1071,6 +1075,29 @@ def _enforce_submission_profile_runner(
     return resolved
 
 
+def _enforce_mock_aware_provider(
+    arms: Sequence[str],
+    *,
+    provider: str,
+    allow_mock_aware: bool = False,
+) -> None:
+    """Reject mock-provider aware runs unless they are explicit smoke tests."""
+    selected_arms = _normalize_arms(arms)
+    # The MockLLMClient returns canned, case-shaped responses, so an "aware"
+    # arm run on the mock provider reports pre-written answers rather than a
+    # genuine ICU-aware analysis. Figure 4 / Case B (paper-facing results) must
+    # use a real provider. Offline plumbing smoke tests can opt in explicitly
+    # with --allow-mock-aware.
+    if "aware" in selected_arms and provider == "mock" and not allow_mock_aware:
+        raise SystemExit(
+            "The 'aware' arm on the mock provider returns pre-written, "
+            "case-shaped responses, so its results are not real. Use "
+            "--provider openrouter/openai for paper-facing runs, restrict to "
+            "--arms naive, or pass --allow-mock-aware for an offline plumbing "
+            "smoke test (results are non-substantive)."
+        )
+
+
 def _run_suite(
     *,
     items: Sequence[Any],
@@ -1086,8 +1113,14 @@ def _run_suite(
     reuse_existing: bool = False,
     case_registration: Optional[Dict[str, Any]] = None,
     force_writer_probe: bool = False,
+    allow_mock_aware: bool = False,
 ) -> Dict[str, Any]:
     selected_arms = _normalize_arms(arms)
+    _enforce_mock_aware_provider(
+        selected_arms,
+        provider=provider,
+        allow_mock_aware=allow_mock_aware,
+    )
     llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
     from easyicu.research_agent import (  # type: ignore
         default_icu_agent_bench_suite,
@@ -1226,6 +1259,15 @@ def main() -> int:
         choices=["mock", "openrouter", "openai"],
         default="mock",
         help="LLM backend for the benchmark arms.",
+    )
+    parser.add_argument(
+        "--allow-mock-aware",
+        action="store_true",
+        help=(
+            "Permit the 'aware' arm to run on the mock provider for an offline "
+            "plumbing smoke test. Results are non-substantive (canned responses) "
+            "and must not be used for paper-facing Figure 4 / Case B."
+        ),
     )
     parser.add_argument(
         "--model",
@@ -1429,6 +1471,7 @@ def main() -> int:
             request_timeout=float(args.request_timeout),
             reuse_existing=bool(args.reuse_existing),
             force_writer_probe=bool(args.force_writer_probe),
+            allow_mock_aware=bool(args.allow_mock_aware),
         )
 
     all_items = list(
@@ -1474,6 +1517,7 @@ def main() -> int:
             reuse_existing=bool(args.reuse_existing),
             case_registration=case_registration,
             force_writer_probe=bool(args.force_writer_probe),
+            allow_mock_aware=bool(args.allow_mock_aware),
         )
         all_runs.append(payload)
         totals = payload["totals"]
@@ -1549,11 +1593,17 @@ def _run_ehrflowbench_jsonl(
     request_timeout: float = 180.0,
     reuse_existing: bool = False,
     force_writer_probe: bool = False,
+    allow_mock_aware: bool = False,
 ) -> int:
     """Run an external EHRFlowBench-style JSONL export when available."""
     from types import SimpleNamespace
     import pandas as pd
 
+    _enforce_mock_aware_provider(
+        arms,
+        provider=provider,
+        allow_mock_aware=allow_mock_aware,
+    )
     if not jsonl_path.exists():
         print(f"EHRFlowBench JSONL not found: {jsonl_path}")
         return 2
