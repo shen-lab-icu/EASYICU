@@ -148,7 +148,7 @@ def test_pipeline_writes_reviewer_report_by_default(ra, synthetic_cohort, tmp_pa
         llm=ra.MockLLMClient(),
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )
@@ -179,7 +179,7 @@ def test_pipeline_reviewer_can_be_disabled(ra, synthetic_cohort, tmp_path):
         enable_reviewer_round=False,
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )

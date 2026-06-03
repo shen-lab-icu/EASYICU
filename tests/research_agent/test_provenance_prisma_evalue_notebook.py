@@ -136,7 +136,7 @@ def test_pipeline_writes_provenance_prisma_evalue_notebook_lockfile(
         llm=ra.MockLLMClient(),
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
         source_files=[{"path": str(raw), "role": "raw_ingest", "database": "miiv"}],
@@ -162,7 +162,7 @@ def test_pipeline_writes_provenance_prisma_evalue_notebook_lockfile(
 
     # O23 — E-values
     # Only required when primary_association produced a CSV; the
-    # sofa_mortality skill with the mock cohort does. If so, the
+    # association-analysis skill with the mock cohort does. If so, the
     # e_values.csv must list at least one row.
     ev_csv = run_dir / "e_values.csv"
     if ev_csv.exists():

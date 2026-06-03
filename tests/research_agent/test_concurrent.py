@@ -105,9 +105,9 @@ def test_concurrent_pipeline_matches_sequential_findings(ra, synthetic_cohort, t
         enable_memory=False, enable_latex=False,
     )
 
-    seq_result = seq_pipeline.run(skill="sofa_mortality",
+    seq_result = seq_pipeline.run(skill="association_analysis",
                                   cohort=synthetic_cohort, database="synthetic")
-    par_result = par_pipeline.run(skill="sofa_mortality",
+    par_result = par_pipeline.run(skill="association_analysis",
                                   cohort=synthetic_cohort, database="synthetic")
 
     seq_findings = _critical_findings(Path(seq_result.manifest_path))
@@ -128,7 +128,7 @@ def test_concurrent_pipeline_records_sorted_by_plan_order(ra, synthetic_cohort, 
         enable_literature=False, enable_visual_qa=False,
         enable_memory=False, enable_latex=False,
     )
-    result = pipeline.run(skill="sofa_mortality",
+    result = pipeline.run(skill="association_analysis",
                           cohort=synthetic_cohort, database="synthetic")
 
     # The skill plan begins with table_one and ends with the SOFA-zero audit.
@@ -170,7 +170,7 @@ def test_concurrent_default_one_worker_keeps_sequential_path(ra, synthetic_cohor
         enable_memory=False, enable_latex=False,
     )
     assert pipeline._max_concurrent_steps == 1
-    result = pipeline.run(skill="sofa_mortality",
+    result = pipeline.run(skill="association_analysis",
                           cohort=synthetic_cohort, database="synthetic")
     # If the default broke, the run wouldn't even produce a manifest.
     assert Path(result.manifest_path).exists()

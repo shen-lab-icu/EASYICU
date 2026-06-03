@@ -184,7 +184,7 @@ def test_pipeline_writes_multiple_testing_report_by_default(
         llm=ra.MockLLMClient(),
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )
@@ -198,7 +198,7 @@ def test_pipeline_writes_multiple_testing_report_by_default(
     assert "multiple_testing_summary" in ev_ids
 
     # At least one finding from the multiple_testing validator should be
-    # emitted (info or warning) because the sofa_mortality skill runs a
+    # emitted (info or warning) because the association-analysis skill runs a
     # logistic regression with a reported p-value.
     mt_findings = [f for f in manifest["findings"] if f["validator"] == "multiple_testing"]
     assert len(mt_findings) >= 1
@@ -212,7 +212,7 @@ def test_pipeline_multiple_testing_can_be_disabled(ra, synthetic_cohort, tmp_pat
         enable_multiple_testing_correction=False,
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )

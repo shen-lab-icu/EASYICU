@@ -259,7 +259,7 @@ def test_pipeline_envelope_populates_manifest_and_writes_artifact(
         envelope_include_previews=False,
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )
@@ -294,7 +294,7 @@ def test_pipeline_without_envelope_stays_bit_identical_for_manifest_field(
         llm=ra.MockLLMClient(),
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )
@@ -316,7 +316,7 @@ def test_pipeline_envelope_composes_with_cost_tracking(
         llm_seed=101,
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )

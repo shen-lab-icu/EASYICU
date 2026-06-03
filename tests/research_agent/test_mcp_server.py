@@ -49,7 +49,12 @@ def test_mcp_tools_call_wraps_tool_result_as_content(ra):
     assert resp["result"]["isError"] is False
     text = resp["result"]["content"][0]["text"]
     data = json.loads(text)
-    assert any(skill["key"] == "sofa_mortality" for skill in data["skills"])
+    keys = {skill["key"] for skill in data["skills"]}
+    assert {
+        "association_analysis",
+        "prediction_model",
+        "data_quality_audit",
+    } <= keys
 
 
 def test_mcp_legacy_tool_shape_still_dispatches(ra):

@@ -211,7 +211,7 @@ def _write_cohort(df, tmp_path):
 def test_pipeline_pattern_auditor_fires_on_clustering_skill(
     ra, synthetic_cohort, tmp_path
 ):
-    """The mock pipeline's sofa_mortality skill generates code that
+    """The mock pipeline's association-analysis skill generates code that
     references sofa2 in a feature context. Verify the pattern auditor
     is wired and doesn't crash the pipeline."""
     cohort_path = _write_cohort(synthetic_cohort, tmp_path)
@@ -220,7 +220,7 @@ def test_pipeline_pattern_auditor_fires_on_clustering_skill(
         llm=ra.MockLLMClient(),
     )
     result = pipeline.run(
-        skill="sofa_mortality",
+        skill="association_analysis",
         cohort=cohort_path,
         database="miiv",
     )

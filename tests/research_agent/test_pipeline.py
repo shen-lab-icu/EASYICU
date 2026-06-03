@@ -80,40 +80,42 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
     partial = json.loads((run_dir / "manifest_partial.json").read_text(encoding="utf-8"))
     assert partial["runtime_state"]["analysis_family"]
 
-    # 4) The SOFA-zero anomaly should appear in at least one step_summary.json.
-    summaries = list(run_dir.rglob("step_summary.json"))
-    assert summaries, "no step_summary.json was produced"
-    flagged = False
-    for ssj in summaries:
-        try:
-            data = json.loads(ssj.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if data.get("sofa_zero_anomaly"):
-            flagged = True
-            break
-    assert flagged, "synthetic cohort SOFA2==0 anomaly was not detected"
-
-    # 5) The manifest's findings should mention the anomaly.
-    finding_msgs = " ".join(f.get("message", "") for f in manifest["findings"])
-    assert "non-monotonic" in finding_msgs.lower() or "exceeds" in finding_msgs.lower(), (
-        f"validator did not surface the SOFA-zero anomaly:\n{finding_msgs}"
-    )
+    # 4) The deterministic probe should expose score completeness without
+    # peeking at outcome-stratum rates or auto-generating a SOFA-specific audit.
+    probe_paths = list(run_dir.rglob("probe_summary.json"))
+    assert probe_paths, "no probe_summary.json was produced"
+    probe = json.loads(probe_paths[0].read_text(encoding="utf-8"))
+    assert "outcome_rate" not in probe
+    assert "sofa_zero_anomaly" not in probe
+    assert probe["score_anomalies"] == []
+    completeness = probe["score_completeness"]
+    assert completeness
+    sofa_report = next(item for item in completeness if item["variable"] == "sofa2")
+    assert sofa_report["completeness"]["n_zero_stratum_incomplete"] > 0
 
 
 def test_pipeline_with_clinical_skill(ra, synthetic_cohort, tmp_path: Path):
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+    # No case-specific skill ships in the registry anymore; the caller supplies
+    # a case-neutral ClinicalSkill object and the mechanism drives the pipeline.
+    skill = ra.ClinicalSkill(
+        key="generic_exposure_outcome",
+        name="Generic exposure → outcome association",
+        description="Case-neutral skill for the pipeline smoke test.",
+        research_question_template="Is sofa2 associated with death in {database}?",
+        target_outcome="death",
+        primary_predictor="sofa2",
+        expected_variables=["age", "sex", "sofa2", "death"],
+    )
     result = pipeline.run(
         cohort=synthetic_cohort,
         cohort_name="synthetic_skill_cohort",
         database="synthetic",
-        skill="sofa_mortality",
+        skill=skill,
     )
     assert result.evidence_count > 0
-    # The skill plan must include a sofa_zero audit step.
     plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
-    step_ids = [s["step_id"] for s in plan["steps"]]
-    assert any("sofa_zero" in sid for sid in step_ids)
+    assert plan["steps"], "the skill plan produced no steps"
 
 
 def test_pipeline_stops_when_hypothesis_blueprint_is_blocked(
@@ -721,7 +723,7 @@ def test_mock_planner_honours_sofa2_when_sofa_is_also_present(ra, synthetic_coho
     plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
     by_id = {step["step_id"]: step for step in plan["steps"]}
     assert by_id["04_primary_association"]["inputs"][:2] == ["sofa2", "death"]
-    assert by_id["05_sofa_zero_audit"]["inputs"][:2] == ["sofa2", "death"]
+    assert "05_sofa_zero_audit" not in by_id
 
 
 def test_pipeline_run_requires_explicit_llm(tmp_path: Path):

@@ -1,4 +1,4 @@
-"""ClinicalSkill registry — composable ICU recipes.
+"""ClinicalSkill registry — composable ICU analysis families.
 
 The research-agent layer exposes reusable "skills" that agents can
 invoke. Here they are specialised to the EasyICU shape:
@@ -6,22 +6,19 @@ invoke. Here they are specialised to the EasyICU shape:
 A :class:`ClinicalSkill` is a small object that, given a cohort
 DataFrame, declares:
 
-* the *target outcome* and primary predictor;
-* the *time window* and *aggregation rules* the skill cares about;
-* a stable list of expected variables (with light validation against
-  the cohort);
+* the analysis family (association, prediction, data-quality audit, ...);
+* optional target outcome / primary predictor hints when a user registers
+  a local skill;
+* optional time-window and expected-variable hints;
 * a deterministic plan assembled by the shared skill template when the
   user explicitly picks the skill instead of writing a free-form
   research question.
 
-Skills make the user-facing API substantially cheaper — a researcher
-who wants the canonical "admission-SOFA -> ICU mortality" analysis
-shouldn't need to spend tokens prompting a planner agent for it.
-The skill emits a deterministic, reviewable plan through the shared
-template and the rest of the pipeline runs unchanged. The outer
-research loop is stable, but the inner analysis steps are assembled
-dynamically from the research question and context instead of forcing
-the same descriptive checks for every task.
+Built-in skills must stay at the analysis-family level. A key such as
+``association_analysis`` or ``prediction_model`` is acceptable because it
+describes a reusable workflow shape; a key such as ``sofa_mortality`` is
+too narrow and bakes one benchmark question into the package. Users may
+still register their own local skills with concrete variables.
 
 ``plan_factory`` remains available for explicit extension points, but
 the built-in registry must stay case-neutral and must not bundle
@@ -55,9 +52,10 @@ class ClinicalSkill:
     name: str
     description: str
     research_question_template: str
-    target_outcome: str
-    primary_predictor: str
-    expected_variables: List[str]
+    target_outcome: Optional[str] = None
+    primary_predictor: Optional[str] = None
+    expected_variables: List[str] = field(default_factory=list)
+    analysis_type_key: Optional[str] = None
     time_windows: List[TimeWindow] = field(default_factory=list)
     plan_factory: Optional[Callable[[ResearchContext], AnalysisPlan]] = None
 
@@ -346,28 +344,6 @@ def should_include_primary_association(
         primary_predictor=primary_predictor,
         target_outcome=target_outcome,
     )
-
-
-def sofa_audit_variable(
-    context: ResearchContext,
-    *,
-    primary_predictor: Optional[str],
-) -> Optional[str]:
-    if primary_predictor and primary_predictor.lower() in {"sofa", "sofa2"}:
-        return primary_predictor
-    sofa_names = [v.name for v in context.variables if v.name.lower() in {"sofa", "sofa2"}]
-    if len(sofa_names) == 1:
-        return sofa_names[0]
-    text = _question_text(context)
-    if "sofa-2" in text or "sofa2" in text:
-        for name in sofa_names:
-            if name.lower() == "sofa2":
-                return name
-    if "sofa" in text:
-        for name in sofa_names:
-            if name.lower() == "sofa":
-                return name
-    return None
 
 
 def build_dynamic_core_plan_steps(
@@ -732,23 +708,6 @@ def build_dynamic_core_plan_steps(
             )
         )
 
-    sofa_var = sofa_audit_variable(context, primary_predictor=primary_predictor)
-    if sofa_var and target_outcome:
-        steps.append(
-            AnalysisStep(
-                step_id="05_sofa_zero_audit",
-                intent=(
-                    f"Stratum-level audit of {sofa_var}; flag the score==0 stratum "
-                    "if its outcome rate exceeds the score==1 stratum (component-missingness signature)."
-                ),
-                inputs=[sofa_var, target_outcome],
-                expected_outputs=["table:sofa_strata", "figure:sofa_strata_curve",
-                                  "statistic:sofa_zero_anomaly"],
-                method="stratified_incidence",
-                icu_rule_refs=["sofa_pitfalls"],
-            )
-        )
-
     return steps
 
 
@@ -758,14 +717,22 @@ def build_dynamic_core_plan_steps(
 
 
 def _default_skill_plan(skill: ClinicalSkill, context: ResearchContext) -> AnalysisPlan:
+    target_outcome = skill.target_outcome or _infer_context_target_outcome(context)
+    primary_predictor = skill.primary_predictor or _infer_context_primary_predictor(
+        context,
+        target_outcome=target_outcome,
+    )
+    candidate_variables = skill.expected_variables or [
+        v.name for v in context.variables if v.role != VariableRole.ID
+    ]
     steps = build_dynamic_core_plan_steps(
         context,
-        primary_predictor=skill.primary_predictor,
-        target_outcome=skill.target_outcome,
-        candidate_variables=skill.expected_variables,
+        primary_predictor=primary_predictor,
+        target_outcome=target_outcome,
+        candidate_variables=candidate_variables,
         scope_label=f"skill '{skill.key}'",
         rationale_note="Respect the skill's declared time window(s) and expected variable set.",
-        analysis_type_key="association_study",
+        analysis_type_key=skill.analysis_type_key,
     )
     return AnalysisPlan(
         research_question=context.research_question,
@@ -805,65 +772,90 @@ def list_skills() -> List[ClinicalSkill]:
     return list(_REGISTRY.values())
 
 
+def _infer_context_target_outcome(context: ResearchContext) -> Optional[str]:
+    if context.target_outcome:
+        return context.target_outcome
+    for descriptor in context.variables:
+        if descriptor.role == VariableRole.OUTCOME:
+            return descriptor.name
+    return None
+
+
+def _infer_context_primary_predictor(
+    context: ResearchContext,
+    *,
+    target_outcome: Optional[str],
+) -> Optional[str]:
+    preferred_roles = (
+        VariableRole.ORDINAL_SCORE,
+        VariableRole.COMPOSITE_SCORE,
+        VariableRole.INTERVENTION,
+        VariableRole.LAB,
+        VariableRole.VITAL,
+    )
+    for role in preferred_roles:
+        for descriptor in context.variables:
+            if descriptor.name == target_outcome:
+                continue
+            if descriptor.role == role:
+                return descriptor.name
+    for descriptor in context.variables:
+        if descriptor.name == target_outcome or descriptor.role == VariableRole.ID:
+            continue
+        return descriptor.name
+    return None
+
+
 def _seed_builtin_skills() -> None:
-    register_skill(ClinicalSkill(
-        key="sofa_mortality",
-        name="Admission SOFA → ICU mortality",
-        description=(
-            "Canonical association between admission-window SOFA / SOFA-2 score and "
-            "ICU mortality, with the SOFA==0 stratum audit baked in."
-        ),
-        research_question_template=(
-            "Is admission SOFA-2 score associated with ICU mortality in {database}?"
-        ),
-        target_outcome="death",
-        primary_predictor="sofa2",
-        expected_variables=["age", "sex", "sofa2", "death", "los_icu"],
-        time_windows=[
-            TimeWindow(name="first_24h", start_hours=0, end_hours=24,
-                       rationale="Admission illness severity window."),
-        ],
-    ))
-    register_skill(ClinicalSkill(
-        key="aki_kdigo_mortality",
-        name="KDIGO AKI stage → ICU mortality",
-        description="KDIGO-defined AKI stage as a predictor of ICU mortality.",
-        research_question_template=(
-            "Is peak first-24h KDIGO AKI stage associated with ICU mortality in {database}?"
-        ),
-        target_outcome="death",
-        primary_predictor="kdigo_stage",
-        expected_variables=["age", "sex", "creat", "kdigo_stage", "death"],
-        time_windows=[TimeWindow(name="first_24h", start_hours=0, end_hours=24)],
-    ))
-    register_skill(ClinicalSkill(
-        key="vaso_exposure_mortality",
-        name="Vasopressor exposure → ICU mortality",
-        description=(
-            "Any-vasopressor exposure within the first ICU window as a predictor of mortality."
-        ),
-        research_question_template=(
-            "Is any-vasopressor exposure within the first 24 h associated with ICU mortality in {database}?"
-        ),
-        target_outcome="death",
-        primary_predictor="vaso",
-        expected_variables=["age", "sex", "vaso", "death", "map"],
-        time_windows=[TimeWindow(name="first_24h", start_hours=0, end_hours=24)],
-    ))
-    register_skill(ClinicalSkill(
-        key="lactate_trajectory_mortality",
-        name="6-hour lactate trajectory → ICU mortality",
-        description=(
-            "Median lactate change within the first 6 hours as a predictor of mortality."
-        ),
-        research_question_template=(
-            "Does the first-6-hour lactate trajectory predict ICU mortality in {database}?"
-        ),
-        target_outcome="death",
-        primary_predictor="lact",
-        expected_variables=["age", "sex", "lact", "death"],
-        time_windows=[TimeWindow(name="first_6h", start_hours=0, end_hours=6)],
-    ))
+    """Register analysis-family skills only.
+
+    These keys describe reusable workflow shapes. They intentionally do not
+    encode a specific clinical score, exposure, database, benchmark item, or
+    endpoint. Concrete variable binding comes from the user's question and the
+    ``ResearchContext`` for the current cohort.
+    """
+    register_skill(
+        ClinicalSkill(
+            key="association_analysis",
+            name="Association analysis",
+            description=(
+                "Estimate an ICU-aware association between a context-selected "
+                "predictor or exposure and outcome."
+            ),
+            research_question_template=(
+                "Run an ICU-aware association analysis for the {database} cohort."
+            ),
+            analysis_type_key="association_study",
+        )
+    )
+    register_skill(
+        ClinicalSkill(
+            key="prediction_model",
+            name="Prediction model",
+            description=(
+                "Build and evaluate a clinical prediction model using the "
+                "current cohort context."
+            ),
+            research_question_template=(
+                "Build and evaluate an ICU prediction model for the {database} cohort."
+            ),
+            analysis_type_key="prediction_model",
+        )
+    )
+    register_skill(
+        ClinicalSkill(
+            key="data_quality_audit",
+            name="Data-quality audit",
+            description=(
+                "Audit missingness, completeness, and cohort data-quality issues "
+                "before outcome analysis."
+            ),
+            research_question_template=(
+                "Audit data quality and variable completeness for the {database} cohort."
+            ),
+            analysis_type_key="data_quality_audit",
+        )
+    )
 
 
 _seed_builtin_skills()
