@@ -1525,88 +1525,101 @@ div[role="listbox"] li {
 .eu-pipe-step .meta { font-size: 11px; color: var(--ink-4); font-family: var(--font-mono); }
 
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] {
+  position: relative !important;
   margin: 1px 8px !important;
+  min-height: 42px !important;
 }
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton {
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .eu-pipe-step {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding: 6px 8px !important;
+  gap: 10px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .eu-pipe-step .dot {
+  width: 14px !important;
+  height: 14px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .eu-pipe-step .title {
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+  font-size: 12.5px !important;
+  line-height: 1.25 !important;
+  font-weight: 400 !important;
+  text-align: left !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_active_"] .eu-pipe-step .title {
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+  font-weight: 500 !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_todo_"] .eu-pipe-step .title {
+  color: var(--ink-3) !important;
+  -webkit-text-fill-color: var(--ink-3) !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .eu-pipe-step .meta {
+  color: var(--ink-4) !important;
+  -webkit-text-fill-color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+  font-weight: 400 !important;
+  text-align: left !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton,
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] div[data-testid="stButton"] {
+  position: absolute !important;
+  inset: 0 !important;
   margin: 0 !important;
+  height: 42px !important;
+  min-height: 42px !important;
+  z-index: 2 !important;
 }
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton > button,
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] div[data-testid="stButton"] > button,
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] button {
+  position: absolute !important;
+  inset: 0 !important;
+  display: block !important;
   width: 100% !important;
   min-height: 42px !important;
-  justify-content: flex-start !important;
-  align-items: flex-start !important;
-  padding: 6px 8px !important;
+  height: 42px !important;
+  padding: 0 !important;
   border: 0 !important;
   border-radius: var(--r-2) !important;
   background: transparent !important;
   box-shadow: none !important;
-  color: var(--ink-2) !important;
-  text-align: left !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
   cursor: pointer !important;
+  opacity: 0 !important;
 }
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton > button:hover,
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] button:hover {
-  background: var(--surface-2) !important;
-  color: var(--ink) !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
 }
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton > button:disabled,
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] button:disabled {
   background: transparent !important;
-  color: var(--ink-4) !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
   cursor: not-allowed !important;
-}
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton > button p,
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] button p {
-  margin: 0 !important;
-  white-space: pre-line !important;
-  text-align: left !important;
-  line-height: 1.22 !important;
-  font-size: 12.5px !important;
-}
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton > button code,
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] button code {
-  padding: 0 !important;
-  background: transparent !important;
-  border: 0 !important;
-  color: var(--ink-4) !important;
-  font-family: var(--font-mono) !important;
-  font-size: 11px !important;
-}
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] .stButton > button span[data-testid="stIconMaterial"],
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_"] button span[data-testid="stIconMaterial"] {
-  flex: 0 0 auto !important;
-  color: var(--hair-3) !important;
-  -webkit-text-fill-color: var(--hair-3) !important;
-  font-size: 16px !important;
-  line-height: 1 !important;
 }
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_active_"] .stButton > button,
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_active_"] button {
-  background: var(--surface-2) !important;
-  color: var(--ink) !important;
-}
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_active_"] .stButton > button span[data-testid="stIconMaterial"],
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_active_"] button span[data-testid="stIconMaterial"] {
-  color: var(--accent) !important;
-  -webkit-text-fill-color: var(--accent) !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
 }
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_done_"] .stButton > button,
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_done_"] button {
-  color: var(--ink) !important;
-}
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_done_"] .stButton > button span[data-testid="stIconMaterial"],
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_done_"] button span[data-testid="stIconMaterial"] {
-  color: var(--ink) !important;
-  -webkit-text-fill-color: var(--ink) !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
 }
 .stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_locked_"] {
   opacity: 0.68;
-}
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_locked_"] .stButton > button span[data-testid="stIconMaterial"],
-.stApp [data-testid="stSidebar"] [class*="st-key-eu_pipeline_step_locked_"] button span[data-testid="stIconMaterial"] {
-  color: var(--ink-4) !important;
-  -webkit-text-fill-color: var(--ink-4) !important;
+  pointer-events: none !important;
 }
 
 .stApp [class*="st-key-cohort_active_panel"] div[role="radiogroup"] {
@@ -8173,6 +8186,44 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   min-height: 32px !important;
   height: 32px !important;
   white-space: nowrap !important;
+}
+.stApp [class*="st-key-concept_footer_actions"] {
+  clear: both;
+  margin-top: 12px !important;
+}
+.stApp [class*="st-key-concept_footer_actions"] [data-testid="stHorizontalBlock"] {
+  display: grid !important;
+  grid-template-columns: minmax(112px, 1fr) minmax(126px, .72fr) minmax(168px, .95fr) !important;
+  gap: 10px !important;
+  align-items: center !important;
+}
+.stApp [class*="st-key-concept_footer_actions"] [data-testid="stColumn"] {
+  width: auto !important;
+  min-width: 0 !important;
+  flex: initial !important;
+}
+.stApp [class*="st-key-concept_footer_actions"] [class*="st-key-concept_previous_step"] button,
+.stApp [class*="st-key-concept_footer_actions"] [class*="st-key-step3_confirm_design"] button {
+  width: 100% !important;
+  min-width: 0 !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+.stApp [class*="st-key-concept_footer_actions"] [class*="st-key-concept_previous_step"] button *,
+.stApp [class*="st-key-concept_footer_actions"] [class*="st-key-step3_confirm_design"] button * {
+  white-space: nowrap !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+@media (max-width: 900px) {
+  .stApp [class*="st-key-concept_footer_actions"] [data-testid="stHorizontalBlock"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .stApp [class*="st-key-concept_footer_actions"] [data-testid="stColumn"]:first-child {
+    grid-column: 1 / -1 !important;
+  }
 }
 .stApp [class*="st-key-concept_module_active_"] button,
 .stApp [class*="st-key-concept_module_add_"] button {
