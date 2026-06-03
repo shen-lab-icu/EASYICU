@@ -206,10 +206,31 @@ def test_prediction_discrimination_template_is_case_neutral():
     assert "OUTCOME_COL" in generated
     assert 'model_bundle.get("outcome_col")' in generated
     assert 'df["death"]' not in generated
+    assert "death_icu" not in generated
+    assert "death_hosp" not in generated
+    assert "mortality" not in generated
     assert "sofa2" not in generated.lower()
 
 
-def test_outcome_incidence_repair_uses_generic_outcome_and_missingness():
+def test_table_one_repair_uses_explicit_outcome_only():
+    repaired = _deterministic_runner_repair(
+        code="pd.DataFrame().to_csv('table_one.csv')\n",
+        run_log="SyntaxError: '(' was never closed",
+    )
+
+    assert repaired is not None
+    repair_id, generated = repaired
+    assert repair_id == "table_one_descriptive_repair_v1"
+    ast.parse(generated)
+    assert "OUTCOME_COL" in generated
+    assert 'df["death"]' not in generated
+    assert "death_icu" not in generated
+    assert "death_hosp" not in generated
+    assert "mortality" not in generated
+    assert "outcome_rate" in generated
+
+
+def test_outcome_incidence_repair_uses_explicit_outcome_only():
     repaired = _deterministic_runner_repair(
         code="# outcome_incidence\n...\n",
         run_log="SyntaxError: invalid syntax",
@@ -220,7 +241,10 @@ def test_outcome_incidence_repair_uses_generic_outcome_and_missingness():
     assert repair_id == "outcome_incidence_descriptive_repair_v1"
     ast.parse(generated)
     assert "OUTCOME_COL" in generated
+    assert "OUTCOME_COL is required" in generated
     assert 'df["death"]' not in generated
-    assert "lactate_measured_24h" not in generated
-    assert "_measured_24h" in generated
+    assert "death_icu" not in generated
+    assert "death_hosp" not in generated
+    assert "mortality" not in generated
+    assert "_measured" not in generated
     assert "outcome_rate" in generated

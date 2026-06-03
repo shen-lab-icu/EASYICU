@@ -43,6 +43,45 @@ def test_runner_build_command_defaults_to_network_isolation(ra, tmp_path: Path):
         assert "deny network" in joined
 
 
+def test_pipeline_runner_receives_target_outcome_env(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "work",
+        enable_memory=False,
+    )
+
+    runner = pipeline._build_runner(
+        run_dir=tmp_path / "run",
+        cohort_path=cohort_path,
+        target_outcome="endpoint_x",
+    )
+
+    assert runner.extra_env["OUTCOME_COL"] == "endpoint_x"
+
+
+def test_pipeline_runner_preserves_explicit_outcome_env_override(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "work",
+        enable_memory=False,
+        runner_kwargs={"extra_env": {"OUTCOME_COL": "manual_endpoint"}},
+    )
+
+    runner = pipeline._build_runner(
+        run_dir=tmp_path / "run",
+        cohort_path=cohort_path,
+        target_outcome="endpoint_x",
+    )
+
+    assert runner.extra_env["OUTCOME_COL"] == "manual_endpoint"
+
+
 def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
     ra,
     tmp_path: Path,

@@ -31,7 +31,7 @@ Usage::
     python tools/run_research_agent_bench.py --arms naive
     python tools/run_research_agent_bench.py --items sofa2_mortality gcs_mortality --arms naive
     python tools/run_research_agent_bench.py --seed 42 --out-root ./bench_runs --arms naive
-    # Paper-facing ICU-aware runs (Figure 4 / Case B) require a real provider:
+    # Paper-facing ICU-aware runs require a real provider:
     python tools/run_research_agent_bench.py --bench-kind analysis --arms aware --provider openrouter --model openai/gpt-oss-120b:free
     python tools/run_research_agent_bench.py --provider openrouter --models openai/gpt-oss-120b:free deepseek/deepseek-chat-v3-0324:free
     # Offline 'aware' plumbing check only (non-substantive, canned results):
@@ -1083,15 +1083,15 @@ def _enforce_mock_aware_provider(
 ) -> None:
     """Reject mock-provider aware runs unless they are explicit smoke tests."""
     selected_arms = _normalize_arms(arms)
-    # The MockLLMClient returns canned, case-shaped responses, so an "aware"
-    # arm run on the mock provider reports pre-written answers rather than a
-    # genuine ICU-aware analysis. Figure 4 / Case B (paper-facing results) must
-    # use a real provider. Offline plumbing smoke tests can opt in explicitly
-    # with --allow-mock-aware.
+    # The MockLLMClient returns canned responses, so an "aware" arm run on
+    # the mock provider reports fixture output rather than a genuine
+    # ICU-aware analysis. Paper-facing results must use a real provider.
+    # Offline plumbing smoke tests can opt in explicitly with
+    # --allow-mock-aware.
     if "aware" in selected_arms and provider == "mock" and not allow_mock_aware:
         raise SystemExit(
             "The 'aware' arm on the mock provider returns pre-written, "
-            "case-shaped responses, so its results are not real. Use "
+            "fixture responses, so its results are not real. Use "
             "--provider openrouter/openai for paper-facing runs, restrict to "
             "--arms naive, or pass --allow-mock-aware for an offline plumbing "
             "smoke test (results are non-substantive)."
@@ -1266,7 +1266,7 @@ def main() -> int:
         help=(
             "Permit the 'aware' arm to run on the mock provider for an offline "
             "plumbing smoke test. Results are non-substantive (canned responses) "
-            "and must not be used for paper-facing Figure 4 / Case B."
+            "and must not be used for paper-facing benchmark results."
         ),
     )
     parser.add_argument(
