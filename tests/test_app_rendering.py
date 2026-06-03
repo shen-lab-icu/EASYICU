@@ -5458,7 +5458,8 @@ def test_sidebar_pipeline_steps_are_sequential_click_targets() -> None:
     assert "_sidebar_extract_step_unlocked" in source
     assert "_sidebar_set_extract_step_state" in source
     assert "`{step.meta}`" not in source
-    assert "**{step.title}**  \\n{step.meta}" in source
+    assert "st.markdown(_pipeline_step_html(step, unlocked=unlocked)" in source
+    assert "icon=step_icon" not in source
     pipeline_css = css_text[
         css_text.index("[class*=\"st-key-eu_pipeline_step_\"]"):
         css_text.index(".eu-sidebar-footer-rule")
@@ -5467,11 +5468,15 @@ def test_sidebar_pipeline_steps_are_sequential_click_targets() -> None:
     assert "[class*=\"st-key-eu_pipeline_step_\"] button" in css_text
     assert "st-key-eu_pipeline_step_active_" in css_text
     assert "st-key-eu_pipeline_step_locked_" in css_text
-    assert "span[data-testid=\"stIconMaterial\"]" in pipeline_css
-    assert "color: var(--accent) !important" in pipeline_css
-    assert "color: var(--ink-4) !important" in pipeline_css
-    assert "white-space: pre-line !important" in css_text
-    assert "opacity: 0 !important" not in pipeline_css
+    assert "position: relative !important" in pipeline_css
+    assert "inset: 0 !important" in pipeline_css
+    assert "z-index: 2 !important" in pipeline_css
+    assert "opacity: 0 !important" in pipeline_css
+    assert "font-size: 12.5px !important" in pipeline_css
+    assert "font-size: 11px !important" in pipeline_css
+    assert "-webkit-text-fill-color: var(--ink-4) !important" in pipeline_css
+    assert "span[data-testid=\"stIconMaterial\"]" not in pipeline_css
+    assert "white-space: pre-line !important" not in pipeline_css
 
 
 def test_sidebar_cohort_meta_ignores_default_internal_filter_values(monkeypatch) -> None:
@@ -7208,7 +7213,8 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert "[1.05, 1.15, 1.15, 1.3, 1.75]" in sidebar_text
     assert '"Back" if lang == "en" else "上一步"' in sidebar_text
     assert '"Confirm" if lang == "en" else "确认"' in sidebar_text
-    assert "st.columns([4.2, 1.45, 1.45], gap=\"small\")" in sidebar_text
+    assert 'key="concept_footer_actions"' in sidebar_text
+    assert "st.columns([3.0, 1.55, 2.55], gap=\"small\")" in sidebar_text
     assert 'key="step1_reset_real"' in sidebar_text
     assert 'key="step1_confirm_real"' in sidebar_text
     assert "disabled=not real_ready" in sidebar_text
@@ -7222,6 +7228,7 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert "st.columns([5, 1, 2.4], gap=\"small\")" not in sidebar_text
     assert "st.columns([2.45, 0.72, 1.15, 1.85], gap=\"small\")" not in sidebar_text
     assert "st.columns([4.2, 1.0, 1.65], gap=\"small\")" not in sidebar_text
+    assert "st.columns([4.2, 1.45, 1.45], gap=\"small\")" not in sidebar_text
     assert 'class*="st-key-step1_reset_demo"' in css_text
     assert 'class*="st-key-step1_confirm_demo"' in css_text
     assert 'class*="st-key-step1_reset_real"' in css_text
@@ -7233,6 +7240,14 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert "_sidebar_set_extract_step_state(st.session_state, 1)" in sidebar_text
     assert 'class*="st-key-step3_confirm_design"' in css_text
     assert 'class*="st-key-concept_previous_step"' in css_text
+    assert 'class*="st-key-concept_footer_actions"' in css_text
+    concept_footer_css = css_text[
+        css_text.index('.stApp [class*="st-key-concept_footer_actions"] {'):
+        css_text.index('.stApp [class*="st-key-concept_module_active_"] button,')
+    ]
+    assert "grid-template-columns: minmax(112px, 1fr) minmax(126px, .72fr) minmax(168px, .95fr) !important" in concept_footer_css
+    assert "overflow: visible !important" in concept_footer_css
+    assert "text-overflow: clip !important" in concept_footer_css
     assert "height: 45px !important" in css_text
 
 

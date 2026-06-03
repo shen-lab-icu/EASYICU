@@ -1628,8 +1628,8 @@ def _pipeline_step_html(step: PipelineStep, *, unlocked: bool) -> str:
 
 
 def _pipeline_step_button_label(step: PipelineStep) -> str:
-    """Return a compact two-line label without Markdown code-chip styling."""
-    return f"**{step.title}**  \n{step.meta}" if step.meta else f"**{step.title}**"
+    """Return an accessible label for the invisible click target."""
+    return f"{step.title}: {step.meta}" if step.meta else step.title
 
 
 def _render_interactive_pipeline_block(steps: list[PipelineStep]) -> None:
@@ -1644,10 +1644,6 @@ def _render_interactive_pipeline_block(steps: list[PipelineStep]) -> None:
     for index, step in enumerate(steps, start=1):
         unlocked = _sidebar_extract_step_unlocked(st.session_state, index)
         state_key = "unlocked" if unlocked else "locked"
-        step_icon = {
-            "done": ":material/check_circle:",
-            "active": ":material/radio_button_checked:",
-        }.get(step.status, ":material/radio_button_unchecked:")
         help_text = (
             ("Open this completed step" if step.status == "done" else "Open this step")
             if lang == "en" else
@@ -1656,11 +1652,11 @@ def _render_interactive_pipeline_block(steps: list[PipelineStep]) -> None:
             "Complete the previous steps first" if lang == "en" else "请先完成前面的步骤"
         )
         with st.container(key=f"eu_pipeline_step_{step.status}_{state_key}_{step.key}"):
+            st.markdown(_pipeline_step_html(step, unlocked=unlocked), unsafe_allow_html=True)
             if st.button(
                 _pipeline_step_button_label(step),
                 key=f"eu_pipeline_jump_{step.key}",
                 disabled=not unlocked,
-                icon=step_icon,
                 help=help_text,
                 use_container_width=True,
             ):
@@ -4151,32 +4147,33 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
 
         selected_concepts = _collect_selected_concepts(concept_groups)
         st.session_state.selected_concepts = selected_concepts
-        footer_l, prev_col, confirm_col = st.columns([4.2, 1.45, 1.45], gap="small")
-        with footer_l:
-            st.markdown(
-                f'<div class="eu-source-footer-note">{html.escape("Step 3 of 4" if lang == "en" else "第 3 步 / 共 4 步")}</div>',
-                unsafe_allow_html=True,
-            )
-        with prev_col:
-            if st.button(
-                "Previous step" if lang == "en" else "上一步",
-                key="concept_previous_step",
-                use_container_width=True,
-                icon=":material/arrow_back:",
-            ):
-                _sidebar_set_extract_step_state(st.session_state, 2)
-                st.rerun()
-        with confirm_col:
-            if st.button(
-                "Confirm concepts" if lang == "en" else "确认变量",
-                key="step3_confirm_design",
-                type="primary",
-                disabled=len(selected_concepts) == 0,
-                use_container_width=True,
-            ):
-                st.session_state.step3_confirmed = True
-                st.session_state["_scroll_to_top"] = True
-                st.rerun()
+        with st.container(key="concept_footer_actions"):
+            footer_l, prev_col, confirm_col = st.columns([3.0, 1.55, 2.55], gap="small")
+            with footer_l:
+                st.markdown(
+                    f'<div class="eu-source-footer-note">{html.escape("Step 3 of 4" if lang == "en" else "第 3 步 / 共 4 步")}</div>',
+                    unsafe_allow_html=True,
+                )
+            with prev_col:
+                if st.button(
+                    "Previous step" if lang == "en" else "上一步",
+                    key="concept_previous_step",
+                    use_container_width=True,
+                    icon=":material/arrow_back:",
+                ):
+                    _sidebar_set_extract_step_state(st.session_state, 2)
+                    st.rerun()
+            with confirm_col:
+                if st.button(
+                    "Confirm concepts" if lang == "en" else "确认变量",
+                    key="step3_confirm_design",
+                    type="primary",
+                    disabled=len(selected_concepts) == 0,
+                    use_container_width=True,
+                ):
+                    st.session_state.step3_confirmed = True
+                    st.session_state["_scroll_to_top"] = True
+                    st.rerun()
 
     with right:
         _render_concept_summary(lang, concept_groups, st.session_state.get("selected_concepts", []) or [])
