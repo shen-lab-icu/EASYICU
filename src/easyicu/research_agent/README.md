@@ -311,7 +311,7 @@ python examples/research_agent_real_llm_smoke.py \
 
 The smoke harness is strict: it fails on missing deliverables, any
 error-severity finding, unresolved evidence placeholders, or a missing
-SOFA-zero anomaly finding.
+component-completeness QC finding.
 
 ### Optional VLM figure review
 
