@@ -9,10 +9,8 @@ final report. They are pure-text rewrites that:
 * drop sentences carrying ``[TBD]`` / ``[TODO]`` / ``[TK]`` writer
   placeholders that small/local models occasionally leak into the
   bound output;
-* repair common writer aliasing mistakes on prediction-task
-  manuscripts (e.g. a writer reaching for ``{evidence:outcome_rate}``
-  when the cohort's prediction performance lives under a different
-  registered id).
+* repair common writer aliasing mistakes on prediction-task manuscripts, while
+  keeping outcome-rate aliases gated to binary/event-style targets.
 
 They were originally inline in :mod:`pipeline`. They are module-level
 pure functions with no pipeline state, so isolating them here cuts
@@ -76,6 +74,45 @@ def _first_resolvable_name(
     return None
 
 
+def _context_target_outcome_is_binary_like(context: ResearchContext) -> bool:
+    target = str(getattr(context, "target_outcome", "") or "")
+    variable = context.variable(target) if target and hasattr(context, "variable") else None
+    source_concept = str(getattr(variable, "source_concept", "") or "").lower()
+    description = str(getattr(variable, "description", "") or "").lower()
+    dtype = str(getattr(variable, "dtype", "") or "").lower()
+    question = (context.research_question or "").lower()
+    haystack = " ".join([target.lower(), source_concept, description, question])
+    non_binary_tokens = (
+        "length of stay",
+        "los",
+        "time-to-event",
+        "time to event",
+        "survival",
+        "cox",
+        "hazard",
+        "continuous",
+        "mean difference",
+    )
+    if any(token in haystack for token in non_binary_tokens):
+        return False
+    if "float" in dtype and not any(token in haystack for token in ("binary", "event", "readmission")):
+        return False
+    binary_tokens = (
+        "binary",
+        "event",
+        "mortality",
+        "death",
+        "readmission",
+        "readmit",
+        "icu_death",
+        "hospital_death",
+    )
+    return any(token in haystack for token in binary_tokens) or dtype in {
+        "bool",
+        "boolean",
+    }
+
+
 def _repair_common_writer_placeholders(
     scaffold: str,
     *,
@@ -119,10 +156,11 @@ def _repair_common_writer_placeholders(
         fallback_map["table_one"] = "research_context"
     if "cohort_summary" not in resolvable and "research_context" in resolvable:
         fallback_map["cohort_summary"] = "research_context"
-    if "outcome_rate" not in resolvable:
-        fallback_map["outcome_rate"] = prediction_summary
-    if "outcome_incidence" not in resolvable:
-        fallback_map["outcome_incidence"] = prediction_summary
+    if _context_target_outcome_is_binary_like(context):
+        if "outcome_rate" not in resolvable:
+            fallback_map["outcome_rate"] = prediction_summary
+        if "outcome_incidence" not in resolvable:
+            fallback_map["outcome_incidence"] = prediction_summary
     if "primary_association" not in resolvable:
         fallback_map["primary_association"] = prediction_summary
 
@@ -226,6 +264,58 @@ _SEMANTIC_HINTS = (
             re.compile(r"primary[_:. -]*or", re.IGNORECASE),
             re.compile(r"adjusted[_:. -]*or", re.IGNORECASE),
             re.compile(r"(^|[_:. -])or($|[_:. -])", re.IGNORECASE),
+        ),
+    ),
+    (
+        (
+            re.compile(r"\bhazard\s+ratio\b", re.IGNORECASE),
+            re.compile(r"\bHR\b"),
+        ),
+        (
+            re.compile(r"hazard[_:. -]*ratio", re.IGNORECASE),
+            re.compile(r"primary[_:. -]*hr", re.IGNORECASE),
+            re.compile(r"adjusted[_:. -]*hr", re.IGNORECASE),
+            re.compile(r"(^|[_:. -])hr($|[_:. -])", re.IGNORECASE),
+        ),
+    ),
+    (
+        (
+            re.compile(r"\baverage\s+treatment\s+effect\b", re.IGNORECASE),
+            re.compile(r"\bATE\b"),
+            re.compile(r"\brisk\s+difference\b", re.IGNORECASE),
+            re.compile(r"\btreatment\s+effect\b", re.IGNORECASE),
+        ),
+        (
+            re.compile(r"average[_:. -]*treatment[_:. -]*effect", re.IGNORECASE),
+            re.compile(r"(^|[_:. -])ate($|[_:. -])", re.IGNORECASE),
+            re.compile(r"risk[_:. -]*difference", re.IGNORECASE),
+            re.compile(r"treatment[_:. -]*effect", re.IGNORECASE),
+        ),
+    ),
+    (
+        (
+            re.compile(r"\bcoefficient\b", re.IGNORECASE),
+            re.compile(r"\bcoef\b", re.IGNORECASE),
+            re.compile(r"\bbeta\b", re.IGNORECASE),
+            re.compile(r"\bmean\s+difference\b", re.IGNORECASE),
+        ),
+        (
+            re.compile(r"coefficient", re.IGNORECASE),
+            re.compile(r"(^|[_:. -])coef($|[_:. -])", re.IGNORECASE),
+            re.compile(r"(^|[_:. -])beta($|[_:. -])", re.IGNORECASE),
+            re.compile(r"mean[_:. -]*difference", re.IGNORECASE),
+        ),
+    ),
+    (
+        (
+            re.compile(r"\blength\s+of\s+stay\b", re.IGNORECASE),
+            re.compile(r"\bLOS\b"),
+        ),
+        (
+            re.compile(r"length[_:. -]*of[_:. -]*stay", re.IGNORECASE),
+            re.compile(r"(^|[_:. -])los($|[_:. -])", re.IGNORECASE),
+            re.compile(r"median[_:. -]*los", re.IGNORECASE),
+            re.compile(r"mean[_:. -]*los", re.IGNORECASE),
         ),
     ),
     (
