@@ -156,7 +156,7 @@ def test_metric_extractor_accepts_predictor_named_or_key(tmp_path: Path):
     )
     (run_dir / "manuscript_scaffold_bound.md").write_text("ok", encoding="utf-8")
     (step_dir / "step_summary.json").write_text(
-        json.dumps({"lactate_max_24h_or": 1.23}),
+        json.dumps({"creatinine_max_24h_or": 1.23}),
         encoding="utf-8",
     )
     task = v14.V14Task(
@@ -278,7 +278,7 @@ def test_metric_extractor_accepts_robustness_metric_lists(tmp_path: Path):
             {
                 "strategy": ["complete_case", "missing_indicator", "reduced_variable"],
                 "sample_size": [217, 785, 338],
-                "lactate_or": [2.35, 3.15, 2.35],
+                "or_estimate": [2.35, 3.15, 2.35],
             }
         ),
         encoding="utf-8",
@@ -601,7 +601,7 @@ def test_metric_extractor_robustness_prefers_complete_case_or_over_event_rate_al
             {
                 "statistic:primary_or": 19.82,
                 "statistic:event_rate": 19.82,
-                "statistic:lactate_or_complete_case": 1.126,
+                "statistic:primary_or_complete_case": 1.126,
                 "statistic:complete_case_n": 217,
             }
         ),
@@ -620,7 +620,7 @@ def test_metric_extractor_robustness_prefers_complete_case_or_over_event_rate_al
     metrics = v14._extract_metrics(run_dir, task)
 
     assert metrics["primary_or"] == 1.126
-    assert metrics["primary_metric_source"] == "statistic:lactate_or_complete_case"
+    assert metrics["primary_metric_source"] == "statistic:primary_or_complete_case"
     assert metrics["complete_case_n"] == 217
     assert metrics["aggregation_version"] == v14.AGGREGATION_VERSION
 

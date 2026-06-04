@@ -1697,7 +1697,7 @@ if len(cc_df) > 0:
         results['complete_case']['error'] = "exog contains inf or nans"
 if len(mi_df) > 0:
     y_mi = mi_df[outcome_var]
-    X_mi = mi_df[[predictor_var, 'lactate_missing_24h'] + covariates]
+    X_mi = mi_df[[predictor_var, 'creatinine_missing_24h'] + covariates]
     X_mi = X_mi.apply(pd.to_numeric, errors='coerce')
     y_mi = y_mi.astype(float)
 if len(rv_df) > 0:
@@ -1850,13 +1850,13 @@ def test_deterministic_runner_repair_restores_predictor_and_sex_in_robustness_sc
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
     code = """
-predictor_col = lactate_col
+predictor_col = creatinine_col
 covariates = ["age", "sex", "sofa2_max_24h"]
 def fit_logistic_model(X, y):
     return None
 model_df = df[all_vars].copy()
 cc_X = cc_df[covariates]
-mi_X = mi_df[covariates + ['lactate_missing']]
+mi_X = mi_df[covariates + ['creatinine_missing']]
 rv_X = rv_df[covariates]
 ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
 """
@@ -1870,7 +1870,7 @@ ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
     assert name == "robustness_predictor_design_and_plot_v1"
     assert "model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)" in patched
     assert "cc_X = cc_df[[predictor_col] + covariates]" in patched
-    assert "mi_X = mi_df[[predictor_col] + covariates + ['lactate_missing']]" in patched
+    assert "mi_X = mi_df[[predictor_col] + covariates + ['creatinine_missing']]" in patched
     assert "rv_X = rv_df[[predictor_col] + covariates]" in patched
     assert "plot_rows = [" in patched
 
@@ -1879,16 +1879,16 @@ def test_deterministic_runner_repair_stabilizes_predictor_col_robustness_templat
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
     code = """
-outcome_col = "death"
-predictor_col = lactate_col
+outcome_col = "readmission_30d"
+predictor_col = creatinine_col
 covariates = ["age", "sex", "los_icu", "sofa2_max_24h", "map_min_24h", "vaso_any_24h", "bili_max_24h", "bili_n_24h", "creat_max_24h"]
 model_df = df[[outcome_col, predictor_col] + covariates].copy()
-model_df["lactate_missing"] = model_df[predictor_col].isnull().astype(int)
+model_df["creatinine_missing"] = model_df[predictor_col].isnull().astype(int)
 complete_case_df = model_df.dropna(subset=[predictor_col])
 missing_indicator_df = model_df.copy()
 reduced_variable_df = model_df.drop(columns=[predictor_col]).copy()
 X_cc = sm.add_constant(complete_case_df[covariates], has_constant="add")
-X_mi = sm.add_constant(missing_indicator_df[covariates + ["lactate_missing"]], has_constant="add")
+X_mi = sm.add_constant(missing_indicator_df[covariates + ["creatinine_missing"]], has_constant="add")
 X_rv = sm.add_constant(reduced_variable_df[covariates], has_constant="add")
 X_rv = X_rv.drop(columns=[predictor_col])
 lci = [row_cc["or_lower"], row_mi["or_lower"], row_rv["or_lower"]]
@@ -1910,7 +1910,7 @@ ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
     assert "missing_indicator_df = missing_indicator_df.dropna(subset=[outcome_col] + covariates)" in patched
     assert "reduced_variable_df = model_df[[outcome_col, predictor_col] + reduced_covariates].dropna().copy()" in patched
     assert 'X_cc = sm.add_constant(complete_case_df[[predictor_col] + covariates], has_constant="add")' in patched
-    assert 'X_mi = sm.add_constant(missing_indicator_df[[predictor_col] + covariates + ["lactate_missing"]], has_constant="add")' in patched
+    assert 'X_mi = sm.add_constant(missing_indicator_df[[predictor_col] + covariates + ["creatinine_missing"]], has_constant="add")' in patched
     assert 'X_rv = sm.add_constant(reduced_variable_df[[predictor_col] + reduced_covariates], has_constant="add")' in patched
     assert "plot_rows = [" in patched
     assert "if len(x_pos):" in patched
@@ -1921,16 +1921,16 @@ def test_deterministic_runner_repair_preserves_indentation_for_robustness_patch(
 
     code = """
 def main():
-    outcome_col = "death"
-    predictor_col = lactate_col
+    outcome_col = "readmission_30d"
+    predictor_col = creatinine_col
     covariates = ["age", "sex"]
     model_df = df[[outcome_col, predictor_col] + covariates].copy()
-    model_df["lactate_missing"] = model_df[predictor_col].isnull().astype(int)
+    model_df["creatinine_missing"] = model_df[predictor_col].isnull().astype(int)
     complete_case_df = model_df.dropna(subset=[predictor_col])
     missing_indicator_df = model_df.copy()
     reduced_variable_df = model_df.drop(columns=[predictor_col]).copy()
     X_cc = sm.add_constant(complete_case_df[covariates], has_constant="add")
-    X_mi = sm.add_constant(missing_indicator_df[covariates + ["lactate_missing"]], has_constant="add")
+    X_mi = sm.add_constant(missing_indicator_df[covariates + ["creatinine_missing"]], has_constant="add")
     X_rv = sm.add_constant(reduced_variable_df[covariates], has_constant="add")
     X_rv = X_rv.drop(columns=[predictor_col])
     ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
@@ -2244,31 +2244,31 @@ def test_deterministic_runner_repair_restores_primary_predictor_in_logit_design(
 import pandas as pd
 import statsmodels.api as sm
 df = pd.read_parquet(cohort_path)
-model_df = df[['lactate_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'death']].copy()
+model_df = df[['creatinine_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'readmission_30d']].copy()
 model_df = pd.get_dummies(model_df, columns=['sex'], drop_first=True)
-y = model_df['death'].astype(float)
+y = model_df['readmission_30d'].astype(float)
 X = model_df[['map_min_24h', 'vaso_any_24h', 'age'] + [col for col in model_df.columns if col.startswith('sex_')]].astype(float)
 X = sm.add_constant(X, has_constant='add')
 try:
     logit_model = sm.Logit(y, X)
     result = logit_model.fit(disp=0)
     coef_table = result.conf_int()
-    lactate_or = coef_table.loc['lactate_max_24h', 'or']
+    primary_or = coef_table.loc['creatinine_max_24h', 'or']
 except Exception as e:
     print(f"Error fitting logistic regression: {e}")
-step_summary = {"n_total_stays": int(n_total), "odds_ratio": lactate_or}
+step_summary = {"n_total_stays": int(n_total), "odds_ratio": primary_or}
 """
     repaired = _deterministic_runner_repair(
         code=code,
         run_log=(
-            "Error fitting logistic regression: 'lactate_max_24h'\n"
+            "Error fitting logistic regression: 'creatinine_max_24h'\n"
             "NameError: name 'n_total' is not defined"
         ),
     )
     assert repaired is not None
     name, patched = repaired
     assert name == "primary_predictor_omitted_from_design_v1"
-    assert "X = model_df[['lactate_max_24h'," in patched
+    assert "X = model_df[['creatinine_max_24h'," in patched
     assert "n_total = int(len(df))" in patched
 
 
@@ -2277,29 +2277,29 @@ def test_deterministic_runner_repair_restores_primary_predictor_with_indented_x_
 
     code = """
 def main():
-    model_df = df[['lactate_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'death']].copy()
-    y = model_df['death'].astype(float)
+    model_df = df[['creatinine_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'readmission_30d']].copy()
+    y = model_df['readmission_30d'].astype(float)
     X = model_df[['map_min_24h', 'vaso_any_24h', 'age', 'sex']].copy()
     X = sm.add_constant(X, has_constant='add')
     coef_table = result.conf_int()
-    lactate_or = coef_table.loc['lactate_max_24h', 'or']
+    primary_or = coef_table.loc['creatinine_max_24h', 'or']
 """
     repaired = _deterministic_runner_repair(
         code=code,
-        run_log="Error fitting logistic regression: 'lactate_max_24h'",
+        run_log="Error fitting logistic regression: 'creatinine_max_24h'",
     )
     assert repaired is not None
     name, patched = repaired
     assert name == "primary_predictor_omitted_from_design_v1"
-    assert "X = model_df[['lactate_max_24h'," in patched
+    assert "X = model_df[['creatinine_max_24h'," in patched
 
 
 def test_deterministic_runner_repair_fixes_stringified_binary_outcome_key(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
     code = """
-table_one_data.append({"variable": "In-hospital Mortality", "type": "binary", "count": summary["outcomes"]["death"]["counts"][1],
-                      "pct": summary["outcomes"]["death"]["pct"][1]})
+table_one_data.append({"variable": "30-day readmission", "type": "binary", "count": summary["outcomes"]["readmission_30d"]["counts"][1],
+                      "pct": summary["outcomes"]["readmission_30d"]["pct"][1]})
 """
     repaired = _deterministic_runner_repair(
         code=code,
@@ -2308,8 +2308,8 @@ table_one_data.append({"variable": "In-hospital Mortality", "type": "binary", "c
     assert repaired is not None
     name, patched = repaired
     assert name == "table_one_binary_key_string_v1"
-    assert '.get("1", summary["outcomes"]["death"]["counts"].get(1, 0))' in patched
-    assert '.get("1", summary["outcomes"]["death"]["pct"].get(1, 0.0))' in patched
+    assert '.get("1", summary["outcomes"]["readmission_30d"]["counts"].get(1, 0))' in patched
+    assert '.get("1", summary["outcomes"]["readmission_30d"]["pct"].get(1, 0.0))' in patched
 
 
 def test_step_contract_findings_flag_missing_primary_association_estimate(ra):
@@ -2461,7 +2461,7 @@ def test_step_contract_findings_accepts_predictor_named_or_key(ra):
 
     findings = _step_contract_findings(
         step=step,
-        step_summary={"lactate_max_24h_or": 1.21},
+        step_summary={"creatinine_max_24h_or": 1.21},
     )
 
     assert findings == []
@@ -2693,7 +2693,7 @@ def test_step_contract_findings_accepts_prefixed_clustering_metrics(ra):
     assert findings == []
 
 
-def test_step_contract_findings_accepts_complete_case_lactate_or_alias(ra):
+def test_step_contract_findings_accepts_complete_case_primary_or_alias(ra):
     from easyicu.research_agent.pipeline import _step_contract_findings
 
     step = ra.AnalysisStep(
@@ -2709,7 +2709,7 @@ def test_step_contract_findings_accepts_complete_case_lactate_or_alias(ra):
     findings = _step_contract_findings(
         step=step,
         step_summary={
-            "statistic:lactate_or_complete_case": 1.14,
+            "statistic:primary_or_complete_case": 1.14,
             "table:complete_case_robustness_summary": [
                 {"strategy": "Complete-case", "n": 450},
             ],
@@ -4435,9 +4435,9 @@ model_df = model_df.replace([np.inf, -np.inf], np.nan)
     repaired = _deterministic_summary_repair(
         code=code,
         step_summary={
-            "primary_predictor": "lactate_max_24h",
+            "primary_predictor": "creatinine_max_24h",
             "complete_case_n": None,
-            "lactate_or": None,
+            "primary_or": None,
         },
         previous_repair="primary_predictor_omitted_from_design_v1",
     )
@@ -5020,8 +5020,8 @@ def test_deterministic_summary_repair_stabilizes_robustness_missingness_models(r
     from easyicu.research_agent.pipeline import _deterministic_summary_repair
 
     code = """
-outcome_col = 'death'
-primary_predictor = 'lactate_max_24h'
+outcome_col = 'readmission_30d'
+primary_predictor = 'creatinine_max_24h'
 covariates = ['age', 'sex', 'los_icu', 'sofa2_max_24h', 'map_min_24h', 'vaso_any_24h', 'bili_max_24h', 'bili_n_24h', 'creat_max_24h']
 model_df = df[[outcome_col, primary_predictor] + covariates].copy()
 if 'sex' in model_df.columns:
@@ -5032,10 +5032,10 @@ for col in model_df.columns:
 model_df = model_df.replace([np.inf, -np.inf], np.nan)
 cc_df = model_df.dropna(subset=[primary_predictor])
 mi_df = model_df.copy()
-mi_df['lactate_missing'] = mi_df[primary_predictor].isna().astype(int)
+mi_df['creatinine_missing'] = mi_df[primary_predictor].isna().astype(int)
 rv_df = model_df.dropna(subset=[primary_predictor])
 cc_X = sm.add_constant(cc_df[[primary_predictor] + covariates], has_constant="add")
-mi_X = sm.add_constant(mi_df[[primary_predictor, 'lactate_missing'] + covariates], has_constant="add")
+mi_X = sm.add_constant(mi_df[[primary_predictor, 'creatinine_missing'] + covariates], has_constant="add")
 rv_X = sm.add_constant(rv_df[covariates], has_constant="add")
 cc_result = sm.Logit(cc_df[outcome_col], cc_X).fit(disp=0)
 mi_result = sm.Logit(mi_df[outcome_col], mi_X).fit(disp=0)

@@ -62,7 +62,7 @@ def _extract_primary_effect_row(
         )
         primary_or = _first_present_scalar(
             summary,
-            ("primary_or", "odds_ratio", "estimate", "adjusted_or", "lactate_or"),
+            ("primary_or", "odds_ratio", "estimate", "adjusted_or"),
         )
         ci_low = _first_present_scalar(
             summary,
@@ -132,7 +132,7 @@ def _primary_effect_candidate_score(
     score = 0
     if _first_present_scalar(
         summary,
-        ("primary_or", "odds_ratio", "estimate", "adjusted_or", "lactate_or"),
+        ("primary_or", "odds_ratio", "estimate", "adjusted_or"),
     ) is not None:
         score += 100
     if "primary_association" in path_text or "association_model" in path_text:
