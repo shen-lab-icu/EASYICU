@@ -196,6 +196,32 @@ def _route_to_extract_entry_mode(
     state["_active_main_page"] = "extract"
 
 
+def _route_to_copilot_entry(
+    state: MutableMapping[str, Any],
+    *,
+    data_mode: str = "demo",
+    question: str | None = None,
+    branch_hint: str | None = None,
+) -> None:
+    """Enter the app through the chat-first Research Copilot path."""
+    mode = "real" if data_mode == "real" else "demo"
+    _route_to_extract_entry_mode(state, mode)
+    state["_active_main_page"] = "assistant"
+    state["_scroll_to_top"] = True
+    state["llm_enabled"] = True
+    state["_llm_toggle"] = True
+    state["_llm_toggle_sync_pending"] = True
+    if branch_hint:
+        state["_copilot_entry_branch_hint"] = branch_hint
+    else:
+        state.pop("_copilot_entry_branch_hint", None)
+    prompt = (question or "").strip()
+    if prompt:
+        state["_ai_pending_question"] = prompt
+    else:
+        state.pop("_ai_pending_question", None)
+
+
 def _route_to_research_agent_setup(
     state: MutableMapping[str, Any],
     *,
@@ -1885,8 +1911,8 @@ def render_settings_redesign_page(lang: str) -> None:
                 label_visibility="collapsed",
                 help=_T(
                     lang,
-                    "Shared switch used by AI Assistant and Research Agent. External Research Agent runs still show a per-run disclosure gate.",
-                    "AI 助手和 Research Agent 共用该开关；外部模型运行仍会显示单次运行披露关口。",
+                    "Shared switch used by Research Copilot and Research Agent. External Research Agent runs still show a per-run disclosure gate.",
+                    "研究 Copilot 和 Research Agent 共用该开关；外部模型运行仍会显示单次运行披露关口。",
                 ),
                 on_change=_settings_outbound_model_calls_changed,
             )
@@ -2760,7 +2786,7 @@ def render_agent_redesign_page(lang: str) -> None:
 
 
 def render_entry_redesign_page(lang: str) -> None:
-    """Render the design's Entry / Mode selection screen.
+    """Render the parallel Copilot / classic Entry screen from the design.
 
     Replaces the legacy ``render_entry_page`` visual surface. Buttons
     still drive the real ``entry_mode`` / ``use_mock_data`` session
@@ -2800,136 +2826,133 @@ def render_entry_redesign_page(lang: str) -> None:
                 unsafe_allow_html=True,
             )
 
-    # Hero
+    data_mode = str(st.session_state.get("_eu_entry_copilot_data_mode") or "demo")
+    if data_mode not in {"demo", "real"}:
+        data_mode = "demo"
+    is_demo_mode = data_mode == "demo"
+
     st.markdown(
-        '<div class="eu-entry-hero" style="padding:34px 0 32px;text-align:center">'
+        '<div class="eu-entry-hero" style="padding:54px 0 24px;text-align:center">'
         f'<div class="mono" style="font-size:11px;color:var(--ink-4);letter-spacing:.08em;'
         f'text-transform:uppercase;font-family:var(--font-mono)">'
-        f'{_T(lang, "Local-first ICU research workflow", "本地优先 · ICU 数据研究工作流")}</div>'
+        f'{_T(lang, "Local-first ICU research workspace", "本地优先 · ICU 数据研究工作台")}</div>'
         f'<h1 style="margin:12px 0 0;font-size:30px;font-weight:600;letter-spacing:-0.025em;color:var(--ink)">'
-        f'{_T(lang, "Extract. Review. Analyze. Draft.", "数据抽取 · 审阅 · 分析 · 起草")}</h1>'
+        f'{_T(lang, "How would you like to work?", "你想怎样开始？")}</h1>'
         f'<div class="eu-entry-hero-copy" style="font-size:13.5px;color:var(--ink-3);margin-top:10px">'
-        f'{_T(lang, "Choose how data enters the workspace. Everything runs on your machine — nothing is uploaded.", "选择数据如何进入工作区。所有流程都在本机运行，不上传任何患者数据。")}</div>'
+        f'{_T(lang, "Pick a way in. Your data choice applies to either.", "选择一个入口；数据源选择会同时作用于两套工作方式。")}</div>'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    demo_card = (
-        '<div class="eu-entry-mode-card demo" style="padding:24px 24px 18px;background:var(--accent-soft);'
-        'border:1px solid var(--accent-border);border-radius:14px;display:flex;'
-        'flex-direction:column;gap:12px">'
-        '<div style="display:flex;align-items:center;gap:10px">'
-        '<div style="width:36px;height:36px;border-radius:8px;background:var(--accent);color:#fff;'
-        'display:flex;align-items:center;justify-content:center">'
-        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M9 3h6"/><path d="M10 3v6L4 20a1 1 0 0 0 .9 1.5h14.2A1 1 0 0 0 20 20l-6-11V3"/></svg></div>'
-        '<div>'
-        f'<div style="font-size:18px;font-weight:500;letter-spacing:-0.01em">{_T(lang, "Demo Mode", "演示模式")}</div>'
-        f'<div class="eu-cn" style="font-size:12px;color:var(--ink-3)">{_T(lang, "Demo Mode", "演示模式")}</div>'
-        '</div>'
-        f'<span class="eu-pill" style="margin-left:auto;background:var(--surface)">'
-        f'{_T(lang, "try first", "新手先试")}</span>'
-        '</div>'
-        f'<p style="margin:0;font-size:13.5px;color:var(--ink-2);line-height:1.55">'
-        f'{_T(lang, "Best for a first run: experience the full workflow with reproducible mock ICU data. No tokens, no local data, no outbound calls.", "首次使用建议先体验演示模式：用可复现的模拟 ICU 数据走完整流程。无需令牌、无需本地数据、无外部连接。")}'
-        '</p>'
-        '<ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px">'
-        + "".join([
-            '<li style="display:flex;gap:8px;font-size:12.5px;color:var(--ink-2)">'
-            '<span style="margin-top:6px;width:4px;height:4px;background:var(--ink-4);border-radius:999px;flex:none"></span>'
-            f'<span>{b}</span></li>'
-            for b in [
-                _T(lang, "10-patient fast review set · 24h default",
-                        "10 例快速审阅集 · 默认 24 小时数据"),
-                _T(lang, "Start at data extraction, then open review panels when ready",
-                        "先进入数据提取，再按需打开审阅面板"),
-                _T(lang, "Research Agent static gallery viewable",
-                        "可查看研究智能体静态示例库"),
-                _T(lang, "Switch to real data anytime without losing work",
-                        "随时可切换到真实数据,不丢工作"),
-            ]
-        ])
-        + '</ul></div>'
-    )
-    real_card = (
-        '<div class="eu-entry-mode-card real" style="padding:24px 24px 18px;background:var(--surface);'
-        'border:1px solid var(--hair);border-radius:14px;display:flex;'
-        'flex-direction:column;gap:12px">'
-        '<div style="display:flex;align-items:center;gap:10px">'
-        '<div style="width:36px;height:36px;border-radius:8px;background:var(--ink);color:#fff;'
-        'display:flex;align-items:center;justify-content:center">'
-        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
-        '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6c0 1.7 4 3 9 3s9-1.3 9-3V5"/>'
-        '<path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6"/></svg></div>'
-        '<div>'
-        f'<div style="font-size:18px;font-weight:500;letter-spacing:-0.01em">{_T(lang, "Real Data", "真实数据")}</div>'
-        f'<div class="eu-cn" style="font-size:12px;color:var(--ink-3)">{_T(lang, "Real Data", "真实数据")}</div>'
-        '</div>'
-        '<span class="eu-pill ok" style="margin-left:auto"><span class="dot"></span>local-only</span>'
-        '</div>'
-        f'<p style="margin:0;font-size:13.5px;color:var(--ink-2);line-height:1.55">'
-        f'{_T(lang, "Connect to local ICU exports. Everything is processed on your machine — EasyICU never uploads anything.", "连接本机的 ICU 数据库导出。所有处理都在你的机器上完成,EasyICU 不会上传或外发任何数据。")}'
-        '</p>'
-        '<ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px">'
-        + "".join([
-            '<li style="display:flex;gap:8px;font-size:12.5px;color:var(--ink-2)">'
-            '<span style="margin-top:6px;width:4px;height:4px;background:var(--ink-4);border-radius:999px;flex:none"></span>'
-            f'<span>{b}</span></li>'
-            for b in [
-                _T(lang, "6 databases · MIMIC-IV / eICU / AUMC / HiRID / MIMIC-III / SICdb",
-                        "6 大数据库 · MIMIC-IV / eICU / AUMC / HiRID / MIMIC-III / SICdb"),
-                _T(lang, "Choose a local export folder; EasyICU detects known layouts",
-                        "选择本地导出目录；EasyICU 自动识别常见结构"),
-                _T(lang, "Module-folder mode reuses prior exports",
-                        "模块文件夹模式可复用之前的导出"),
-                _T(lang, "Cross-DB Benchmark connects ≥2 databases",
-                        "跨数据库对比可同时连接 ≥ 2 个数据库"),
-            ]
-        ])
-        + '</ul></div>'
-    )
-
-    with st.container(key="eu_entry_modes_grid"):
-        demo_col, real_col = st.columns(2, gap="large")
+    with st.container(key="eu_entry_home_data_toggle"):
+        demo_col, real_col = st.columns(2, gap="small")
         with demo_col:
-            with st.container(key="eu_entry_demo_mode_card"):
-                st.markdown(demo_card, unsafe_allow_html=True)
-                if st.button(_T(lang, "Start demo →", "开始演示 →"),
-                             key="_eu_entry_demo", type="primary", use_container_width=True):
-                    _route_to_extract_entry_mode(st.session_state, "demo")
-                    st.rerun()
+            if st.button(
+                _T(lang, "Demo data", "演示数据"),
+                key="_eu_entry_copilot_demo_mode",
+                type="primary" if is_demo_mode else "secondary",
+                icon=":material/science:",
+                use_container_width=True,
+            ):
+                st.session_state["_eu_entry_copilot_data_mode"] = "demo"
+                st.rerun()
         with real_col:
-            with st.container(key="eu_entry_real_mode_card"):
-                st.markdown(real_card, unsafe_allow_html=True)
-                if st.button(_T(lang, "Use local data folder →", "使用本地数据目录 →"),
-                             key="_eu_entry_real", use_container_width=True):
-                    _route_to_extract_entry_mode(st.session_state, "real")
+            if st.button(
+                _T(lang, "Real data", "真实数据"),
+                key="_eu_entry_copilot_real_mode",
+                type="primary" if not is_demo_mode else "secondary",
+                icon=":material/database:",
+                use_container_width=True,
+            ):
+                st.session_state["_eu_entry_copilot_data_mode"] = "real"
+                st.rerun()
+
+    with st.container(key="eu_entry_parallel_home"):
+        copilot_col, classic_col = st.columns(2, gap="large")
+        with copilot_col:
+            with st.container(key="eu_entry_copilot_card"):
+                st.markdown(
+                    '<div class="eu-entry-card-head">'
+                    '<div class="eu-entry-card-mark accent">'
+                    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                    'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+                    '<path d="M12 3l1.6 5.4L19 10l-5.4 1.6L12 17l-1.6-5.4L5 10l5.4-1.6L12 3z"/></svg>'
+                    '</div>'
+                    '<div><div class="eu-entry-card-title">Research Copilot</div>'
+                    f'<div class="eu-entry-card-sub">{_T(lang, "talk it through · guided", "对话推进 · 引导式")}</div></div>'
+                    f'<span class="eu-pill demo"><span class="dot"></span>{_T(lang, "lowest barrier", "最低门槛")}</span>'
+                    '</div>'
+                    f'<p class="eu-entry-card-copy">{html.escape(_T(lang, "Describe what you want to study. The copilot frames it, pulls the cohort, runs the analysis, and prepares a gated draft — in plain conversation.", "描述你想研究什么；Copilot 会用对话方式整理问题、拉取队列、推进分析，并准备带证据闸门的草稿。"))}</p>',
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    _T(lang, "Start a guided study", "开始引导式研究"),
+                    key="_eu_entry_open_copilot",
+                    icon=":material/auto_awesome:",
+                    use_container_width=True,
+                ):
+                    _route_to_copilot_entry(st.session_state, data_mode=data_mode)
+                    st.rerun()
+        with classic_col:
+            with st.container(key="eu_entry_classic_card"):
+                st.markdown(
+                    '<div class="eu-entry-card-head">'
+                    '<div class="eu-entry-card-mark">'
+                    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                    'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+                    '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/>'
+                    '<rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>'
+                    '</div>'
+                    '<div><div class="eu-entry-card-title">Classic Workspace</div>'
+                    f'<div class="eu-entry-card-sub">{_T(lang, "drive it yourself · full control", "手动驱动 · 完整控制")}</div></div>'
+                    f'<span class="eu-pill"><span class="dot"></span>{_T(lang, "full control", "完整控制")}</span>'
+                    '</div>'
+                    f'<p class="eu-entry-card-copy">{html.escape(_T(lang, "Drive each panel yourself: four-step extraction, patient and cohort review, cross-database benchmark, and the Research Agent.", "逐个面板手动推进：四步数据提取、患者与队列审阅、跨库 benchmark，以及 Research Agent。"))}</p>'
+                    '<div class="eu-entry-classic-foot">'
+                    f'<span class="eu-entry-data-note">{html.escape(_T(lang, "Demo data · reproducible" if is_demo_mode else "Real data · local-only", "演示数据 · 可复现" if is_demo_mode else "真实数据 · 仅本地"))}</span>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    _T(lang, "Open the workspace", "打开经典工作区"),
+                    key="_eu_entry_demo",
+                    icon=":material/grid_view:",
+                    use_container_width=True,
+                ):
+                    _route_to_extract_entry_mode(st.session_state, data_mode)
                     st.rerun()
 
-    with st.container(key="eu_entry_code_row"):
-        aux_col, code_col = st.columns([0.72, 0.28], gap="large")
-        with aux_col:
-            st.markdown(
-                '<div class="eu-entry-nodata" style="display:flex;align-items:center;gap:14px">'
-                '<div class="eu-entry-nodata-icon" style="color:var(--ink-3)">'
-                '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
-                '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>'
-                '<path d="M14 3v6h6"/></svg></div>'
-                '<div style="flex:1">'
-                f'<div style="font-size:13px;font-weight:500">{_T(lang, "No data yet?", "还没有数据?")}</div>'
-                f'<div style="font-size:12px;color:var(--ink-3)">'
-                f'{_T(lang, "Let the Research Agent generate a reusable code skeleton, then plug data in later.", "让研究智能体先生成可复用代码骨架，稍后再接入数据。")}</div>'
-                '</div></div>',
-                unsafe_allow_html=True,
-            )
+    with st.container(key="eu_entry_prompt_links"):
+        link_l, code_col, how_col, link_r = st.columns([0.34, 0.19, 0.16, 0.31], gap="small")
         with code_col:
-            if st.button(_T(lang, "Generate code only →", "仅生成代码 →"),
-                         key="_eu_entry_nodata", use_container_width=True):
+            if st.button(
+                _T(lang, "Generate code only", "仅生成代码"),
+                key="_eu_entry_nodata",
+                icon=":material/description:",
+                use_container_width=True,
+            ):
                 _route_to_research_agent_no_data_setup(st.session_state)
                 st.rerun()
+        with how_col:
+            if st.button(
+                _T(lang, "How it works", "了解流程"),
+                key="_eu_entry_how_it_works",
+                icon=":material/help:",
+                use_container_width=True,
+            ):
+                st.session_state["_active_main_page"] = "tutorial"
+                st.session_state["_scroll_to_top"] = True
+                st.rerun()
+
+    with st.container(key="eu_entry_floating_copilot"):
+        if st.button(
+            _T(lang, "Copilot", "Copilot"),
+            key="_eu_entry_floating_copilot_button",
+            help=_T(lang, "Open Research Copilot", "打开研究 Copilot"),
+            use_container_width=True,
+        ):
+            _route_to_copilot_entry(st.session_state, data_mode=data_mode)
+            st.rerun()
 
     st.markdown(
         '<div class="eu-entry-next">'

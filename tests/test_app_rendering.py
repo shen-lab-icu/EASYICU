@@ -11,6 +11,7 @@ from pathlib import Path
 
 import easyicu
 from easyicu.concept import load_dictionary
+import easyicu.webapp.agent_workbench as agent_workbench
 import easyicu.webapp.app as app
 import easyicu.webapp.concept_catalog as concept_catalog
 import easyicu.webapp.cohort_dashboard_page as cohort_dashboard_page
@@ -208,8 +209,12 @@ def test_step1_demo_reset_defers_slider_key_updates_until_next_render() -> None:
     assert source.index('st.session_state.pop("_eu_demo_source_reset_pending", False)') < source.index(
         'key="demo_mode_patients"'
     )
+    assert source.index('st.session_state.pop("_eu_demo_widget_params_pending", None)') < source.index(
+        'key="demo_mode_patients"'
+    )
     assert "st.session_state.demo_mode_patients = demo_patients_default" in pending_block
     assert "st.session_state.demo_mode_hours = demo_hours_default" in pending_block
+    assert 'st.session_state.pop("_eu_demo_widget_params_pending", None)' in pending_block
     assert 'st.session_state["_eu_demo_source_reset_pending"] = True' in reset_block
     assert "st.session_state.demo_mode_patients = demo_patients_default" not in reset_block
     assert "st.session_state.demo_mode_hours = demo_hours_default" not in reset_block
@@ -359,6 +364,16 @@ def test_concept_checkbox_and_selection_states_do_not_use_black_token_fills() ->
     assert "-webkit-text-fill-color: #0F1A23 !important" in final_guard_css
     assert "text-shadow: none !important" in final_guard_css
     assert "def _render_concept_checkbox_row" in sidebar_text
+    checkbox_helper = sidebar_text[
+        sidebar_text.index("def _render_concept_checkbox_row"):
+        sidebar_text.index("def _render_step3_concept_selection_design")
+    ]
+    step3_detail_block = sidebar_text[
+        sidebar_text.index('"Feature detail configuration"'):
+        sidebar_text.index('selected_concepts = _collect_selected_concepts(concept_groups)', sidebar_text.index('"Feature detail configuration"'))
+    ]
+    assert "st.columns" not in checkbox_helper
+    assert "st.columns(3)" not in step3_detail_block
     assert 'label_visibility="collapsed"' in sidebar_text
     assert 'f\'<div class="eu-concept-checkbox-text">{html.escape(concept)}</div>\'' in sidebar_text
     assert 'checked = st.checkbox(concept, value=default_val, key=f"cb_{key_hash}_{concept}")' not in sidebar_text
@@ -1052,6 +1067,12 @@ def test_export_manifest_keeps_installed_context_when_generating_suffix(tmp_path
             "entry_mode": "real",
             "selected_concepts": ["hr"],
             "selected_groups": ["vitals"],
+            "export_merge_mode": "merged",
+            "export_filter_patient_enabled": True,
+            "patient_limit": 100,
+            "_export_effective_patient_limit": 100,
+            "export_include_index": True,
+            "export_add_timestamp": True,
         }
     )
     monkeypatch.setattr(export_reports, "st", streamlit_stub)
@@ -1071,6 +1092,12 @@ def test_export_manifest_keeps_installed_context_when_generating_suffix(tmp_path
 
     manifest = json.loads((tmp_path / "easyicu_export_manifest.json").read_text())
     assert manifest["cohort_suffix"] == "icdInA41_icdExI50"
+    assert manifest["merge_mode"] == "merged"
+    assert manifest["filter_by_patient"] is True
+    assert manifest["patient_limit_requested"] == 100
+    assert manifest["patient_limit_effective"] == 100
+    assert manifest["include_row_index"] is True
+    assert manifest["add_timestamp_to_filename"] is True
 
 
 def test_special_concept_worker_failure_writes_error_manifest(tmp_path, monkeypatch) -> None:
@@ -1930,23 +1957,39 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
 
     assert "All 19 modules / 167 features available" not in source_text
     assert "Lightweight review dataset opens immediately" not in source_text
-    assert "Start at data extraction, then open review panels when ready" in source_text
-    assert "Research Agent static gallery viewable" in source_text
+    assert "How would you like to work?" in source_text
+    assert "Pick a way in. Your data choice applies to either." in source_text
+    assert "Research Copilot" in source_text
+    assert "Classic Workspace" in source_text
+    assert "Start a guided study" in source_text
+    assert "Open the workspace" in source_text
+    assert "talk it through" in source_text
+    assert "drive it yourself" in source_text
+    assert "Start demo extraction" not in source_text
+    assert "Research Agent static gallery viewable" not in source_text
     assert "Research Agent setup and local-run handoff preview" not in source_text
-    assert "Use local data folder" in source_text
+    assert "Use local data folder" not in source_text
     assert "Generate code only" in source_text
-    assert "Let the Research Agent generate a reusable code skeleton" in source_text
     assert "Let the Research Agent prepare extraction settings" not in source_text
-    assert "try first" in source_text
+    assert "lowest barrier" in source_text
+    assert "full control" in source_text
     assert "_eu_entry_lang_toggle" in source_text
-    assert "Choose how data enters the workspace" in source_text
+    assert "_eu_entry_copilot_start" not in source_text
+    assert "_eu_entry_copilot_starter_" not in source_text
+    assert "_eu_entry_open_copilot" in source_text
+    assert "_eu_entry_how_it_works" in source_text
+    assert "_eu_entry_floating_copilot_button" in source_text
+    assert "Choose how data enters the workspace" not in source_text
     assert "EASYICU — ENTRY · MODE CHOICE" not in source_text
-    assert "eu-entry-mode-card demo" in source_text
-    assert "eu-entry-mode-card real" in source_text
-    assert "eu_entry_modes_grid" in source_text
-    assert "eu_entry_demo_mode_card" in source_text
-    assert "eu_entry_real_mode_card" in source_text
-    assert "eu_entry_code_row" in source_text
+    assert "eu-entry-mode-card demo" not in source_text
+    assert "eu-entry-mode-card real" not in source_text
+    assert "eu_entry_parallel_home" in source_text
+    assert "eu_entry_copilot_card" in source_text
+    assert "eu_entry_classic_card" in source_text
+    assert "eu_entry_chat_home" not in source_text
+    assert "eu_entry_prompt_card" not in source_text
+    assert "eu_entry_prompt_chips" not in source_text
+    assert "eu_entry_prompt_links" in source_text
     assert "中 / EN" not in source_text
     assert "Concept catalog" not in source_text
     assert "Sample cohorts" not in source_text
@@ -1957,17 +2000,21 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "Cohort review" in source_text
     assert "Quality checks" in source_text
     assert "Export & handoff" in source_text
+    assert "_route_to_copilot_entry" in inspect.getsource(pages_redesign)
     assert ".eu-entry-rail" in css_text
-    assert "st-key-eu_entry_modes_grid" in css_text
+    assert "st-key-eu_entry_parallel_home" in css_text
+    assert "st-key-eu_entry_home_data_toggle" in css_text
+    assert "st-key-eu_entry_copilot_card" in css_text
+    assert "st-key-eu_entry_classic_card" in css_text
+    assert "st-key-eu_entry_prompt_links" in css_text
+    assert "st-key-eu_entry_floating_copilot" in css_text
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in css_text
-    assert "max-width: 1100px" in css_text
+    assert "max-width: 320px" in css_text
     assert "st-key-eu_entry_topbar_shell" in css_text
     assert "st-key-_eu_entry_lang_toggle" in css_text
-    assert "st-key-eu_entry_code_row" in css_text
     assert "margin-top: 40px" in css_text
     assert ".eu-entry-step::before" in css_text
     assert "st-key-_eu_entry_demo" in css_text
-    assert "st-key-_eu_entry_real" in css_text
     assert "st-key-_eu_entry_nodata" in css_text
     base_kicker_css = css_text[
         css_text.index(".stApp .eu-start-kicker {"):
@@ -2825,6 +2872,61 @@ def test_demo_entry_routes_to_data_extraction_before_visualization(tmp_path, mon
     assert "time_candidates" not in warning_text
 
 
+def test_copilot_entry_starter_routes_to_chat_workspace(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.run(timeout=60)
+
+    page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "How would you like to work?" in page_text
+    assert "Research Copilot" in page_text
+    assert "Extract. Review. Analyze. Draft." not in page_text
+    assert at.button(key="_eu_entry_demo") is not None
+    assert at.button(key="_eu_entry_nodata") is not None
+
+    at.button(key="_eu_entry_open_copilot").click().run(timeout=60)
+
+    assert at.session_state["_active_main_page"] == "assistant"
+    assert at.session_state["entry_mode"] == "demo"
+    assert at.session_state["use_mock_data"] is True
+    assert at.session_state["database"] == "mock"
+    assert at.session_state["llm_enabled"] is True
+    assert at.session_state["_llm_toggle"] is True
+    assert "_copilot_entry_branch_hint" not in at.session_state
+
+
+def test_copilot_entry_helper_can_start_with_real_data() -> None:
+    state: dict[str, object] = {
+        "database": "mock",
+        "loaded_concepts": {"stale": object()},
+        "patient_ids": [1, 2],
+    }
+
+    pages_redesign._route_to_copilot_entry(
+        state,
+        data_mode="real",
+        question="Audit data quality first",
+        branch_hint="quality",
+    )
+
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["database"] == "miiv"
+    assert state["_active_main_page"] == "assistant"
+    assert state["llm_enabled"] is True
+    assert state["_llm_toggle"] is True
+    assert state["_ai_pending_question"] == "Audit data quality first"
+    assert state["_copilot_entry_branch_hint"] == "quality"
+    assert state["loaded_concepts"] == {}
+    assert state["patient_ids"] == []
+
+
 def test_entry_no_data_cta_routes_to_real_agent_extraction_setup(tmp_path, monkeypatch) -> None:
     streamlit_testing = pytest.importorskip("streamlit.testing.v1")
 
@@ -2907,8 +3009,8 @@ def test_real_data_mode_requires_data_path_before_validation(tmp_path, monkeypat
     at.session_state["entry_lang_select"] = "EN"
     at.session_state["language"] = "en"
     at.run(timeout=60)
-    at.button(key="_eu_entry_real").click().run(timeout=60)
-    at.session_state["_active_main_page"] = "extract"
+    at.button(key="_eu_entry_copilot_real_mode").click().run(timeout=60)
+    at.button(key="_eu_entry_demo").click().run(timeout=60)
     at.run(timeout=60)
     at.button(key="validate_path").click().run(timeout=60)
 
@@ -3732,6 +3834,22 @@ def test_clear_assistant_surfaces_removes_stale_inline_panel_state() -> None:
     assert "_ai_pending_question" not in state
 
 
+def test_clear_assistant_surfaces_can_preserve_global_dock() -> None:
+    state = {
+        "_inline_ai_panel_open": True,
+        "_floating_ai_open": True,
+        "_sidebar_ai_open": True,
+        "_ai_pending_question": "stale prompt",
+    }
+
+    app._clear_assistant_surfaces(state, clear_pending=True, clear_floating=False)
+
+    assert state["_inline_ai_panel_open"] is False
+    assert state["_floating_ai_open"] is True
+    assert state["_sidebar_ai_open"] is False
+    assert "_ai_pending_question" not in state
+
+
 def test_open_embedded_ai_assistant_targets_standalone_page() -> None:
     state: dict[str, object] = {"llm_enabled": False, "_floating_ai_open": True}
 
@@ -3788,6 +3906,194 @@ def test_ai_assistant_handoff_seeds_research_agent_question_without_overwriting(
     assert seeded_existing is False
     assert existing_state["research_agent_question"] == "Keep this manually edited Agent question."
     assert "_research_agent_question_handoff_notice" not in existing_state
+
+
+def test_research_copilot_suggests_executable_workflow_actions() -> None:
+    actions = llm_chat._suggest_ui_actions(
+        "Load a demo workspace and then run a guided Research Agent study",
+        "",
+        "en",
+    )
+
+    assert {
+        (action["id"], action["kind"]) for action in actions
+    } >= {
+        ("workflow_demo_review", "workflow"),
+        ("agent_handoff", "agent_handoff"),
+    }
+
+
+def test_research_copilot_guided_demo_runs_to_evidence_gate() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "demo_mode_patients": 10,
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "Run the whole demo for me, then stop at the evidence gate.",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert study["branch"] == "predict"
+    assert study["step"] == "draft"
+    assert study["draft_signed"] is False
+    assert "draft remains locked" in reply
+    assert ("workflow_study_review", "workflow") in {
+        (action["id"], action["kind"]) for action in actions
+    }
+    assert ("agent_handoff", "agent_handoff") in {
+        (action["id"], action["kind"]) for action in actions
+    }
+
+
+def test_research_copilot_guided_study_drives_review_workspace(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "database": "mock",
+            "demo_mode_patients": 30,
+            "_copilot_guided_study": {
+                "branch": "quality",
+                "step": "review",
+                "data_mode": "demo",
+                "patient_n": 30,
+                "question": "Which ICU concepts are trustworthy enough to analyze?",
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("study_review")
+
+    assert state["entry_mode"] == "demo"
+    assert state["use_mock_data"] is True
+    assert state["mock_params"]["n_patients"] == 30
+    assert state["_preview_requested"] is True
+    assert state["_preview_n"] == 30
+    assert state["_active_main_page"] == "cohort"
+    assert "crea" in state["selected_concepts"]
+    assert "_main_nav_widget" not in state
+
+
+def test_research_copilot_dock_actions_defer_demo_widget_key_updates(monkeypatch) -> None:
+    class _WidgetLockedSessionState(_AttrSessionState):
+        _locked_keys = {"demo_mode_patients", "demo_mode_hours"}
+
+        def __setitem__(self, key, value) -> None:
+            if key in self._locked_keys:
+                raise AssertionError(f"attempted to mutate widget key after render: {key}")
+            super().__setitem__(key, value)
+
+    state = _WidgetLockedSessionState(
+        {
+            "language": "en",
+            "database": "mock",
+            "demo_mode_patients": 10,
+            "demo_mode_hours": 24,
+            "_floating_ai_open": True,
+            "_copilot_guided_study": {
+                "branch": "quality",
+                "step": "review",
+                "data_mode": "demo",
+                "patient_n": 30,
+                "question": "Which ICU concepts are trustworthy enough to analyze?",
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("study_review")
+
+    assert state["mock_params"]["n_patients"] == 30
+    assert state["_preview_n"] == 30
+    assert state["_eu_demo_widget_params_pending"] == {"n_patients": 30, "hours": 24}
+    assert state["_active_main_page"] == "cohort"
+    assert state["_floating_ai_open"] is False
+
+
+def test_research_copilot_guided_workspace_renders_stage_cards() -> None:
+    study: dict[str, object] = {
+        "branch": "predict",
+        "step": "draft",
+        "data_mode": "demo",
+        "patient_n": 30,
+        "modules": ["Demographics", "Vital signs", "Labs"],
+        "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+        "draft_signed": False,
+    }
+
+    question_html = llm_chat._copilot_stage_card_html(study, "question", "en", compact=True)
+    draft_html = llm_chat._copilot_stage_card_html(study, "draft", "en")
+
+    assert "eu-copilot-stage collapsed done" in question_html
+    assert "Among Sepsis-3 patients" in question_html
+    assert "eu-copilot-stage active" in draft_html
+    assert "WHY THIS STEP" in draft_html
+    assert "Drafting stays locked" in draft_html
+    assert llm_chat._copilot_stage_detail(study, "cohort", "en") == (
+        "30 stays · first ICU stay · first 24h"
+    )
+
+
+def test_research_copilot_handoff_prefers_framed_guided_question() -> None:
+    state: dict[str, object] = {
+        "llm_messages": [{"role": "user", "content": "raw vague question"}],
+        "_copilot_guided_study": {
+            "branch": "predict",
+            "step": "draft",
+            "question": "Among Sepsis-3 patients, does lactate improve in-hospital mortality prediction?",
+        },
+    }
+
+    seeded = llm_chat._prepare_research_agent_handoff_from_ai(state)
+
+    assert seeded is True
+    assert state["research_agent_question"] == (
+        "Among Sepsis-3 patients, does lactate improve in-hospital mortality prediction?"
+    )
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
+
+
+def test_research_copilot_workflow_action_drives_classic_workspace(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "database": "mock",
+            "_floating_ai_open": True,
+            "_inline_ai_panel_open": True,
+            "_ai_pending_question": "load demo",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("demo_review")
+
+    assert state["entry_mode"] == "demo"
+    assert state["use_mock_data"] is True
+    assert state["database"] == "mock"
+    assert state["_preview_requested"] is True
+    assert state["_active_main_page"] == "quick_viz"
+    assert "_main_nav_widget" not in state
+    assert state["_scroll_to_top"] is True
+    assert state["_inline_ai_panel_open"] is False
+    assert state["_floating_ai_open"] is False
+    assert "_ai_pending_question" not in state
+
+    llm_chat._apply_chat_workflow_action("real_extraction")
+
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["database"] == "miiv"
+    assert state["_active_main_page"] == "extract"
+    assert "_main_nav_widget" not in state
 
 
 def test_topbar_assistant_open_agent_reuses_ai_handoff_seed() -> None:
@@ -4074,6 +4380,26 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
     i18n_source = Path(i18n.__file__).read_text(encoding="utf-8")
     assert "🧪 Reproduce published findings" not in i18n_source
     assert "🧪 复现已发表" not in i18n_source
+
+
+def test_research_agent_empty_workbench_uses_locked_reference_shell() -> None:
+    css_source = Path(agent_workbench.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
+    html = agent_workbench._workbench_empty_html("en")
+
+    assert "eu-ref-workbench" in html
+    assert "eu-ref-run-strip" in html
+    assert "Task map" in html
+    assert "Evidence ledger" in html
+    assert "Analysis outputs" in html
+    assert "Figure artifact slot" in html
+    assert "not generated until a real run" in html
+    assert "No active run" in html
+    assert "locked preview only" in html
+    assert "eu-agent-empty-compact" in html
+    assert "_agent_reference_workbench_html(_workbench_empty_reference_state(lang), lang)" in Path(
+        agent_workbench.__file__
+    ).read_text(encoding="utf-8")
+    assert ".eu-agent-empty.eu-agent-empty-compact" in css_source
 
 
 def test_research_agent_header_rerun_routes_to_checkpoint_setup() -> None:
@@ -5941,6 +6267,21 @@ def test_crossdb_demo_workspace_keeps_six_database_story(monkeypatch) -> None:
     assert rows[0][1:-1] == ["144", "144", "144", "144", "144", "144"]
 
 
+def test_crossdb_availability_matrix_uses_soft_status_cells() -> None:
+    html = cohort_charts.render_availability_matrix(
+        [("heart rate", [1.0, 0.72, 0.0, float("nan")])],
+        columns=("MIMIC-IV", "eICU-CRD", "HiRID", "SICdb"),
+    )
+
+    assert "✓" in html
+    assert "72%" in html
+    assert "0%" in html
+    assert "background:color-mix(in srgb, var(--ok)" in html
+    assert "color:var(--ok)" in html
+    assert "background:var(--ink)" not in html
+    assert "color:#fff" not in html
+
+
 def test_crossdb_page_labels_demo_source_before_summary(monkeypatch) -> None:
     class _FakeStreamlit:
         def __init__(self, session_state) -> None:
@@ -6028,6 +6369,9 @@ def test_cohort_redesign_defaults_to_real_panel_body(monkeypatch) -> None:
     assert "st-key-cohort_active_panel" in css_text
     assert "eu-readiness-strip" in css_text
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in css_text
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in css_text
+    assert ".eu-readiness-strip .eu-gate-card .k::before" in css_text
+    assert "@media (max-width: 760px)" in css_text
     cohort_panel_css = css_text[
         css_text.index('[class*="st-key-cohort_active_panel"] div[role="radiogroup"]'):
         css_text.index("@media (max-width: 900px)", css_text.index('[class*="st-key-cohort_active_panel"]'))
@@ -6983,7 +7327,7 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert "assistant" in sidebar_text
     assert "tutorial" in sidebar_text
     assert "states" in sidebar_text
-    assert '"AI Assistant" if lang == "en" else "AI 助手"' in sidebar_text
+    assert '"Research Copilot" if lang == "en" else "研究 Copilot"' in sidebar_text
     assert '"Get Started" if lang == "en" else "开始使用"' in sidebar_text
     assert '"Workspace States" if lang == "en" else "工作区状态"' in sidebar_text
     assert 'st.session_state["_active_main_page"] = "assistant"' in sidebar_text
@@ -7004,17 +7348,28 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     app_text = Path(app.__file__).read_text(encoding="utf-8")
     llm_text = Path(app.__file__).with_name("llm_chat.py").read_text(encoding="utf-8")
     ai_optin_text = Path(app.__file__).with_name("ai_optin.py").read_text(encoding="utf-8")
-    assert "render_floating_chat_dock()" not in app_text
+    assert "render_floating_chat_dock()" in app_text
     assert "render_inline_ai_panel()" not in app_text
     assert "render_ai_assistant_page(lang)" in app_text
     assert "_open_embedded_ai_assistant" in app_text
     assert "_inline_ai_panel_open" in app_text
     assert 'if active_page != "assistant":' in app_text
-    assert '_clear_assistant_surfaces(st.session_state, clear_pending=True)' in app_text
+    assert '_clear_assistant_surfaces(st.session_state, clear_pending=True, clear_floating=False)' in app_text
+    assert 'if active_page != "assistant" and not _is_screenshot_mode():' in app_text
     assert "Show floating AI assistant" not in llm_text
     assert "Show floating AI assistant" not in ai_optin_text
     assert "per-run external LLM opt-in" in ai_optin_text
-    assert "Use the bottom-right chat button" not in llm_text
+    assert "Open Research Copilot dock" in llm_text
+    assert "Local Copilot is available" in llm_text
+    assert "_render_floating_copilot_context_actions" in llm_text
+    assert "_floating_ai_full_copilot" in llm_text
+    assert "_floating_ai_demo_review" in llm_text
+    assert "_floating_ai_agent_setup" in llm_text
+    assert "_render_copilot_session_rail" in llm_text
+    assert "_render_copilot_stage_workspace" in llm_text
+    assert "rail_col, chat_col, state_col = st.columns([0.7, 1.58, 0.92], gap=\"large\")" in llm_text
+    assert "WHY THIS STEP" in llm_text
+    assert "Evidence gate" in llm_text
     assert "render_inline_ai_panel" in llm_text
     assert "def render_ai_assistant_page" in llm_text
     assert "force_open: bool = False" in llm_text
@@ -7023,11 +7378,25 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert 'if active_page != "assistant":' in llm_text
     assert ".eu-ai-page-head" in shell_styles._load_shell_overrides_css()
     assert "st-key-ai_assistant_page_panel" in shell_styles._load_shell_overrides_css()
+    assert ".eu-copilot-rail" in shell_styles._load_shell_overrides_css()
+    assert ".eu-copilot-study-workspace" in shell_styles._load_shell_overrides_css()
+    assert ".eu-copilot-stage.collapsed" in shell_styles._load_shell_overrides_css()
+    assert ".eu-copilot-gate-row" in shell_styles._load_shell_overrides_css()
+    assert '[aria-label="Chat message from user"]' in shell_styles._load_shell_overrides_css()
+    assert '[data-testid="stChatMessageAvatarCustom"]' in shell_styles._load_shell_overrides_css()
+    assert '[data-testid="stChatMessageContent"][aria-label="Chat message from user"] [data-testid="stVerticalBlockBorderWrapper"]' in shell_styles._load_shell_overrides_css()
+    assert "bottom: calc(96px + env(safe-area-inset-bottom, 0px))" in shell_styles._load_shell_overrides_css()
+    assert 'max-height: calc(100vh - 184px)' in shell_styles._load_shell_overrides_css()
+    assert ':has([class*="st-key-_floating_ai_size_s_btn"])' in shell_styles._load_shell_overrides_css()
+    assert '[class*="st-key-_floating_ai_close_btn"] button' in shell_styles._load_shell_overrides_css()
+    assert ".floating-ai-title .eu-pill" in shell_styles._load_shell_overrides_css()
+    assert "max-width: 172px" in shell_styles._load_shell_overrides_css()
+    assert "flex: 0 0 28px" in shell_styles._load_shell_overrides_css()
     assert "st-key-inline_ai_assistant_panel" in llm_text
-    assert "EasyICU Assistant" in llm_text
+    assert "Research Copilot" in llm_text
     assert "evidence-bound" in llm_text
     assert "EasyICU hosted · evidence-bound" in llm_text
-    assert "EasyICU · research helper" in llm_text
+    assert "EasyICU · chat-first research workspace" in llm_text
     assert "GPT-OSS · 研究助手" not in llm_text
     assert "gpt-oss · local · evidence-bound" not in llm_text
     assert "_render_ai_assistant_workspace_page" in llm_text
@@ -7336,13 +7705,22 @@ def test_step2_defaults_scrub_icd_placeholder_values(monkeypatch) -> None:
 
 def test_step4_export_footer_actions_have_overlap_guard() -> None:
     sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
+    export_text = Path(export_workflow.__file__).read_text(encoding="utf-8")
+    worker_text = Path(subprocess_workers.__file__).read_text(encoding="utf-8")
     i18n_text = Path(i18n.__file__).read_text(encoding="utf-8")
     data_paths_text = Path(data_paths.__file__).read_text(encoding="utf-8")
     css_text = shell_styles._load_shell_overrides_css()
 
     assert 'key="eu_export_footer_actions"' in sidebar_text
     assert "Package & export" in sidebar_text
+    assert "Concepts to export" in sidebar_text
     assert "Export contents" in sidebar_text
+    assert "Merge mode" in sidebar_text
+    assert 'key="export_filter_patient_enabled"' in sidebar_text
+    assert 'key="export_include_index"' in sidebar_text
+    assert 'key="export_add_timestamp"' in sidebar_text
+    assert "Bundle preview" in sidebar_text
+    assert "This bundle reproduces" in sidebar_text
     assert "Agent code, figures, evidence ledger" in sidebar_text
     assert 'icon=":material/arrow_back:"' in sidebar_text
     assert 'icon=":material/check:"' in sidebar_text
@@ -7356,8 +7734,21 @@ def test_step4_export_footer_actions_have_overlap_guard() -> None:
     assert 'browse_label = "📂"' not in data_paths_text
     assert "_module_display_name(group, lang)" in sidebar_text
     assert "sofa2 score" not in sidebar._module_display_name("sofa2_score", "en")
+    assert "export_merge_mode == 'merged'" in export_text
+    assert "selected_modules = {'all_selected': list(concepts_to_export)}" in export_text
+    assert "module_concept_map = {'all_selected': list(valid_concepts)}" in export_text
+    assert "patient_limit = requested_patient_limit if export_filter_patient_enabled else 0" in export_text
+    assert "st.session_state['_export_effective_patient_limit'] = patient_limit" in export_text
+    assert "export_filename_timestamp = timestamp if add_timestamp else \"\"" in export_text
+    assert "index=include_index" in export_text
+    assert "include_index=False" in worker_text
+    assert "filename_timestamp=''" in worker_text
+    assert "preserve_index=include_index" in worker_text
     assert 'class*="st-key-eu_export_footer_actions"' in css_text
+    assert ".eu-export-concepts-card" in css_text
     assert ".eu-export-contents-card" in css_text
+    assert 'class*="st-key-eu_export_merge_"' in css_text
+    assert ".eu-export-manifest-preview" in css_text
     export_footer_css = css_text[
         css_text.index('.stApp [class*="st-key-eu_export_footer_actions"] {'):
         css_text.index(".eu-performance-strip {")

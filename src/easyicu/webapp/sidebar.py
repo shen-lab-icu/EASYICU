@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, MutableMapping
 from pathlib import Path
 import html
+import json
 import os
 import re
 
@@ -550,6 +551,34 @@ def _render_step1_data_source(entry_mode: str) -> None:
                 "n_patients": demo_patients_default,
                 "hours": demo_hours_default,
             }
+            current_mock_params = st.session_state.mock_params
+
+        pending_demo_params = st.session_state.pop("_eu_demo_widget_params_pending", None)
+        if isinstance(pending_demo_params, dict):
+            pending_patients = _clamped_int(
+                pending_demo_params.get("n_patients"),
+                fallback=demo_patients_default,
+                low=10,
+                high=50,
+            )
+            pending_hours = _clamped_int(
+                pending_demo_params.get("hours"),
+                fallback=demo_hours_default,
+                low=24,
+                high=168,
+            )
+            st.session_state.demo_mode_patients = pending_patients
+            st.session_state.demo_mode_hours = pending_hours
+            merged_mock_params = dict(current_mock_params)
+            merged_mock_params.update(
+                {
+                    "n_patients": pending_patients,
+                    "hours": pending_hours,
+                    "demo_profile": pending_demo_params.get("demo_profile", "lite"),
+                }
+            )
+            st.session_state.mock_params = merged_mock_params
+            current_mock_params = merged_mock_params
 
         if 'demo_mode_patients' not in st.session_state:
             st.session_state.demo_mode_patients = _clamped_int(
@@ -1460,7 +1489,7 @@ def _render_shell_aux_nav() -> None:
     labels = {
         "tools": "Tools" if lang == "en" else "工具",
         "reference": "Reference" if lang == "en" else "参考",
-        "assistant": "AI Assistant" if lang == "en" else "AI 助手",
+        "assistant": "Research Copilot" if lang == "en" else "研究 Copilot",
         "tutorial": "Get Started" if lang == "en" else "开始使用",
         "states": "Workspace States" if lang == "en" else "工作区状态",
     }
@@ -2761,9 +2790,36 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
     patient_limit_options = [0, 100, 1000, 5000, 10000, 20000, 50000]
     if st.session_state.get('patient_limit', 0) not in patient_limit_options:
         st.session_state.patient_limit = 0
+    st.session_state.setdefault("export_merge_mode", "separate")
+    if st.session_state.export_merge_mode not in {"separate", "merged"}:
+        st.session_state.export_merge_mode = "separate"
+    st.session_state.setdefault(
+        "export_filter_patient_enabled",
+        bool(st.session_state.get("patient_limit", 0)),
+    )
+    st.session_state.setdefault("export_include_index", False)
+    st.session_state.setdefault("export_add_timestamp", False)
 
     settings_col, review_col = st.columns([1.08, 0.92], gap="large")
     with settings_col:
+        concept_chip_html = "".join(
+            f"<span>{html.escape(str(concept))}</span>"
+            for concept in selected_concepts[:12]
+        )
+        if len(selected_concepts) > 12:
+            concept_chip_html += f"<em>+{len(selected_concepts) - 12}</em>"
+        if not concept_chip_html:
+            concept_chip_html = f'<em>{html.escape("No features selected" if lang == "en" else "尚未选择特征")}</em>'
+        st.markdown(
+            '<div class="eu-export-concepts-card">'
+            '<div class="eu-export-card-head">'
+            f'<span>{html.escape("Concepts to export" if lang == "en" else "待导出概念")}</span>'
+            f'<small>{len(selected_concepts)}</small>'
+            '</div>'
+            f'<div class="eu-export-concept-chip-row">{concept_chip_html}</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         st.markdown(
             '<div class="eu-export-contents-card">'
             f'<div class="eu-section-label"><span>{html.escape("Export contents" if lang == "en" else "导出内容")}</span></div>'
@@ -2858,8 +2914,42 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
 
             st.markdown(
                 '<div class="eu-export-control-label">'
+                f'{html.escape("Merge mode" if lang == "en" else "合并方式")}'
+                f'<small>{html.escape("layout of data files" if lang == "en" else "数据文件布局")}</small>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            merge_options = [
+                ("separate", "Separate files" if lang == "en" else "分开保存"),
+                ("merged", "Merge into one" if lang == "en" else "合并为一个"),
+            ]
+            merge_cols = st.columns(2, gap="small")
+            for merge_col, (mode_value, mode_label) in zip(merge_cols, merge_options):
+                with merge_col:
+                    if st.button(
+                        mode_label,
+                        key=f"eu_export_merge_{mode_value}",
+                        type="primary" if st.session_state.export_merge_mode == mode_value else "secondary",
+                        use_container_width=True,
+                    ):
+                        st.session_state.export_merge_mode = mode_value
+                        st.rerun()
+
+            filter_patient = bool(
+                st.checkbox(
+                    "Filter by patient" if lang == "en" else "按患者过滤",
+                    key="export_filter_patient_enabled",
+                    help=(
+                        "When off, export all patients that pass the cohort filters."
+                        if lang == "en" else
+                        "关闭时导出所有通过队列筛选的患者。"
+                    ),
+                )
+            )
+            st.markdown(
+                '<div class="eu-export-control-label">'
                 f'{html.escape("Patient limit" if lang == "en" else "患者数量限制")}'
-                f'<small>{html.escape(_export_patient_limit_hint(st.session_state.patient_limit, lang))}</small>'
+                f'<small>{html.escape(_export_patient_limit_hint(st.session_state.patient_limit if filter_patient else 0, lang))}</small>'
                 '</div>',
                 unsafe_allow_html=True,
             )
@@ -2873,14 +2963,45 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
                     if st.button(
                         limit_labels[limit_value],
                         key=f"eu_export_limit_{limit_value}",
-                        type="primary" if st.session_state.patient_limit == limit_value else "secondary",
+                        type=(
+                            "primary"
+                            if (filter_patient and st.session_state.patient_limit == limit_value)
+                            or (not filter_patient and limit_value == 0)
+                            else "secondary"
+                        ),
                         use_container_width=True,
+                        disabled=(not filter_patient and limit_value != 0),
                     ):
                         st.session_state.patient_limit = limit_value
                         st.rerun()
+            opt_left, opt_right = st.columns(2, gap="small")
+            with opt_left:
+                st.checkbox(
+                    "Include row index" if lang == "en" else "包含行索引",
+                    key="export_include_index",
+                    help=(
+                        "Preserve the pandas row index in exported files."
+                        if lang == "en" else
+                        "在导出文件中保留 pandas 行索引。"
+                    ),
+                )
+            with opt_right:
+                st.checkbox(
+                    "Add timestamp to filename" if lang == "en" else "文件名添加时间戳",
+                    key="export_add_timestamp",
+                    help=(
+                        "Append a run timestamp so repeated exports do not reuse the same filename."
+                        if lang == "en" else
+                        "在文件名中加入运行时间戳，便于保留多次导出结果。"
+                    ),
+                )
 
     export_format = st.session_state.export_format
-    patient_limit = st.session_state.patient_limit
+    filter_patient_enabled = bool(st.session_state.get("export_filter_patient_enabled", False))
+    patient_limit = st.session_state.patient_limit if filter_patient_enabled else 0
+    export_merge_mode = st.session_state.get("export_merge_mode", "separate")
+    include_index = bool(st.session_state.get("export_include_index", False))
+    add_timestamp = bool(st.session_state.get("export_add_timestamp", False))
 
     # 导出按钮
     use_mock = st.session_state.get('use_mock_data', False)
@@ -2897,6 +3018,8 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
 
     _n_feats = len(selected_concepts)
     _n_mods = len(set(g for g, cs in CONCEPT_GROUPS_INTERNAL.items() if any(c in selected_concepts for c in cs)))
+    if export_merge_mode == "merged" and selected_concepts:
+        _n_mods = 1
     _pat_str = _export_patient_limit_label(patient_limit, lang)
     _selected_groups = [
         g for g, cs in CONCEPT_GROUPS_INTERNAL.items() if any(c in selected_concepts for c in cs)
@@ -2911,6 +3034,35 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
         module_chip_html += f'<em>+{len(_selected_groups) - 8}</em>'
     if not module_chip_html:
         module_chip_html = f'<em>{html.escape("No modules" if lang == "en" else "无模块")}</em>'
+    layout_label = (
+        "Merged file" if export_merge_mode == "merged" and lang == "en"
+        else "合并文件" if export_merge_mode == "merged"
+        else "Separate module files" if lang == "en"
+        else "按模块分开"
+    )
+    option_chip_html = "".join(
+        f"<span>{html.escape(text)}</span>"
+        for text in [
+            layout_label,
+            "Patient filter on" if filter_patient_enabled and lang == "en" else "按患者过滤" if filter_patient_enabled else "All eligible patients" if lang == "en" else "全部合格患者",
+            "Row index" if include_index and lang == "en" else "包含行索引" if include_index else "No row index" if lang == "en" else "不含行索引",
+            "Timestamped names" if add_timestamp and lang == "en" else "文件名加时间戳" if add_timestamp else "Stable names" if lang == "en" else "稳定文件名",
+        ]
+    )
+    manifest_preview = json.dumps(
+        {
+            "database": db_name,
+            "format": export_format,
+            "merge_mode": export_merge_mode,
+            "filter_by_patient": filter_patient_enabled,
+            "patient_limit": patient_limit,
+            "include_row_index": include_index,
+            "add_timestamp": add_timestamp,
+            "concepts": len(selected_concepts),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
     path_exists = bool(export_path and Path(export_path).exists())
     cohort_filter_meta = _format_step2_filter_meta(
         len(_active_step2_filter_chips(lang)),
@@ -2921,6 +3073,7 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
         ("source", "Demo data" if use_mock else db_name.upper(), True),
         ("cohort", cohort_filter_meta, True),
         ("features", f"{_n_feats} selected", _n_feats > 0),
+        ("layout", layout_label, True),
         ("path", "ready" if path_exists else "missing", path_exists),
     ]
     check_html = "".join(
@@ -2952,6 +3105,18 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
             '<div class="eu-export-module-strip">'
             f'<small>{html.escape("Selected modules" if lang == "en" else "已选模块")}</small>'
             f'<div>{module_chip_html}</div>'
+            '</div>'
+            '<div class="eu-export-option-strip">'
+            f'<small>{html.escape("Export options" if lang == "en" else "导出选项")}</small>'
+            f'<div>{option_chip_html}</div>'
+            '</div>'
+            '<div class="eu-export-manifest-preview">'
+            f'<small>{html.escape("Bundle preview" if lang == "en" else "数据包预览")}</small>'
+            f'<code>{html.escape(manifest_preview)}</code>'
+            '</div>'
+            '<div class="eu-export-reproduces-card">'
+            f'<b>{html.escape("This bundle reproduces" if lang == "en" else "该数据包可复现")}</b>'
+            f'<span>{html.escape("cohort filters, concept selection, export layout, file format, and local provenance" if lang == "en" else "队列筛选、概念选择、导出布局、文件格式和本地来源")}</span>'
             '</div>'
             '</div>',
             unsafe_allow_html=True,
@@ -3972,20 +4137,17 @@ def _render_concept_summary(lang: str, concept_groups: dict[str, list[str]], sel
 
 
 def _render_concept_checkbox_row(concept: str, *, value: bool, key: str) -> bool:
-    """Render a concept checkbox with a separate readable visible label."""
-    cb_col, label_col = st.columns([0.16, 0.84], gap="small")
-    with cb_col:
-        checked = st.checkbox(
-            concept,
-            value=value,
-            key=key,
-            label_visibility="collapsed",
-        )
-    with label_col:
-        st.markdown(
-            f'<div class="eu-concept-checkbox-text">{html.escape(concept)}</div>',
-            unsafe_allow_html=True,
-        )
+    """Render a concept checkbox without adding another nested column level."""
+    checked = st.checkbox(
+        concept,
+        value=value,
+        key=key,
+        label_visibility="collapsed",
+    )
+    st.markdown(
+        f'<div class="eu-concept-checkbox-text">{html.escape(concept)}</div>',
+        unsafe_allow_html=True,
+    )
     return checked
 
 
@@ -4124,59 +4286,58 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
                     )
                 st.caption(caption)
 
-        selected_groups = [g for g in st.session_state.selected_groups if g in concept_groups]
-        if selected_groups:
-            with st.expander(
-                "Feature detail configuration" if lang == "en" else "变量详细配置",
-                expanded=False,
-            ):
-                import hashlib
-                for group_name in selected_groups:
-                    key_hash = hashlib.md5(group_name.encode()).hexdigest()[:8]
-                    st.markdown(f"**{html.escape(_clean_module_label(group_name))}**")
-                    cols = st.columns(3)
-                    for cidx, concept in enumerate(concept_groups.get(group_name, [])):
-                        with cols[cidx % 3]:
-                            default_val = st.session_state.concept_checkboxes.get(concept, True)
-                            checked = _render_concept_checkbox_row(
-                                concept,
-                                value=default_val,
-                                key=f"cb_design_{key_hash}_{concept}",
-                            )
-                            st.session_state.concept_checkboxes[concept] = checked
-
-        selected_concepts = _collect_selected_concepts(concept_groups)
-        st.session_state.selected_concepts = selected_concepts
-        with st.container(key="concept_footer_actions"):
-            footer_l, prev_col, confirm_col = st.columns([3.0, 1.55, 2.55], gap="small")
-            with footer_l:
-                st.markdown(
-                    f'<div class="eu-source-footer-note">{html.escape("Step 3 of 4" if lang == "en" else "第 3 步 / 共 4 步")}</div>',
-                    unsafe_allow_html=True,
-                )
-            with prev_col:
-                if st.button(
-                    "Previous step" if lang == "en" else "上一步",
-                    key="concept_previous_step",
-                    use_container_width=True,
-                    icon=":material/arrow_back:",
-                ):
-                    _sidebar_set_extract_step_state(st.session_state, 2)
-                    st.rerun()
-            with confirm_col:
-                if st.button(
-                    "Confirm concepts" if lang == "en" else "确认变量",
-                    key="step3_confirm_design",
-                    type="primary",
-                    disabled=len(selected_concepts) == 0,
-                    use_container_width=True,
-                ):
-                    st.session_state.step3_confirmed = True
-                    st.session_state["_scroll_to_top"] = True
-                    st.rerun()
 
     with right:
         _render_concept_summary(lang, concept_groups, st.session_state.get("selected_concepts", []) or [])
+
+    selected_groups = [g for g in st.session_state.selected_groups if g in concept_groups]
+    if selected_groups:
+        with st.expander(
+            "Feature detail configuration" if lang == "en" else "变量详细配置",
+            expanded=False,
+        ):
+            import hashlib
+            for group_name in selected_groups:
+                key_hash = hashlib.md5(group_name.encode()).hexdigest()[:8]
+                st.markdown(f"**{html.escape(_clean_module_label(group_name))}**")
+                for concept in concept_groups.get(group_name, []):
+                    default_val = st.session_state.concept_checkboxes.get(concept, True)
+                    checked = _render_concept_checkbox_row(
+                        concept,
+                        value=default_val,
+                        key=f"cb_design_{key_hash}_{concept}",
+                    )
+                    st.session_state.concept_checkboxes[concept] = checked
+
+    selected_concepts = _collect_selected_concepts(concept_groups)
+    st.session_state.selected_concepts = selected_concepts
+    with st.container(key="concept_footer_actions"):
+        footer_l, prev_col, confirm_col = st.columns([3.0, 1.55, 2.55], gap="small")
+        with footer_l:
+            st.markdown(
+                f'<div class="eu-source-footer-note">{html.escape("Step 3 of 4" if lang == "en" else "第 3 步 / 共 4 步")}</div>',
+                unsafe_allow_html=True,
+            )
+        with prev_col:
+            if st.button(
+                "Previous step" if lang == "en" else "上一步",
+                key="concept_previous_step",
+                use_container_width=True,
+                icon=":material/arrow_back:",
+            ):
+                _sidebar_set_extract_step_state(st.session_state, 2)
+                st.rerun()
+        with confirm_col:
+            if st.button(
+                "Confirm concepts" if lang == "en" else "确认变量",
+                key="step3_confirm_design",
+                type="primary",
+                disabled=len(selected_concepts) == 0,
+                use_container_width=True,
+            ):
+                st.session_state.step3_confirmed = True
+                st.session_state["_scroll_to_top"] = True
+                st.rerun()
 
     return st.session_state.get("selected_concepts", []) or []
 

@@ -131,6 +131,17 @@ def _write_export_manifest(
         'entry_mode': st.session_state.get('entry_mode', 'unknown'),
         'export_dir': str(export_dir),
         'export_format': export_format,
+        'merge_mode': st.session_state.get('export_merge_mode', 'separate'),
+        'filter_by_patient': bool(st.session_state.get('export_filter_patient_enabled', False)),
+        'patient_limit_requested': int(st.session_state.get('patient_limit', 0) or 0),
+        'patient_limit_effective': int(
+            st.session_state.get(
+                '_export_effective_patient_limit',
+                st.session_state.get('patient_limit', 0) if st.session_state.get('export_filter_patient_enabled') else 0,
+            ) or 0
+        ),
+        'include_row_index': bool(st.session_state.get('export_include_index', False)),
+        'add_timestamp_to_filename': bool(st.session_state.get('export_add_timestamp', False)),
         'patient_count': int(patient_count or 0),
         'concept_count': int(concept_count or 0),
         'selected_concepts': list(st.session_state.get('selected_concepts', [])),
@@ -160,6 +171,12 @@ def _write_export_manifest(
         f"Entry mode: {manifest['entry_mode']}",
         f"Export directory: {manifest['export_dir']}",
         f"Export format: {manifest['export_format']}",
+        f"Merge mode: {manifest['merge_mode']}",
+        f"Filter by patient: {manifest['filter_by_patient']}",
+        f"Patient limit requested: {manifest['patient_limit_requested']}",
+        f"Patient limit effective: {manifest['patient_limit_effective']}",
+        f"Include row index: {manifest['include_row_index']}",
+        f"Add timestamp to filename: {manifest['add_timestamp_to_filename']}",
         f"Patients: {manifest['patient_count']}",
         f"Concepts: {manifest['concept_count']}",
     ]
