@@ -3,7 +3,7 @@
 These primitives mirror the design-canvas / page-cohort-subtabs charts:
 they are pure SVG strings driven by simple Python data (lists / dicts)
 and styled with the design tokens defined in ``tokens.css``
-(``--ink``, ``--accent``, ``--warn``, ``--bad``, ``--hair-2``,
+(``--ink``, ``--accent``, ``--ok``, ``--warn``, ``--bad``, ``--hair-2``,
 ``--ink-3``, ``--ink-4``).
 
 Cohort / Cross-DB pages call these helpers in place of matplotlib /
@@ -357,17 +357,25 @@ def render_availability_matrix(
         )
         for v in values:
             if v is None or (isinstance(v, float) and math.isnan(v)):
-                fill, op, text = "var(--bad)", 0.7, "—"
+                fill = "color-mix(in srgb, var(--bad) 10%, var(--surface))"
+                border = "color-mix(in srgb, var(--bad) 30%, var(--hair))"
+                fg, text = "var(--bad)", "—"
             elif v >= 0.95:
-                fill, op, text = "var(--ink)", 0.85, "✓"
+                fill = "color-mix(in srgb, var(--ok) 16%, var(--surface))"
+                border = "color-mix(in srgb, var(--ok) 36%, var(--hair))"
+                fg, text = "var(--ok)", "✓"
             elif v >= 0.5:
-                fill, op, text = "var(--warn)", 0.7, f"{int(round(v * 100))}%"
+                fill = "color-mix(in srgb, var(--warn) 14%, var(--surface))"
+                border = "color-mix(in srgb, var(--warn) 34%, var(--hair))"
+                fg, text = "var(--warn)", f"{int(round(v * 100))}%"
             else:
-                fill, op, text = "var(--bad)", 0.7, f"{int(round(v * 100))}%"
+                fill = "color-mix(in srgb, var(--bad) 12%, var(--surface))"
+                border = "color-mix(in srgb, var(--bad) 32%, var(--hair))"
+                fg, text = "var(--bad)", f"{int(round(v * 100))}%"
             body_cells.append(
-                f'<div style="height:{cell_h}px;background:{fill};opacity:{op};'
+                f'<div style="height:{cell_h}px;background:{fill};border:1px solid {border};'
                 f'border-radius:3px;display:flex;align-items:center;justify-content:center;'
-                f'font-size:10.5px;color:#fff;font-family:var(--font-mono)">'
+                f'font-size:10.5px;color:{fg};font-family:var(--font-mono);font-weight:600">'
                 f'{_esc(text)}</div>'
             )
     return (

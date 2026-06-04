@@ -300,6 +300,15 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
     export_format = st.session_state.get('export_format', 'Parquet').lower()
     selected_concepts = st.session_state.get('selected_concepts', [])
     use_mock = st.session_state.get('use_mock_data', False)
+    export_merge_mode = st.session_state.get('export_merge_mode', 'separate')
+    if export_merge_mode not in {'separate', 'merged'}:
+        export_merge_mode = 'separate'
+    export_filter_patient_enabled = bool(st.session_state.get('export_filter_patient_enabled', False))
+    requested_patient_limit = int(st.session_state.get('patient_limit', 0) or 0)
+    patient_limit = requested_patient_limit if export_filter_patient_enabled else 0
+    include_index = bool(st.session_state.get('export_include_index', False))
+    add_timestamp = bool(st.session_state.get('export_add_timestamp', False))
+    st.session_state['_export_effective_patient_limit'] = patient_limit
 
     # 🔧 FIX (2026-02-03): 检测是否是从可视化模式导入数据的场景
     loaded_concepts = st.session_state.get('loaded_concepts', {})
@@ -331,6 +340,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
 
     try:
         timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        export_filename_timestamp = timestamp if add_timestamp else ""
 
         # 直接使用用户设置的导出路径（已包含数据库子目录）
         export_dir = Path(export_path)
@@ -483,22 +493,25 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
             if group_key not in selected_modules:
                 selected_modules[group_key] = []
             selected_modules[group_key].append(c)
+        if export_merge_mode == 'merged':
+            selected_modules = {'all_selected': list(selected_concepts)}
 
         # 检测哪些模块的文件已存在
         # 🔧 FIX (2026-02-05): 使用模块名开头匹配，cohort条件在后缀
         existing_modules = {}  # group_key -> file_path
         cohort_suffix = _generate_cohort_prefix()
 
-        for group_key, group_concepts in selected_modules.items():
-            # 🔧 按模块名开头查找已存在的文件
-            search_prefix = f"{group_key}_"
-            target_ext = _export_extension_for_format(export_format)
+        if not export_filename_timestamp:
+            for group_key, group_concepts in selected_modules.items():
+                # 🔧 按模块名开头查找已存在的文件
+                search_prefix = f"{group_key}_"
+                target_ext = _export_extension_for_format(export_format)
 
-            # 检查是否有匹配该模块的文件存在
-            matching_files = list(export_dir.glob(f"{search_prefix}*{target_ext}"))
-            if matching_files:
-                # 找到匹配当前目标格式的文件
-                existing_modules[group_key] = matching_files[0]
+                # 检查是否有匹配该模块的文件存在
+                matching_files = list(export_dir.glob(f"{search_prefix}*{target_ext}"))
+                if matching_files:
+                    # 找到匹配当前目标格式的文件
+                    existing_modules[group_key] = matching_files[0]
 
         # 如果有已存在的模块，显示让用户选择
         # 🔧 FIX (2026-02-03): 在 viz_import_mode 下自动覆盖，跳过对话框
@@ -580,6 +593,8 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
 
         # 过滤掉将跳过的概念
         concepts_to_export = [c for c in selected_concepts if c not in concepts_to_skip]
+        if export_merge_mode == 'merged':
+            selected_modules = {'all_selected': list(concepts_to_export)}
 
         if not concepts_to_export:
             if concepts_to_skip:
@@ -694,15 +709,13 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                 return
 
             # 批量并行加载所有特征
-            patient_limit_display = st.session_state.get('patient_limit', 0)
+            patient_limit_display = patient_limit
             patient_info = f"({patient_limit_display} patients)" if patient_limit_display else "(all patients)"
             patient_info_cn = f"（{patient_limit_display}患者）" if patient_limit_display else "（全部患者）"
             batch_msg = f"Loading concepts {patient_info}..." if lang == 'en' else f"正在加载概念 {patient_info_cn}..."
             _set_status(batch_msg)
 
             # 🚀 性能优化：参照 extract_baseline_features.py 的配置
-            patient_limit = st.session_state.get('patient_limit', 0)
-
             patient_ids_filter = None
             id_col = 'stay_id'
             data_path = Path(data_path_str)
@@ -899,6 +912,8 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                     if mod not in module_concept_map:
                         module_concept_map[mod] = []
                     module_concept_map[mod].append(c)
+                if export_merge_mode == 'merged' and valid_concepts:
+                    module_concept_map = {'all_selected': list(valid_concepts)}
 
                 # 🔧 模块加载优先级：快的模块先加载（给用户更快的反馈）
                 MODULE_PRIORITY = [
@@ -1334,6 +1349,8 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                         safe_filename = f"{group_name}_{concepts_suffix}_{cohort_suffix}".replace('/', '_').replace('\\', '_')
                     else:
                         safe_filename = f"{group_name}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
+                    if export_filename_timestamp:
+                        safe_filename = f"{safe_filename}_{export_filename_timestamp}"
                     if len(safe_filename) > 150:
                         safe_filename = safe_filename[:150]
 
@@ -1370,7 +1387,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
 
                     # 写入文件
                     if export_format == 'csv':
-                        merged_df.to_csv(file_path, index=False, encoding='utf-8-sig')
+                        merged_df.to_csv(file_path, index=include_index, encoding='utf-8-sig')
                     elif export_format == 'parquet':
                         for col in merged_df.columns:
                             if merged_df[col].dtype == object:
@@ -1380,9 +1397,9 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                                     merged_df[col] = numeric_vals
                                 else:
                                     merged_df[col] = merged_df[col].astype(str)
-                        merged_df.to_parquet(file_path, index=False)
+                        merged_df.to_parquet(file_path, index=include_index)
                     elif export_format == 'excel':
-                        merged_df.to_excel(file_path, index=False)
+                        merged_df.to_excel(file_path, index=include_index)
                     else:
                         for col in merged_df.columns:
                             if merged_df[col].dtype == object:
@@ -1392,7 +1409,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                                     merged_df[col] = numeric_vals
                                 else:
                                     merged_df[col] = merged_df[col].astype(str)
-                        merged_df.to_parquet(file_path, index=False)
+                        merged_df.to_parquet(file_path, index=include_index)
 
                     exported_files.append(str(file_path))
                     _mod_exp_elapsed = time_module.time() - _mod_export_start
@@ -1761,6 +1778,8 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                                       _overwrite_this, cohort_suffix,
                                       _special_dep_concepts if _deps_cache_dir else None,
                                       _deps_cache_dir,
+                                      include_index,
+                                      export_filename_timestamp,
                                       _get_sepsis_runtime_options()),
                                 daemon=True
                             )
@@ -1887,6 +1906,8 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                         # 构建 concept → group 映射，传给子进程做直接导出
                         _sp_concept_to_group = {c: _concept_to_group_pre.get(c, 'special')
                                                 for c in special_concepts_to_load}
+                        if export_merge_mode == 'merged':
+                            _sp_concept_to_group = {c: 'all_selected_derived' for c in special_concepts_to_load}
 
                         _sp_proc = _mp_mod.Process(
                             target=_subprocess_load_special,
@@ -1898,6 +1919,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                                   str(export_dir), export_format,
                                   list(_cohort_exclude_ids) if _cohort_exclude_ids else None,
                                   _sp_concept_to_group, cohort_suffix,
+                                  include_index, export_filename_timestamp,
                                   _get_sepsis_runtime_options()),
                             daemon=True
                         )
@@ -2174,18 +2196,20 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                 if cohort_suffix:
                     safe_filename = f"{safe_filename}_{cohort_suffix}"
                 safe_filename = safe_filename.replace('/', '_').replace('\\', '_')
+                if export_filename_timestamp:
+                    safe_filename = f"{safe_filename}_{export_filename_timestamp}"
                 if len(safe_filename) > 150:
                     safe_filename = safe_filename[:150]
 
                 if export_format == 'csv':
                     file_path = export_dir / f"{safe_filename}.csv"
-                    merged_df.to_csv(file_path, index=False, encoding='utf-8-sig')
+                    merged_df.to_csv(file_path, index=include_index, encoding='utf-8-sig')
                 elif export_format == 'excel':
                     file_path = export_dir / f"{safe_filename}.xlsx"
-                    merged_df.to_excel(file_path, index=False)
+                    merged_df.to_excel(file_path, index=include_index)
                 else:
                     file_path = export_dir / f"{safe_filename}.parquet"
-                    merged_df.to_parquet(file_path, index=False)
+                    merged_df.to_parquet(file_path, index=include_index)
 
                 exported_files.append(str(file_path))
                 return True

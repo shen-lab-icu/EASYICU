@@ -1275,6 +1275,9 @@ def _countish(value: Any) -> int:
 
 def _agent_ref_step_meta(step: dict[str, Any], lang: str) -> str:
     """Human-facing step subtitle for the Claude-style Workbench overview."""
+    explicit = step.get("detail") or step.get("sub") or step.get("meta")
+    if explicit:
+        return _compact_label(explicit, max_len=54)
     evidence_count = _countish(step.get("evidence_count"))
     repair_count = _countish(step.get("repair_count"))
     parts: list[str] = []
@@ -3941,7 +3944,8 @@ def prime_agent_workbench_state(lang: str) -> None:
 
 def _workbench_empty_html(lang: str) -> str:
     return (
-        '<div class="eu-agent-empty">'
+        _agent_reference_workbench_html(_workbench_empty_reference_state(lang), lang)
+        + '<div class="eu-agent-empty eu-agent-empty-compact">'
         '<div class="eu-agent-empty-glyph" aria-hidden="true">'
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
         'stroke-linecap="round" stroke-linejoin="round">'
@@ -3953,9 +3957,67 @@ def _workbench_empty_html(lang: str) -> str:
         '</div>'
         f'<h2>{_T(lang, "No active run", "暂无当前运行")}</h2>'
         f'<p>{_T(lang, "Open Setup or choose a saved manifest.", "打开配置页，或选择本机保存的 manifest。")}</p>'
-        f'<small>{_T(lang, "The Workbench stays empty until real evidence-bound artifacts are selected. Local run history stays on this machine and is opened only when you choose a manifest.", "只有选择真实、证据绑定的产物后，工作台才会填充。本机运行历史只保留在这台机器上，并且只会在你选择 manifest 时打开。")}</small>'
+        f'<small>{_T(lang, "The structure above is a locked preview only. The Workbench fills with real evidence-bound artifacts after you run an analysis or choose a local manifest.", "上方只是锁定的结构预览。只有启动分析或选择本机 manifest 后，工作台才会填充真实、证据绑定的产物。")}</small>'
         '</div>'
     )
+
+
+def _workbench_empty_reference_state(lang: str) -> dict[str, Any]:
+    """Locked no-run preview that mirrors the real Workbench without fake results."""
+    return {
+        "is_demo": True,
+        "run_id": _T(lang, "pending local run", "等待本机运行"),
+        "evidence_total": 4,
+        "steps": [
+            {
+                "label": _T(lang, "Plan study", "制定研究计划"),
+                "status": "pending",
+                "detail": _T(lang, "question, cohort, estimand", "问题、队列、估计目标"),
+            },
+            {
+                "label": _T(lang, "Build cohort", "构建队列"),
+                "status": "pending",
+                "detail": _T(lang, "database checks and denominators", "数据库检查与分母确认"),
+            },
+            {
+                "label": _T(lang, "Analyze", "执行分析"),
+                "status": "pending",
+                "detail": _T(lang, "code-backed tables and figures", "代码驱动的表格与图件"),
+            },
+            {
+                "label": _T(lang, "Evidence gate", "证据关口"),
+                "status": "pending",
+                "detail": _T(lang, "manifest, hashes, validators", "manifest、哈希与验证器"),
+            },
+            {
+                "label": _T(lang, "Human review", "人工复核"),
+                "status": "pending",
+                "detail": _T(lang, "sign-off before drafting", "签字后再进入草稿"),
+            },
+        ],
+        "summary_outputs": [
+            {
+                "kind": _T(lang, "slot", "槽位"),
+                "title": _T(lang, "Figure artifact slot", "图件产物槽位"),
+                "sub": _T(lang, "not generated until a real run", "真实运行前不生成"),
+            },
+            {
+                "kind": _T(lang, "slot", "槽位"),
+                "title": _T(lang, "Table artifact slot", "表格产物槽位"),
+                "sub": _T(lang, "not generated until a real run", "真实运行前不生成"),
+            },
+            {
+                "kind": _T(lang, "slot", "槽位"),
+                "title": _T(lang, "Evidence manifest slot", "证据 manifest 槽位"),
+                "sub": _T(lang, "requires local artifacts", "需要本机产物"),
+            },
+            {
+                "kind": _T(lang, "slot", "槽位"),
+                "title": _T(lang, "Repro code slot", "复现代码槽位"),
+                "sub": _T(lang, "requires a run directory", "需要 run 目录"),
+            },
+        ],
+    }
 
 
 def _route_to_agent_empty_state_target(view: str) -> None:

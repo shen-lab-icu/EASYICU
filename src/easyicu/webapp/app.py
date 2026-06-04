@@ -511,10 +511,12 @@ def _clear_assistant_surfaces(
     state: MutableMapping[str, Any],
     *,
     clear_pending: bool = False,
+    clear_floating: bool = True,
 ) -> None:
     """Close assistant-only surfaces when navigation leaves the assistant page."""
     state['_inline_ai_panel_open'] = False
-    state['_floating_ai_open'] = False
+    if clear_floating:
+        state['_floating_ai_open'] = False
     state['_sidebar_ai_open'] = False
     if clear_pending:
         state.pop('_ai_pending_question', None)
@@ -524,14 +526,14 @@ def _open_embedded_ai_assistant(
     state: dict[str, Any],
     question: str | None = None,
 ) -> None:
-    """Route to the standalone AI Assistant page and optionally queue a prompt."""
+    """Route to the standalone Research Copilot page and optionally queue a prompt."""
     if question:
         state['_ai_pending_question'] = question
     state['llm_enabled'] = True
     state['_llm_toggle'] = True
     state['_active_main_page'] = 'assistant'
     state['_scroll_to_top'] = True
-    _clear_assistant_surfaces(state, clear_pending=False)
+    _clear_assistant_surfaces(state, clear_pending=False, clear_floating=True)
 
 
 def _resolve_viz_data_source_mode(
@@ -1558,7 +1560,7 @@ def _apply_assistant_preset():
     else:
         st.session_state['_assistant_pending_feature_preset'] = payload
         notice_en = payload.get('notice_en') or "Prepared a sidebar preset from the AI assistant."
-        notice_zh = payload.get('notice_zh') or "已根据 AI 助手建议预设侧边栏。"
+        notice_zh = payload.get('notice_zh') or "已根据研究 Copilot 建议预设侧边栏。"
         st.session_state['_assistant_notice'] = notice_en if lang == 'en' else notice_zh
     st.session_state['_scroll_to_top'] = True
 
@@ -2570,7 +2572,7 @@ def render_data_table_subtab():
 
 
 def _render_ai_context_button(question_key: str, context: str = "", concept: str = ""):
-    """渲染上下文感知的 AI 助手小按钮。点击后将问题发送到全局 AI 助手。"""
+    """渲染上下文感知的 Copilot 小按钮。点击后将问题发送到全局研究 Copilot。"""
     label = get_text(question_key)
     btn_key = f"ai_ctx_{question_key}_{concept}_{hash(context) % 10000}"
     if st.button(label, key=btn_key, help=label):
@@ -2580,7 +2582,7 @@ def _render_ai_context_button(question_key: str, context: str = "", concept: str
         if context:
             full_q += f" Context: {context}"
         _open_embedded_ai_assistant(st.session_state, full_q)
-        st.toast("Question sent to AI Assistant" if st.session_state.get('language') == 'en' else "问题已发送到 AI 助手")
+        st.toast("Question sent to Research Copilot" if st.session_state.get('language') == 'en' else "问题已发送到研究 Copilot")
         st.rerun()
 
 
@@ -4028,7 +4030,7 @@ def main():
     _page_labels_for_topbar = {
         'extract':        'Data Extraction' if lang == 'en' else '数据提取',
         'tutorial':       'Get Started' if lang == 'en' else '开始使用',
-        'assistant':      'AI Assistant' if lang == 'en' else 'AI 助手',
+        'assistant':      'Research Copilot' if lang == 'en' else '研究 Copilot',
         'states':         'Workspace States' if lang == 'en' else '工作区状态',
         'settings':       'Settings' if lang == 'en' else '设置',
         'quick_viz':      'Patient Review' if lang == 'en' else '患者审阅',
@@ -4243,7 +4245,7 @@ def main():
     mobile_page_keys = ["extract"] + page_keys + ["assistant", "states", "settings"]
     page_labels["extract"] = "Data Extraction" if lang == "en" else "数据提取"
     page_labels["tutorial"] = "Get Started" if lang == "en" else "开始使用"
-    page_labels["assistant"] = "AI Assistant" if lang == "en" else "AI 助手"
+    page_labels["assistant"] = "Research Copilot" if lang == "en" else "研究 Copilot"
     page_labels["states"] = "Workspace States" if lang == "en" else "工作区状态"
     page_labels["settings"] = "Settings" if lang == "en" else "设置"
 
@@ -4255,6 +4257,8 @@ def main():
     _nav_page_map = {
         'viz': 'quick_viz',
         'tutorial': 'tutorial',
+        'extract': 'extract',
+        'data_extraction': 'extract',
         'cohort': 'cohort',
         'cross_db': 'cross_db',
         'crossdb': 'cross_db',
@@ -4324,7 +4328,7 @@ def main():
         )
     active_page = st.session_state.get('_active_main_page', page_keys[0])
     if active_page != "assistant":
-        _clear_assistant_surfaces(st.session_state, clear_pending=True)
+        _clear_assistant_surfaces(st.session_state, clear_pending=True, clear_floating=False)
 
     _topbar_result = _handle_topbar_run_request(active_page, lang)
     if _topbar_result and st.session_state.get('_active_main_page') != active_page:
@@ -4657,6 +4661,10 @@ def main():
                     st.caption(get_text("ra_optional_deps_hint"))
 
     _handle_sidebar_export_trigger(default_export_container)
+
+    if active_page != "assistant" and not _is_screenshot_mode():
+        from easyicu.webapp.llm_chat import render_floating_chat_dock
+        render_floating_chat_dock()
 
     # Page navigation now happens via the segmented_control above. Only the
     # scroll-to-top request still needs a small script — and this one does not

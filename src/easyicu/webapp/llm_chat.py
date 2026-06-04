@@ -40,6 +40,79 @@ from easyicu.webapp.session_state import clear_agent_continuation_state
 
 _FEATURE_COUNT = len(get_all_concepts())
 
+COPILOT_STUDY_STEPS: tuple[tuple[str, str], ...] = (
+    ("question", "Research question"),
+    ("data", "Data source"),
+    ("cohort", "Cohort"),
+    ("concepts", "Feature modules"),
+    ("extract", "Extraction"),
+    ("review", "Review"),
+    ("analysis", "Analysis run"),
+    ("draft", "Draft gate"),
+)
+COPILOT_STEP_INDEX = {step: idx for idx, (step, _label) in enumerate(COPILOT_STUDY_STEPS)}
+COPILOT_DEFAULT_MODULES = [
+    "Demographics",
+    "Vital signs",
+    "Labs",
+    "SOFA / SOFA-2",
+    "Sepsis-3",
+    "Outcomes",
+]
+COPILOT_BRANCH_CONFIG = {
+    "predict": {
+        "chip": "Predict sepsis mortality",
+        "question_en": "Among Sepsis-3 patients, do first-24h bedside features predict in-hospital mortality, and does adding lactate improve it?",
+        "question_zh": "在 Sepsis-3 患者中，前 24 小时床旁特征能否预测院内死亡，加入乳酸是否改善模型？",
+        "review_target": "quick_viz",
+        "selected_concepts": ["hr", "map", "temp", "spo2", "sofa2", "lact", "age", "death"],
+        "why": {
+            "question": "A vague aim becomes testable only after binding cohort, outcome, time window, and comparator.",
+            "data": "Demo data lowers risk for the first pass; real data stays local and uses the same gates.",
+            "cohort": "The cohort defines every downstream denominator, rate, and model row.",
+            "concepts": "Only question-relevant modules are preselected, then coverage is audited before modelling.",
+            "extract": "A frozen normalized frame keeps review panels and agent runs reproducible.",
+            "review": "A human preview catches obvious data problems before spending an analysis run.",
+            "analysis": "The run is evidence-bound; every table or figure must trace to an artifact.",
+            "draft": "Drafting stays locked until checks pass and a human signs off.",
+        },
+    },
+    "crossdb": {
+        "chip": "Compare across ICU databases",
+        "question_en": "Does the sepsis mortality signal replicate across ICU databases, and where do feature distributions diverge?",
+        "question_zh": "脓毒症死亡信号能否跨 ICU 数据库复现，哪些特征分布差异最大？",
+        "review_target": "cross_db",
+        "selected_concepts": ["hr", "map", "lact", "sofa2", "death", "age"],
+        "why": {
+            "question": "Replication needs one shared cohort definition applied consistently across databases.",
+            "data": "Cross-database work needs at least two local sources; demo mode seeds all six safely.",
+            "cohort": "Here the cohort includes both patients and the database set being compared.",
+            "concepts": "Only concepts available across selected databases can support fair comparisons.",
+            "extract": "Each source is normalized into the same concept names before comparison.",
+            "review": "Availability and distribution review prevents over-reading database differences.",
+            "analysis": "Per-database summaries and deltas are logged before any replication claim.",
+            "draft": "Cross-database claims remain gated until each database artifact is traceable.",
+        },
+    },
+    "quality": {
+        "chip": "Audit data quality first",
+        "question_en": "Before modelling, which ICU concepts are sparse, out-of-range, or trustworthy enough to analyze?",
+        "question_zh": "建模前，哪些 ICU 概念稀疏、越界，哪些足够可信可以进入分析？",
+        "review_target": "cohort",
+        "selected_concepts": ["hr", "map", "temp", "spo2", "crea", "lact", "urine", "sofa2", "death"],
+        "why": {
+            "question": "A quality-first study starts with trustworthiness instead of effect estimates.",
+            "data": "The same extraction gates apply; the first deliverable is a coverage and range audit.",
+            "cohort": "The audit must use the same denominator as the later analysis would use.",
+            "concepts": "Broad modules reveal sparse or unsafe variables before they bias a model.",
+            "extract": "Consistent frames let coverage, ranges, and temporal density be measured uniformly.",
+            "review": "The review table is the main deliverable for a QC-first branch.",
+            "analysis": "Coverage, range, missingness, and density checks produce flags, not claims.",
+            "draft": "Even a QC summary must trace every flag to logged evidence.",
+        },
+    },
+}
+
 # ---------------------------------------------------------------------------
 # System prompt — enriched with EasyICU documentation & concept catalogue
 # ---------------------------------------------------------------------------
@@ -69,7 +142,7 @@ Sepsis-3, KDIGO-AKI, circulatory failure, etc.
 - **Tutorial** — workflow guide, usage examples, and the in-app data dictionary
 - **Quick Visualization** — load extracted data and inspect trends, missingness, and distributions
 - **Cohort Analysis** — compare groups and review downstream cohort summaries
-- **AI Assistant** — guided help for navigation, feature planning, troubleshooting, and evidence lookup
+- **Research Copilot** — chat-first help for navigation, feature planning, troubleshooting, evidence lookup, and handoff into the auditable Research Agent
 
 ## Feature Modules & Concepts (19 modules, {_FEATURE_COUNT} concepts)
 - **Vital Signs** (8): hr, map, sbp, dbp, pulse_pressure, temp, spo2, resp
@@ -615,6 +688,383 @@ def _infer_db_from_text(text: str) -> str | None:
     return None
 
 
+def _default_copilot_study_state(state: MutableMapping[str, object] | None = None) -> dict[str, object]:
+    state = state or {}
+    patient_n = int(state.get("demo_mode_patients") or 10)
+    return {
+        "branch": None,
+        "step": "question",
+        "data_mode": state.get("entry_mode") if state.get("entry_mode") in {"demo", "real"} else "demo",
+        "patient_n": patient_n,
+        "db_count": 6,
+        "outcome": "In-hospital mortality",
+        "window": "first 24h",
+        "exposure": "lactate",
+        "modules": COPILOT_DEFAULT_MODULES[:],
+        "question": "",
+        "draft_signed": False,
+        "last_update": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _ensure_copilot_study_state(state: MutableMapping[str, object]) -> dict[str, object]:
+    study = state.get("_copilot_guided_study")
+    if not isinstance(study, dict):
+        study = _default_copilot_study_state(state)
+        state["_copilot_guided_study"] = study
+    for key, value in _default_copilot_study_state(state).items():
+        study.setdefault(key, value)
+    return study
+
+
+def _reset_copilot_study_state(state: MutableMapping[str, object]) -> dict[str, object]:
+    study = _default_copilot_study_state(state)
+    state["_copilot_guided_study"] = study
+    return study
+
+
+def _copilot_pick_branch(text: str) -> str:
+    text_l = (text or "").lower()
+    if any(key in text_l for key in ("cross", "database", "databases", "replicate", "replication", "多库", "跨库", "数据库")):
+        return "crossdb"
+    if any(key in text_l for key in ("quality", "missing", "coverage", "audit", "sparse", "trust", "qc", "缺失", "质量", "覆盖")):
+        return "quality"
+    return "predict"
+
+
+def _copilot_endpoint_pinned(text: str) -> bool:
+    text_l = (text or "").lower()
+    return bool(re.search(r"in-?hospital|28[\s-]*day|icu\s+mortality|icu\s+death|院内|28\s*天|icu\s*死亡", text_l))
+
+
+def _copilot_apply_entities(study: MutableMapping[str, object], text: str) -> list[str]:
+    text_l = (text or "").lower()
+    found: list[str] = []
+    exposure_aliases = [
+        (r"\blactate\b|乳酸", "lactate"),
+        (r"\bsofa\b|sofa-?2", "SOFA"),
+        (r"\bmap\b|mean arterial", "MAP"),
+        (r"creatinine|肌酐", "creatinine"),
+        (r"heart rate|心率", "heart rate"),
+        (r"\bwbc\b|white cell|白细胞", "WBC"),
+    ]
+    for pattern, label in exposure_aliases:
+        if re.search(pattern, text_l):
+            study["exposure"] = label
+            found.append(label)
+            break
+    window_match = re.search(r"(?:first\s*)?(\d{1,3})\s*(?:h\b|hr|hour|小时)", text_l)
+    if window_match:
+        study["window"] = f"first {window_match.group(1)}h"
+        found.append(str(study["window"]))
+    if re.search(r"28[\s-]*day|28\s*天", text_l):
+        study["outcome"] = "28-day mortality"
+        found.append("28-day mortality")
+    elif re.search(r"icu\s+mortality|icu\s+death|icu\s*死亡", text_l):
+        study["outcome"] = "ICU mortality"
+        found.append("ICU mortality")
+    elif re.search(r"in-?hospital|院内", text_l):
+        study["outcome"] = "In-hospital mortality"
+        found.append("in-hospital mortality")
+    patient_match = re.search(r"\b(\d{1,3})\s*(?:patient|patients|case|cases|stay|stays|subject|subjects|例|人)", text_l)
+    if patient_match:
+        patient_n = max(5, min(50, int(patient_match.group(1))))
+        study["patient_n"] = patient_n
+        found.append(f"{patient_n} stays")
+    study["last_update"] = datetime.now().isoformat(timespec="seconds")
+    return found
+
+
+def _copilot_frame_question(study: MutableMapping[str, object], lang: str) -> str:
+    branch = str(study.get("branch") or "predict")
+    config = COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"])
+    if branch == "predict":
+        if lang == "en":
+            return (
+                f"Among Sepsis-3 patients, do {study.get('window', 'first 24h')} bedside features "
+                f"predict {str(study.get('outcome', 'In-hospital mortality')).lower()}, and does adding "
+                f"{study.get('exposure', 'lactate')} improve the model?"
+            )
+        return (
+            f"在 Sepsis-3 患者中，{study.get('window', '前 24 小时')}床旁特征能否预测"
+            f"{study.get('outcome', '院内死亡')}，加入 {study.get('exposure', '乳酸')} 是否改善模型？"
+        )
+    return str(config["question_en"] if lang == "en" else config["question_zh"])
+
+
+def _copilot_status_markdown(study: MutableMapping[str, object], lang: str) -> str:
+    active_step = str(study.get("step") or "question")
+    active_idx = COPILOT_STEP_INDEX.get(active_step, 0)
+    rows = []
+    for idx, (step, label_en) in enumerate(COPILOT_STUDY_STEPS):
+        mark = "[x]" if idx < active_idx or (step == "draft" and study.get("draft_signed")) else ("[>]" if idx == active_idx else "[ ]")
+        label = label_en if lang == "en" else {
+            "question": "研究问题",
+            "data": "数据源",
+            "cohort": "队列",
+            "concepts": "特征模块",
+            "extract": "提取",
+            "review": "审阅",
+            "analysis": "分析运行",
+            "draft": "草稿闸门",
+        }.get(step, label_en)
+        rows.append(f"{mark} {label}")
+    return "\n".join(rows)
+
+
+def _copilot_study_actions(study: MutableMapping[str, object], lang: str) -> list[dict[str, object]]:
+    is_en = lang == "en"
+    step = str(study.get("step") or "question")
+    actions: list[dict[str, object]] = []
+
+    def workflow(action_id: str, label_en: str, label_zh: str, target: str) -> None:
+        if any(item["id"] == action_id for item in actions):
+            return
+        actions.append({
+            "id": action_id,
+            "kind": "workflow",
+            "label": label_en if is_en else label_zh,
+            "workflow": target,
+        })
+
+    if step in {"data", "cohort", "concepts", "extract"}:
+        workflow("workflow_study_extract", "Open Classic Flow", "打开经典流程", "study_extract")
+    if step in {"review", "analysis", "draft"}:
+        workflow("workflow_study_review", "Open Review Workspace", "打开审阅工作区", "study_review")
+    if step in {"analysis", "draft"}:
+        actions.append({
+            "id": "agent_handoff",
+            "kind": "agent_handoff",
+            "label": "Hand off to Research Agent" if is_en else "交给 Research Agent",
+        })
+    if str(study.get("data_mode")) == "real":
+        workflow("workflow_real_extraction", "Open Real Data Setup", "打开真实数据配置", "real_extraction")
+    return actions[:3]
+
+
+def _copilot_reply(
+    study: MutableMapping[str, object],
+    body: str,
+    lang: str,
+    *,
+    include_status: bool = True,
+) -> str:
+    question = str(study.get("question") or _copilot_frame_question(study, lang)).strip()
+    if question:
+        study["question"] = question
+    if not include_status:
+        return body
+    status_title = "Study workspace" if lang == "en" else "研究工作区"
+    return f"{body}\n\n**{status_title}**\n\n```text\n{_copilot_status_markdown(study, lang)}\n```"
+
+
+def _copilot_advance_step(study: MutableMapping[str, object]) -> str:
+    current = str(study.get("step") or "question")
+    sequence = [step for step, _label in COPILOT_STUDY_STEPS]
+    try:
+        idx = sequence.index(current)
+    except ValueError:
+        idx = 0
+    next_step = sequence[min(idx + 1, len(sequence) - 1)]
+    study["step"] = next_step
+    study["last_update"] = datetime.now().isoformat(timespec="seconds")
+    return next_step
+
+
+def _handle_copilot_guided_prompt(
+    prompt: str,
+    lang: str,
+    state: MutableMapping[str, object] | None = None,
+) -> tuple[str, list[dict[str, object]]] | None:
+    """Handle local chat-first study control before falling back to an LLM."""
+    state = state if state is not None else st.session_state
+    prompt = (prompt or "").strip()
+    if not prompt:
+        return None
+    text_l = prompt.lower()
+    study = _ensure_copilot_study_state(state)
+    guided_active = bool(study.get("branch"))
+    guided_intent = any(key in text_l for key in (
+        "run the whole", "autopilot", "do it for me", "guided study", "whole demo",
+        "walk me", "start a guided", "use demo", "use local", "go back", "why this step",
+        "why?", "研究", "帮我跑", "自动跑", "一键", "回退", "为什么",
+    ))
+    branch_intent = _copilot_pick_branch(prompt) != "predict" or any(key in text_l for key in (
+        "sepsis", "mortality", "lactate", "aki", "trajectory", "cohort", "prediction",
+        "脓毒症", "死亡", "乳酸", "队列", "预测",
+    ))
+    if not (guided_active or guided_intent or branch_intent):
+        return None
+
+    if any(key in text_l for key in ("new study", "start over", "reset study", "重新开始", "新研究")):
+        study = _reset_copilot_study_state(state)
+        body = (
+            "New study started. Describe the question, pick a direction, or say `run the whole demo`."
+            if lang == "en" else
+            "已开始新研究。请描述问题、选择方向，或直接说“跑完整演示”。"
+        )
+        return _copilot_reply(study, body, lang), []
+
+    if not study.get("branch"):
+        study["branch"] = _copilot_pick_branch(prompt)
+    _copilot_apply_entities(study, prompt)
+    branch = str(study.get("branch") or "predict")
+    config = COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"])
+
+    if any(key in text_l for key in ("back", "go back", "undo", "change", "edit", "previous", "回退", "修改", "上一步")):
+        current_idx = COPILOT_STEP_INDEX.get(str(study.get("step") or "question"), 0)
+        editable = ["question", "data", "cohort", "concepts"]
+        target = "question"
+        for step in reversed(editable):
+            if COPILOT_STEP_INDEX[step] < current_idx:
+                target = step
+                break
+        study["step"] = target
+        body = (
+            f"Rewound to **{dict(COPILOT_STUDY_STEPS)[target]}**. Downstream choices will be refreshed from here."
+            if lang == "en" else
+            f"已回退到 **{target}**。后续选择会从这里重新刷新。"
+        )
+        return _copilot_reply(study, body, lang), _copilot_study_actions(study, lang)
+
+    if any(key in text_l for key in ("why", "explain", "reason", "为什么", "解释")):
+        step = str(study.get("step") or "question")
+        why = str(config["why"].get(step, config["why"]["question"]))
+        body = (
+            f"Why this step: {why}"
+            if lang == "en" else
+            f"为什么做这一步：{why}"
+        )
+        return _copilot_reply(study, body, lang), _copilot_study_actions(study, lang)
+
+    if re.search(r"\b\d{1,3}\b", text_l) and any(key in text_l for key in ("patient", "patients", "stay", "stays", "cohort", "sample", "例", "人")):
+        patient_n = int(study.get("patient_n") or 10)
+        body = (
+            f"Set the demo cohort to **{patient_n} stays**. I will keep downstream review and analysis tied to that denominator."
+            if lang == "en" else
+            f"已把演示队列设为 **{patient_n} 例 ICU stay**。后续审阅和分析会绑定这个分母。"
+        )
+        if COPILOT_STEP_INDEX.get(str(study.get("step") or "question"), 0) > COPILOT_STEP_INDEX["cohort"]:
+            study["step"] = "cohort"
+        return _copilot_reply(study, body, lang), _copilot_study_actions(study, lang)
+
+    if any(key in text_l for key in ("run the whole", "whole demo", "autopilot", "just do it", "do it for me", "帮我跑", "自动跑", "一键")):
+        study["data_mode"] = "demo"
+        study["step"] = "draft"
+        study["draft_signed"] = False
+        study["question"] = _copilot_frame_question(study, lang)
+        state["_copilot_autopilot_ready"] = True
+        body = (
+            "I ran the guided demo path to the evidence gate: framed the question, selected demo data, built the cohort, chose modules, prepared extraction, loaded review, and assembled the analysis run. The draft remains locked until you review evidence and sign off."
+            if lang == "en" else
+            "我已把引导式演示推进到证据闸门：完成问题框定、演示数据、队列、模块、提取准备、审阅加载和分析运行组装。草稿仍会锁定，直到你审阅证据并确认。"
+        )
+        return _copilot_reply(study, body, lang), _copilot_study_actions(study, lang)
+
+    if study.get("step") == "question" and branch == "predict" and not _copilot_endpoint_pinned(prompt):
+        study["step"] = "question"
+        body = (
+            "Good direction. Quick check before I build the plan: do you mean **in-hospital mortality**, **28-day mortality**, or **ICU mortality**?"
+            if lang == "en" else
+            "方向可以。生成计划前先确认：你指的是 **院内死亡**、**28 天死亡**，还是 **ICU 死亡**？"
+        )
+        return _copilot_reply(study, body, lang), []
+
+    if any(key in text_l for key in ("28-day", "28 day", "28天", "icu mortality", "icu death", "in-hospital", "院内")) and study.get("step") == "question":
+        study["question"] = _copilot_frame_question(study, lang)
+        study["step"] = "data"
+        body = (
+            f"Got it. I framed the study as: **{study['question']}**\n\nNext, choose how data enters: demo data for a fast walkthrough, or local real data."
+            if lang == "en" else
+            f"收到。我把研究问题框定为：**{study['question']}**\n\n下一步选择数据入口：快速演示数据，或本地真实数据。"
+        )
+        return _copilot_reply(study, body, lang), _copilot_study_actions(study, lang)
+
+    if any(key in text_l for key in ("real data", "local data", "use local", "真实数据", "本地数据")):
+        study["data_mode"] = "real"
+        study["step"] = "data"
+        body = (
+            "Real-data mode selected. I can open the classic data-source setup so you can choose the database and local path; patient rows stay on this machine."
+            if lang == "en" else
+            "已选择真实数据模式。我可以打开经典数据源配置页，让你选择数据库和本地路径；患者行数据不会离开本机。"
+        )
+        return _copilot_reply(study, body, lang), _copilot_study_actions(study, lang)
+
+    if any(key in text_l for key in ("demo", "use demo", "演示", "示例")) and study.get("step") in {"data", "question"}:
+        study["data_mode"] = "demo"
+        study["step"] = "cohort"
+        study["question"] = _copilot_frame_question(study, lang)
+        body = (
+            "Demo data selected. I set up a lightweight, reproducible cohort so you can inspect the workflow without tokens or uploads."
+            if lang == "en" else
+            "已选择演示数据。我会使用轻量、可复现的队列，让你不用 token、也不用上传数据就能检查流程。"
+        )
+        return _copilot_reply(study, body, lang), _copilot_study_actions(study, lang)
+
+    if study.get("step") == "question":
+        study["question"] = _copilot_frame_question(study, lang)
+        study["step"] = "data"
+        body = (
+            f"I framed your study as: **{study['question']}**\n\nNext, choose data source: say `use demo` for a safe walkthrough or `use local data` for real extraction."
+            if lang == "en" else
+            f"我把你的研究问题框定为：**{study['question']}**\n\n下一步选择数据源：说“用演示数据”可快速体验，说“用本地数据”则进入真实提取。"
+        )
+        return _copilot_reply(study, body, lang), _copilot_study_actions(study, lang)
+
+    next_step = _copilot_advance_step(study)
+    if next_step == "cohort":
+        body = (
+            f"Cohort ready: **{study.get('patient_n', 10)} demo stays** with the branch `{config['chip']}`. You can say `use 30 patients` to edit the denominator."
+            if lang == "en" else
+            f"队列已准备：**{study.get('patient_n', 10)} 例演示 ICU stay**，研究方向为 `{config['chip']}`。你可以说“用 30 个患者”来修改分母。"
+        )
+    elif next_step == "concepts":
+        body = (
+            "I preselected the modules this question needs: demographics, vitals, labs, SOFA/SOFA-2, Sepsis-3, and outcomes. Coverage will be audited before analysis."
+            if lang == "en" else
+            "我已预选该问题需要的模块：人口学、生命体征、实验室、SOFA/SOFA-2、Sepsis-3 和结局。分析前会先做覆盖率审计。"
+        )
+    elif next_step == "extract":
+        body = (
+            "Extraction is ready. I can open the classic 4-step flow now, or continue in chat and then load Patient Review."
+            if lang == "en" else
+            "提取已准备好。我可以现在打开经典四步流程，也可以继续在聊天中推进后再加载患者审阅。"
+        )
+    elif next_step == "review":
+        body = (
+            "Review is ready. Open Patient Review to inspect data tables, time series, patient overview, and quality flags."
+            if lang == "en" else
+            "审阅已准备好。可以打开患者审阅页查看表格、时间序列、患者概览和质量标记。"
+        )
+    elif next_step == "analysis":
+        body = (
+            "Analysis run assembled. It remains evidence-bound: deterministic steps must complete and produce traceable artifacts before any draft claim unlocks."
+            if lang == "en" else
+            "分析运行已组装。它仍然保持证据绑定：确定性步骤必须完成并产生可追溯产物，草稿论断才会解锁。"
+        )
+    else:
+        study["draft_signed"] = False
+        body = (
+            "The draft gate is reached but locked. Review the workspace or hand the framed question to Research Agent; no claim is written until evidence checks pass and you sign off."
+            if lang == "en" else
+            "已到达草稿闸门，但仍处于锁定状态。请审阅工作区或把问题交给 Research Agent；证据检查通过并人工确认前不会写出论断。"
+        )
+    return _copilot_reply(study, body, lang), _copilot_study_actions(study, lang)
+
+
+def _local_copilot_fallback_reply(prompt: str, lang: str) -> str:
+    if lang == "en":
+        return (
+            "I can handle this locally as Research Copilot. Describe a study goal, say `run the whole demo`, "
+            "or ask me to open demo review, real data setup, or Research Agent handoff. Enable an external "
+            "provider only when you need open-ended evidence lookup or long-form explanation."
+        )
+    return (
+        "我可以先用本地 Research Copilot 逻辑处理：描述一个研究目标，直接说“跑完整演示”，"
+        "或让我打开演示审阅、真实数据配置、Research Agent 交接。只有需要开放式证据检索或长篇解释时，才需要启用外部模型。"
+    )
+
+
 def _suggest_ui_actions(prompt: str, answer: str, lang: str) -> list[dict[str, object]]:
     """Suggest in-app navigation or preset actions."""
     prompt_l = (prompt or '').lower()
@@ -648,6 +1098,25 @@ def _suggest_ui_actions(prompt: str, answer: str, lang: str) -> list[dict[str, o
             "scroll_to": scroll_to,
         })
 
+    def add_workflow(action_id: str, label_en: str, label_zh: str, workflow: str):
+        if any(item["id"] == action_id for item in actions):
+            return
+        actions.append({
+            "id": action_id,
+            "kind": "workflow",
+            "label": label_en if lang == "en" else label_zh,
+            "workflow": workflow,
+        })
+
+    def add_agent_handoff(action_id: str, label_en: str, label_zh: str):
+        if any(item["id"] == action_id for item in actions):
+            return
+        actions.append({
+            "id": action_id,
+            "kind": "agent_handoff",
+            "label": label_en if lang == "en" else label_zh,
+        })
+
     dictionary_requested = any(key in prompt_l for key in ["字典", "数据字典", "dictionary", "feature list", "concept list"])
     tutorial_requested = any(key in prompt_l for key in ["tutorial", "教程", "step", "步骤", "how do i", "怎么做", "workflow", "流程", "guide", "使用"])
     viz_requested = any(key in prompt_l for key in [
@@ -656,6 +1125,23 @@ def _suggest_ui_actions(prompt: str, answer: str, lang: str) -> list[dict[str, o
     ])
     cohort_requested = any(key in prompt_l for key in ["cohort", "队列", "compare", "comparison", "dashboard", "仪表板"])
     export_requested = any(key in prompt_l for key in ["export", "导出"])
+    demo_requested = any(key in prompt_l for key in [
+        "demo", "演示", "模拟", "try first", "load demo", "populate", "sample workspace",
+        "样例", "示例", "先跑", "快速体验",
+    ])
+    extraction_requested = any(key in prompt_l for key in [
+        "data extraction", "extract", "提取", "抽取", "data source", "数据源",
+        "real data", "真实数据", "connect data", "连接数据",
+    ])
+    agent_requested = any(key in prompt_l for key in [
+        "research agent", "agent", "智能体", "manuscript", "draft", "草稿",
+        "evidence", "证据", "run study", "guided study", "do it for me",
+        "copilot", "一键", "帮我跑", "自动跑",
+    ])
+    guided_demo_requested = any(key in prompt_l for key in [
+        "run the whole demo", "whole demo", "guided demo", "autopilot",
+        "do it for me", "just do it", "跑完整演示", "完整演示", "帮我跑", "自动跑",
+    ])
 
     if dictionary_requested or (
         any(key in answer_l for key in ["data dictionary", "数据字典", "concept dictionary"]) and
@@ -674,6 +1160,20 @@ def _suggest_ui_actions(prompt: str, answer: str, lang: str) -> list[dict[str, o
 
     if export_requested:
         add_nav("tutorial", "Open Export Guide", "打开导出教程")
+
+    if guided_demo_requested:
+        add_workflow("workflow_guided_demo", "Run Guided Demo", "运行引导演示", "guided_demo")
+
+    if demo_requested and (viz_requested or "workspace" in prompt_l or "加载" in prompt_l or "populate" in prompt_l):
+        add_workflow("workflow_demo_review", "Load Demo Review Workspace", "加载演示审阅工作区", "demo_review")
+    elif demo_requested or (extraction_requested and any(key in prompt_l for key in ["start", "开始", "first", "入口"])):
+        add_workflow("workflow_demo_extraction", "Start with Demo Extraction", "从演示提取开始", "demo_extraction")
+
+    if extraction_requested and not demo_requested:
+        add_workflow("workflow_real_extraction", "Open Real Data Extraction", "打开真实数据提取", "real_extraction")
+
+    if agent_requested:
+        add_agent_handoff("agent_handoff", "Hand off to Research Agent", "交给 Research Agent")
 
     target_db = _infer_db_from_text(combined)
     is_all_features_request = any(key in combined for key in [
@@ -751,9 +1251,149 @@ def _render_nav_actions(actions: list[dict[str, object]], key_prefix: str) -> No
                 if action.get("kind") == "preset":
                     st.session_state["_assistant_preset_request"] = dict(action.get("payload") or {})
                     st.session_state["_scroll_to_tab"] = str(action.get("scroll_to") or "tutorial")
+                elif action.get("kind") == "workflow":
+                    _apply_chat_workflow_action(str(action.get("workflow") or ""))
+                elif action.get("kind") == "agent_handoff":
+                    _prepare_research_agent_handoff_from_ai(st.session_state)
                 else:
                     st.session_state["_scroll_to_tab"] = str(action["id"])
                 st.rerun()
+
+
+def _seed_demo_context_from_chat(state: MutableMapping[str, object]) -> None:
+    """Put the classic workspace into a safe demo-ready state."""
+    study = state.get("_copilot_guided_study") if isinstance(state.get("_copilot_guided_study"), dict) else {}
+    current_mock_params = state.get("mock_params") if isinstance(state.get("mock_params"), dict) else {}
+    patient_n = int(
+        (study or {}).get("patient_n")
+        or current_mock_params.get("n_patients")
+        or state.get("demo_mode_patients")
+        or 10
+    )
+    demo_hours = int(
+        (study or {}).get("hours")
+        or current_mock_params.get("hours")
+        or state.get("demo_mode_hours")
+        or 24
+    )
+    state["entry_mode"] = "demo"
+    state["use_mock_data"] = True
+    state["database"] = "mock"
+    state["mock_params"] = {
+        "n_patients": patient_n,
+        "hours": demo_hours,
+        "demo_profile": "lite",
+    }
+    state["_eu_demo_widget_params_pending"] = {
+        "n_patients": int(state["mock_params"]["n_patients"]),
+        "hours": int(state["mock_params"]["hours"]),
+    }
+    for key in ("step1_confirmed", "step2_confirmed", "step3_confirmed", "export_completed"):
+        state[key] = False
+    state["trigger_export"] = False
+    state["_exporting_in_progress"] = False
+
+
+def _copilot_selected_concepts_for_study(state: MutableMapping[str, object]) -> list[str]:
+    study = _ensure_copilot_study_state(state)
+    branch = str(study.get("branch") or "predict")
+    config = COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"])
+    concepts = list(config.get("selected_concepts") or [])
+    return concepts or ["hr", "map", "temp", "spo2", "sofa2"]
+
+
+def _apply_copilot_study_to_workspace(state: MutableMapping[str, object]) -> None:
+    study = _ensure_copilot_study_state(state)
+    question = str(study.get("question") or _copilot_frame_question(study, state.get("language", "en"))).strip()
+    if question:
+        study["question"] = question
+        state["_copilot_last_question"] = question
+    state["selected_concepts"] = _copilot_selected_concepts_for_study(state)
+    state["_preview_n"] = int(study.get("patient_n") or state.get("demo_mode_patients") or 10)
+    state["_copilot_guided_study"] = study
+
+
+def _apply_chat_workflow_action(workflow: str) -> None:
+    """Apply a chat-first command to the live Streamlit workspace."""
+    state = st.session_state
+    workflow = (workflow or "").strip()
+    lang = state.get("language", "en")
+    if workflow == "demo_extraction":
+        _seed_demo_context_from_chat(state)
+        state["_active_main_page"] = "extract"
+        state["_assistant_notice"] = (
+            "Demo extraction is ready. Confirm the data source, then continue through Cohort and Concepts."
+            if lang == "en" else
+            "演示提取已准备好。先确认数据源，再继续完成队列和变量步骤。"
+        )
+    elif workflow == "study_extract":
+        _seed_demo_context_from_chat(state)
+        _apply_copilot_study_to_workspace(state)
+        state["_active_main_page"] = "extract"
+        state["_assistant_notice"] = (
+            "Research Copilot prepared the classic extraction flow from your guided study."
+            if lang == "en" else
+            "研究 Copilot 已根据引导式研究准备好经典提取流程。"
+        )
+    elif workflow == "demo_review":
+        _seed_demo_context_from_chat(state)
+        state["selected_concepts"] = state.get("selected_concepts") or _copilot_selected_concepts_for_study(state)
+        state["_preview_requested"] = True
+        mock_params = state.get("mock_params") if isinstance(state.get("mock_params"), dict) else {}
+        state["_preview_n"] = int(mock_params.get("n_patients") or state.get("demo_mode_patients") or 10)
+        state["_active_main_page"] = "quick_viz"
+        state["_assistant_notice"] = (
+            "Demo review workspace is loading in Patient Review."
+            if lang == "en" else
+            "演示审阅工作区正在患者审阅页加载。"
+        )
+    elif workflow == "study_review":
+        _seed_demo_context_from_chat(state)
+        _apply_copilot_study_to_workspace(state)
+        study = _ensure_copilot_study_state(state)
+        state["_preview_requested"] = True
+        branch = str(study.get("branch") or "predict")
+        target = str(COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"]).get("review_target") or "quick_viz")
+        state["_active_main_page"] = target
+        state["_assistant_notice"] = (
+            "Research Copilot loaded the review workspace from your guided study."
+            if lang == "en" else
+            "研究 Copilot 已根据引导式研究加载审阅工作区。"
+        )
+    elif workflow == "real_extraction":
+        state["entry_mode"] = "real"
+        state["use_mock_data"] = False
+        if state.get("database") == "mock":
+            state["database"] = "miiv"
+        state["_active_main_page"] = "extract"
+        state["_assistant_notice"] = (
+            "Real Data extraction is open. Choose the database, set the local path, then validate or convert."
+            if lang == "en" else
+            "真实数据提取已打开。请选择数据库、填写本地路径，然后验证或转换。"
+        )
+    elif workflow == "study_agent":
+        _apply_copilot_study_to_workspace(state)
+        _prepare_research_agent_handoff_from_ai(state)
+    elif workflow == "guided_demo":
+        prompt = "Run the whole demo for me, then stop at the evidence gate."
+        reply = _handle_copilot_guided_prompt(prompt, str(lang), state)
+        messages = state.setdefault("llm_messages", [])
+        if isinstance(messages, list) and reply is not None:
+            content, actions = reply
+            messages.append({"role": "user", "content": prompt})
+            messages.append({"role": "assistant", "content": content, "actions": actions})
+        state["_active_main_page"] = "assistant"
+        state["_assistant_notice"] = (
+            "Guided Research Copilot demo is ready in the chat."
+            if lang == "en" else
+            "引导式研究 Copilot 演示已在聊天中准备好。"
+        )
+    else:
+        state["_active_main_page"] = "assistant"
+    state["_scroll_to_top"] = True
+    state["_inline_ai_panel_open"] = False
+    state["_floating_ai_open"] = False
+    state.pop("_ai_pending_question", None)
 
 
 def _is_external_lookup_question(prompt: str) -> bool:
@@ -1099,7 +1739,7 @@ def render_llm_settings(
 
     if show_status_card:
         enabled = bool(st.session_state.llm_enabled)
-        status_title = "AI Assistant" if lang == "en" else "AI 助手"
+        status_title = "Research Copilot" if lang == "en" else "研究 Copilot"
         status_subtitle = (
             "Embedded guidance for the current EasyICU workflow."
             if lang == "en" else
@@ -1149,7 +1789,7 @@ def _render_llm_settings_controls(
     previous_enabled = bool(st.session_state.llm_enabled)
     if show_enable_toggle:
         enabled = st.toggle(
-            "Enable AI assistant" if lang == "en" else "启用 AI 助手",
+            "Enable Research Copilot" if lang == "en" else "启用研究 Copilot",
             value=previous_enabled,
             key="_llm_toggle",
         )
@@ -1298,9 +1938,9 @@ def render_chat_tab():
     if not st.session_state.llm_enabled:
         st.info(
             (
-                "The AI Assistant is disabled. Enable it in the sidebar AI Assistant section."
+                "Research Copilot is disabled. Enable it in the sidebar Copilot settings."
                 if lang == "en" else
-                "AI 助手当前已关闭。请在侧边栏 AI 助手中开启。"
+                "研究 Copilot 当前已关闭。请在侧边栏 Copilot 设置中开启。"
             )
         )
         # Show a brief intro even when disabled
@@ -1311,9 +1951,9 @@ def render_chat_tab():
     if not _is_configured():
         st.warning(
             (
-                "Please configure your API Key in the sidebar AI Assistant section first."
+                "Please configure your API Key in the sidebar Copilot settings first."
                 if lang == "en" else
-                "请先在侧边栏 AI 助手中设置 API Key。"
+                "请先在侧边栏 Copilot 设置中设置 API Key。"
             )
         )
         return
@@ -1338,8 +1978,8 @@ def render_chat_tab():
                   or public_provider_defaults(st.session_state.get("llm_provider", public_default_provider_key()))[2]
                   or "—")
     st.markdown(
-        "##### " + ("Chat with AI Assistant" if lang == "en"
-                     else "与 AI 助手对话")
+        "##### " + ("Chat with Research Copilot" if lang == "en"
+                     else "与研究 Copilot 对话")
     )
     st.caption(f"**{provider_name}** · `{model_name}`")
     st.caption(
@@ -1389,6 +2029,27 @@ def _submit_prompt(prompt: str, lang: str, history_container, key_prefix: str = 
         with st.chat_message("user"):
             st.markdown(prompt)
 
+    guided_reply = _handle_copilot_guided_prompt(prompt, lang)
+    if guided_reply is not None:
+        reply_content, guided_actions = guided_reply
+        st.session_state.llm_last_tool_events = []
+        st.session_state.llm_last_verification = {
+            "status": "pass",
+            "issues": [],
+        }
+        st.session_state.llm_messages.append(
+            {
+                "role": "assistant",
+                "content": reply_content,
+                "actions": guided_actions,
+            }
+        )
+        with history_container:
+            with st.chat_message("assistant"):
+                st.markdown(reply_content)
+                _render_nav_actions(guided_actions, key_prefix=f"{key_prefix}_guided")
+        return
+
     instant_reply = _get_instant_reply(prompt, lang)
     if instant_reply is not None:
         st.session_state.llm_last_tool_events = []
@@ -1408,6 +2069,25 @@ def _submit_prompt(prompt: str, lang: str, history_container, key_prefix: str = 
             with st.chat_message("assistant"):
                 st.markdown(instant_reply)
                 _render_nav_actions(instant_actions, key_prefix=f"{key_prefix}_instant")
+        return
+
+    if st.session_state.get("_active_main_page") == "assistant" and (
+        not bool(st.session_state.get("llm_enabled", False)) or not _is_configured()
+    ):
+        fallback_reply = _local_copilot_fallback_reply(prompt, lang)
+        fallback_actions = _suggest_ui_actions(prompt, fallback_reply, lang)
+        st.session_state.llm_last_tool_events = []
+        st.session_state.llm_last_verification = {
+            "status": "pass",
+            "issues": [],
+        }
+        st.session_state.llm_messages.append(
+            {"role": "assistant", "content": fallback_reply, "actions": fallback_actions}
+        )
+        with history_container:
+            with st.chat_message("assistant"):
+                st.markdown(fallback_reply)
+                _render_nav_actions(fallback_actions, key_prefix=f"{key_prefix}_fallback")
         return
 
     prep_placeholder = st.empty()
@@ -1450,6 +2130,27 @@ def _submit_prompt_background(
         with st.chat_message("user"):
             st.markdown(prompt)
 
+    guided_reply = _handle_copilot_guided_prompt(prompt, lang)
+    if guided_reply is not None:
+        reply_content, guided_actions = guided_reply
+        st.session_state.llm_last_tool_events = []
+        st.session_state.llm_last_verification = {
+            "status": "pass",
+            "issues": [],
+        }
+        st.session_state.llm_messages.append(
+            {
+                "role": "assistant",
+                "content": reply_content,
+                "actions": guided_actions,
+            }
+        )
+        with history_container:
+            with st.chat_message("assistant"):
+                st.markdown(reply_content)
+                _render_nav_actions(guided_actions, key_prefix=f"{key_prefix}_guided")
+        return
+
     instant_reply = _get_instant_reply(prompt, lang)
     if instant_reply is not None:
         st.session_state.llm_last_tool_events = []
@@ -1469,6 +2170,25 @@ def _submit_prompt_background(
             with st.chat_message("assistant"):
                 st.markdown(instant_reply)
                 _render_nav_actions(instant_actions, key_prefix=f"{key_prefix}_instant")
+        return
+
+    if st.session_state.get("_active_main_page") == "assistant" and (
+        not bool(st.session_state.get("llm_enabled", False)) or not _is_configured()
+    ):
+        fallback_reply = _local_copilot_fallback_reply(prompt, lang)
+        fallback_actions = _suggest_ui_actions(prompt, fallback_reply, lang)
+        st.session_state.llm_last_tool_events = []
+        st.session_state.llm_last_verification = {
+            "status": "pass",
+            "issues": [],
+        }
+        st.session_state.llm_messages.append(
+            {"role": "assistant", "content": fallback_reply, "actions": fallback_actions}
+        )
+        with history_container:
+            with st.chat_message("assistant"):
+                st.markdown(fallback_reply)
+                _render_nav_actions(fallback_actions, key_prefix=f"{key_prefix}_fallback")
         return
 
     session_id = _start_bg_response(prompt, lang)
@@ -1586,9 +2306,9 @@ def render_sidebar_chat_widget():
         st.session_state["_sidebar_ai_open"] = expanded
         if not st.session_state.llm_enabled:
             st.caption(
-                "Enable AI Assistant above to start chatting here."
+                "Enable Research Copilot above to start chatting here."
                 if lang == "en" else
-                "请先在上方开启 AI 助手，然后在这里对话。"
+                "请先在上方开启研究 Copilot，然后在这里对话。"
             )
             return
 
@@ -1725,6 +2445,16 @@ def _latest_ai_handoff_question(state: MutableMapping[str, object]) -> str:
     if pending:
         return pending[:1200]
 
+    study = state.get("_copilot_guided_study")
+    if isinstance(study, dict):
+        question = str(study.get("question") or "").strip()
+        if question:
+            return question[:1200]
+
+    copilot_question = str(state.get("_copilot_last_question") or "").strip()
+    if copilot_question:
+        return copilot_question[:1200]
+
     messages = state.get("llm_messages")
     if isinstance(messages, list):
         for message in reversed(messages):
@@ -1739,7 +2469,7 @@ def _latest_ai_handoff_question(state: MutableMapping[str, object]) -> str:
 
 
 def _prepare_research_agent_handoff_from_ai(state: MutableMapping[str, object]) -> bool:
-    """Route AI Assistant to Agent setup and seed the question when safe."""
+    """Route Research Copilot to Agent setup and seed the question when safe."""
     clear_agent_continuation_state(state)
     seeded = False
     if not str(state.get("research_agent_question") or "").strip():
@@ -1811,7 +2541,7 @@ def _ai_panel_header_html(lang: str) -> str:
     provider_label = public_provider_defaults(provider_key)[0] or provider_key
     default_model = public_provider_defaults(provider_key)[2] or "model"
     model_label = st.session_state.get("llm_model") or default_model
-    title = "EasyICU Assistant" if lang == "en" else "EasyICU 助手"
+    title = "Research Copilot" if lang == "en" else "研究 Copilot"
     if provider_key == "easyicu_hosted":
         subtitle = (
             "EasyICU hosted · evidence-bound"
@@ -2351,32 +3081,448 @@ def render_inline_ai_panel(*, force_open: bool = False, allow_close: bool = True
 
 def _render_ai_assistant_workspace_page(lang: str, *, pending_prompt: bool) -> None:
     with st.container(key="ai_assistant_page_panel"):
+        st.markdown('<div class="eu-copilot-page-marker"></div>', unsafe_allow_html=True)
         st.markdown(_ai_panel_header_html(lang), unsafe_allow_html=True)
 
-        enabled = bool(st.session_state.get("llm_enabled", False))
-        configured = _is_configured()
-        if not enabled:
-            _render_inline_ai_blocked_state(lang, enabled=False)
-            _render_inline_ai_context_and_handoff(lang)
-            return
+        rail_col, chat_col, state_col = st.columns([0.7, 1.58, 0.92], gap="large")
+        with rail_col:
+            _render_copilot_session_rail(lang)
 
-        if not configured:
-            _render_inline_ai_blocked_state(lang, enabled=True)
-            _render_inline_ai_context_and_handoff(lang)
-            return
+        with chat_col:
+            _render_copilot_quick_actions(lang)
+            st.markdown(
+                '<div class="inline-ai-section-label">'
+                f'{html.escape("Conversation" if lang == "en" else "对话")}'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            if not bool(st.session_state.get("llm_enabled", False)) or not _is_configured():
+                note = (
+                    "Local guided mode is available now. Enable an external provider only for free-form evidence lookup."
+                    if lang == "en" else
+                    "本地引导模式现在即可使用。只有需要开放式证据检索时才需要启用外部模型。"
+                )
+                st.markdown(
+                    f'<div class="inline-ai-status-strip">{html.escape(note)}</div>',
+                    unsafe_allow_html=True,
+                )
+            _render_compact_chat_panel(
+                lang=lang,
+                panel_key="_llm_ai_page_workspace",
+                history_height=620,
+                show_starters=not pending_prompt,
+                background_pending_prompts=True,
+            )
 
-        _render_compact_chat_panel(
-            lang=lang,
-            panel_key="_llm_ai_page_workspace",
-            history_height=500,
-            show_starters=not pending_prompt,
-            background_pending_prompts=True,
+        with state_col:
+            _render_copilot_stage_workspace(lang)
+            _render_copilot_state_panel(lang)
+            _render_inline_ai_context_and_handoff(lang)
+
+
+def _render_copilot_quick_actions(lang: str) -> None:
+    """Render chat-first commands that also drive the classic workspace."""
+    is_en = lang == "en"
+    st.markdown(
+        '<div class="inline-ai-section-label">'
+        f'{html.escape("Start here" if is_en else "从这里开始")}'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(5, gap="small")
+    actions = [
+        (
+            "Guided demo" if is_en else "引导演示",
+            "guided_demo",
+            ":material/auto_awesome:",
+            "_copilot_guided_demo",
+            "Run the chat-first demo to the evidence gate" if is_en else "用聊天方式跑到证据闸门",
+        ),
+        (
+            "Demo extraction" if is_en else "演示提取",
+            "demo_extraction",
+            ":material/science:",
+            "_copilot_demo_extraction",
+            "Start the classic 4-step flow with demo data" if is_en else "用演示数据进入经典四步流程",
+        ),
+        (
+            "Demo review" if is_en else "演示审阅",
+            "demo_review",
+            ":material/table_chart:",
+            "_copilot_demo_review",
+            "Load a lightweight Patient Review workspace" if is_en else "加载轻量患者审阅工作区",
+        ),
+        (
+            "Real data" if is_en else "真实数据",
+            "real_extraction",
+            ":material/database:",
+            "_copilot_real_extraction",
+            "Open local data-source setup" if is_en else "打开本地真实数据源配置",
+        ),
+        (
+            "Agent setup" if is_en else "Agent 配置",
+            "agent_handoff",
+            ":material/smart_toy:",
+            "_copilot_agent_setup",
+            "Hand the latest question to Research Agent" if is_en else "把最近的问题交给 Research Agent",
+        ),
+    ]
+    for col, (label, workflow, icon_name, key, help_text) in zip(cols, actions):
+        with col:
+            if st.button(
+                label,
+                key=key,
+                icon=icon_name,
+                use_container_width=True,
+                help=help_text,
+            ):
+                if workflow == "agent_handoff":
+                    _prepare_research_agent_handoff_from_ai(st.session_state)
+                else:
+                    _apply_chat_workflow_action(workflow)
+                st.rerun()
+
+
+def _workflow_status_step(label: str, detail: str, status: str) -> str:
+    safe_status = status if status in {"done", "active", "todo"} else "todo"
+    return (
+        f'<div class="eu-copilot-step {safe_status}">'
+        '<span class="node"></span>'
+        '<div>'
+        f'<b>{html.escape(label)}</b>'
+        f'<p>{html.escape(detail)}</p>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _copilot_step_label(step: str, lang: str) -> str:
+    label = dict(COPILOT_STUDY_STEPS).get(step, step)
+    if lang == "en":
+        return label
+    return {
+        "question": "研究问题",
+        "data": "数据源",
+        "cohort": "队列",
+        "concepts": "特征模块",
+        "extract": "提取",
+        "review": "审阅",
+        "analysis": "分析运行",
+        "draft": "草稿闸门",
+    }.get(step, label)
+
+
+def _copilot_stage_status(study: MutableMapping[str, object], step: str) -> str:
+    active_step = str(study.get("step") or "question")
+    active_idx = COPILOT_STEP_INDEX.get(active_step, 0)
+    step_idx = COPILOT_STEP_INDEX.get(step, 0)
+    if step_idx < active_idx or (step == "draft" and study.get("draft_signed")):
+        return "done"
+    if step_idx == active_idx:
+        return "active"
+    if step == "draft":
+        return "locked"
+    return "todo"
+
+
+def _copilot_stage_detail(study: MutableMapping[str, object], step: str, lang: str) -> str:
+    is_en = lang == "en"
+    branch = str(study.get("branch") or "predict")
+    config = COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"])
+    if step == "question":
+        return str(study.get("question") or (config["chip"] if is_en else config["question_zh"]))
+    if step == "data":
+        mode = str(study.get("data_mode") or "demo")
+        if mode == "real":
+            return "local data · no upload" if is_en else "本地数据 · 不上传"
+        return "demo data · local only" if is_en else "演示数据 · 仅本机"
+    if step == "cohort":
+        if branch == "crossdb":
+            return f"{int(study.get('db_count') or 6)} databases · shared sepsis definition" if is_en else f"{int(study.get('db_count') or 6)} 个数据库 · 共享脓毒症定义"
+        return f"{int(study.get('patient_n') or 10)} stays · first ICU stay · first 24h" if is_en else f"{int(study.get('patient_n') or 10)} 例 stay · 首次 ICU · 前 24h"
+    if step == "concepts":
+        modules = list(study.get("modules") or COPILOT_DEFAULT_MODULES)
+        return f"{len(modules)} modules · coverage audited before analysis" if is_en else f"{len(modules)} 个模块 · 分析前审计覆盖率"
+    if step == "extract":
+        n = int(study.get("patient_n") or 10)
+        return f"{n * 24} time points · frozen normalized frames" if is_en else f"{n * 24} 个时间点 · 冻结标准化数据帧"
+    if step == "review":
+        if branch == "crossdb":
+            return "availability matrix and distribution deltas" if is_en else "可用性矩阵与分布差异"
+        if branch == "quality":
+            return "coverage, ranges, missingness, density" if is_en else "覆盖率、范围、缺失和时间密度"
+        return "Table 1, time series, patient overview, quality flags" if is_en else "Table 1、时间序列、患者概览和质量标记"
+    if step == "analysis":
+        return "5 deterministic steps · evidence contract" if is_en else "5 个确定性步骤 · 证据契约"
+    if step == "draft":
+        return "locked until checks pass and a human signs off" if is_en else "证据检查和人工确认前保持锁定"
+    return ""
+
+
+def _copilot_stage_card_html(
+    study: MutableMapping[str, object],
+    step: str,
+    lang: str,
+    *,
+    compact: bool = False,
+) -> str:
+    is_en = lang == "en"
+    status = _copilot_stage_status(study, step)
+    branch = str(study.get("branch") or "predict")
+    config = COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"])
+    why = str(config["why"].get(step, ""))
+    status_label = {
+        "done": "done" if is_en else "完成",
+        "active": "active" if is_en else "当前",
+        "locked": "locked" if is_en else "锁定",
+        "todo": "queued" if is_en else "待定",
+    }[status]
+    if compact and status == "done":
+        return (
+            f'<div class="eu-copilot-stage collapsed {status}">'
+            '<span class="mark"></span>'
+            f'<b>{html.escape(_copilot_step_label(step, lang))}</b>'
+            f'<em>{html.escape(_copilot_stage_detail(study, step, lang))}</em>'
+            '</div>'
         )
-        _render_inline_ai_context_and_handoff(lang)
+    return (
+        f'<div class="eu-copilot-stage {status}" data-step="{html.escape(step)}">'
+        '<div class="stage-head">'
+        '<span class="mark"></span>'
+        '<div>'
+        f'<b>{html.escape(_copilot_step_label(step, lang))}</b>'
+        f'<p>{html.escape(_copilot_stage_detail(study, step, lang))}</p>'
+        '</div>'
+        f'<span class="stage-status">{html.escape(status_label)}</span>'
+        '</div>'
+        f'<div class="stage-why"><span>{"WHY THIS STEP" if is_en else "为什么做这一步"}</span>{html.escape(why)}</div>'
+        '</div>'
+    )
+
+
+def _render_copilot_session_rail(lang: str) -> None:
+    """Render the Claude/Codex-style session rail for the standalone Copilot page."""
+    is_en = lang == "en"
+    state = st.session_state
+    study = _ensure_copilot_study_state(state)
+    branch = str(study.get("branch") or "predict")
+    config = COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"])
+    question = str(study.get("question") or _copilot_frame_question(study, lang)).strip()
+    branch_label = str(config["chip"] if is_en else config["question_zh"])
+    data_mode = str(study.get("data_mode") or "demo")
+    rail_html = (
+        '<div class="eu-copilot-rail">'
+        f'<div class="inline-ai-section-label">{html.escape("Sessions" if is_en else "研究会话")}</div>'
+        '<div class="eu-copilot-session live">'
+        '<span class="dot"></span><div>'
+        f'<b>{html.escape(branch_label)}</b>'
+        f'<p>{html.escape(question[:120] or branch_label)}</p>'
+        '</div></div>'
+        '<div class="eu-copilot-session">'
+        '<span class="dot muted"></span><div>'
+        f'<b>{html.escape("Evidence gate" if is_en else "证据闸门")}</b>'
+        f'<p>{html.escape("Draft locked until checks pass" if is_en else "证据检查通过前草稿锁定")}</p>'
+        '</div></div>'
+        '<div class="eu-copilot-rail-meta">'
+        f'<span>{html.escape("mode" if is_en else "模式")}<b>{html.escape("demo" if data_mode == "demo" else "real")}</b></span>'
+        f'<span>{html.escape("patients" if is_en else "患者")}<b>{int(study.get("patient_n") or 10)}</b></span>'
+        f'<span>{html.escape("modules" if is_en else "模块")}<b>{len(study.get("modules") or COPILOT_DEFAULT_MODULES)}</b></span>'
+        '</div>'
+        '</div>'
+    )
+    st.markdown(rail_html, unsafe_allow_html=True)
+    if st.button(
+        "New study" if is_en else "新研究",
+        key="_copilot_new_study",
+        icon=":material/add:",
+        use_container_width=True,
+    ):
+        _reset_copilot_study_state(state)
+        state.pop("_ai_pending_question", None)
+        st.rerun()
+    if st.button(
+        "Run whole demo" if is_en else "跑完整演示",
+        key="_copilot_rail_guided_demo",
+        icon=":material/auto_awesome:",
+        use_container_width=True,
+    ):
+        _apply_chat_workflow_action("guided_demo")
+        st.rerun()
+
+
+def _render_copilot_stage_workspace(lang: str) -> None:
+    """Render guided-study cards adapted from the Claude Design prototype."""
+    is_en = lang == "en"
+    state = st.session_state
+    study = _ensure_copilot_study_state(state)
+    branch = str(study.get("branch") or "predict")
+    config = COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"])
+    active_step = str(study.get("step") or "question")
+    active_idx = COPILOT_STEP_INDEX.get(active_step, 0)
+    stages = []
+    for step, _label in COPILOT_STUDY_STEPS:
+        status = _copilot_stage_status(study, step)
+        stages.append(_copilot_stage_card_html(study, step, lang, compact=status == "done" and step != active_step))
+    checks = [
+        ("Denominators resolved", "分母已解析", active_idx >= COPILOT_STEP_INDEX["review"]),
+        ("Coverage audited", "覆盖率已审计", active_idx >= COPILOT_STEP_INDEX["analysis"]),
+        ("Artifacts traceable", "产物可追溯", active_idx >= COPILOT_STEP_INDEX["draft"]),
+        ("Reviewer sign-off", "人工确认", bool(study.get("draft_signed"))),
+    ]
+    gate_rows = "".join(
+        '<div class="eu-copilot-gate-row {status}"><span></span><b>{label}</b><em>{state}</em></div>'.format(
+            status="done" if done else "pending",
+            label=html.escape(label_en if is_en else label_zh),
+            state=html.escape(("passed" if done else "pending") if is_en else ("通过" if done else "待确认")),
+        )
+        for label_en, label_zh, done in checks
+    )
+    st.markdown(
+        '<div class="eu-copilot-study-workspace">'
+        '<div class="eu-copilot-study-head">'
+        f'<div class="inline-ai-section-label">{html.escape("Study plan" if is_en else "研究计划")}</div>'
+        f'<h3>{html.escape(config["chip"] if is_en else config["question_zh"])}</h3>'
+        f'<p>{html.escape(str(study.get("question") or _copilot_frame_question(study, lang)))}</p>'
+        '</div>'
+        '<div class="eu-copilot-stage-list">'
+        + "".join(stages)
+        + '</div>'
+        '<div class="eu-copilot-gate">'
+        f'<div class="inline-ai-section-label">{html.escape("Evidence gate" if is_en else "证据闸门")}</div>'
+        + gate_rows
+        + '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    action_cols = st.columns(2, gap="small")
+    with action_cols[0]:
+        if st.button(
+            "Open review" if is_en else "打开审阅",
+            key="_copilot_stage_open_review",
+            icon=":material/preview:",
+            use_container_width=True,
+        ):
+            _apply_chat_workflow_action("study_review")
+            st.rerun()
+    with action_cols[1]:
+        if st.button(
+            "Agent setup" if is_en else "Agent 配置",
+            key="_copilot_stage_agent_setup",
+            icon=":material/assignment:",
+            use_container_width=True,
+        ):
+            _apply_chat_workflow_action("study_agent")
+            st.rerun()
+
+
+def _render_copilot_state_panel(lang: str) -> None:
+    """Show the shared GUI/chat state so users can see both architectures linked."""
+    is_en = lang == "en"
+    state = st.session_state
+    entry_mode = str(state.get("entry_mode") or "none")
+    database = str(state.get("database") or "miiv")
+    selected_count = len(state.get("selected_concepts") or [])
+    loaded_count = len(state.get("loaded_concepts") or {})
+    patient_count = len(state.get("patient_ids") or [])
+    data_path = str(state.get("data_path") or "").strip()
+    path_validated = bool(state.get("path_validated"))
+    study = _ensure_copilot_study_state(state)
+    study_question = str(study.get("question") or "").strip()
+    study_step = str(study.get("step") or "question")
+    study_idx = COPILOT_STEP_INDEX.get(study_step, 0)
+    if entry_mode == "none" and study.get("data_mode") in {"demo", "real"}:
+        entry_mode = str(study.get("data_mode"))
+
+    mode_label = {
+        "demo": "Demo" if is_en else "演示",
+        "real": "Real Data" if is_en else "真实数据",
+        "none": "Not selected" if is_en else "未选择",
+    }.get(entry_mode, entry_mode)
+    db_label = "mock" if database == "mock" else database.upper()
+
+    step1_done = entry_mode == "demo" or bool(data_path and path_validated) or study_idx >= COPILOT_STEP_INDEX["data"]
+    step2_done = bool(state.get("step2_confirmed")) or study_idx >= COPILOT_STEP_INDEX["cohort"]
+    step3_done = bool(state.get("step3_confirmed")) or selected_count > 0 or study_idx >= COPILOT_STEP_INDEX["concepts"]
+    review_done = loaded_count > 0 or patient_count > 0 or study_idx >= COPILOT_STEP_INDEX["review"]
+    agent_ready = bool(state.get("research_agent_question")) or review_done or study_idx >= COPILOT_STEP_INDEX["analysis"]
+
+    def status(done: bool, active: bool = False) -> str:
+        if done:
+            return "done"
+        return "active" if active else "todo"
+
+    rows = [
+        _workflow_status_step(
+            "Question" if is_en else "研究问题",
+            (str(state.get("research_agent_question") or study_question).strip()[:82] or (
+                "Ask in chat or choose a starter prompt" if is_en else "可在聊天中提出，也可选择起始问题"
+            )),
+            status(bool(state.get("research_agent_question") or study_question), active=study_step == "question"),
+        ),
+        _workflow_status_step(
+            "Data source" if is_en else "数据源",
+            f"{mode_label} · {db_label}" + ("" if not data_path else f" · {Path(data_path).name}"),
+            status(step1_done, active=study_step == "data" or entry_mode == "none"),
+        ),
+        _workflow_status_step(
+            "Cohort" if is_en else "队列",
+            ("confirmed" if step2_done else "waiting for Step 2") if is_en else ("已确认" if step2_done else "等待第 2 步"),
+            status(step2_done, active=study_step == "cohort" or (step1_done and not step2_done)),
+        ),
+        _workflow_status_step(
+            "Concepts" if is_en else "变量",
+            (f"{selected_count or len(study.get('modules') or [])} selected" if is_en else f"已选 {selected_count or len(study.get('modules') or [])} 个"),
+            status(step3_done, active=study_step == "concepts" or (step2_done and not step3_done)),
+        ),
+        _workflow_status_step(
+            "Review" if is_en else "审阅",
+            f"{loaded_count} concepts · {patient_count} patients" if is_en else f"{loaded_count} 个概念 · {patient_count} 位患者",
+            status(review_done, active=study_step == "review" or (step3_done and not review_done)),
+        ),
+        _workflow_status_step(
+            "Agent" if is_en else "Agent",
+            ("draft gated" if study_step == "draft" else "ready for handoff") if is_en else ("草稿已闸门锁定" if study_step == "draft" else "可交接"),
+            status(agent_ready, active=study_step in {"analysis", "draft"} or review_done),
+        ),
+    ]
+
+    st.markdown(
+        '<div class="eu-copilot-state-card">'
+        f'<div class="inline-ai-section-label">{html.escape("Workspace state" if is_en else "工作区状态")}</div>'
+        f'<h3>{html.escape("Chat and GUI stay linked" if is_en else "聊天和图形界面保持联动")}</h3>'
+        f'<p>{html.escape("Every chat command writes into the same session state as the classic EasyICU panels." if is_en else "每个聊天命令都会写入经典 EasyICU 面板共用的会话状态。")}</p>'
+        '<div class="eu-copilot-stepper">'
+        + "".join(rows)
+        + '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    nav_cols = st.columns(2, gap="small")
+    with nav_cols[0]:
+        if st.button(
+            "Classic flow" if is_en else "经典流程",
+            key="_copilot_open_classic_flow",
+            icon=":material/account_tree:",
+            use_container_width=True,
+        ):
+            state["_active_main_page"] = "extract"
+            state["_scroll_to_top"] = True
+            st.rerun()
+    with nav_cols[1]:
+        if st.button(
+            "Patient Review" if is_en else "患者审阅",
+            key="_copilot_open_patient_review",
+            icon=":material/table_chart:",
+            use_container_width=True,
+        ):
+            state["_active_main_page"] = "quick_viz"
+            state["_scroll_to_top"] = True
+            st.rerun()
 
 
 def render_ai_assistant_page(lang: str | None = None) -> None:
-    """Render the latest Tools · AI Assistant page using the live chat backend."""
+    """Render the latest Tools · Research Copilot page using the live chat backend."""
     _init_chat_state()
     lang = lang or st.session_state.get("language", "en")
     is_en = lang == "en"
@@ -2391,9 +3537,9 @@ def render_ai_assistant_page(lang: str | None = None) -> None:
     st.session_state["_inline_ai_panel_open"] = False
     st.markdown(
         '<div class="eu-ai-page-head">'
-        f'<div class="eyebrow">{html.escape("EasyICU · research helper" if is_en else "EasyICU · 研究助手")}</div>'
-        f'<h1>{html.escape("AI Assistant" if is_en else "AI 助手")}</h1>'
-        f'<p>{html.escape("A local, evidence-bound helper for framing questions and shaping analysis plans. It reads your loaded context and never invents results." if is_en else "一个本地、证据绑定的助手，用于整理研究问题和分析计划。它读取当前上下文，但不会编造结果。")}</p>'
+        f'<div class="eyebrow">{html.escape("EasyICU · chat-first research workspace" if is_en else "EasyICU · 聊天优先研究工作台")}</div>'
+        f'<h1>{html.escape("Research Copilot" if is_en else "研究 Copilot")}</h1>'
+        f'<p>{html.escape("A parallel chat-first interface for framing a study, driving the classic workspace, and handing a vetted question into Research Agent." if is_en else "一套并行的聊天优先入口：可整理研究问题、驱动经典界面，并把审核后的问题交给 Research Agent。")}</p>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -2403,25 +3549,25 @@ def render_ai_assistant_page(lang: str | None = None) -> None:
 def _starter_prompts(lang: str) -> list[str]:
     if lang == "en":
         return [
-            "I want to build a sepsis early-warning cohort. Which EasyICU steps and modules should I use?",
-            "I want to cluster sepsis patient trajectories over time. Which concepts and scores should I export?",
-            "I want an AKI cohort for outcome analysis. How should I configure Step 2 and Step 3?",
-            "I want an ICD-defined pneumonia or heart-failure cohort in MIMIC-IV. How should I use the disease template and ICD filter?",
+            "Predict sepsis mortality using first 24h lactate, SOFA, vitals, and labs.",
+            "Compare a sepsis mortality signal across ICU databases.",
+            "Audit data quality first: missingness, coverage, out-of-range values, and sparse modules.",
+            "Run the whole demo for me, then stop at the evidence gate.",
         ]
     return [
-        "我想构建脓毒症实时预警队列。EasyICU 里应该走哪些步骤、提取哪些模块？",
-        "我想做脓毒症患者时间轨迹聚类。应该导出哪些时间序列概念和评分？",
-        "我想做 AKI 队列结局分析。Step 2 和 Step 3 应该怎么配置？",
-        "我想在 MIMIC-IV 里按 ICD 构建肺炎或心衰队列。疾病模板和 ICD filter 应该怎么用？",
+        "用前 24 小时乳酸、SOFA、生命体征和实验室指标预测脓毒症死亡。",
+        "跨 ICU 数据库比较脓毒症死亡信号是否复现。",
+        "先做数据质量审计：缺失率、覆盖率、越界值和稀疏模块。",
+        "帮我跑完整演示，然后停在证据闸门。",
     ]
 
 
 def _render_chat_welcome(*, lang: str, panel_key: str, history_container, show_starters: bool = True) -> None:
-    title = "Assistant" if lang == "en" else "助手"
+    title = "Research Copilot" if lang == "en" else "研究 Copilot"
     subtitle = (
-        "I'm the EasyICU assistant — I help you frame questions, shape an analysis plan, and read your results. I work from your loaded context and stay evidence-bound."
+        "I can walk a whole study through by chat: frame the question, pick data, assemble the cohort, load review, and hand a gated question to Research Agent."
         if lang == "en" else
-        "我是 EasyICU 助手，可以帮你框定问题、组织分析计划、阅读结果。我只基于当前上下文给建议，并保持证据绑定。"
+        "我可以用聊天带你走完整研究：框定问题、选择数据、组装队列、加载审阅，并把带闸门的问题交给 Research Agent。"
     )
     prompt_hint = (
         "Try one of these prompts:" if lang == "en" else "可以从这些提示开始："
@@ -2436,9 +3582,9 @@ def _render_chat_welcome(*, lang: str, panel_key: str, history_container, show_s
         "帮我把“乳酸是否影响脓毒症死亡率”整理成可研究问题。"
     )
     sample_a = (
-        "A tighter framing maps cleanly onto a cohort, outcome, first-24h window, and a comparator model with and without lactate."
+        "I will bind it to a cohort, outcome, first-24h window, feature modules, review gate, and Research Agent handoff."
         if lang == "en" else
-        "更稳的表述会同时固定队列、结局、前 24 小时窗口，以及含/不含乳酸的比较模型。"
+        "我会把它绑定到队列、结局、前 24 小时窗口、特征模块、审阅闸门和 Research Agent 交接。"
     )
     rec_label = "Evidence-bound note" if lang == "en" else "证据绑定提示"
     rec_text = (
@@ -2614,17 +3760,59 @@ def _render_compact_chat_panel(
                 st.rerun()
 
 
+def _render_floating_copilot_context_actions(lang: str) -> None:
+    """Render compact context and workspace-driving actions for the global dock."""
+    is_en = lang == "en"
+    st.markdown(_inline_ai_context_html(lang), unsafe_allow_html=True)
+    st.markdown(
+        '<div class="inline-ai-evidence-note">'
+        '<b>' + html.escape("Local companion" if is_en else "本地伴随助手") + '</b>'
+        '<p>' + html.escape(
+            "Use this dock for screen-aware help and fast workspace actions. Open the full Copilot for a complete guided study."
+            if is_en else
+            "这个 dock 用于当前页面解释和快速驱动工作区；完整引导式研究请打开完整 Copilot。"
+        ) + '</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    action_cols = st.columns(3, gap="small")
+    with action_cols[0]:
+        if st.button(
+            "Full Copilot" if is_en else "完整 Copilot",
+            key="_floating_ai_full_copilot",
+            use_container_width=True,
+            icon=":material/auto_awesome:",
+        ):
+            st.session_state["llm_enabled"] = True
+            st.session_state["_llm_toggle"] = True
+            st.session_state["_active_main_page"] = "assistant"
+            st.session_state["_floating_ai_open"] = False
+            st.session_state["_scroll_to_top"] = True
+            st.rerun()
+    with action_cols[1]:
+        if st.button(
+            "Demo review" if is_en else "演示审阅",
+            key="_floating_ai_demo_review",
+            use_container_width=True,
+            icon=":material/preview:",
+        ):
+            _apply_chat_workflow_action("demo_review")
+            st.rerun()
+    with action_cols[2]:
+        if st.button(
+            "Agent setup" if is_en else "Agent 设置",
+            key="_floating_ai_agent_setup",
+            use_container_width=True,
+            icon=":material/assignment:",
+        ):
+            _prepare_research_agent_handoff_from_ai(st.session_state)
+            st.rerun()
+
+
 def render_floating_chat_dock():
     """Render a fixed bottom-right floating AI chat dock."""
     _init_chat_state()
     lang = st.session_state.get("language", "en")
-    has_pending_prompt = bool(
-        st.session_state.get("_ai_pending_question")
-        or st.session_state.get("_ai_bg_unread_count", 0)
-        or st.session_state.get("_ai_bg_responding", False)
-    )
-    if not st.session_state.get("llm_enabled", False) and not has_pending_prompt:
-        return
     if "_floating_ai_open" not in st.session_state:
         st.session_state["_floating_ai_open"] = False
     if "_floating_ai_size" not in st.session_state:
@@ -2894,6 +4082,59 @@ def render_floating_chat_dock():
             line-height: 1.42;
         }
 
+        div.st-key-floating_ai_panel .inline-ai-context-card,
+        div.st-key-floating_ai_panel .inline-ai-evidence-note {
+            border-radius: 10px;
+            border: 1px solid var(--hair);
+            background: var(--surface-2);
+            padding: 10px 12px;
+            margin: 8px 8px 10px;
+        }
+
+        div.st-key-floating_ai_panel .inline-ai-context-card h3,
+        div.st-key-floating_ai_panel .inline-ai-evidence-note b {
+            display: block;
+            margin: 0;
+            color: var(--ink);
+            font-size: 12.5px;
+            font-weight: 600;
+            line-height: 1.35;
+        }
+
+        div.st-key-floating_ai_panel .inline-ai-context-card p,
+        div.st-key-floating_ai_panel .inline-ai-evidence-note p {
+            margin: 4px 0 0;
+            color: var(--ink-3);
+            font-size: 11.5px;
+            line-height: 1.45;
+        }
+
+        div.st-key-floating_ai_panel .inline-ai-section-label {
+            color: var(--ink-4);
+            font-family: var(--font-mono);
+            font-size: 9.5px;
+            font-weight: 500;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        div.st-key-floating_ai_panel .inline-ai-tag-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-top: 8px;
+        }
+
+        div.st-key-floating_ai_panel .inline-ai-tag-row span {
+            border-radius: 999px;
+            border: 1px solid var(--hair);
+            background: var(--surface);
+            color: var(--ink-3);
+            font-size: 10.5px;
+            padding: 2px 7px;
+        }
+
         div.st-key-floating_ai_panel .floating-ai-welcome-hint {
             font-size: 10px;
             color: var(--accent-ink);
@@ -3051,7 +4292,7 @@ def render_floating_chat_dock():
             if st.button(
                 "",
                 key="_floating_ai_open_btn",
-                help="Open AI chat" if lang == "en" else "打开 AI 对话",
+                help="Open Research Copilot dock" if lang == "en" else "打开研究 Copilot dock",
                 icon=":material/smart_toy:",
             ):
                 st.session_state["_floating_ai_open"] = True
@@ -3059,7 +4300,7 @@ def render_floating_chat_dock():
 
     if st.session_state.get("_floating_ai_open", False):
         with st.container(key="floating_ai_panel"):
-            dock_title = "AI Assistant" if lang == "en" else "AI 助手"
+            dock_title = "Research Copilot" if lang == "en" else "研究 Copilot"
             dock_subtitle = (
                 "Grounded in your current page and selections."
                 if lang == "en" else
@@ -3070,15 +4311,12 @@ def render_floating_chat_dock():
             )
             provider_label = public_provider_defaults(provider_key)[0] or provider_key
             llm_configured = _is_configured()
-            if not st.session_state.get("llm_enabled", False):
-                status_label = "AI off" if lang == "en" else "AI 已关闭"
-                status_color = "var(--ink-4)"
-            elif not llm_configured:
-                status_label = "key missing" if lang == "en" else "缺少 API key"
-                status_color = "var(--warn)"
-            else:
+            if llm_configured:
                 status_label = f"{provider_label} · online"
                 status_color = "var(--ok)"
+            else:
+                status_label = "local Copilot" if lang == "en" else "本地 Copilot"
+                status_color = "var(--accent)"
             status_pill = (
                 f'<span class="eu-pill mono" '
                 f'style="font-size:10px;padding:2px 7px;height:18px;'
@@ -3124,25 +4362,19 @@ def render_floating_chat_dock():
                     _close_floating_ai_panel(disable_assistant=True)
                     st.rerun()
 
-            if not st.session_state.llm_enabled:
+            _render_floating_copilot_context_actions(lang)
+            if not _is_configured():
                 st.caption(
-                    "Enable AI Assistant in the sidebar settings first."
+                    "Local Copilot is available. Configure a provider only for open-ended external model calls."
                     if lang == "en" else
-                    "请先在侧边栏上方开启 AI 助手。"
+                    "本地 Copilot 可直接使用。只有开放式外部模型调用才需要配置服务商/API Key。"
                 )
-            elif not _is_configured():
-                st.caption(
-                    "Configure provider/API key in the sidebar settings first."
-                    if lang == "en" else
-                    "请先在侧边栏上方配置服务商/API Key。"
-                )
-            else:
-                _render_compact_chat_panel(
-                    lang=lang,
-                    panel_key="_llm_floating",
-                    history_height=size_cfg["history_height"],
-                    show_starters=False,
-                )
+            _render_compact_chat_panel(
+                lang=lang,
+                panel_key="_llm_floating",
+                history_height=size_cfg["history_height"],
+                show_starters=False,
+            )
 
 
 
@@ -3154,7 +4386,7 @@ def _render_intro(lang: str):
     """Show a brief feature overview when the assistant is disabled."""
     if lang == "en":
         st.markdown("""\
-#### What is the AI Assistant?
+#### What is Research Copilot?
 A built-in conversational helper that knows EasyICU inside-out. It can:
 - Start from your study goal, then map it to the right EasyICU workflow
 - Explain which cohort filters, feature modules, and scores fit your task
@@ -3162,14 +4394,14 @@ A built-in conversational helper that knows EasyICU inside-out. It can:
 - Help interpret extraction results (SOFA, Sepsis-3, missingness, etc.)
 
 **Getting started:**
-1. Toggle **Enable AI Assistant** in the sidebar
+1. Toggle **Enable Research Copilot** in the sidebar
 2. Choose a provider and enter your API key or token
 3. Start by describing your task, e.g. "I want to build a sepsis early-warning cohort."
 4. If you already know the disease cohort you want, ask directly for AKI / Sepsis / ventilation / ICD-based filtering.
 """)
     else:
         st.markdown("""\
-#### AI 助手是什么？
+#### 研究 Copilot 是什么？
 内置的对话助手，熟知 EasyICU 的所有功能。它可以：
 - 从你的研究目标出发，反推最合适的 EasyICU 工作流
 - 解释适合该任务的队列筛选、特征模块和临床评分
@@ -3177,7 +4409,7 @@ A built-in conversational helper that knows EasyICU inside-out. It can:
 - 帮助解读提取结果（SOFA、Sepsis-3、缺失率等）
 
 **快速开始：**
-1. 在侧边栏开启 **启用 AI 助手**
+1. 在侧边栏开启 **启用研究 Copilot**
 2. 选择服务商并填写对应的 API Key / Token
 3. 先描述你的任务，例如“我想做脓毒症实时预警队列”。
 4. 如果你已经知道要筛选的疾病队列，也可以直接问 AKI / Sepsis / 机械通气 / ICD 队列怎么设置。
