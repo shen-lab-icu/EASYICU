@@ -90,6 +90,33 @@ if TYPE_CHECKING:
     from .pipeline import ResearchAgentPipeline
 
 
+def _is_cosmetic_visual_finding(finding: ValidationFinding) -> bool:
+    """Return true only for deterministic layout errors safe to demote."""
+
+    if finding.severity != "error" or finding.validator != "visual_qa":
+        return False
+    message = (finding.message or "").lower()
+    return (
+        "overlapping text elements" in message
+        and "spacing" in message
+    )
+
+
+def _demote_cosmetic_visual_findings(
+    findings: Sequence[ValidationFinding],
+) -> tuple[List[ValidationFinding], List[ValidationFinding]]:
+    """Demote cosmetic visual errors and return remaining hard errors."""
+
+    demoted: List[ValidationFinding] = []
+    for finding in findings:
+        if _is_cosmetic_visual_finding(finding):
+            demoted.append(finding.model_copy(update={"severity": "warning"}))
+        else:
+            demoted.append(finding)
+    blocking_errors = [f for f in demoted if f.severity == "error"]
+    return demoted, blocking_errors
+
+
 def run_execute_phase(
     pipeline: "ResearchAgentPipeline",
     *,
@@ -862,6 +889,13 @@ def run_execute_phase(
             run_result = runner.run(step_id=step.step_id, code=code)
             step_record["returncode"] = run_result.returncode
             step_record["timed_out"] = run_result.timed_out
+            step_record["requested_network_policy"] = run_result.requested_network_policy
+            step_record["effective_isolation"] = run_result.effective_isolation
+            step_record["isolation_degraded"] = run_result.isolation_degraded
+            if run_result.isolation_degradation_reason:
+                step_record["isolation_degradation_reason"] = (
+                    run_result.isolation_degradation_reason
+                )
             step_record["code_repair_attempts"] = repair_attempts
 
             script_description = (
@@ -992,31 +1026,40 @@ def run_execute_phase(
                                 code = fallback_code
                                 _clear_output_dir(run_result.out_dir)
                                 continue
-                            # Demote unrecoverable visual_qa errors to
-                            # warnings — visual layout issues (overlapping
-                            # text, panel-label spacing, etc.) should not
-                            # block scientifically-valid analysis outputs
-                            # from being accepted. The issues remain
-                            # visible to reviewers via
-                            # ``step_record["visual_findings"]`` and the
-                            # demoted warnings recorded on the manifest.
-                            demoted_findings = [
-                                (
-                                    finding.model_copy(
-                                        update={"severity": "warning"}
-                                    )
-                                    if finding.severity == "error"
-                                    else finding
-                                )
-                                for finding in visual_findings
-                            ]
+                            demoted_findings, blocking_visual_errors = (
+                                _demote_cosmetic_visual_findings(visual_findings)
+                            )
                             with shared_lock:
                                 findings.extend(demoted_findings)
-                            step_record["visual_qa_demoted"] = True
+                            step_record["visual_qa_demoted"] = any(
+                                original.severity == "error"
+                                and demoted.severity == "warning"
+                                for original, demoted in zip(
+                                    visual_findings, demoted_findings
+                                )
+                            )
+                            if blocking_visual_errors:
+                                step_record["status"] = "execution_failed"
+                                with shared_lock:
+                                    per_step_records.append(step_record)
+                                    _flush_partial_manifest()
+                                emit_progress(
+                                    "visual_qa",
+                                    (
+                                        f"Visual QA blocked {step.step_id} after "
+                                        f"{repair_attempts} repair attempts."
+                                    ),
+                                    status="error",
+                                    run_id=run_id,
+                                    step_id=step.step_id,
+                                    current_step=step_current,
+                                    total_steps=total_steps,
+                                )
+                                return step_record
                             emit_progress(
                                 "visual_qa",
                                 (
-                                    f"Visual QA findings demoted to warning "
+                                    f"Cosmetic visual QA findings demoted to warning "
                                     f"for {step.step_id} after "
                                     f"{repair_attempts} repair attempts."
                                 ),
@@ -1027,9 +1070,8 @@ def run_execute_phase(
                                 total_steps=total_steps,
                             )
                             # Fall through to contract checks and evidence
-                            # registration — the step's analytic outputs
-                            # remain valid even if the figure layout has
-                            # cosmetic issues.
+                            # registration only when every remaining visual
+                            # error was a deterministic layout/cosmetic issue.
                         else:
                             repair_attempts += 1
                             step_record["code_repair_attempts"] = repair_attempts
@@ -1194,6 +1236,7 @@ def run_execute_phase(
                         code=code,
                         step_summary=visual_step_summary,
                         previous_repair=runner_repair_name,
+                        analysis_family=local_runtime_state.analysis_family,
                     )
                 else:
                     summary_repair = None
@@ -1249,6 +1292,7 @@ def run_execute_phase(
                         code=code,
                         run_log=run_log,
                         previous_repair=runner_repair_name,
+                        analysis_family=local_runtime_state.analysis_family,
                     )
             else:
                 runner_repair = None
@@ -1762,8 +1806,10 @@ def run_execute_phase(
             prompt_pack_version=prompt_version,
         )
         step_record["interpretation_evidence_id"] = interp_record.evidence_id
+        evidence_ids_for_step.append(interp_record.evidence_id)
+        step_record["evidence_ids"] = list(dict.fromkeys(evidence_ids_for_step))
         _propagate_findings_to_evidence(
-            evidence_ids_for_step + [interp_record.evidence_id],
+            evidence_ids_for_step,
             usage_findings
             + stat_findings
             + clinical_findings
@@ -1943,26 +1989,9 @@ def run_execute_phase(
         final_visual_findings = VisualQAAuditor(
             vlm_adapter=vlm_adapter
         ).audit(figure_paths=fig_paths)
-        # Mirror the per-step demotion policy here: layout-style
-        # visual_qa errors (overlapping text, panel-label spacing,
-        # etc.) are cosmetic and should not block scientifically
-        # valid analyses from being accepted at the run level. The
-        # per-step pipeline above attempts up to
-        # ``pipeline._max_code_repair_attempts`` repairs and falls back
-        # to a layout-aware deterministic helper before demoting;
-        # by the time the final whole-run audit runs we have
-        # exhausted those budgets, so any remaining figure-layout
-        # findings are demoted to warnings here too. The original
-        # message is preserved for reviewer inspection on the
-        # manifest.
-        demoted_final_findings = [
-            (
-                finding.model_copy(update={"severity": "warning"})
-                if finding.severity == "error"
-                else finding
-            )
-            for finding in final_visual_findings
-        ]
+        demoted_final_findings, _ = _demote_cosmetic_visual_findings(
+            final_visual_findings
+        )
         findings += demoted_final_findings
 
     plan_result.plan = plan

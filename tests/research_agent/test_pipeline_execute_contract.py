@@ -231,3 +231,36 @@ def test_required_collaborators_are_importable():
         _deterministic_summary_repair,
         MockLLMClient,
     )
+
+
+def test_visual_qa_demotes_only_cosmetic_layout_errors(ra):
+    from easyicu.research_agent.pipeline_execute import (
+        _demote_cosmetic_visual_findings,
+    )
+    from easyicu.research_agent.schema import ValidationFinding
+
+    cosmetic = ValidationFinding(
+        validator="visual_qa",
+        severity="error",
+        message=(
+            "SVG figure 'x.svg' has overlapping text elements; "
+            "multi-panel labels, annotations or axis text need more spacing."
+        ),
+    )
+    hard = ValidationFinding(
+        validator="visual_qa",
+        severity="error",
+        message="Could not open figure 'x.png': truncated image file",
+    )
+    vlm = ValidationFinding(
+        validator="vlm_visual_qa",
+        severity="error",
+        message="Panel B axis values do not match source data.",
+    )
+
+    demoted, blocking = _demote_cosmetic_visual_findings([cosmetic, hard, vlm])
+
+    assert demoted[0].severity == "warning"
+    assert demoted[1].severity == "error"
+    assert demoted[2].severity == "error"
+    assert [f.message for f in blocking] == [hard.message, vlm.message]

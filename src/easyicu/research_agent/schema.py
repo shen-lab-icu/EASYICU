@@ -1006,6 +1006,10 @@ class StepRecord(BaseModel):
     # Runner observability.
     returncode: Optional[int] = None
     timed_out: Optional[bool] = None
+    requested_network_policy: Optional[str] = None
+    effective_isolation: Optional[str] = None
+    isolation_degraded: Optional[bool] = None
+    isolation_degradation_reason: Optional[str] = None
     code_repair_attempts: Optional[int] = None
     runner_repair: Optional[str] = None
     deterministic_code_fallback: Optional[str] = None

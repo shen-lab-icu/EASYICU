@@ -211,6 +211,7 @@ from .pipeline_writer_aux import (
     _summarise_table_one_rows,
 )
 from .plan_utils import (
+    _cap_plan_preserving_figure_steps,
     _ensure_publication_figure_step_in_plan,
     _enforce_advanced_plan_contract,
     _infer_primary_predictor_from_context,
@@ -1263,27 +1264,9 @@ class ResearchAgentPipeline:
         )
         findings.extend(figure_guard_findings)
 
-        # C1 (pilot 20260515 fix): cap initial plan size for the same
-        # reason the replanner is capped (see pipeline_execute.py).
-        # Truncation happens AFTER figure-step guard so a publication
-        # figure step is not accidentally dropped.
         cap = self._max_total_steps
-        if cap > 0 and len(plan.steps) > cap:
-            dropped = [s.step_id for s in plan.steps[cap:]]
-            plan = plan.model_copy(update={"steps": list(plan.steps[:cap])})
-            findings.append(
-                ValidationFinding(
-                    validator="planner",
-                    severity="warning",
-                    message=(
-                        f"Initial plan had {len(dropped) + cap} steps; "
-                        f"truncated to max_total_steps={cap}. Dropped: "
-                        f"{', '.join(dropped[:6])}"
-                        + (" ..." if len(dropped) > 6 else "")
-                    ),
-                    detail={"dropped_step_ids": dropped, "cap": cap},
-                )
-            )
+        plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
+        findings.extend(cap_findings)
         plan = ensure_cohort_definition(plan)
         plan = ensure_robustness_specs(plan)
         plan_path = run_dir / "analysis_plan.json"
@@ -1806,18 +1789,50 @@ class ResearchAgentPipeline:
             )
 
         def _write_invoker(plan_result, execute_result):
-            return self._run_write_phase(
-                plan_result=plan_result,
-                execute_result=execute_result,
-                run_dir=run_dir,
-                run_id=run_id,
-                stop_after_analysis=stop_after_analysis,
-                manuscript_title=manuscript_title,
-                manuscript_authors=manuscript_authors,
-                run_language=run_language,
-                emit_progress=_emit_progress,
-                force_writer_probe=force_writer_probe,
-            )
+            try:
+                return self._run_write_phase(
+                    plan_result=plan_result,
+                    execute_result=execute_result,
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    stop_after_analysis=stop_after_analysis,
+                    manuscript_title=manuscript_title,
+                    manuscript_authors=manuscript_authors,
+                    run_language=run_language,
+                    emit_progress=_emit_progress,
+                    force_writer_probe=force_writer_probe,
+                )
+            except EvidenceEnforcementError as exc:
+                validator = (
+                    "manuscript_numeric_auditor"
+                    if "untraced" in getattr(exc, "detail", {})
+                    else "evidence_bound_writer"
+                )
+                plan_result.findings.append(
+                    ValidationFinding(
+                        validator=validator,
+                        severity="error",
+                        message=(
+                            "STRICT evidence enforcement blocked manuscript "
+                            f"generation: {exc}"
+                        ),
+                        detail=getattr(exc, "detail", {}) or None,
+                    )
+                )
+                bound_path = run_dir / "manuscript_scaffold_bound.md"
+                bound_path.write_text(
+                    "# Manuscript scaffold not generated\n\n"
+                    "STRICT evidence enforcement failed before final binding.\n\n"
+                    f"Error: {exc}\n",
+                    encoding="utf-8",
+                )
+                _emit_progress(
+                    "writer",
+                    "STRICT evidence enforcement blocked manuscript generation.",
+                    status="error",
+                    run_id=run_id,
+                )
+                return _WritePhaseResult(literature=None, bound_path=bound_path)
 
         def _finalise_invoker(plan_result, execute_result, write_result):
             return self._finalise_success(
