@@ -12,9 +12,9 @@ def _synthetic_binary_frame(n: int = 900, seed: int = 7) -> pd.DataFrame:
     logit = -0.3 + np.log(1.8) * x
     p = 1 / (1 + np.exp(-logit))
     y = rng.binomial(1, p)
-    y_db = rng.binomial(1, np.clip(p + 0.02, 0.01, 0.99))
-    y_28 = rng.binomial(1, np.clip(p - 0.02, 0.01, 0.99))
-    return pd.DataFrame({"x": x, "y": y, "y_db": y_db, "y_28": y_28})
+    y_alt_1 = rng.binomial(1, np.clip(p + 0.02, 0.01, 0.99))
+    y_alt_2 = rng.binomial(1, np.clip(p - 0.02, 0.01, 0.99))
+    return pd.DataFrame({"x": x, "y": y, "y_alt_1": y_alt_1, "y_alt_2": y_alt_2})
 
 
 def _adapter_records(df: pd.DataFrame):
@@ -30,8 +30,8 @@ def _adapter_records(df: pd.DataFrame):
                     "estimator_kind": "logistic",
                     "missing_strategy": "complete_case",
                     "outcome_columns": {
-                        "database_specific_mortality": "y_db",
-                        "28_day_mortality_if_available": "y_28",
+                        "author_defined_outcome_1": "y_alt_1",
+                        "author_defined_outcome_2": "y_alt_2",
                     },
                 }
             },
