@@ -49,16 +49,56 @@ from .scalar_utils import (
 )
 
 
+_BINARY_MODEL_REPAIR_FAMILIES = {
+    "association_study",
+    "prediction_model",
+    "validation",
+    "robustness",
+    "bias_audit",
+}
+
+
+def _family_allows_binary_model_repair(analysis_family: Optional[str]) -> bool:
+    """Return whether deterministic binary-model fallbacks fit the task family."""
+
+    if analysis_family is None:
+        return True
+    family = str(analysis_family).strip().lower()
+    if not family:
+        return True
+    return family in _BINARY_MODEL_REPAIR_FAMILIES
+
+
+def _code_contains_binary_model(code: str) -> bool:
+    lowered = code.lower()
+    return (
+        "sm.logit(" in lowered
+        or "sm.logit" in lowered
+        or "sm.glm" in lowered and "binomial" in lowered
+        or "logisticregression" in lowered
+        or "predict_proba" in lowered
+        or "roc_auc" in lowered
+    )
+
+
+def _statsmodels_repair_allowed_for_family(code: str, analysis_family: Optional[str]) -> bool:
+    if _family_allows_binary_model_repair(analysis_family):
+        return True
+    return not _code_contains_binary_model(code)
+
+
 def _primary_association_fallback_code(
     *,
     predictor: str,
-    outcome: str = "death",
+    outcome: str,
     reason: str,
 ) -> str:
     """Appendable case-neutral rescue block for common regression failures."""
 
+    if not outcome:
+        raise ValueError("A binary outcome column is required for primary association fallback.")
     predictor_lit = json.dumps(predictor)
-    outcome_lit = json.dumps(outcome or "death")
+    outcome_lit = json.dumps(outcome)
     reason_lit = json.dumps(reason)
     return textwrap.dedent(
         f"""
@@ -82,7 +122,10 @@ def _primary_association_fallback_code(
             for col in model_df.columns:
                 model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
             model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
-            if len(model_df) < 20 or model_df[outcome_col].nunique() < 2:
+            outcome_values = set(model_df[outcome_col].dropna().astype(float).unique().tolist())
+            if outcome_values - {{0.0, 1.0}}:
+                return
+            if len(model_df) < 20 or len(outcome_values) < 2:
                 return
             y = model_df[outcome_col].astype(float)
             X = sm.add_constant(model_df[[predictor_col]].astype(float), has_constant="add")
@@ -154,10 +197,13 @@ def _infer_overexpanded_categorical_predictor(step_summary: Dict[str, Any], code
     return None
 
 
-def _infer_binary_outcome_from_code(code: str, default: str = "death") -> str:
+def _infer_binary_outcome_from_code(code: str) -> Optional[str]:
     """Best-effort extraction of the left-hand side of a generated formula."""
 
     match = re.search(r"formula\s*=\s*[\"'](?P<outcome>[A-Za-z_][A-Za-z0-9_]*)\s*~", code)
+    if match:
+        return match.group("outcome")
+    match = re.search(r"[\"'](?P<outcome>[A-Za-z_][A-Za-z0-9_]*)\s*~\s*[^\"']+[\"']", code)
     if match:
         return match.group("outcome")
     match = re.search(r"(?P<outcome>[A-Za-z_][A-Za-z0-9_]*)\s*~\s*C\(", code)
@@ -169,7 +215,7 @@ def _infer_binary_outcome_from_code(code: str, default: str = "death") -> str:
     )
     if match:
         return match.group("outcome")
-    return default
+    return None
 
 
 def _normalise_predictor_column_candidate(value: Any, code: str) -> Optional[str]:
@@ -318,6 +364,7 @@ def _ordinal_primary_association_fallback_code(
                 model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
             model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
             n_complete = int(len(model_df))
+            outcome_values = set(model_df[outcome_col].dropna().astype(float).unique().tolist())
             summary_path = os.path.join(out_dir, "step_summary.json")
             summary = {{}}
             if os.path.exists(summary_path):
@@ -328,9 +375,17 @@ def _ordinal_primary_association_fallback_code(
                         summary.update(loaded)
                 except Exception:
                     summary = {{}}
+            if outcome_values - {{0.0, 1.0}}:
+                summary.setdefault("fallback_notes", []).append(
+                    "ordinal_primary_association_fallback_v1 refused to run because "
+                    "the inferred outcome is not a binary 0/1 endpoint."
+                )
+                with open(summary_path, "w", encoding="utf-8") as f:
+                    json.dump(summary, f, indent=2, default=_jsonable, ensure_ascii=False)
+                return
             if (
                 n_complete < 20
-                or model_df[outcome_col].nunique(dropna=True) < 2
+                or len(outcome_values) < 2
                 or model_df[predictor_col].nunique(dropna=True) < 2
             ):
                 summary.setdefault("fallback_notes", []).append(
@@ -499,6 +554,7 @@ def _deterministic_summary_repair(
     code: str,
     step_summary: Dict[str, Any],
     previous_repair: Optional[str] = None,
+    analysis_family: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     if not isinstance(step_summary, dict) or not step_summary:
         return None
@@ -560,6 +616,9 @@ def _deterministic_summary_repair(
         and "not defined" in error_text.lower()
         and "pd.get_dummies" in code
         and "logit(" in code.lower()
+    )
+    binary_model_repair_allowed = _family_allows_binary_model_repair(
+        analysis_family
     )
     if (
         predictor
@@ -627,7 +686,7 @@ def _deterministic_summary_repair(
             and "def _fit_logistic" in code
             and 'X = X.apply(pd.to_numeric, errors="coerce")' in code
         )
-        if helper_dtype_summary_failure:
+        if helper_dtype_summary_failure and binary_model_repair_allowed:
             repair_name = "statsmodels_helper_design_float_v1"
             if previous_repair != repair_name:
                 repaired = code.replace(
@@ -643,19 +702,27 @@ def _deterministic_summary_repair(
                 )
                 if repaired != code:
                     return repair_name, repaired
-        if dtype_summary_failure:
+        if (
+            dtype_summary_failure
+            and _statsmodels_repair_allowed_for_family(code, analysis_family)
+        ):
             repaired = _deterministic_runner_repair(
                 code=code,
                 run_log=summary_text,
                 previous_repair=previous_repair,
+                analysis_family=analysis_family,
             )
             if repaired is not None:
                 return repaired
-        if index_alignment_summary_failure:
+        if (
+            index_alignment_summary_failure
+            and _statsmodels_repair_allowed_for_family(code, analysis_family)
+        ):
             repaired = _deterministic_runner_repair(
                 code=code,
                 run_log=summary_text,
                 previous_repair=previous_repair,
+                analysis_family=analysis_family,
             )
             if repaired is not None:
                 return repaired
@@ -665,7 +732,7 @@ def _deterministic_summary_repair(
             and "sm.Logit" in code
             and "X_final = sm.add_constant(X_encoded" in code
         )
-        if dummy_logit_null_summary:
+        if dummy_logit_null_summary and binary_model_repair_allowed:
             repair_name = "statsmodels_dummy_design_float_v1"
             if previous_repair != repair_name:
                 marker = "X_final = sm.add_constant(X_encoded, has_constant=\"add\")"
@@ -676,12 +743,17 @@ def _deterministic_summary_repair(
                 repaired = code.replace(marker, patch, 1)
                 if repaired != code:
                     return repair_name, repaired
-        if undefined_dummy_formula_failure and predictor:
+        if undefined_dummy_formula_failure and predictor and binary_model_repair_allowed:
             repair_name = "formula_dummy_name_fallback_v1"
             if previous_repair != repair_name:
+                fallback_outcome = str(
+                    step_summary.get("outcome") or _infer_binary_outcome_from_code(code) or ""
+                ).strip()
+                if not fallback_outcome:
+                    return None
                 fallback = _primary_association_fallback_code(
                     predictor=predictor,
-                    outcome=str(step_summary.get("outcome") or "death"),
+                    outcome=fallback_outcome,
                     reason=(
                         "Deterministic fallback after statsmodels formula used "
                         "a hard-coded dummy column name that was not present."
@@ -715,17 +787,20 @@ def _deterministic_summary_repair(
                 or '"primary_ci_high": null' in summary_text
             )
         )
-        if glm_primary_effect_null:
+        if glm_primary_effect_null and binary_model_repair_allowed:
             fallback_predictor = _infer_primary_association_predictor_from_code(
                 step_summary,
                 code,
             )
             if fallback_predictor:
+                fallback_outcome = _infer_binary_outcome_from_code(code)
+                if not fallback_outcome:
+                    return None
                 repair_name = "ordinal_primary_association_fallback_v1"
                 if previous_repair != repair_name:
                     fallback = _ordinal_primary_association_fallback_code(
                         predictor=fallback_predictor,
-                        outcome=_infer_binary_outcome_from_code(code),
+                        outcome=fallback_outcome,
                         reason=(
                             "Deterministic fallback after generated GLM/Logit "
                             "model failed to produce a finite primary association."
@@ -741,17 +816,20 @@ def _deterministic_summary_repair(
                 or "primary_or" in summary_text
             )
         )
-        if overexpanded_categorical_singular:
+        if overexpanded_categorical_singular and binary_model_repair_allowed:
             categorical_predictor = _infer_overexpanded_categorical_predictor(
                 step_summary,
                 code,
             )
             if categorical_predictor:
+                fallback_outcome = _infer_binary_outcome_from_code(code)
+                if not fallback_outcome:
+                    return None
                 repair_name = "ordinal_primary_association_fallback_v1"
                 if previous_repair != repair_name:
                     fallback = _ordinal_primary_association_fallback_code(
                         predictor=categorical_predictor,
-                        outcome=_infer_binary_outcome_from_code(code),
+                        outcome=fallback_outcome,
                         reason=(
                             "Deterministic fallback after generated categorical "
                             "logistic model failed with a singular matrix."
@@ -765,7 +843,7 @@ def _deterministic_summary_repair(
             and "pd.get_dummies" not in code
             and ".str.lower().isin(['m', 'male'])" not in code
         )
-        if raw_categorical_sex_logit:
+        if raw_categorical_sex_logit and binary_model_repair_allowed:
             repair_name = "sex_binary_encode_for_logit_v1"
             if previous_repair != repair_name:
                 model_df_assign = re.search(
@@ -1210,6 +1288,7 @@ def _deterministic_runner_repair(
     code: str,
     run_log: str,
     previous_repair: Optional[str] = None,
+    analysis_family: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Best-effort execution-layer patch for common numeric model failures.
 
@@ -1219,6 +1298,9 @@ def _deterministic_runner_repair(
     coder by handling one family of brittle runtime errors below the LLM layer.
     """
     lowered = (run_log or "").lower()
+    binary_model_repair_allowed = _family_allows_binary_model_repair(
+        analysis_family
+    )
 
     # 🔧 2026-05-17: defend against LLM hallucinating non-existent easyicu
     # sub-modules (e.g. deepseek-v4-flash emitted
@@ -1500,7 +1582,10 @@ def _deterministic_runner_repair(
         "indices for endog and exog are not aligned" in lowered
         and any(token in code for token in ("sm.Logit(", "sm.OLS(", "sm.GLM("))
     )
-    if statsmodels_endog_exog_index_mismatch:
+    if (
+        statsmodels_endog_exog_index_mismatch
+        and _statsmodels_repair_allowed_for_family(code, analysis_family)
+    ):
         repair_name = "statsmodels_endog_exog_index_align_v1"
         if previous_repair != repair_name:
             repaired = _patch_statsmodels_endog_exog_index_alignment(code)
@@ -1678,11 +1763,20 @@ def _deterministic_runner_repair(
             if repaired != code:
                 return repair_name, repaired
 
+    missing_subset_cols = _extract_missing_index_columns(run_log or "")
+    literal_outcomes = re.findall(
+        r"outcome_col\s*=\s*['\"]([^'\"]+)['\"]",
+        code,
+    )
     missing_outcome_from_subset = (
         "keyerror" in lowered
-        and "death" in lowered
         and "not in index" in lowered
         and "all_vars = [primary_predictor] + covariates" in code
+        and "outcome_col" in code
+        and (
+            not literal_outcomes
+            or any(col in set(missing_subset_cols) for col in literal_outcomes)
+        )
     )
     if missing_outcome_from_subset:
         repair_name = "include_outcome_in_all_vars_v1"
@@ -2070,8 +2164,17 @@ def _deterministic_runner_repair(
                 if outcome_col and outcome_col in df.columns:
                     outcome = pd.to_numeric(df[outcome_col], errors="coerce").dropna()
                     summary["outcome_col"] = outcome_col
-                    summary["outcome_n"] = int(outcome.sum()) if len(outcome) else 0
-                    summary["outcome_rate"] = float(outcome.mean()) if len(outcome) else None
+                    outcome_values = set(outcome.astype(float).unique().tolist())
+                    if outcome_values <= {0.0, 1.0}:
+                        summary["outcome_kind"] = "binary_0_1"
+                        summary["outcome_n"] = int(outcome.sum()) if len(outcome) else 0
+                        summary["outcome_rate"] = float(outcome.mean()) if len(outcome) else None
+                    else:
+                        summary["outcome_kind"] = "non_binary"
+                        summary["outcome_note"] = (
+                            "OUTCOME_COL was not summarized as an event rate because "
+                            "it is not a binary 0/1 endpoint."
+                        )
                 if "age" in df.columns:
                     age = pd.to_numeric(df["age"], errors="coerce").dropna()
                     summary["age_median"] = float(age.median()) if len(age) else None
@@ -2135,6 +2238,13 @@ def _deterministic_runner_repair(
                 if outcome_col not in df.columns:
                     raise KeyError(f"OUTCOME_COL={outcome_col!r} is not present in the cohort")
                 outcome = pd.to_numeric(df[outcome_col], errors="coerce")
+                valid_outcome = outcome.dropna().astype(float)
+                outcome_values = set(valid_outcome.unique().tolist())
+                if outcome_values - {0.0, 1.0} or len(outcome_values) < 2:
+                    raise RuntimeError(
+                        "Outcome incidence repair requires a binary 0/1 OUTCOME_COL; "
+                        "refusing to compute an event rate for a continuous or multi-class endpoint."
+                    )
                 rows = []
 
                 def add_row(label, mask):
@@ -2206,7 +2316,7 @@ def _deterministic_runner_repair(
         and "train_test_split" in code
         and "figure_contract = figurecontract(" in code.lower()
     )
-    if repeated_keyword_syntax:
+    if repeated_keyword_syntax and binary_model_repair_allowed:
         repair_name = "prediction_split_minimal_v1"
         if previous_repair != repair_name:
             repaired = textwrap.dedent(
@@ -2229,8 +2339,26 @@ def _deterministic_runner_repair(
 
                 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
                 out = os.environ["STEP_OUT_DIR"]
-                outcome = "death" if "death" in df.columns else df.columns[-1]
-                y = pd.to_numeric(df[outcome], errors="coerce").fillna(0).astype(int)
+                outcome = os.environ.get("OUTCOME_COL")
+                if not outcome:
+                    raise RuntimeError(
+                        "OUTCOME_COL is required for deterministic prediction split repair; "
+                        "refusing to guess a target outcome."
+                    )
+                if outcome not in df.columns:
+                    raise KeyError(
+                        f"OUTCOME_COL={outcome!r} is not present in cohort columns."
+                    )
+                y_numeric = pd.to_numeric(df[outcome], errors="coerce")
+                valid_y = y_numeric.dropna().astype(float)
+                outcome_values = set(valid_y.unique().tolist())
+                if outcome_values - {0.0, 1.0} or len(outcome_values) < 2:
+                    raise RuntimeError(
+                        "Deterministic prediction split repair requires a binary 0/1 OUTCOME_COL; "
+                        "refusing to coerce a continuous or multi-class outcome."
+                    )
+                df = df.loc[y_numeric.notna()].copy()
+                y = y_numeric.loc[df.index].astype(int)
                 X = df.drop(columns=[outcome], errors="ignore").copy()
                 X = X.select_dtypes(include=["number", "bool"]).apply(pd.to_numeric, errors="coerce")
                 if X.empty:
@@ -2262,7 +2390,7 @@ def _deterministic_runner_repair(
         "logisticregression does not accept missing values encoded as nan" in lowered
         and "logisticregression" in code.lower()
     )
-    if logreg_nan:
+    if logreg_nan and binary_model_repair_allowed:
         repair_name = "logreg_impute_v1"
         if previous_repair != repair_name and "_easyicu_logreg_impute_v1" not in code:
             patch = textwrap.dedent(
@@ -2312,7 +2440,7 @@ def _deterministic_runner_repair(
         and "..." in code
         and "model_bundle" in code
     )
-    if placeholder_ellipsis:
+    if placeholder_ellipsis and binary_model_repair_allowed:
         repair_name = "prediction_discrimination_template_v1"
         if previous_repair != repair_name:
             repaired = textwrap.dedent(
@@ -2353,13 +2481,22 @@ def _deterministic_runner_repair(
                 feature_cols = list(model_bundle.get("feature_cols", []))
 
                 df = pd.read_parquet(cohort_path)
-                X_test = df[feature_cols].copy()
                 outcome_col = os.environ.get("OUTCOME_COL") or model_bundle.get("outcome_col")
                 if not outcome_col:
                     raise KeyError("OUTCOME_COL or model_bundle['outcome_col'] is required for prediction evaluation")
                 if outcome_col not in df.columns:
                     raise KeyError(f"Outcome column {outcome_col!r} is not present in the cohort")
-                y_test = pd.to_numeric(df[outcome_col], errors="coerce").fillna(0).astype(int).values
+                y_numeric = pd.to_numeric(df[outcome_col], errors="coerce")
+                valid_y = y_numeric.dropna().astype(float)
+                outcome_values = set(valid_y.unique().tolist())
+                if outcome_values - {0.0, 1.0} or len(outcome_values) < 2:
+                    raise RuntimeError(
+                        "Deterministic prediction evaluation repair requires a binary 0/1 outcome; "
+                        "refusing to compute AUROC for a continuous or multi-class endpoint."
+                    )
+                eval_mask = y_numeric.notna()
+                X_test = df.loc[eval_mask, feature_cols].copy()
+                y_test = y_numeric.loc[eval_mask].astype(int).values
                 for col in X_test.columns:
                     series = pd.to_numeric(X_test[col], errors="ignore")
                     if getattr(series, "dtype", None) is not None and str(series.dtype) != "object" and series.isna().any():
@@ -2416,7 +2553,11 @@ def _deterministic_runner_repair(
         run_log or "",
         flags=re.IGNORECASE,
     )
-    if omitted_primary_predictor and "X = model_df[[" in code:
+    if (
+        omitted_primary_predictor
+        and "X = model_df[[" in code
+        and binary_model_repair_allowed
+    ):
         predictor = omitted_primary_predictor.group(1)
         repair_name = "primary_predictor_omitted_from_design_v1"
         if previous_repair != repair_name:
@@ -2463,7 +2604,7 @@ def _deterministic_runner_repair(
                     return repair_name, repaired
 
     singular_logit = "singular matrix" in lowered and "sm.logit(" in code.lower()
-    if singular_logit:
+    if singular_logit and binary_model_repair_allowed:
         repair_name = "logit_regularized_fit_v1"
         if previous_repair != repair_name:
             helper = textwrap.dedent(
@@ -2735,6 +2876,7 @@ def _deterministic_runner_repair(
         any(sig in lowered for sig in signatures)
         and "_easyicu_runner_repair_v1" not in code
         and any(token in code for token in ("sm.Logit(", "sm.OLS(", "sm.GLM("))
+        and _statsmodels_repair_allowed_for_family(code, analysis_family)
     )
     if dtype_coerce_applies:
         repair_name = "dtype_coerce_v1"
