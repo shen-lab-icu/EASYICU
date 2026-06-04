@@ -308,9 +308,9 @@ def _enforce_advanced_plan_contract(
         canonical_step_id = "03_complete_case_robustness"
         canonical_method = "association_robustness"
         canonical_intent = (
-            "Fit complete-case, missing-indicator, and reduced-variable mortality "
-            "association models; extract lactate odds ratios and complete-case "
-            "sample size; write the summary table and robustness figure in one "
+            "Fit complete-case, missing-indicator, and reduced-variable association "
+            "models; extract the primary effect estimate and complete-case sample "
+            "size; write the summary table and robustness figure in one "
             "self-contained executable step."
         )
         required_outputs = [
@@ -806,14 +806,6 @@ _PRIMARY_EFFECT_DIRECT_KEYS = (
     "statistic:adjusted_or",
     "adjusted_odds_ratio",
     "statistic:adjusted_odds_ratio",
-    "lactate_or",
-    "statistic:lactate_or",
-    "lactate_or_complete_case",
-    "statistic:lactate_or_complete_case",
-    "complete_case_lactate_or",
-    "statistic:complete_case_lactate_or",
-    "lactate_max_24h_or",
-    "statistic:lactate_max_24h_or",
     "primary_association_estimate",
     "statistic:primary_association_estimate",
     "association_estimate",
@@ -1154,7 +1146,7 @@ def _step_contract_findings(
                     f"Step {step.step_id} was expected to report a primary association "
                     "estimate, but no numeric effect size was recorded."
                 ),
-                ("estimate", "primary_or", "odds_ratio", "adjusted_or", "lactate_or"),
+                ("estimate", "primary_or", "odds_ratio", "adjusted_or"),
             )
 
     prediction_step = (

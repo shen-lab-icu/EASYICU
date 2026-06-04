@@ -58,6 +58,40 @@ _BINARY_MODEL_REPAIR_FAMILIES = {
 }
 
 
+_NULL_PRIMARY_EFFECT_MARKERS = (
+    '"complete_case_n": null',
+    '"statistic:complete_case_n": null',
+    '"or_estimate": null',
+    '"odds_ratio": null',
+    '"primary_odds_ratio": null',
+    '"primary_or": null',
+    '"statistic:primary_or": null',
+    '"adjusted_or": null',
+    '"statistic:adjusted_or": null',
+    '"adjusted_odds_ratio": null',
+    '"statistic:adjusted_odds_ratio": null',
+    '"estimate": null',
+    '"statistic:estimate": null',
+    '"primary_association_estimate": null',
+    '"statistic:primary_association_estimate": null',
+    '"association_estimate": null',
+    '"statistic:association_estimate": null',
+)
+
+
+def _code_mentions_missing_indicator_column(code: str) -> bool:
+    """Detect generated missing-indicator robustness code without case terms."""
+
+    if "missing_indicator" in code.lower() or "Missing-indicator" in code:
+        return True
+    return bool(
+        re.search(
+            r"['\"][A-Za-z_][A-Za-z0-9_]*_missing(?:_[A-Za-z0-9_]+)?['\"]",
+            code,
+        )
+    )
+
+
 def _family_allows_binary_model_repair(analysis_family: Optional[str]) -> bool:
     """Return whether deterministic binary-model fallbacks fit the task family."""
 
@@ -595,7 +629,7 @@ def _deterministic_summary_repair(
     ).strip()
     estimate = _first_present_scalar(
         step_summary,
-        ("estimate", "primary_or", "odds_ratio", "adjusted_or", "lactate_or", "or"),
+        ("estimate", "primary_or", "odds_ratio", "adjusted_or", "or"),
     )
     if estimate is not None:
         return None
@@ -665,18 +699,7 @@ def _deterministic_summary_repair(
             return repair_name, repaired
     if repaired is None or repaired == code:
         skipped = str(step_summary.get("skipped") or "").lower()
-        null_model_summary = (
-            '"complete_case_n": null' in summary_text
-            or '"statistic:complete_case_n": null' in summary_text
-            or '"lactate_or": null' in summary_text
-            or '"statistic:lactate_or_stability": null' in summary_text
-            or '"or_estimate": null' in summary_text
-            or '"odds_ratio": null' in summary_text
-            or '"primary_odds_ratio": null' in summary_text
-            or '"primary_or": null' in summary_text
-            or '"statistic:primary_or": null' in summary_text
-            or '"estimate": null' in summary_text
-        )
+        null_model_summary = any(marker in summary_text for marker in _NULL_PRIMARY_EFFECT_MARKERS)
         dtype_summary_failure = "pandas data cast to numpy dtype of object" in summary_text
         index_alignment_summary_failure = (
             "indices for endog and exog are not aligned" in summary_text
@@ -870,7 +893,10 @@ def _deterministic_summary_repair(
                         return repair_name, repaired
         categorical_sex_dropna = (
             (
-                "no valid data after dropping lactate missing rows" in skipped
+                (
+                    "no valid data after dropping" in skipped
+                    and "missing rows" in skipped
+                )
                 or "insufficient data" in skipped
                 or "no valid observations" in skipped
                 or null_model_summary
@@ -959,21 +985,27 @@ def _deterministic_summary_repair(
                 }
                 for old, new in cc_replacements.items():
                     repaired = repaired.replace(old, new)
-                mi_replacements = {
-                    "mi_df['lactate_missing'] = mi_df[primary_predictor].isna().astype(int)": (
-                        "mi_df['lactate_missing'] = mi_df[primary_predictor].isna().astype(int)\n"
-                        "mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)\n"
-                        "mi_df = mi_df.dropna(subset=[outcome_col] + covariates)"
-                    ),
-                    'mi_df["lactate_missing"] = mi_df[primary_predictor].isna().astype(int)': (
-                        'mi_df["lactate_missing"] = mi_df[primary_predictor].isna().astype(int)\n'
-                        'mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)\n'
-                        "mi_df = mi_df.dropna(subset=[outcome_col] + covariates)"
-                    ),
-                }
-                for old, new in mi_replacements.items():
-                    if old in repaired and "fillna(0)" not in repaired:
-                        repaired = repaired.replace(old, new, 1)
+                if "fillna(0)" not in repaired:
+                    missing_assign_pattern = re.compile(
+                        r"(?m)^(?P<indent>\s*)"
+                        r"mi_df\[(?P<missing>(?:['\"][^'\"]+_missing[^'\"]*['\"]|missing_indicator_col))\]"
+                        r"\s*=\s*mi_df\[primary_predictor\]\.isna\(\)\.astype\(int\)\s*$"
+                    )
+
+                    def _patch_mi_assignment(match: re.Match[str]) -> str:
+                        indent = match.group("indent")
+                        missing_expr = match.group("missing")
+                        return (
+                            f"{indent}mi_df[{missing_expr}] = mi_df[primary_predictor].isna().astype(int)\n"
+                            f"{indent}mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)\n"
+                            f"{indent}mi_df = mi_df.dropna(subset=[outcome_col] + covariates)"
+                        )
+
+                    repaired = missing_assign_pattern.sub(
+                        _patch_mi_assignment,
+                        repaired,
+                        count=1,
+                    )
                 rv_replacements = {
                     "rv_df = model_df.dropna(subset=[primary_predictor])": (
                         "rv_df = model_df[[outcome_col, primary_predictor] + reduced_covariates].dropna()"
@@ -1794,11 +1826,7 @@ def _deterministic_runner_repair(
         and "none" in lowered
         and "ax.errorbar(" in code
         and ("predictor_col" in code or "primary_predictor" in code)
-        and (
-            "lactate_missing" in code
-            or "Missing-indicator" in code
-            or "missing_indicator" in code.lower()
-        )
+        and _code_mentions_missing_indicator_column(code)
     )
     if robustness_none_plot:
         repair_name = "robustness_predictor_design_and_plot_v1"
@@ -1837,8 +1865,6 @@ def _deterministic_runner_repair(
             replacements = {
                 "cc_X = cc_df[covariates]": "cc_X = cc_df[[predictor_col] + covariates]",
                 "cc_X = complete_case_df[covariates]": "cc_X = complete_case_df[[predictor_col] + covariates]",
-                "mi_X = mi_df[covariates + ['lactate_missing']]": "mi_X = mi_df[[predictor_col] + covariates + ['lactate_missing']]",
-                "mi_X = model_df[covariates + ['lactate_missing']]": "mi_X = model_df[[predictor_col] + covariates + ['lactate_missing']]",
                 "rv_X = rv_df[covariates]": "rv_X = rv_df[[predictor_col] + covariates]",
                 "rv_X = rv_df[reduced_covariates]": "rv_X = rv_df[[predictor_col] + reduced_covariates]",
                 "X_cc = sm.add_constant(complete_case_df[covariates], has_constant=\"add\")": (
@@ -1846,12 +1872,6 @@ def _deterministic_runner_repair(
                 ),
                 "X_cc = sm.add_constant(cc_df[covariates], has_constant=\"add\")": (
                     f"X_cc = sm.add_constant(cc_df[[{predictor_var}] + covariates], has_constant=\"add\")"
-                ),
-                "X_mi = sm.add_constant(missing_indicator_df[covariates + [\"lactate_missing\"]], has_constant=\"add\")": (
-                    f"X_mi = sm.add_constant(missing_indicator_df[[{predictor_var}] + covariates + [\"lactate_missing\"]], has_constant=\"add\")"
-                ),
-                "X_mi = sm.add_constant(mi_df[covariates + [\"lactate_missing\"]], has_constant=\"add\")": (
-                    f"X_mi = sm.add_constant(mi_df[[{predictor_var}] + covariates + [\"lactate_missing\"]], has_constant=\"add\")"
                 ),
                 "X_rv = sm.add_constant(reduced_variable_df[covariates], has_constant=\"add\")": (
                     f"X_rv = sm.add_constant(reduced_variable_df[[{predictor_var}] + reduced_covariates], has_constant=\"add\")"
@@ -1862,6 +1882,35 @@ def _deterministic_runner_repair(
             }
             for old, new in replacements.items():
                 repaired = repaired.replace(old, new)
+            missing_expr = (
+                r"(?:['\"][A-Za-z_][A-Za-z0-9_]*_missing(?:_[A-Za-z0-9_]+)?['\"]|"
+                r"missing_indicator_col)"
+            )
+            repaired = re.sub(
+                rf"(?m)^(?P<indent>\s*)"
+                rf"(?P<lhs>mi_X)\s*=\s*(?P<df>mi_df|model_df)"
+                rf"\[covariates\s*\+\s*\[(?P<missing>{missing_expr})\]\]\s*$",
+                lambda match: (
+                    f"{match.group('indent')}{match.group('lhs')} = "
+                    f"{match.group('df')}[[{predictor_var}] + covariates + "
+                    f"[{match.group('missing')}]]"
+                ),
+                repaired,
+            )
+            repaired = re.sub(
+                rf"(?m)^(?P<indent>\s*)"
+                rf"(?P<lhs>X_mi)\s*=\s*sm\.add_constant\("
+                rf"(?P<df>missing_indicator_df|mi_df)"
+                rf"\[covariates\s*\+\s*\[(?P<missing>{missing_expr})\]\], "
+                rf"has_constant=\"add\"\)\s*$",
+                lambda match: (
+                    f"{match.group('indent')}{match.group('lhs')} = "
+                    f"sm.add_constant({match.group('df')}[[{predictor_var}] "
+                    f"+ covariates + [{match.group('missing')}]], "
+                    'has_constant="add")'
+                ),
+                repaired,
+            )
             subset_replacements = {
                 f"complete_case_df = model_df.dropna(subset=[{predictor_var}])": (
                     f"complete_case_df = model_df.dropna(subset=[outcome_col, {predictor_var}] + covariates)"
@@ -2638,19 +2687,23 @@ def _deterministic_runner_repair(
 
     table_one_binary_keyerror = (
         "keyerror: 1" in lowered
-        and "in-hospital mortality" in code.lower()
-        and '"counts"][1]' in code
+        and re.search(
+            r'summary\["outcomes"\]\["[^"]+"\]\["(?:counts|pct)"\]\[1\]',
+            code,
+        )
     )
     if table_one_binary_keyerror:
         repair_name = "table_one_binary_key_string_v1"
         if previous_repair != repair_name:
-            repaired = code.replace(
-                'summary["outcomes"]["death"]["counts"][1]',
-                'summary["outcomes"]["death"]["counts"].get("1", summary["outcomes"]["death"]["counts"].get(1, 0))',
-            )
-            repaired = repaired.replace(
-                'summary["outcomes"]["death"]["pct"][1]',
-                'summary["outcomes"]["death"]["pct"].get("1", summary["outcomes"]["death"]["pct"].get(1, 0.0))',
+            repaired = re.sub(
+                r'summary\["outcomes"\]\["(?P<outcome>[^"]+)"\]\["(?P<field>counts|pct)"\]\[1\]',
+                lambda match: (
+                    f'summary["outcomes"]["{match.group("outcome")}"]["{match.group("field")}"].get('
+                    f'"1", summary["outcomes"]["{match.group("outcome")}"]'
+                    f'["{match.group("field")}"].get(1, '
+                    f'{"0" if match.group("field") == "counts" else "0.0"}))'
+                ),
+                code,
             )
             if repaired != code:
                 return repair_name, repaired
