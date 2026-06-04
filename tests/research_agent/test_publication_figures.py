@@ -581,6 +581,57 @@ def test_publication_figure_skill_renders_from_registered_association_table(ra, 
     assert (run_dir / "publication_figures" / "easyicu_publication_figure.svg").exists()
 
 
+def test_association_forest_axis_metadata_tracks_effect_measure(ra):
+    from easyicu.research_agent.figure_skill import _normalise_association_frame
+
+    hr_frame = _normalise_association_frame(
+        pd.DataFrame(
+            {
+                "term": ["age"],
+                "hazard_ratio": [1.22],
+                "hr_lower": [1.05],
+                "hr_upper": [1.41],
+            }
+        )
+    )
+    assert hr_frame.attrs["xlabel"] == "Hazard ratio"
+    assert hr_frame.attrs["header"] == "HR (95% CI)"
+    assert hr_frame.attrs["null_value"] == 1.0
+    assert hr_frame.attrs["ratio_scale"] is True
+
+    ate_frame = _normalise_association_frame(
+        pd.DataFrame(
+            {
+                "term": ["treatment"],
+                "average_treatment_effect": [-0.8],
+                "ci_low": [-1.2],
+                "ci_high": [-0.3],
+            }
+        )
+    )
+    assert ate_frame.attrs["xlabel"] == "Average treatment effect"
+    assert ate_frame.attrs["header"] == "ATE (95% CI)"
+    assert ate_frame.attrs["null_value"] == 0.0
+    assert ate_frame.attrs["ratio_scale"] is False
+
+
+def test_strata_axis_label_comes_from_score_column(ra):
+    from easyicu.research_agent.figure_skill import (
+        _normalise_strata_frame,
+        _strata_score_label,
+    )
+
+    kdigo_frame = _normalise_strata_frame(
+        pd.DataFrame({"kdigo_stage": [1, 2, 3], "outcome_rate": [0.1, 0.2, 0.3]})
+    )
+    assert _strata_score_label(kdigo_frame) == "KDIGO stage"
+
+    generic_frame = _normalise_strata_frame(
+        pd.DataFrame({"score": [1, 2, 3], "outcome_rate": [0.1, 0.2, 0.3]})
+    )
+    assert _strata_score_label(generic_frame) == "Score"
+
+
 def test_publication_figure_skill_renders_from_robustness_panel_without_table(
     ra,
     tmp_path: Path,
