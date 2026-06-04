@@ -31,12 +31,14 @@ from __future__ import annotations
 
 import ast
 import re
+import json
 
 import pytest
 
 from easyicu.research_agent.code_repair import (
     _KEYERROR_NOT_IN_INDEX_RE,
     _NAME_ERROR_HELPER_RE,
+    _deterministic_summary_repair,
     _deterministic_runner_repair,
     _extract_missing_index_columns,
     _patch_json_dump_numpy_key_sanitizer,
@@ -99,6 +101,138 @@ def test_name_error_helper_regex_rejects_non_identifiers():
     assert _NAME_ERROR_HELPER_RE.search(
         "NameError: name '123abc' is not defined"
     ) is None
+
+
+def test_prediction_split_repair_requires_explicit_outcome_col():
+    repaired = _deterministic_runner_repair(
+        code=(
+            "figure_contract = FigureContract()\n"
+            "train_test_split(X, y, test_size=0.2, test_size=0.3)\n"
+        ),
+        run_log="SyntaxError: keyword argument repeated",
+    )
+
+    assert repaired is not None
+    name, patched = repaired
+    assert name == "prediction_split_minimal_v1"
+    assert 'os.environ.get("OUTCOME_COL")' in patched
+    assert "df.columns[-1]" not in patched
+    assert '"death" if "death" in df.columns' not in patched
+
+
+def test_prediction_split_repair_uses_outcome_col_at_runtime(
+    tmp_path,
+    monkeypatch,
+):
+    repaired = _deterministic_runner_repair(
+        code=(
+            "figure_contract = FigureContract()\n"
+            "train_test_split(X, y, test_size=0.2, test_size=0.3)\n"
+        ),
+        run_log="SyntaxError: keyword argument repeated",
+    )
+    assert repaired is not None
+    _, patched = repaired
+
+    cohort = tmp_path / "cohort.parquet"
+    pd = pytest.importorskip("pandas")
+    pd.DataFrame(
+        {
+            "death": [1] * 10,
+            "endpoint_x": [0, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+            "age": [50, 55, 60, 65, 70, 75, 80, 85, 90, 95],
+        }
+    ).to_parquet(cohort, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    monkeypatch.setenv("OUTCOME_COL", "endpoint_x")
+
+    exec(patched, {})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["event_rate_total"] == 0.6
+
+
+def test_prediction_split_repair_rejects_non_binary_outcome(
+    tmp_path,
+    monkeypatch,
+):
+    repaired = _deterministic_runner_repair(
+        code=(
+            "figure_contract = FigureContract()\n"
+            "train_test_split(X, y, test_size=0.2, test_size=0.3)\n"
+        ),
+        run_log="SyntaxError: keyword argument repeated",
+    )
+    assert repaired is not None
+    _, patched = repaired
+
+    cohort = tmp_path / "cohort.parquet"
+    pd = pytest.importorskip("pandas")
+    pd.DataFrame(
+        {
+            "los_icu": [1.2, 2.0, 3.5, 4.0, 5.25, 6.0],
+            "age": [50, 55, 60, 65, 70, 75],
+        }
+    ).to_parquet(cohort, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    monkeypatch.setenv("OUTCOME_COL", "los_icu")
+
+    with pytest.raises(RuntimeError, match="binary 0/1 OUTCOME_COL"):
+        exec(patched, {})
+    assert not (out_dir / "step_summary.json").exists()
+
+
+def test_binary_prediction_runner_repair_is_family_gated():
+    code = (
+        "figure_contract = FigureContract()\n"
+        "train_test_split(X, y, test_size=0.2, test_size=0.3)\n"
+    )
+
+    assert (
+        _deterministic_runner_repair(
+            code=code,
+            run_log="SyntaxError: keyword argument repeated",
+            analysis_family="survival",
+        )
+        is None
+    )
+    assert (
+        _deterministic_runner_repair(
+            code="model_bundle = ...\n",
+            run_log="SyntaxError: invalid syntax near placeholder ellipsis",
+            analysis_family="causal_inference",
+        )
+        is None
+    )
+
+
+def test_binary_summary_repair_is_family_gated():
+    code = (
+        "import pandas as pd\n"
+        "model_df = pd.get_dummies(df[['event_time', 'sex']], columns=['sex'])\n"
+        "result = logit('event_time ~ sex_male', data=model_df).fit()\n"
+    )
+    step_summary = {
+        "primary_predictor": "sex",
+        "outcome": "event_time",
+        "primary_or": None,
+        "error": "NameError: name 'sex_male' is not defined",
+    }
+
+    assert (
+        _deterministic_summary_repair(
+            code=code,
+            step_summary=step_summary,
+            analysis_family="survival",
+        )
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -230,6 +364,40 @@ def test_table_one_repair_uses_explicit_outcome_only():
     assert "outcome_rate" in generated
 
 
+def test_table_one_repair_does_not_report_continuous_outcome_rate(
+    tmp_path,
+    monkeypatch,
+):
+    repaired = _deterministic_runner_repair(
+        code="pd.DataFrame().to_csv('table_one.csv')\n",
+        run_log="SyntaxError: '(' was never closed",
+    )
+    assert repaired is not None
+    _, generated = repaired
+
+    pd = pytest.importorskip("pandas")
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "los_icu": [1.0, 2.5, 3.0, 4.25],
+            "age": [50, 60, 70, 80],
+        }
+    ).to_parquet(cohort, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    monkeypatch.setenv("OUTCOME_COL", "los_icu")
+
+    exec(generated, {})
+
+    summary = json.loads((out_dir / "step_summary.json").read_text(encoding="utf-8"))
+    assert summary["outcome_col"] == "los_icu"
+    assert summary["outcome_kind"] == "non_binary"
+    assert "outcome_rate" not in summary
+    assert "outcome_n" not in summary
+
+
 def test_outcome_incidence_repair_uses_explicit_outcome_only():
     repaired = _deterministic_runner_repair(
         code="# outcome_incidence\n...\n",
@@ -248,3 +416,32 @@ def test_outcome_incidence_repair_uses_explicit_outcome_only():
     assert "mortality" not in generated
     assert "_measured" not in generated
     assert "outcome_rate" in generated
+
+
+def test_outcome_incidence_repair_rejects_non_binary_outcome(
+    tmp_path,
+    monkeypatch,
+):
+    repaired = _deterministic_runner_repair(
+        code="# outcome_incidence\n...\n",
+        run_log="SyntaxError: invalid syntax",
+    )
+    assert repaired is not None
+    _, generated = repaired
+
+    pd = pytest.importorskip("pandas")
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame(
+        {
+            "los_icu": [1.0, 2.5, 3.0, 4.25],
+            "age": [50, 60, 70, 80],
+        }
+    ).to_parquet(cohort, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    monkeypatch.setenv("COHORT_PARQUET", str(cohort))
+    monkeypatch.setenv("STEP_OUT_DIR", str(out_dir))
+    monkeypatch.setenv("OUTCOME_COL", "los_icu")
+
+    with pytest.raises(RuntimeError, match="binary 0/1 OUTCOME_COL"):
+        exec(generated, {})
