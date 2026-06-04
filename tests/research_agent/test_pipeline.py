@@ -79,6 +79,15 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
     )
     partial = json.loads((run_dir / "manifest_partial.json").read_text(encoding="utf-8"))
     assert partial["runtime_state"]["analysis_family"]
+    ok_step_records = [
+        record
+        for record in manifest["per_step_records"]
+        if record.get("step_id") != "00_probe" and record.get("status") == "ok"
+    ]
+    assert ok_step_records
+    for record in ok_step_records:
+        assert record.get("evidence_ids"), record
+        assert record["interpretation_evidence_id"] in record["evidence_ids"]
 
     # 4) The deterministic probe should expose score completeness without
     # peeking at outcome-stratum rates or auto-generating a SOFA-specific audit.
@@ -90,6 +99,49 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
     assert completeness
     sofa_report = next(item for item in completeness if item["variable"] == "sofa2")
     assert sofa_report["completeness"]["n_low_completeness"] > 0
+
+
+def test_strict_evidence_failure_writes_structured_diagnostic_package(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+    monkeypatch,
+):
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+        enable_literature=False,
+        evidence_enforcement_mode="strict",
+    )
+
+    def _raise_strict_failure(**kwargs):
+        raise ra.EvidenceEnforcementError(
+            "Manuscript contains 1 numeric value not traceable.",
+            detail={"untraced": ["9.99"]},
+        )
+
+    monkeypatch.setattr(pipeline, "_run_write_phase", _raise_strict_failure)
+
+    result = pipeline.run(
+        question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=synthetic_cohort,
+        cohort_name="strict_failure_test",
+        database="synthetic",
+        target_outcome="death",
+    )
+    run_dir = Path(result.workdir)
+    run_status = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    bound = Path(result.manuscript_path).read_text(encoding="utf-8")
+
+    assert "STRICT evidence enforcement failed" in bound
+    assert run_status["gates"]["numeric_error_count"] == 1
+    assert run_status["gates"]["manuscript_generated"] is False
+    assert any(
+        finding["validator"] == "manuscript_numeric_auditor"
+        and finding["severity"] == "error"
+        for finding in manifest["findings"]
+    )
 
 
 def test_pipeline_with_clinical_skill(ra, synthetic_cohort, tmp_path: Path):
@@ -2958,6 +3010,40 @@ def test_ensure_publication_figure_step_no_op_when_question_does_not_request_fig
     assert findings == []
 
 
+def test_plan_cap_preserves_appended_publication_figure_step(ra):
+    from easyicu.research_agent.pipeline import (
+        _cap_plan_preserving_figure_steps,
+        _ensure_publication_figure_step_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    class _Ctx:
+        research_question = "Build tables and a concise publication-ready figure."
+
+    plan = AnalysisPlan(
+        research_question=_Ctx.research_question,
+        steps=[
+            AnalysisStep(
+                step_id=f"{idx:02d}_table",
+                intent=f"Compute table {idx}.",
+                expected_outputs=[f"table:t{idx}"],
+            )
+            for idx in range(1, 5)
+        ],
+    )
+    with_figure, _ = _ensure_publication_figure_step_in_plan(
+        plan=plan,
+        context=_Ctx(),
+    )
+
+    capped, findings = _cap_plan_preserving_figure_steps(plan=with_figure, cap=4)
+
+    assert len(capped.steps) == 4
+    assert any("publication_figure_fallback" in step.step_id for step in capped.steps)
+    assert findings
+    assert findings[0].detail["preserved_figure_step_ids"]
+
+
 def test_deterministic_runner_repair_injects_undefined_helper_stub(ra):
     """Regression: NameError for an undefined helper triggers stub injection."""
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
@@ -3213,6 +3299,71 @@ def test_repair_common_writer_placeholders_prediction_fallbacks(ra, tmp_path: Pa
     assert ("table_one", "research_context") in repairs
 
 
+def test_prediction_placeholder_repair_does_not_create_outcome_rate_for_continuous_target(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _repair_common_writer_placeholders
+
+    store = EvidenceStore(tmp_path)
+    context_path = tmp_path / "research_context.json"
+    context_path.write_text("{}", encoding="utf-8")
+    store.register_file(
+        kind="log",
+        description="ResearchContext",
+        source_path=context_path,
+        evidence_id="research_context",
+        producer="test",
+    )
+    summary_path = tmp_path / "step_summary.json"
+    summary_path.write_text("{}", encoding="utf-8")
+    store.register_file(
+        kind="statistic",
+        description="Model summary",
+        source_path=summary_path,
+        evidence_id="statistic_step_summary_model",
+        producer="test",
+        aliases=["01_model_training"],
+    )
+    context = ra.schema.ResearchContext(
+        research_question="Build an ICU length-of-stay prediction model.",
+        cohort=ra.schema.CohortDescriptor(
+            cohort_name="c",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+            outcome_columns=["los_icu"],
+        ),
+        variables=[
+            ra.schema.ConceptDescriptor(
+                name="los_icu",
+                role="outcome",
+                dtype="float64",
+                description="Continuous length-of-stay outcome.",
+                source_concept="length_of_stay",
+            )
+        ],
+        target_outcome="los_icu",
+    )
+    scaffold = (
+        "The cohort summary is {evidence:table_one}. "
+        "The endpoint rate was {evidence:outcome_rate}. "
+        "Performance was evaluated {evidence:primary_association}."
+    )
+
+    repaired, repairs = _repair_common_writer_placeholders(
+        scaffold,
+        context=context,
+        evidence=store,
+    )
+
+    assert "{evidence:table_one}" not in repaired
+    assert "{evidence:outcome_rate}" in repaired
+    assert "{evidence:primary_association}" not in repaired
+    assert ("outcome_rate", "01_model_training") not in repairs
+
+
 def test_execution_gate_and_parent_figure_dependency_helpers(ra):
     from easyicu.research_agent.pipeline import (
         _execution_gate_status,
@@ -3385,6 +3536,27 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
 
     evidence = EvidenceStore(tmp_path)
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text("{}", encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description="Publication figure contract.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={"source_evidence_id": "publication_figure_source_demo"},
+    )
+    source_path = tmp_path / "publication_figure_source.csv"
+    source_path.write_text("x,y\n1,2\n", encoding="utf-8")
+    evidence.register_file(
+        kind="table",
+        description="Publication figure source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_demo",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
     for suffix in ("svg", "png", "pdf", "tiff"):
         path = tmp_path / f"easyicu_publication_figure.{suffix}"
         path.write_text("x", encoding="utf-8")
@@ -3402,9 +3574,11 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
 
     assert readiness["publication_figure_bundle_ready"] is True
     assert readiness["publication_ready_stems"] == ["easyicu_publication_figure"]
+    assert readiness["publication_figure_contract_ready"] is True
+    assert readiness["publication_figure_source_data_ready"] is True
 
 
-def test_publication_bundle_ready_accepts_registered_forest_plot_png_svg(
+def test_publication_bundle_ready_rejects_uncontracted_forest_plot_png_svg(
     ra,
     tmp_path: Path,
 ):
@@ -3426,8 +3600,68 @@ def test_publication_bundle_ready_accepts_registered_forest_plot_png_svg(
 
     readiness = _publication_figure_bundle_ready(evidence=evidence, run_dir=tmp_path)
 
-    assert readiness["publication_figure_bundle_ready"] is True
-    assert readiness["publication_ready_stems"] == ["forest_plot"]
+    assert readiness["publication_figure_bundle_ready"] is False
+    assert readiness["publication_ready_stems"] == []
+
+
+def test_publication_bundle_ready_blocks_visual_qa_errors(ra, tmp_path: Path):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+    from easyicu.research_agent.schema import ValidationFinding
+
+    evidence = EvidenceStore(tmp_path)
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text("{}", encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description="Publication figure contract.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={"source_evidence_id": "publication_figure_source_demo"},
+    )
+    source_path = tmp_path / "publication_figure_source.csv"
+    source_path.write_text("x,y\n1,2\n", encoding="utf-8")
+    evidence.register_file(
+        kind="table",
+        description="Publication figure source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_demo",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
+    for suffix in ("svg", "png"):
+        path = tmp_path / f"easyicu_publication_figure.{suffix}"
+        path.write_text("x", encoding="utf-8")
+        evidence.register_file(
+            kind="figure",
+            description="Publication figure export.",
+            source_path=path,
+            evidence_id=f"publication_figure_{suffix}",
+            producer="publication_figure_skill",
+            generation_mode="deterministic_figure_skill",
+            metadata={
+                "figure_role": "publication_figure",
+                "figure_contract": "publication_figure_contract",
+                "source_evidence_id": "publication_figure_source_demo",
+            },
+        )
+
+    readiness = _publication_figure_bundle_ready(
+        evidence=evidence,
+        run_dir=tmp_path,
+        findings=[
+            ValidationFinding(
+                validator="visual_qa",
+                severity="error",
+                message="Could not open figure 'easyicu_publication_figure.png'",
+            )
+        ],
+    )
+
+    assert readiness["publication_figure_bundle_ready"] is False
+    assert readiness["publication_figure_visual_qa_passed"] is False
 
 
 def test_salvage_minimal_contract_step_summary_from_table_one_csv(

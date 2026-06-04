@@ -417,10 +417,26 @@ def _artifact_substring_hits(
         return {}
     tokens: List[str] = []
     for evidence in manifest.get("evidence", []):
-        for key in ("artifact_id", "label", "kind", "path", "summary"):
+        for key in (
+            "evidence_id",
+            "kind",
+            "description",
+            "relative_path",
+            "artifact_id",
+            "label",
+            "path",
+            "summary",
+        ):
             value = evidence.get(key)
             if value:
                 tokens.append(str(value))
+        metadata = evidence.get("metadata")
+        if isinstance(metadata, dict):
+            for value in metadata.values():
+                if isinstance(value, (str, int, float, bool)):
+                    tokens.append(str(value))
+                elif isinstance(value, list):
+                    tokens.extend(str(item) for item in value if item)
     blob = " || ".join(tokens).lower()
     return {n: (n.lower() in blob) for n in needles}
 

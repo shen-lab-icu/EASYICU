@@ -740,6 +740,61 @@ def _preserve_figure_steps_after_replan(
     return preserved, findings
 
 
+def _cap_plan_preserving_figure_steps(
+    *,
+    plan: AnalysisPlan,
+    cap: int,
+) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Truncate an initial plan without dropping required figure steps."""
+
+    steps = list(plan.steps or [])
+    if cap <= 0 or len(steps) <= cap:
+        return plan, []
+
+    kept = list(steps[:cap])
+    dropped = list(steps[cap:])
+    preserved_step_ids: List[str] = []
+    displaced_step_ids: List[str] = []
+
+    for step in dropped:
+        if not _step_produces_figure(step):
+            continue
+        replace_idx: Optional[int] = None
+        for idx in range(len(kept) - 1, -1, -1):
+            if not _step_produces_figure(kept[idx]):
+                replace_idx = idx
+                break
+        if replace_idx is None:
+            continue
+        displaced = kept[replace_idx]
+        kept[replace_idx] = step
+        preserved_step_ids.append(step.step_id)
+        displaced_step_ids.append(displaced.step_id)
+
+    kept_ids = {step.step_id for step in kept}
+    dropped_ids = [step.step_id for step in steps if step.step_id not in kept_ids]
+    capped = plan.model_copy(update={"steps": kept})
+    findings = [
+        ValidationFinding(
+            validator="planner",
+            severity="warning",
+            message=(
+                f"Initial plan had {len(steps)} steps; truncated to "
+                f"max_total_steps={cap}. Dropped: "
+                f"{', '.join(dropped_ids[:6])}"
+                + (" ..." if len(dropped_ids) > 6 else "")
+            ),
+            detail={
+                "dropped_step_ids": dropped_ids,
+                "cap": cap,
+                "preserved_figure_step_ids": preserved_step_ids,
+                "displaced_step_ids": displaced_step_ids,
+            },
+        )
+    ]
+    return capped, findings
+
+
 _PRIMARY_EFFECT_DIRECT_KEYS = (
     "estimate",
     "statistic:estimate",

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tools.run_research_agent_bench import _primary_or
+from tools.run_research_agent_bench import _artifact_substring_hits, _primary_or
 
 
 def _write_summary(run_dir: Path, payload: dict) -> None:
@@ -32,6 +32,21 @@ def _write_panel(run_dir: Path, value: float) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def test_artifact_substring_hits_scan_evidence_record_fields() -> None:
+    manifest = {
+        "evidence": [
+            {
+                "evidence_id": "table_one__summary",
+                "description": "Table one baseline characteristics.",
+                "relative_path": "evidence/table_one__summary.csv",
+                "kind": "table",
+            }
+        ]
+    }
+
+    assert _artifact_substring_hits(manifest, ["table_one"]) == {"table_one": True}
 
 
 def test_primary_or_accepts_nested_logistic_model_type(tmp_path: Path) -> None:

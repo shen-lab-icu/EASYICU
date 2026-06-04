@@ -57,6 +57,10 @@ class RunResult:
     duration_seconds: float
     artefacts: List[Path] = field(default_factory=list)
     timed_out: bool = False
+    requested_network_policy: str = "none"
+    effective_isolation: str = "unknown"
+    isolation_degraded: bool = False
+    isolation_degradation_reason: Optional[str] = None
 
     @property
     def succeeded(self) -> bool:
@@ -85,6 +89,15 @@ class CodeRunner:
         self.python_executable = python_executable or sys.executable
         self.extra_env = dict(extra_env or {})
         self.network_policy = (network_policy or "none").lower()
+
+    def _isolation_backend_for_cmd(self, cmd: Sequence[str]) -> str:
+        if self.network_policy not in {"none", "disabled"}:
+            return "network_allowed"
+        if cmd and Path(cmd[0]).name == "sandbox-exec":
+            return "macos_sandbox_exec"
+        if cmd and Path(cmd[0]).name == "unshare":
+            return "linux_unshare_network_namespace"
+        return "host_subprocess"
 
     def build_command(self, *, script_path: Path) -> List[str]:
         base = [self.python_executable, str(script_path)]
@@ -175,6 +188,15 @@ class CodeRunner:
         started = time.monotonic()
         cmd = self.build_command(script_path=script_path)
         original_cmd = list(cmd)
+        requested_isolation = self._isolation_backend_for_cmd(original_cmd)
+        isolation_degraded = False
+        isolation_degradation_reason: Optional[str] = None
+        if self.network_policy in {"none", "disabled"} and requested_isolation == "host_subprocess":
+            isolation_degraded = True
+            isolation_degradation_reason = (
+                "No sandbox-exec or unshare network isolation backend was available; "
+                "running generated code as a host subprocess."
+            )
         try:
             proc = subprocess.run(  # noqa: S603 - intentional, generated script
                 cmd,
@@ -215,6 +237,10 @@ class CodeRunner:
                 )
                 returncode = retry_proc.returncode
                 cmd = retry_cmd
+                isolation_degraded = True
+                isolation_degradation_reason = (
+                    "unshare network namespace isolation failed; retried as a host subprocess."
+                )
             if (
                 returncode != 0
                 and original_cmd
@@ -248,6 +274,11 @@ class CodeRunner:
                 )
                 returncode = retry_proc.returncode
                 cmd = retry_cmd
+                isolation_degraded = True
+                isolation_degradation_reason = (
+                    "macOS sandbox-exec blocked Python stdio initialisation; "
+                    "retried as a host subprocess."
+                )
             if (
                 returncode != 0
                 and original_cmd
@@ -278,6 +309,11 @@ class CodeRunner:
                 )
                 returncode = retry_proc.returncode
                 cmd = retry_cmd
+                isolation_degraded = True
+                isolation_degradation_reason = (
+                    "macOS sandbox-exec blocked numeric runtime shared memory; "
+                    "retried as a host subprocess."
+                )
             duration = time.monotonic() - started
         except subprocess.TimeoutExpired as exc:
             stdout = exc.stdout or ""
@@ -295,6 +331,10 @@ class CodeRunner:
                 cwd: {step_dir}
                 cohort: {self.cohort_parquet}
                 network_policy: {self.network_policy}
+                requested_isolation: {requested_isolation}
+                effective_isolation: {self._isolation_backend_for_cmd(cmd)}
+                isolation_degraded: {isolation_degraded}
+                isolation_degradation_reason: {isolation_degradation_reason or ""}
                 returncode: {returncode}
                 timed_out: {timed_out}
                 duration_seconds: {duration:.3f}
@@ -319,6 +359,10 @@ class CodeRunner:
             duration_seconds=duration,
             artefacts=artefacts,
             timed_out=timed_out,
+            requested_network_policy=self.network_policy,
+            effective_isolation=self._isolation_backend_for_cmd(cmd),
+            isolation_degraded=isolation_degraded,
+            isolation_degradation_reason=isolation_degradation_reason,
         )
 
 
@@ -597,6 +641,10 @@ class DockerRunner:
             duration_seconds=duration,
             artefacts=artefacts,
             timed_out=timed_out,
+            requested_network_policy=f"docker:{self.network}",
+            effective_isolation=f"docker_network_{self.network}",
+            isolation_degraded=False,
+            isolation_degradation_reason=None,
         )
 
 
