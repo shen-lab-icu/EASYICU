@@ -9,7 +9,7 @@ those values as **hours since ICU admission** — the post
 
 import pandas as pd
 
-from easyicu.sepsis import susp_inf
+from easyicu.sepsis import compute_sepsis3_onset, susp_inf
 
 
 def test_susp_inf_numeric_hour_offsets_match_within_abx_window():
@@ -57,3 +57,51 @@ def test_susp_inf_datetime_offsets_use_timedelta_windows():
     result = susp_inf(abx, samp, ["stay_id"], "charttime")
 
     assert result["susp_inf"].tolist() == [True]
+
+
+def test_compute_sepsis3_onset_requires_explicit_true_susp_inf():
+    sofa = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2, 2, 3, 3],
+            "charttime": [0.0, 1.0, 0.0, 1.0, 0.0, 1.0],
+            "sofa": [0, 3, 0, 3, 0, 3],
+        }
+    )
+    si = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "charttime": [0.0, 0.0, 0.0],
+            "susp_inf": [True, pd.NA, False],
+        }
+    )
+
+    result = compute_sepsis3_onset(
+        sofa,
+        si,
+        id_col="stay_id",
+        sofa_time_col="charttime",
+        si_time_col="charttime",
+    )
+
+    assert result["stay_id"].tolist() == [1]
+
+
+def test_compute_sepsis3_onset_missing_susp_inf_column_fails_closed():
+    sofa = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [0.0, 1.0],
+            "sofa": [0, 3],
+        }
+    )
+    si = pd.DataFrame({"stay_id": [1], "charttime": [0.0]})
+
+    result = compute_sepsis3_onset(
+        sofa,
+        si,
+        id_col="stay_id",
+        sofa_time_col="charttime",
+        si_time_col="charttime",
+    )
+
+    assert result.empty
