@@ -37,6 +37,7 @@ class _FakeStreamlit:
         self.toggle_value = toggle_value
         self.clicked_key = clicked_key
         self.toggle_calls: list[dict] = []
+        self.errors: list[str] = []
 
     def markdown(self, *_args, **_kwargs) -> None:
         pass
@@ -49,6 +50,9 @@ class _FakeStreamlit:
 
     def warning(self, *_args, **_kwargs) -> None:
         pass
+
+    def error(self, message, *_args, **_kwargs) -> None:
+        self.errors.append(str(message))
 
     def expander(self, *_args, **_kwargs):
         return _Panel()
@@ -108,6 +112,80 @@ def test_easyicu_hosted_is_configured_without_user_key(monkeypatch) -> None:
     monkeypatch.setattr(llm_chat, "st", fake_streamlit)
 
     assert llm_chat._is_configured() is True
+
+
+def test_ai_assistant_page_render_does_not_enable_hosted_provider(monkeypatch) -> None:
+    fake_streamlit = _FakeStreamlit(
+        {
+            "language": "en",
+            "llm_enabled": False,
+            "_llm_toggle": False,
+            "llm_provider": "easyicu_hosted",
+            "llm_api_key": "",
+            "llm_base_url": "",
+            "llm_model": "",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", fake_streamlit)
+    monkeypatch.setattr(
+        llm_chat,
+        "_render_ai_assistant_workspace_page",
+        lambda _lang, *, pending_prompt: None,
+    )
+
+    llm_chat.render_ai_assistant_page("en")
+
+    assert fake_streamlit.session_state["llm_enabled"] is False
+    assert fake_streamlit.session_state["_llm_toggle"] is False
+
+
+def test_stream_response_enforces_opt_in_before_building_client(monkeypatch) -> None:
+    fake_streamlit = _FakeStreamlit(
+        {
+            "language": "en",
+            "llm_enabled": False,
+            "llm_provider": "easyicu_hosted",
+            "llm_api_key": "",
+            "llm_base_url": "",
+            "llm_model": "hosted-default",
+            "llm_messages": [{"role": "user", "content": "Explain SOFA."}],
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", fake_streamlit)
+    monkeypatch.setattr(
+        llm_chat,
+        "_get_client",
+        lambda: pytest.fail("_stream_response built a client without opt-in"),
+    )
+
+    llm_chat._stream_response([{"role": "user", "content": "Explain SOFA."}], "en")
+
+    assert fake_streamlit.errors
+    assert "AI features are disabled" in fake_streamlit.errors[0]
+
+
+def test_background_response_enforces_opt_in_before_composing_messages(monkeypatch) -> None:
+    fake_streamlit = _FakeStreamlit(
+        {
+            "language": "en",
+            "llm_enabled": False,
+            "llm_provider": "easyicu_hosted",
+            "llm_api_key": "",
+            "llm_base_url": "",
+            "llm_model": "hosted-default",
+            "llm_messages": [{"role": "user", "content": "Explain SOFA."}],
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", fake_streamlit)
+    monkeypatch.setattr(
+        llm_chat,
+        "_compose_agent_messages",
+        lambda _prompt: pytest.fail("_start_bg_response composed messages without opt-in"),
+    )
+
+    assert llm_chat._start_bg_response("Explain SOFA.", "en") is None
+    assert fake_streamlit.errors
+    assert "AI features are disabled" in fake_streamlit.errors[0]
 
 
 def test_llm_reasoning_blocks_are_hidden_from_web_answers() -> None:

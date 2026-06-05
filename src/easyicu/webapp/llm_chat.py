@@ -26,6 +26,7 @@ from pathlib import Path
 
 import requests
 import streamlit as st
+from easyicu.webapp.ai_optin import AIOptInError, enforce_external_llm_opt_in
 from easyicu.webapp.components.constants import get_all_concepts
 from easyicu.webapp.llm_config import (
     PROVIDERS,
@@ -1675,6 +1676,22 @@ def _get_client():
     return OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
 
 
+def _current_provider_choice() -> str:
+    return str(st.session_state.get("llm_provider", public_default_provider_key()))
+
+
+def _current_public_provider() -> str:
+    return coerce_public_provider(
+        st.session_state.get("llm_provider", public_default_provider_key())
+    )
+
+
+def _external_llm_ready(lang: str) -> bool:
+    provider = _current_provider_choice()
+    enforce_external_llm_opt_in(provider, language=lang)
+    return _is_configured()
+
+
 # ---------------------------------------------------------------------------
 # UI — Settings panel (rendered inside an expander in the sidebar)
 # ---------------------------------------------------------------------------
@@ -2071,8 +2088,13 @@ def _submit_prompt(prompt: str, lang: str, history_container, key_prefix: str = 
                 _render_nav_actions(instant_actions, key_prefix=f"{key_prefix}_instant")
         return
 
-    if st.session_state.get("_active_main_page") == "assistant" and (
-        not bool(st.session_state.get("llm_enabled", False)) or not _is_configured()
+    try:
+        assistant_external_llm_ready = _external_llm_ready(lang)
+    except AIOptInError:
+        assistant_external_llm_ready = False
+    if (
+        st.session_state.get("_active_main_page") == "assistant"
+        and not assistant_external_llm_ready
     ):
         fallback_reply = _local_copilot_fallback_reply(prompt, lang)
         fallback_actions = _suggest_ui_actions(prompt, fallback_reply, lang)
@@ -2172,8 +2194,13 @@ def _submit_prompt_background(
                 _render_nav_actions(instant_actions, key_prefix=f"{key_prefix}_instant")
         return
 
-    if st.session_state.get("_active_main_page") == "assistant" and (
-        not bool(st.session_state.get("llm_enabled", False)) or not _is_configured()
+    try:
+        assistant_external_llm_ready = _external_llm_ready(lang)
+    except AIOptInError:
+        assistant_external_llm_ready = False
+    if (
+        st.session_state.get("_active_main_page") == "assistant"
+        and not assistant_external_llm_ready
     ):
         fallback_reply = _local_copilot_fallback_reply(prompt, lang)
         fallback_actions = _suggest_ui_actions(prompt, fallback_reply, lang)
@@ -3527,12 +3554,6 @@ def render_ai_assistant_page(lang: str | None = None) -> None:
     lang = lang or st.session_state.get("language", "en")
     is_en = lang == "en"
     pending_prompt = bool(st.session_state.get("_ai_pending_question"))
-    provider_key = coerce_public_provider(
-        st.session_state.get("llm_provider", public_default_provider_key())
-    )
-    if not _needs_api_key(provider_key):
-        st.session_state["llm_enabled"] = True
-        st.session_state["_llm_toggle"] = True
     st.session_state["_floating_ai_open"] = False
     st.session_state["_inline_ai_panel_open"] = False
     st.markdown(
@@ -4551,6 +4572,11 @@ _bg_results: dict[str, dict] = {}
 
 def _start_bg_response(prompt: str, lang: str) -> str | None:
     """Prepare and start a background LLM call. Returns a session_id or None."""
+    try:
+        enforce_external_llm_opt_in(_current_provider_choice(), language=lang)
+    except AIOptInError as exc:
+        st.error(str(exc))
+        return None
     if not _is_configured():
         return None
     try:
@@ -4589,6 +4615,11 @@ def _check_bg_response() -> dict | None:
 
 def _stream_response(messages: list, lang: str):
     """Call the LLM API with streaming and render tokens incrementally."""
+    try:
+        enforce_external_llm_opt_in(_current_provider_choice(), language=lang)
+    except AIOptInError as exc:
+        st.error(str(exc))
+        return
     client = _get_client()
     if client is None:
         err = ("Failed to create API client. Check your configuration."
