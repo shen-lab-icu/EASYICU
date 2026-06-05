@@ -15,12 +15,23 @@ database-specific item ids or tables.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 PUBLIC_DATABASES = ("mimic", "miiv", "eicu", "aumc", "hirid", "sic")
+
+_OUTCOME_BLIND_FORBIDDEN_FIELDS = (
+    "outcome_rate",
+    "stratified_outcome",
+    "effect_estimate",
+    "p_value",
+    "odds_ratio",
+    "hazard_ratio",
+    "risk_difference",
+)
 
 _DATABASE_ALIASES = {
     "miii": "mimic",
@@ -60,9 +71,90 @@ class ConceptDatabaseAvailability(BaseModel):
     available: bool = False
     direct_source: bool = False
     reason: Optional[str] = None
+    runtime_reason: Optional[str] = None
+    source_missing_tables: List[str] = Field(default_factory=list)
+    structural_unavailable: bool = False
     available_dependencies: List[str] = Field(default_factory=list)
     degraded_dependencies: List[str] = Field(default_factory=list)
     missing_dependencies: List[str] = Field(default_factory=list)
+
+
+def concept_database_availability_from_load_record(
+    record: Any,
+    *,
+    requested_concept: Optional[str] = None,
+) -> ConceptDatabaseAvailability:
+    """Map a runtime load availability record onto the RA availability model."""
+
+    reason = str(getattr(record, "reason"))
+    status = str(getattr(record, "status"))
+    structural = reason in {"unmapped", "source_unavailable"}
+    return ConceptDatabaseAvailability(
+        concept=str(getattr(record, "concept")),
+        requested_concept=str(requested_concept or getattr(record, "concept")),
+        database=str(getattr(record, "database")),
+        status=status,
+        available=status != "blocked",
+        direct_source=reason in {"mapped_present", "data_missing"},
+        reason=reason,
+        runtime_reason=reason,
+        source_missing_tables=list(getattr(record, "missing_tables", ()) or ()),
+        structural_unavailable=structural,
+    )
+
+
+class RealDataConceptFeasibility(BaseModel):
+    """Outcome-blind real-data availability summary for one concept.
+
+    This model is deliberately limited to denominator and missingness signals.
+    It never carries outcome rates, stratum outcomes, p-values, or effect
+    estimates; those belong to a registered analysis after a human gate.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    concept: str
+    database: str
+    analytic_unit: Literal["stay", "patient"] = "stay"
+    denominator_n: int = Field(ge=0)
+    n_present: int = Field(ge=0)
+    fraction_missing: float = Field(ge=0.0, le=1.0)
+    n_joint_complete: int = Field(ge=0)
+    joint_fraction_complete: float = Field(ge=0.0, le=1.0)
+    missingness_applicable: bool = True
+    structural_unavailable: bool = False
+    availability_status: Optional[str] = None
+    availability_reason: Optional[str] = None
+    source_missing_tables: List[str] = Field(default_factory=list)
+    structural_unavailable_concepts: List[str] = Field(default_factory=list)
+    joint_denominator_concepts: List[str] = Field(default_factory=list)
+    note: Optional[str] = None
+    time_window_requested: Optional[str] = None
+    aggregation_requested: Optional[str] = None
+    cohort_filter_summary: str = "none"
+    missingness_severity: Literal["low", "medium", "high"]
+    non_outcome_blind_fields_checked: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _counts_do_not_exceed_denominator(self) -> "RealDataConceptFeasibility":
+        if self.n_present > self.denominator_n:
+            raise ValueError("n_present cannot exceed denominator_n")
+        if self.n_joint_complete > self.denominator_n:
+            raise ValueError("n_joint_complete cannot exceed denominator_n")
+        return self
+
+    @model_validator(mode="after")
+    def _record_outcome_blind_guard_fields(self) -> "RealDataConceptFeasibility":
+        checked = list(
+            dict.fromkeys(
+                [
+                    *self.non_outcome_blind_fields_checked,
+                    *_OUTCOME_BLIND_FORBIDDEN_FIELDS,
+                ]
+            )
+        )
+        self.non_outcome_blind_fields_checked = checked
+        return self
 
 
 def normalize_database_name(database: str) -> str:
@@ -159,6 +251,138 @@ def hypothesis_cross_database_feasibility(
         "degraded_reason": degraded_reason,
         "availability": availability,
     }
+
+
+def real_data_concept_feasibility(
+    concepts: Sequence[str],
+    database: str,
+    data_path: str | Path,
+    *,
+    cohort: Optional[Mapping[str, Any]] = None,
+    time_window: Optional[str] = None,
+    aggregation: Optional[str] = None,
+    analytic_unit: Literal["stay", "patient"] = "stay",
+) -> Dict[str, RealDataConceptFeasibility]:
+    """Return outcome-blind data-layer feasibility for EasyICU concepts.
+
+    The dictionary layer is checked first. Concepts that are blocked by the
+    EasyICU concept dictionary short-circuit without reading ``data_path``.
+    When at least one concept is dictionary-feasible, ``data_path`` is treated
+    as a single exported wide cohort table, not as a raw database directory or
+    a sharded ricu-style concept store. The table is inspected for denominator
+    counts, per-concept non-missing counts, and joint completeness across the
+    requested concept set. ``time_window`` and ``aggregation`` are recorded as
+    requested metadata for downstream triage; S1 does not enforce temporal
+    filtering or aggregation rules.
+    """
+
+    db = normalize_database_name(database)
+    unit = _normalise_analytic_unit(analytic_unit)
+    requested = [str(c) for c in concepts if str(c or "").strip()]
+    cells = {
+        concept: explain_concept_availability(
+            concept=normalize_concept_name(concept),
+            database=db,
+            requested_concept=concept,
+        )
+        for concept in requested
+    }
+    if not cells:
+        return {}
+
+    structural_concepts = {
+        concept
+        for concept, cell in cells.items()
+        if _cell_is_structural_unavailable(cell)
+    }
+    data_concepts = [concept for concept in requested if concept not in structural_concepts]
+
+    needs_data = bool(data_concepts)
+    if not needs_data:
+        return {
+            concept: _blocked_real_data_feasibility(
+                concept=concept,
+                database=db,
+                analytic_unit=unit,
+                reason=_reason_for_cell(cells[concept].model_dump(mode="json")),
+                time_window=time_window,
+                aggregation=aggregation,
+                availability_cell=cells[concept],
+            )
+            for concept in requested
+        }
+
+    frame = _read_prepared_frame(data_path)
+    non_structural_blocked = [
+        concept
+        for concept in data_concepts
+        if cells[concept].status == "blocked"
+    ]
+    if non_structural_blocked:
+        joint = _zero_joint_from_frame(
+            frame,
+            analytic_unit=unit,
+            cohort=cohort,
+        )
+    else:
+        joint = _probe_joint_from_frame(
+            frame,
+            concepts=data_concepts,
+            analytic_unit=unit,
+            cohort=cohort,
+        )
+
+    out: Dict[str, RealDataConceptFeasibility] = {}
+    structural_note = _structural_unavailable_note(structural_concepts)
+    joint_denominator_concepts = [
+        normalize_concept_name(concept)
+        for concept in data_concepts
+    ]
+    for concept in requested:
+        cell = cells[concept]
+        if _cell_is_structural_unavailable(cell):
+            out[concept] = _blocked_real_data_feasibility(
+                concept=concept,
+                database=db,
+                analytic_unit=unit,
+                reason=_reason_for_cell(cell.model_dump(mode="json")),
+                time_window=time_window,
+                aggregation=aggregation,
+                availability_cell=cell,
+            )
+            continue
+        single = _probe_single_concept_from_frame(
+            frame,
+            concept=concept,
+            analytic_unit=unit,
+            cohort=cohort,
+        )
+        out[concept] = RealDataConceptFeasibility(
+            concept=normalize_concept_name(concept),
+            database=db,
+            analytic_unit=unit,
+            denominator_n=single["denominator_n"],
+            n_present=single["n_present"],
+            fraction_missing=single["fraction_missing"],
+            n_joint_complete=joint["n_joint_complete"],
+            joint_fraction_complete=joint["joint_fraction_complete"],
+            missingness_applicable=True,
+            structural_unavailable=False,
+            availability_status=cell.status,
+            availability_reason=cell.reason,
+            source_missing_tables=list(cell.source_missing_tables),
+            structural_unavailable_concepts=sorted(
+                normalize_concept_name(concept)
+                for concept in structural_concepts
+            ),
+            joint_denominator_concepts=joint_denominator_concepts,
+            note=structural_note,
+            time_window_requested=str(time_window) if time_window is not None else None,
+            aggregation_requested=str(aggregation) if aggregation is not None else None,
+            cohort_filter_summary=single["cohort_filter_summary"],
+            missingness_severity=_missingness_severity(single["fraction_missing"]),
+        )
+    return out
 
 
 @lru_cache(maxsize=4096)
@@ -318,13 +542,257 @@ def _reason_for_cell(cell: Mapping[str, Any]) -> str:
     return " ".join(parts)
 
 
+def _cell_is_structural_unavailable(cell: ConceptDatabaseAvailability) -> bool:
+    if cell.structural_unavailable:
+        return True
+    if cell.status != "blocked":
+        return False
+    return (cell.reason or "") in {
+        "concept_not_found",
+        "no_direct_source_or_dependencies",
+        "recursive_dependency_cycle_or_empty_dependency_set",
+        "all_dependencies_blocked",
+        "source_unavailable",
+        "unmapped",
+    }
+
+
+def _structural_unavailable_note(concepts: Iterable[str]) -> Optional[str]:
+    unavailable = sorted(
+        normalize_concept_name(concept)
+        for concept in concepts
+        if str(concept or "").strip()
+    )
+    if not unavailable:
+        return None
+    return (
+        "structural unavailable concept(s) excluded from missingness denominator: "
+        + ", ".join(unavailable)
+    )
+
+
+def _read_prepared_frame(data_path: str | Path) -> Any:
+    path = Path(data_path)
+    suffix = path.suffix.lower()
+    import pandas as pd
+
+    if suffix == ".csv":
+        return pd.read_csv(path)
+    return pd.read_parquet(path)
+
+
+def _normalise_analytic_unit(
+    analytic_unit: Literal["stay", "patient"],
+) -> Literal["stay", "patient"]:
+    unit = str(analytic_unit or "stay").strip().lower()
+    if unit not in {"stay", "patient"}:
+        raise ValueError("analytic_unit must be 'stay' or 'patient'")
+    return unit  # type: ignore[return-value]
+
+
+def _apply_cohort_filter(
+    frame: Any,
+    cohort: Optional[Mapping[str, Any]],
+) -> tuple[Any, str]:
+    if not cohort:
+        return frame, "none (all rows)"
+    mask = None
+    parts: List[str] = []
+    for column, allowed in cohort.items():
+        if column not in frame.columns:
+            current = frame.index == "__missing_cohort_column__"
+            parts.append(f"{column}=<missing column>")
+        elif isinstance(allowed, (list, tuple, set, frozenset)):
+            current = frame[column].isin(list(allowed))
+            preview = ",".join(map(str, list(allowed)[:5]))
+            parts.append(f"{column} in [{preview}]")
+        else:
+            current = frame[column] == allowed
+            parts.append(f"{column}={allowed}")
+        mask = current if mask is None else (mask & current)
+    if mask is None:
+        return frame, "none (empty cohort filter)"
+    return frame.loc[mask].copy(), "; ".join(parts)
+
+
+def _probe_single_concept_from_frame(
+    frame: Any,
+    *,
+    concept: str,
+    analytic_unit: Literal["stay", "patient"],
+    cohort: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    filtered, cohort_summary = _apply_cohort_filter(frame, cohort)
+    unit = _normalise_analytic_unit(analytic_unit)
+    denominator = _denominator_n(filtered, unit)
+    column = _resolve_concept_column(filtered, concept)
+    n_present = _n_present(filtered, column, unit) if column is not None else 0
+    fraction_missing = _fraction_missing(n_present=n_present, denominator_n=denominator)
+    return {
+        "concept": normalize_concept_name(concept),
+        "denominator_n": denominator,
+        "n_present": n_present,
+        "fraction_missing": fraction_missing,
+        "cohort_filter_summary": cohort_summary,
+    }
+
+
+def _probe_joint_from_frame(
+    frame: Any,
+    *,
+    concepts: Sequence[str],
+    analytic_unit: Literal["stay", "patient"],
+    cohort: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    filtered, _cohort_summary = _apply_cohort_filter(frame, cohort)
+    unit = _normalise_analytic_unit(analytic_unit)
+    denominator = _denominator_n(filtered, unit)
+    resolved_columns = [
+        _resolve_concept_column(filtered, concept)
+        for concept in _unique(normalize_concept_name(c) for c in concepts if c)
+    ]
+    if denominator == 0 or not resolved_columns or any(col is None for col in resolved_columns):
+        return {
+            "n_joint_complete": 0,
+            "joint_fraction_complete": 0.0,
+        }
+    complete = filtered[list(resolved_columns)].notna().all(axis=1)
+    if unit == "patient":
+        id_col = _patient_id_column(filtered)
+        n_joint = int(filtered.loc[complete, id_col].dropna().nunique())
+    else:
+        n_joint = int(complete.sum())
+    return {
+        "n_joint_complete": n_joint,
+        "joint_fraction_complete": _fraction_present(
+            n_present=n_joint,
+            denominator_n=denominator,
+        ),
+    }
+
+
+def _zero_joint_from_frame(
+    frame: Any,
+    *,
+    analytic_unit: Literal["stay", "patient"],
+    cohort: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    filtered, _cohort_summary = _apply_cohort_filter(frame, cohort)
+    _denominator_n(filtered, _normalise_analytic_unit(analytic_unit))
+    return {
+        "n_joint_complete": 0,
+        "joint_fraction_complete": 0.0,
+    }
+
+
+def _blocked_real_data_feasibility(
+    *,
+    concept: str,
+    database: str,
+    analytic_unit: Literal["stay", "patient"],
+    reason: str,
+    time_window: Optional[str],
+    aggregation: Optional[str],
+    availability_cell: Optional[ConceptDatabaseAvailability] = None,
+) -> RealDataConceptFeasibility:
+    return RealDataConceptFeasibility(
+        concept=normalize_concept_name(concept),
+        database=database,
+        analytic_unit=analytic_unit,
+        denominator_n=0,
+        n_present=0,
+        fraction_missing=0.0,
+        n_joint_complete=0,
+        joint_fraction_complete=0.0,
+        missingness_applicable=False,
+        structural_unavailable=True,
+        availability_status=availability_cell.status if availability_cell else "blocked",
+        availability_reason=availability_cell.reason if availability_cell else reason,
+        source_missing_tables=(
+            list(availability_cell.source_missing_tables)
+            if availability_cell
+            else []
+        ),
+        structural_unavailable_concepts=[normalize_concept_name(concept)],
+        joint_denominator_concepts=[],
+        note=_structural_unavailable_note([concept]),
+        time_window_requested=str(time_window) if time_window is not None else None,
+        aggregation_requested=str(aggregation) if aggregation is not None else None,
+        cohort_filter_summary=f"structural_unavailable: {reason}",
+        missingness_severity="low",
+    )
+
+
+def _resolve_concept_column(frame: Any, concept: str) -> Optional[Any]:
+    candidates = _unique([str(concept), normalize_concept_name(concept)])
+    columns_by_lower = {str(column).lower(): column for column in frame.columns}
+    for candidate in candidates:
+        if candidate in frame.columns:
+            return candidate
+        match = columns_by_lower.get(candidate.lower())
+        if match is not None:
+            return match
+    return None
+
+
+def _denominator_n(frame: Any, analytic_unit: Literal["stay", "patient"]) -> int:
+    if analytic_unit == "patient":
+        id_col = _patient_id_column(frame)
+        return int(frame[id_col].dropna().nunique())
+    return int(len(frame))
+
+
+def _n_present(
+    frame: Any,
+    column: Any,
+    analytic_unit: Literal["stay", "patient"],
+) -> int:
+    present = frame[column].notna()
+    if analytic_unit == "patient":
+        id_col = _patient_id_column(frame)
+        return int(frame.loc[present, id_col].dropna().nunique())
+    return int(present.sum())
+
+
+def _patient_id_column(frame: Any) -> str:
+    for column in ("patient_id", "subject_id", "uniquepid"):
+        if column in frame.columns:
+            return column
+    raise ValueError(
+        "analytic_unit='patient' requires a patient_id, subject_id, or uniquepid column"
+    )
+
+
+def _fraction_missing(*, n_present: int, denominator_n: int) -> float:
+    if denominator_n <= 0:
+        return 1.0
+    return max(0.0, min(1.0, 1.0 - (float(n_present) / float(denominator_n))))
+
+
+def _fraction_present(*, n_present: int, denominator_n: int) -> float:
+    if denominator_n <= 0:
+        return 0.0
+    return max(0.0, min(1.0, float(n_present) / float(denominator_n)))
+
+
+def _missingness_severity(fraction_missing: float) -> Literal["low", "medium", "high"]:
+    if fraction_missing <= 0.10:
+        return "low"
+    if fraction_missing <= 0.30:
+        return "medium"
+    return "high"
+
+
 __all__ = [
     "ConceptDatabaseAvailability",
     "PUBLIC_DATABASES",
+    "RealDataConceptFeasibility",
+    "concept_database_availability_from_load_record",
     "cross_database_concept_availability",
     "default_public_databases",
     "explain_concept_availability",
     "hypothesis_cross_database_feasibility",
     "normalize_concept_name",
     "normalize_database_name",
+    "real_data_concept_feasibility",
 ]

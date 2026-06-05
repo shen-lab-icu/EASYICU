@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from easyicu.concept_availability_signal import ConceptAvailabilityRecord
+from easyicu.research_agent.concept_availability import (
+    concept_database_availability_from_load_record,
+)
+
 
 def test_cross_database_concept_availability_resolves_recursive_sofa2(ra):
     availability = ra.cross_database_concept_availability(
@@ -30,3 +35,28 @@ def test_hypothesis_cross_database_feasibility_summarizes_statuses(ra):
         "blocked",
     }
     assert isinstance(summary["degraded_reason"], dict)
+
+
+def test_runtime_load_availability_maps_to_research_agent_status_terms():
+    record = ConceptAvailabilityRecord(
+        concept="norepi_rate",
+        database="mimic",
+        reason="source_unavailable",
+        n_rows=0,
+        sources_defined=("inputevents",),
+        missing_tables=("inputevents",),
+    )
+
+    cell = concept_database_availability_from_load_record(
+        record,
+        requested_concept="norepinephrine",
+    )
+
+    assert cell.concept == "norepi_rate"
+    assert cell.requested_concept == "norepinephrine"
+    assert cell.status == "blocked"
+    assert cell.available is False
+    assert cell.reason == "source_unavailable"
+    assert cell.runtime_reason == "source_unavailable"
+    assert cell.structural_unavailable is True
+    assert cell.source_missing_tables == ["inputevents"]

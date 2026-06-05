@@ -26,6 +26,7 @@ from .datasource import (
 )
 from .table import ICUTable, WinTbl
 from .concept_callbacks import ConceptCallbackContext, execute_concept_callback
+from .concept_availability_signal import ConceptAvailabilityRecord
 from . import compat
 
 logger = logging.getLogger(__name__)
@@ -33,11 +34,46 @@ logger = logging.getLogger(__name__)
 # 全局调试开关 - 设置为 False 可以减少输出
 DEBUG_MODE = False
 
-# 避免在分批/分块加载时重复打印同一条“数据库未配置数据源”提示
-_MISSING_SOURCE_WARNED: set[tuple[str, str]] = set()
+# 避免在分批/分块加载时重复打印同一条 availability 提示
+_MISSING_SOURCE_WARNED: set[tuple[str, ...]] = set()
 
 # Concepts that require hourly maxima (vasoactive infusion rates)
 VASO_RATE_CONCEPTS = {"dopa_rate", "dobu_rate", "epi_rate", "norepi_rate", "adh_rate"}
+
+
+class _AvailabilityLoadContext:
+    """Per-call mutable state for optional concept availability tracking."""
+
+    def __init__(self, database: str) -> None:
+        self.database = database
+        self.sources_defined: Dict[str, tuple[str, ...]] = {}
+        self.missing_tables: Dict[str, set[str]] = {}
+        self._lock = RLock()
+
+    def set_sources(self, concept_name: str, sources: Iterable[object]) -> None:
+        table_names = tuple(
+            dict.fromkeys(
+                str(getattr(source, "table"))
+                for source in sources
+                if getattr(source, "table", None)
+            )
+        )
+        with self._lock:
+            self.sources_defined[concept_name] = table_names
+
+    def record_source_unavailable(self, concept_name: str, table_name: object) -> None:
+        if not table_name:
+            return
+        with self._lock:
+            self.missing_tables.setdefault(concept_name, set()).add(str(table_name))
+
+    def missing_for(self, concept_name: str) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(sorted(self.missing_tables.get(concept_name, set())))
+
+    def sources_for(self, concept_name: str) -> tuple[str, ...]:
+        with self._lock:
+            return self.sources_defined.get(concept_name, ())
 
 def _debug(msg: str) -> None:
     if DEBUG_MODE:
@@ -79,6 +115,79 @@ def _default_id_columns_for_db(db_name: Optional[str]) -> List[str]:
     if db.startswith("mimic"):
         return ["stay_id"]
     return mapping.get(db, ["stay_id"])
+
+
+def _definition_has_runtime_dependencies(definition: object) -> bool:
+    return bool(
+        getattr(definition, "sub_concepts", None)
+        or getattr(definition, "depends_on", None)
+        or getattr(definition, "callback", None)
+    )
+
+
+def _availability_table_stats(
+    table: object,
+    concept_name: str,
+) -> tuple[Optional[int], bool]:
+    if hasattr(table, "data"):
+        frame = table.data
+        value_col = getattr(table, "value_column", None) or concept_name
+    elif isinstance(table, pd.DataFrame):
+        frame = table
+        value_col = concept_name
+    else:
+        return None, False
+
+    n_rows = len(frame)
+    if n_rows == 0:
+        return 0, False
+
+    if value_col in frame.columns:
+        return n_rows, bool(frame[value_col].notna().any())
+    if concept_name in frame.columns:
+        return n_rows, bool(frame[concept_name].notna().any())
+    return n_rows, False
+
+
+def _build_availability_record(
+    *,
+    concept_name: str,
+    definition: object,
+    database: str,
+    table: object,
+    availability_context: _AvailabilityLoadContext,
+) -> ConceptAvailabilityRecord:
+    sources_defined = availability_context.sources_for(concept_name)
+    missing_tables = availability_context.missing_for(concept_name)
+    n_rows, has_present_value = _availability_table_stats(table, concept_name)
+
+    if not sources_defined and not _definition_has_runtime_dependencies(definition):
+        reason = "unmapped"
+        note = "No source is defined for this concept/database pair."
+    elif (
+        sources_defined
+        and missing_tables
+        and set(missing_tables) >= set(sources_defined)
+        and not has_present_value
+    ):
+        reason = "source_unavailable"
+        note = "All defined source tables were unavailable at load time."
+    elif not has_present_value:
+        reason = "data_missing"
+        note = "Source mapping exists and loaded, but no usable values were present."
+    else:
+        reason = "mapped_present"
+        note = None
+
+    return ConceptAvailabilityRecord(
+        concept=concept_name,
+        database=database,
+        reason=reason,  # type: ignore[arg-type]
+        n_rows=n_rows,
+        sources_defined=sources_defined,
+        missing_tables=missing_tables,
+        note=note,
+    )
 
 
 def _normalize_patient_ids_for_cache(patient_ids: Optional[Iterable[object]]) -> Optional[object]:
@@ -641,12 +750,20 @@ class ConceptResolver:
         concept_workers: int = -1,  # 🔧 -1 表示自动检测
         _batch_loading: bool = False,  # 🔧 批量加载模式标志，减少诊断输出
         _skip_concept_cache: bool = False,  # 🔧 跳过概念缓存，用于回调内部加载
+        availability_sink: Optional[MutableMapping[str, ConceptAvailabilityRecord]] = None,
         **kwargs,  # Additional parameters for callbacks (e.g., win_length, worst_val_fun)
     ):
         names = [name for name in concept_names]
         required_names = self._expand_dependencies(names)  # Ensure dependencies are expanded
         tables: Dict[str, ICUTable] = {}
         aggregators = self._normalise_aggregators(aggregate, required_names)
+        config = data_source.config
+        db_name = config.name if hasattr(config, 'name') else 'unknown'
+        availability_context = (
+            _AvailabilityLoadContext(str(db_name))
+            if availability_sink is not None
+            else None
+        )
         
         # 🔧 嵌套调用深度跟踪：递归概念会嵌套调用 load_concepts
         # 只有顶层调用才应该清除缓存
@@ -693,6 +810,11 @@ class ConceptResolver:
         for name in names:
             if name not in self.dictionary:
                 raise KeyError(f"Concept '{name}' not present in dictionary")
+            if availability_context is not None:
+                availability_context.set_sources(
+                    name,
+                    self.dictionary[name].for_data_source(config),
+                )
 
         # 🚀 智能并行策略：根据系统资源自动配置并行度
         # -1 表示自动检测，0 表示禁用并行，>0 表示指定的并行数
@@ -1135,6 +1257,7 @@ class ConceptResolver:
                 align_to_admission,
                 kwargs,
                 _skip_concept_cache=_skip_concept_cache,
+                availability_context=availability_context,
             )
             if verbose and logger.isEnabledFor(logging.INFO):
                 if isinstance(concept_table, ICUTable) or hasattr(concept_table, 'data'):
@@ -1166,6 +1289,38 @@ class ConceptResolver:
                 name: results[name]
                 for name in names
             }
+
+            if availability_sink is not None and availability_context is not None:
+                unavailable_by_table: Dict[str, List[str]] = {}
+                for name in names:
+                    record = _build_availability_record(
+                        concept_name=name,
+                        definition=self.dictionary[name],
+                        database=availability_context.database,
+                        table=tables[name],
+                        availability_context=availability_context,
+                    )
+                    availability_sink[name] = record
+                    if record.reason == "source_unavailable":
+                        for table_name in record.missing_tables:
+                            unavailable_by_table.setdefault(table_name, []).append(name)
+
+                for table_name, affected_concepts in sorted(unavailable_by_table.items()):
+                    warn_key = (
+                        "source_unavailable",
+                        str(availability_context.database),
+                        str(table_name),
+                    )
+                    if warn_key in _MISSING_SOURCE_WARNED:
+                        continue
+                    logger.warning(
+                        "source table '%s' not available for %s; concepts [%s] marked source_unavailable",
+                        table_name,
+                        availability_context.database,
+                        ", ".join(sorted(set(affected_concepts))),
+                    )
+                    _MISSING_SOURCE_WARNED.add(warn_key)
+                self._last_availability = dict(availability_sink)
 
             if not merge:
                 # 如果是r_compatible模式且只有一个概念，返回ricu.R格式的DataFrame
@@ -1306,6 +1461,7 @@ class ConceptResolver:
         verbose: bool = True,
         interval: Optional[pd.Timedelta] = None,
         align_to_admission: bool = True,
+        availability_context: Optional[_AvailabilityLoadContext] = None,
         **kwargs,  # Additional parameters for callbacks
     ) -> ICUTable:
         # 🔧 批量加载模式：减少诊断输出
@@ -1373,6 +1529,7 @@ class ConceptResolver:
                                 verbose=False,
                                 interval=interval,
                                 align_to_admission=align_to_admission,
+                                availability_context=availability_context,
                                 _bypass_callback=True,  # Prevent infinite recursion
                             )
                             if sub_result is not None:
@@ -1406,6 +1563,8 @@ class ConceptResolver:
         config = data_source.config
         
         sources = definition.for_data_source(config)
+        if availability_context is not None:
+            availability_context.set_sources(concept_name, sources)
         if not sources:
             # 🔧 FIX: 当数据源未配置时，返回空表而不是报错
             # 这样用户可以继续提取其他概念，并在结果中看到哪些概念没有数据
@@ -2739,6 +2898,8 @@ class ConceptResolver:
                         if verbose:
                             if DEBUG_MODE: print(f"   💾 缓存表 {source.table}: {len(patient_filter_in_filters.value)} 个患者")
                 except (KeyError, FileNotFoundError, ValueError) as e:
+                    if availability_context is not None:
+                        availability_context.record_source_unavailable(concept_name, source.table)
                     # 如果表不存在，跳过这个源
                     if DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
                         logger.debug(f"Table '{source.table}' not available: {type(e).__name__}: {str(e)[:100]}")
@@ -6754,6 +6915,7 @@ class ConceptResolver:
         align_to_admission: bool,
         kwargs: Dict[str, object],
         _skip_concept_cache: bool = False,  # 🔧 跳过概念缓存
+        availability_context: Optional[_AvailabilityLoadContext] = None,
     ) -> ICUTable:
         # 🚀 优化：增强概念数据缓存（避免重复加载相同概念，如urine、vaso_ind、pafi）
         # 🔧 使用统一的 hash 函数，确保 list 和 dict 形式得到相同的 hash
@@ -6874,6 +7036,7 @@ class ConceptResolver:
                 align_to_admission,
                 kwargs,
                 _skip_concept_cache=_skip_concept_cache,  # 传递跳过缓存标志
+                availability_context=availability_context,
             )
 
         cache_key = self._build_cache_key(
@@ -6908,6 +7071,7 @@ class ConceptResolver:
                 verbose=verbose,
                 interval=interval,
                 align_to_admission=align_to_admission,
+                availability_context=availability_context,
                 **kwargs,
             )
             
