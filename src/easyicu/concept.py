@@ -5607,7 +5607,9 @@ class ConceptResolver:
                     value_col = getattr(result, 'value_column', None)
                 
                 if value_col and value_col in result.data.columns:
-                    if pd.api.types.is_numeric_dtype(result.data[value_col]):
+                    if pd.api.types.is_bool_dtype(result.data[value_col]):
+                        agg_method = 'any'
+                    elif pd.api.types.is_numeric_dtype(result.data[value_col]):
                         agg_method = 'median'  # Changed from 'mean' to 'median' to match R ricu default
                     else:
                         agg_method = 'first'
@@ -7704,4 +7706,3 @@ from .concept_expr_parser import (  # noqa: F401, E402
 # re-exported in the schema import block near the top of this file.
 # --------------------------------------------------------------------------
 from .concept_loader import load_dictionary  # noqa: F401, E402
-
