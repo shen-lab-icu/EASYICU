@@ -3598,12 +3598,15 @@ def eicu_dex_med(
         else:
             duration_minutes = dur_vals
 
-    # Filter: duration <= 0 set to 1 min
-    duration_minutes = duration_minutes.fillna(1.0)
-    duration_minutes = duration_minutes.where(duration_minutes > 0, 1.0)
+    # Filter: duration <= 0 set to 1 min, but do not fabricate a duration
+    # when it is genuinely missing.
+    duration_minutes = duration_minutes.where(
+        duration_minutes.isna() | (duration_minutes > 0),
+        1.0,
+    )
 
     # Filter: duration <= 12 hours (720 minutes)
-    mask = duration_minutes <= 720.0
+    mask = duration_minutes.notna() & (duration_minutes <= 720.0)
     work = work.loc[mask].copy()
     duration_minutes = duration_minutes.loc[mask]
 
