@@ -35,6 +35,8 @@ import pandas as pd
 import numpy as np
 import logging
 
+from easyicu.ts_utils import _infer_numeric_time_unit
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,7 +104,7 @@ def kdigo_creatinine(
     # Vectorized: use searchsorted for O(N log N) window boundaries per patient
     
     # Detect time unit and convert to hours for uniform processing
-    time_unit = _detect_time_unit(df[time_col])
+    time_unit = _detect_time_unit(df[time_col], time_col)
     logger.debug(f"Creatinine baseline calculation using time unit: {time_unit}")
     
     if time_unit == 'datetime':
@@ -110,6 +112,8 @@ def kdigo_creatinine(
         df['_hours'] = (df[time_col] - ref_time) / pd.Timedelta(hours=1)
     elif time_unit == 'seconds':
         df['_hours'] = df[time_col].astype(np.float64) / 3600.0
+    elif time_unit == 'hours':
+        df['_hours'] = df[time_col].astype(np.float64)
     else:  # minutes
         df['_hours'] = df[time_col].astype(np.float64) / 60.0
     
@@ -264,28 +268,31 @@ def kdigo_uo(
     return result
 
 
-def _detect_time_unit(time_series: pd.Series) -> str:
+def _detect_time_unit(time_series: pd.Series, time_col: str | None = None) -> str:
     """Detect the unit of a numeric time series.
     
     Returns:
         'seconds': Time values are in seconds (e.g., SICdb)
+        'hours': Time values are already in hours
         'minutes': Time values are in minutes (e.g., MIIV, AUMC, eICU)
         'datetime': Time values are datetime objects
     """
     if pd.api.types.is_datetime64_any_dtype(time_series):
         return 'datetime'
-    
-    # For numeric time, check the magnitude
-    # If max value > 50000, likely seconds (50000 seconds = ~14 hours)
-    # Typical ICU stays are 1-30 days = 1440-43200 minutes = 86400-2592000 seconds
-    max_val = time_series.max()
-    
-    if max_val > 100000:  # > 100000 seconds = 27.8 hours is reasonable for seconds
+
+    # KDIGO accepts both raw source offsets and normalized concept time axes.
+    # Reuse ts_utils' inference, but do not let the generic "charttime" name
+    # override numeric spacing because older callers pass minute offsets under
+    # that column name.
+    index_hint = time_col or getattr(time_series, "name", None)
+    if str(index_hint).lower() == "charttime":
+        index_hint = None
+    inferred = _infer_numeric_time_unit(time_series, index_hint)
+    if inferred == 's':
         return 'seconds'
-    elif max_val > 50000:  # Ambiguous zone, but lean towards seconds
-        return 'seconds'
-    else:
-        return 'minutes'
+    if inferred == 'h':
+        return 'hours'
+    return 'minutes'
 
 
 def _calculate_uo_rates_simple(
@@ -356,21 +363,10 @@ def _calculate_uo_rates_simple(
     # Sort urine by patient and time
     urine = urine.sort_values([id_col, time_col]).reset_index(drop=True)
     
-    # Determine time unit (datetime, minutes, or seconds)
-    time_unit = _detect_time_unit(urine[time_col])
+    # Determine time unit (datetime, hours, minutes, or seconds)
+    time_unit = _detect_time_unit(urine[time_col], time_col)
     logger.debug(f"Detected time unit for UO calculation: {time_unit}")
-    
-    # Define window sizes and conversion factor to get hours
-    if time_unit == 'datetime':
-        # Will convert to minutes in the loop
-        to_minutes_factor = 1.0  # Already handled specially
-    elif time_unit == 'seconds':
-        # SICdb uses seconds
-        to_minutes_factor = 1.0 / 60.0  # 1 second = 1/60 minute
-    else:
-        # Default: minutes
-        to_minutes_factor = 1.0
-    
+
     # Vectorized UO rate calculation using cumsum + searchsorted (O(N log N))
     # Convert time to minutes for uniform window computation
     urine = urine.copy()
@@ -379,6 +375,8 @@ def _calculate_uo_rates_simple(
         urine['_min'] = (urine[time_col] - _ref) / pd.Timedelta(minutes=1)
     elif time_unit == 'seconds':
         urine['_min'] = urine[time_col].astype(np.float64) / 60.0
+    elif time_unit == 'hours':
+        urine['_min'] = urine[time_col].astype(np.float64) * 60.0
     else:
         urine['_min'] = urine[time_col].astype(np.float64)
     

@@ -38,6 +38,36 @@ def test_kdigo_uo_matches_mit_lcp_window_rules_once_six_hours_are_present():
     assert pd.isna(result["uo_rt_24hr"].iloc[-1])
 
 
+def test_kdigo_uo_large_minute_offsets_are_not_misclassified_as_seconds():
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1, 1, 1, 1],
+            "charttime": [60000, 60060, 60120, 60180, 60240, 60300],
+            "urine": [10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+        }
+    )
+    weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
+
+    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
+
+    assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(0.1)
+
+
+def test_kdigo_uo_hour_numeric_time_axis_is_supported():
+    urine = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1, 1, 1, 1],
+            "time": [0, 1, 2, 3, 4, 5],
+            "urine": [10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+        }
+    )
+    weight = pd.DataFrame({"stay_id": [1], "weight": [100.0]})
+
+    result = _calculate_uo_rates_simple(urine, weight, "stay_id", "time")
+
+    assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(0.1)
+
+
 def test_kdigo_uo_missing_patient_weight_leaves_rates_missing():
     urine = pd.DataFrame(
         {
