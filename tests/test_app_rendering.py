@@ -58,6 +58,22 @@ def test_concept_catalog_helpers_remain_available_to_workflow_context() -> None:
     assert app._sample_patient_ids_random([3, 1, 2], 10) == [3, 1, 2]
 
 
+def test_ai_assistant_hosted_provider_does_not_auto_enable_opt_in() -> None:
+    render_source = inspect.getsource(llm_chat.render_ai_assistant_page)
+    stream_source = inspect.getsource(llm_chat._stream_response)
+    bg_source = inspect.getsource(llm_chat._start_bg_response)
+
+    assert 'st.session_state["llm_enabled"] = True' not in render_source
+    assert 'st.session_state["_llm_toggle"] = True' not in render_source
+    assert "_needs_api_key" not in render_source
+    assert stream_source.index("enforce_external_llm_opt_in") < stream_source.index(
+        "client = _get_client()"
+    )
+    assert bg_source.index("enforce_external_llm_opt_in") < bg_source.index(
+        "threading.Thread"
+    )
+
+
 def test_quick_preview_prefers_lightweight_concepts_when_all_features_selected() -> None:
     selected = ["sofa2", "sofa2_liver", "sep3_sofa2", "hr", "map", "temp", "spo2"]
 
