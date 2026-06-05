@@ -38,6 +38,7 @@ from easyicu.callback_utils import (
     combine_callbacks,
     comp_na,
     convert_unit,
+    eicu_dex_med,
     eicu_extract_unit,
     fahr_to_cels,
     force_type,
@@ -246,6 +247,27 @@ class TestConvertUnit:
 
         assert result["value"].tolist() == [2.0, 1.0]
         assert result["unit"].tolist() == ["hour", "hour"]
+
+
+# ---------------------------------------------------------------------------
+# eicu_dex_med — duration-derived rate normalization
+# ---------------------------------------------------------------------------
+
+
+class TestEicuDexMed:
+    def test_missing_duration_without_start_offset_is_dropped(self):
+        df = pd.DataFrame(
+            {
+                "dosage": ["25 ml", "25 ml"],
+                "drugstopoffset": [np.nan, 5.0],
+            }
+        )
+
+        result = eicu_dex_med(df, "dosage", "drugstopoffset", "d50")
+
+        assert len(result) == 1
+        assert result["drugstopoffset"].iloc[0] == pytest.approx(5.0 / 60.0)
+        assert result["dosage"].iloc[0] == pytest.approx(1500.0)
 
 
 # ---------------------------------------------------------------------------

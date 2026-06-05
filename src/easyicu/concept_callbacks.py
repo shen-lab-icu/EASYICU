@@ -1126,7 +1126,13 @@ def _merge_tables(
                             try:
                                 frame[k] = frame[k].astype(v)
                             except Exception:
-                                pass
+                                logger.debug(
+                                    "Failed to cast merge key %s to %s for concept %s",
+                                    k,
+                                    v,
+                                    name,
+                                    exc_info=True,
+                                )
             indexed = frame.set_index(key_cols, drop=True)
             # Only keep the value column (concept name)
             if name in indexed.columns:
@@ -3424,6 +3430,7 @@ def _match_fio2_fallback_loop_original(
             effective_tolerance = match_win.total_seconds() / 3600.0
     
     unique_ids = left_df[id_columns[0]].unique()
+    failed_ids = []
     for id_val in unique_ids:
         left_mask = left_df[id_columns[0]] == id_val
         right_mask = right_df[id_columns[0]] == id_val
@@ -3447,8 +3454,20 @@ def _match_fio2_fallback_loop_original(
             for col in id_columns:
                 merged[col] = id_val
             result_list.append(merged)
-        except Exception:
+        except Exception as exc:
+            failed_ids.append((id_val, str(exc)))
             continue
+
+    if failed_ids:
+        logger.warning(
+            "merge_asof fallback skipped %d/%d patient groups for %s/%s; "
+            "first failures=%s",
+            len(failed_ids),
+            len(unique_ids),
+            left_col,
+            right_col,
+            failed_ids[:5],
+        )
     
     if result_list:
         return pd.concat(result_list, ignore_index=True)
@@ -3693,7 +3712,11 @@ def _match_fio2(
                     pd.to_datetime(merged[unified_time_col], errors='coerce') - base_time
                 ) / pd.Timedelta(hours=1)
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to restore merged FiO2 time column %s",
+                    unified_time_col,
+                    exc_info=True,
+                )
             
     else:
         # mode = "extreme_vals" or "fill_gaps"
@@ -4105,7 +4128,11 @@ def _callback_vent_ind(
             if td_series.notna().any():
                 return td_series
         except Exception:  # fallback to numeric parsing
-            pass
+            logger.debug(
+                "Failed to parse ventilation duration as timedelta; "
+                "falling back to numeric hours",
+                exc_info=True,
+            )
         numeric = pd.to_numeric(series, errors="coerce")
         return pd.to_timedelta(numeric, unit="h")
 
@@ -5801,7 +5828,11 @@ def _callback_vaso60(
         try:
             result[output_index_col] = (pd.to_datetime(result[output_index_col], errors='coerce') - base_time) / pd.Timedelta(hours=1)
         except Exception:
-            pass
+            logger.debug(
+                "Failed to restore callback time column %s",
+                output_index_col,
+                exc_info=True,
+            )
     return _as_icutbl(
         result,
         id_columns=id_columns,
