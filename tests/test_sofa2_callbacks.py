@@ -2,6 +2,7 @@ import pandas as pd
 
 from easyicu.callbacks import sofa2_cns, sofa2_resp
 from easyicu.concept_callbacks import ConceptCallbackContext, _callback_sofa_component
+from easyicu.sofa2 import sofa2_cardio as standalone_sofa2_cardio
 from easyicu.table import ICUTable
 
 
@@ -23,6 +24,16 @@ def test_sofa2_cns_uses_motor_response_when_gcs_missing():
     )
 
     assert score.tolist() == [0, 1, 2, 3, 4, 4]
+
+
+def test_standalone_sofa2_cardio_mechanical_support_is_not_downgraded():
+    score = standalone_sofa2_cardio(
+        pd.Series([65, 75, 75]),
+        norepi60=pd.Series([0.0, 0.1, 0.0]),
+        mech_circ_support=pd.Series([True, True, True]),
+    )
+
+    assert score.tolist() == [4, 4, 4]
 
 
 def test_sofa2_resp_component_preserves_ecmo_indication_strings():

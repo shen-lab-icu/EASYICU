@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from easyicu.kdigo_aki import _calculate_uo_rates_simple, kdigo_uo
+from easyicu.kdigo_aki import _calculate_uo_rates_simple, kdigo_stages, kdigo_uo
 
 
 def test_kdigo_uo_requires_minimum_documented_window_hours():
@@ -87,3 +87,35 @@ def test_kdigo_uo_global_weight_without_id_applies_to_all_rows():
     result = _calculate_uo_rates_simple(urine, weight, "stay_id", "charttime")
 
     assert result["uo_rt_6hr"].iloc[-1] == pytest.approx(0.2)
+
+
+def test_kdigo_rrt_stage_applies_from_first_active_rrt_time():
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [0, 120, 240],
+            "crea": [1.0, 1.1, 1.2],
+        }
+    )
+    rrt = pd.DataFrame({"stay_id": [1], "charttime": [180], "rrt": [1]})
+
+    result = kdigo_stages(creatinine, rrt_df=rrt, id_col="stay_id", time_col="charttime")
+
+    assert result["aki_stage_rrt"].tolist() == [0, 0, 3]
+    assert result["aki_stage"].tolist() == [0, 0, 3]
+    assert result["aki"].tolist() == [False, False, True]
+
+
+def test_kdigo_rrt_exact_timestamp_match_is_not_required():
+    creatinine = pd.DataFrame(
+        {
+            "stay_id": [1, 1],
+            "charttime": [100, 200],
+            "crea": [1.0, 1.1],
+        }
+    )
+    rrt = pd.DataFrame({"stay_id": [1], "charttime": [150], "rrt": [True]})
+
+    result = kdigo_stages(creatinine, rrt_df=rrt, id_col="stay_id", time_col="charttime")
+
+    assert result.loc[result["charttime"] == 200, "aki_stage_rrt"].item() == 3

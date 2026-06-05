@@ -329,9 +329,6 @@ def sofa2_cardio(
 
     score = pd.Series(0, index=idx, dtype=int)
 
-    # Mechanical support overrides → auto 4pt
-    score[mech] = 4
-
     # Check if any vasopressors/inotropes are being used
     any_vaso = (total > 0) | (da > 0) | (db > 0) | others
 
@@ -367,6 +364,10 @@ def sofa2_cardio(
         score[vaso_unavail & (map_val >= 50) & (map_val < 60)] = 2
         score[vaso_unavail & (map_val >= 40) & (map_val < 50)] = 3
         score[vaso_unavail & (map_val < 40)] = 4
+
+    # Mechanical circulatory support is an automatic SOFA-2 cardiovascular 4.
+    # Apply last so later MAP/dose fallback rules cannot downgrade it.
+    score[mech] = 4
 
     return score
 

@@ -207,6 +207,33 @@ def _expand_synonyms(aliases: List[str]) -> List[str]:
     return _dedup([*aliases, *extra]) if extra else aliases
 
 
+def _drop_ambiguous_outcome_aliases(
+    aliases: Dict[str, List[str]],
+    outcome_keys: Iterable[str],
+) -> Dict[str, List[str]]:
+    """Suppress aliases that would bind one outcome phrase to multiple outcomes."""
+    guarded = set(outcome_keys)
+    if not guarded:
+        return aliases
+    owners: Dict[str, set[str]] = {}
+    for key, key_aliases in aliases.items():
+        if key not in guarded:
+            continue
+        for alias in key_aliases:
+            owners.setdefault(_clean(alias).lower(), set()).add(key)
+    ambiguous = {alias for alias, keys in owners.items() if len(keys) > 1}
+    if not ambiguous:
+        return aliases
+    return {
+        key: [
+            alias
+            for alias in key_aliases
+            if key not in guarded or _clean(alias).lower() not in ambiguous
+        ]
+        for key, key_aliases in aliases.items()
+    }
+
+
 def _dedup(items: Iterable[str]) -> List[str]:
     seen = set()
     out: List[str] = []
@@ -219,17 +246,20 @@ def _dedup(items: Iterable[str]) -> List[str]:
 
 
 def _is_binary_outcome(concept: Mapping) -> bool:
-    """A concept is a 0/1-determinable outcome when it is logical (has a
-    ``class_name``) or an outcome-category concept, and is neither numeric nor an
-    ordinal score (SOFA / qSOFA / NEWS components are 0-N scales, not 0/1)."""
+    """Return whether a dictionary concept is safe as a 0/1 outcome.
+
+    Logical concepts outside the outcome category can be valid exposures or
+    eligibility variables, but should not automatically pass the idea-mining
+    outcome gate.
+    """
     if any(k in concept for k in ("unit", "min", "max")):
         return False  # numeric / continuous
     desc = str(concept.get("description", "")).lower()
     if "score" in desc or "component" in desc:
         return False  # ordinal severity scale, not 0/1
-    if concept.get("category") == "outcome":
-        return True
-    return bool(concept.get("class_name"))
+    if any(word in desc for word in ("administration", "infusion", "dose", " rate")):
+        return False  # treatment/exposure concept, not an outcome
+    return concept.get("category") == "outcome"
 
 
 def load_concept_catalog(
@@ -295,6 +325,8 @@ def load_concept_catalog(
         for key, extra in extra_aliases.items():
             merged = [*aliases.get(str(key), []), *[str(e) for e in extra]]
             aliases[str(key)] = _dedup(merged)
+
+    aliases = _drop_ambiguous_outcome_aliases(aliases, outcomes.keys())
 
     return ConceptCatalog(
         available_concepts=tuple(keys),

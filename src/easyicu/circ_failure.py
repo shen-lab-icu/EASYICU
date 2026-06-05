@@ -356,7 +356,15 @@ def load_circ_failure(
     
     # Concepts to load
     core_concepts = ['lact', 'map']
-    optional_concepts = ['norepi_rate', 'epi_rate', 'dobu_rate', 'dopa_rate']
+    optional_concepts = [
+        'norepi_rate',
+        'epi_rate',
+        'adh_rate',
+        'dobu_rate',
+        'dopa_rate',
+        'phn_rate',
+        'milrinone',
+    ]
     all_needed = core_concepts + optional_concepts
     
     if verbose:
@@ -463,8 +471,11 @@ def load_circ_failure(
     # Find drug columns (based on what was loaded)
     norepi_col = 'norepi_rate' if 'norepi_rate' in df.columns else None
     epi_col = 'epi_rate' if 'epi_rate' in df.columns else None
-    vaso_col = None  # Not commonly available
-    level1_cols = [c for c in ['dobu_rate', 'dopa_rate'] if c in df.columns]
+    vaso_col = 'adh_rate' if 'adh_rate' in df.columns else None
+    level1_cols = [
+        c for c in ['dobu_rate', 'dopa_rate', 'phn_rate', 'milrinone']
+        if c in df.columns
+    ]
     
     # Calculate circulatory failure status
     result = calculate_circ_failure_status(

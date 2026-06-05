@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from easyicu.research_agent.concept_catalog import (
     DERIVED_CONCEPT_HINTS,
     ConceptCatalog,
@@ -34,8 +36,20 @@ def test_mortality_description_expands_to_mortality_alias() -> None:
 
 def test_binary_outcomes_are_declared_known_0_1() -> None:
     cat = load_concept_catalog()
-    for key in ("death", "rrt", "susp_inf"):
+    for key in ("death", "susp_inf", "sep3"):
         assert cat.outcome_determinability[key]["status"] == "known_0_1"
+
+
+def test_intervention_logical_concepts_are_not_default_outcomes() -> None:
+    cat = load_concept_catalog()
+    for key in ("rrt", "vaso_ind", "vent_ind", "mech_vent"):
+        assert key not in cat.outcome_determinability
+
+
+def test_administration_exposure_concepts_are_not_default_outcomes() -> None:
+    cat = load_concept_catalog()
+    for key in ("norepi60", "epi60", "dopa60"):
+        assert key not in cat.outcome_determinability
 
 
 def test_ordinal_scores_are_not_declared_as_binary_outcomes() -> None:
@@ -49,6 +63,33 @@ def test_continuous_outcomes_are_not_declared_as_binary() -> None:
     cat = load_concept_catalog()
     for key in ("los_icu", "los_hosp"):
         assert key not in cat.outcome_determinability
+
+
+def test_colliding_literature_aliases_are_suppressed(tmp_path) -> None:
+    concept_dict = {
+        "death_icu": {
+            "class_name": "lgl_cncpt",
+            "description": "ICU mortality",
+            "category": "outcome",
+        },
+        "death_hosp": {
+            "class_name": "lgl_cncpt",
+            "description": "hospital mortality",
+            "category": "outcome",
+        },
+    }
+    dict_path = tmp_path / "concept-dict.json"
+    dict_path.write_text(json.dumps(concept_dict), encoding="utf-8")
+
+    cat = load_concept_catalog(dict_paths=[dict_path])
+
+    lower_aliases = {
+        key: {alias.lower() for alias in aliases}
+        for key, aliases in cat.concept_aliases.items()
+    }
+    assert "mortality" not in lower_aliases["death_icu"]
+    assert "mortality" not in lower_aliases["death_hosp"]
+    assert "hospital mortality" in lower_aliases["death_hosp"]
 
 
 def test_derived_concepts_absent_from_dicts_get_hint_metadata() -> None:
