@@ -63,14 +63,40 @@ def binary_op(op: Callable, y: Any) -> Callable:
         # Convert to numeric if needed for division operations
         if op in (operator.truediv, operator.floordiv):
             try:
-                x = pd.to_numeric(x, errors='coerce')
+                x_val = pd.to_numeric(x, errors='coerce')
                 y_val = pd.to_numeric(y, errors='coerce')
-                if pd.isna(x) or pd.isna(y_val):
+
+                if isinstance(x_val, pd.Series):
+                    if np.isscalar(y_val):
+                        if pd.isna(y_val) or y_val == 0:
+                            return pd.Series(np.nan, index=x_val.index, dtype=float)
+                        return op(x_val, y_val)
+                    y_series = (
+                        y_val
+                        if isinstance(y_val, pd.Series)
+                        else pd.Series(y_val, index=x_val.index)
+                    )
+                    result = op(x_val, y_series)
+                    invalid = x_val.isna() | y_series.isna() | (y_series == 0)
+                    return result.mask(invalid)
+
+                if isinstance(x_val, np.ndarray):
+                    if np.isscalar(y_val):
+                        if pd.isna(y_val) or y_val == 0:
+                            return np.full(x_val.shape, np.nan, dtype=float)
+                        return op(x_val, y_val)
+                    y_arr = np.asarray(y_val)
+                    result = np.asarray(op(x_val, y_arr), dtype=float)
+                    invalid = pd.isna(x_val) | pd.isna(y_arr) | (y_arr == 0)
+                    result[invalid] = np.nan
+                    return result
+
+                if pd.isna(x_val) or pd.isna(y_val):
                     return None
                 # Special handling for division by zero
                 if y_val == 0:
                     return None
-                return op(x, y_val)
+                return op(x_val, y_val)
             except (ValueError, TypeError):
                 return None
         else:
@@ -2927,17 +2953,14 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
             except Exception as e:
                 logging.debug(f"Failed to load weight from patient table: {e}")
         
-        # Fill remaining missing weights with default 70 kg
-        # Also replace 0 or negative weights with default (prevents division by zero)
-        frame['_weight'] = frame['_weight'].fillna(70.0)
-        frame.loc[frame['_weight'] <= 0, '_weight'] = 70.0
+        frame['_weight'] = pd.to_numeric(frame['_weight'], errors='coerce')
+        frame.loc[frame['_weight'] <= 0, '_weight'] = np.nan
         
         # 🚀 Vectorized unit conversion (replaces per-row apply, ~50x faster)
         _val = pd.to_numeric(frame[val_var], errors='coerce').values.astype(np.float64).copy()
         _unit = frame['unit_var'].astype(str).str.strip().str.lower()
         _wt = frame['_weight'].values.astype(np.float64).copy()
         _wt_bad = np.isnan(_wt) | (_wt <= 0)
-        _wt[_wt_bad] = 70.0
 
         # Incompatible units → NaN (include NaN/empty units — original code: `if not unit: return np.nan`)
         _unit_raw_na = frame['unit_var'].isna()
@@ -2975,7 +2998,10 @@ def eicu_rate_kg_callback(ml_to_mcg: float) -> Callable:
         # Step 5: non-/kg/ units → ÷weight
         _unit_final = pd.Series(_unit_arr)
         _no_kg = ~_unit_final.str.contains('/kg/', na=False).values & ~_invalid.values
-        _val[_no_kg] /= _wt[_no_kg]
+        _missing_weight = _no_kg & _wt_bad
+        _val[_missing_weight] = np.nan
+        _normalizable = _no_kg & ~_wt_bad
+        _val[_normalizable] /= _wt[_normalizable]
 
         frame[concept_name] = _val
         
@@ -3748,7 +3774,6 @@ def aumc_rate_kg(
     rate_unit_col: Optional[str],
     index_col: Optional[str],
     stop_col: Optional[str],
-    default_weight: float = 70.0,
 ) -> pd.DataFrame:
     if frame.empty:
         return frame
@@ -3780,17 +3805,22 @@ def aumc_rate_kg(
     rate_unit_col = _aumc_normalize_rate_units(df, rate_unit_col, val_col) or rate_unit_col
 
     if 'weight' not in df.columns:
-        df['weight'] = default_weight
-    df['weight'] = pd.to_numeric(df['weight'], errors='coerce').fillna(default_weight)
+        df['weight'] = np.nan
+    df['weight'] = pd.to_numeric(df['weight'], errors='coerce')
+    df.loc[df['weight'] <= 0, 'weight'] = np.nan
 
     if rel_weight_col and rel_weight_col in df.columns:
         rel_mask = df[rel_weight_col].fillna(False).astype(bool)
     else:
         rel_mask = pd.Series(False, index=df.index)
 
-    mask_non_perkg = (~rel_mask) & (df['weight'] > 0)
-    if mask_non_perkg.any():
-        df.loc[mask_non_perkg, val_col] = df.loc[mask_non_perkg, val_col] / df.loc[mask_non_perkg, 'weight']
+    mask_non_perkg = ~rel_mask
+    valid_weight = mask_non_perkg & df['weight'].notna()
+    missing_weight = mask_non_perkg & df['weight'].isna()
+    if valid_weight.any():
+        df.loc[valid_weight, val_col] = df.loc[valid_weight, val_col] / df.loc[valid_weight, 'weight']
+    if missing_weight.any():
+        df.loc[missing_weight, val_col] = np.nan
 
     if unit_col and unit_col in df.columns:
         df[unit_col] = df[unit_col].astype(str).replace({'µg': 'mcg', 'μg': 'mcg', 'ug': 'mcg'})
@@ -4452,7 +4482,6 @@ def hirid_rate_kg(
     unit_col: Optional[str],
     grp_var: Optional[str],
     index_col: Optional[str],
-    default_weight: float = 70.0,
     interval_minutes: float = 60.0,
     value_min: Optional[float] = None,
     value_max: Optional[float] = None,
@@ -4531,8 +4560,9 @@ def hirid_rate_kg(
     
     # Step 3: Get patient weight
     if 'weight' not in df.columns:
-        df['weight'] = default_weight
-    df['weight'] = pd.to_numeric(df['weight'], errors='coerce').fillna(default_weight)
+        df['weight'] = np.nan
+    df['weight'] = pd.to_numeric(df['weight'], errors='coerce')
+    df.loc[df['weight'] <= 0, 'weight'] = np.nan
     
     # Detect time column if not specified
     if not index_col:
@@ -4560,18 +4590,29 @@ def hirid_rate_kg(
     if grp_var and grp_var in df.columns:
         group_cols.append(grp_var)
     
-    # Aggregate weight (take first value per patient)
-    weight_map = df.groupby(id_col)['weight'].first().to_dict()
+    # Aggregate the first usable weight per patient.
+    weight_map = (
+        df.dropna(subset=['weight'])
+        .groupby(id_col)['weight']
+        .first()
+        .to_dict()
+    )
     
     grouped = df.groupby(group_cols, as_index=False).agg({
         actual_val_col: 'sum',
     })
     
     # Map weight back
-    grouped['weight'] = grouped[id_col].map(weight_map).fillna(default_weight)
-    
+    grouped['weight'] = grouped[id_col].map(weight_map)
+
     # Step 5: Calculate rate = dose / interval_minutes / weight
-    grouped[concept_name] = grouped[actual_val_col] / interval_minutes / grouped['weight']
+    valid_weight = grouped['weight'].notna() & (grouped['weight'] > 0)
+    grouped[concept_name] = np.nan
+    grouped.loc[valid_weight, concept_name] = (
+        grouped.loc[valid_weight, actual_val_col]
+        / interval_minutes
+        / grouped.loc[valid_weight, 'weight']
+    )
     
     # Rename _time_bin to index_col for consistency
     grouped = grouped.rename(columns={'_time_bin': index_col if index_col else 'datetime'})

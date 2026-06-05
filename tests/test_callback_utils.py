@@ -37,6 +37,7 @@ from easyicu.callback_utils import (
     binary_op,
     combine_callbacks,
     comp_na,
+    convert_unit,
     eicu_extract_unit,
     fahr_to_cels,
     force_type,
@@ -201,6 +202,50 @@ class TestBinaryOp:
     def test_division_by_nan_returns_none(self):
         div = binary_op(operator.truediv, np.nan)
         assert div(5) is None
+
+    def test_division_series_preserves_values_and_na(self):
+        div = binary_op(operator.truediv, 60)
+        result = div(pd.Series([120, 60, np.nan, "bad"]))
+        assert result.iloc[0] == pytest.approx(2.0)
+        assert result.iloc[1] == pytest.approx(1.0)
+        assert pd.isna(result.iloc[2])
+        assert pd.isna(result.iloc[3])
+
+    def test_division_series_by_zero_returns_nan_series(self):
+        div = binary_op(operator.truediv, 0)
+        result = div(pd.Series([120, 60], index=["a", "b"]))
+        assert list(result.index) == ["a", "b"]
+        assert result.isna().all()
+
+
+# ---------------------------------------------------------------------------
+# convert_unit — direct public helper path
+# ---------------------------------------------------------------------------
+
+
+class TestConvertUnit:
+    def test_regex_division_only_converts_matching_units(self):
+        cb = convert_unit(binary_op(operator.truediv, 60), "hour", regex="min")
+        df = pd.DataFrame(
+            {
+                "value": [120.0, 60.0, 30.0],
+                "unit": ["min", "min", "sec"],
+            }
+        )
+
+        result = cb(df)
+
+        assert result["value"].tolist() == [2.0, 1.0, 30.0]
+        assert result["unit"].tolist() == ["hour", "hour", "sec"]
+
+    def test_division_without_regex_converts_whole_column(self):
+        cb = convert_unit(binary_op(operator.truediv, 60), "hour")
+        df = pd.DataFrame({"value": [120.0, 60.0], "unit": ["min", "min"]})
+
+        result = cb(df)
+
+        assert result["value"].tolist() == [2.0, 1.0]
+        assert result["unit"].tolist() == ["hour", "hour"]
 
 
 # ---------------------------------------------------------------------------
