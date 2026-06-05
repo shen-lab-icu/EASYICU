@@ -998,7 +998,7 @@ class ResearchAgentPipeline:
                                 description=(
                                     "Ranked front-door hypothesis candidates "
                                     "(predictor × outcome) with coverage, "
-                                    "novelty and ICU-gate scores (O17)."
+                                    "literature-saturation and ICU-gate scores (O17)."
                                 ),
                                 source_path=hg_json,
                                 evidence_id="hypothesis_candidates",
