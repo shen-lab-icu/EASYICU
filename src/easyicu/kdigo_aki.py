@@ -339,13 +339,19 @@ def _calculate_uo_rates_simple(
             if col in weight.columns:
                 weight_col = col
                 break
+
+    if weight_col in weight.columns:
+        weight[weight_col] = pd.to_numeric(weight[weight_col], errors='coerce')
     
     # Get first weight per patient for simplicity
+    global_weight = np.nan
     if weight_id_col and weight_id_col in weight.columns:
         weight_per_patient = weight.groupby(weight_id_col)[weight_col].first().to_dict()
     else:
-        # Single weight value
-        weight_per_patient = {None: weight[weight_col].iloc[0] if len(weight) > 0 else 70.0}
+        # Single weight value applies to all rows if no patient ID is present.
+        if weight_col in weight.columns and len(weight) > 0:
+            global_weight = weight[weight_col].iloc[0]
+        weight_per_patient = {}
     
     # Sort urine by patient and time
     urine = urine.sort_values([id_col, time_col]).reset_index(drop=True)
@@ -377,9 +383,12 @@ def _calculate_uo_rates_simple(
         urine['_min'] = urine[time_col].astype(np.float64)
     
     # Map weights to each row
-    urine['_wt'] = urine[id_col].map(weight_per_patient)
-    urine['_wt'] = urine['_wt'].fillna(70.0)
-    urine.loc[(urine['_wt'] <= 0) | urine['_wt'].isna(), '_wt'] = 70.0
+    if weight_per_patient:
+        urine['_wt'] = urine[id_col].map(weight_per_patient)
+    else:
+        urine['_wt'] = global_weight
+    urine['_wt'] = pd.to_numeric(urine['_wt'], errors='coerce')
+    urine.loc[urine['_wt'] <= 0, '_wt'] = np.nan
     
     urine[urine_col] = urine[urine_col].astype(np.float64)
     urine = urine.sort_values([id_col, '_min']).reset_index(drop=True)
