@@ -386,6 +386,14 @@ def real_data_concept_feasibility(
             cohort=cohort,
             event_default_false_concepts=event_default_false,
         )
+        note = _join_notes(
+            structural_note,
+            _column_resolution_note(
+                cell=cell,
+                concept=concept,
+                single=single,
+            ),
+        )
         out[concept] = RealDataConceptFeasibility(
             concept=normalize_concept_name(concept),
             database=db,
@@ -405,7 +413,7 @@ def real_data_concept_feasibility(
                 for concept in structural_concepts
             ),
             joint_denominator_concepts=joint_denominator_concepts,
-            note=structural_note,
+            note=note,
             time_window_requested=str(time_window) if time_window is not None else None,
             aggregation_requested=str(aggregation) if aggregation is not None else None,
             cohort_filter_summary=single["cohort_filter_summary"],
@@ -600,6 +608,35 @@ def _structural_unavailable_note(concepts: Iterable[str]) -> Optional[str]:
     )
 
 
+def _join_notes(*notes: Optional[str]) -> Optional[str]:
+    clean = [note for note in notes if note]
+    if not clean:
+        return None
+    return " ".join(clean)
+
+
+def _column_resolution_note(
+    *,
+    cell: ConceptDatabaseAvailability,
+    concept: str,
+    single: Mapping[str, Any],
+) -> Optional[str]:
+    if cell.status != "full":
+        return None
+    if single.get("column_resolved"):
+        return None
+    if int(single.get("denominator_n") or 0) <= 0:
+        return None
+    if int(single.get("n_present") or 0) != 0:
+        return None
+    candidates = ", ".join(map(str, single.get("column_candidates") or []))
+    suffix = f" checked aliases: {candidates}" if candidates else ""
+    return (
+        "available concept has no matching exported wide-table column: "
+        f"{normalize_concept_name(concept)}.{suffix}"
+    )
+
+
 def _read_prepared_frame(data_path: str | Path) -> Any:
     path = Path(data_path)
     suffix = path.suffix.lower()
@@ -656,6 +693,7 @@ def _probe_single_concept_from_frame(
     unit = _normalise_analytic_unit(analytic_unit)
     denominator = _denominator_n(filtered, unit)
     column = _resolve_concept_column(filtered, concept)
+    column_candidates = _concept_column_candidates(concept)
     event_default_false = _normalise_event_default_false_concepts(
         event_default_false_concepts
     )
@@ -679,6 +717,8 @@ def _probe_single_concept_from_frame(
         "n_present": n_present,
         "fraction_missing": fraction_missing,
         "cohort_filter_summary": cohort_summary,
+        "column_resolved": column is not None,
+        "column_candidates": column_candidates,
     }
 
 
@@ -790,15 +830,36 @@ def _blocked_real_data_feasibility(
 
 
 def _resolve_concept_column(frame: Any, concept: str) -> Optional[Any]:
-    candidates = _unique([str(concept), normalize_concept_name(concept)])
-    columns_by_lower = {str(column).lower(): column for column in frame.columns}
+    candidates = _concept_column_candidates(concept)
+    columns_by_key = {_normalise_column_key(column): column for column in frame.columns}
     for candidate in candidates:
         if candidate in frame.columns:
             return candidate
-        match = columns_by_lower.get(candidate.lower())
+        match = columns_by_key.get(_normalise_column_key(candidate))
         if match is not None:
             return match
     return None
+
+
+def _concept_column_candidates(concept: str) -> List[str]:
+    requested = str(concept or "").strip()
+    canonical = normalize_concept_name(requested)
+    candidates = [requested, canonical]
+    candidates.extend(_reverse_concept_aliases().get(canonical, ()))
+    return _unique(candidates)
+
+
+@lru_cache(maxsize=1)
+def _reverse_concept_aliases() -> Dict[str, tuple[str, ...]]:
+    aliases: Dict[str, List[str]] = {}
+    for alias, canonical in _CONCEPT_ALIASES.items():
+        key = normalize_concept_name(canonical)
+        aliases.setdefault(key, []).append(alias)
+    return {key: tuple(_unique(values)) for key, values in aliases.items()}
+
+
+def _normalise_column_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
 
 
 def _denominator_n(frame: Any, analytic_unit: Literal["stay", "patient"]) -> int:
@@ -833,7 +894,9 @@ def _present_mask(
     event_default_false: bool,
 ) -> Any:
     if event_default_false:
-        return frame[column].notna() | True
+        import pandas as pd
+
+        return pd.Series(True, index=frame.index)
     return frame[column].notna()
 
 

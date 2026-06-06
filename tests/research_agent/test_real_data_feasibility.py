@@ -143,6 +143,67 @@ def test_event_default_false_concepts_treat_sparse_nan_as_observed_false(
     assert "effect_estimate" not in dumped
 
 
+def test_canonical_concept_resolves_exported_alias_column(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ca = _allow_all_concepts(monkeypatch)
+    path = tmp_path / "canonical_alias_fixture.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "peep": [8.0, 10.0, None, 12.0, 14.0],
+            # The prepared wide table may carry the original short column while
+            # the idea resolver requests the canonical concept name.
+            "aki": [1.0, None, None, None, 1.0],
+        }
+    ).to_parquet(path, index=False)
+
+    result = ca.real_data_concept_feasibility(
+        ["peep", "kdigo_aki"],
+        "miiv",
+        path,
+    )
+
+    kdigo = result["kdigo_aki"]
+    assert kdigo.concept == "kdigo_aki"
+    assert kdigo.n_present == 5
+    assert kdigo.fraction_missing == 0.0
+    assert kdigo.note is None
+    assert result["peep"].n_joint_complete == 4
+    assert result["peep"].joint_fraction_complete == pytest.approx(4.0 / 5.0)
+
+
+def test_available_concept_missing_export_column_records_resolution_note(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ca = _allow_all_concepts(monkeypatch)
+    path = tmp_path / "missing_alias_column_fixture.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "peep": [8.0, 10.0, 12.0],
+        }
+    ).to_parquet(path, index=False)
+
+    result = ca.real_data_concept_feasibility(
+        ["peep", "kdigo_aki"],
+        "miiv",
+        path,
+    )
+
+    kdigo = result["kdigo_aki"]
+    assert kdigo.availability_status == "full"
+    assert kdigo.n_present == 0
+    assert kdigo.n_joint_complete == 0
+    assert "no matching exported wide-table column" in (kdigo.note or "")
+    assert "aki" in (kdigo.note or "")
+    dumped = kdigo.model_dump()
+    assert "outcome_rate" not in dumped
+    assert "effect_estimate" not in dumped
+
+
 def test_measurement_nan_still_reduces_joint_completeness(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
