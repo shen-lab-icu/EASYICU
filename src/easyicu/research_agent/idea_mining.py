@@ -233,6 +233,7 @@ _PRIOR_ART_SINGLETON_STOPWORDS = _PRIOR_ART_QUERY_STOPWORDS | {
     "pressure",
     "profile",
     "ratio",
+    "red",
     "setting",
     "signature",
     "strategy",
@@ -1785,7 +1786,7 @@ def _prior_art_phrase_facets(phrase: str) -> List[str]:
     """Derive phrase-local recall facets without using EasyICU concept keys."""
 
     tokens = _prior_art_query_tokens(phrase)
-    facets: List[str] = []
+    facets: List[str] = _prior_art_synonym_phrases(phrase)
     for size in (3, 2):
         for idx in range(0, len(tokens) - size + 1):
             facets.append(" ".join(tokens[idx : idx + size]))
