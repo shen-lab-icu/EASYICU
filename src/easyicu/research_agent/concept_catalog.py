@@ -95,6 +95,11 @@ SYNONYM_GROUPS: Tuple[frozenset, ...] = (
     frozenset({"positive end-expiratory pressure", "positive end expiratory pressure", "peep"}),
     frozenset({"horowitz index", "p/f ratio", "pf ratio", "pao2/fio2", "pao2/fio2 ratio", "oxygenation index"}),
     frozenset({"sao2/fio2", "s/f ratio", "sf ratio"}),
+    frozenset({"rdw", "red cell distribution width", "red blood cell distribution width"}),
+    frozenset({
+        "nlr", "neutrophil lymphocyte ratio", "neutrophil-lymphocyte ratio",
+        "neutrophil-to-lymphocyte ratio", "neutrophil to lymphocyte ratio",
+    }),
     frozenset({"acetaminophen", "paracetamol"}),
     frozenset({"furosemide", "frusemide"}),
     frozenset({"acute kidney injury", "acute renal failure"}),

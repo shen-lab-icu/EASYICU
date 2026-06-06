@@ -376,6 +376,45 @@ def test_prior_art_broad_query_does_not_overexpand_generic_singleton_facets() ->
     assert "pressure[Title/Abstract]" not in broad
 
 
+def test_prior_art_broad_query_expands_common_biomarker_abbreviations() -> None:
+    rdw = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:rdw123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="critically ill patients",
+        exposure_or_predictor="red cell distribution width",
+        outcome="mortality",
+        rationale="The source points to biomarker prognostication.",
+        source_quote="future work should study red cell distribution width",
+        analysis_family="association",
+    )
+    nlr = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:nlr123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="critically ill patients",
+        exposure_or_predictor="neutrophil lymphocyte ratio",
+        outcome="mortality",
+        rationale="The source points to inflammatory biomarker prognostication.",
+        source_quote="future work should study neutrophil lymphocyte ratio",
+        analysis_family="association",
+    )
+
+    rdw_broad = build_prior_art_queries(rdw)["broad"]
+    nlr_broad = build_prior_art_queries(nlr)["broad"]
+
+    assert '"red cell distribution width"[Title/Abstract]' in rdw_broad
+    assert '"red blood cell distribution width"[Title/Abstract]' in rdw_broad
+    assert "rdw[Title/Abstract]" in rdw_broad
+    assert "red[Title/Abstract]" not in rdw_broad
+    assert "red[MeSH Terms]" not in rdw_broad
+
+    assert '"neutrophil lymphocyte ratio"[Title/Abstract]' in nlr_broad
+    assert '"neutrophil-to-lymphocyte ratio"[Title/Abstract]' in nlr_broad
+    assert '"neutrophil to lymphocyte ratio"[Title/Abstract]' in nlr_broad
+    assert "nlr[Title/Abstract]" in nlr_broad
+
+
 def test_prior_art_broad_query_preserves_specific_icu_population_facets() -> None:
     ventilated = LiteratureIdeaCandidate(
         source_snapshot_id="source-snapshot/sha256:vent123",
