@@ -212,6 +212,34 @@ _PRIOR_ART_QUERY_STOPWORDS = _GENERIC_CONCEPT_WORDS | {
     "with",
 }
 
+_PRIOR_ART_SINGLETON_STOPWORDS = _PRIOR_ART_QUERY_STOPWORDS | {
+    # Single-token facets from these words make PubMed relevance explode
+    # without preserving same-topic specificity. Keep the full phrase and
+    # multiword facets instead.
+    "balance",
+    "clearance",
+    "count",
+    "dose",
+    "driving",
+    "energy",
+    "exposure",
+    "failure",
+    "free",
+    "index",
+    "injury",
+    "mechanical",
+    "pattern",
+    "power",
+    "pressure",
+    "profile",
+    "ratio",
+    "setting",
+    "signature",
+    "strategy",
+    "timing",
+    "trajectory",
+}
+
 _PRIOR_ART_QUERY_SYNONYMS: Dict[str, Tuple[str, ...]] = {
     "mortality": ("death",),
     "death": ("mortality",),
@@ -1691,7 +1719,11 @@ def _pubmed_core_recall_clause(
     if core:
         phrases.append(core)
         phrases.extend(_prior_art_synonym_phrases(core))
-    if fallback and normalize_concept_name(fallback) != normalize_concept_name(core):
+        clauses = [_pubmed_recall_clause(phrase) for phrase in phrases]
+        if fallback and normalize_concept_name(fallback) != normalize_concept_name(core):
+            clauses.append(_pubmed_phrase_clause(fallback))
+        return _pubmed_or_clause(clauses)
+    if fallback:
         phrases.append(fallback)
     return _pubmed_or_clause([_pubmed_recall_clause(phrase) for phrase in phrases])
 
@@ -1729,6 +1761,23 @@ def _pubmed_population_recall_clause(population: str) -> str:
                 _pubmed_phrase_clause("critical illness"),
             ]
         )
+    if (
+        "mechanically ventilated" in text
+        or "mechanical ventilation" in text
+        or "ventilated" in text
+    ):
+        clauses.extend(
+            [
+                _pubmed_phrase_clause("mechanically ventilated"),
+                _pubmed_phrase_clause("mechanical ventilation"),
+            ]
+        )
+    if "septic shock" in text:
+        clauses.append(_pubmed_phrase_clause("septic shock"))
+    elif "sepsis" in text:
+        clauses.append(_pubmed_phrase_clause("sepsis"))
+    elif "shock" in text:
+        clauses.append(_pubmed_phrase_clause("shock"))
     return _pubmed_or_clause(clauses)
 
 
@@ -1740,7 +1789,9 @@ def _prior_art_phrase_facets(phrase: str) -> List[str]:
     for size in (3, 2):
         for idx in range(0, len(tokens) - size + 1):
             facets.append(" ".join(tokens[idx : idx + size]))
-    facets.extend(tokens)
+    facets.extend(
+        token for token in tokens if token not in _PRIOR_ART_SINGLETON_STOPWORDS
+    )
     for token in list(tokens):
         facets.extend(_PRIOR_ART_QUERY_SYNONYMS.get(token, ()))
     original = _clean_literature_phrase(phrase).lower()
