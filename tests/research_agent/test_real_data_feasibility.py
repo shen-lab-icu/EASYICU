@@ -105,6 +105,132 @@ def test_real_data_feasibility_reports_single_and_joint_completeness(
     assert "death" not in crea.model_dump().keys()
 
 
+def test_event_default_false_concepts_treat_sparse_nan_as_observed_false(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ca = _allow_all_concepts(monkeypatch)
+    path = tmp_path / "event_default_false_fixture.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "peep": [8.0, 10.0, None, 12.0, 14.0],
+            # Sparse positive event export: NaN encodes no AKI, not unobserved AKI.
+            "aki": [1.0, None, None, None, 1.0],
+            "lact": [1.2, None, 2.4, None, 3.1],
+        }
+    ).to_parquet(path, index=False)
+
+    result = ca.real_data_concept_feasibility(
+        ["peep", "aki"],
+        "miiv",
+        path,
+    )
+
+    peep = result["peep"]
+    aki = result["aki"]
+    assert peep.denominator_n == 5
+    assert peep.n_present == 4
+    assert aki.concept == "kdigo_aki"
+    assert aki.n_present == 5
+    assert aki.fraction_missing == 0.0
+    assert peep.n_joint_complete == 4
+    assert peep.joint_fraction_complete == pytest.approx(4.0 / 5.0)
+
+    dumped = aki.model_dump()
+    assert "outcome_rate" not in dumped
+    assert "event_rate" not in dumped
+    assert "effect_estimate" not in dumped
+
+
+def test_measurement_nan_still_reduces_joint_completeness(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ca = _allow_all_concepts(monkeypatch)
+    path = tmp_path / "measurement_missing_fixture.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "peep": [8.0, 10.0, None, 12.0, 14.0],
+            "lact": [1.2, None, 2.4, None, 3.1],
+        }
+    ).to_parquet(path, index=False)
+
+    result = ca.real_data_concept_feasibility(
+        ["peep", "lact"],
+        "miiv",
+        path,
+    )
+
+    lact = result["lact"]
+    assert lact.n_present == 3
+    assert lact.fraction_missing == pytest.approx(2.0 / 5.0)
+    assert lact.n_joint_complete == 2
+    assert lact.joint_fraction_complete == pytest.approx(2.0 / 5.0)
+
+
+def test_screened_binary_concepts_do_not_default_nan_to_false(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ca = _allow_all_concepts(monkeypatch)
+    path = tmp_path / "screened_binary_fixture.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5],
+            "peep": [8.0, 10.0, None, 12.0, 14.0],
+            # Assessed/screened-style binary: NaN means not assessed.
+            "delirium_positive": [1.0, None, None, None, None],
+        }
+    ).to_parquet(path, index=False)
+
+    result = ca.real_data_concept_feasibility(
+        ["peep", "delirium_positive"],
+        "miiv",
+        path,
+    )
+
+    delirium = result["delirium_positive"]
+    assert delirium.n_present == 1
+    assert delirium.fraction_missing == pytest.approx(4.0 / 5.0)
+    assert delirium.n_joint_complete == 1
+    assert delirium.joint_fraction_complete == pytest.approx(1.0 / 5.0)
+
+
+def test_caller_supplied_event_default_false_hint_controls_custom_events(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ca = _allow_all_concepts(monkeypatch)
+    path = tmp_path / "custom_event_hint_fixture.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "marker": [1.0, 2.0, None, 4.0],
+            "custom_event": [None, 1.0, None, None],
+        }
+    ).to_parquet(path, index=False)
+
+    default_result = ca.real_data_concept_feasibility(
+        ["marker", "custom_event"],
+        "miiv",
+        path,
+    )
+    hinted_result = ca.real_data_concept_feasibility(
+        ["marker", "custom_event"],
+        "miiv",
+        path,
+        event_default_false_concepts={"custom_event"},
+    )
+
+    assert default_result["custom_event"].n_present == 1
+    assert default_result["custom_event"].n_joint_complete == 1
+    assert hinted_result["custom_event"].n_present == 4
+    assert hinted_result["custom_event"].fraction_missing == 0.0
+    assert hinted_result["custom_event"].n_joint_complete == 3
+
+
 def test_time_window_and_aggregation_are_recorded_as_requested_only(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

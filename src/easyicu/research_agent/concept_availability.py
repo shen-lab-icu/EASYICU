@@ -58,6 +58,24 @@ _CONCEPT_ALIASES = {
     "icu_mortality": "death",
 }
 
+# Sparse, full-cohort event indicators where an exported wide-table NaN can
+# mean "event absent" rather than "not observed". This is intentionally narrower
+# than generic binary-determinable concepts: screened/assessed concepts must not
+# default missing values to false.
+_DEFAULT_EVENT_DEFAULT_FALSE_CONCEPTS = frozenset(
+    {
+        "aki",
+        "kdigo_aki",
+        "rrt",
+        "mech_vent",
+        "death",
+        "vaso_ind",
+        "circ_event",
+        "circ_failure",
+        "sep3",
+    }
+)
+
 
 class ConceptDatabaseAvailability(BaseModel):
     """Availability of one EasyICU concept on one database."""
@@ -262,6 +280,7 @@ def real_data_concept_feasibility(
     time_window: Optional[str] = None,
     aggregation: Optional[str] = None,
     analytic_unit: Literal["stay", "patient"] = "stay",
+    event_default_false_concepts: Optional[Iterable[str]] = None,
 ) -> Dict[str, RealDataConceptFeasibility]:
     """Return outcome-blind data-layer feasibility for EasyICU concepts.
 
@@ -274,11 +293,19 @@ def real_data_concept_feasibility(
     requested concept set. ``time_window`` and ``aggregation`` are recorded as
     requested metadata for downstream triage; S1 does not enforce temporal
     filtering or aggregation rules.
+
+    ``event_default_false_concepts`` identifies sparse event/logical concepts
+    whose present column covers the full cohort even when event-negative rows
+    are encoded as ``NaN``. Measurement concepts keep the default ``NaN`` means
+    missing semantics.
     """
 
     db = normalize_database_name(database)
     unit = _normalise_analytic_unit(analytic_unit)
     requested = [str(c) for c in concepts if str(c or "").strip()]
+    event_default_false = _normalise_event_default_false_concepts(
+        event_default_false_concepts
+    )
     cells = {
         concept: explain_concept_availability(
             concept=normalize_concept_name(concept),
@@ -330,6 +357,7 @@ def real_data_concept_feasibility(
             concepts=data_concepts,
             analytic_unit=unit,
             cohort=cohort,
+            event_default_false_concepts=event_default_false,
         )
 
     out: Dict[str, RealDataConceptFeasibility] = {}
@@ -356,6 +384,7 @@ def real_data_concept_feasibility(
             concept=concept,
             analytic_unit=unit,
             cohort=cohort,
+            event_default_false_concepts=event_default_false,
         )
         out[concept] = RealDataConceptFeasibility(
             concept=normalize_concept_name(concept),
@@ -621,12 +650,28 @@ def _probe_single_concept_from_frame(
     concept: str,
     analytic_unit: Literal["stay", "patient"],
     cohort: Optional[Mapping[str, Any]],
+    event_default_false_concepts: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     filtered, cohort_summary = _apply_cohort_filter(frame, cohort)
     unit = _normalise_analytic_unit(analytic_unit)
     denominator = _denominator_n(filtered, unit)
     column = _resolve_concept_column(filtered, concept)
-    n_present = _n_present(filtered, column, unit) if column is not None else 0
+    event_default_false = _normalise_event_default_false_concepts(
+        event_default_false_concepts
+    )
+    n_present = (
+        _n_present(
+            filtered,
+            column,
+            unit,
+            event_default_false=_is_event_default_false(
+                concept,
+                event_default_false,
+            ),
+        )
+        if column is not None
+        else 0
+    )
     fraction_missing = _fraction_missing(n_present=n_present, denominator_n=denominator)
     return {
         "concept": normalize_concept_name(concept),
@@ -643,20 +688,41 @@ def _probe_joint_from_frame(
     concepts: Sequence[str],
     analytic_unit: Literal["stay", "patient"],
     cohort: Optional[Mapping[str, Any]],
+    event_default_false_concepts: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     filtered, _cohort_summary = _apply_cohort_filter(frame, cohort)
     unit = _normalise_analytic_unit(analytic_unit)
     denominator = _denominator_n(filtered, unit)
+    unique_concepts = _unique_concepts_preserving_requested_alias(concepts)
     resolved_columns = [
         _resolve_concept_column(filtered, concept)
-        for concept in _unique(normalize_concept_name(c) for c in concepts if c)
+        for concept in unique_concepts
     ]
     if denominator == 0 or not resolved_columns or any(col is None for col in resolved_columns):
         return {
             "n_joint_complete": 0,
             "joint_fraction_complete": 0.0,
         }
-    complete = filtered[list(resolved_columns)].notna().all(axis=1)
+    event_default_false = _normalise_event_default_false_concepts(
+        event_default_false_concepts
+    )
+    complete = None
+    for concept, column in zip(unique_concepts, resolved_columns):
+        assert column is not None
+        current = _present_mask(
+            filtered,
+            column,
+            event_default_false=_is_event_default_false(
+                concept,
+                event_default_false,
+            ),
+        )
+        complete = current if complete is None else (complete & current)
+    if complete is None:
+        return {
+            "n_joint_complete": 0,
+            "joint_fraction_complete": 0.0,
+        }
     if unit == "patient":
         id_col = _patient_id_column(filtered)
         n_joint = int(filtered.loc[complete, id_col].dropna().nunique())
@@ -746,12 +812,63 @@ def _n_present(
     frame: Any,
     column: Any,
     analytic_unit: Literal["stay", "patient"],
+    *,
+    event_default_false: bool = False,
 ) -> int:
-    present = frame[column].notna()
+    present = _present_mask(
+        frame,
+        column,
+        event_default_false=event_default_false,
+    )
     if analytic_unit == "patient":
         id_col = _patient_id_column(frame)
         return int(frame.loc[present, id_col].dropna().nunique())
     return int(present.sum())
+
+
+def _present_mask(
+    frame: Any,
+    column: Any,
+    *,
+    event_default_false: bool,
+) -> Any:
+    if event_default_false:
+        return frame[column].notna() | True
+    return frame[column].notna()
+
+
+def _normalise_event_default_false_concepts(
+    concepts: Optional[Iterable[str]],
+) -> set[str]:
+    raw = _DEFAULT_EVENT_DEFAULT_FALSE_CONCEPTS if concepts is None else concepts
+    out: set[str] = set()
+    for concept in raw:
+        key = str(concept or "").strip()
+        if not key:
+            continue
+        out.add(key)
+        out.add(normalize_concept_name(key))
+    return out
+
+
+def _is_event_default_false(concept: str, concepts: set[str]) -> bool:
+    key = str(concept or "").strip()
+    return bool(key) and (key in concepts or normalize_concept_name(key) in concepts)
+
+
+def _unique_concepts_preserving_requested_alias(concepts: Iterable[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for concept in concepts:
+        requested = str(concept or "").strip()
+        if not requested:
+            continue
+        canonical = normalize_concept_name(requested)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        out.append(requested)
+    return out
 
 
 def _patient_id_column(frame: Any) -> str:
