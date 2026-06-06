@@ -271,6 +271,9 @@ def test_prior_art_broad_query_uses_core_concept_facets_for_known_seed() -> None
     assert "death[Title/Abstract]" in broad
     assert "norepinephrine[Title/Abstract]" not in exact
     assert "noradrenaline[Title/Abstract]" not in exact
+    assert "short[Title/Abstract]" not in broad
+    assert "term[Title/Abstract]" not in broad
+    assert '"timing strategy"[Title/Abstract]' not in broad
 
     search = FakePriorArtSearchClient(
         {
@@ -350,6 +353,55 @@ def test_prior_art_broad_query_expands_peep_aki_core_facets() -> None:
 
     assert assessment.novelty_label == "already_done"
     assert assessment.direct_same_topic_pmids == ["111"]
+
+
+def test_prior_art_broad_query_does_not_overexpand_generic_singleton_facets() -> None:
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:pressure123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="mechanically ventilated patients",
+        exposure_or_predictor="driving pressure",
+        outcome="mortality",
+        rationale="The source points to ventilator mechanics.",
+        source_quote="future work should study driving pressure",
+        analysis_family="association",
+        time_window_hint="mechanical ventilation",
+    )
+
+    broad = build_prior_art_queries(idea)["broad"]
+
+    assert '"driving pressure"[Title/Abstract]' in broad
+    assert "driving[Title/Abstract]" not in broad
+    assert "pressure[Title/Abstract]" not in broad
+
+
+def test_prior_art_broad_query_preserves_specific_icu_population_facets() -> None:
+    ventilated = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:vent123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="mechanically ventilated patients",
+        exposure_or_predictor="mechanical power",
+        outcome="mortality",
+        rationale="The source points to ventilator mechanics.",
+        source_quote="future work should study mechanical power",
+        analysis_family="association",
+    )
+    shock = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:shock123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="septic shock patients",
+        exposure_or_predictor="vasopressor dose",
+        outcome="mortality",
+        rationale="The source points to shock resuscitation.",
+        source_quote="future work should study vasopressor dose",
+        analysis_family="association",
+    )
+
+    assert '"mechanical ventilation"[Title/Abstract]' in build_prior_art_queries(ventilated)["broad"]
+    assert '"septic shock"[Title/Abstract]' in build_prior_art_queries(shock)["broad"]
 
 
 def test_prior_art_freeze_records_direct_same_topic_pmids_and_rationale() -> None:
