@@ -245,6 +245,113 @@ def test_prior_art_broad_query_uses_phrase_facets_to_avoid_false_gaps() -> None:
     assert assessment.novelty_label == "sparse"
 
 
+def test_prior_art_broad_query_uses_core_concept_facets_for_known_seed() -> None:
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="adult ICU patients with shock",
+        exposure_or_predictor="early vasopressor timing strategy after shock recognition",
+        outcome="short-term patient-centered endpoint",
+        rationale="The source points to early vasopressor timing.",
+        source_quote="future work should study early vasopressor timing",
+        analysis_family="association",
+        time_window_hint="first six hours after ICU admission",
+        exposure_core_concept="norepinephrine",
+        outcome_core_concept="ICU mortality",
+    )
+
+    queries = build_prior_art_queries(idea)
+    broad = queries["broad"]
+    exact = queries["exact"]
+
+    assert "norepinephrine[Title/Abstract]" in broad
+    assert "noradrenaline[Title/Abstract]" in broad
+    assert "mortality[Title/Abstract]" in broad
+    assert "death[Title/Abstract]" in broad
+    assert "norepinephrine[Title/Abstract]" not in exact
+    assert "noradrenaline[Title/Abstract]" not in exact
+
+    search = FakePriorArtSearchClient(
+        {
+            "norepinephrine[Title/Abstract]": {
+                "hit_count": 1,
+                "top_hits": [
+                    {
+                        "pmid": "40329359",
+                        "title": "Early norepinephrine initiation and mortality in shock",
+                        "abstract": "Meta-analysis of early norepinephrine and ICU mortality.",
+                        "same_topic_screened": True,
+                        "direct_same_topic": True,
+                        "direct_same_topic_rationale": "Known same-topic seed recovered by core facets.",
+                    }
+                ],
+            }
+        }
+    )
+    assessment = assess_prior_art_for_idea(
+        idea,
+        search_client=search,
+        searched_at="2026-06-06T00:00:00+00:00",
+    )
+
+    assert assessment.novelty_label == "already_done"
+    assert assessment.direct_same_topic_pmids == ["40329359"]
+
+
+def test_prior_art_broad_query_expands_peep_aki_core_facets() -> None:
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:def456",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="adult mechanically ventilated ICU patients",
+        exposure_or_predictor="ventilatory pressure strategy",
+        outcome="renal complication",
+        rationale="The source suggests ventilation-kidney crosstalk.",
+        source_quote="future work should study ventilation kidney interactions",
+        analysis_family="association",
+        exposure_core_concept="positive end-expiratory pressure",
+        outcome_core_concept="acute kidney injury",
+    )
+
+    queries = build_prior_art_queries(idea)
+    broad = queries["broad"]
+    exact = queries["exact"]
+
+    assert '"positive end-expiratory pressure"[Title/Abstract]' in broad
+    assert "peep[Title/Abstract]" in broad
+    assert '"acute kidney injury"[Title/Abstract]' in broad
+    assert '"acute renal failure"[Title/Abstract]' in broad
+    assert '"positive end-expiratory pressure"[Title/Abstract]' not in exact
+    assert '"acute kidney injury"[Title/Abstract]' not in exact
+
+    search = FakePriorArtSearchClient(
+        {
+            "peep[Title/Abstract]": {
+                "hit_count": 2,
+                "top_hits": [
+                    {
+                        "pmid": "111",
+                        "title": "Positive end-expiratory pressure and acute kidney injury",
+                        "abstract": "Review of PEEP and acute kidney injury.",
+                        "same_topic_screened": True,
+                        "direct_same_topic": True,
+                        "direct_same_topic_rationale": "Known PEEP-AKI same-topic hit recovered.",
+                    }
+                ],
+            }
+        }
+    )
+    assessment = assess_prior_art_for_idea(
+        idea,
+        search_client=search,
+        searched_at="2026-06-06T00:00:00+00:00",
+    )
+
+    assert assessment.novelty_label == "already_done"
+    assert assessment.direct_same_topic_pmids == ["111"]
+
+
 def test_prior_art_freeze_records_direct_same_topic_pmids_and_rationale() -> None:
     idea = LiteratureIdeaCandidate(
         source_snapshot_id="source-snapshot/sha256:abc123",

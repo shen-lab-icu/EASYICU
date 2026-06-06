@@ -22,6 +22,7 @@ from .concept_availability import (
     normalize_concept_name,
     real_data_concept_feasibility,
 )
+from .concept_catalog import SYNONYM_GROUPS
 from .hypothesis_generator import (
     HypothesisFeasibilitySignal,
     HypothesisGeneratorResult,
@@ -570,10 +571,10 @@ def build_prior_art_queries(
     """Build broad/exact PubMed-style queries from literature phrasing.
 
     N-6: exact novelty queries intentionally use the phrase as written in the
-    source material plus differentiators. Broad queries add literature-word
-    facets from those same phrases to avoid false gaps caused by over-specific
-    wording. Neither path is rebuilt from canonical EasyICU concept keys such
-    as ``lact``.
+    source material plus differentiators. Broad queries use the LLM-separated
+    core construct when available, with the literature phrase kept as an OR-ed
+    recall fallback. This avoids false gaps caused by over-specific wording
+    while still avoiding EasyICU canonical keys such as ``lact``.
     """
 
     predictor_phrase = _clean_literature_phrase(idea.exposure_or_predictor)
@@ -582,8 +583,14 @@ def build_prior_art_queries(
     differentiators = _candidate_differentiators(idea)
 
     broad_parts = [
-        _pubmed_recall_clause(predictor_phrase),
-        _pubmed_recall_clause(outcome_phrase),
+        _pubmed_core_recall_clause(
+            idea.exposure_core_concept,
+            fallback_phrase=predictor_phrase,
+        ),
+        _pubmed_core_recall_clause(
+            idea.outcome_core_concept,
+            fallback_phrase=outcome_phrase,
+        ),
     ]
     population_recall = _pubmed_population_recall_clause(population_phrase)
     if population_recall:
@@ -1665,10 +1672,38 @@ def _pubmed_recall_clause(phrase: str) -> str:
     text = _clean_literature_phrase(phrase)
     if not text:
         return ""
-    clauses = [_pubmed_phrase_clause(text)]
+    clauses = [_pubmed_phrase_clause(text), _pubmed_mesh_clause(text)]
     for facet in _prior_art_phrase_facets(text):
         clauses.append(_pubmed_phrase_clause(facet))
     return _pubmed_or_clause(clauses)
+
+
+def _pubmed_core_recall_clause(
+    core_phrase: Optional[str],
+    *,
+    fallback_phrase: str,
+) -> str:
+    """Return a broad PubMed clause from core concept facets plus source words."""
+
+    core = _clean_literature_phrase(str(core_phrase or ""))
+    fallback = _clean_literature_phrase(fallback_phrase)
+    phrases: List[str] = []
+    if core:
+        phrases.append(core)
+        phrases.extend(_prior_art_synonym_phrases(core))
+    if fallback and normalize_concept_name(fallback) != normalize_concept_name(core):
+        phrases.append(fallback)
+    return _pubmed_or_clause([_pubmed_recall_clause(phrase) for phrase in phrases])
+
+
+def _pubmed_mesh_clause(phrase: str) -> str:
+    text = _clean_literature_phrase(phrase)
+    if not text:
+        return ""
+    escaped = text.replace('"', "")
+    if " " in escaped or "-" in escaped:
+        return f'"{escaped}"[MeSH Terms]'
+    return f"{escaped}[MeSH Terms]"
 
 
 def _pubmed_population_recall_clause(population: str) -> str:
@@ -1710,6 +1745,19 @@ def _prior_art_phrase_facets(phrase: str) -> List[str]:
         facets.extend(_PRIOR_ART_QUERY_SYNONYMS.get(token, ()))
     original = _clean_literature_phrase(phrase).lower()
     return _ordered_unique([item for item in facets if item != original])[:6]
+
+
+def _prior_art_synonym_phrases(phrase: str) -> List[str]:
+    target = _clean_literature_phrase(phrase).lower()
+    if not target:
+        return []
+    target_key = normalize_concept_name(target)
+    out: List[str] = []
+    for group in SYNONYM_GROUPS:
+        group_keys = {normalize_concept_name(item) for item in group}
+        if target_key in group_keys:
+            out.extend(sorted(group))
+    return _ordered_unique([item for item in out if normalize_concept_name(item) != target_key])
 
 
 def _prior_art_query_tokens(phrase: str) -> List[str]:
