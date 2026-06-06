@@ -92,6 +92,7 @@ SYNONYM_GROUPS: Tuple[frozenset, ...] = (
         "haemofiltration", "cvvh", "cvvhd",
     }),
     frozenset({"mechanical ventilation", "invasive ventilation", "invasive mechanical ventilation"}),
+    frozenset({"positive end-expiratory pressure", "positive end expiratory pressure", "peep"}),
     frozenset({"horowitz index", "p/f ratio", "pf ratio", "pao2/fio2", "pao2/fio2 ratio", "oxygenation index"}),
     frozenset({"sao2/fio2", "s/f ratio", "sf ratio"}),
     frozenset({"acetaminophen", "paracetamol"}),
