@@ -34,6 +34,7 @@ from .idea_registry import (
     CandidateRegistryEntry,
     IdeaCandidateRegistry,
 )
+from .idea_scope import LiteratureScopeSpec, build_pubmed_query_from_scope
 from .literature import CitationRecord
 from .llm import LLMClient, LLMMessage
 from .schema import CohortDescriptor, ConceptDescriptor, MissingnessProfile, ResearchContext, VariableRole
@@ -1255,9 +1256,38 @@ def _merge_concept_aliases(
     return merged
 
 
+def fetch_source_materials_from_scope(
+    scope: LiteratureScopeSpec,
+    search_client: Any,
+    *,
+    reference_year: Optional[int] = None,
+    retmax: int = 20,
+) -> List[SourceMaterial]:
+    """Retrieve metadata-only source materials for a declarative scope.
+
+    This is the discovery-lever-1 search front-end: it turns a
+    ``LiteratureScopeSpec`` into a PubMed query (via
+    :func:`~easyicu.research_agent.idea_scope.build_pubmed_query_from_scope`),
+    runs the caller-injected ``search_client`` (``search_client.search(query,
+    retmax=...) -> Sequence[CitationRecord]``), and wraps each hit as a
+    ``metadata_only`` :class:`SourceMaterial`.
+
+    Only metadata (titles/venues/ids) is captured — no abstract or full-text
+    body is fetched or stored, keeping the snapshot manifest copyright-clean.
+    Network I/O happens only through the explicitly injected ``search_client``;
+    nothing here runs automatically.
+    """
+    query = build_pubmed_query_from_scope(scope, reference_year=reference_year)
+    records = search_client.search(query, retmax=retmax)
+    return [
+        SourceMaterial(citation=record, source_adapter_level="metadata_only")
+        for record in records
+    ]
+
+
 def run_idea_mining_dry_run(
     *,
-    materials: Sequence[SourceMaterial | Mapping[str, Any]],
+    materials: Sequence[SourceMaterial | Mapping[str, Any]] = (),
     llm: LLMClient,
     available_concepts: Sequence[ConceptDescriptor | str],
     output_dir: str | Path,
@@ -1276,6 +1306,10 @@ def run_idea_mining_dry_run(
     prior_art_search_client: Optional[Any] = None,
     prior_art_searched_at: Optional[str] = None,
     prior_art_top_n: int = 20,
+    scope: Optional[LiteratureScopeSpec] = None,
+    source_search_client: Optional[Any] = None,
+    scope_reference_year: Optional[int] = None,
+    scope_retmax: int = 20,
 ) -> IdeaMiningDryRunResult:
     """Run the S4→S1→S3→S2 idea-triage dry run and stop at the human gate.
 
@@ -1292,12 +1326,48 @@ def run_idea_mining_dry_run(
     including an empty one, keeps the caller's gate semantics.
     """
 
+    materials = list(materials)
+    scope_query: Optional[str] = None
+    if scope is not None:
+        scope_query = build_pubmed_query_from_scope(
+            scope, reference_year=scope_reference_year
+        )
+        if not materials:
+            if source_search_client is None:
+                raise IdeaMiningError(
+                    "scope was supplied without source_search_client and no "
+                    "explicit materials; cannot retrieve the literature corpus. "
+                    "Pass source_search_client to fetch from scope, or supply "
+                    "materials directly."
+                )
+            materials = fetch_source_materials_from_scope(
+                scope,
+                source_search_client,
+                reference_year=scope_reference_year,
+                retmax=scope_retmax,
+            )
+
     parsed_materials = [
         raw if isinstance(raw, SourceMaterial) else SourceMaterial.model_validate(raw)
         for raw in materials
     ]
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if scope_query is not None:
+        (out_dir / "scope_query.json").write_text(
+            json.dumps(
+                {
+                    "scope": scope.model_dump(mode="json"),
+                    "scope_reference_year": scope_reference_year,
+                    "scope_retmax": scope_retmax,
+                    "pubmed_query": scope_query,
+                    "n_materials_retrieved": len(parsed_materials),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     manifest = freeze_source_snapshot(parsed_materials)
     manifest_path = out_dir / "source_snapshot_manifest.json"

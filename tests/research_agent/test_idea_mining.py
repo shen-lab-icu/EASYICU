@@ -1462,3 +1462,131 @@ def test_dry_run_surfaces_unresolved_mapping_yield(tmp_path) -> None:
         "predictor concept is not available" in reason
         for reason in result.yield_report.top_non_executable_reasons
     )
+
+
+class FakeScopeSearchClient:
+    """Minimal source-search client: returns canned CitationRecords per query."""
+
+    def __init__(self, records: Sequence[CitationRecord]):
+        self.records = list(records)
+        self.queries: list[tuple[str, int]] = []
+
+    def search(self, query: str, *, retmax: int = 8) -> list[CitationRecord]:
+        self.queries.append((query, retmax))
+        return self.records[:retmax]
+
+
+def test_fetch_source_materials_from_scope_builds_query_and_wraps_metadata() -> None:
+    from easyicu.research_agent.idea_scope import LiteratureScopeSpec
+    from easyicu.research_agent.idea_mining import fetch_source_materials_from_scope
+
+    client = FakeScopeSearchClient(
+        [
+            CitationRecord(key="a_2025", title="A", year="2025", venue="Crit Care", pmid="1"),
+            CitationRecord(key="b_2025", title="B", year="2025", venue="Intensive Care Med", pmid="2"),
+        ]
+    )
+    scope = LiteratureScopeSpec(
+        journal_preset="critical_care_top3",
+        last_n_years=2,
+        topic_terms=["septic shock"],
+    )
+
+    materials = fetch_source_materials_from_scope(
+        scope, client, reference_year=2025, retmax=5
+    )
+
+    query, retmax = client.queries[0]
+    assert retmax == 5
+    assert "2024:2025[dp]" in query
+    assert '"Crit Care"[Journal]' in query
+    assert '"septic shock"' in query
+    assert len(materials) == 2
+    assert all(m.source_adapter_level == "metadata_only" for m in materials)
+    assert all(m.source_text is None for m in materials)
+
+
+def test_dry_run_scope_retrieves_corpus_and_freezes_query(tmp_path) -> None:
+    from easyicu.research_agent.idea_scope import LiteratureScopeSpec
+
+    quote = "early vasopressin exposure and intensive-care unit mortality"
+    client = FakeScopeSearchClient(
+        [
+            CitationRecord(
+                key="rev_2025",
+                title="Vasopressin in critical illness: an unresolved review",
+                year="2025",
+                venue="Crit Care",
+                relevance=f"The review calls for studies of {quote}.",
+                pmid="1",
+            )
+        ]
+    )
+    scope = LiteratureScopeSpec(
+        journal_preset="critical_care_top3",
+        last_n_years=2,
+        topic_terms=["vasopressin"],
+    )
+    llm = CapturingIdeaLLM(
+        [
+            {
+                "citation_key": "rev_2025",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "early vasopressin exposure",
+                "outcome": "intensive-care unit mortality",
+                "rationale": "The source describes this direction.",
+                "source_quote": quote,
+                "analysis_family": "association",
+            }
+        ]
+    )
+
+    def fake_probe(**kwargs):
+        pair = tuple(kwargs["concepts"])
+        return {
+            concept: {
+                "joint_fraction_complete": 0.75,
+                "n_joint_complete": 75,
+                "denominator_n": 100,
+                "source": "synthetic_s1_fixture",
+            }
+            for concept in pair
+        }
+
+    out_dir = tmp_path / "dry_run"
+    result = run_idea_mining_dry_run(
+        llm=llm,
+        available_concepts=["adh_rate", "death"],
+        output_dir=out_dir,
+        feasibility_probe=fake_probe,
+        scope=scope,
+        source_search_client=client,
+        scope_reference_year=2025,
+        scope_retmax=10,
+    )
+
+    # The scope drove retrieval (no explicit materials passed).
+    assert client.queries and client.queries[0][1] == 10
+    assert result.yield_report.n_literature_ideas == 1
+    assert result.yield_report.n_executable == 1
+
+    scope_query_path = out_dir / "scope_query.json"
+    assert scope_query_path.exists()
+    frozen = json.loads(scope_query_path.read_text(encoding="utf-8"))
+    assert "2024:2025[dp]" in frozen["pubmed_query"]
+    assert frozen["n_materials_retrieved"] == 1
+    assert frozen["scope_reference_year"] == 2025
+
+
+def test_dry_run_scope_without_client_or_materials_fails_closed(tmp_path) -> None:
+    from easyicu.research_agent.idea_scope import LiteratureScopeSpec
+    from easyicu.research_agent.idea_mining import IdeaMiningError
+
+    scope = LiteratureScopeSpec(journal_preset="critical_care_top3", last_n_years=2)
+    with pytest.raises(IdeaMiningError, match="source_search_client"):
+        run_idea_mining_dry_run(
+            llm=CapturingIdeaLLM([]),
+            available_concepts=["adh_rate", "death"],
+            output_dir=tmp_path / "dry_run",
+            scope=scope,
+        )

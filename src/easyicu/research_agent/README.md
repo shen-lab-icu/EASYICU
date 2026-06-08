@@ -62,9 +62,98 @@ The runtime now makes a four-layer design explicit:
 
 Current scope note: Layer 4 is bounded. It produces an auditable
 `hypothesis_blueprint.json` before planning, ranking candidates by
-coverage / novelty / gate-pass weights, but it should not be described
-as "Scientific Discovery" in paper-facing text. In manuscripts use
+coverage / literature-saturation / gate-pass weights, but it should not
+be described as "Scientific Discovery" in paper-facing text. In manuscripts use
 "candidate hypothesis ranking, human-curated".
+
+S1 idea-triage note: `concept_availability.real_data_concept_feasibility`
+adds an outcome-blind data-layer feasibility probe for future
+review/editorial-derived idea triage. It reports denominator counts,
+per-concept non-missing counts, and joint completeness across requested
+concepts from a single exported wide cohort table. The input is **not** a raw
+database directory or sharded concept store. The probe records requested
+time-window and aggregation metadata for downstream triage, but S1 does not
+apply temporal filtering or aggregation. It does **not** compute outcome rates,
+subgroup outcomes, p-values, or effect estimates, and it does not trigger an
+analysis run.
+
+S2 preregistration note: `idea_registry.IdeaCandidateRegistry` provides the
+append-only human gate for future idea-mining candidates. `source_snapshot_id`
+is required but intentionally opaque at this stage; the later literature
+snapshot layer owns freeze/hash semantics. Only candidates whose latest ledger
+entry is `accepted` pass `assert_executable()`, so ranking or extraction stages
+cannot silently launch analyses from proposed or rejected ideas.
+
+S3 ranking note: `hypothesis_generator.generate_hypotheses` remains a pure
+deterministic ranking helper. It does not read parquet files, call the S1 probe,
+or trigger pipeline execution. Callers may pass precomputed pair-level
+`feasibility_by_pair` signals, in which case ranking uses
+`joint_fraction_complete` as the coverage term and records a `feasibility_note`
+when joint completeness is low. The `literature_saturation_signal` field is a
+ranking signal only, not a novelty claim; higher values mean the supplied
+citations mention the predictor-outcome pair more densely.
+
+S4 extraction note: `idea_mining.py` adds the first upstream literature
+idea-extraction layer. In v1 it only supports `metadata_only` and
+`user_supplied_excerpt` extraction paths; `open_access_fulltext` and licensed
+full-text ingestion remain behind DG1. Source snapshot manifests store citation
+metadata, locators, hashes and character counts, but not source bodies. Extracted
+ideas carry source quotes and can be mapped to executable candidates only after
+concept names are reconciled and outcome determinability is known. Binary
+outcomes stored as event-positive present/NA values must be normalized to
+explicit known 0/1 before feasibility probing, or the candidate remains
+non-executable for joint-feasibility ranking. S4 does not register, accept, or
+run analyses.
+
+S5 dry-run note: `idea_mining.run_idea_mining_dry_run()` wires the upstream
+idea extraction into the downstream feasibility/ranking/registry gates without
+launching an analysis. It writes a source snapshot manifest, candidate triage
+report, and S2 registry ledger, then stops with every candidate still in
+`proposed` status. S5 uses each `ExecutableHypothesisCandidate.feasibility_pair_key`
+as the canonical anchor, runs pair-level feasibility one predictor/outcome pair
+at a time, and only passes those precomputed joint-completeness signals into
+`generate_hypotheses()`. If no data path or feasibility probe is supplied, S5
+withholds ranking rather than silently falling back to single-variable
+missingness. The dry-run report surfaces extraction/mapping yield, unresolved
+terms, outcome-determinability gates, preregistered family size, and triage-only
+causal-audit risk markers. The preregistration report deliberately separates the
+all-considered candidate denominator from the executable-candidate denominator;
+the former is an anti-fishing audit trail, while the latter is the scope that a
+later p-value adjustment layer would normally consume. The causal-audit marker is
+a static dry-run reminder, not a per-candidate causal analysis.
+
+S6 discovery-output note: prior-art assessment is a triage layer, not a
+tool-authored novelty claim. S6 builds broad and exact PubMed-style queries for
+each literature-derived candidate, freezes query strings, counts, PMIDs, top
+hits, direct same-topic decisions and rationales, and labels candidates as
+`already_done`, `crowded_but_differentiable`, `sparse`, or `apparently_gap`.
+The query construction deliberately uses the literature wording and
+differentiators (`time_window_hint`, trajectory/clearance wording, analysis
+family, clinical scenario), not canonical EasyICU concept keys. Feasibility may
+use `lact`, but novelty search must preserve phrases such as "lactate clearance
+trajectory" so the idea is not drowned in broad lactate literature. S6 can pass
+the frozen prior-art saturation signal into `generate_hypotheses()` as a
+caller-supplied pure-function input; ranking still does not connect to PubMed.
+The human-readable discovery report is rendered from structured records and
+must include source, gap quote, candidate topic, prior-art triage, database
+feasibility, Go/No-go, risks, and `clinical_plausibility_requires_human` for
+every candidate.
+
+Literature scope (discovery lever 1): `idea_scope.py` turns a declarative
+`LiteratureScopeSpec` (journal set/preset, publication types, date window,
+user-supplied topic terms) into a deterministic PubMed query via
+`build_pubmed_query_from_scope(...)`. The spec is case-neutral — it hardcodes
+only publication metadata (journal presets, `[pt]` clauses), never a
+disease/exposure/score/database; topic terms are always caller-supplied, and
+`last_n_years` resolves against an explicit `reference_year` to stay
+reproducible. Letting each user scope their own corpus is the cheapest lever
+against cross-user candidate duplication. `run_idea_mining_dry_run(...)` accepts
+an optional `scope` plus an injected `source_search_client`: when no explicit
+`materials` are passed it builds the query, retrieves `metadata_only` source
+materials (titles/venues/ids only — no abstract or full-text body), and freezes
+the resolved query to `scope_query.json`. Network I/O happens only through the
+explicitly injected client; supplying a `scope` without a client (and without
+materials) fails closed.
 
 Current evaluation-protocol note: the historical name **"ICUAgentBench"**
 is retained for code and on-disk compatibility, but in the manuscript
