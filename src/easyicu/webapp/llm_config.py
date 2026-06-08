@@ -148,13 +148,18 @@ PROVIDERS: Dict[str, ProviderInfo] = {
 def ensure_llm_config_state() -> None:
     """Ensure the shared LLM keys exist in Streamlit session state."""
     _load_local_env_file()
+    openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    openrouter_base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").strip()
+    openrouter_model = os.getenv("EASYICU_OPENROUTER_MODEL", "").strip()
+    has_openrouter_env = bool(openrouter_key)
+    provider_default = "openrouter" if has_openrouter_env else default_provider_key()
     defaults = {
         "llm_enabled": False,
-        "llm_provider": default_provider_key(),
-        "llm_api_key": "",
-        "llm_model": "",
-        "llm_base_url": "",
-        "llm_configured": False,
+        "llm_provider": provider_default,
+        "llm_api_key": openrouter_key if has_openrouter_env else "",
+        "llm_model": openrouter_model if has_openrouter_env else "",
+        "llm_base_url": openrouter_base_url if has_openrouter_env else "",
+        "llm_configured": has_openrouter_env,
     }
     for key, value in defaults.items():
         if key not in st.session_state:

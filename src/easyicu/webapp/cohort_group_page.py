@@ -1197,8 +1197,6 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                 }
             )
 
-            # 统计方法说明
-            st.markdown("---")
             stats_note = """**Statistical Methods:**
 - Continuous variables: Mean ± SD (Median [IQR]), Mann-Whitney U test, SMD with pooled SD
 - Categorical variables: n (%), Chi-square test, binary SMD with pooled proportion
@@ -1210,7 +1208,11 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 - SMD 仅作为数值效应量距离展示；|SMD| > 0.10 提示不平衡，|SMD| > 0.25 常被视为较大不平衡
 - 小样本（任一组 n < 10）会让 SMD 不稳定，应谨慎解释数值
 - p < 0.05 认为具有统计学显著性"""
-            st.caption(stats_note)
+            if st.toggle(
+                "Methods and interpretation" if lang == 'en' else "方法与解释说明",
+                key="cohort_group_show_methods_note",
+            ):
+                st.caption(stats_note)
 
             # 🔧 FIX (2026-02-04): 简化导出逻辑，使用 UTF-8 BOM 编码确保 Excel 正确显示
             # 无需手动替换特殊字符，utf-8-sig 编码可以正确处理
@@ -1228,10 +1230,11 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             csv_bytes = buffer.getvalue()
 
             st.download_button(
-                label="📥 " + ("Download Table (CSV)" if lang == 'en' else "下载表格 (CSV)"),
+                label="Download table" if lang == 'en' else "下载表格",
                 data=csv_bytes,
                 file_name=f"baseline_comparison_{group1_name}_vs_{group2_name}.csv",
-                mime="text/csv"
+                mime="text/csv",
+                icon=":material/download:",
             )
 
     except Exception as e:

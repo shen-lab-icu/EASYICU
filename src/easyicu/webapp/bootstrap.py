@@ -104,6 +104,12 @@ def render_runtime_shell_styles(st: Any) -> None:
     div[data-testid="stExpander"] {{
         display: {expander_display} !important;
     }}
+    details[data-testid="stExpander"]:not([open]) > [data-testid="stExpanderDetails"] {{
+        display: none !important;
+    }}
+    div[data-testid="stExpander"] > details:not([open]) > [data-testid="stExpanderDetails"] {{
+        display: none !important;
+    }}
     [data-testid="stMain"] {{
         display: {main_display} !important;
         overflow-y: visible !important;

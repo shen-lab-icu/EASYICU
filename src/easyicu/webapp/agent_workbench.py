@@ -42,9 +42,11 @@ from __future__ import annotations
 
 import html
 import hashlib
+import io
 import json
 import re
 import base64
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -86,8 +88,13 @@ _ACKED_FINDINGS_KEY = "_eu_wb_findings_acked"
 _ACKED_FINDINGS_RUN_KEY = "_eu_wb_findings_acked_run_dir"
 _FINDING_REVIEW_STATE_FILE = "finding_review_state.json"
 _REVIEW_DETAILS_EXPANDED_KEY = "_eu_wb_review_details_expanded"
+_DETAIL_ADVANCED_KEY = "_eu_wb_detail_advanced"
+_TECHNICAL_DETAILS_BUTTON_KEY = "_eu_wb_open_step_details"
+_TECHNICAL_DETAILS_HIDE_KEY = "_eu_wb_hide_step_details"
 _APPROVED_REVIEW_DECISIONS = {"approved", "accept", "accepted", "signed_off", "ready"}
 _FINDING_QUEUE_PREVIEW_LIMIT = 8
+_SUMMARY_BUNDLE_MAX_FILE_BYTES = 10 * 1024 * 1024
+_SUMMARY_BUNDLE_MAX_TOTAL_BYTES = 48 * 1024 * 1024
 
 
 def _file_fingerprint(path: Path) -> tuple[str, int, int]:
@@ -1185,6 +1192,33 @@ def _prime_summary_draft_setup(state: dict[str, Any]) -> None:
     st.session_state["_research_agent_expand_history"] = False
 
 
+def _prime_workbench_request_rerun_setup(session_state: dict[str, Any], state: dict[str, Any]) -> None:
+    """Route Workbench Request re-run into the checkpoint-resume setup path."""
+    run_dir_text = str(state.get("run_dir") or "").strip()
+    run_id = str(state.get("run_id") or Path(run_dir_text).name or "").strip()
+    if not run_id:
+        return
+    session_state["_active_main_page"] = "research_agent"
+    session_state["research_agent_resume_run_id"] = run_id
+    if run_dir_text:
+        session_state["research_agent_resume_run_dir"] = run_dir_text
+        try:
+            session_state["research_agent_workdir"] = str(Path(run_dir_text).expanduser().resolve().parent)
+        except Exception:
+            session_state["research_agent_workdir"] = str(Path(run_dir_text).expanduser().parent)
+    session_state["research_agent_force_manuscript"] = False
+    session_state["research_agent_resume_mode"] = "continue"
+    session_state["research_agent_resume_notes"] = ""
+    session_state["research_agent_resume_relax_probe"] = False
+    prior_question = str(state.get("research_question") or state.get("question") or "").strip()
+    if prior_question:
+        session_state["research_agent_question"] = prior_question
+    session_state["research_agent_preflight_confirmed"] = False
+    session_state.pop("research_agent_preflight_signature", None)
+    session_state["_ra_view"] = "setup"
+    session_state["_research_agent_expand_history"] = False
+
+
 def _summary_outputs_from_manifest(
     *,
     manifest: dict[str, Any],
@@ -1276,8 +1310,18 @@ def _countish(value: Any) -> int:
 def _agent_ref_step_meta(step: dict[str, Any], lang: str) -> str:
     """Human-facing step subtitle for the Claude-style Workbench overview."""
     explicit = step.get("detail") or step.get("sub") or step.get("meta")
+    status = str(step.get("status") or "").lower()
     if explicit:
-        return _compact_label(explicit, max_len=54)
+        explicit_text = str(explicit)
+        lower = explicit_text.lower()
+        looks_internal = (
+            status in {"fail", "error", "blocked"}
+            or "rc=" in lower
+            or lower.startswith("llm")
+            or " evidence" in lower
+        )
+        if not looks_internal:
+            return _compact_label(explicit_text, max_len=54)
     evidence_count = _countish(step.get("evidence_count"))
     repair_count = _countish(step.get("repair_count"))
     parts: list[str] = []
@@ -1287,7 +1331,6 @@ def _agent_ref_step_meta(step: dict[str, Any], lang: str) -> str:
         parts.append(_T(lang, f"{repair_count} repair logged", f"{repair_count} 次修复记录"))
     if evidence_count:
         parts.append(_T(lang, f"{evidence_count} evidence", f"{evidence_count} 条证据"))
-    status = str(step.get("status") or "").lower()
     if status in {"fail", "error", "blocked"}:
         parts.append(_T(lang, "needs review", "需要复核"))
     if not parts:
@@ -1383,7 +1426,6 @@ def _agent_ref_thumb(kind: object, title: object = "") -> str:
 def _agent_reference_workbench_html(state: dict[str, Any], lang: str) -> str:
     """Claude Design-compatible overview surface for the Workbench tab."""
     steps = [s for s in state.get("steps", []) if isinstance(s, dict)]
-    outputs = [o for o in state.get("summary_outputs", []) if isinstance(o, dict)]
     evidence = [e for e in state.get("evidence", []) if isinstance(e, dict)]
     evidence_total = _countish(state.get("evidence_total")) or len(evidence)
     audit = state.get("audit") if isinstance(state.get("audit"), dict) else {}
@@ -1427,7 +1469,8 @@ def _agent_reference_workbench_html(state: dict[str, Any], lang: str) -> str:
         status_class = "ok"
 
     task_rows = []
-    for i, step in enumerate(steps[:8], start=1):
+    task_preview_limit = 5
+    for i, step in enumerate(steps[:task_preview_limit], start=1):
         status = step.get("status") or "pending"
         cls = _agent_ref_status_class(status)
         label = _compact_label(step.get("label") or step.get("step_id") or f"step {i}", max_len=34)
@@ -1445,19 +1488,18 @@ def _agent_reference_workbench_html(state: dict[str, Any], lang: str) -> str:
             '</div>'
             '</div>'
         )
-    if len(steps) > 8:
+    if len(steps) > task_preview_limit:
         task_rows.append(
             '<div class="eu-ref-plan-more mono">'
-            f'+ {len(steps) - 8} {_T(lang, "more step(s) in detailed inspector", "个步骤在详细检查器中")}'
+            f'+ {len(steps) - task_preview_limit} {_T(lang, "more step(s) in the full audit trail", "个步骤在完整审计链中")}'
             '</div>'
         )
 
     if state.get("is_demo"):
         ledger_rows = [
-            (_T(lang, "Preview structure", "预览结构"), _T(lang, "no manifest opened", "未打开 manifest"), "file"),
-            (_T(lang, "Step contracts", "步骤契约"), f"{len(steps)} {_T(lang, 'preview steps', '个预览步骤')}", "list"),
-            (_T(lang, "Template binding", "模板绑定"), _T(lang, "expected slots only", "仅预期槽位"), "layers"),
-            (_T(lang, "Review gate", "复核关口"), _T(lang, "draft locked", "草稿锁定"), "lock"),
+            (_T(lang, "Run folder", "运行目录"), _T(lang, "no manifest opened", "未打开 manifest"), "file"),
+            (_T(lang, "Evidence links", "证据链接"), f"{len(steps)} {_T(lang, 'planned checks', '个计划检查')}", "list"),
+            (_T(lang, "Draft gate", "草稿关口"), _T(lang, "locked until review", "复核前锁定"), "lock"),
         ]
     else:
         if finding_total:
@@ -1469,10 +1511,9 @@ def _agent_reference_workbench_html(state: dict[str, Any], lang: str) -> str:
         else:
             review_gate_sub = _T(lang, f"{errors} error(s) · {warnings} warning(s)", f"{errors} 错误 · {warnings} 警告")
         ledger_rows = [
-            (_T(lang, "Run manifest", "运行 manifest"), state.get("run_id") or _T(lang, "current run", "当前运行"), "file"),
-            (_T(lang, "Step contracts", "步骤契约"), f"{len(steps)} {_T(lang, 'steps', '步')} · {evidence_total} evidence", "list"),
-            (_T(lang, "Template binding", "模板绑定"), _T(lang, "expected tables + checks", "预期表格与检查"), "layers"),
-            (_T(lang, "Review gate", "复核关口"), review_gate_sub, "lock"),
+            (_T(lang, "Run folder", "运行目录"), state.get("run_id") or _T(lang, "current run", "当前运行"), "file"),
+            (_T(lang, "Evidence links", "证据链接"), f"{evidence_total} evidence · {len(steps)} {_T(lang, 'steps', '步')}", "list"),
+            (_T(lang, "Draft gate", "草稿关口"), review_gate_sub, "lock"),
         ]
     ledger_html = "".join(
         '<div class="eu-ref-ledger-row">'
@@ -1485,41 +1526,17 @@ def _agent_reference_workbench_html(state: dict[str, Any], lang: str) -> str:
         for title, sub, icon in ledger_rows
     )
 
-    output_rows = []
-    for output in outputs[:4]:
-        kind = output.get("kind", "")
-        title = output.get("title", "")
-        output_rows.append(
-            '<div class="eu-ref-out-tile">'
-            f'<div class="eu-ref-out-thumb">{_agent_ref_thumb(kind, title)}</div>'
-            '<div class="eu-ref-out-meta">'
-            f'<div class="mono eu-ref-out-kind">{_esc(str(kind))}</div>'
-            f'<div class="eu-ref-out-title">{_esc(_compact_label(title, max_len=42))}</div>'
-            f'<div class="eu-ref-out-sub">{_esc(_compact_label(output.get("sub"), max_len=60))}</div>'
-            '</div>'
-            '</div>'
-        )
-    if not output_rows:
-        output_rows.append(
-            '<div class="eu-ref-out-tile">'
-            '<div class="eu-ref-out-thumb"><div class="eu-ref-number">0</div></div>'
-            '<div class="eu-ref-out-meta">'
-            f'<div class="eu-ref-out-title">{_T(lang, "No outputs yet", "尚无产物")}</div>'
-            f'<div class="eu-ref-out-sub">{_T(lang, "Open or run a manifest to populate this gallery.", "打开或运行 manifest 后填充。")}</div>'
-            '</div></div>'
-        )
-
     finding = ""
     for row in [r for r in finding_rows if not r.get("reviewed")] + finding_rows:
-        finding = _compact_label(row.get("message") or row.get("validator"), max_len=160)
+        finding = _compact_label(row.get("message") or row.get("validator"), max_len=110)
         if finding and row.get("target_label"):
-            finding = _compact_label(f"{row['target_label']}: {finding}", max_len=180)
+            finding = _compact_label(f"{row['target_label']}: {finding}", max_len=124)
         if finding:
             break
     if not finding:
         for item in audit.get("findings") or []:
             if isinstance(item, dict):
-                finding = _compact_label(item.get("message") or item.get("validator"), max_len=180)
+                finding = _compact_label(item.get("message") or item.get("validator"), max_len=124)
                 if finding:
                     break
     review_meta_html = ""
@@ -1603,8 +1620,19 @@ def _agent_reference_workbench_html(state: dict[str, Any], lang: str) -> str:
                 "暂无阻断性发现；写作前仍需复核证据 ledger。",
             )
 
+    detail_summary = _T(
+        lang,
+        "Run map",
+        "运行地图",
+    )
+    detail_hint = _T(
+        lang,
+        f"{len(steps)} steps · {evidence_total} evidence",
+        f"{len(steps)} 步 · {evidence_total} 条证据",
+    )
+
     return (
-        '<div class="eu-ref-workbench">'
+        '<div class="eu-ref-workbench compact">'
         '<div class="eu-ref-run-strip">'
         f'<span class="eu-ref-pill {status_class}"><span class="dot"></span>{_esc(status_label)}</span>'
         '<span class="mono eu-ref-run-meta">'
@@ -1615,21 +1643,6 @@ def _agent_reference_workbench_html(state: dict[str, Any], lang: str) -> str:
         '"></i></div>'
         f'<span class="mono eu-ref-run-pct">{pct}%</span>'
         '</div>'
-        '<div class="eu-ref-split">'
-        '<div class="eu-ref-card eu-ref-pad">'
-        '<div class="eu-ref-card-head">'
-        f'<div class="eu-ref-eyebrow">{_T(lang, "Task map", "任务地图")}</div>'
-        f'<span class="mono">{_T(lang, "deterministic · repairs logged", "确定性 · 修复有记录")}</span>'
-        '</div>'
-        f'<div class="eu-ref-planlist">{"".join(task_rows)}</div>'
-        '</div>'
-        '<div class="eu-ref-card eu-ref-pad">'
-        f'<div class="eu-ref-eyebrow">{_T(lang, "Evidence ledger", "证据 ledger")}</div>'
-        f'<div class="eu-ref-ledger-list">{ledger_html}</div>'
-        '</div>'
-        '</div>'
-        f'<div class="eu-ref-section-label">{_T(lang, "Analysis outputs", "分析产出")}</div>'
-        f'<div class="eu-ref-out-grid">{"".join(output_rows)}</div>'
         f'<div class="eu-ref-note {note_class}">'
         f'<div class="eu-ref-note-ico">{_esc(note_icon)}</div>'
         '<div class="eu-ref-note-body">'
@@ -1641,6 +1654,25 @@ def _agent_reference_workbench_html(state: dict[str, Any], lang: str) -> str:
         f'{review_meta_html}'
         '</div>'
         '</div>'
+        '<details class="eu-ref-more-details">'
+        '<summary>'
+        f'<span>{_esc(detail_summary)}</span>'
+        f'<small>{_esc(detail_hint)}</small>'
+        '</summary>'
+        '<div class="eu-ref-split">'
+        '<div class="eu-ref-card eu-ref-pad">'
+        '<div class="eu-ref-card-head">'
+        f'<div class="eu-ref-eyebrow">{_T(lang, "Task map", "任务地图")}</div>'
+        f'<span class="mono">{_T(lang, "deterministic · repairs logged", "确定性 · 修复有记录")}</span>'
+        '</div>'
+        f'<div class="eu-ref-planlist">{"".join(task_rows)}</div>'
+        '</div>'
+        '<div class="eu-ref-card eu-ref-pad">'
+        f'<div class="eu-ref-eyebrow">{_T(lang, "Evidence checks", "证据检查")}</div>'
+        f'<div class="eu-ref-ledger-list">{ledger_html}</div>'
+        '</div>'
+        '</div>'
+        '</details>'
         '</div>'
     )
 
@@ -1661,9 +1693,9 @@ def _review_gate_actions_from_audit(audit: dict[str, Any], *, lang: str, is_demo
                 "detail": _T(lang, "Demo mode shows structure only; it does not invent metrics.", "Demo 只展示结构，不编造指标。"),
             },
             {
-                "label": _T(lang, "Open Workbench", "打开工作台"),
+                "label": _T(lang, "Open Review", "打开复核"),
                 "state": "ready",
-                "detail": _T(lang, "Inspect the step-by-step agent surface without token use.", "无需 token 即可查看逐步 agent 工作台。"),
+                "detail": _T(lang, "Inspect the review gate without token use.", "无需 token 即可查看复核关口。"),
             },
         ]
     if errors:
@@ -1733,7 +1765,7 @@ def _review_decisions_from_audit(audit: dict[str, Any], *, lang: str, is_demo: b
         decision = str(review.get("decision") or "reviewed")
         note = str(review.get("note") or review.get("updated_at") or "")
         tone = "selected"
-        if decision in {"repair_requested", "locked"}:
+        if decision in {"repair_requested", "locked", "declined"}:
             tone = "warning"
         elif decision == "blocked":
             tone = "danger"
@@ -3377,6 +3409,52 @@ def _summary_cohort_denominators_resolved(state: dict[str, Any]) -> bool:
 
 def _summary_review_checks(state: dict[str, Any], lang: str) -> list[dict[str, object]]:
     if state.get("is_demo"):
+        if state.get("summary_demo_source") == "guided_copilot_signed_draft":
+            return [
+                {
+                    "label": _T(lang, "Guided study assembled", "引导式研究已组装"),
+                    "ok": True,
+                },
+                {
+                    "label": _T(lang, "No LLM call or token use", "不调用 LLM、不消耗 token"),
+                    "ok": True,
+                },
+                {
+                    "label": _T(lang, "Artifact slots are labelled as preview", "产物槽位已标注为预览"),
+                    "ok": True,
+                },
+                {
+                    "label": _T(lang, "Local reviewer sign-off recorded", "已记录本地审核签字"),
+                    "ok": True,
+                },
+                {
+                    "label": _T(lang, "Manifest export remains gated", "Manifest 导出仍受闸门约束"),
+                    "ok": True,
+                },
+            ]
+        if state.get("summary_demo_source") == "dock_completed_run_preview":
+            return [
+                {
+                    "label": _T(lang, "Completed-run shell opened", "已完成运行壳已打开"),
+                    "ok": True,
+                },
+                {
+                    "label": _T(lang, "No LLM call or token use", "不调用 LLM、不消耗 token"),
+                    "ok": True,
+                },
+                {
+                    "label": _T(lang, "No cohort metrics fabricated", "不编造队列指标"),
+                    "ok": True,
+                },
+                {
+                    "label": _T(lang, "Summary gate is visible", "Summary gate 已可见"),
+                    "ok": True,
+                },
+                {
+                    "label": _T(lang, "Manifest export remains gated", "Manifest 导出仍受闸门约束"),
+                    "ok": True,
+                },
+            ]
         return [
             {
                 "label": _T(lang, "Demo context structure is visible", "Demo 上下文结构已可见"),
@@ -3399,10 +3477,8 @@ def _summary_review_checks(state: dict[str, Any], lang: str) -> list[dict[str, o
                 "ok": False,
             },
         ]
-    steps = [s for s in state.get("steps", []) if isinstance(s, dict)]
     evidence = [e for e in state.get("evidence", []) if isinstance(e, dict)]
     audit = state.get("audit") if isinstance(state.get("audit"), dict) else {}
-    counts = audit.get("counts") if isinstance(audit.get("counts"), dict) else {}
     bundle_counts = _summary_bundle_counts(state)
     review = audit.get("review_decision") if isinstance(audit.get("review_decision"), dict) else {}
     review_status = str(review.get("decision") or review.get("status") or "").lower()
@@ -3453,11 +3529,16 @@ def _summary_review_checks(state: dict[str, Any], lang: str) -> list[dict[str, o
     ]
 
 
-def _summary_bundle_index_download(state: dict[str, Any], lang: str) -> tuple[str, str]:
+def _summary_bundle_index_payload(state: dict[str, Any], lang: str) -> dict[str, Any]:
     bundle_counts = _summary_bundle_counts(state)
-    payload = {
+    run_dir = str(state.get("run_dir") or "").strip()
+    run_name = Path(run_dir).name if run_dir else str(state.get("run_id") or "").strip()
+    workdir_name = Path(run_dir).parent.name if run_dir else ""
+    return {
         "run_id": state.get("run_id"),
-        "run_dir": state.get("run_dir"),
+        "run_name": run_name,
+        "workdir_name": workdir_name,
+        "local_paths_included": False,
         "source_label": state.get("source_label"),
         "status": state.get("status"),
         "output_bundle": bundle_counts,
@@ -3473,17 +3554,128 @@ def _summary_bundle_index_download(state: dict[str, Any], lang: str) -> tuple[st
             {
                 "kind": rec.get("kind") or rec.get("tag"),
                 "label": rec.get("label") or rec.get("title"),
-                "relative_path": rec.get("relative_path"),
+                "relative_path": _safe_summary_bundle_member(rec.get("relative_path") or rec.get("path")),
                 "sha": rec.get("sha") or rec.get("sha256"),
             }
             for rec in (state.get("evidence") or [])
             if isinstance(rec, dict)
         ],
     }
+
+
+def _summary_bundle_index_download(state: dict[str, Any], lang: str) -> tuple[str, str]:
+    payload = _summary_bundle_index_payload(state, lang)
     data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     encoded = base64.b64encode(data).decode("ascii")
     filename = _compact_label(state.get("run_id") or "easyicu_summary", max_len=48)
     return f"data:application/json;base64,{encoded}", f"{filename}_bundle_index.json"
+
+
+def _safe_summary_bundle_member(raw_path: object) -> str | None:
+    text = str(raw_path or "").strip().replace("\\", "/")
+    if not text or text.startswith("/"):
+        return None
+    if re.match(r"^[A-Za-z]:", text):
+        return None
+    parts: list[str] = []
+    for part in text.split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            return None
+        parts.append(part)
+    if not parts:
+        return None
+    return "/".join(parts)
+
+
+def _summary_bundle_zip_download(state: dict[str, Any], lang: str) -> tuple[str, str]:
+    """Return a local, privacy-scrubbed ZIP bundle for the Summary export."""
+    run_dir_text = str(state.get("run_dir") or "").strip()
+    run_dir = Path(run_dir_text).expanduser() if run_dir_text else None
+    try:
+        run_root = run_dir.resolve() if run_dir else None
+    except OSError:
+        run_root = None
+    index_payload = _summary_bundle_index_payload(state, lang)
+    included: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    total_bytes = 0
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "bundle_index.json",
+            json.dumps(index_payload, ensure_ascii=False, indent=2),
+        )
+        zf.writestr(
+            "review_checks.json",
+            json.dumps(index_payload.get("review_checks") or [], ensure_ascii=False, indent=2),
+        )
+        for rec in (state.get("evidence") or []):
+            if not isinstance(rec, dict):
+                continue
+            safe_member = _safe_summary_bundle_member(rec.get("relative_path") or rec.get("path"))
+            label = str(rec.get("label") or rec.get("title") or safe_member or "artifact")
+            if safe_member is None or run_root is None:
+                skipped.append({"label": label, "reason": "not a safe run-relative artifact path"})
+                continue
+            source = (run_root / safe_member)
+            try:
+                resolved = source.resolve()
+                if resolved != run_root and run_root not in resolved.parents:
+                    skipped.append({"label": label, "reason": "artifact path escapes run directory"})
+                    continue
+                stat = resolved.stat()
+            except OSError:
+                skipped.append({"label": label, "reason": "artifact file not found"})
+                continue
+            if not resolved.is_file():
+                skipped.append({"label": label, "reason": "artifact is not a file"})
+                continue
+            if stat.st_size > _SUMMARY_BUNDLE_MAX_FILE_BYTES:
+                skipped.append({"label": label, "reason": "artifact exceeds per-file bundle limit"})
+                continue
+            if total_bytes + stat.st_size > _SUMMARY_BUNDLE_MAX_TOTAL_BYTES:
+                skipped.append({"label": label, "reason": "bundle size limit reached"})
+                continue
+            data = _cached_artifact_bytes(_file_fingerprint(resolved))
+            if not data:
+                skipped.append({"label": label, "reason": "artifact file is empty or unreadable"})
+                continue
+            arcname = f"artifacts/{safe_member}"
+            if arcname in {item["bundle_path"] for item in included}:
+                continue
+            zf.writestr(arcname, data)
+            total_bytes += len(data)
+            included.append({
+                "label": label,
+                "bundle_path": arcname,
+                "kind": str(rec.get("kind") or rec.get("tag") or ""),
+                "sha": str(rec.get("sha") or rec.get("sha256") or ""),
+                "bytes": len(data),
+            })
+        review = (state.get("audit") or {}).get("review_decision") if isinstance(state.get("audit"), dict) else {}
+        if isinstance(review, dict) and review:
+            zf.writestr("review_decision.json", json.dumps(review, ensure_ascii=False, indent=2))
+        zf.writestr(
+            "bundle_manifest.json",
+            json.dumps(
+                {
+                    "run_id": state.get("run_id"),
+                    "run_name": index_payload.get("run_name"),
+                    "local_paths_included": False,
+                    "included_artifacts": included,
+                    "skipped_artifacts": skipped,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+    filename = _compact_label(state.get("run_id") or "easyicu_summary", max_len=48)
+    return f"data:application/zip;base64,{encoded}", f"{filename}_output_bundle.zip"
 
 
 def _output_summary_html(state: dict[str, Any], lang: str) -> str:
@@ -3547,7 +3739,7 @@ def _output_summary_html(state: dict[str, Any], lang: str) -> str:
         bundle_rows = [
             (_T(lang, "Figure slot", "图件槽位"), _T(lang, "not generated in demo", "Demo 中不生成"), "figure"),
             (_T(lang, "Table slot", "表格槽位"), _T(lang, "not generated in demo", "Demo 中不生成"), "table"),
-            (_T(lang, "Evidence ledger", "证据 ledger"), _T(lang, "requires a real manifest", "需要真实 manifest"), "evidence"),
+            (_T(lang, "Evidence manifest", "证据 manifest"), _T(lang, "requires a real manifest", "需要真实 manifest"), "evidence"),
             (_T(lang, "Repro code", "复现代码"), _T(lang, "no files written in demo", "Demo 中不写文件"), "code"),
         ]
     else:
@@ -3563,7 +3755,7 @@ def _output_summary_html(state: dict[str, Any], lang: str) -> str:
                 "table",
             ),
             (
-                _T(lang, "Evidence ledger", "证据 ledger"),
+                _T(lang, "Evidence manifest", "证据 manifest"),
                 _T(lang, f"{bundle_counts['evidence']} manifest rows", f"{bundle_counts['evidence']} 条 manifest 记录"),
                 "evidence",
             ),
@@ -3583,7 +3775,7 @@ def _output_summary_html(state: dict[str, Any], lang: str) -> str:
         '</div>'
         for title, detail, icon in bundle_rows
     )
-    bundle_href, bundle_filename = _summary_bundle_index_download(state, lang)
+    bundle_href, bundle_filename = _summary_bundle_zip_download(state, lang)
     demo_notice = (
         f'<div class="eu-summary-demo-note">{_esc(state.get("demo_notice", ""))}</div>'
         if is_demo and state.get("demo_notice") else ""
@@ -3591,7 +3783,21 @@ def _output_summary_html(state: dict[str, Any], lang: str) -> str:
     bundle_action = (
         f'<span class="eu-summary-bundle-button disabled">{_T(lang, "Real run required", "需要真实运行")}</span>'
         if is_demo else
-        f'<a class="eu-summary-bundle-button" href="{_esc(bundle_href)}" download="{_esc(bundle_filename)}">{_T(lang, "Export bundle index", "导出 bundle 索引")}</a>'
+        f'<a class="eu-summary-bundle-button" href="{_esc(bundle_href)}" download="{_esc(bundle_filename)}">{_T(lang, "Export bundle", "导出 bundle")}</a>'
+    )
+    bundle_summary_title = (
+        _T(lang, "Export package is demo-only", "导出包为演示占位")
+        if is_demo else
+        _T(lang, "Export package is ready", "导出包已就绪")
+    )
+    bundle_summary_detail = (
+        _T(lang, "Real run required before files can be packaged.", "真实运行后才能打包文件。")
+        if is_demo else
+        _T(
+            lang,
+            f"{bundle_counts['figures']} figures · {bundle_counts['tables']} tables · {bundle_counts['evidence']} evidence · {bundle_counts['code']} code",
+            f"{bundle_counts['figures']} 个图件 · {bundle_counts['tables']} 张表 · {bundle_counts['evidence']} 条证据 · {bundle_counts['code']} 个代码产物",
+        )
     )
 
     return (
@@ -3617,11 +3823,18 @@ def _output_summary_html(state: dict[str, Any], lang: str) -> str:
         '</div>'
         '</div>'
         '</div>'
-        '<div class="eu-summary-bundle">'
-        f'<div class="eu-section-label">{_T(lang, "Output bundle", "输出包")}</div>'
+        '<details class="eu-summary-bundle eu-summary-bundle-details">'
+        '<summary class="eu-summary-bundle-summary">'
+        '<div>'
+        f'<div class="eu-section-label">{_T(lang, "Export package", "导出包")}</div>'
+        f'<b>{_esc(bundle_summary_title)}</b>'
+        f'<p>{_esc(bundle_summary_detail)}</p>'
+        '</div>'
+        f'<span>{_T(lang, "Details", "详情")}</span>'
+        '</summary>'
         f'<div class="eu-summary-bundle-list">{bundle_html}</div>'
         f'{bundle_action}'
-        '</div>'
+        '</details>'
         '</div>'
         '</div>'
     )
@@ -3695,11 +3908,18 @@ def _summary_empty_html(lang: str) -> str:
         '</div>'
         '</div>'
         '</div>'
-        '<div class="eu-summary-bundle">'
-        f'<div class="eu-section-label">{_T(lang, "Output bundle", "输出包")}</div>'
+        '<details class="eu-summary-bundle eu-summary-bundle-details">'
+        '<summary class="eu-summary-bundle-summary">'
+        '<div>'
+        f'<div class="eu-section-label">{_T(lang, "Export package", "导出包")}</div>'
+        f'<b>{_T(lang, "No package until evidence is bound", "证据绑定前没有导出包")}</b>'
+        f'<p>{_T(lang, "Run or import a manifest to unlock artifact details and package export.", "运行或导入 manifest 后再解锁产物明细和导出包。")}</p>'
+        '</div>'
+        f'<span>{_T(lang, "Details", "详情")}</span>'
+        '</summary>'
         f'<div class="eu-summary-bundle-list">{bundle_html}</div>'
         f'<span class="eu-summary-bundle-button disabled">{_T(lang, "Bundle index unavailable", "Bundle 索引尚不可用")}</span>'
-        '</div>'
+        '</details>'
         '</div>'
         '</div>'
     )
@@ -3744,9 +3964,12 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
     finding_review_state = _finding_review_state_summary(state)
     safe_run = re.sub(r"[^A-Za-z0-9_]+", "_", str(state.get("run_id") or run_dir.name))
     note_key = f"_eu_summary_review_note_{safe_run}"
+    note_visible_key = f"_eu_summary_review_note_visible_{safe_run}"
     default_note = str(review.get("note") or "")
     if note_key not in st.session_state:
         st.session_state[note_key] = default_note
+    if note_visible_key not in st.session_state:
+        st.session_state[note_visible_key] = bool(default_note)
     passed = sum(1 for check in checks if check.get("ok") is True)
     total = len(checks)
     if reviewer_ready:
@@ -3799,23 +4022,13 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
             ),
             unsafe_allow_html=True,
         )
-        note = st.text_area(
-            _T(lang, "Reviewer note", "审核备注"),
-            key=note_key,
-            height=68,
-            placeholder=_T(
-                lang,
-                "Optional note for the run audit trail.",
-                "可选：写入该 run 的审核记录。",
-            ),
-            disabled=not non_reviewer_ready,
-        )
-        approve_col, lock_col = st.columns([1, 1])
+        note = str(st.session_state.get(note_key, default_note) or "")
+        approve_col, lock_col, draft_col = st.columns([1, 1, 1.15])
         with approve_col:
             if st.button(
                 _T(lang, "Sign off review", "签字通过复核"),
                 key=f"_eu_summary_review_approve_{safe_run}",
-                type="primary",
+                type="primary" if non_reviewer_ready and not reviewer_ready else "secondary",
                 use_container_width=True,
                 disabled=(not non_reviewer_ready or reviewer_ready),
                 help=_T(
@@ -3838,42 +4051,69 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
                 st.rerun()
         with lock_col:
             if st.button(
-                _T(lang, "Keep locked", "保持锁定"),
-                key=f"_eu_summary_review_lock_{safe_run}",
+                _T(lang, "Decline", "退回"),
+                key=f"_eu_summary_review_decline_{safe_run}",
                 use_container_width=True,
                 disabled=not non_reviewer_ready,
                 help=_T(
                     lang,
-                    "Records that the draft should remain locked for this run.",
-                    "记录该 run 的草稿仍需保持锁定。",
+                    "Records a reviewer decline while keeping the draft gate locked for this run.",
+                    "记录审核者退回，并让该 run 的草稿关口保持锁定。",
                 ),
             ):
                 payload = _write_summary_review_decision(
                     run_dir,
-                    decision="locked",
-                    note=note or _T(lang, "Reviewer kept the draft gate locked.", "审核者保持草稿关口锁定。"),
+                    decision="declined",
+                    note=note or _T(
+                        lang,
+                        "Reviewer declined the Summary gate; manuscript draft remains locked.",
+                        "审核者退回 Summary gate；手稿草稿保持锁定。",
+                    ),
                     run_id=state.get("run_id"),
                     finding_review_state=finding_review_state,
                 )
                 _sync_review_decision_to_workbench_state(payload, lang=lang)
                 st.session_state["_active_main_page"] = "research_agent"
                 st.session_state["_ra_view"] = "summary"
-                st.warning(_T(lang, "Review gate kept locked.", "复核关口已保持锁定。"))
+                st.warning(_T(lang, "Review gate declined; draft remains locked.", "复核关口已退回；草稿保持锁定。"))
                 st.rerun()
-        if st.button(
-            _T(lang, "Draft methods + results", "生成方法与结果草稿"),
-            key=f"_eu_summary_review_draft_{safe_run}",
-            type="primary",
-            use_container_width=True,
-            disabled=not reviewer_ready,
+        with draft_col:
+            if st.button(
+                _T(lang, "Draft methods + results", "生成方法与结果草稿"),
+                key=f"_eu_summary_review_draft_{safe_run}",
+                type="primary" if reviewer_ready else "secondary",
+                use_container_width=True,
+                disabled=not reviewer_ready,
+                help=_T(
+                    lang,
+                    "Opens Setup in force-manuscript mode using this reviewed run.",
+                    "使用该已复核 run 打开 Setup 的强制写稿模式。",
+                ),
+            ):
+                _prime_summary_draft_setup(state)
+                st.rerun()
+        note_visible = st.toggle(
+            _T(lang, "Add reviewer note", "添加审核备注"),
+            key=note_visible_key,
+            disabled=not non_reviewer_ready and not bool(default_note),
             help=_T(
                 lang,
-                "Opens Setup in force-manuscript mode using this reviewed run.",
-                "使用该已复核 run 打开 Setup 的强制写稿模式。",
+                "Optional. Notes are stored locally with review_decision.json.",
+                "可选。备注会随 review_decision.json 保存在本机。",
             ),
-        ):
-            _prime_summary_draft_setup(state)
-            st.rerun()
+        )
+        if note_visible:
+            note = st.text_area(
+                _T(lang, "Reviewer note", "审核备注"),
+                key=note_key,
+                height=68,
+                placeholder=_T(
+                    lang,
+                    "Optional note for the run audit trail.",
+                    "可选：写入该 run 的审核记录。",
+                ),
+                disabled=not non_reviewer_ready,
+            )
         if reviewer_ready:
             st.success(
                 _T(
@@ -3928,6 +4168,8 @@ def _resolve_workbench_state(lang: str) -> dict[str, Any]:
     existing = st.session_state.get("_agent_workbench")
     if isinstance(existing, dict) and existing.get("steps"):
         if existing.get("is_demo"):
+            if existing.get("allow_summary_demo"):
+                return existing
             return {}
         return existing
     return {}
@@ -3937,15 +4179,14 @@ def prime_agent_workbench_state(lang: str) -> None:
     """Compatibility shim; Workbench no longer auto-opens latest runs."""
     existing = st.session_state.get("_agent_workbench")
     if isinstance(existing, dict) and existing.get("steps"):
-        if existing.get("is_demo"):
+        if existing.get("is_demo") and not existing.get("allow_summary_demo"):
             st.session_state.pop("_agent_workbench", None)
         return
 
 
 def _workbench_empty_html(lang: str) -> str:
     return (
-        _agent_reference_workbench_html(_workbench_empty_reference_state(lang), lang)
-        + '<div class="eu-agent-empty eu-agent-empty-compact">'
+        '<div class="eu-agent-empty eu-agent-empty-compact eu-agent-empty-simple">'
         '<div class="eu-agent-empty-glyph" aria-hidden="true">'
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
         'stroke-linecap="round" stroke-linejoin="round">'
@@ -3955,9 +4196,15 @@ def _workbench_empty_html(lang: str) -> str:
         '<rect x="14" y="14" width="7" height="7" rx="1"/>'
         '</svg>'
         '</div>'
-        f'<h2>{_T(lang, "No active run", "暂无当前运行")}</h2>'
-        f'<p>{_T(lang, "Open Setup or choose a saved manifest.", "打开配置页，或选择本机保存的 manifest。")}</p>'
-        f'<small>{_T(lang, "The structure above is a locked preview only. The Workbench fills with real evidence-bound artifacts after you run an analysis or choose a local manifest.", "上方只是锁定的结构预览。只有启动分析或选择本机 manifest 后，工作台才会填充真实、证据绑定的产物。")}</small>'
+        f'<span class="eu-pill">{_T(lang, "No active run", "暂无当前运行")}</span>'
+        f'<h2>{_T(lang, "Start with one research question", "先从一个研究问题开始")}</h2>'
+        f'<p>{_T(lang, "Open Setup to launch an auditable run, or choose a saved local manifest from History.", "打开配置启动可审计运行，或从历史记录选择本机保存的 manifest。")}</p>'
+        '<div class="eu-agent-empty-path">'
+        f'<span>{_T(lang, "Setup", "配置")}</span>'
+        f'<span>{_T(lang, "Run", "运行")}</span>'
+        f'<span>{_T(lang, "Review", "复核")}</span>'
+        '</div>'
+        f'<small>{_T(lang, "No token use or upload happens from this empty state. Local run history stays on this machine.", "空状态不会使用 token 或上传数据。本机运行历史只保留在这台机器上。")}</small>'
         '</div>'
     )
 
@@ -4179,20 +4426,20 @@ def _workbench_action_panel_html(state: dict[str, Any], lang: str) -> str:
     panel = st.session_state.get("_eu_wb_action_panel")
     if not panel:
         return ""
-    if panel == "summary":
+    if panel in {"evidence", "summary"}:
         audit = state.get("audit") if isinstance(state.get("audit"), dict) else {}
         counts = audit.get("counts") if isinstance(audit.get("counts"), dict) else {}
         active = state.get("active_step") if isinstance(state.get("active_step"), dict) else {}
-        outputs = [o for o in state.get("summary_outputs", []) if isinstance(o, dict)]
-        output_html = "".join(
-            '<div>'
-            f'<span>{_esc(o.get("kind", ""))}</span>'
-            f'<b>{_esc(o.get("title", ""))}</b>'
-            f'<small>{_esc(o.get("sub", ""))}</small>'
-            '</div>'
-            for o in outputs[:4]
-        )
+        results = [r for r in state.get("results", []) if isinstance(r, dict)]
         evidence = [e for e in state.get("evidence", []) if isinstance(e, dict)]
+        result_html = "".join(
+            '<div>'
+            f'<span>{_esc(r.get("kind", ""))}</span>'
+            f'<b>{_esc(r.get("title", ""))}</b>'
+            f'<small>{_esc(r.get("sub") or r.get("metric") or "")}</small>'
+            '</div>'
+            for r in results[:2]
+        )
         evidence_html = "".join(
             '<div>'
             f'<span>{_esc(e.get("tag", ""))}</span>'
@@ -4201,19 +4448,37 @@ def _workbench_action_panel_html(state: dict[str, Any], lang: str) -> str:
             '</div>'
             for e in evidence[:4]
         )
+        snapshot_html = result_html + evidence_html
+        if not snapshot_html:
+            snapshot_html = (
+                '<div>'
+                f'<span>{_T(lang, "No selected-step evidence", "当前步骤暂无证据")}</span>'
+                f'<b>{_T(lang, "Open full audit trail", "打开完整审计链")}</b>'
+                f'<small>{_T(lang, "Choose another review step or open the full inspector.", "切换复核步骤，或打开完整检查区。")}</small>'
+                '</div>'
+            )
+        step_label = active.get("label") or state.get("label") or state.get("title") or _T(lang, "Selected step", "当前步骤")
+        hint = _T(
+            lang,
+            "This is a short selected-step snapshot. Open the full audit trail for downloads, provenance, code, and audit actions.",
+            "这里是当前步骤的轻量快照；下载、溯源、代码和审计动作请打开完整审计链。",
+        )
+        evidence_count_label = _T(
+            lang,
+            f"{len(evidence)} evidence · {len(results)} result(s)",
+            f"{len(evidence)} 条证据 · {len(results)} 个结果",
+        )
         return (
             '<div class="eu-wb-action-panel">'
-            f'<b>{_T(lang, "Run summary", "运行摘要")}</b>'
+            f'<b>{_T(lang, "Evidence snapshot", "证据快照")}</b>'
             f'<span class="mono">{_esc(state.get("run_id", ""))}</span>'
-            f'<p>{_esc(state.get("subtitle", ""))}</p>'
+            f'<p>{_esc(hint)}</p>'
             '<div class="eu-wb-action-grid">'
-            f'<div><span>{_T(lang, "Source", "来源")}</span><b>{_esc(state.get("source_label", ""))}</b></div>'
-            f'<div><span>{_T(lang, "Active step", "当前步骤")}</span><b>{_esc(active.get("label", ""))}</b></div>'
+            f'<div><span>{_T(lang, "Step", "步骤")}</span><b>{_esc(_compact_label(step_label, max_len=44))}</b></div>'
+            f'<div><span>{_T(lang, "Evidence shown", "已显示证据")}</span><b>{_esc(evidence_count_label)}</b></div>'
             f'<div><span>{_T(lang, "Findings", "发现")}</span><b>{int(counts.get("errors") or 0)} error(s) · {int(counts.get("warnings") or 0)} warning(s)</b></div>'
             '</div>'
-            f'<div class="eu-wb-manifest-mini">{output_html}</div>'
-            f'<div class="eu-wb-manifest-mini">{evidence_html}</div>'
-            f'{_step_contract_html(state, lang)}'
+            f'<div class="eu-wb-snapshot-list">{snapshot_html}</div>'
             '</div>'
         )
     if panel == "plan":
@@ -4822,7 +5087,13 @@ def _step_review_html(active_state: dict[str, Any], full_state: dict[str, Any], 
     )
 
 
-def _render_code_panel_tabs(active_state: dict[str, Any], full_state: dict[str, Any], lang: str) -> None:
+def _render_code_panel_tabs(
+    active_state: dict[str, Any],
+    full_state: dict[str, Any],
+    lang: str,
+    *,
+    include_review: bool = True,
+) -> None:
     """Replace the static 4-tab HTML strip in _live_code_html with real st.tabs.
 
     Item 2 of the workbench wiring audit (2026-05-25).
@@ -4830,26 +5101,31 @@ def _render_code_panel_tabs(active_state: dict[str, Any], full_state: dict[str, 
     trace = active_state.get("trace") or []
     err_trace = [t for t in trace if t.get("level") in {"err", "warn"}]
     steps = [s for s in full_state.get("steps", []) if isinstance(s, dict)]
-    tab_labels = [
-        f"{_T(lang, 'Review', '复核')}",
+    tab_labels = []
+    if include_review:
+        tab_labels.append(f"{_T(lang, 'Review', '复核')}")
+    tab_labels.extend([
         f"{_T(lang, 'Activity', '活动')} · {len(trace)}",
         f"{_T(lang, 'Script', '脚本')}",
         f"{_T(lang, 'Issues', '问题')} · {len(err_trace)}",
         f"{_T(lang, 'All steps', '全部步骤')} · {len(steps)}",
-    ]
+    ])
     tabs = st.tabs(tab_labels)
-    with tabs[0]:
-        st.markdown(_step_review_html(active_state, full_state, lang), unsafe_allow_html=True)
-    with tabs[1]:
+    tab_index = 0
+    if include_review:
+        with tabs[tab_index]:
+            st.markdown(_step_review_html(active_state, full_state, lang), unsafe_allow_html=True)
+        tab_index += 1
+    with tabs[tab_index]:
         st.markdown(_live_trace_block_html(trace, lang), unsafe_allow_html=True)
-    with tabs[2]:
+    with tabs[tab_index + 1]:
         st.markdown(_live_code_only_html(active_state, lang), unsafe_allow_html=True)
-    with tabs[3]:
+    with tabs[tab_index + 2]:
         st.markdown(
             _live_trace_block_html(trace, lang, level_filter={"err", "warn"}),
             unsafe_allow_html=True,
         )
-    with tabs[4]:
+    with tabs[tab_index + 3]:
         st.markdown(_live_history_block_html(full_state, lang), unsafe_allow_html=True)
 
 
@@ -5142,8 +5418,8 @@ def _render_audit_actions(state: dict[str, Any], lang: str, select_key: str) -> 
             key=f"_eu_wb_finding_show_all_{select_key}_{total}",
             help=_T(
                 lang,
-                "The first pass shows a compact queue so the Workbench stays responsive.",
-                "默认只显示紧凑队列，避免工作台展开后过慢。",
+                "The first pass shows a compact queue so the Review page stays responsive.",
+                "默认只显示紧凑队列，避免复核页展开后过慢。",
             ),
         )
         if not show_all:
@@ -5229,6 +5505,72 @@ def _render_audit_actions(state: dict[str, Any], lang: str, select_key: str) -> 
         st.rerun()
 
 
+def _render_workbench_primary_actions(
+    state: dict[str, Any],
+    active_state: dict[str, Any],
+    lang: str,
+) -> None:
+    """Render the three Workbench actions as the first interactive surface."""
+    with st.container(key="_eu_wb_primary_actions"):
+        c1, c2, c3 = st.columns([1, 1, 1], gap="small")
+        with c1:
+            if st.button(
+                _T(lang, "See evidence", "查看证据"),
+                key="_eu_wb_see_evidence",
+                use_container_width=True,
+            ):
+                st.session_state["_eu_wb_action_panel"] = "evidence"
+                st.session_state["_active_main_page"] = "research_agent"
+                st.session_state["_ra_view"] = "workbench"
+                st.rerun()
+        with c2:
+            if st.button(
+                _T(lang, "Review & sign off", "复核并签字"),
+                key="_eu_wb_review_signoff",
+                use_container_width=True,
+            ):
+                st.session_state["_active_main_page"] = "research_agent"
+                st.session_state["_ra_view"] = "summary"
+                st.rerun()
+        with c3:
+            if st.button(
+                _T(lang, "Request re-run", "请求重跑"),
+                key="_eu_wb_request_rerun",
+                use_container_width=True,
+                help=_T(
+                    lang,
+                    "Open Setup in checkpoint-resume mode for this run.",
+                    "使用该 run 打开配置页的 checkpoint 续跑模式。",
+                ),
+            ):
+                _prime_workbench_request_rerun_setup(st.session_state, state)
+                st.rerun()
+        panel_html = _workbench_action_panel_html(active_state, lang)
+        if panel_html:
+            st.markdown(panel_html, unsafe_allow_html=True)
+
+
+def _render_workbench_technical_details_gate(lang: str) -> None:
+    """Keep the full inspector available without making it part of the default path."""
+    if st.session_state.get(_REVIEW_DETAILS_EXPANDED_KEY):
+        if st.button(
+            _T(lang, "Hide full audit trail", "收起完整审计链"),
+            key=_TECHNICAL_DETAILS_HIDE_KEY,
+        ):
+            st.session_state[_REVIEW_DETAILS_EXPANDED_KEY] = False
+            st.session_state[_DETAIL_ADVANCED_KEY] = False
+            st.rerun()
+        return
+    if st.button(
+        _T(lang, "Full audit trail", "完整审计链"),
+        key=_TECHNICAL_DETAILS_BUTTON_KEY,
+    ):
+        st.session_state[_REVIEW_DETAILS_EXPANDED_KEY] = True
+        st.session_state["_active_main_page"] = "research_agent"
+        st.session_state["_ra_view"] = "workbench"
+        st.rerun()
+
+
 # ---------------------------------------------------------------------
 # Public entrypoint
 # ---------------------------------------------------------------------
@@ -5281,40 +5623,14 @@ def render_agent_workbench(lang: str, *, show_header: bool = True) -> None:
         )
 
     st.markdown(_agent_reference_workbench_html(state, lang), unsafe_allow_html=True)
+    _render_workbench_primary_actions(state, active_state, lang)
 
     details_expanded = bool(st.session_state.get(_REVIEW_DETAILS_EXPANDED_KEY))
-    with st.expander(_T(lang, "Review details", "复核详情"), expanded=details_expanded):
-        c1, c2, c3 = st.columns([1, 1, 1], gap="small")
-        with c1:
-            if st.button(_T(lang, "Summary", "摘要"), key="_eu_wb_summary", use_container_width=True):
-                st.session_state["_active_main_page"] = "research_agent"
-                st.session_state["_ra_view"] = "summary"
-                st.rerun()
-        with c2:
-            if st.button(
-                _T(lang, "Run setup", "运行配置"),
-                key="_eu_wb_run_controls",
-                use_container_width=True,
-                help=_T(
-                    lang,
-                    "Open Setup, where live runs are configured and launched.",
-                    "打开配置页；实时 run 在那里配置和启动。",
-                ),
-            ):
-                st.session_state["_active_main_page"] = "research_agent"
-                st.session_state["_ra_view"] = "setup"
-                st.rerun()
-        with c3:
-            if st.button(
-                _T(lang, "Contract", "契约"),
-                key="_eu_wb_adjust",
-                use_container_width=True,
-            ):
-                st.session_state["_eu_wb_action_panel"] = "plan"
-        panel_html = _workbench_action_panel_html(active_state, lang)
-        if panel_html:
-            st.markdown(panel_html, unsafe_allow_html=True)
+    _render_workbench_technical_details_gate(lang)
+    if not details_expanded:
+        return
 
+    with st.expander(_T(lang, "Full audit trail", "完整审计链"), expanded=True):
         with st.container(border=True):
             selected_idx = _render_process_graph_controls(
                 state,
@@ -5323,34 +5639,43 @@ def render_agent_workbench(lang: str, *, show_header: bool = True) -> None:
                 select_key=select_key,
             )
         active_state = _state_for_selected_step(state, selected_idx)
-        col_c, col_r = st.columns([1.75, 1], gap="medium")
-        with col_c:
+        st.markdown(_step_review_html(active_state, state, lang), unsafe_allow_html=True)
+        st.markdown(
+            '<div class="eu-agent-panel eu-wb-selected-evidence" style="padding:0;overflow:hidden;max-height:520px;overflow-y:auto">'
+            + _result_evidence_html(active_state, lang)
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+        # Items 1 + 5: real drill-down actions for the selected-step cards.
+        _render_evidence_drilldown(active_state, lang, key_suffix=str(selected_idx))
+        _render_result_downloads(active_state, lang)
+
+        show_advanced = st.toggle(
+            _T(lang, "Advanced step inspector", "高级步骤检查器"),
+            key=_DETAIL_ADVANCED_KEY,
+            help=_T(
+                lang,
+                "Show code, activity traces, run timeline, and finding review actions.",
+                "显示代码、活动轨迹、运行时间线和 finding 复核动作。",
+            ),
+        )
+        if show_advanced:
             # Item 2 of the workbench wire-up audit: real st.tabs instead of
             # the decorative 4-tab <div> strip that lived inside _live_code_html.
             with st.container(border=True):
-                _render_code_panel_tabs(active_state, state, lang)
-        with col_r:
+                _render_code_panel_tabs(active_state, state, lang, include_review=False)
+
             st.markdown(
-                '<div class="eu-agent-panel" style="padding:0;overflow:hidden;max-height:620px;overflow-y:auto">'
-                + _result_evidence_html(active_state, lang)
-                + '</div>',
+                '<div class="eu-agent-timeline">' + _state_track_html(state, lang) + '</div>',
                 unsafe_allow_html=True,
             )
-            # Items 1 + 5: real drill-down actions for the right-column cards.
-            _render_evidence_drilldown(active_state, lang, key_suffix=str(selected_idx))
-            _render_result_downloads(active_state, lang)
+            _render_timeline_jump(state, lang, select_key)
 
-        st.markdown(
-            '<div class="eu-agent-timeline">' + _state_track_html(state, lang) + '</div>',
-            unsafe_allow_html=True,
-        )
-        _render_timeline_jump(state, lang, select_key)
-
-        audit_html = _audit_review_html(state, lang)
-        if audit_html:
-            st.markdown(audit_html, unsafe_allow_html=True)
-            # Item 4: real Open-step + Mark-reviewed actions per finding.
-            _render_audit_actions(state, lang, select_key)
+            audit_html = _audit_review_html(state, lang)
+            if audit_html:
+                st.markdown(audit_html, unsafe_allow_html=True)
+                # Item 4: real Open-step + Mark-reviewed actions per finding.
+                _render_audit_actions(state, lang, select_key)
 
 
 def render_agent_live_workbench(lang: str) -> None:
@@ -5372,7 +5697,7 @@ def render_agent_live_workbench(lang: str) -> None:
     )
     st.markdown(
         cc.render_design_page_header(
-            kicker=_T(lang, "Live Workbench", "实时工作台"),
+            kicker=_T(lang, "Live Review", "实时复核"),
             title_en=state.get("title", "Research Agent"),
             title_zh=state.get("title", "研究智能体"),
             desc=state.get("subtitle", ""),
