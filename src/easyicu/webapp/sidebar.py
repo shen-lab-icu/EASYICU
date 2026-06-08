@@ -1189,8 +1189,14 @@ def _agent_state_summary_html(entry_mode: str, lang: str) -> str:
             ("Cohort" if lang == "en" else "队列"),
             cohort_value,
         ),
-        ("Last run" if lang == "en" else "最近运行", run_id),
     ]
+    if run_id_raw or not setup_view:
+        rows.append(("Last run" if lang == "en" else "最近运行", run_id))
+    else:
+        rows.append((
+            "Next" if lang == "en" else "下一步",
+            "Request -> Data -> Gate" if lang == "en" else "请求 -> 数据 -> 关口",
+        ))
     row_html = "".join(
         '<div class="eu-context-row">'
         f'<span>{html.escape(label)}</span>'
@@ -1210,16 +1216,26 @@ def _agent_state_summary_html(entry_mode: str, lang: str) -> str:
         '</div>'
         for icon_name, label in guarantees
     )
+    guarantee_summary = (
+        "Local-first run" if lang == "en" else "本地优先运行"
+    )
+    guarantee_hint = (
+        "evidence-gated" if lang == "en" else "证据关口"
+    )
     return (
         '<div class="eu-section-label eu-context-label eu-agent-state-label">'
         f'<span>{html.escape("Agent state" if lang == "en" else "Agent 状态")}</span>'
         f'<span class="eu-agent-state-pill {status_class}"><span></span>{html.escape(status_label)}</span>'
         '</div>'
         f'<div class="eu-context-card eu-agent-state-card">{row_html}</div>'
-        '<div class="eu-agent-guarantees">'
-        f'<div class="eu-agent-guarantees-title">{html.escape("Guarantees" if lang == "en" else "保障")}</div>'
+        '<details class="eu-agent-guarantees">'
+        '<summary>'
+        f'<span>{_icon("shield")}</span>'
+        f'<b>{html.escape(guarantee_summary)}</b>'
+        f'<em>{html.escape(guarantee_hint)}</em>'
+        '</summary>'
         f'{guarantee_html}'
-        '</div>'
+        '</details>'
     )
 
 
@@ -4038,6 +4054,67 @@ def _default_concept_groups(concept_groups: dict[str, list[str]]) -> list[str]:
     return defaults or list(concept_groups.keys())[:4]
 
 
+_DESIGN_CORE_GROUP_KEYS = {
+    "demographics",
+    "vitals",
+    "blood_gas",
+    "chemistry",
+    "hematology",
+    "sofa2_score",
+    "sofa1_score",
+    "sepsis3_sofa2",
+    "sepsis3_sofa1",
+    "sepsis_shared",
+    "outcome",
+}
+
+_DESIGN_CORE_LABEL_TOKENS = (
+    "demographic",
+    "vital",
+    "lab",
+    "chemistry",
+    "hematology",
+    "blood gas",
+    "fluid",
+    "sofa",
+    "sepsis-3",
+    "sepsis shared",
+    "outcome",
+    "人口",
+    "生命体征",
+    "实验室",
+    "血气",
+    "生化",
+    "血液",
+    "评分",
+    "结局",
+)
+
+
+def _core_concept_groups_for_design(concept_groups: dict[str, list[str]]) -> list[str]:
+    """Map the polish Step 3 "Reset to core" action onto the local concept catalog."""
+    core_groups: list[str] = []
+    for group_name in concept_groups:
+        key = str(group_name).strip()
+        label_en = _module_display_name(key, "en").lower()
+        label_zh = _module_display_name(key, "zh").lower()
+        raw = key.lower().replace("-", "_").replace(" ", "_")
+        if raw in _DESIGN_CORE_GROUP_KEYS or any(
+            token in label_en or token in label_zh or token in key.lower()
+            for token in _DESIGN_CORE_LABEL_TOKENS
+        ):
+            if "respiratory" in label_en and "sofa" not in label_en:
+                continue
+            if "ventilat" in label_en:
+                continue
+            if "aki" in label_en or "renal" in label_en or "肾" in label_zh:
+                continue
+            if "vasopressor" in label_en or "medication" in label_en:
+                continue
+            core_groups.append(group_name)
+    return core_groups or _default_concept_groups(concept_groups)
+
+
 def _all_concept_groups(concept_groups: dict[str, list[str]]) -> list[str]:
     """Return every concept group in display order."""
     return list(concept_groups.keys())
@@ -4195,24 +4272,24 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
                 st.rerun()
         with rec_col:
             if st.button(
-                "Recommended" if lang == "en" else "推荐",
-                key="concept_recommended_design",
+                "Reset to core" if lang == "en" else "恢复核心",
+                key="concept_reset_core_design",
                 use_container_width=True,
             ):
-                _reset_concepts_to_groups(concept_groups, _default_concept_groups(concept_groups))
+                _reset_concepts_to_groups(concept_groups, _core_concept_groups_for_design(concept_groups))
                 st.rerun()
     selected_concepts = _collect_selected_concepts(concept_groups)
     st.session_state.selected_concepts = selected_concepts
     selected_groups_now = [g for g in st.session_state.get("selected_groups", []) if g in concept_groups]
     all_groups = _all_concept_groups(concept_groups)
-    recommended_groups = _default_concept_groups(concept_groups)
+    core_groups = _core_concept_groups_for_design(concept_groups)
     selected_group_set = set(selected_groups_now)
     if not selected_groups_now:
         selection_mode = "none" if lang == "en" else "未选择"
     elif selected_group_set == set(all_groups):
         selection_mode = "all" if lang == "en" else "全选"
-    elif selected_group_set == set(recommended_groups):
-        selection_mode = "recommended" if lang == "en" else "推荐"
+    elif selected_group_set == set(core_groups):
+        selection_mode = "core" if lang == "en" else "核心"
     else:
         selection_mode = "custom" if lang == "en" else "自定义"
     selection_summary = (
