@@ -13,7 +13,17 @@ import numpy as np
 import pandas as pd
 
 from easyicu.sofa2 import sofa2_score
+from easyicu.scores import sirs_score, qsofa_score, news_score, mews_score
 from easyicu.data_quality import composite_score_completeness
+
+
+def _ts(name, values, ids=(1, 2, 3), t="2020-01-01"):
+    """Single-timepoint per-patient input frame for an early-warning score."""
+    return pd.DataFrame({
+        "stay_id": list(ids),
+        "charttime": [pd.Timestamp(t)] * len(ids),
+        name: list(values),
+    })
 
 _COMPS = [
     "sofa2_resp", "sofa2_coag", "sofa2_liver",
@@ -82,3 +92,77 @@ def test_composite_score_completeness_accepts_precomputed_count():
     assert rep["n_low_completeness"] == 1
     assert rep["frac_low_completeness"] == 1 / 3
     assert rep["n_complete_components"] == 2
+
+
+# --- Early-warning scores: outcome-blind completeness signal (SIRS/qSOFA/NEWS/MEWS).
+# Each score coalesces an unmeasured component to 0, so an all-missing row scores 0
+# just like a fully-measured negative; the *_n_components column tells them apart
+# without changing the score. Per-patient single timepoint keeps LOCF/windowing trivial.
+
+def test_sirs_score_emits_outcome_blind_component_count():
+    out = sirs_score(
+        temp=_ts("temp", [37, 39, np.nan]),
+        hr=_ts("hr", [100, np.nan, np.nan]),
+        resp=_ts("resp", [25, np.nan, np.nan]),
+        wbc=_ts("wbc", [15, np.nan, np.nan]),
+        pco2=_ts("pco2", [30, np.nan, np.nan]),
+        bnd=_ts("bnd", [12, np.nan, np.nan]),
+        id_cols=["stay_id"], index_col="charttime",
+    ).set_index("stay_id")
+    # 4 components: temp, hr, (resp|pco2), (wbc|bnd)
+    assert out.loc[1, "sirs_n_components"] == 4
+    assert out.loc[2, "sirs_n_components"] == 1
+    assert out.loc[3, "sirs_n_components"] == 0
+    # score unchanged: missing -> 0
+    assert out.loc[1, "sirs"] == 3   # hr>90, resp>20, wbc>12
+    assert out.loc[2, "sirs"] == 1   # temp 39 only
+    assert out.loc[3, "sirs"] == 0
+
+
+def test_qsofa_score_emits_outcome_blind_component_count():
+    out = qsofa_score(
+        gcs=_ts("gcs", [10, 15, np.nan]),
+        sbp=_ts("sbp", [90, np.nan, np.nan]),
+        resp=_ts("resp", [25, np.nan, np.nan]),
+        id_cols=["stay_id"], index_col="charttime",
+    ).set_index("stay_id")
+    assert out.loc[1, "qsofa_n_components"] == 3
+    assert out.loc[2, "qsofa_n_components"] == 1   # gcs measured (but 15 -> 0pt)
+    assert out.loc[3, "qsofa_n_components"] == 0
+    assert out.loc[1, "qsofa"] == 3
+    assert out.loc[2, "qsofa"] == 0
+    assert out.loc[3, "qsofa"] == 0
+
+
+def test_news_score_completeness_excludes_defaulted_supp_o2():
+    out = news_score(
+        hr=_ts("hr", [80, np.nan, np.nan]),
+        avpu=_ts("avpu", ["A", np.nan, np.nan]),
+        supp_o2=_ts("supp_o2", [True, np.nan, np.nan]),
+        o2sat=_ts("o2sat", [98, np.nan, np.nan]),
+        temp=_ts("temp", [37, 36.5, np.nan]),
+        sbp=_ts("sbp", [120, np.nan, np.nan]),
+        resp=_ts("resp", [18, np.nan, np.nan]),
+        id_cols=["stay_id"], index_col="charttime",
+    ).set_index("stay_id")
+    # 6 measured physiological components; supp_o2 excluded (defaults to False)
+    assert out.loc[1, "news_n_components"] == 6
+    assert out.loc[2, "news_n_components"] == 1   # temp only
+    assert out.loc[3, "news_n_components"] == 0
+    # all-missing row scores 0 like a fully-measured normal patient
+    assert out.loc[3, "news"] == 0
+
+
+def test_mews_score_emits_outcome_blind_component_count():
+    out = mews_score(
+        hr=_ts("hr", [80, np.nan, np.nan]),
+        avpu=_ts("avpu", ["A", np.nan, np.nan]),
+        temp=_ts("temp", [37, 36.5, np.nan]),
+        sbp=_ts("sbp", [120, np.nan, np.nan]),
+        resp=_ts("resp", [18, np.nan, np.nan]),
+        id_cols=["stay_id"], index_col="charttime",
+    ).set_index("stay_id")
+    assert out.loc[1, "mews_n_components"] == 5
+    assert out.loc[2, "mews_n_components"] == 1   # temp only
+    assert out.loc[3, "mews_n_components"] == 0
+    assert out.loc[3, "mews"] == 0
