@@ -2430,9 +2430,13 @@ def locf(
                     if col not in existing_id_cols and col != index_col:
                         group[col] = group.groupby(gap_groups)[col].ffill()
             else:
-                # Simple forward fill
+                # Simple forward fill. Sort by time first when an index is given
+                # so LOCF propagates in chronological order even if the caller
+                # passed unsorted rows (consistent with the max_gap branch above).
+                if index_col is not None and index_col in group.columns:
+                    group = group.sort_values(index_col)
                 group = group.ffill()
-            
+
             return group
         
         # 🔧 FIX pandas 3.0: groupby().apply() drops group columns
@@ -2453,8 +2457,10 @@ def locf(
                 if col != index_col:
                     data[col] = data.groupby(gap_groups)[col].ffill()
         else:
+            if index_col is not None and index_col in data.columns:
+                data = data.sort_values(index_col)
             data = data.ffill()
-    
+
     return data
 
 def locb(
@@ -2505,9 +2511,13 @@ def locb(
                     if col not in existing_id_cols and col != index_col:
                         group[col] = group.groupby(gap_groups)[col].bfill()
             else:
-                # Simple backward fill
+                # Simple backward fill. Sort by time first when an index is given
+                # so LOCB propagates in chronological order even if the caller
+                # passed unsorted rows (consistent with the max_gap branch above).
+                if index_col is not None and index_col in group.columns:
+                    group = group.sort_values(index_col)
                 group = group.bfill()
-            
+
             return group
         
         # 🔧 FIX pandas 3.0: groupby().apply() drops group columns
@@ -2528,8 +2538,10 @@ def locb(
                 if col != index_col:
                     data[col] = data.groupby(gap_groups)[col].bfill()
         else:
+            if index_col is not None and index_col in data.columns:
+                data = data.sort_values(index_col)
             data = data.bfill()
-    
+
     return data
 
 def calc_dur(
