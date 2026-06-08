@@ -3510,9 +3510,11 @@ def _render_entry_cards_layout(lang: str, data_mode: str, is_demo_mode: bool) ->
 
 def render_entry_redesign_page(lang: str) -> None:
     """Render the co-equal Copilot / Classic Entry screen from the design."""
-    data_mode = str(st.session_state.get("_eu_entry_copilot_data_mode") or "demo")
+    # real-data first: default the entry to real so the brand line, the Copilot
+    # note, and the Classic card footer ("Real data · local-only") all agree.
+    data_mode = str(st.session_state.get("_eu_entry_copilot_data_mode") or "real")
     if data_mode not in {"demo", "real"}:
-        data_mode = "demo"
+        data_mode = "real"
     is_demo_mode = data_mode == "demo"
     home_layout = _entry_home_layout(st.session_state)
 
@@ -3576,7 +3578,7 @@ def render_entry_redesign_page(lang: str) -> None:
     starter_prompts = [
         (
             "predict",
-            _T(lang, "Model outcome", "建模结局"),
+            _T(lang, "Predict mortality", "预测死亡"),
             _T(
                 lang,
                 "Start a guided ICU outcome study. Help me frame the question first; do not choose data source, cohort, or modules for me yet.",
@@ -3646,8 +3648,8 @@ def render_entry_redesign_page(lang: str) -> None:
                         key="_eu_entry_copilot_question",
                         placeholder=_T(
                             lang,
-                            "e.g. I want to study ICU AKI risk, mortality, treatment exposure, database differences, or patient subgroups.",
-                            "例如：我想研究 ICU 患者的 AKI 风险、死亡结局、治疗暴露、数据库差异或患者分群。",
+                            "e.g. Among Sepsis-3 patients, does early lactate predict in-hospital mortality, and does adding it to SOFA improve the model?",
+                            "例如：在 Sepsis-3 患者中，早期乳酸能否预测院内死亡？把它加入 SOFA 能否改善模型？",
                         ),
                         label_visibility="collapsed",
                         height=132,

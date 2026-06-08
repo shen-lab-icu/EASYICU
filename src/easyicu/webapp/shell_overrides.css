@@ -10914,13 +10914,13 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   width: 34px !important;
   min-width: 34px !important;
   border-radius: var(--r-2) !important;
-  background-color: var(--accent) !important;
+  background-color: var(--ink) !important;
   background-image: url("data:image/svg+xml,%3Csvg%20width='26'%20height='26'%20viewBox='0%200%2024%2024'%20fill='none'%20xmlns='http://www.w3.org/2000/svg'%3E%3Cpath%20d='M5%2012h13M13%206l6%206-6%206'%20stroke='%23ffffff'%20stroke-width='2.8'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E") !important;
   background-repeat: no-repeat !important;
   background-position: center !important;
   background-size: 18px 18px !important;
   color: var(--surface) !important;
-  border: 1px solid var(--accent-border) !important;
+  border: 1px solid var(--ink) !important;
   box-shadow: 0 1px 2px rgba(14, 17, 22, .08) !important;
   font-size: 18px !important;
   font-weight: 600 !important;
@@ -11608,9 +11608,18 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 }
 .stApp div.st-key-ai_assistant_page_panel [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
   flex-direction: row-reverse !important;
+  justify-content: flex-start !important;
 }
 .stApp div.st-key-ai_assistant_page_panel [data-testid="stChatMessage"]:has([aria-label="Chat message from user"]) {
   flex-direction: row-reverse !important;
+  justify-content: flex-start !important;
+}
+/* user bubble: dark, right-aligned, sized to content (design parity) */
+.stApp div.st-key-ai_assistant_page_panel [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"],
+.stApp div.st-key-ai_assistant_page_panel [data-testid="stChatMessage"]:has([aria-label="Chat message from user"]) [data-testid="stChatMessageContent"] {
+  flex: 0 1 auto !important;
+  width: fit-content !important;
+  max-width: 78% !important;
 }
 .stApp div.st-key-ai_assistant_page_panel [data-testid="stChatMessageAvatarUser"],
 .stApp div.st-key-ai_assistant_page_panel [data-testid="stChatMessageAvatarAssistant"],
@@ -15252,9 +15261,38 @@ body ::-moz-selection,
   font-style: normal;
   line-height: 1.15;
 }
+/* The copilot page should fill the full viewport. Streamlit's main block container
+   sizes to content by default (and the newer stLayoutWrapper layers don't stretch),
+   which left a blank strip below the page. Force the container chain to full height,
+   scoped to the copilot page so every other page is untouched. */
+.stMain:has(.eu-copilot-page-marker) [data-testid="stMainBlockContainer"] {
+  height: 100% !important;
+  min-height: 100% !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+.stMain:has(.eu-copilot-page-marker) [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"],
+.stMain:has(.eu-copilot-page-marker) [data-testid="stMainBlockContainer"] [data-testid="stLayoutWrapper"]:has(> div.st-key-ai_assistant_page_panel),
+.stMain:has(.eu-copilot-page-marker) div.st-key-ai_assistant_page_panel {
+  height: 100% !important;
+  min-height: 0 !important;
+}
+/* Inside the (now full-height) panel, the stLayoutWrapper holding the guided shell
+   defaults to flex:0 1 auto and stayed at content height, so the shell still stopped
+   short of the viewport. Let that wrapper grow; keep the top bar fixed. */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) > [data-testid="stLayoutWrapper"]:has(> [class*="st-key-eu_copilot_guided_shell"]) {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) > [data-testid="stLayoutWrapper"]:has(> [class*="st-key-eu_copilot_guided_top"]) {
+  flex: 0 0 auto !important;
+}
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] {
-  --copilot-content-max: 960px;
-  --copilot-user-message-max: 640px;
+  --copilot-content-max: 768px;
+  --copilot-user-message-max: 560px;
   width: 100% !important;
   margin: 0 !important;
   padding: 0 !important;
@@ -15300,6 +15338,21 @@ body ::-moz-selection,
   height: 100% !important;
   min-height: 0 !important;
 }
+/* A newer Streamlit version inserts an intermediate <stLayoutWrapper> between the
+   column's vertical block and our rail/shell containers. It defaults to
+   flex:0 1 auto and collapses to content height, so the chat+composer column and
+   the left rail stopped filling the viewport (composer floated mid-page with a
+   large blank below). Make the layout wrappers that hold a rail/shell stretch. */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] > [data-testid="stLayoutWrapper"]:has(> [data-testid="stHorizontalBlock"]),
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stLayoutWrapper"]:has(> [class*="st-key-eu_copilot_conversation_shell"]),
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stLayoutWrapper"]:has(> [class*="st-key-eu_copilot_left_rail"]),
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stLayoutWrapper"]:has(> [class*="st-key-eu_copilot_right_rail"]) {
+  flex: 1 1 auto !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_copilot_left_rail"]) > [data-testid="stColumn"] > [data-testid="stVerticalBlockBorderWrapper"],
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_copilot_left_rail"]) > [data-testid="stColumn"] > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"],
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_copilot_left_rail"]) > [data-testid="stColumn"] > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"] > [data-testid="stVerticalBlockBorderWrapper"] {
@@ -15344,6 +15397,22 @@ body ::-moz-selection,
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_conversation_shell"] > [data-testid="stVerticalBlockBorderWrapper"]:has([class*="st-key-_llm_ai_page_workspace_composer_wrap"]) {
   flex: none !important;
+  min-height: 0 !important;
+}
+/* Same stLayoutWrapper insertion happens one level deeper: the chat history is now
+   wrapped in a layout wrapper with a fixed flex-basis, so it can't grow to push the
+   composer to the bottom. Make the history wrapper grow and the composer wrapper stay
+   pinned. */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_conversation_shell"] > [data-testid="stLayoutWrapper"]:has(> [class*="st-key-_llm_ai_page_workspace_history"]) {
+  flex: 1 1 auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_conversation_shell"] > [data-testid="stLayoutWrapper"]:has(> [class*="st-key-_llm_ai_page_workspace_composer_wrap"]) {
+  flex: 0 0 auto !important;
   min-height: 0 !important;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_llm_ai_page_workspace_history"] {
@@ -15413,6 +15482,41 @@ body ::-moz-selection,
   font-weight: 750 !important;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="guided_intent_"] button:hover {
+  border-color: var(--accent-border) !important;
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface)) !important;
+}
+/* Non-blocking fallback prompt actions (route_fallback_*) render outside the
+   guided_intents wrapper, so they showed up as full-width stacked bars. Give them
+   the same compact chip-row treatment. */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stHorizontalBlock"]:has([class*="route_fallback"]) {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stColumn"]:has([class*="route_fallback"]) {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  max-width: none !important;
+  min-width: 0 !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="route_fallback"] button {
+  min-height: 32px !important;
+  height: 32px !important;
+  width: auto !important;
+  padding: 0 17px !important;
+  border-radius: 999px !important;
+  border: 1px solid var(--hair-2) !important;
+  background: color-mix(in srgb, var(--surface) 96%, var(--surface-2)) !important;
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+  box-shadow: none !important;
+  font-size: 12.5px !important;
+  font-weight: 560 !important;
+  white-space: nowrap !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="route_fallback"] button:hover {
   border-color: var(--accent-border) !important;
   background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface)) !important;
 }
@@ -15543,7 +15647,8 @@ body ::-moz-selection,
   max-width: min(var(--copilot-content-max), 92%) !important;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
-  justify-content: flex-end !important;
+  flex-direction: row-reverse !important;
+  justify-content: flex-start !important;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
   max-width: min(var(--copilot-user-message-max), 74%) !important;
@@ -15554,6 +15659,26 @@ body ::-moz-selection,
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stMarkdownContainer"],
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stMarkdownContainer"] * {
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+/* Newer Streamlit marks custom-avatar messages as stChatMessageAvatarCustom, so the
+   user message can no longer be matched via stChatMessageAvatarUser. The rules above
+   silently stopped matching, leaving the user bubble white with white text (invisible).
+   Re-apply the dark user bubble + white text by keying off the stable aria-label. */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stChatMessage"]:has([data-testid="stChatMessageContent"][aria-label="Chat message from user"]) {
+  flex-direction: row-reverse !important;
+  justify-content: flex-start !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stChatMessageContent"][aria-label="Chat message from user"] {
+  max-width: min(var(--copilot-user-message-max), 74%) !important;
+  width: fit-content !important;
+  background: var(--ink) !important;
+  border-color: var(--ink) !important;
+  color: #fff !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stChatMessageContent"][aria-label="Chat message from user"] [data-testid="stMarkdownContainer"],
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stChatMessageContent"][aria-label="Chat message from user"] [data-testid="stMarkdownContainer"] * {
   color: #fff !important;
   -webkit-text-fill-color: #fff !important;
 }
@@ -15625,10 +15750,19 @@ body ::-moz-selection,
   font-weight: 650;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-current {
-  border: 1px solid var(--hair);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 10px 11px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-eyebrow {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-current strong {
   display: block;
@@ -15740,11 +15874,30 @@ body ::-moz-selection,
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_inline_edits"] > [data-testid="stVerticalBlock"] {
   gap: 6px !important;
 }
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_step_controls"] div[data-testid="column"] {
+/* Streamlit renamed the column testid (column -> stColumn); the old override
+   stopped matching, so these action buttons wrapped to full-width stacked bars.
+   Keep them as a compact, content-width, left-aligned button row (reference look). */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_step_controls"] [data-testid="stHorizontalBlock"],
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_inline_edits"] [data-testid="stHorizontalBlock"] {
+  flex-wrap: nowrap !important;
+  justify-content: flex-start !important;
+  gap: 6px !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_step_controls"] [data-testid="stColumn"],
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_inline_edits"] [data-testid="stColumn"],
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_step_controls"] div[data-testid="column"],
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_inline_edits"] div[data-testid="column"] {
+  flex: 0 1 auto !important;
+  width: auto !important;
   min-width: 0 !important;
 }
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_inline_edits"] div[data-testid="column"] {
-  min-width: 0 !important;
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_step_controls"] [data-testid="stColumn"] > div,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_inline_edits"] [data-testid="stColumn"] > div,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_step_controls"] .stButton,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_inline_edits"] .stButton,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_step_controls"] button,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_inline_edits"] button {
+  width: auto !important;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_inline_edits"] button {
   min-height: 32px !important;
@@ -16055,15 +16208,41 @@ body ::-moz-selection,
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_off_"] button,
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_on_"] button {
+  position: relative !important;
   justify-content: flex-start !important;
   width: 100% !important;
-  min-height: 36px !important;
-  padding: 6px 10px !important;
-  border-radius: 7px !important;
+  min-height: 38px !important;
+  padding: 6px 10px 6px 34px !important;
+  border-radius: 8px !important;
   box-shadow: none !important;
   font-size: 12.5px !important;
-  font-weight: 620 !important;
+  font-weight: 560 !important;
   text-align: left !important;
+}
+/* left-align the label inside Streamlit's centering button wrapper */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_off_"] button > div,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_on_"] button > div,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_off_"] button [data-testid="stMarkdownContainer"],
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_on_"] button [data-testid="stMarkdownContainer"],
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_off_"] button p,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_on_"] button p {
+  justify-content: flex-start !important;
+  text-align: left !important;
+  width: 100% !important;
+}
+/* gd-mod checkbox */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_off_"] button::before,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_on_"] button::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1.5px solid var(--hair-3);
+  background: var(--surface);
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_off_"] button {
   border-color: var(--hair-2) !important;
@@ -16076,6 +16255,15 @@ body ::-moz-selection,
   background: #DDF5F8 !important;
   color: #0C4A57 !important;
   -webkit-text-fill-color: #0C4A57 !important;
+}
+/* checked checkbox: accent fill + white tick */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_toggle_on_"] button::before {
+  border-color: var(--accent) !important;
+  background-color: var(--accent) !important;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20fill='none'%20stroke='white'%20stroke-width='3.2'%20stroke-linecap='round'%20stroke-linejoin='round'%20d='M5%2012l5%205%209-10'/%3E%3C/svg%3E") !important;
+  background-size: 11px 11px !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_feature_module_save"] button {
   width: 100% !important;
@@ -16136,23 +16324,55 @@ body ::-moz-selection,
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_rail_classic_workspace"] button {
   justify-content: center !important;
 }
+/* Clean borderless session rows (design parity): dot + title, no boxed card. */
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_session_open_"] button {
-  min-height: 42px !important;
+  position: relative !important;
+  min-height: 30px !important;
   justify-content: flex-start !important;
-  margin-top: 7px !important;
-  padding: 9px 10px !important;
-  border: 1px solid var(--hair-2) !important;
-  border-radius: 7px !important;
-  background: var(--surface) !important;
+  align-items: center !important;
+  margin-top: 1px !important;
+  padding: 6px 10px 6px 24px !important;
+  border: 1px solid transparent !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  box-shadow: none !important;
   color: var(--ink-2) !important;
   -webkit-text-fill-color: var(--ink-2) !important;
-  font-size: 12.25px !important;
-  font-weight: 650 !important;
+  font-size: 12.5px !important;
+  font-weight: 550 !important;
+  line-height: 1.3 !important;
   text-align: left !important;
 }
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_session_open_"] button > div,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_session_open_"] button [data-testid="stMarkdownContainer"],
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_session_open_"] button p {
+  justify-content: flex-start !important;
+  text-align: left !important;
+  width: 100% !important;
+  margin: 0 !important;
+}
+/* the session dot */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_session_open_"] button::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 13px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-4);
+}
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_session_open_"] button:hover {
-  border-color: rgba(20, 104, 119, 0.26) !important;
-  background: rgba(231, 248, 250, 0.64) !important;
+  border-color: transparent !important;
+  background: var(--surface-2) !important;
+}
+/* active session: subtle card + accent dot */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_session_active"] [class*="st-key-_copilot_session_open_"] button {
+  background: var(--surface) !important;
+  border-color: var(--hair) !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_session_active"] [class*="st-key-_copilot_session_open_"] button::before {
+  background: var(--accent);
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_left_rail"] [data-testid="stElementContainer"]:has(.eu-copilot-left-spacer) {
   flex: 1 1 auto !important;
@@ -16193,7 +16413,7 @@ body ::-moz-selection,
   line-height: 1.38;
 }
 .eu-copilot-session-meta {
-  margin: 2px 6px 0 22px;
+  margin: 0 6px 6px 24px;
   overflow: hidden;
   color: var(--ink-4);
   font-size: 10.5px;
@@ -16313,7 +16533,7 @@ body ::-moz-selection,
 [class*="st-key-eu_study_step_list"] {
   flex: 1 1 auto;
   min-height: 0;
-  margin-top: 24px;
+  margin-top: 10px;
   padding: 0 0 12px 0;
   overflow-x: hidden;
   overflow-y: auto;
@@ -16404,9 +16624,14 @@ body ::-moz-selection,
 }
 [class*="st-key-eu_study_step_row_"] {
   position: relative;
-  min-height: 56px;
-  padding: 0 0 14px 42px;
+  min-height: 34px;
+  padding: 0 0 6px 42px;
   color: var(--ink-4);
+}
+/* tighten the stack inside each step row (dot / button / detail) */
+[class*="st-key-eu_study_step_row_"] > [data-testid="stVerticalBlock"],
+[class*="st-key-eu_study_step_row_"] > [data-testid="stVerticalBlockBorderWrapper"] [data-testid="stVerticalBlock"] {
+  gap: 1px !important;
 }
 [class*="st-key-eu_study_step_row_"]:not(:last-child)::after {
   content: "";
@@ -16464,9 +16689,24 @@ body ::-moz-selection,
   box-shadow: none !important;
   color: var(--ink-4) !important;
   -webkit-text-fill-color: var(--ink-4) !important;
-  font-size: 12.75px !important;
-  font-weight: 680 !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
   line-height: 1.35 !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+}
+/* Force the rail step label to sit tight against its dot (was floating centered). */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_study_step_row_"] button,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_study_step_row_"] button > div,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_study_step_row_"] button [data-testid="stMarkdownContainer"] {
+  justify-content: flex-start !important;
+  text-align: left !important;
+  width: 100% !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_study_step_row_"] button p {
+  text-align: left !important;
+  width: 100% !important;
+  margin: 0 !important;
 }
 [class*="st-key-eu_study_step_row_"] button,
 [class*="st-key-eu_study_step_row_"] button * {
@@ -17289,17 +17529,9 @@ body ::-moz-selection,
   opacity: 0 !important;
 }
 
+/* Arrow is drawn by the background-image SVG above; do not add a second one. */
 .stApp [class*="st-key-eu_entry_prompt_controls"] [class*="st-key-_eu_entry_copilot_start"] button::after {
-  content: "→";
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--surface);
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1;
+  content: none !important;
 }
 
 .stApp [class*="st-key-eu_entry_prompt_links"] button,
@@ -17344,6 +17576,18 @@ body ::-moz-selection,
   display: inline-flex !important;
   align-items: center !important;
   gap: 7px !important;
+}
+/* Streamlit's inner button wrapper centers the label; left-align it so the
+   text sits tight next to the icon (was a ~124px gap on the classic rows). */
+.stApp [class*="st-key-_eu_entry_demo"] button > div,
+.stApp [class*="st-key-_eu_entry_classic_visualization"] button > div,
+.stApp [class*="st-key-_eu_entry_classic_agent"] button > div,
+.stApp [class*="st-key-_eu_entry_demo"] button [data-testid="stMarkdownContainer"],
+.stApp [class*="st-key-_eu_entry_classic_visualization"] button [data-testid="stMarkdownContainer"],
+.stApp [class*="st-key-_eu_entry_classic_agent"] button [data-testid="stMarkdownContainer"] {
+  justify-content: flex-start !important;
+  text-align: left !important;
+  width: 100% !important;
 }
 
 .stApp [class*="st-key-_eu_entry_polish_plan"] button::before,
@@ -17459,7 +17703,7 @@ body ::-moz-selection,
 .stApp [class*="st-key-eu_entry_copilot_split_card"],
 .stApp [class*="st-key-eu_entry_classic_split_card"] {
   height: 100% !important;
-  min-height: 373px !important;
+  min-height: 408px !important;
   padding: 15px 16px 16px !important;
   border-radius: var(--r-4) !important;
   border: 1px solid var(--hair-2) !important;
@@ -17626,8 +17870,8 @@ body ::-moz-selection,
   height: 34px !important;
   min-height: 34px !important;
   border-radius: var(--r-2) !important;
-  border: 1px solid var(--accent-border) !important;
-  background-color: var(--accent) !important;
+  border: 1px solid var(--ink) !important;
+  background-color: var(--ink) !important;
   background-image: url("data:image/svg+xml,%3Csvg%20width='26'%20height='26'%20viewBox='0%200%2024%2024'%20fill='none'%20xmlns='http://www.w3.org/2000/svg'%3E%3Cpath%20d='M5%2012h13M13%206l6%206-6%206'%20stroke='%23ffffff'%20stroke-width='2.8'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E") !important;
   background-repeat: no-repeat !important;
   background-position: center !important;
@@ -17636,8 +17880,8 @@ body ::-moz-selection,
 }
 
 .stApp [class*="st-key-eu_entry_col_prompt"] [class*="st-key-_eu_entry_copilot_start"] button:hover {
-  background-color: var(--accent-ink) !important;
-  border-color: var(--accent-ink) !important;
+  background-color: #000 !important;
+  border-color: #000 !important;
   box-shadow: 0 2px 6px rgba(14, 17, 22, .12) !important;
 }
 
@@ -18097,6 +18341,14 @@ body ::-moz-selection,
   background: var(--surface) !important;
   box-shadow: 0 8px 24px rgba(17, 22, 29, 0.025) !important;
 }
+/* This generic bubble rule paints EVERY message white, which buried the user message
+   (white text on white). Keep the assistant bubble light, but restore the dark user
+   bubble — higher specificity + later position so it wins. */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stChatMessage"]:has([aria-label="Chat message from user"]) > div:nth-child(2) {
+  background: var(--ink) !important;
+  border-color: var(--ink) !important;
+  box-shadow: 0 6px 18px rgba(17, 22, 29, 0.10) !important;
+}
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="guided_intents"] {
   padding-top: 14px !important;
 }
@@ -18391,12 +18643,18 @@ body ::-moz-selection,
   overflow: visible !important;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_top_exit"] {
-  right: 210px !important;
+  right: 226px !important;
   width: 92px !important;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_top_classic_workspace"] {
   right: 18px !important;
-  width: 176px !important;
+  width: 200px !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_top_exit"] button p,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_top_classic_workspace"] button p {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_top_exit"] button,
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_top_classic_workspace"] button {
@@ -18537,9 +18795,9 @@ body ::-moz-selection,
    Match the supplied guided prototype more closely: compact 42px composer,
    single-line chips, and no viewport-dependent overlap at small desktop sizes. */
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_llm_ai_page_workspace_composer_wrap"] {
-  min-height: 126px !important;
-  max-height: 136px !important;
-  padding-bottom: 8px !important;
+  min-height: 140px !important;
+  max-height: 156px !important;
+  padding-bottom: 20px !important;
   border-top: 1px solid var(--gd-card-border) !important;
   background: var(--surface) !important;
   overflow: hidden !important;
@@ -18650,9 +18908,9 @@ body ::-moz-selection,
 
 @media (max-height: 720px) {
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_llm_ai_page_workspace_composer_wrap"] {
-    min-height: 116px !important;
-    max-height: 126px !important;
-    padding-bottom: 6px !important;
+    min-height: 128px !important;
+    max-height: 142px !important;
+    padding-bottom: 16px !important;
   }
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="guided_intents"] {
     height: 34px !important;
@@ -18785,4 +19043,109 @@ body ::-moz-selection,
   width: 100% !important;
   max-width: 100% !important;
   margin: -2px 0 0 !important;
+}
+
+/* Copilot depth finish-line (ported from easyicu美化/polish/css/guided.css). */
+.study-finishline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 9px 0 11px;
+  padding-left: 2px;
+  position: relative;
+}
+.study-finishline .fl-flag {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border: 1.5px dashed var(--accent);
+}
+.study-finishline .fl-flag svg {
+  width: 11px;
+  height: 11px;
+}
+.study-finishline .fl-t {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  white-space: nowrap;
+}
+.study-finishline::after {
+  content: "";
+  flex: 1;
+  height: 1.5px;
+  border-radius: 2px;
+  opacity: 0.55;
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+
+/* Copilot option rows (chat choice / nav actions) — polish gd-opt card look:
+   full-width left-aligned cards with hover accent + a right chevron. */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  margin-top: 6px !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] [data-testid="stHorizontalBlock"],
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] [data-testid="column"] {
+  display: block !important;
+  width: 100% !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] button,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] [data-testid="stBaseButton-secondary"] {
+  position: relative !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+  width: 100% !important;
+  min-height: 44px !important;
+  margin: 0 !important;
+  padding: 11px 36px 11px 14px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: 10px !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+  font-size: 13px !important;
+  font-weight: 560 !important;
+  line-height: 1.3 !important;
+  transition: border-color 0.12s, background 0.12s, box-shadow 0.12s !important;
+}
+/* left-align the label inside Streamlit's centering button wrapper */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] button > div,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] button [data-testid="stMarkdownContainer"],
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] button p {
+  justify-content: flex-start !important;
+  text-align: left !important;
+  width: 100% !important;
+  margin: 0 !important;
+}
+/* right chevron */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] button::after {
+  content: "\203A";
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ink-4);
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 400;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] button:hover {
+  border-color: var(--accent-border, var(--accent)) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+  -webkit-text-fill-color: var(--accent-ink) !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] button:hover::after {
+  color: var(--accent-ink);
 }

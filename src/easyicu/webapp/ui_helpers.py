@@ -39,6 +39,13 @@ _ICON_SVG: dict[str, str] = {
     "clock":    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
     "user":     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
     "settings": '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.5-2.4.8a7 7 0 0 0-2-1.1L14 3h-4l-.5 2.4a7 7 0 0 0-2 1.1l-2.4-.8-2 3.5 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.5 2.4-.8a7 7 0 0 0 2 1.1L10 21h4l.5-2.4a7 7 0 0 0 2-1.1l2.4.8 2-3.5-2-1.6c.1-.4.1-.8.1-1.2Z"/></svg>',
+    # Copilot study-rail glyphs, matched to easyicu美化/polish design.
+    "spark":    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c.5 5.5 4 9 10 10-6 1-9.5 4.5-10 10-.5-5.5-4-9-10-10 6-1 9.5-4.5 10-10Z"/></svg>',
+    "hexagon":  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.6 20 7v10l-8 4.4L4 17V7l8-4.4Z"/></svg>',
+    "eye":      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
+    "stack":    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="16" height="5" rx="1.2"/><rect x="4" y="10.5" width="16" height="5" rx="1.2"/><path d="M6 18.5h12"/></svg>',
+    "robot":    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="8" width="14" height="11" rx="2.5"/><path d="M12 4.5V8"/><circle cx="12" cy="3.4" r="1.2"/><path d="M9.2 13h.01"/><path d="M14.8 13h.01"/><path d="M9.5 16h5"/></svg>',
+    "shield":   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.8 19 6v5.2c0 4.3-3 7.4-7 8.9-4-1.5-7-4.6-7-8.9V6l7-3.2Z"/></svg>',
 }
 
 
