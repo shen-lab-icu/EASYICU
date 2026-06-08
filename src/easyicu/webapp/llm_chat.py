@@ -29,6 +29,7 @@ from pathlib import Path
 
 import requests
 import streamlit as st
+from easyicu.webapp import copilot_engine as _copilot_engine
 from easyicu.webapp.ai_optin import AIOptInError, enforce_external_llm_opt_in
 from easyicu.webapp.concept_catalog import CONCEPT_GROUP_NAMES, CONCEPT_GROUPS_INTERNAL
 from easyicu.webapp.components.constants import get_all_concepts
@@ -56,6 +57,10 @@ COPILOT_STUDY_STEPS: tuple[tuple[str, str], ...] = (
     ("draft", "Draft gate"),
 )
 COPILOT_STEP_INDEX = {step: idx for idx, (step, _label) in enumerate(COPILOT_STUDY_STEPS)}
+# copilot_engine keeps an import-light copy of the step sequence; keep them in sync.
+assert tuple(step for step, _ in COPILOT_STUDY_STEPS) == _copilot_engine.COPILOT_STEP_SEQUENCE, (
+    "COPILOT_STUDY_STEPS drifted from copilot_engine.COPILOT_STEP_SEQUENCE"
+)
 COPILOT_DEFAULT_MODULES: list[str] = []
 COPILOT_DATABASE_OPTIONS = ("miiv", "mimic", "eicu", "aumc", "hirid", "sic")
 COPILOT_DATABASE_LABELS = {
@@ -116,7 +121,14 @@ COPILOT_CONCEPT_LABELS = {
     "rrt": "RRT",
 }
 COPILOT_STRICT_COHORT_FILTERS = ["sepsis-3", "age >= 80", "first 24h"]
-COPILOT_ROUTE_TIMEOUT_SECONDS = 1.5
+# Free-text routing timeout. The default 1.5s is too tight for local/slow model
+# endpoints (the route times out and the step stalls). Default raised to 6s and
+# made configurable via EASYICU_COPILOT_ROUTE_TIMEOUT so self-hosted models work;
+# fixed step buttons are deterministic and never hit this path.
+try:
+    COPILOT_ROUTE_TIMEOUT_SECONDS = max(1.0, float(os.environ.get("EASYICU_COPILOT_ROUTE_TIMEOUT", "6.0")))
+except (TypeError, ValueError):
+    COPILOT_ROUTE_TIMEOUT_SECONDS = 6.0
 COPILOT_ROUTE_MAX_TOKENS = 360
 COPILOT_SESSION_MESSAGE_SAVE_LIMIT = 80
 COPILOT_RENDER_MESSAGE_LIMIT = 5
@@ -887,6 +899,7 @@ def _default_copilot_study_state(state: MutableMapping[str, object] | None = Non
     return {
         "branch": None,
         "step": "question",
+        "depth": _copilot_engine.DEFAULT_DEPTH,
         "data_mode": "real",
         "patient_n": patient_n,
         "db_count": 6,
@@ -1404,6 +1417,49 @@ def _copilot_feature_step_requested(text: str) -> bool:
     ) or any(term in raw for term in ("选择特征模块", "特征模块步骤", "模块选择", "配置模块"))
 
 
+def _copilot_extract_step_requested(text: str) -> bool:
+    """Return True when the user (or a fixed step button) asks to run extraction.
+
+    The "Prepare extraction plan" button submits a fixed prompt; routing that
+    known intent through the LLM is fragile (a slow route times out and the step
+    stalls). Detect it deterministically so extraction runs via the classic
+    engine without any model round-trip.
+    """
+    text_l = (text or "").lower()
+    raw = text or ""
+    return any(
+        term in text_l
+        for term in (
+            "prepare the extraction plan",
+            "prepare extraction plan",
+            "run the extraction",
+            "run extraction",
+            "extract the cohort",
+            "extract now",
+        )
+    ) or any(term in raw for term in ("准备提取计划", "运行提取", "开始提取", "执行提取"))
+
+
+def _copilot_review_step_requested(text: str) -> bool:
+    """Return True when the user (or the fixed Review button) asks to run review.
+
+    Same rationale as extraction: route the known intent deterministically to the
+    classic engine instead of the timeout-prone LLM router.
+    """
+    text_l = (text or "").lower()
+    raw = text or ""
+    return any(
+        term in text_l
+        for term in (
+            "run the visual review",
+            "visual review in chat",
+            "run the review",
+            "review the cohort",
+            "open the review",
+        )
+    ) or any(term in raw for term in ("运行审阅", "可视化审阅", "在聊天里审阅", "开始审阅"))
+
+
 def _copilot_next_step_help_requested(text: str) -> bool:
     """Return True for broad "what do I do next" prompts that need local guidance."""
     text_l = (text or "").lower()
@@ -1679,10 +1735,50 @@ def _copilot_database_label(database: object, lang: str) -> str:
     return label_en if lang == "en" else label_zh
 
 
+def _copilot_full_disease_options(lang: str) -> "dict[str, str]":
+    """Full classic disease-cohort list (curated 6 + ICD-based templates).
+
+    Tier-3 advanced disclosure: the chat dropdown surfaces every template the
+    classic Step 2 supports (DISEASE_COHORT_CONFIG) so power users never have to
+    leave the conversation. Writes still flow through the same classic engine
+    (`apply_cohort_filter`), so the chat cohort stays byte-identical to classic.
+    """
+    options: dict[str, str] = {
+        key: (label_en if lang == "en" else label_zh)
+        for key, (label_en, label_zh) in COPILOT_DISEASE_OPTIONS.items()
+    }
+    try:
+        from easyicu.webapp.cohort_config import DISEASE_COHORT_CONFIG
+    except Exception:
+        return options
+    for key, cfg in DISEASE_COHORT_CONFIG.items():
+        if key in options:
+            continue
+        options[key] = str(
+            cfg.get("label_en" if lang == "en" else "label_zh") or key
+        )
+    return options
+
+
+def _copilot_sepsis_mode_options(lang: str) -> "dict[str, str]":
+    """Sepsis suspected-infection modes (classic `sepsis_si_mode`)."""
+    try:
+        from easyicu.webapp.cohort_config import SEPSIS_MODE_CONFIG
+    except Exception:
+        return {"auto": "Auto by database" if lang == "en" else "按数据库自动选择"}
+    return {
+        key: str(cfg.get("label_en" if lang == "en" else "label_zh") or key)
+        for key, cfg in SEPSIS_MODE_CONFIG.items()
+    }
+
+
 def _copilot_disease_label(disease: object, lang: str) -> str:
     key = str(disease or "none").strip()
-    label_en, label_zh = COPILOT_DISEASE_OPTIONS.get(key, (key, key))
-    return label_en if lang == "en" else label_zh
+    if key in COPILOT_DISEASE_OPTIONS:
+        label_en, label_zh = COPILOT_DISEASE_OPTIONS[key]
+        return label_en if lang == "en" else label_zh
+    # Fall back to the full classic template labels (ARDS, pneumonia, etc.).
+    return _copilot_full_disease_options(lang).get(key, key)
 
 
 def _copilot_feature_pack_label(pack_key: str, lang: str) -> str:
@@ -1768,6 +1864,35 @@ def _copilot_parse_optional_int(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _copilot_validate_real_data_path(state: MutableMapping[str, object]) -> bool:
+    """Run the SAME validator the classic Data Source step uses.
+
+    The classic flow requires Validate Data Path + Confirm before extraction can
+    read the prepared tables; the chat flow previously recorded a path but left
+    ``path_validated`` False, so the loader found nothing ("0 tables"). This runs
+    `validate_database_path` and, on success, marks the source validated/confirmed
+    exactly like the classic Step 1, so chat extraction matches classic.
+    """
+    data_path = str(state.get("data_path") or "").strip()
+    database = _copilot_normalize_database(state.get("database") or "miiv")
+    if not data_path:
+        state["path_validated"] = False
+        return False
+    try:
+        from easyicu.webapp.data_workflows import validate_database_path
+
+        result = validate_database_path(data_path, database, state.get("_app_context"))
+    except Exception:
+        state["path_validated"] = False
+        return False
+    valid = bool(isinstance(result, Mapping) and result.get("valid"))
+    state["path_validated"] = valid
+    if valid:
+        state["last_validated_path"] = data_path
+        state["step1_confirmed"] = True
+    return valid
+
+
 def _copilot_set_real_data_path_in_chat(
     state: MutableMapping[str, object],
     path: str,
@@ -1784,16 +1909,18 @@ def _copilot_set_real_data_path_in_chat(
         clean_path,
         _copilot_normalize_database(database or state.get("database") or "miiv"),
     )
-    state["path_validated"] = False
     state.pop("last_validated_path", None)
     state["sidebar_data_path_input__pending_value"] = clean_path
     study = _ensure_copilot_study_state(state)
     study["data_mode"] = "real"
     study["step"] = "data"
     study["data_source_choice"] = "prepared_path"
-    study["data_source_status"] = "pending_validation"
     study["data_source_path_label"] = Path(clean_path).name or clean_path
     study["database"] = state["database"]
+    # Validate immediately (mirrors classic Validate + Confirm) so the recorded
+    # path is actually usable for extraction, not just stored.
+    validated = _copilot_validate_real_data_path(state)
+    study["data_source_status"] = "pending_validation" if validated else "conversion_needed"
     study["last_update"] = datetime.now().isoformat(timespec="seconds")
 
 
@@ -1948,24 +2075,34 @@ def _copilot_submit_cohort_filter(
     *,
     disease: str,
     age_min: object = None,
+    age_max: object = None,
     los_min: object = None,
     first_icu: str = "yes",
     gender: str = "any",
     survival: str = "any",
+    si_mode: object = None,
     lang: str,
 ) -> tuple[str, list[dict[str, object]]]:
     """Save classic Step 2 cohort filters from the Copilot page."""
     clean_disease = str(disease or "none").strip()
-    if clean_disease not in COPILOT_DISEASE_OPTIONS:
+    if clean_disease != "none" and clean_disease not in _copilot_full_disease_options(lang):
         clean_disease = "none"
     clean_gender = str(gender or "any").strip()
     clean_survival = str(survival or "any").strip()
     clean_first_icu = str(first_icu or "any").strip()
     min_age = _copilot_parse_optional_int(age_min)
+    max_age = _copilot_parse_optional_int(age_max)
     min_los = _copilot_parse_optional_int(los_min)
+
+    # Sepsis suspected-infection mode drives the classic Sepsis-3 cohort via the
+    # same session key the classic view reads (cohort_filters.py).
+    clean_si_mode = str(si_mode or "").strip()
+    if clean_si_mode and clean_si_mode in _copilot_sepsis_mode_options(lang):
+        state["sepsis_si_mode"] = clean_si_mode
 
     cohort_filter = _copilot_default_cohort_filter()
     cohort_filter["age_min"] = min_age
+    cohort_filter["age_max"] = max_age
     cohort_filter["los_min"] = min_los
     cohort_filter["disease_cohort"] = clean_disease
     cohort_filter["has_sepsis"] = True if clean_disease == "sepsis" else None
@@ -1984,10 +2121,16 @@ def _copilot_submit_cohort_filter(
         filter_labels.append("first ICU stay")
     elif cohort_filter["first_icu_stay"] is False:
         filter_labels.append("readmissions only")
-    if min_age is not None:
+    if min_age is not None and max_age is not None:
+        filter_labels.append(f"age {min_age}-{max_age}")
+    elif min_age is not None:
         filter_labels.append(f"age >= {min_age}")
+    elif max_age is not None:
+        filter_labels.append(f"age <= {max_age}")
     if min_los is not None:
         filter_labels.append(f"ICU LOS >= {min_los}h")
+    if clean_disease == "sepsis" and clean_si_mode and clean_si_mode != "auto":
+        filter_labels.append(f"sepsis def: {clean_si_mode}")
     if clean_gender in {"M", "F"}:
         filter_labels.append(f"sex = {clean_gender}")
     if clean_survival == "survived":
@@ -2002,13 +2145,47 @@ def _copilot_submit_cohort_filter(
     state["cohort_enabled"] = bool(filter_labels)
     state["filtered_patient_count"] = None
     _copilot_confirm_classic_step2(state)
+    # Execute the SAME cohort filter the classic view runs, so the chat-path
+    # cohort is byte-identical to the classic-path cohort (no-op on demo data).
+    # Previously this point only recorded the filter and left the count unrun.
+    _copilot_run_step(state, "cohort")
     study = _ensure_copilot_study_state(state)
     study["cohort_filters"] = filter_labels
     study["cohort_strategy"] = "filtered" if filter_labels else "eligible"
     study["cohort_configured"] = True
-    study["step"] = "concepts"
     study.pop("cohort_substep", None)
     study["last_update"] = datetime.now().isoformat(timespec="seconds")
+    # D1: real-data cohort returned 0 patients — guide to loosen rather than
+    # advancing into an empty study. (Only when a real filter actually ran;
+    # eligible/demo leaves filtered_patient_count None and skips this.)
+    matched = state.get("filtered_patient_count")
+    if filter_labels and isinstance(matched, int) and matched == 0:
+        study["step"] = "cohort"
+        study["cohort_phase"] = "empty"
+        body = (
+            "These cohort filters matched **0 patients** in this dataset. "
+            "Loosen them — widen age/LOS, drop the disease filter, or use the eligible cohort — then save again."
+            if lang == "en" else
+            "这些队列过滤条件在本数据集里匹配到 **0 位患者**。"
+            "请放宽条件——放宽年龄/住院时长、去掉疾病过滤,或改用合格队列——再保存一次。"
+        )
+        return _copilot_reply(study, body, lang, include_status=False), [
+            {
+                "id": "workflow_study_loosen_filters",
+                "kind": "workflow",
+                "label": "Loosen filters" if lang == "en" else "放宽过滤条件",
+                "workflow": "study_loosen_filters",
+            },
+            _copilot_prompt_action(
+                "choice_eligible_cohort",
+                "Use eligible cohort",
+                "改用合格队列",
+                "use the eligible cohort",
+                "使用合格队列",
+                lang,
+            ),
+        ]
+    study["step"] = "concepts"
     summary = ", ".join(filter_labels) if filter_labels else ("eligible cohort" if lang == "en" else "合格队列")
     body = (
         f"Cohort filters saved in Copilot: **{summary}**. Next, choose feature modules; I will keep those selections synced to classic Step 3."
@@ -2826,25 +3003,22 @@ def _copilot_message_actions_for_current_step(
 
 def _copilot_workflow_snapshot_html(snapshot: Mapping[str, object], lang: str) -> str:
     snapshot = _normalized_copilot_workflow_snapshot(snapshot, lang)
-    api = snapshot.get("api") if isinstance(snapshot.get("api"), Mapping) else {}
-    api_status = html.escape(str(api.get("status") or "local"))
-    api_detail = html.escape(str(api.get("detail") or ""))
+    # Slimmed card: the right-hand Study panel already carries the question,
+    # full step map, evidence gate, and API state. The in-thread card keeps
+    # ONLY the current step's "what this does" line so each step has a single,
+    # non-redundant place to act (the edit controls render right below it).
+    step_title = html.escape(str(snapshot.get("step_title") or ""))
+    step_detail = html.escape(str(snapshot.get("step_detail") or ""))
+    if not step_title and not step_detail:
+        return ""
+    eyebrow = html.escape("This step" if lang == "en" else "当前这一步")
     return (
         '<div class="eu-copilot-flow-card">'
-        '<div class="flow-head">'
-        f'<span>{html.escape(str(snapshot.get("title") or ("Workflow" if lang == "en" else "工作流")))}</span>'
-        f'<b>{html.escape(str(snapshot.get("branch") or ""))}</b>'
-        '</div>'
-        f'<p class="flow-question">{html.escape(str(snapshot.get("question") or ""))}</p>'
         '<div class="flow-current">'
-        f'<strong>{html.escape(str(snapshot.get("step_title") or ""))}</strong>'
-        f'<p>{html.escape(str(snapshot.get("step_detail") or ""))}</p>'
+        f'<span class="flow-eyebrow">{eyebrow}</span>'
+        f'<strong>{step_title}</strong>'
+        f'<p>{step_detail}</p>'
         '</div>'
-        '<div class="flow-api">'
-        f'<span class="{api_status}">{html.escape("API" if lang == "en" else "API")}</span>'
-        f'<p>{api_detail}</p>'
-        '</div>'
-        f'<div class="flow-gate">{html.escape(str(snapshot.get("gate") or ""))}</div>'
         '</div>'
     )
 
@@ -2987,7 +3161,13 @@ def _render_copilot_workflow_step_controls(
     lang: str,
     key_prefix: str,
 ) -> None:
-    """Render a compact set of real buttons near the current workflow step."""
+    """Render a compact set of real buttons near the current workflow step.
+
+    Disabled: the right-hand Study panel stepper is now the single, clickable
+    step map. Re-rendering prev/current/next chips inside the thread duplicated
+    that navigation, so we no longer draw them here.
+    """
+    return
     step_items = _copilot_visible_workflow_step_items(snapshot, lang)
     if not step_items:
         return
@@ -4551,6 +4731,44 @@ def _copilot_guided_choice_actions(
                     lang,
                 ),
             ]
+        if step == "review":
+            return [
+                _copilot_prompt_action(
+                    "choice_run_review",
+                    "Run visual review",
+                    "运行可视化审阅",
+                    "Run the visual review in chat.",
+                    "在聊天里运行可视化审阅。",
+                    lang,
+                ),
+                _copilot_prompt_action(
+                    "choice_explain_gate",
+                    "Explain the gate",
+                    "解释证据闸门",
+                    "why this step?",
+                    "为什么这一步？",
+                    lang,
+                ),
+            ]
+        if step == "analysis":
+            # Deterministic agent hand-off (no LLM route): seeds Research Agent
+            # setup context + evidence gate. "Continue in chat" used to route
+            # through the timeout-prone model here.
+            return [
+                {
+                    "id": "agent_handoff",
+                    "kind": "agent_handoff",
+                    "label": "Set up agent run" if lang == "en" else "配置 Agent 运行",
+                },
+                _copilot_prompt_action(
+                    "choice_explain_gate",
+                    "Explain the gate",
+                    "解释证据闸门",
+                    "why this step?",
+                    "为什么这一步？",
+                    lang,
+                ),
+            ]
         return [
             _copilot_prompt_action(
                 "choice_continue_chat",
@@ -4867,15 +5085,236 @@ def _copilot_reply(
 
 def _copilot_advance_step(study: MutableMapping[str, object]) -> str:
     current = str(study.get("step") or "question")
-    sequence = [step for step, _label in COPILOT_STUDY_STEPS]
-    try:
-        idx = sequence.index(current)
-    except ValueError:
-        idx = 0
-    next_step = sequence[min(idx + 1, len(sequence) - 1)]
+    # Depth-gated advance: never auto-advance past the study's depth goal
+    # (extract / review / full). The finish-line UI offers "take it further".
+    next_step = _copilot_engine.next_step_capped(study.get("depth"), current)
     study["step"] = next_step
     study["last_update"] = datetime.now().isoformat(timespec="seconds")
     return next_step
+
+
+def _copilot_submit_extract(
+    state: MutableMapping[str, object],
+    lang: str,
+) -> tuple[str, list[dict[str, object]]]:
+    """Run the extract step deterministically (no LLM route) via the classic engine.
+
+    Mirrors `_copilot_submit_cohort_filter`: a fixed step button executes the
+    SAME `load_data_for_preview` the classic view uses, then summarises results
+    in chat and respects the depth goal (stops at the extract finish line when
+    depth == extract).
+    """
+    is_en = lang == "en"
+    study = _ensure_copilot_study_state(state)
+    study["step"] = "extract"
+    # The classic preview loader reads state["selected_concepts"]/data_path; make
+    # sure the study's concept selection is synced into session state first, or
+    # the loader returns nothing ("0 tables"). Keep the real-data binding intact.
+    if str(study.get("data_mode") or "") == "real" or str(state.get("data_path") or "").strip():
+        state["entry_mode"] = "real"
+        state["use_mock_data"] = False
+        if state.get("database") in {None, "", "mock"}:
+            state["database"] = _copilot_normalize_database(state.get("database") or "miiv")
+        # Ensure the path is validated/confirmed like classic Step 1 before load.
+        if str(state.get("data_path") or "").strip() and not state.get("path_validated"):
+            _copilot_validate_real_data_path(state)
+    _apply_copilot_study_to_workspace(state)
+    result = _copilot_run_step(state, "extract")
+    status = str(result.get("status") or "")
+
+    if status == "no_real_data":
+        body = (
+            "I don't have a real data source bound yet, so there's nothing to extract. "
+            "Paste a prepared path with `set data path /path/to/prepared_data`, then ask me to prepare the extraction plan again."
+            if is_en else
+            "目前还没有绑定真实数据源,无法提取。请先用 `set data path /路径/到/prepared_data` 设置 prepared 路径,再让我准备提取计划。"
+        )
+        return _copilot_reply(study, body, lang, include_status=False), [
+            _copilot_prompt_action(
+                "choice_set_data_path",
+                "Set data path",
+                "设置数据路径",
+                "what real data path should I use?",
+                "真实数据路径应该填什么？",
+                lang,
+            )
+        ]
+
+    if status == "error":
+        err = str(result.get("error") or "")
+        body = (
+            f"Extraction hit an error: `{err}`. The path may not be a prepared/converted EasyICU dataset. "
+            "Open the classic Data Extraction view for the full validate/convert flow, or set a different path."
+            if is_en else
+            f"提取出错:`{err}`。该路径可能不是已转换的 prepared EasyICU 数据集。可以打开经典数据提取视图走完整的验证/转换流程,或换一个路径。"
+        )
+        return _copilot_reply(study, body, lang, include_status=False), [
+            {
+                "id": "workflow_study_extract",
+                "kind": "workflow",
+                "label": "Open classic extraction" if is_en else "打开经典提取",
+                "workflow": "study_extract",
+            }
+        ]
+
+    # status == "ok"
+    loaded = state.get("loaded_concepts")
+    n_tables = len(loaded) if isinstance(loaded, Mapping) else 0
+    if n_tables == 0:
+        # The engine returns "ok" even when the loader yielded nothing; don't
+        # pretend success. Surface it honestly with a path/validation hint.
+        validated = bool(state.get("path_validated"))
+        hint = (
+            "the path validated but no concept tables came back — check the database selection and selected modules"
+            if validated else
+            "the data path isn't validated yet (it may need conversion); open the classic Data Extraction view to validate/convert"
+        ) if is_en else (
+            "路径已验证但没有载入任何概念表——请检查数据库选择和所选模块"
+            if validated else
+            "数据路径尚未验证(可能需要转换);打开经典数据提取视图做验证/转换"
+        )
+        body = (
+            f"Extraction returned 0 concept tables. Likely cause: {hint}."
+            if is_en else
+            f"提取返回 0 张概念表。可能原因:{hint}。"
+        )
+        return _copilot_reply(study, body, lang, include_status=False), [
+            {
+                "id": "workflow_study_extract",
+                "kind": "workflow",
+                "label": "Open classic extraction" if is_en else "打开经典提取",
+                "workflow": "study_extract",
+            }
+        ]
+    cohort_n = state.get("filtered_patient_count")
+    if not isinstance(cohort_n, int):
+        stats = state.get("_cohort_stats")
+        cohort_n = stats.get("total_after") if isinstance(stats, Mapping) else None
+    study["extracted"] = True
+    study["last_update"] = datetime.now().isoformat(timespec="seconds")
+    next_step = _copilot_advance_step(study)
+
+    cohort_txt = (
+        (f" for ~{cohort_n} stays" if is_en else f"(约 {cohort_n} 例 stay)")
+        if isinstance(cohort_n, int) else ""
+    )
+    base = (
+        f"Extraction preview is ready{cohort_txt}: {n_tables} concept tables loaded through the same classic pipeline."
+        if is_en else
+        f"提取预览已就绪{cohort_txt}:已通过与经典一致的管线载入 {n_tables} 张概念表。"
+    )
+    if next_step == "extract":
+        # Depth goal reached — stop at the finish line.
+        tail = (
+            " This is your finish line for the Extract depth. Use \"Take it further\" on the right to continue to Review, or open the classic view for detailed audit."
+            if is_en else
+            "这是 Extract 档的终点线。可点右侧的「继续深入」进入审阅,或打开经典视图做细节审阅。"
+        )
+    else:
+        tail = (
+            " Next: visual review of the extracted cohort."
+            if is_en else
+            "下一步:对提取队列做可视化审阅。"
+        )
+    body = _copilot_reply(study, base + tail, lang, include_status=False)
+    return body, _copilot_guided_choice_actions(study, lang)
+
+
+def _copilot_submit_review(
+    state: MutableMapping[str, object],
+    lang: str,
+) -> tuple[str, list[dict[str, object]]]:
+    """Run the review step deterministically (no LLM route) via the classic engine.
+
+    Mirrors `_copilot_submit_extract`: marks the review workspace ready, surfaces
+    a metric summary from the SAME `quick_visualization_page` helper, links to the
+    embedded classic Patient Review, and respects the depth finish line.
+    """
+    is_en = lang == "en"
+    study = _ensure_copilot_study_state(state)
+    study["step"] = "review"
+
+    loaded = state.get("loaded_concepts")
+    n_tables = len(loaded) if isinstance(loaded, Mapping) else 0
+    if n_tables == 0:
+        # Nothing extracted yet — guide back to the extract step rather than
+        # opening an empty review.
+        body = (
+            "There's no extracted cohort to review yet. Run **Prepare extraction plan** first, "
+            "then I'll open the visual review here."
+            if is_en else
+            "目前还没有可审阅的提取队列。请先运行 **准备提取计划**，我再在这里打开可视化审阅。"
+        )
+        return _copilot_reply(study, body, lang, include_status=False), [
+            _copilot_prompt_action(
+                "choice_prepare_extraction",
+                "Prepare extraction plan",
+                "准备提取计划",
+                "Prepare the extraction plan in chat.",
+                "在聊天里准备提取计划。",
+                lang,
+            )
+        ]
+
+    # Mark the review workspace ready through the classic engine + enable the
+    # classic preview so the embedded Patient Review renders the same data.
+    _copilot_run_step(state, "review")
+    state["_preview_requested"] = True
+
+    summary: Mapping[str, object] = {}
+    try:
+        from easyicu.webapp.quick_visualization_page import _quick_viz_workspace_summary
+        summary = _quick_viz_workspace_summary(dict(state), lang) or {}
+    except Exception:  # pragma: no cover - defensive
+        summary = {}
+    concept_count = int(summary.get("concept_count") or n_tables)
+    patient_count = summary.get("loaded_patient_count") or summary.get("all_patient_count")
+    cohort_n = state.get("filtered_patient_count")
+    if not isinstance(cohort_n, int):
+        stats = state.get("_cohort_stats")
+        cohort_n = stats.get("total_after") if isinstance(stats, Mapping) else None
+
+    study["reviewed"] = True
+    study["last_update"] = datetime.now().isoformat(timespec="seconds")
+    next_step = _copilot_advance_step(study)
+
+    bits = []
+    bits.append(
+        (f"{concept_count} concept tables" if is_en else f"{concept_count} 张概念表")
+    )
+    if isinstance(patient_count, int) and patient_count:
+        bits.append((f"{patient_count} patients in preview" if is_en else f"{patient_count} 位患者预览"))
+    elif isinstance(cohort_n, int):
+        bits.append((f"~{cohort_n} cohort stays" if is_en else f"约 {cohort_n} 例队列 stay"))
+    summary_txt = ", ".join(bits)
+
+    base = (
+        f"Visual review is ready: {summary_txt}. The Patient Review workspace below is bound to the same extracted frame."
+        if is_en else
+        f"可视化审阅已就绪:{summary_txt}。下方的患者审阅工作区与提取出的同一数据帧绑定。"
+    )
+    if next_step == "review":
+        tail = (
+            " This is your finish line for the Review depth. Use \"Take it further\" on the right to continue to the agent analysis."
+            if is_en else
+            "这是 Review 档的终点线。可点右侧的「继续深入」进入 agent 分析。"
+        )
+    else:
+        tail = (
+            " Next: the evidence-bound agent analysis run."
+            if is_en else
+            "下一步:证据绑定的 agent 分析运行。"
+        )
+    actions = [
+        {
+            "id": "workflow_study_review",
+            "kind": "workflow",
+            "label": "Open Patient Review" if is_en else "打开患者审阅",
+            "workflow": "study_review",
+        }
+    ]
+    body = _copilot_reply(study, base + tail, lang, include_status=False)
+    return body, actions
 
 
 def _copilot_concept_label_list(study: Mapping[str, object], *, limit: int = 5) -> list[str]:
@@ -5001,6 +5440,8 @@ def _handle_copilot_guided_prompt(
     step_by_step_intent = _copilot_step_by_step_requested(prompt)
     cohort_step_intent = _copilot_cohort_step_requested(prompt)
     feature_step_intent = _copilot_feature_step_requested(prompt)
+    extract_step_intent = _copilot_extract_step_requested(prompt)
+    review_step_intent = _copilot_review_step_requested(prompt)
     next_step_help_intent = _copilot_next_step_help_requested(prompt)
     usage_help_intent = _copilot_usage_help_requested(prompt)
     capability_overview_intent = _copilot_capability_overview_requested(prompt)
@@ -5032,6 +5473,10 @@ def _handle_copilot_guided_prompt(
     if cohort_step_intent:
         guided_intent = True
     if feature_step_intent:
+        guided_intent = True
+    if extract_step_intent:
+        guided_intent = True
+    if review_step_intent:
         guided_intent = True
     if next_step_help_intent:
         guided_intent = True
@@ -5101,6 +5546,15 @@ def _handle_copilot_guided_prompt(
 
     if capability_overview_intent:
         return _copilot_capability_overview_reply(study, lang, state)
+
+    if extract_step_intent:
+        # Fixed "Prepare extraction plan" button → run the classic extract step
+        # deterministically, never via the (timeout-prone) LLM router.
+        return _copilot_submit_extract(state, lang)
+
+    if review_step_intent:
+        # Fixed "Run visual review" button → deterministic review step.
+        return _copilot_submit_review(state, lang)
 
     waiting_for_custom_text = str(study.get("question_substep") or "") in {
         "custom",
@@ -6545,17 +6999,48 @@ def _append_copilot_prompt_action(
     )
 
 
+_COPILOT_ACTION_ICON_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("agent", "代理"), "smart_toy"),  # before "age": "set up agent run" contains "age"
+    (("eligible",), "groups"),
+    (("disease", "diagnosis", "sepsis", "脓毒", "疾病"), "clinical_notes"),
+    (("age", "los", "年龄", "住院时长"), "calendar_month"),
+    (("reviewed", "current", "审阅队列"), "history"),
+    (("extraction", "extract", "提取"), "database"),
+    (("review", "审阅", "patient review"), "visibility"),
+    (("gate", "why", "解释", "为什么"), "help"),
+    (("classic", "经典"), "grid_view"),
+    (("loosen", "放宽", "broad"), "tune"),
+    (("data path", "数据路径", "set data", "设置路径"), "folder_open"),
+    (("api", "设置"), "settings"),
+    (("module", "模块"), "layers"),
+    (("draft", "草稿", "sign"), "description"),
+)
+
+
+def _copilot_action_material_icon(action: Mapping[str, object]) -> str:
+    """Infer a Material icon for an option row from its id/label (polish gd-opt)."""
+    text = (str(action.get("id") or "") + " " + str(action.get("label") or "")).lower()
+    for keys, name in _COPILOT_ACTION_ICON_RULES:
+        if any(k in text for k in keys):
+            return f":material/{name}:"
+    return ":material/arrow_forward:"
+
+
 def _render_nav_actions(actions: list[dict[str, object]], key_prefix: str) -> None:
-    """Render in-app navigation and preset actions as buttons."""
+    """Render in-app navigation and preset actions as buttons.
+
+    Rendered as a vertical stack of full-width "option rows" (polish gd-opt
+    look) inside a keyed container so the copilot CSS can card-style them.
+    """
     if not actions:
         return
-    action_cols = st.columns(len(actions))
-    for action_idx, action in enumerate(actions):
-        with action_cols[action_idx]:
+    with st.container(key=f"{key_prefix}_navactions"):
+        for action_idx, action in enumerate(actions):
             if st.button(
                 action["label"],
                 key=f"{key_prefix}_{action_idx}_{action['id']}",
                 use_container_width=True,
+                icon=_copilot_action_material_icon(action),
             ):
                 if action.get("kind") == "preset":
                     st.session_state["_assistant_preset_request"] = dict(action.get("payload") or {})
@@ -6779,6 +7264,29 @@ def _seed_research_agent_real_source_from_copilot(
     state["_eu_ra_focus_no_data"] = True
     state.pop("_eu_ra_focus_module_folder", None)
     return False
+
+
+def _copilot_run_step(
+    state: MutableMapping[str, object],
+    step_id: str,
+    **kwargs: object,
+) -> dict[str, object]:
+    """Route one Copilot step to the SAME classic engine the classic views use.
+
+    Thin wrapper over ``copilot_engine.run_copilot_step``: the live
+    ``st.session_state`` is both the state read and written, so a cohort filtered
+    in chat lands in the exact keys (``cohort_filter`` / ``_cohort_stats`` /
+    ``_cohort_filtered_ids``) the classic Data Extraction view uses. Guarded so a
+    data-layer error degrades to a no-op instead of breaking the chat surface.
+    """
+    study = _ensure_copilot_study_state(state)
+    app_context = state.get("_app_context")
+    try:
+        return _copilot_engine.run_copilot_step(
+            step_id, study, state, app_context=app_context, **kwargs
+        )
+    except Exception as exc:  # pragma: no cover - defensive UI guard
+        return {"step": step_id, "status": "error", "error": str(exc)}
 
 
 def _apply_copilot_study_to_workspace(state: MutableMapping[str, object]) -> None:
@@ -7470,6 +7978,34 @@ def _apply_chat_workflow_action(workflow: str) -> None:
             "Open AI / API connection settings. API keys stay in this browser session and are not written to the repository."
             if lang == "en" else
             "已打开 AI / API 连接设置。API Key 只保存在当前浏览器会话，不会写入仓库。"
+        )
+    elif workflow in {"study_depth_extract", "study_depth_review", "study_depth_full"}:
+        study = _ensure_copilot_study_state(state)
+        depth = workflow.rsplit("_", 1)[-1]
+        study["depth"] = _copilot_engine.normalize_depth(depth)
+        # Don't leave the active step past the new (possibly shallower) goal.
+        study["step"] = _copilot_engine.clamp_step_to_goal(study["depth"], str(study.get("step") or "question"))
+        study["last_update"] = datetime.now().isoformat(timespec="seconds")
+        state["_copilot_guided_study"] = study
+        goal = _copilot_engine.copilot_goal_step(study["depth"])
+        state["_assistant_notice"] = (
+            f"Study depth set — this run will finish at the {goal} step."
+            if lang == "en" else
+            f"已设置研究深度——本次将在 {goal} 步停下。"
+        )
+    elif workflow == "study_take_further":
+        study = _ensure_copilot_study_state(state)
+        study["depth"] = _copilot_engine.copilot_bump_depth(study.get("depth"))
+        _copilot_advance_step(study)
+        state["_copilot_guided_study"] = study
+        # Reconcile the segmented control before its next instantiation (writing
+        # the widget key directly after instantiation is forbidden by Streamlit).
+        state["_copilot_depth_seg_pending"] = study["depth"]
+        _apply_copilot_study_to_workspace(state)
+        state["_assistant_notice"] = (
+            f"Taking it further — depth is now {study['depth']}."
+            if lang == "en" else
+            f"继续深入——当前深度为 {study['depth']}。"
         )
     elif workflow == "study_agent":
         _apply_copilot_study_to_workspace(state)
@@ -9590,6 +10126,10 @@ def _copilot_step_unlocked_for_navigation(
     """Allow jumps only to completed/current steps or the next satisfied step."""
     if step == "question":
         return True
+    # Depth gate: steps past the study's depth goal are locked ("beyond" in the
+    # prototype) until the user takes the study further.
+    if _copilot_engine.is_step_beyond_goal(study.get("depth"), step):
+        return False
     active_step = str(study.get("step") or "question")
     if step == active_step:
         return True
@@ -9638,16 +10178,18 @@ def _copilot_rail_step_items(
             "label": label,
             "detail": detail,
             "status": status,
+            "is_goal": step == _copilot_engine.copilot_goal_step(study.get("depth")),
+            "beyond_goal": _copilot_engine.is_step_beyond_goal(study.get("depth"), step),
             "unlocked": _copilot_step_unlocked_for_navigation(study, step),
             "icon": {
-                "question": "sparkles",
+                "question": "spark",
                 "data": "flask",
-                "cohort": "patient",
+                "cohort": "hexagon",
                 "concepts": "layers",
-                "extract": "extract",
-                "review": "search",
-                "analysis": "agent",
-                "draft": "book",
+                "extract": "stack",
+                "review": "eye",
+                "analysis": "robot",
+                "draft": "shield",
             }.get(step, "grid"),
         })
     return items
@@ -9924,6 +10466,32 @@ def _copilot_stage_card_html(
     )
 
 
+def _copilot_relative_time(iso_str: str, lang: str) -> str:
+    """Human relative time ('2h ago' / '2小时前') from an ISO timestamp."""
+    raw = str(iso_str or "").strip()
+    if not raw:
+        return ""
+    is_en = lang == "en"
+    try:
+        ts = datetime.fromisoformat(raw)
+    except ValueError:
+        return raw[:16].replace("T", " ")
+    delta = datetime.now() - ts
+    secs = max(0, int(delta.total_seconds()))
+    mins, hours, days = secs // 60, secs // 3600, secs // 86400
+    if secs < 60:
+        return "just now" if is_en else "刚刚"
+    if mins < 60:
+        return f"{mins}m ago" if is_en else f"{mins}分钟前"
+    if hours < 24:
+        return f"{hours}h ago" if is_en else f"{hours}小时前"
+    if days == 1:
+        return "yesterday" if is_en else "昨天"
+    if days < 7:
+        return f"{days}d ago" if is_en else f"{days}天前"
+    return ts.strftime("%b %d") if is_en else ts.strftime("%m-%d")
+
+
 def _render_copilot_session_rail(lang: str) -> None:
     """Render the polish-design session rail for the standalone Copilot page."""
     is_en = lang == "en"
@@ -9959,48 +10527,32 @@ def _render_copilot_session_rail(lang: str) -> None:
         for idx, session in enumerate(sessions[:COPILOT_RECENT_SESSION_RENDER_LIMIT]):
             session_id = str(session.get("id") or "")
             title = str(session.get("title") or _copilot_session_fallback_title(lang)).strip()
-            workdir_name = Path(str(session.get("workdir") or "")).name
-            updated_at = str(session.get("updated_at") or "").replace("T", " ")
-            meta = " · ".join(part for part in (workdir_name, updated_at[:16]) if part)
+            title = " ".join(title.split())
+            if len(title) > 40:
+                title = title[:39].rstrip() + "…"
             active = session_id == current_session_id
-            label = ("● " if active else "") + title
-            if st.button(
-                label,
-                key=f"_copilot_session_open_{session_id}_{idx}",
-                use_container_width=True,
-                help=meta or None,
-            ):
-                if session_id:
-                    _open_copilot_study_session(state, session_id, lang)
-                st.rerun()
-            st.markdown(
-                '<div class="eu-copilot-session-meta {status}">'
-                f'{html.escape(("active" if is_en else "当前") if active else (meta or workdir_name))}'
-                '</div>'.format(status="active" if active else ""),
-                unsafe_allow_html=True,
+            rel = ("active now" if is_en else "进行中") if active else _copilot_relative_time(
+                str(session.get("updated_at") or ""), lang
             )
+            # Clean session row: small dot + title + inline relative time (design parity).
+            with st.container(key=f"eu_copilot_session_{'active' if active else 'idle'}_{idx}"):
+                if st.button(
+                    title,
+                    key=f"_copilot_session_open_{session_id}_{idx}",
+                    use_container_width=True,
+                    help=rel or None,
+                ):
+                    if session_id:
+                        _open_copilot_study_session(state, session_id, lang)
+                    st.rerun()
+                if rel:
+                    st.markdown(
+                        f'<div class="eu-copilot-session-meta{" active" if active else ""}">'
+                        f'{html.escape(rel)}</div>',
+                        unsafe_allow_html=True,
+                    )
 
-    active_dir = str(state.get("_copilot_current_session_dir") or "").strip()
-    if active_dir:
-        context_title = "Research directory" if is_en else "研究目录"
-        context_value = Path(active_dir).name
-        context_detail = str(Path(active_dir) / "agent_runs")
-    else:
-        context_title = "Research directory" if is_en else "研究目录"
-        context_value = "not created" if is_en else "尚未创建"
-        context_detail = "Start a new study first." if is_en else "请先新建研究。"
-    st.markdown(
-        '<div class="eu-copilot-rail-context">'
-        f'<span>{html.escape(context_title)}</span>'
-        f'<b>{html.escape(context_value)}</b>'
-        f'<p>{html.escape(context_detail)}</p>'
-        f'<span>{html.escape("Copilot mode" if is_en else "Copilot 模式")}</span>'
-        f'<b>{html.escape("real-data first" if is_en else "真实数据优先")}</b>'
-        f'<p>{html.escape("Conversation state is local; no demo mode is assumed." if is_en else "对话状态只保存在本地；不默认演示模式。")}</p>'
-        '</div>'
-        '<div class="eu-copilot-left-spacer"></div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="eu-copilot-left-spacer"></div>', unsafe_allow_html=True)
 
     if st.button(
         "Classic workspace" if is_en else "经典工作区",
@@ -10010,6 +10562,81 @@ def _render_copilot_session_rail(lang: str) -> None:
         help="Open the classic workspace only when you explicitly want to leave Copilot" if is_en else "只有明确想离开 Copilot 时才打开经典工作区",
     ):
         _apply_chat_workflow_action("study_extract")
+        st.rerun()
+
+
+# Active step -> (classic page key, workflow action, EN label, ZH label).
+# The "advanced drawer": one click drops from the conversation into the SAME
+# classic component for the current step, so users are never trapped in chat.
+_COPILOT_STEP_ESCAPE = {
+    "data": ("extract", "real_extraction", "Open classic Data Extraction", "打开经典数据提取"),
+    "cohort": ("extract", "study_extract", "Open classic Cohort filters", "打开经典队列筛选"),
+    "concepts": ("extract", "study_extract", "Open classic Feature modules", "打开经典特征模块"),
+    "extract": ("extract", "study_extract", "Open classic Extraction", "打开经典提取"),
+    "review": ("quick_viz", "study_review", "Open classic Patient Review", "打开经典患者审阅"),
+    "analysis": ("assistant", "study_agent", "Open Research Agent", "打开研究 Agent"),
+}
+
+
+def _render_copilot_step_escape_hatch(study: Mapping[str, object], lang: str) -> None:
+    """Advanced drawer / escape hatch: jump to the classic view for the active step."""
+    is_en = lang == "en"
+    step = str(study.get("step") or "question")
+    entry = _COPILOT_STEP_ESCAPE.get(step)
+    if not entry:
+        return
+    _page, workflow, label_en, label_zh = entry
+    with st.expander("Advanced · classic view" if is_en else "高级 · 经典视图", expanded=False):
+        st.caption(
+            "Drop into the full classic component for this step. Your study state stays in sync."
+            if is_en else
+            "下钻到该步骤的完整经典组件，研究状态保持同步。"
+        )
+        if st.button(
+            label_en if is_en else label_zh,
+            key=f"_copilot_escape_{step}",
+            use_container_width=True,
+            icon=":material/open_in_new:",
+        ):
+            _apply_chat_workflow_action(workflow)
+            st.rerun()
+
+
+def _render_copilot_depth_control(study: Mapping[str, object], lang: str) -> None:
+    """Render the depth selector (how far the study runs) above the step list.
+
+    extract = filter + extract · review = + visual review · full = full agent run.
+    Orthogonal to branch (what to study); drives where the study stops.
+    """
+    is_en = lang == "en"
+    current = _copilot_engine.normalize_depth(study.get("depth"))
+    labels = {
+        "extract": "Extract" if is_en else "提取",
+        "review": "Review" if is_en else "审阅",
+        "full": "Full agent" if is_en else "全流程",
+    }
+    key = "_copilot_depth_seg"
+    # Reconcile from a pending value (e.g. set by "take it further") BEFORE the
+    # widget is instantiated — the only point where writing the key is allowed.
+    pending = st.session_state.pop("_copilot_depth_seg_pending", None)
+    if pending in labels:
+        st.session_state[key] = pending
+    elif st.session_state.get(key) not in labels:
+        st.session_state[key] = current
+    st.markdown(
+        '<div class="eu-copilot-rail-eyebrow">'
+        f'{html.escape("How far to run" if is_en else "本次跑多远")}</div>',
+        unsafe_allow_html=True,
+    )
+    choice = st.segmented_control(
+        "How far to run" if is_en else "本次跑多远",
+        options=["extract", "review", "full"],
+        format_func=lambda d: labels[d],
+        key=key,
+        label_visibility="collapsed",
+    )
+    if choice and choice != current:
+        _apply_chat_workflow_action(f"study_depth_{choice}")
         st.rerun()
 
 
@@ -10035,6 +10662,7 @@ def _render_copilot_stage_workspace(lang: str) -> None:
             '</div>',
             unsafe_allow_html=True,
         )
+        _render_copilot_depth_control(study, lang)
         with st.container(key="eu_study_step_list"):
             for idx, item in enumerate(step_items):
                 step_id = str(item["id"])
@@ -10068,6 +10696,27 @@ def _render_copilot_stage_workspace(lang: str) -> None:
                             f'<p class="eu-study-step-detail">{html.escape(display_detail)}</p>',
                             unsafe_allow_html=True,
                         )
+                # Finish-line after the depth goal step (prototype .study-finishline).
+                if bool(item.get("is_goal")):
+                    depth_label = _copilot_engine.normalize_depth(study.get("depth"))
+                    st.markdown(
+                        '<div class="study-finishline">'
+                        f'<span class="fl-flag">{icon("check")}</span>'
+                        f'<span class="fl-t">{html.escape(("Finish line" if is_en else "终点线") + " · " + depth_label)}</span>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if str(study.get("depth") or "full") != "full":
+                        if st.button(
+                            "Take it further →" if is_en else "继续深入 →",
+                            key="_copilot_take_further",
+                            use_container_width=True,
+                            help=("Extend the study one stage deeper"
+                                  if is_en else "把研究再向后推进一档"),
+                        ):
+                            _apply_chat_workflow_action("study_take_further")
+                            st.rerun()
+        _render_copilot_step_escape_hatch(study, lang)
         st.markdown(
             '<div class="eu-copilot-evidence-note">'
             f'<span>{icon("check")}</span>'
@@ -10186,9 +10835,13 @@ def _render_copilot_state_panel(lang: str) -> None:
             st.rerun()
 
 
-def render_ai_assistant_page(lang: str | None = None) -> None:
+def render_ai_assistant_page(lang: str | None = None, app_context: dict | None = None) -> None:
     """Render the latest Tools · Research Copilot page using the live chat backend."""
     _init_chat_state()
+    if app_context is not None:
+        # Stash the host app's context so Copilot steps can reach the SAME
+        # classic engine functions (which need `st`/`pd`/helpers injected).
+        st.session_state["_app_context"] = app_context
     lang = lang or st.session_state.get("language", "en")
     pending_prompt = bool(st.session_state.get("_ai_pending_question"))
     st.session_state["_floating_ai_open"] = False
@@ -10477,8 +11130,19 @@ def _copilot_hint_prompts_for_state(
 
 
 def _render_copilot_primary_chips(lang: str, panel_key: str) -> None:
-    """Render the main intent chips above the guided composer."""
+    """Render the main intent chips above the guided composer.
+
+    Only shown at the welcome state as study entry points. Once the study has
+    started, the current step's choices are already injected inline on the
+    latest assistant reply (see `_copilot_message_actions_for_current_step`),
+    so repeating them as a bottom chip row was pure duplication — each step now
+    has a single place to act. The contextual "Try:" hint row still renders.
+    """
     if st.session_state.get("_active_main_page") != "assistant":
+        return
+    raw_study = st.session_state.get("_copilot_guided_study")
+    study: Mapping[str, object] = raw_study if isinstance(raw_study, Mapping) else {}
+    if _copilot_started_in_chat(st.session_state, study):
         return
     actions = _copilot_primary_actions_for_state(st.session_state, lang)
     if not actions:
@@ -10666,9 +11330,14 @@ def _render_copilot_cohort_inline_form(lang: str, panel_key: str) -> None:
     current_filter = st.session_state.get("cohort_filter")
     if not isinstance(current_filter, Mapping):
         current_filter = _copilot_default_cohort_filter()
+    disease_options = _copilot_full_disease_options(lang)
     current_disease = str(current_filter.get("disease_cohort") or "none")
-    if current_disease not in COPILOT_DISEASE_OPTIONS:
+    if current_disease not in disease_options:
         current_disease = "none"
+    sepsis_mode_options = _copilot_sepsis_mode_options(lang)
+    current_si_mode = str(st.session_state.get("sepsis_si_mode") or "auto")
+    if current_si_mode not in sepsis_mode_options:
+        current_si_mode = next(iter(sepsis_mode_options), "auto")
     current_first = current_filter.get("first_icu_stay")
     first_key = "yes" if current_first is True else "no" if current_first is False else "any"
     gender_key = str(current_filter.get("gender") or "any")
@@ -10688,9 +11357,9 @@ def _render_copilot_cohort_inline_form(lang: str, panel_key: str) -> None:
         with st.form(f"{panel_key}_cohort_filter_form", clear_on_submit=False):
             disease = st.selectbox(
                 "Clinical cohort" if is_en else "疾病队列",
-                options=list(COPILOT_DISEASE_OPTIONS),
-                format_func=lambda value: _copilot_disease_label(value, lang),
-                index=list(COPILOT_DISEASE_OPTIONS).index(current_disease),
+                options=list(disease_options),
+                format_func=lambda value: disease_options.get(value, value),
+                index=list(disease_options).index(current_disease),
                 key=f"{panel_key}_cohort_disease_select",
             )
             row1 = st.columns(2, gap="small")
@@ -10744,6 +11413,39 @@ def _render_copilot_cohort_inline_form(lang: str, panel_key: str) -> None:
                 index=["any", "survived", "deceased"].index(survival_key),
                 key=f"{panel_key}_cohort_survival_select",
             )
+            # Tier-3: in-chat advanced disclosure of the remaining classic
+            # Step 2 controls (max age, sepsis suspected-infection mode). These
+            # write the same cohort_filter / session keys the classic view uses.
+            with st.expander(
+                "Advanced options" if is_en else "高级选项",
+                expanded=False,
+            ):
+                adv1 = st.columns(2, gap="small")
+                with adv1[0]:
+                    age_max = st.text_input(
+                        "Max age" if is_en else "最大年龄",
+                        value="" if current_filter.get("age_max") in {None, ""} else str(current_filter.get("age_max")),
+                        placeholder="89",
+                        key=f"{panel_key}_cohort_age_max",
+                    )
+                with adv1[1]:
+                    si_mode = st.selectbox(
+                        "Sepsis definition" if is_en else "脓毒症判定",
+                        options=list(sepsis_mode_options),
+                        format_func=lambda value: sepsis_mode_options.get(value, value),
+                        index=list(sepsis_mode_options).index(current_si_mode),
+                        key=f"{panel_key}_cohort_si_mode",
+                        help=(
+                            "Suspected-infection rule used to build the Sepsis-3 cohort; only applies when the clinical cohort is Sepsis-3."
+                            if is_en else
+                            "构建 Sepsis-3 队列时的疑似感染判定规则；仅当疾病队列为脓毒症时生效。"
+                        ),
+                    )
+                st.caption(
+                    "Need the full classic cohort builder (ICD code filters, etc.)? Use Advanced · classic view below."
+                    if is_en else
+                    "需要完整经典队列构建器（ICD 代码过滤等）？用下方的「高级 · 经典视图」。"
+                )
             submit_clicked = st.form_submit_button(
                 "Save cohort" if is_en else "保存队列",
                 type="primary",
@@ -10754,10 +11456,12 @@ def _render_copilot_cohort_inline_form(lang: str, panel_key: str) -> None:
             st.session_state,
             disease=disease,
             age_min=age_min,
+            age_max=age_max,
             los_min=los_min,
             first_icu=first_icu,
             gender=gender,
             survival=survival,
+            si_mode=si_mode,
             lang=lang,
         )
         messages = st.session_state.setdefault("llm_messages", [])
@@ -10822,7 +11526,8 @@ def _render_copilot_feature_inline_form(lang: str, panel_key: str) -> None:
             for idx, key in enumerate(COPILOT_FEATURE_MODULE_PACKS):
                 label = _copilot_feature_pack_label(key, lang)
                 selected = key in selected_module_set
-                button_label = (f"Selected · {label}" if is_en else f"已选 · {label}") if selected else label
+                concept_n = len(COPILOT_FEATURE_MODULE_PACKS[key].get("concepts") or [])
+                button_label = f"{label}　{concept_n}" if concept_n else label
                 row_state = "on" if selected else "off"
                 with columns[idx % 2]:
                     with st.container(key=f"{panel_key}_feature_module_toggle_{row_state}_{key}"):
@@ -11715,9 +12420,11 @@ def _render_floating_copilot_context_actions(lang: str) -> None:
             st.rerun()
 
 
-def render_floating_chat_dock():
+def render_floating_chat_dock(app_context: dict | None = None):
     """Render a fixed bottom-right floating AI chat dock."""
     _init_chat_state()
+    if app_context is not None:
+        st.session_state["_app_context"] = app_context
     lang = st.session_state.get("language", "en")
     if "_floating_ai_open" not in st.session_state:
         st.session_state["_floating_ai_open"] = False

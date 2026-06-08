@@ -161,6 +161,34 @@ def test_extract_preview_vs_full():
     assert eng2.load_data.calls and not eng2.load_data_for_preview.calls
 
 
+def test_extract_reads_back_state_when_loader_returns_none():
+    """Regression: classic loaders write st.session_state.loaded_concepts and
+    return None — the engine must NOT overwrite that with None (0-tables bug)."""
+    state = _real_state()
+
+    def fake_preview(n, app_context=None):
+        # mimic load_data_for_preview: writes to state, returns None
+        state["loaded_concepts"] = {"vitals": "df", "labs": "df"}
+        return None
+
+    eng = _engines(load_data_for_preview=fake_preview)
+    res = ce.run_copilot_step("extract", {"patient_n": 10}, state, engines=eng, preview=True)
+    assert res["status"] == "ok"
+    assert state["loaded_concepts"] == {"vitals": "df", "labs": "df"}
+
+
+def test_extract_reports_empty_when_no_tables():
+    state = _real_state()
+
+    def fake_preview(n, app_context=None):
+        state["loaded_concepts"] = {}
+        return None
+
+    eng = _engines(load_data_for_preview=fake_preview)
+    res = ce.run_copilot_step("extract", {}, state, engines=eng, preview=True)
+    assert res["status"] == "empty"
+
+
 def test_export_runs_classic_export():
     eng = _engines()
     res = ce.run_copilot_step("export", {}, _real_state(), app_context={"c": 2}, engines=eng)

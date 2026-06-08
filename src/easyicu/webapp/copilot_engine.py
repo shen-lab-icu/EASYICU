@@ -221,9 +221,15 @@ def _step_extract(study, state, app_context, engines, *, preview: bool = True,
         data = engines.load_data_for_preview(n, app_context)
     else:
         data = engines.load_data(app_context)
-    state["loaded_concepts"] = data
+    # Both classic loaders write the result into st.session_state.loaded_concepts
+    # and return None — do NOT overwrite that with the None return value.
+    if data is None:
+        data = state.get("loaded_concepts")
+    if data is not None:
+        state["loaded_concepts"] = data
     state["_extraction_done"] = True
-    return {"step": "extract", "status": "ok", "preview": preview}
+    loaded_ok = bool(data)
+    return {"step": "extract", "status": "ok" if loaded_ok else "empty", "preview": preview}
 
 
 def _step_review(study, state, app_context, engines, **_kwargs) -> dict[str, Any]:

@@ -4435,7 +4435,7 @@ def main():
 
     elif active_page == "assistant":
         from easyicu.webapp.llm_chat import render_ai_assistant_page
-        render_ai_assistant_page(lang)
+        render_ai_assistant_page(lang, app_context=globals())
 
     elif active_page == "settings":
         from easyicu.webapp.pages_redesign import render_settings_redesign_page
@@ -4734,7 +4734,7 @@ def main():
 
     if active_page != "assistant" and not _is_screenshot_mode():
         from easyicu.webapp.llm_chat import render_floating_chat_dock
-        render_floating_chat_dock()
+        render_floating_chat_dock(app_context=globals())
 
     # Page navigation now happens via the segmented_control above. Only the
     # scroll-to-top request still needs a small script — and this one does not
