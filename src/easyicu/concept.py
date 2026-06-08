@@ -40,6 +40,42 @@ _MISSING_SOURCE_WARNED: set[tuple[str, ...]] = set()
 # Concepts that require hourly maxima (vasoactive infusion rates)
 VASO_RATE_CONCEPTS = {"dopa_rate", "dobu_rate", "epi_rate", "norepi_rate", "adh_rate"}
 
+# 窗口/递归聚合方法的概念级覆盖 —— 单一声明式来源（REFACTOR 2026-06）。
+# 这些是 change_interval 在同一时间桶内聚合"最终概念值"时使用的标量方法，
+# 区别于概念字典里的 per-source `aggregate` 列表（后者是每个数据源各自的聚合）。
+# 历史上这两条规则以散落的 `if concept_name == 'gcs'` / `sofa_max_concepts`
+# 内联在 _apply_change_interval 流程里，难审计；现集中到此表。
+# 值为 (method, force):
+#   - force=True : 始终覆盖为 method（即使传入了别的显式聚合）—— 用于 gcs，
+#                  取窗口最小值（最差神经状态），与 R ricu recursive gcs 一致。
+#   - force=False: 仅当未另行确定聚合方法 (agg_method is None) 时套用 —— 用于
+#                  sofa_cardio / sofa2_cardio，取窗口最大值保留升压药尖峰严重度，
+#                  默认 median 会把尖峰稀释，ricu 取窗口最大。
+WINDOW_AGGREGATE_OVERRIDES: Dict[str, tuple] = {
+    "gcs": ("min", True),
+    "sofa_cardio": ("max", False),
+    "sofa2_cardio": ("max", False),
+}
+
+
+def resolve_window_aggregate(concept_name: str, agg_method):
+    """套用概念级窗口聚合覆盖，返回最终的 agg_method（纯函数，便于单测）。
+
+    语义与历史内联实现逐字等价：force=True 始终覆盖（除非已等于目标方法），
+    force=False 仅在 agg_method 为 None 时套用。未登记的概念原样返回。
+    """
+    override = WINDOW_AGGREGATE_OVERRIDES.get(concept_name)
+    if override is None:
+        return agg_method
+    method, force = override
+    if force:
+        if agg_method is None or (isinstance(agg_method, str) and agg_method != method):
+            return method
+        return agg_method
+    if agg_method is None:
+        return method
+    return agg_method
+
 
 class _AvailabilityLoadContext:
     """Per-call mutable state for optional concept availability tracking."""
@@ -1136,10 +1172,12 @@ class ConceptResolver:
                         # path and _align_time_to_admission expect hours. Convert to hours here
                         # to match single-concept behavior (avoid downstream time-unit mismatch
                         # when merging sub-concepts, e.g. in _callback_news/mews).
+                        # 转换因子统一走 time_units.minutes_to_hours_series（单一来源，禁止裸 /60.0）。
                         _db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                         if _db_name == 'aumc' and _time_col_out == 'measuredat_minutes':
+                            from .time_units import minutes_to_hours_series
                             batch_df = batch_df.copy()
-                            batch_df['measuredat_minutes'] = batch_df['measuredat_minutes'] / 60.0
+                            batch_df['measuredat_minutes'] = minutes_to_hours_series(batch_df['measuredat_minutes'])
 
                         covered_names = set()
                         for concept_name in batch_itemids:
@@ -1598,48 +1636,17 @@ class ConceptResolver:
         # 🔧 提取数据库名称，用于后续的数据库特定处理
         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
 
-        # 🚀 预检查：多源概念的 value_transform 回调计数
-        # 当 2+ 个源使用 value_transform（percent_as_numeric, set_val_na, fahr_to_cels）时，
-        # DuckDB 每源单独 MEDIAN 聚合会产生 median-of-medians（≠ median-of-all-raw-data）。
-        # 禁止 DuckDB 聚合以保持与 R ricu 一致的跨源池化 MEDIAN。
-        _n_value_transform_sources = 0
-        for _src in sources:
-            _cb = getattr(_src, 'callback', None)
-            if isinstance(_cb, str):
-                _cb_stripped = _cb.strip()
-                if (_cb_stripped == 'transform_fun(percent_as_numeric)' or
-                    (_cb_stripped.startswith('convert_unit(') and
-                     ('set_val(' in _cb_stripped or 'fahr_to_cels' in _cb_stripped))):
-                    _n_value_transform_sources += 1
-        _block_duckdb_value_transform = _n_value_transform_sources > 1
-
-        # 🔧 FIX 2026-05: 同表多源检测
-        # 当 2+ 个源指向同一个表时（如 AUMC o2sat 的 [6709, 8903] + [12311 *100]），
-        # 每个源单独在 DuckDB 中聚合会得到 median-of-medians 而不是池化 median。
-        # R ricu 的行为是把所有源的原始值一起 pool，再一次性 median。
-        # 为了匹配 ricu，禁止同表多源使用 DuckDB 预聚合，让 change_interval 做统一聚合。
-        _table_source_counts: Dict[str, int] = {}
-        for _src in sources:
-            _tbl = getattr(_src, 'table', None)
-            if _tbl:
-                _table_source_counts[_tbl] = _table_source_counts.get(_tbl, 0) + 1
-        _block_duckdb_same_table = any(cnt > 1 for cnt in _table_source_counts.values())
-
-        # 🔧 FIX 2026-05: 多源（不论是否同表）聚合一致性
-        # 即使源分布在不同表（如 MIMIC o2sat 的 chartevents + labevents），
-        # 每源独立 DuckDB MEDIAN 后 concat 再 mean，仍与 ricu 的池化 median 不一致。
-        # 对所有 num_cncpt 且至少有一个数值列的源 ≥ 2 情况，禁用 DuckDB 预聚合。
-        # rgx_itm 类源常量比较稀疏，保持原路径。
-        _n_plain_num_sources = 0
-        for _src in sources:
-            _cb = getattr(_src, 'callback', None)
-            _cls = getattr(_src, 'class_name', None)
-            if _cls == 'rgx_itm':
-                continue
-            # plain numeric source OR simple transform source
-            if _cb is None or isinstance(_cb, str):
-                _n_plain_num_sources += 1
-        _block_duckdb_multi_numeric = _n_plain_num_sources >= 2
+        # 🔧 REFACTOR 2026-06: 跨源池化决策收敛到单一策略函数（pooling.compute_pooling_decision）。
+        # 历史上这里有三段内联代码分别计算 _block_duckdb_value_transform /
+        # _block_duckdb_same_table / _block_duckdb_multi_numeric，散落难审计、易回归。
+        # 现统一由 pooling 模块计算（语义逐字等价，见 tests/test_ricu_alignment.py），
+        # 目的都是：当一个概念有多个数值源时，禁用 DuckDB 每源预聚合，避免
+        # median-of-medians，让 change_interval 做一次性跨源池化（匹配 R ricu）。
+        from .pooling import compute_pooling_decision
+        _pool_decision = compute_pooling_decision(sources)
+        _block_duckdb_value_transform = _pool_decision.block_value_transform
+        _block_duckdb_same_table = _pool_decision.block_same_table
+        _block_duckdb_multi_numeric = _pool_decision.block_multi_numeric
 
         for source in sources:
             _convert_unit_callback_for_duckdb = False  # 每个 source 重置
@@ -4925,12 +4932,13 @@ class ConceptResolver:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
             
-            # 转换所有时间列（从分钟到小时）
+            # 转换所有时间列（从分钟到小时）— 统一走 time_units（单一来源）
+            from .time_units import minutes_to_hours_series
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
-                    data[col] = data[col] / 60.0
+                    data[col] = minutes_to_hours_series(data[col])
             return data
-        
+
         if db_name == 'aumc':
             # AUMC时间列是绝对时间戳（毫秒，已在datasource.py中转换为分钟）
             # R ricu 的行为：使用绝对时间（小时），不减去 admittedat
@@ -4963,12 +4971,13 @@ class ConceptResolver:
             if not cols_to_convert:
                 return data
             
-            # 时间转换：只将分钟转换为小时（不减去 admittedat）
+            # 时间转换：只将分钟转换为小时（不减去 admittedat）— 统一走 time_units
+            from .time_units import minutes_to_hours_series
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
-                    # 分钟转小时
-                    data[col] = data[col] / 60.0
-            
+                    # 分钟转小时（单一来源转换因子）
+                    data[col] = minutes_to_hours_series(data[col])
+
             return data
         
         if db_name == 'sic':
@@ -5745,20 +5754,15 @@ class ConceptResolver:
             agg_method = agg_value if agg_value not in (None, False, "auto") else None
             if agg_method in (None, "auto"):
                 agg_method = None
-            # GCS total score should use 'min' aggregation (for recursive concepts)
-            # But GCS sub-components should use default aggregation (median)
-            if concept_name == 'gcs':
-                if agg_method is None or (isinstance(agg_method, str) and agg_method != 'min'):
-                    agg_method = 'min'
-            # 🔧 FIX 2024-12-01: 删除 VASO_RATE_CONCEPTS 使用 max 聚合的特殊处理
-            # R ricu 对所有数值概念默认使用 median 聚合，VASO_RATE_CONCEPTS 也不例外
-            # 之前的 max 聚合导致 norepi_rate 等概念与 ricu 不一致
-            # SOFA cardiovascular components must retain the highest severity within the window.
-            # Using the default 'median' aggregation diluted vasopressor-driven spikes (e.g. 2 and 4
-            # becoming 3, or 1 and 2 becoming 1.5). ricu keeps the window maximum, so align here.
-            sofa_max_concepts = {'sofa_cardio', 'sofa2_cardio'}
-            if agg_method is None and concept_name in sofa_max_concepts:
-                agg_method = 'max'
+            # 🔧 REFACTOR 2026-06: 概念级窗口聚合覆盖统一查 WINDOW_AGGREGATE_OVERRIDES
+            # （单一声明式来源，见模块顶部）。语义逐字保留：
+            #   - gcs (force=True): 取窗口最小值，即使传入别的聚合也覆盖（recursive GCS 取最差）。
+            #     GCS 子分量不在表中，仍走默认 median。
+            #   - sofa_cardio / sofa2_cardio (force=False): 仅在未确定聚合时取 max，
+            #     保留升压药驱动的最高严重度（默认 median 会稀释尖峰，ricu 取窗口最大）。
+            # 注：VASO_RATE_CONCEPTS 不在表中——R ricu 对其也用默认 median，2024-12 已纠正
+            # 历史上误用的 max 聚合（曾导致 norepi_rate 等与 ricu 不一致）。
+            agg_method = resolve_window_aggregate(concept_name, agg_method)
             # 如果仍然没有指定，根据值列类型自动选择
             if agg_method is None:
                 # Get value column based on result type

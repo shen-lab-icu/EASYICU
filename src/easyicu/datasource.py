@@ -3100,7 +3100,9 @@ def load_bucketed_table_aggregated(
     
     if db_name == 'aumc':
         # AUMC measuredat是Unix毫秒时间戳，转换为分钟后再取整
-        # NOTE: 这里输出的是分钟，与ricu(小时)不匹配。修复需要在concept.py中处理时间单位转换。
+        # NOTE: 这里输出的是分钟(measuredat_minutes)。分钟→小时的归一由 concept.py
+        # 经 time_units.minutes_to_hours_series 单点完成（批量路径或 _align_time_to_admission，
+        # 两者互斥，每列只转一次）。本层只产出分钟，不做单位换算。
         time_round_expr = f"FLOOR(({time_col} / 60000.0) / {interval_minutes}) * {interval_minutes}"
         # 输出时间列为分钟偏移量（相对于admittedat）
         output_time_expr = f"{time_round_expr} as measuredat_minutes"
