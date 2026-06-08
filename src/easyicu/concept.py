@@ -140,16 +140,19 @@ def _default_id_columns_for_db(db_name: Optional[str]) -> List[str]:
         "hirid": ["patientid"],
         "sic": ["CaseID"],  # 🔧 FIX 2025-01-31: Use CaseID (uppercase) to match actual SICdb data
         "miiv": ["stay_id"],
-        "mimic_demo": ["stay_id"],
+        # 🔧 FIX 2026-06: mimic_demo 是 MIMIC-III demo (physionet mimiciii-demo/1.4),
+        # 与 mimic 一样用 icustay_id, 而非 miiv 的 stay_id。此前误置为 stay_id 会导致
+        # 空/默认结果的 id 列与真实数据(icustay_id)不一致, SOFA 合并报 ID 冲突。
+        "mimic_demo": ["icustay_id"],
         "mimic": ["icustay_id"],  # 🔧 FIX 2026-02-06: MIMIC-III uses icustay_id
     }
 
     # Check explicit mapping first (mimic → icustay_id, miiv → stay_id)
     if db in mapping:
         return mapping[db]
-    # Fallback for mimic variants (e.g. mimic_demo if not in mapping)
+    # Fallback for mimic variants (MIMIC-III family uses icustay_id; miiv 不以 'mimic' 开头)
     if db.startswith("mimic"):
-        return ["stay_id"]
+        return ["icustay_id"]
     return mapping.get(db, ["stay_id"])
 
 
