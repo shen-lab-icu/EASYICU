@@ -10418,10 +10418,12 @@
           "ids": [
             12281,
             8852,
-            8877
+            8877,
+            6698
           ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "6698='PIP'(cmH2O, primary peak insp pressure) added 2026-06-08 ricu-audit; same unit as 12281 Piek druk. Excluded 12365 Piek druk (2) = secondary channel."
         }
       ],
       "eicu": [
