@@ -8748,9 +8748,13 @@
       ],
       "sic": [
         {
-          "ids": 713,
+          "ids": [
+            713,
+            2019
+          ],
           "table": "data_float_h",
-          "sub_var": "DataID"
+          "sub_var": "DataID",
+          "_comment": "713=MV (exp); 2019=MV (total minute volume); both unit L. 2019 added 2026-06-08 ricu-audit (docs/ricu_audit_results_20260608.md)"
         }
       ]
     }
