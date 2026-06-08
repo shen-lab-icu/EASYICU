@@ -163,12 +163,19 @@ __all__ = [
     "default_public_databases",
     "explain_concept_availability",
     "extract_literature_ideas",
+    "fetch_source_materials_from_scope",
     "freeze_source_snapshot",
     "hypothesis_cross_database_feasibility",
     "map_literature_idea_to_executable_candidate",
     "real_data_concept_feasibility",
     "render_discovery_report",
     "run_idea_mining_dry_run",
+    # Idea-mining literature scope (discovery lever 1)
+    "JOURNAL_PRESETS",
+    "LiteratureScopeSpec",
+    "build_pubmed_query_from_scope",
+    "resolve_journals",
+    "resolve_year_range",
     "ExperimentSpec",
     "CohortInputSpec",
     "RuntimeSpec",
@@ -508,6 +515,7 @@ def __getattr__(name: str):
         "build_discovery_candidate_records",
         "build_prior_art_queries",
         "extract_literature_ideas",
+        "fetch_source_materials_from_scope",
         "freeze_source_snapshot",
         "map_literature_idea_to_executable_candidate",
         "render_discovery_report",
@@ -516,6 +524,16 @@ def __getattr__(name: str):
         from . import idea_mining as _idea_mining
 
         return getattr(_idea_mining, name)
+    if name in {
+        "JOURNAL_PRESETS",
+        "LiteratureScopeSpec",
+        "build_pubmed_query_from_scope",
+        "resolve_journals",
+        "resolve_year_range",
+    }:
+        from . import idea_scope as _idea_scope
+
+        return getattr(_idea_scope, name)
     if name in {
         "ExperimentSpec",
         "CohortInputSpec",
