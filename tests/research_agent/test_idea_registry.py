@@ -234,3 +234,43 @@ def test_package_lazy_exports_registry_api() -> None:
     assert ra.CandidateRegistryEntry is CandidateRegistryEntry
     assert ra.IdeaCandidateRegistry is IdeaCandidateRegistry
     assert ra.SelectionStatus is not None
+
+
+def test_concurrent_instances_do_not_lose_appends(tmp_path: Path) -> None:
+    # Two registry handles on the same ledger. `a` loaded its snapshot before
+    # `b` appended; without reload-before-append, a's write would clobber b's
+    # entry (lost update). The locked read-modify-write must preserve both.
+    path = tmp_path / "registry.json"
+    a = IdeaCandidateRegistry(path)
+    b = IdeaCandidateRegistry(path)
+
+    b.register_candidate(_entry("candidate_b"))
+    a.register_candidate(_entry("candidate_a"))  # a still holds a stale snapshot
+
+    on_disk = IdeaCandidateRegistry(path)
+    ids = {rec.candidate_id for rec in on_disk.records}
+    assert ids == {"candidate_a", "candidate_b"}
+
+
+def test_gate_sees_decision_written_by_another_instance(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    a = IdeaCandidateRegistry(path)
+    b = IdeaCandidateRegistry(path)
+
+    a.register_candidate(_entry("candidate_a"))
+    a.record_selection("candidate_a", "accepted", by="dr_x", reason="plausible")
+
+    # b never saw the registration in memory, but the gate reloads from disk.
+    assert b.assert_executable("candidate_a") is True
+
+
+def test_write_is_atomic_and_leaves_no_temp_files(tmp_path: Path) -> None:
+    path = tmp_path / "registry.json"
+    registry = IdeaCandidateRegistry(path)
+    registry.register_candidate(_entry("candidate_a"))
+
+    # ledger is valid JSON and no .tmp sidecars are left behind
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert [e["candidate_id"] for e in payload["entries"]] == ["candidate_a"]
+    leftovers = [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+    assert leftovers == []
