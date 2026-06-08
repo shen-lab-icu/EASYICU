@@ -666,14 +666,14 @@ def render_design_page_header(
         '<div class="eu-design-page-header">'
         f'<div class="mono" style="font-size:11px;color:var(--ink-4);'
         f'letter-spacing:0.06em;text-transform:uppercase">{_esc(kicker)}</div>'
-        '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-top:6px">'
-        '<div>'
+        '<div class="eu-design-page-header-row" style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-top:6px">'
+        '<div class="eu-design-page-header-copy">'
         f'<h1 style="margin:0;font-size:22px;font-weight:500;letter-spacing:0;color:var(--ink)">'
         f'{_esc(title)}'
         '</h1>'
         f'<div style="margin-top:4px;color:var(--ink-3);font-size:12.5px">{_esc(desc)}</div>'
         '</div>'
-        f'<div style="display:flex;gap:6px;flex-shrink:0">{right_html}</div>'
+        f'<div class="eu-design-page-header-actions" style="display:flex;gap:6px;flex-shrink:0">{right_html}</div>'
         '</div></div>'
     )
 

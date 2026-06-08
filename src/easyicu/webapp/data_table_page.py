@@ -72,6 +72,62 @@ def _render_preview_csv_download(
     )
 
 
+def _render_data_table_detail_gate(
+    *,
+    lang: str,
+    selected_module: str,
+    module_feature_count: int,
+    patient_count: int,
+) -> bool:
+    """Return True when the heavy table preview controls should render."""
+    details_open = bool(st.session_state.get("data_table_details_open"))
+    title = "Table details" if lang == "en" else "表格细节"
+    if details_open:
+        body = (
+            "Preview controls, merged rows, filters, and CSV export are visible below."
+            if lang == "en"
+            else "下方已显示预览控件、合并行、筛选与 CSV 导出。"
+        )
+        action = "Hide table details" if lang == "en" else "收起表格细节"
+        tone = "open"
+        button_key = "data_table_hide_details"
+    else:
+        body = (
+            "Keep the review workspace light by default. Open details only when you need raw rows, filters, or a CSV preview."
+            if lang == "en"
+            else "默认保持审阅工作区轻量；需要原始行、筛选或 CSV 预览时再打开细节。"
+        )
+        action = "Open table details" if lang == "en" else "打开表格细节"
+        tone = "collapsed"
+        button_key = "data_table_open_details"
+
+    metric_html = "".join(
+        f'<span><b>{html.escape(str(value))}</b>{html.escape(str(label))}</span>'
+        for label, value in (
+            ("module" if lang == "en" else "模块", selected_module),
+            ("features" if lang == "en" else "特征", module_feature_count),
+            ("patients" if lang == "en" else "患者", patient_count),
+        )
+    )
+    st.markdown(
+        f'''
+        <div class="dt-detail-gate {tone}">
+            <div>
+                <div class="dt-detail-gate-kicker">{html.escape(title)}</div>
+                <div class="dt-detail-gate-title">{html.escape("Raw rows are optional" if lang == "en" else "原始行按需查看")}</div>
+                <p>{html.escape(body)}</p>
+                <div class="dt-detail-gate-metrics">{metric_html}</div>
+            </div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+    if st.button(action, key=button_key, use_container_width=True):
+        st.session_state["data_table_details_open"] = not details_open
+        st.rerun()
+    return details_open
+
+
 def render_data_table_subtab(app_context: dict[str, Any] | None = None):
     """渲染数据大表子模块 - 让用户按模块查看已加载的数据。"""
     if app_context is not None:
@@ -244,6 +300,13 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
             unsafe_allow_html=True,
         )
         st.markdown('<div class="dt-section-separator"></div>', unsafe_allow_html=True)
+        if not _render_data_table_detail_gate(
+            lang=lang,
+            selected_module=selected_module,
+            module_feature_count=len(module_concepts),
+            patient_count=patient_count,
+        ):
+            return
 
         view_mode_label = "Preview Mode" if lang == 'en' else "预览模式"
         view_modes = ["Merge All (Wide Table)", "Single Feature"] if lang == 'en' else ["合并全部（宽表）", "单个特征"]

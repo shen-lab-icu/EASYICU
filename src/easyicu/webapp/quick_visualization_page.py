@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import html
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -179,6 +181,139 @@ def _render_quick_viz_export_path_recovery(lang: str) -> None:
         ):
             _apply_quick_viz_export_candidate(st.session_state, default_export_root)
             st.rerun()
+
+
+def _quick_viz_workspace_summary(state: dict[str, Any], lang: str) -> dict[str, Any]:
+    """Build a serializable summary of the loaded review workspace."""
+    loaded_concepts = state.get("loaded_concepts") if isinstance(state.get("loaded_concepts"), dict) else {}
+    patient_ids = list(state.get("patient_ids") or [])
+    try:
+        all_patient_count = int(state.get("all_patient_count") or 0)
+    except (TypeError, ValueError):
+        all_patient_count = 0
+    loaded_patient_count = len(patient_ids) or all_patient_count
+    concept_names = sorted(str(name) for name in loaded_concepts)
+    origin = str(state.get("loaded_data_origin") or "none")
+    source_labels = {
+        "demo_viz": ("Demo review workspace", "演示审阅工作区"),
+        "exported_files": ("Exported EasyICU tables", "已导出的 EasyICU 表格"),
+        "loaded_exports": ("Loaded export workspace", "已加载导出工作区"),
+        "quick_load": ("Quick-loaded local data", "快速加载的本地数据"),
+        "quick_preview": ("Preview data", "预览数据"),
+        "preview": ("Preview data", "预览数据"),
+        "real_sofa_reclassification": ("Real SOFA workspace", "真实 SOFA 工作区"),
+        "none": ("No data loaded", "尚未加载数据"),
+    }
+    source_label_en, source_label_zh = source_labels.get(origin, (origin.replace("_", " ").title(), origin))
+    if origin in {"preview", "quick_preview"} and (
+        state.get("entry_mode") == "demo" or state.get("use_mock_data") or state.get("database") == "mock"
+    ):
+        source_label_en, source_label_zh = "Demo review workspace", "演示审阅工作区"
+    is_en = lang == "en"
+    module_count = _quick_viz_loaded_module_count(concept_names)
+    return {
+        "loaded": bool(concept_names),
+        "origin": origin,
+        "source_label": source_label_en if is_en else source_label_zh,
+        "concept_count": len(concept_names),
+        "module_count": module_count,
+        "concepts": concept_names,
+        "loaded_patient_count": loaded_patient_count,
+        "all_patient_count": all_patient_count or loaded_patient_count,
+        "active_panel": str(state.get("quick_viz_active_panel") or "Data Tables"),
+        "export_path": str(state.get("viz_confirmed_path") or state.get("last_export_dir") or state.get("viz_export_path") or ""),
+        "error_count": int(state.get("quick_viz_error_count") or 0),
+    }
+
+
+def _quick_viz_loaded_module_count(concept_names: list[str]) -> int:
+    """Count EasyICU concept modules represented by loaded concepts."""
+    groups = globals().get("CONCEPT_GROUPS_INTERNAL")
+    if isinstance(groups, dict):
+        concept_set = set(concept_names)
+        module_count = sum(
+            1
+            for concepts in groups.values()
+            if isinstance(concepts, list) and any(str(concept) in concept_set for concept in concepts)
+        )
+        if module_count:
+            return module_count
+    return len(concept_names)
+
+
+def _quick_viz_export_summary_payload(state: dict[str, Any], lang: str) -> bytes:
+    """Return a JSON payload for the loaded review workspace summary."""
+    summary = _quick_viz_workspace_summary(state, lang)
+    payload = {
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "workspace": summary,
+        "notes": (
+            "Summary only; patient-level rows are not included."
+            if lang == "en" else
+            "仅包含摘要；不包含患者级数据行。"
+        ),
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def _quick_viz_reset_review_workspace(state: dict[str, Any]) -> None:
+    """Clear the loaded review workspace and return to the setup loader."""
+    state["loaded_concepts"] = {}
+    state["loaded_data_origin"] = "none"
+    state["patient_ids"] = []
+    state["all_patient_count"] = 0
+    state["selected_patient"] = None
+    state["selected_concepts"] = []
+    state.pop("available_patient_ids", None)
+    state.pop("patient_view_id", None)
+    state.pop("quick_viz_active_panel", None)
+    state["_scroll_to_top"] = True
+
+
+def _render_quick_viz_loaded_bar(lang: str) -> None:
+    """Render the loaded-workspace status bar and concrete actions."""
+    is_en = lang == "en"
+    summary = _quick_viz_workspace_summary(st.session_state, lang)
+    status_text = (
+        f"{summary['loaded_patient_count']} stays · {summary['module_count']} modules · {summary['error_count']} errors"
+        if is_en else
+        f"{summary['loaded_patient_count']} 例 stay · {summary['module_count']} 个模块 · {summary['error_count']} 个错误"
+    )
+    is_demo_review = str(summary.get("source_label") or "").startswith("Demo review")
+    title = "Demo review workspace ready" if is_demo_review and is_en else summary["source_label"]
+    if is_demo_review and not is_en:
+        title = "演示审阅工作区已就绪"
+    with st.container(key="eu_qv_loaded_bar"):
+        st.markdown(
+            '<div class="eu-qv-loaded-bar">'
+            '<div class="eu-qv-loaded-copy">'
+            f'<span class="eu-qv-loaded-pill">{html.escape("Loaded" if is_en else "已加载")}</span>'
+            f'<b>{html.escape(str(title))}</b>'
+            f'<p>{html.escape(status_text)}</p>'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        action_cols = st.columns([1, 1, 4])
+        with action_cols[0]:
+            if st.button(
+                "Edit setup" if is_en else "编辑设置",
+                key="quick_viz_edit_setup",
+                icon=":material/tune:",
+                use_container_width=True,
+            ):
+                _quick_viz_reset_review_workspace(st.session_state)
+                st.rerun()
+        with action_cols[1]:
+            st.download_button(
+                "Export" if is_en else "导出",
+                data=_quick_viz_export_summary_payload(st.session_state, lang),
+                file_name="easyicu_review_workspace_summary.json",
+                mime="application/json",
+                key="quick_viz_export_summary",
+                icon=":material/download:",
+                use_container_width=True,
+            )
 
 
 def _quick_viz_panel_options(lang: str) -> list[tuple[str, str]]:
@@ -471,6 +606,7 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
             render_quick_figure_panel(figure_panel)
             return
 
+        _render_quick_viz_loaded_bar(lang)
         active_panel = _render_quick_viz_panel_switcher(lang)
         if active_panel == "Data Tables":
             render_data_table_subtab()

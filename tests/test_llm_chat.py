@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -101,6 +102,23 @@ def test_easyicu_hosted_is_available_to_web_assistant() -> None:
     assert llm_config.coerce_public_provider("easyicu_hosted") == "easyicu_hosted"
 
 
+def test_openrouter_env_prefills_shared_llm_config(monkeypatch) -> None:
+    fake_streamlit = SimpleNamespace(session_state={})
+    monkeypatch.setattr(llm_config, "st", fake_streamlit)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test-env")
+    monkeypatch.setenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("EASYICU_OPENROUTER_MODEL", "z-ai/glm-4.5-air:free")
+
+    llm_config.ensure_llm_config_state()
+
+    assert fake_streamlit.session_state["llm_enabled"] is False
+    assert fake_streamlit.session_state["llm_provider"] == "openrouter"
+    assert fake_streamlit.session_state["llm_api_key"] == "sk-test-env"
+    assert fake_streamlit.session_state["llm_base_url"] == "https://openrouter.ai/api/v1"
+    assert fake_streamlit.session_state["llm_model"] == "z-ai/glm-4.5-air:free"
+    assert fake_streamlit.session_state["llm_configured"] is True
+
+
 def test_easyicu_hosted_is_configured_without_user_key(monkeypatch) -> None:
     fake_streamlit = SimpleNamespace(
         session_state={
@@ -112,6 +130,118 @@ def test_easyicu_hosted_is_configured_without_user_key(monkeypatch) -> None:
     monkeypatch.setattr(llm_chat, "st", fake_streamlit)
 
     assert llm_chat._is_configured() is True
+
+
+def test_openrouter_client_uses_reference_headers(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    fake_streamlit = _FakeStreamlit(
+        {
+            "llm_provider": "openrouter",
+            "llm_api_key": "sk-test",
+            "llm_base_url": "https://openrouter.ai/api/v1",
+            "llm_model": "z-ai/glm-4.5-air:free",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", fake_streamlit)
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_FakeOpenAI))
+
+    client = llm_chat._get_client()
+
+    assert client is not None
+    assert captured["api_key"] == "sk-test"
+    assert captured["base_url"] == "https://openrouter.ai/api/v1"
+    assert captured["default_headers"] == {
+        "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
+        "X-Title": "EasyICU web copilot",
+    }
+    assert "sk-test" not in repr(captured["default_headers"])
+
+
+def test_background_openrouter_call_uses_reference_headers(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Choice:
+        message = SimpleNamespace(content="ok")
+
+    class _Completions:
+        def create(self, **kwargs):
+            captured["create"] = kwargs
+            return SimpleNamespace(choices=[_Choice()])
+
+    class _Chat:
+        completions = _Completions()
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured["client"] = kwargs
+            self.chat = _Chat()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_FakeOpenAI))
+    session_id = "unit-openrouter-bg"
+    llm_chat._bg_results.pop(session_id, None)
+
+    llm_chat._bg_llm_call(
+        [{"role": "user", "content": "ping"}],
+        "en",
+        "openrouter",
+        "z-ai/glm-4.5-air:free",
+        "https://openrouter.ai/api/v1",
+        "sk-test",
+        session_id,
+    )
+
+    assert captured["client"]["default_headers"] == {
+        "HTTP-Referer": "https://github.com/shen-lab-icu/easyicu",
+        "X-Title": "EasyICU web copilot",
+    }
+    assert captured["create"]["model"] == "z-ai/glm-4.5-air:free"
+    assert llm_chat._bg_results.pop(session_id)["answer"] == "ok"
+
+
+def test_empty_openrouter_response_is_treated_as_actionable_error(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _Choice:
+        message = SimpleNamespace(content="")
+
+    class _Completions:
+        def create(self, **kwargs):
+            captured["create"] = kwargs
+            return SimpleNamespace(choices=[_Choice()])
+
+    class _Chat:
+        completions = _Completions()
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs) -> None:
+            captured["client"] = kwargs
+            self.chat = _Chat()
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=_FakeOpenAI))
+    session_id = "unit-openrouter-empty"
+    llm_chat._bg_results.pop(session_id, None)
+
+    llm_chat._bg_llm_call(
+        [{"role": "user", "content": "ping"}],
+        "en",
+        "openrouter",
+        "z-ai/glm-4.5-air:free",
+        "https://openrouter.ai/api/v1",
+        "sk-test",
+        session_id,
+    )
+
+    result = llm_chat._bg_results.pop(session_id)
+    assert result["status"] == "error"
+    assert "empty response" in result["answer"].lower()
+    message = llm_chat._handle_api_error(RuntimeError(result["answer"]), "en", render=False)
+    assert "empty response" in message
+    assert "OpenRouter free model" in message
 
 
 def test_ai_assistant_page_render_does_not_enable_hosted_provider(monkeypatch) -> None:

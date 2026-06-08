@@ -92,6 +92,10 @@ from easyicu.webapp.paper_figures import (
 )
 from easyicu.webapp.workflow_figure import _render_extraction_pipeline_figure as _render_extraction_pipeline_figure_impl
 from easyicu.webapp import cohort_charts as cc
+from easyicu.project_config import (
+    DEFAULT_WEB_UI_DISPLAY_TARGET,
+    normalize_web_ui_display_target,
+)
 from easyicu.webapp.styles import render_global_styles
 from easyicu.webapp.shell_styles import render_shell_styles
 from easyicu.webapp.i18n import get_text, strip_emoji
@@ -225,11 +229,16 @@ render_shell_styles(st)
 _eu_density_pref = str(st.session_state.get("ui_density") or "comfortable").lower()
 if _eu_density_pref not in {"comfortable", "compact"}:
     _eu_density_pref = "comfortable"
+_eu_display_target = normalize_web_ui_display_target(
+    st.session_state.get("ui_display_target") or DEFAULT_WEB_UI_DISPLAY_TARGET
+)
+st.session_state["ui_display_target"] = _eu_display_target
 _eu_reduce_motion = "true" if bool(st.session_state.get("reduce_motion", False)) else "false"
 st.markdown(
     f"""
     <div id="eu-display-preferences"
          data-density="{_eu_density_pref}"
+         data-display-target="{_eu_display_target}"
          data-reduce-motion="{_eu_reduce_motion}"
          style="display:none"></div>
     <style>
@@ -243,6 +252,9 @@ st.markdown(
     .stApp:has(#eu-display-preferences[data-density="compact"]) .eu-settings-card,
     .stApp:has(#eu-display-preferences[data-density="compact"]) .eu-agent-panel {{
       padding-block: 12px !important;
+    }}
+    .stApp:has(#eu-display-preferences[data-display-target="desktop"]) {{
+      --eu-shell-target: desktop;
     }}
     .stApp:has(#eu-display-preferences[data-reduce-motion="true"]) *,
     .stApp:has(#eu-display-preferences[data-reduce-motion="true"]) *::before,
@@ -601,6 +613,7 @@ def _apply_quick_viz_screenshot_defaults(state: dict[str, Any], *, lang: str) ->
     if quality_concept:
         state['quality_concept'] = quality_concept
     state['data_table_view_mode'] = "Merge All (Wide Table)" if lang == 'en' else "合并全部（宽表）"
+    state['data_table_details_open'] = True
     state['_quick_viz_screenshot_preset_applied'] = True
 
 
@@ -725,6 +738,35 @@ def _switch_extract_entry_mode(state: dict[str, Any], target: str) -> None:
     state.pop('_export_failure_result', None)
     state.pop('_scroll_to_tab', None)
     state['_active_main_page'] = 'extract'
+
+
+def _clear_query_param(key: str) -> None:
+    params = getattr(st, "query_params", None)
+    if params is None:
+        return
+    try:
+        if key in params:
+            del params[key]
+    except Exception:
+        try:
+            params.clear()
+        except Exception:
+            return
+
+
+def _consume_research_agent_route_action(state: MutableMapping[str, Any]) -> bool:
+    """Consume Research Agent links before the entry shell can reset routing."""
+    key = "eu_ra_action"
+    action = query_param_value(st, key)
+    if action != "switch_cohort":
+        return False
+    _clear_query_param(key)
+    from easyicu.webapp.research_agent import _activate_real_data_mode_from_agent
+
+    clear_run_state("all")
+    _activate_real_data_mode_from_agent(state)
+    state["_research_agent_switch_cohort_notice"] = True
+    return True
 
 
 def _apply_topbar_breadcrumb_target(state: dict[str, Any], target: str) -> None:
@@ -1003,6 +1045,7 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
     state['entry_mode'] = 'demo'
     state['use_mock_data'] = True
     state['database'] = 'mock'
+    state['_eu_entry_home_layout'] = 'prompt'
     state['demo_mode_patients'] = LIGHTWEIGHT_DEMO_PATIENTS
     state['demo_mode_hours'] = LIGHTWEIGHT_DEMO_HOURS
     state['mock_params'] = {
@@ -1038,7 +1081,15 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
         '_eu_wb_findings_acked',
         '_eu_wb_findings_acked_run_dir',
         '_eu_wb_review_details_expanded',
+        '_eu_wb_detail_advanced',
+        '_eu_wb_open_step_details',
+        '_eu_wb_hide_step_details',
         '_eu_wb_action_panel',
+        'research_agent_show_advanced_setup',
+        'research_agent_idea_show_advanced_mapping',
+        'research_agent_idea_show_triage_details',
+        'cohort_group_show_methods_note',
+        'data_table_details_open',
     ):
         state.pop(key, None)
     for key in list(state):
@@ -1063,6 +1114,7 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
     state['_eu_settings_allow_outbound_model_calls'] = False
     state['_eu_settings_reduce_motion'] = False
     state['ui_density'] = 'comfortable'
+    state['ui_display_target'] = DEFAULT_WEB_UI_DISPLAY_TARGET
     state['reduce_motion'] = False
     state['_llm_provider_sel'] = default_provider
     state['_llm_api_key_inp'] = ''
@@ -1272,7 +1324,6 @@ def _topbar_primary_action_label(
     if active_page == 'research_agent':
         return ('Agent guide', 'Agent 导览')
     label_map = {
-        'assistant': ('Open Agent', '打开 Agent'),
         'states': ('Patient Review', '患者审阅'),
         'quick_viz': ('Prepare review', '准备审阅'),
         'cohort': ('Re-run', '重新运行'),
@@ -1286,8 +1337,6 @@ def _topbar_primary_action_icon(active_page: str) -> str | None:
     """Return an optional material icon for the global topbar action."""
     if active_page == 'settings':
         return ':material/refresh:'
-    if active_page == 'assistant':
-        return ':material/smart_toy:'
     if active_page == 'states':
         return ':material/table_chart:'
     return None
@@ -1295,7 +1344,7 @@ def _topbar_primary_action_icon(active_page: str) -> str | None:
 
 def _render_narrow_view_notice(active_page: str, lang: str) -> None:
     """Show the dense-chart mobile notice only where it applies."""
-    if active_page not in {'quick_viz', 'cohort', 'cross_db'}:
+    if active_page not in {'cohort', 'cross_db'}:
         return
     message = (
         "Narrow view: EasyICU keeps this page readable here. Use a ≥1024 px window for dense chart comparison."
@@ -2374,10 +2423,17 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
 def _research_agent_handoff_setup_ready(state: Dict[str, Any]) -> bool:
     """Return whether an in-session cohort should open the real setup surface."""
     inbound = state.get("research_agent_inbound_cohort")
+    question_handoff_ready = (
+        bool(state.get("_eu_ra_question_handoff_setup"))
+        and bool(str(state.get("research_agent_question") or "").strip())
+    )
     return (
-        bool(state.get("_eu_ra_force_setup_from_handoff"))
-        and isinstance(inbound, pd.DataFrame)
-        and not inbound.empty
+        question_handoff_ready
+        or (
+            bool(state.get("_eu_ra_force_setup_from_handoff"))
+            and isinstance(inbound, pd.DataFrame)
+            and not inbound.empty
+        )
     )
 
 
@@ -3955,6 +4011,8 @@ def main():
     init_session_state()
     app_state = get_state()
     _apply_figure_query_preset(st.session_state, lang=st.session_state.get('language', 'en'))
+    if _consume_research_agent_route_action(st.session_state):
+        st.rerun()
 
     # 获取入口模式
     entry_mode = st.session_state.get('entry_mode', 'none')
@@ -4164,10 +4222,13 @@ def main():
                 unsafe_allow_html=True,
             )
     else:
-        if _active == 'tutorial':
-            # Tutorial already has explicit entry CTAs in the page body, so
-            # the global action buttons are withheld here to avoid duplicate,
-            # ambiguous calls to action.
+        if _active == 'assistant':
+            # The polish Copilot design is a full-screen conversational shell
+            # with its own Exit / Classic workspace controls.
+            pass
+        elif _active == 'tutorial':
+            # Tutorial exposes its primary actions in the page body, so the
+            # global action button is withheld while the breadcrumb remains.
             _tb_left = st.container()
             with _tb_left:
                 _render_topbar_path_nav(
@@ -4242,12 +4303,19 @@ def main():
     page_registry = build_main_page_registry(get_text)
     page_keys = [page["key"] for page in page_registry]
     page_labels = {page["key"]: page["label"] for page in page_registry}
-    mobile_page_keys = ["extract"] + page_keys + ["assistant", "states", "settings"]
+    mobile_page_keys = ["extract", "quick_viz", "cohort", "cross_db", "research_agent"]
     page_labels["extract"] = "Data Extraction" if lang == "en" else "数据提取"
     page_labels["tutorial"] = "Get Started" if lang == "en" else "开始使用"
     page_labels["assistant"] = "Research Copilot" if lang == "en" else "研究 Copilot"
     page_labels["states"] = "Workspace States" if lang == "en" else "工作区状态"
     page_labels["settings"] = "Settings" if lang == "en" else "设置"
+    mobile_page_labels = {
+        "extract": "Extract" if lang == "en" else "提取",
+        "quick_viz": "Patient" if lang == "en" else "患者",
+        "cohort": "Cohort" if lang == "en" else "队列",
+        "cross_db": "Cross-DB" if lang == "en" else "跨库",
+        "research_agent": "Agent" if lang == "en" else "Agent",
+    }
 
     # Resolve any pending navigation request (set by "Go to ..." buttons,
     # the sidebar, or the AI dock) into the active main page. This replaces
@@ -4274,15 +4342,16 @@ def main():
     elif _nav_request in _nav_page_map:
         st.session_state['_active_main_page'] = _nav_page_map[_nav_request]
 
-    # Tutorial is now the leftmost top tab again so it's discoverable from
-    # the main pane (also still reachable via the sidebar "📚 Workflow Help"
-    # button and ``_scroll_to_tab='tutorial'`` nav requests).
+    # The polish(2) mobile shell keeps the bottom bar focused on the five
+    # primary workflow pages. Support/reference pages remain routable from
+    # the sidebar, topbar, and programmatic actions but do not occupy bottom
+    # navigation slots.
     # 'extract' is a special main page (the relocated data-extraction
     # workflow) reached via the sidebar pipeline; it is intentionally
     # NOT in the radio page_keys but is still a valid active page.
-    _EXTRA_PAGES = {'extract', 'assistant', 'states', 'settings'}
+    _EXTRA_PAGES = {'extract', 'tutorial', 'assistant', 'states', 'settings'}
     if st.session_state.get('_active_main_page') not in (set(mobile_page_keys) | _EXTRA_PAGES):
-        st.session_state['_active_main_page'] = page_keys[0]
+        st.session_state['_active_main_page'] = mobile_page_keys[0]
 
     # Do NOT bind ``st.radio`` directly to ``_active_main_page`` via
     # ``key=``. Streamlit serializes the widget state against the options
@@ -4291,7 +4360,7 @@ def main():
     # ``ValueError: <name> is not in iterable``. Using a separate widget
     # key + on_change-propagation keeps programmatic navigation safe.
     _current_active = st.session_state.get('_active_main_page', page_keys[0])
-    _visible_active = _current_active if _current_active in mobile_page_keys else page_keys[0]
+    _visible_active = _current_active if _current_active in mobile_page_keys else mobile_page_keys[0]
     # Force the widget to reflect the current (or fallback) visible page
     # each render — without this, Streamlit's widget-state persistence
     # would override programmatic navigation from sidebar buttons.
@@ -4320,7 +4389,7 @@ def main():
         st.radio(
             "Main navigation",
             options=mobile_page_keys,
-            format_func=lambda key: page_labels.get(key, key),
+            format_func=lambda key: mobile_page_labels.get(key, page_labels.get(key, key)),
             horizontal=True,
             label_visibility='collapsed',
             key='_main_nav_widget',
@@ -4549,6 +4618,7 @@ def main():
             _default_ra_view = 'setup'
             _ra_view = st.session_state.get('_ra_view', _default_ra_view)
             _ra_run_context = _research_agent_active_run_context(st.session_state)
+
             _render_research_agent_reference_header(lang, view=_ra_view)
 
             with st.container(key="_eu_ra_tabs"):
