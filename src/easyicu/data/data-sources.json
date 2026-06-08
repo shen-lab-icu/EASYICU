@@ -5669,7 +5669,6 @@
   {
     "name": "mimic_demo",
     "class_prefix": [
-      "miiv",
       "mimic_demo",
       "mimic"
     ],
