@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from easyicu.webapp.cohort_filters import _read_table, _resolve_table_path
+from easyicu.webapp.concept_catalog import _sample_patient_ids_random
 from easyicu.webapp.data_paths import find_database_path
 from easyicu.webapp.services import count_unique_concepts, normalize_column_name
 
@@ -984,7 +985,13 @@ def load_from_exported(export_dir: str, max_patients: int = 50, selected_files: 
             preview_patient_ids = sorted(list(patient_ids))
             is_limited = False
         else:
-            preview_patient_ids = sorted(list(patient_ids))[:max_patients]
+            # 用「固定种子的随机采样」而非「sorted 前缀」做预览裁剪：
+            # 某些库(如 eICU)患者 id 按医院/批次聚簇，取最低 N 个 id 会得到
+            # 非代表性子集，使本来有覆盖的概念在预览里显示为空/异常稀疏。
+            # _sample_patient_ids_random(seed=42) 保证预览可复现，同时避免偏差。
+            preview_patient_ids = sorted(
+                _sample_patient_ids_random(list(patient_ids), max_patients)
+            )
             is_limited = all_patient_count > max_patients
 
         # 筛选数据只保留限制的患者
