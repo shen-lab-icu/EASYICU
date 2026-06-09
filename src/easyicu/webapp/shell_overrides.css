@@ -19128,6 +19128,15 @@ body ::-moz-selection,
   width: 100% !important;
   margin: 0 !important;
 }
+/* gd-opt second line: the description paragraph (smaller, muted) */
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] button [data-testid="stMarkdownContainer"] p + p {
+  margin-top: 3px !important;
+  font-size: 11.5px !important;
+  font-weight: 450 !important;
+  line-height: 1.35 !important;
+  color: var(--ink-4) !important;
+  -webkit-text-fill-color: var(--ink-4) !important;
+}
 /* right chevron */
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] button::after {
   content: "\203A";
