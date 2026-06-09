@@ -4445,6 +4445,20 @@ def _request_examples() -> List[Dict[str, str]]:
     ]
 
 
+def _on_research_agent_question_change() -> None:
+    """Auto-apply the research request when the text box commits.
+
+    Streamlit commits ``st.text_area`` to session_state on blur / Ctrl+Enter and
+    reruns automatically when an ``on_change`` callback is attached, so the setup
+    overview and preflight gate recompute on the same rerun. This removes the old
+    manual "Apply question" button, which made users think nothing had registered
+    until they found and clicked a second control.
+    """
+    _preserve_module_file_selection_for_next_rerun(st.session_state)
+    if str(st.session_state.get("research_agent_question", "")).strip():
+        st.session_state["_research_agent_question_applied_notice"] = True
+
+
 def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
     """Render one unified request box with detailed example prompts."""
     examples = _request_examples()
@@ -4522,24 +4536,9 @@ def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
         help=_ra_text("question_help"),
         key="research_agent_question",
         height=112,
+        on_change=_on_research_agent_question_change,
     )
-    apply_cols = st.columns([1.15, 3.85])
-    with apply_cols[0]:
-        apply_question = st.button(
-            _ra_text("apply_question"),
-            key="research_agent_apply_question",
-            help=_ra_text("apply_question_help"),
-            use_container_width=True,
-        )
-    with apply_cols[1]:
-        st.caption(_ra_text("apply_question_help"))
-    if apply_question:
-        _preserve_module_file_selection_for_next_rerun(st.session_state)
-        if str(st.session_state.get("research_agent_question", "")).strip():
-            st.session_state["_research_agent_question_applied_notice"] = True
-        else:
-            st.session_state["_research_agent_question_empty_notice"] = True
-        st.rerun()
+    st.caption(_ra_text("apply_question_help"))
     if st.session_state.pop("_research_agent_question_applied_notice", False):
         st.success(_ra_text("question_applied"))
     if st.session_state.pop("_research_agent_question_handoff_notice", False):
@@ -6631,7 +6630,6 @@ def _render_research_agent_setup_overview(
             </div>
             <span>{html.escape(gate_state_label)}</span>
           </div>
-          <div class="ra-setup-flow-strip">{stage_html}</div>
           <div class="ra-core-grid">
             {_core_card("1", "Request" if is_en else "请求", request_body, "ready" if question_ready and is_en else ("已就绪" if question_ready else ("needed" if is_en else "需要")), ok=question_ready)}
             {_core_card("2", "Data" if is_en else "数据", data_body, "ready" if cohort_ready and is_en else ("已就绪" if cohort_ready else ("needed" if is_en else "需要")), ok=cohort_ready)}
@@ -6911,26 +6909,41 @@ def _render_execution_preflight(
         key="research_agent_preflight_ack",
     )
     can_confirm = request_ready and cohort_ready and llm_ready
-    c1, c2 = st.columns([1.2, 1.0])
-    with c1:
-        if st.button(
+    # Only show "Reset review" once there is a confirmation to undo. Before
+    # confirming, a Reset button is a no-op that just adds a greyed control the
+    # user cannot reason about, so the Confirm button takes the full width.
+    if confirmed:
+        c1, c2 = st.columns([1.2, 1.0])
+        with c1:
+            confirm_clicked = st.button(
+                "Confirm launch review" if is_en else "确认启动复核",
+                type="primary",
+                disabled=not ack or not can_confirm,
+                use_container_width=True,
+                key="research_agent_preflight_confirm",
+            )
+        with c2:
+            reset_clicked = st.button(
+                "Reset review" if is_en else "重置复核",
+                use_container_width=True,
+                key="research_agent_preflight_reset",
+            )
+    else:
+        confirm_clicked = st.button(
             "Confirm launch review" if is_en else "确认启动复核",
             type="primary",
             disabled=not ack or not can_confirm,
             use_container_width=True,
             key="research_agent_preflight_confirm",
-        ):
-            st.session_state["research_agent_preflight_confirmed"] = True
-            st.session_state["research_agent_preflight_signature"] = signature
-            st.rerun()
-    with c2:
-        if st.button(
-            "Reset review" if is_en else "重置复核",
-            use_container_width=True,
-            key="research_agent_preflight_reset",
-        ):
-            st.session_state["research_agent_preflight_confirmed"] = False
-            st.rerun()
+        )
+        reset_clicked = False
+    if confirm_clicked:
+        st.session_state["research_agent_preflight_confirmed"] = True
+        st.session_state["research_agent_preflight_signature"] = signature
+        st.rerun()
+    if reset_clicked:
+        st.session_state["research_agent_preflight_confirmed"] = False
+        st.rerun()
     external_consent_needed = bool(contract["external_llm"] and not st.session_state.get("llm_enabled", False))
     if confirmed and external_consent_needed:
         st.info(

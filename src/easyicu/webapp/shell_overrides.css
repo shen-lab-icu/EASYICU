@@ -14296,6 +14296,8 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   [data-testid="stSidebar"] .eu-nav-item .label,
   [data-testid="stSidebar"] .eu-nav-item .count,
   [data-testid="stSidebar"] .eu-shell-brand-subtitle,
+  [data-testid="stSidebar"] .eu-brand .text,
+  [data-testid="stSidebar"] .eu-pipe-step .body,
   [data-testid="stSidebar"] .eu-shell-context-body,
   [data-testid="stSidebar"] .eu-sidebar-search,
   [data-testid="stSidebar"] .eu-sidebar-recents,
@@ -14305,6 +14307,18 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   [data-testid="stSidebar"] [class*="st-key-sidebar_recent"],
   [data-testid="stSidebar"] [class*="st-key-ai_optin"] {
     display: none !important;
+  }
+  [data-testid="stSidebar"] .eu-brand {
+    justify-content: center !important;
+    gap: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+  [data-testid="stSidebar"] .eu-pipe-step {
+    justify-content: center !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    gap: 0 !important;
   }
   [data-testid="stSidebar"] [class*="st-key-eunavrow_"] .eu-nav-item {
     justify-content: center !important;
@@ -17407,7 +17421,7 @@ body ::-moz-selection,
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_copilot_left_rail"]) {
     grid-template-columns: minmax(0, 1fr) 292px !important;
   }
-  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_left_rail"] {
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stColumn"]:has([class*="st-key-eu_copilot_left_rail"]) {
     display: none !important;
   }
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_right_rail"] {
@@ -17466,8 +17480,8 @@ body ::-moz-selection,
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_copilot_left_rail"]) {
     grid-template-columns: 1fr !important;
   }
-  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_left_rail"],
-  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_right_rail"] {
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stColumn"]:has([class*="st-key-eu_copilot_left_rail"]),
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stColumn"]:has([class*="st-key-eu_copilot_right_rail"]) {
     display: none !important;
   }
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_conversation_shell"] {
@@ -18279,6 +18293,16 @@ body ::-moz-selection,
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_copilot_left_rail"]) {
   grid-template-columns: 248px minmax(520px, 1fr) 326px !important;
 }
+/* The 3-column default above is unconditional and appears after the
+   max-width:980px breakpoint, so it would otherwise re-assert 3 columns at
+   very narrow widths and squeeze the chat into the first track. Re-assert the
+   single-column collapse here, after the default, so it keeps winning. */
+@media (max-width: 980px) {
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] > [data-testid="stHorizontalBlock"],
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_copilot_left_rail"]) {
+    grid-template-columns: 1fr !important;
+  }
+}
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_left_rail"] {
   background: color-mix(in srgb, var(--gd-rail-bg) 84%, var(--surface)) !important;
   padding: 16px 12px !important;
@@ -18497,7 +18521,7 @@ body ::-moz-selection,
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_copilot_left_rail"]) {
     grid-template-columns: minmax(0, 1fr) 304px !important;
   }
-  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_left_rail"] {
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stColumn"]:has([class*="st-key-eu_copilot_left_rail"]) {
     display: none !important;
   }
 }
@@ -18786,6 +18810,9 @@ body ::-moz-selection,
 }
 
 @media (max-width: 1320px) and (min-width: 1181px) {
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stColumn"]:has([class*="st-key-eu_copilot_left_rail"]) {
+    display: block !important;
+  }
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_left_rail"] {
     display: flex !important;
   }

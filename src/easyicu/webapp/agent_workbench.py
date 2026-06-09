@@ -3886,39 +3886,33 @@ def _summary_empty_html(lang: str) -> str:
             "请从配置页运行分析，或打开本机 manifest 后再填充这里。",
         )
     )
+    # Progressive disclosure: before any run there is nothing to act on here, so
+    # lead with one plain-language explanation and a single CTA. The locked
+    # evidence checklist and export bundle still exist for the curious, but they
+    # are tucked into one optional "preview" expander instead of greeting every
+    # first-time user with a wall of pending/locked rows and dead disabled
+    # buttons (Draft methods + Bundle index, which do nothing before a run).
+    preview_label = _T(lang, "Preview what this page will check", "预览这一页之后会检查什么")
     return (
         '<div class="eu-summary-page eu-summary-reference">'
         f'<div class="eu-summary-demo-note">{_esc(note)}</div>'
-        '<div class="eu-summary-reference-grid">'
         '<div class="eu-summary-review eu-summary-review-main">'
         f'<div class="eu-section-label">{_T(lang, "Review gate", "复核关口")}</div>'
         '<div class="eu-summary-gate-head">'
-        f'<b>{_T(lang, "No draft until evidence is bound", "证据绑定前不生成草稿")}</b>'
-        f'<p>{_T(lang, "Summary is intentionally a second-stage surface. It should explain what is missing before any manuscript-like output appears.", "Summary 是第二阶段界面；在出现类似手稿的输出前，它应明确说明还缺哪些证据。")}</p>'
-        '</div>'
-        f'<div class="eu-summary-checklist">{gate_rows}</div>'
-        '<div class="eu-summary-manuscript locked">'
-        f'<span class="mono">0 / {len(checks)} {_T(lang, "checks", "项检查")}</span>'
-        '<div>'
-        f'<b>{_T(lang, "Draft gate locked", "草稿关口已锁定")}</b>'
-        f'<p>{_T(lang, "Run or import a manifest before preparing methods and results text.", "请先运行或导入 manifest，再准备方法与结果文本。")}</p>'
-        '</div>'
-        '<div class="eu-summary-manuscript-actions">'
-        f'<button disabled>{_T(lang, "Draft methods + results", "生成方法与结果草稿")}</button>'
-        '</div>'
-        '</div>'
+        f'<b>{_T(lang, "Results and export appear here after a run", "运行之后，结果与导出会出现在这里")}</b>'
+        f'<p>{_T(lang, "Summary is a second-stage surface. Run an analysis (or open a local manifest) from Setup, and this page fills in with review checks, the draft gate, and the export package.", "Summary 是第二阶段界面。请在配置页运行分析（或打开本机 manifest），之后这一页会自动填入复核检查、草稿关口和导出包。")}</p>'
         '</div>'
         '<details class="eu-summary-bundle eu-summary-bundle-details">'
         '<summary class="eu-summary-bundle-summary">'
         '<div>'
-        f'<div class="eu-section-label">{_T(lang, "Export package", "导出包")}</div>'
-        f'<b>{_T(lang, "No package until evidence is bound", "证据绑定前没有导出包")}</b>'
-        f'<p>{_T(lang, "Run or import a manifest to unlock artifact details and package export.", "运行或导入 manifest 后再解锁产物明细和导出包。")}</p>'
+        f'<div class="eu-section-label">{_T(lang, "Preview", "预览")}</div>'
+        f'<b>{_esc(preview_label)}</b>'
+        f'<p>{_T(lang, "The evidence checklist and export artifacts you will unlock once a run completes.", "运行完成后将解锁的证据清单与导出产物。")}</p>'
         '</div>'
         f'<span>{_T(lang, "Details", "详情")}</span>'
         '</summary>'
+        f'<div class="eu-summary-checklist">{gate_rows}</div>'
         f'<div class="eu-summary-bundle-list">{bundle_html}</div>'
-        f'<span class="eu-summary-bundle-button disabled">{_T(lang, "Bundle index unavailable", "Bundle 索引尚不可用")}</span>'
         '</details>'
         '</div>'
         '</div>'
