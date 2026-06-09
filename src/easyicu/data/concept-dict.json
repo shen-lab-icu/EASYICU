@@ -8048,6 +8048,19 @@
           "dur_var": "endtime",
           "callback": "apply_map(c(`225792` = 'invasive',\n                                     `225794` = 'noninvasive'),\n                                   var = 'sub_var')"
         }
+      ],
+      "sic": [
+        {
+          "ids": [
+            720,
+            3041
+          ],
+          "table": "data_range",
+          "sub_var": "DataID",
+          "value_var": "DataID",
+          "dur_var": "OffsetEnd",
+          "callback": "apply_map(c(`720` = 'invasive',\n                                     `3041` = 'invasive'),\n                                   var = 'sub_var')"
+        }
       ]
     }
   },

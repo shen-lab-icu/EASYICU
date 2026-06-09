@@ -4604,7 +4604,12 @@ def hirid_rate_kg(
     grouped = df.groupby(group_cols, as_index=False).agg({
         actual_val_col: 'sum',
     })
-    
+    # Sum into a dedicated column. When the frame arrived pre-renamed (so
+    # actual_val_col == concept_name), writing grouped[concept_name] = np.nan
+    # below would otherwise clobber the summed dose *before* it is read as the
+    # numerator, collapsing every rate to NaN and dropping all rows.
+    grouped = grouped.rename(columns={actual_val_col: '_dose_sum'})
+
     # Map weight back
     grouped['weight'] = grouped[id_col].map(weight_map)
 
@@ -4612,7 +4617,7 @@ def hirid_rate_kg(
     valid_weight = grouped['weight'].notna() & (grouped['weight'] > 0)
     grouped[concept_name] = np.nan
     grouped.loc[valid_weight, concept_name] = (
-        grouped.loc[valid_weight, actual_val_col]
+        grouped.loc[valid_weight, '_dose_sum']
         / interval_minutes
         / grouped.loc[valid_weight, 'weight']
     )

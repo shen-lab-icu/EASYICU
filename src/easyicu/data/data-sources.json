@@ -11018,6 +11018,7 @@
       "data_range": {
         "files": "data_range.parquet",
         "defaults": {
+          "id_var": "CaseID",
           "index_var": "Offset",
           "time_vars": [
             "Offset",
