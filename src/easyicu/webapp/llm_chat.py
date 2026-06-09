@@ -31,6 +31,141 @@ import requests
 import streamlit as st
 from easyicu.webapp import copilot_engine as _copilot_engine
 from easyicu.webapp.ai_optin import AIOptInError, enforce_external_llm_opt_in
+# Phase-6 split: offline keyword routing + disease/sepsis option helpers now live
+# in `copilot/routing.py`. Re-imported here so all existing references (and the
+# `tests/webapp/test_copilot_keyword_route.py` `llm_chat.<fn>` accesses) keep
+# working. routing.py imports the COPILOT_* constants lazily (inside the
+# functions), so this top-level import does not create an import cycle.
+from easyicu.webapp.copilot.routing import (  # noqa: F401  (re-exported)
+    _copilot_branch_for_route_family,
+    _copilot_create_route_completion,
+    _copilot_extract_route_json,
+    _copilot_full_disease_options,
+    _copilot_keyword_route,
+    _copilot_route_choice_actions,
+    _copilot_route_family_label,
+    _copilot_route_has_specific_goal,
+    _copilot_route_uses_broad_question_type_choices,
+    _copilot_sanitize_route_choice_id,
+    _copilot_sepsis_mode_options,
+    _copilot_specific_route_next_question,
+)
+# Phase-6 split: pure model-output sanitisers now live in `copilot/llm.py`.
+# Re-imported here so all internal call sites and the `llm_chat.<fn>` test
+# accesses keep working unchanged. The provider/client layer (`_get_client`,
+# `_is_configured`, ...) intentionally stays in this module because the test
+# suite swaps it wholesale via `monkeypatch.setattr(llm_chat, "st", ...)`; those
+# functions must resolve `st` from this module's namespace, not llm.py's.
+from easyicu.webapp.copilot.llm import (  # noqa: F401  (re-exported)
+    _parse_verification_report,
+    _strip_llm_reasoning,
+)
+# Phase-6 split: pure prompt-intent classifiers + lightweight text parsers now
+# live in `copilot/intents.py`. Re-imported here so all call sites and
+# `llm_chat.<fn>` test accesses keep working. intents.py lazy-imports the few
+# `COPILOT_*` constants it needs from this module (inside the functions), so the
+# top-level import below creates no cycle.
+from easyicu.webapp.copilot.intents import (  # noqa: F401  (re-exported)
+    _copilot_age_los_choice_requested,
+    _copilot_api_setup_requested,
+    _copilot_capability_overview_requested,
+    _copilot_cohort_step_requested,
+    _copilot_concepts_from_text,
+    _copilot_confirm_suggested_concepts_requested,
+    _copilot_current_reviewed_cohort_requested,
+    _copilot_data_path_help_requested,
+    _copilot_database_from_path,
+    _copilot_disease_cohort_choice_requested,
+    _copilot_endpoint_pinned,
+    _copilot_explicit_local_command,
+    _copilot_extract_data_path_from_text,
+    _copilot_extract_patient_count,
+    _copilot_extract_step_requested,
+    _copilot_feature_pack_label,
+    _copilot_feature_step_requested,
+    _copilot_first_pass_goal_allowed,
+    _copilot_free_study_goal_requested,
+    _copilot_full_cohort_requested,
+    _copilot_idea_topic,
+    _copilot_is_loosen_filter_request,
+    _copilot_is_strict_filter_request,
+    _copilot_module_export_choice_requested,
+    _copilot_module_pack_from_prompt,
+    _copilot_modules_for_concepts,
+    _copilot_next_step_help_requested,
+    _copilot_no_disease_filter_requested,
+    _copilot_normalize_database,
+    _copilot_parse_idea_selection,
+    _copilot_pick_branch,
+    _copilot_prepared_data_choice_requested,
+    _copilot_raw_files_choice_requested,
+    _copilot_real_data_requested,
+    _copilot_research_recommendation_requested,
+    _copilot_review_step_requested,
+    _copilot_route_next_question_asks_broad_type,
+    _copilot_should_use_llm_route,
+    _copilot_step_by_step_requested,
+    _copilot_usage_help_requested,
+    _infer_db_from_text,
+)
+# Phase-6 split (4th batch): study-state lifecycle + session-manifest persistence
+# now live in `copilot/sessions.py`. Re-imported here so all call sites keep
+# working. sessions.py lazy-imports the `COPILOT_*` constants and `_repo_root` it
+# needs from this module (inside the functions), so no import cycle.
+from easyicu.webapp.copilot.sessions import (  # noqa: F401  (re-exported)
+    _copilot_is_legacy_default_question,
+    _copilot_jsonable,
+    _copilot_list_study_sessions,
+    _copilot_normalize_legacy_study,
+    _copilot_normalize_session_title,
+    _copilot_sanitized_messages,
+    _copilot_session_fallback_title,
+    _copilot_session_now,
+    _copilot_session_title_from_state,
+    _copilot_study_manifest_path,
+    _copilot_study_sessions_root,
+    _default_copilot_study_state,
+    _ensure_copilot_study_state,
+    _invalidate_copilot_session_cache,
+    _open_copilot_study_session,
+    _read_copilot_study_session_manifest,
+    _remember_copilot_guided_study_resume,
+    _reset_copilot_study_state,
+    _start_new_copilot_study_session,
+    _touch_current_copilot_study_session,
+    _write_copilot_study_session_manifest,
+)
+# Phase-6 split (5th batch): pure presentation helpers (labels, intros,
+# stage/step rendering, workflow-snapshot HTML, relative-time) now live in
+# `copilot/presentation.py`. Re-imported here so all call sites keep working. It
+# lazy-imports the `COPILOT_*` constants + `_copilot_frame_question` from this
+# module inside the functions, so no import cycle.
+from easyicu.webapp.copilot.presentation import (  # noqa: F401  (re-exported)
+    _copilot_action_material_icon,
+    _copilot_cohort_is_empty,
+    _copilot_cohort_label,
+    _copilot_concept_label_list,
+    _copilot_data_source_choice_label,
+    _copilot_database_label,
+    _copilot_disease_label,
+    _copilot_rail_step_items,
+    _copilot_relative_time,
+    _copilot_stage_card_html,
+    _copilot_stage_detail,
+    _copilot_stage_status,
+    _copilot_step_by_step_intro,
+    _copilot_step_complete_for_navigation,
+    _copilot_step_label,
+    _copilot_step_unlocked_for_navigation,
+    _copilot_uses_eligible_cohort,
+    _copilot_visible_workflow_step_items,
+    _copilot_workflow_button_label,
+    _copilot_workflow_snapshot_html,
+    _normalized_copilot_workflow_snapshot,
+    _research_agent_source_label,
+    _strip_module_label_icon,
+    _workflow_status_step,
+)
 from easyicu.webapp.concept_catalog import CONCEPT_GROUP_NAMES, CONCEPT_GROUPS_INTERNAL
 from easyicu.webapp.components.constants import get_all_concepts
 from easyicu.webapp.llm_config import (
@@ -87,12 +222,6 @@ COPILOT_FEATURE_MODULE_ACTION_KEYS = (
     "respiratory",
     "sofa2_score",
 )
-
-
-def _strip_module_label_icon(label: object) -> str:
-    """Return the text label used in classic Step 3 without decorative icons."""
-    text = re.sub(r"^[^\w\u4e00-\u9fff]+", "", str(label or "")).strip()
-    return re.sub(r"\s+", " ", text)
 
 
 COPILOT_FEATURE_MODULE_PACKS = {
@@ -279,45 +408,6 @@ COPILOT_IDEA_CANDIDATES: dict[str, list[dict[str, object]]] = {
         },
     ],
 }
-COPILOT_GUIDED_ARTIFACTS: tuple[dict[str, str], ...] = (
-    {
-        "path": "src/easyicu/pipeline.py",
-        "delta": "+148",
-        "kind": "file",
-        "meta": "python · 148 lines",
-    },
-    {
-        "path": "analysis/table_one.csv",
-        "delta": "+22",
-        "kind": "rows",
-        "meta": "22 rows · csv",
-    },
-    {
-        "path": "analysis/cohort_summary.json",
-        "delta": "+18",
-        "kind": "file",
-        "meta": "18 lines · json",
-    },
-    {
-        "path": "analysis/roc_curve.png",
-        "delta": "bin",
-        "kind": "viz",
-        "meta": "figure · png",
-    },
-    {
-        "path": "analysis/calibration.png",
-        "delta": "bin",
-        "kind": "viz",
-        "meta": "figure · png",
-    },
-    {
-        "path": "manifest.json",
-        "delta": "+124",
-        "kind": "shield",
-        "meta": "124 lines · json",
-    },
-)
-
 # ---------------------------------------------------------------------------
 # System prompt — enriched with EasyICU documentation & concept catalogue
 # ---------------------------------------------------------------------------
@@ -637,15 +727,6 @@ def _sync_llm_toggle_before_render() -> None:
         st.session_state["_llm_toggle"] = bool(st.session_state.get("llm_enabled", False))
 
 
-def _apply_floating_ai_toggle(enabled: bool) -> None:
-    """Apply the legacy assistant toggle used by older sessions."""
-    enabled = bool(enabled)
-    st.session_state.llm_enabled = enabled
-    st.session_state["_floating_ai_open"] = enabled
-    if not enabled:
-        st.session_state["_ai_pending_question"] = None
-
-
 def _close_floating_ai_panel(*, disable_assistant: bool = False) -> None:
     """Close the floating panel, optionally turning off the sidebar toggle too."""
     st.session_state["_floating_ai_open"] = False
@@ -877,761 +958,12 @@ def _append_quick_links(prompt: str, answer: str, lang: str) -> str:
     return "\n".join(lines)
 
 
-def _infer_db_from_text(text: str) -> str | None:
-    text_l = (text or "").lower()
-    db_aliases = {
-        "miiv": ("miiv", "mimic-iv", "mimic iv", "mimiciv"),
-        "mimic": ("mimic-iii", "mimic iii", "mimiciii", "mimic 3"),
-        "eicu": ("eicu", "eicu-crd"),
-        "aumc": ("aumc", "amsterdamumcdb", "amsterdam umc"),
-        "hirid": ("hirid",),
-        "sic": ("sic", "sicdb"),
-    }
-    for db_key, aliases in db_aliases.items():
-        if any(alias in text_l for alias in aliases):
-            return db_key
-    return None
-
-
-def _default_copilot_study_state(state: MutableMapping[str, object] | None = None) -> dict[str, object]:
-    state = state or {}
-    patient_n = int(state.get("demo_mode_patients") or 10)
-    return {
-        "branch": None,
-        "step": "question",
-        "depth": _copilot_engine.DEFAULT_DEPTH,
-        "data_mode": "real",
-        "patient_n": patient_n,
-        "db_count": 6,
-        "outcome": "a prespecified ICU outcome",
-        "window": "first 24h",
-        "exposure": "",
-        "modules": COPILOT_DEFAULT_MODULES[:],
-        "question": "",
-        "cohort_phase": "ready",
-        "cohort_filters": [],
-        "cohort_configured": False,
-        "concepts_configured": False,
-        "draft_signed": False,
-        "last_update": datetime.now().isoformat(timespec="seconds"),
-    }
-
-
-def _copilot_is_legacy_default_question(question: str) -> bool:
-    text = " ".join((question or "").split()).strip().lower()
-    if not text:
-        return False
-    legacy_exact = {
-        "among sepsis-3 patients, do first-24h bedside features predict in-hospital mortality, and does adding lactate improve the model?",
-    }
-    return text in legacy_exact
-
-
-def _copilot_normalize_legacy_study(study: MutableMapping[str, object]) -> None:
-    """Clean old default examples from persisted chat state after UI copy changes."""
-    if str(study.get("branch") or "predict") != "predict":
-        return
-    if _copilot_is_legacy_default_question(str(study.get("question") or "")):
-        study["question"] = ""
-        if str(study.get("outcome") or "").strip().lower() in {"in-hospital mortality", "院内死亡"}:
-            study["outcome"] = "a prespecified ICU outcome"
-        if str(study.get("exposure") or "").strip().lower() in {"lactate", "乳酸"}:
-            study["exposure"] = ""
-
-
-def _ensure_copilot_study_state(state: MutableMapping[str, object]) -> dict[str, object]:
-    study = state.get("_copilot_guided_study")
-    if not isinstance(study, dict):
-        study = _default_copilot_study_state(state)
-        state["_copilot_guided_study"] = study
-    for key, value in _default_copilot_study_state(state).items():
-        study.setdefault(key, value)
-    branch_hint = str(state.get("_copilot_entry_branch_hint") or "").strip()
-    if branch_hint in COPILOT_BRANCH_CONFIG and not str(study.get("branch") or "").strip():
-        study["branch"] = branch_hint
-    _copilot_normalize_legacy_study(study)
-    return study
-
-
-def _remember_copilot_guided_study_resume(
-    state: MutableMapping[str, object],
-    study: MutableMapping[str, object],
-) -> dict[str, object]:
-    """Persist the signed guided study for the entry-page resume card."""
-    branch = str(study.get("branch") or "predict")
-    config = COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"])
-    modules = [str(item) for item in list(study.get("modules") or COPILOT_DEFAULT_MODULES)]
-    selected_concepts = [
-        str(item)
-        for item in list(study.get("selected_concepts") or [])
-        if str(item).strip()
-    ] or [
-        str(item)
-        for item in list(config.get("selected_concepts") or [])
-        if str(item).strip()
-    ]
-    try:
-        patient_n = int(study.get("patient_n") or 10)
-    except (TypeError, ValueError):
-        patient_n = 10
-    record: dict[str, object] = {
-        "branch": branch,
-        "data_mode": str(study.get("data_mode") or "real"),
-        "patient_n": patient_n,
-        "modules": modules,
-        "selected_concepts": selected_concepts,
-        "question": str(study.get("question") or config.get("question_en") or config.get("chip") or branch),
-        "step": str(study.get("step") or "draft"),
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    state["_eu_last_study_resume"] = record
-    state["easyicu_study"] = record
-    return record
-
-
-def _reset_copilot_study_state(state: MutableMapping[str, object]) -> dict[str, object]:
-    study = _default_copilot_study_state(state)
-    state["_copilot_guided_study"] = study
-    state.pop("_copilot_data_source_choice", None)
-    state.pop("_copilot_data_source_notice", None)
-    return study
-
-
-def _copilot_study_sessions_root(state: Mapping[str, object] | None = None) -> Path:
-    """Return the local directory that stores Copilot study session manifests."""
-    raw_root = str((state or {}).get("copilot_study_root") or "").strip()
-    if raw_root:
-        return Path(raw_root).expanduser()
-    return _repo_root() / "research_output" / "copilot_studies"
-
-
-def _copilot_study_manifest_path(workdir: Path) -> Path:
-    return workdir / "copilot_session.json"
-
-
-def _copilot_session_now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
-
-
-def _copilot_session_fallback_title(lang: str) -> str:
-    return "Untitled study" if lang == "en" else "未命名研究"
-
-
-def _copilot_session_title_from_state(
-    state: Mapping[str, object],
-    study: Mapping[str, object],
-    lang: str,
-) -> str:
-    question = str(study.get("question") or "").strip()
-    if question:
-        return question[:84]
-    messages = state.get("llm_messages")
-    if isinstance(messages, list):
-        for message in reversed(messages):
-            if not isinstance(message, Mapping):
-                continue
-            if str(message.get("role") or "").lower() != "user":
-                continue
-            content = str(message.get("content") or "").strip()
-            if content:
-                return content[:84]
-    title = str(state.get("_copilot_current_session_title") or "").strip()
-    return title or _copilot_session_fallback_title(lang)
-
-
-def _copilot_jsonable(value: object) -> object:
-    try:
-        json.dumps(value, ensure_ascii=False)
-        return value
-    except (TypeError, ValueError):
-        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
-
-
-def _copilot_sanitized_messages(messages: object) -> list[dict[str, object]]:
-    if not isinstance(messages, list):
-        return []
-    sanitized: list[dict[str, object]] = []
-    for message in messages[-COPILOT_SESSION_MESSAGE_SAVE_LIMIT:]:
-        if not isinstance(message, Mapping):
-            continue
-        role = str(message.get("role") or "").strip().lower()
-        if role not in {"user", "assistant", "system"}:
-            continue
-        item: dict[str, object] = {
-            "role": role,
-            "content": str(message.get("content") or ""),
-        }
-        for key in ("actions", "workflow_snapshot"):
-            if key in message:
-                item[key] = _copilot_jsonable(message.get(key))
-        sanitized.append(item)
-    return sanitized
-
-
-def _invalidate_copilot_session_cache(state: MutableMapping[str, object]) -> None:
-    state.pop("_copilot_sessions_cache", None)
-
-
-def _write_copilot_study_session_manifest(
-    state: MutableMapping[str, object],
-    lang: str,
-    *,
-    created_at: str | None = None,
-) -> dict[str, object] | None:
-    raw_workdir = str(state.get("_copilot_current_session_dir") or "").strip()
-    session_id = str(state.get("_copilot_current_session_id") or "").strip()
-    if not raw_workdir or not session_id:
-        return None
-    workdir = Path(raw_workdir).expanduser()
-    workdir.mkdir(parents=True, exist_ok=True)
-    agent_runs_dir = workdir / "agent_runs"
-    agent_runs_dir.mkdir(parents=True, exist_ok=True)
-    study = dict(_ensure_copilot_study_state(state))
-    existing_created = created_at
-    manifest_path = _copilot_study_manifest_path(workdir)
-    if existing_created is None and manifest_path.exists():
-        existing = _read_copilot_study_session_manifest(manifest_path)
-        if isinstance(existing, dict):
-            existing_created = str(existing.get("created_at") or "") or None
-    now = _copilot_session_now()
-    title = _copilot_session_title_from_state(state, study, lang)
-    manifest: dict[str, object] = {
-        "schema_version": 1,
-        "id": session_id,
-        "title": title,
-        "status": "active",
-        "created_at": existing_created or now,
-        "updated_at": now,
-        "workdir": str(workdir.resolve()),
-        "agent_runs_dir": str(agent_runs_dir.resolve()),
-        "study": _copilot_jsonable(study),
-        "messages": _copilot_sanitized_messages(state.get("llm_messages")),
-    }
-    tmp_path = manifest_path.with_suffix(".json.tmp")
-    tmp_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(manifest_path)
-    state["_copilot_current_session_title"] = title
-    state["research_agent_workdir"] = str(agent_runs_dir.resolve())
-    _invalidate_copilot_session_cache(state)
-    return manifest
-
-
-def _read_copilot_study_session_manifest(path: Path) -> dict[str, object] | None:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    if not str(data.get("id") or "").strip():
-        return None
-    return data
-
-
 _COPILOT_GENERIC_SESSION_TITLES = {
     "new study / workspace", "新建研究 / 工作目录",
     "new study", "新研究",
     "untitled study", "未命名研究",
     "guided study", "当前研究目标", "new study / workspace ",
 }
-
-
-def _copilot_normalize_session_title(manifest: Mapping[str, object], lang: str) -> str:
-    """Session-list title: prefer the question, skip generic chip labels.
-
-    A session created via the "New study / workspace" chip stored that label as
-    its first user message, leaking into the saved manifest title. Normalize any
-    empty/generic title down to the real question (or "Untitled study").
-    """
-    raw = str(manifest.get("title") or "").strip()
-    if raw and raw.lower() not in _COPILOT_GENERIC_SESSION_TITLES:
-        return raw[:84]
-    study = manifest.get("study") if isinstance(manifest.get("study"), Mapping) else {}
-    cand = str(study.get("question") or "").strip()
-    if not cand:
-        messages = manifest.get("messages")
-        if isinstance(messages, list):
-            for message in messages:
-                if not isinstance(message, Mapping):
-                    continue
-                if str(message.get("role") or "").lower() != "user":
-                    continue
-                content = str(message.get("content") or "").strip()
-                if content and content.lower() not in _COPILOT_GENERIC_SESSION_TITLES:
-                    cand = content
-                    break
-    return cand[:84] if cand else _copilot_session_fallback_title(lang)
-
-
-def _copilot_list_study_sessions(state: Mapping[str, object]) -> list[dict[str, object]]:
-    root = _copilot_study_sessions_root(state)
-    cached = state.get("_copilot_sessions_cache")
-    if isinstance(cached, Mapping) and str(cached.get("root") or "") == str(root):
-        sessions_cached = cached.get("sessions")
-        if isinstance(sessions_cached, list):
-            return [
-                dict(session)
-                for session in sessions_cached
-                if isinstance(session, Mapping)
-            ]
-    if not root.exists():
-        return []
-    lang = str(state.get("language") or "en")
-    sessions: list[dict[str, object]] = []
-    for manifest_path in sorted(root.glob("*/copilot_session.json")):
-        manifest = _read_copilot_study_session_manifest(manifest_path)
-        if not manifest:
-            continue
-        workdir = Path(str(manifest.get("workdir") or manifest_path.parent)).expanduser()
-        sessions.append({
-            "id": str(manifest.get("id") or manifest_path.parent.name),
-            "title": _copilot_normalize_session_title(manifest, lang),
-            "updated_at": str(manifest.get("updated_at") or manifest.get("created_at") or ""),
-            "created_at": str(manifest.get("created_at") or ""),
-            "workdir": str(workdir),
-            "agent_runs_dir": str(manifest.get("agent_runs_dir") or (workdir / "agent_runs")),
-            "study": manifest.get("study") if isinstance(manifest.get("study"), dict) else {},
-            "messages": manifest.get("messages") if isinstance(manifest.get("messages"), list) else [],
-        })
-    sessions.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
-    if isinstance(state, MutableMapping):
-        state["_copilot_sessions_cache"] = {
-            "root": str(root),
-            "sessions": [dict(session) for session in sessions],
-        }
-    return sessions
-
-
-def _start_new_copilot_study_session(
-    state: MutableMapping[str, object],
-    lang: str,
-    *,
-    carry_messages: list[dict[str, object]] | None = None,
-) -> dict[str, object]:
-    root = _copilot_study_sessions_root(state)
-    root.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    suffix = 0
-    while True:
-        session_id = f"study_{stamp}" if suffix == 0 else f"study_{stamp}_{suffix}"
-        workdir = root / session_id
-        if not workdir.exists():
-            break
-        suffix += 1
-    (workdir / "agent_runs").mkdir(parents=True, exist_ok=True)
-    _reset_copilot_study_state(state)
-    state["llm_messages"] = list(carry_messages or [])
-    state["_copilot_current_session_id"] = session_id
-    state["_copilot_current_session_dir"] = str(workdir.resolve())
-    state["_copilot_current_session_title"] = _copilot_session_fallback_title(lang)
-    state["research_agent_workdir"] = str((workdir / "agent_runs").resolve())
-    state.pop("_ai_pending_question", None)
-    state.pop("_copilot_data_source_form", None)
-    _write_copilot_study_session_manifest(state, lang, created_at=_copilot_session_now())
-    return {
-        "id": session_id,
-        "workdir": str(workdir.resolve()),
-        "agent_runs_dir": str((workdir / "agent_runs").resolve()),
-    }
-
-
-def _open_copilot_study_session(
-    state: MutableMapping[str, object],
-    session_id: str,
-    lang: str,
-) -> bool:
-    for session in _copilot_list_study_sessions(state):
-        if str(session.get("id") or "") != session_id:
-            continue
-        study = session.get("study")
-        state["_copilot_guided_study"] = dict(study) if isinstance(study, Mapping) else _default_copilot_study_state(state)
-        state["llm_messages"] = [
-            dict(message)
-            for message in session.get("messages", [])
-            if isinstance(message, Mapping)
-        ]
-        state["_copilot_current_session_id"] = str(session.get("id") or session_id)
-        state["_copilot_current_session_dir"] = str(session.get("workdir") or "")
-        state["_copilot_current_session_title"] = str(session.get("title") or _copilot_session_fallback_title(lang))
-        agent_runs_dir = str(session.get("agent_runs_dir") or "").strip()
-        if agent_runs_dir:
-            state["research_agent_workdir"] = agent_runs_dir
-        state.pop("_ai_pending_question", None)
-        _invalidate_copilot_session_cache(state)
-        return True
-    return False
-
-
-def _touch_current_copilot_study_session(state: MutableMapping[str, object], lang: str) -> None:
-    if str(state.get("_copilot_current_session_id") or "").strip():
-        _write_copilot_study_session_manifest(state, lang)
-
-
-def _copilot_pick_branch(text: str) -> str:
-    text_l = (text or "").lower()
-    if any(key in text_l for key in ("cross", "database", "databases", "replicate", "replication", "多库", "跨库", "数据库")):
-        return "crossdb"
-    if any(key in text_l for key in ("quality", "missing", "coverage", "audit", "sparse", "trust", "qc", "缺失", "质量", "覆盖")):
-        return "quality"
-    return "predict"
-
-
-def _copilot_endpoint_pinned(text: str) -> bool:
-    text_l = (text or "").lower()
-    return bool(
-        re.search(
-            r"in-?hospital|28[\s-]*day|icu\s+mortality|icu\s+death|aki|rrt|renal|kidney|creatinine|urine output|length\s+of\s+stay|los|院内|28\s*天|icu\s*死亡|住院时长|肾脏替代|急性肾|肾损伤|肾损害|肾功能|肾衰|肌酐|尿量",
-            text_l,
-        )
-    )
-
-
-def _copilot_extract_patient_count(text: str) -> int | None:
-    """Extract only explicit cohort-size commands, not labels like Sepsis-3."""
-    text_l = (text or "").lower()
-    patterns = [
-        r"(?<![-/\w])(\d{1,6})\s*(?:demo\s*)?(?:icu\s*)?(?:patients?|cases?|stays?|subjects?)\b",
-        r"(?<![-/\w])(\d{1,6})\s+(?:(?:demo|real|local|synthetic|icu|adult|sepsis-?3|sepsis|first)\s+){1,6}(?:patients?|cases?|stays?|subjects?)\b",
-        r"(?<![-/\w])(\d{1,6})\s*(?:个|名)?\s*(?:患者|病例|例|人)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text_l)
-        if match:
-            return max(5, min(100_000, int(match.group(1))))
-    return None
-
-
-def _copilot_real_data_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    return any(
-        key in text_l
-        for key in (
-            "real data",
-            "real-data",
-            "local data",
-            "local-data",
-            "use local",
-            "my data",
-            "own data",
-            "prepared data",
-            "converted data",
-            "真实数据",
-            "本地数据",
-            "我的数据",
-            "实际数据",
-            "已转换数据",
-            "准备好的数据",
-        )
-    )
-
-
-def _copilot_full_cohort_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    if (
-        any(term in text_l for term in ("eligible", "full", "entire", "whole", "all"))
-        and any(term in text_l for term in ("cohort", "stays", "patients", "subjects"))
-    ):
-        return True
-    return any(
-        key in text_l
-        for key in (
-            "eligible cohort",
-            "eligible stays",
-            "all eligible",
-            "full cohort",
-            "entire cohort",
-            "whole cohort",
-            "all patients",
-            "all stays",
-            "use the cohort",
-            "formal analysis",
-            "全量",
-            "全部患者",
-            "全部病例",
-            "全部队列",
-            "合格队列",
-            "合格患者",
-            "真实队列",
-            "正式分析",
-        )
-    )
-
-
-def _copilot_data_path_help_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    raw = text or ""
-    path_terms = ("path", "data_path", "folder", "directory", "prepared", "converted", "路径", "目录", "文件夹")
-    real_terms = (
-        "real data",
-        "real-data",
-        "local data",
-        "local-data",
-        "my data",
-        "own data",
-        "mimic",
-        "eicu",
-        "hirid",
-        "真实数据",
-        "本地数据",
-        "我的数据",
-        "数据库",
-        "这个路径",
-    )
-    return any(term in text_l or term in raw for term in path_terms) and any(
-        term in text_l or term in raw for term in real_terms
-    )
-
-
-def _copilot_step_by_step_requested(text: str) -> bool:
-    """Return True for starter prompts that should ask before choosing."""
-    text_l = (text or "").lower()
-    raw = text or ""
-    return any(
-        term in text_l
-        for term in (
-            "step by step",
-            "one by one",
-            "walk me through",
-            "guided",
-            "help me frame",
-            "ask me",
-            "do not choose",
-            "don't choose",
-            "do not decide",
-            "don't decide",
-            "before deciding",
-        )
-    ) or any(
-        term in raw
-        for term in (
-            "逐步",
-            "一步步",
-            "向导",
-            "先帮我框定",
-            "先问我",
-            "不要替我",
-            "不要帮我决定",
-            "再做决定",
-        )
-    )
-
-
-def _copilot_cohort_step_requested(text: str) -> bool:
-    """Return True when the user explicitly wants the cohort step."""
-    text_l = (text or "").lower()
-    raw = text or ""
-    return (
-        any(
-            term in text_l
-            for term in (
-                "choose cohort",
-                "cohort step",
-                "cohort options",
-                "configure cohort",
-                "walk me through the cohort",
-            )
-        )
-        or any(term in raw for term in ("选择队列", "队列步骤", "配置队列", "队列选项", "完成队列"))
-    )
-
-
-def _copilot_feature_step_requested(text: str) -> bool:
-    """Return True when the user explicitly wants to open Step 3 module selection."""
-    text_l = (text or "").lower()
-    raw = text or ""
-    if "add feature module:" in text_l or "feature module:" in text_l or "选择特征模块：" in raw:
-        return False
-    return any(
-        term in text_l
-        for term in (
-            "choose feature modules",
-            "feature module step",
-            "module selection",
-            "select modules",
-            "configure modules",
-        )
-    ) or any(term in raw for term in ("选择特征模块", "特征模块步骤", "模块选择", "配置模块"))
-
-
-def _copilot_extract_step_requested(text: str) -> bool:
-    """Return True when the user (or a fixed step button) asks to run extraction.
-
-    The "Prepare extraction plan" button submits a fixed prompt; routing that
-    known intent through the LLM is fragile (a slow route times out and the step
-    stalls). Detect it deterministically so extraction runs via the classic
-    engine without any model round-trip.
-    """
-    text_l = (text or "").lower()
-    raw = text or ""
-    return any(
-        term in text_l
-        for term in (
-            "prepare the extraction plan",
-            "prepare extraction plan",
-            "run the extraction",
-            "run extraction",
-            "extract the cohort",
-            "extract now",
-        )
-    ) or any(term in raw for term in ("准备提取计划", "运行提取", "开始提取", "执行提取"))
-
-
-def _copilot_review_step_requested(text: str) -> bool:
-    """Return True when the user (or the fixed Review button) asks to run review.
-
-    Same rationale as extraction: route the known intent deterministically to the
-    classic engine instead of the timeout-prone LLM router.
-    """
-    text_l = (text or "").lower()
-    raw = text or ""
-    return any(
-        term in text_l
-        for term in (
-            "run the visual review",
-            "visual review in chat",
-            "run the review",
-            "review the cohort",
-            "open the review",
-        )
-    ) or any(term in raw for term in ("运行审阅", "可视化审阅", "在聊天里审阅", "开始审阅"))
-
-
-def _copilot_next_step_help_requested(text: str) -> bool:
-    """Return True for broad "what do I do next" prompts that need local guidance."""
-    text_l = (text or "").lower()
-    raw = text or ""
-    return any(
-        term in text_l
-        for term in (
-            "what should i do",
-            "what do i do",
-            "what now",
-            "what next",
-            "next step",
-            "where do i start",
-            "how do i start",
-            "how should i start",
-        )
-    ) or any(
-        term in raw
-        for term in (
-            "我要做什么",
-            "我该做什么",
-            "现在做什么",
-            "接下来做什么",
-            "下一步",
-            "下一步是什么",
-            "从哪开始",
-            "怎么开始",
-        )
-    )
-
-
-def _copilot_usage_help_requested(text: str) -> bool:
-    """Return True when the user asks how to use Copilot itself."""
-    text_l = (text or "").lower()
-    raw = text or ""
-    return any(
-        term in text_l
-        for term in (
-            "how do i use",
-            "how to use",
-            "how should i use",
-            "how does this work",
-            "what can i do",
-            "what can i do now",
-            "what can this do",
-            "what can copilot do",
-            "getting started",
-            "get started",
-        )
-    ) or any(
-        term in raw
-        for term in (
-            "怎么使用",
-            "如何使用",
-            "怎么用",
-            "如何用",
-            "怎么开始用",
-            "使用这个",
-            "这个怎么用",
-            "可以干什么",
-            "可以做什么",
-            "能干什么",
-            "能做什么",
-            "能干嘛",
-            "可以干嘛",
-            "能帮我干什么",
-            "能帮我做什么",
-        )
-    )
-
-
-def _copilot_capability_overview_requested(text: str) -> bool:
-    """Return True for broad capability questions, not current-step usage help."""
-    text_l = (text or "").lower()
-    raw = text or ""
-    return any(
-        term in text_l
-        for term in (
-            "what can i do",
-            "what can i do now",
-            "what can this do",
-            "what can copilot do",
-        )
-    ) or any(
-        term in raw
-        for term in (
-            "可以干什么",
-            "可以做什么",
-            "能干什么",
-            "能做什么",
-            "能干嘛",
-            "可以干嘛",
-            "能帮我干什么",
-            "能帮我做什么",
-        )
-    )
-
-
-def _copilot_step_by_step_intro(branch: str, lang: str) -> str:
-    """Ask for the first human choice instead of preconfiguring the study."""
-    if lang == "en":
-        if branch == "crossdb":
-            return (
-                "Got it. I will keep this step-by-step and avoid choosing for you.\n\n"
-                "**Step 1 · Research question:** what cohort and outcome signal do you want to compare across databases? "
-                "You can name a disease group, a bedside score, a treatment exposure, or just describe the clinical question."
-            )
-        if branch == "quality":
-            return (
-                "Got it. I will keep this step-by-step and avoid choosing for you.\n\n"
-                "**Step 1 · Audit target:** which data source, cohort, or concept family do you want to audit first? "
-                "After that we will choose cohort scope, modules, extraction, and review in order."
-            )
-        return (
-            "Got it. I will keep this step-by-step and avoid choosing for you.\n\n"
-            "**Step 1 · Research question:** first choose the kind of study you want to build: outcome model, "
-            "treatment exposure, cross-database comparison, data-quality audit, or your own question. After that I will "
-            "ask for the endpoint/exposure if needed, then data source, cohort, feature modules, extraction, review, "
-            "analysis, and draft gate in order."
-        )
-    if branch == "crossdb":
-        return (
-            "收到。我会按步骤来，不替你提前做选择。\n\n"
-            "**第 1 步 · 研究问题：** 你想跨库比较哪个队列和结局信号？可以说疾病组、床旁评分、治疗暴露，"
-            "也可以直接描述临床问题。"
-        )
-    if branch == "quality":
-        return (
-            "收到。我会按步骤来，不替你提前做选择。\n\n"
-            "**第 1 步 · 审计目标：** 你想先审计哪个数据源、队列或概念家族？之后我们再依次选择队列范围、模块、提取和审阅。"
-        )
-    return (
-        "收到。我会按步骤来，不替你提前做选择。\n\n"
-        "**第 1 步 · 研究问题：** 先选择你要搭建哪类研究：结局建模、治疗暴露、跨库比较、数据质量审计，"
-        "或直接描述自己的问题。之后我会按需继续问 endpoint/暴露，再依次选择数据源、队列、特征模块、提取、审阅、分析和草稿闸门。"
-    )
 
 
 def _copilot_cohort_step_intro(
@@ -1698,128 +1030,9 @@ def _copilot_feature_step_intro(
     return body, _copilot_guided_choice_actions(study, lang)
 
 
-def _copilot_extract_data_path_from_text(text: str) -> str:
-    """Extract a local data/module path when the user configures it in chat."""
-    raw = (text or "").strip()
-    if not raw:
-        return ""
-    quoted = re.search(r"`([^`]+)`|[\"']([^\"']+)[\"']", raw)
-    if quoted:
-        candidate = str(quoted.group(1) or quoted.group(2) or "").strip()
-        if candidate.startswith(("/", "~")):
-            return candidate
-    patterns = [
-        r"(?:data[_ -]?path|prepared(?:/converted)?(?:\s+data)?\s+path|module\s+export(?:\s+folder)?|export\s+folder)\s*(?:is|=|:|为|是)?\s*(.+)$",
-        r"(?:路径|目录|文件夹)\s*(?:是|为|=|:)?\s*(.+)$",
-        r"((?:/|~)[^\n\r]+)$",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, raw, flags=re.IGNORECASE)
-        if not match:
-            continue
-        candidate = str(match.group(1) or "").strip()
-        candidate = re.sub(r"^(?:to|at|is|=|:|为|是)\s+", "", candidate, flags=re.IGNORECASE)
-        candidate = candidate.strip(" \t\r\n'\"`.,;，。；")
-        if candidate.startswith(("/", "~")):
-            return candidate
-    return ""
-
-
-def _copilot_database_from_path(path: str, fallback: str = "miiv") -> str:
-    path_l = (path or "").lower()
-    if any(token in path_l for token in ("eicu", "eicu-crd")):
-        return "eicu"
-    if "hirid" in path_l:
-        return "hirid"
-    if "aumc" in path_l or "amsterdam" in path_l:
-        return "aumc"
-    if "mimiciii" in path_l or "mimic-iii" in path_l or "mimic3" in path_l:
-        return "mimic"
-    if any(token in path_l for token in ("miiv", "mimic-iv", "mimiciv")):
-        return "miiv"
-    if "sic" in path_l:
-        return "sic"
-    fallback_clean = str(fallback or "").strip()
-    return "miiv" if fallback_clean == "mock" else (fallback_clean or "miiv")
-
-
-def _copilot_normalize_database(database: object, fallback: str = "miiv") -> str:
-    """Return a supported EasyICU database key for Copilot/classic state."""
-    raw = str(database or "").strip().lower()
-    aliases = {
-        "mimiciv": "miiv",
-        "mimic-iv": "miiv",
-        "mimic_iv": "miiv",
-        "mimiciii": "mimic",
-        "mimic-iii": "mimic",
-        "mimic_iii": "mimic",
-        "eicu-crd": "eicu",
-        "umc": "aumc",
-        "amsterdam": "aumc",
-        "sicdb": "sic",
-    }
-    raw = aliases.get(raw, raw)
-    if raw in COPILOT_DATABASE_OPTIONS:
-        return raw
-    fallback_clean = str(fallback or "miiv").strip().lower()
-    return fallback_clean if fallback_clean in COPILOT_DATABASE_OPTIONS else "miiv"
-
-
-def _copilot_database_label(database: object, lang: str) -> str:
-    key = _copilot_normalize_database(database)
-    label_en, label_zh = COPILOT_DATABASE_LABELS.get(key, (key.upper(), key.upper()))
-    return label_en if lang == "en" else label_zh
-
-
-def _copilot_full_disease_options(lang: str) -> "dict[str, str]":
-    """Full classic disease-cohort list (curated 6 + ICD-based templates).
-
-    Tier-3 advanced disclosure: the chat dropdown surfaces every template the
-    classic Step 2 supports (DISEASE_COHORT_CONFIG) so power users never have to
-    leave the conversation. Writes still flow through the same classic engine
-    (`apply_cohort_filter`), so the chat cohort stays byte-identical to classic.
-    """
-    options: dict[str, str] = {
-        key: (label_en if lang == "en" else label_zh)
-        for key, (label_en, label_zh) in COPILOT_DISEASE_OPTIONS.items()
-    }
-    try:
-        from easyicu.webapp.cohort_config import DISEASE_COHORT_CONFIG
-    except Exception:
-        return options
-    for key, cfg in DISEASE_COHORT_CONFIG.items():
-        if key in options:
-            continue
-        options[key] = str(
-            cfg.get("label_en" if lang == "en" else "label_zh") or key
-        )
-    return options
-
-
-def _copilot_sepsis_mode_options(lang: str) -> "dict[str, str]":
-    """Sepsis suspected-infection modes (classic `sepsis_si_mode`)."""
-    try:
-        from easyicu.webapp.cohort_config import SEPSIS_MODE_CONFIG
-    except Exception:
-        return {"auto": "Auto by database" if lang == "en" else "按数据库自动选择"}
-    return {
-        key: str(cfg.get("label_en" if lang == "en" else "label_zh") or key)
-        for key, cfg in SEPSIS_MODE_CONFIG.items()
-    }
-
-
-def _copilot_disease_label(disease: object, lang: str) -> str:
-    key = str(disease or "none").strip()
-    if key in COPILOT_DISEASE_OPTIONS:
-        label_en, label_zh = COPILOT_DISEASE_OPTIONS[key]
-        return label_en if lang == "en" else label_zh
-    # Fall back to the full classic template labels (ARDS, pneumonia, etc.).
-    return _copilot_full_disease_options(lang).get(key, key)
-
-
-def _copilot_feature_pack_label(pack_key: str, lang: str) -> str:
-    pack = COPILOT_FEATURE_MODULE_PACKS.get(pack_key, {})
-    return str(pack.get("label_en" if lang == "en" else "label_zh") or pack_key)
+# `_copilot_full_disease_options` and `_copilot_sepsis_mode_options` moved to
+# `copilot/routing.py` (Phase-6 split) and are re-imported at the top of this
+# module, so references below resolve unchanged.
 
 
 def _copilot_feature_module_action_keys() -> list[str]:
@@ -2037,16 +1250,6 @@ def _copilot_set_data_source_choice(
     study["database"] = state["database"]
     study["last_update"] = datetime.now().isoformat(timespec="seconds")
     return study
-
-
-def _copilot_data_source_choice_label(choice: str, lang: str) -> str:
-    labels = {
-        "prepared_path": ("Prepared data path", "prepared 数据路径"),
-        "module_export": ("Module export folder", "模块导出文件夹"),
-        "raw_files": ("Raw ICU files", "ICU 原始文件"),
-    }
-    label_en, label_zh = labels.get(choice, labels["prepared_path"])
-    return label_en if lang == "en" else label_zh
 
 
 def _copilot_submit_data_source_path(
@@ -2381,41 +1584,6 @@ def _copilot_toggle_feature_inline_module(
     return ordered
 
 
-def _copilot_concepts_from_text(text: str) -> list[str]:
-    """Map conversational concept names into EasyICU concept ids."""
-    text_l = (text or "").lower()
-    aliases = [
-        (("lactate", "乳酸"), "lact"),
-        (("sofa-2", "sofa2", "sofa"), "sofa2"),
-        (("map", "mean arterial"), "map"),
-        (("heart rate", "hr", "心率"), "hr"),
-        (("temperature", "temp", "体温"), "temp"),
-        (("spo2", "saturation", "氧饱和"), "spo2"),
-        (("creatinine", "creat", "肌酐"), "crea"),
-        (("urine", "urine output", "尿量"), "urine"),
-        (("vasopressor", "norepi", "noradrenaline", "去甲", "升压"), "vaso_ind"),
-        (("ventilation", "ventilator", "mechanical vent", "机械通气"), "vent_ind"),
-        (("rrt", "renal replacement", "dialysis", "crrt", "透析", "肾替代"), "rrt"),
-        (("age", "年龄"), "age"),
-        (("mortality", "death", "死亡", "结局"), "death"),
-    ]
-    found: list[str] = []
-    for terms, concept in aliases:
-        if any(term in text_l for term in terms) and concept not in found:
-            found.append(concept)
-    return found
-
-
-def _copilot_modules_for_concepts(concepts: list[str]) -> list[str]:
-    """Return display modules that explain which classic feature groups are active."""
-    concept_set = set(concepts)
-    modules: list[str] = []
-    for group_key, group_concepts in CONCEPT_GROUPS_INTERNAL.items():
-        if concept_set.intersection(str(concept) for concept in group_concepts):
-            modules.append(_copilot_feature_pack_label(group_key, "en"))
-    return modules
-
-
 def _copilot_template_for_study(study: MutableMapping[str, object]) -> str:
     """Map the conversational branch into a Research Agent template key."""
     branch = str(study.get("branch") or "predict")
@@ -2440,42 +1608,6 @@ def _copilot_outcome_for_study(study: MutableMapping[str, object]) -> str:
     if "mortality" in outcome or "death" in outcome:
         return "death"
     return "death"
-
-
-def _copilot_is_strict_filter_request(text: str) -> bool:
-    text_l = (text or "").lower()
-    has_strict_word = any(
-        key in text_l
-        for key in ("restrict", "strict", "narrow", "tighten", "收紧", "严格", "限制")
-    )
-    has_age80 = bool(
-        re.search(r"age\s*(?:>=|≥|over|older than|above)\s*80", text_l)
-        or re.search(r"80\s*(?:years?|岁|以上)", text_l)
-    )
-    has_sepsis = any(key in text_l for key in ("sepsis-3", "sepsis 3", "sep3", "脓毒症"))
-    return (has_strict_word and (has_age80 or has_sepsis)) or (has_age80 and has_sepsis)
-
-
-def _copilot_is_loosen_filter_request(text: str) -> bool:
-    text_l = (text or "").lower()
-    return any(
-        key in text_l
-        for key in (
-            "loosen",
-            "back to defaults",
-            "default filters",
-            "defaults",
-            "relax",
-            "放宽",
-            "恢复默认",
-            "默认",
-            "取消限制",
-        )
-    )
-
-
-def _copilot_cohort_is_empty(study: MutableMapping[str, object]) -> bool:
-    return str(study.get("cohort_phase") or "ready") == "empty"
 
 
 def _copilot_apply_strict_no_data_filter(study: MutableMapping[str, object]) -> None:
@@ -2603,48 +1735,6 @@ def _copilot_frame_question(study: MutableMapping[str, object], lang: str) -> st
     return str(config["question_en"] if lang == "en" else config["question_zh"])
 
 
-def _copilot_status_markdown(study: MutableMapping[str, object], lang: str) -> str:
-    active_step = str(study.get("step") or "question")
-    active_idx = COPILOT_STEP_INDEX.get(active_step, 0)
-    rows = []
-    for idx, (step, label_en) in enumerate(COPILOT_STUDY_STEPS):
-        mark = "[x]" if idx < active_idx or (step == "draft" and study.get("draft_signed")) else ("[>]" if idx == active_idx else "[ ]")
-        label = label_en if lang == "en" else {
-            "question": "研究问题",
-            "data": "数据源",
-            "cohort": "队列",
-            "concepts": "特征模块",
-            "extract": "提取",
-            "review": "审阅",
-            "analysis": "分析运行",
-            "draft": "草稿闸门",
-        }.get(step, label_en)
-        rows.append(f"{mark} {label}")
-    return "\n".join(rows)
-
-
-def _copilot_api_setup_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    return any(
-        key in text_l
-        for key in (
-            "connect api",
-            "api key",
-            "openrouter",
-            "model setup",
-            "model settings",
-            "llm settings",
-            "token",
-            "接入api",
-            "接 api",
-            "配置api",
-            "模型设置",
-            "模型配置",
-            "连接模型",
-        )
-    )
-
-
 def _copilot_api_connection_snapshot(state: Mapping[str, object], lang: str) -> dict[str, str | bool]:
     provider = coerce_public_provider(str(state.get("llm_provider") or public_default_provider_key()))
     provider_label, default_url, default_model, needs_key, _desc_en, _desc_zh = public_provider_defaults(provider)
@@ -2762,20 +1852,6 @@ def _copilot_current_step_detail(study: Mapping[str, object], lang: str) -> tupl
         ("Research question", "Frame the question in one sentence; I will turn it into workflow state.")
         if is_en else
         ("研究问题", "用一句话描述问题；我会把它转成工作流状态。")
-    )
-
-
-def _copilot_uses_eligible_cohort(study: Mapping[str, object]) -> bool:
-    return str(study.get("cohort_strategy") or "").strip().lower() in {"eligible", "full", "all_eligible"}
-
-
-def _copilot_cohort_label(study: Mapping[str, object], lang: str) -> str:
-    if _copilot_uses_eligible_cohort(study):
-        return "eligible real-data cohort" if lang == "en" else "真实数据合格队列"
-    return (
-        f"{int(study.get('patient_n') or 10)} stays"
-        if lang == "en" else
-        f"{int(study.get('patient_n') or 10)} 例 stay"
     )
 
 
@@ -2957,49 +2033,6 @@ def _copilot_workflow_snapshot(
     }
 
 
-def _normalized_copilot_workflow_snapshot(snapshot: Mapping[str, object], lang: str) -> dict[str, object]:
-    clean: dict[str, object] = dict(snapshot)
-    is_en = lang == "en"
-    branch = str(clean.get("branch") or "")
-    legacy_predict_label = "Predict " + "sepsis mortality"
-    if branch == legacy_predict_label or "sepsis mortality" in branch.lower():
-        clean["branch"] = "Model ICU outcomes" if is_en else "建模 ICU 结局"
-    question = str(clean.get("question") or "")
-    if _copilot_is_legacy_default_question(question):
-        clean["question"] = _copilot_frame_question(
-            {
-                "branch": "predict",
-                "window": "first 24h" if is_en else "前 24 小时",
-                "outcome": "a prespecified ICU outcome" if is_en else "预设 ICU 结局",
-            },
-            lang,
-        )
-    if str(clean.get("step_title") or "") == "Cohort · all eligible stays":
-        clean["step_title"] = "Cohort · needs confirmation"
-        clean["step_detail"] = (
-            "This old auto-selected scope is paused. Confirm the data source and cohort in chat before continuing."
-        )
-    if str(clean.get("step_title") or "") == "队列 · 全量合格 stay":
-        clean["step_title"] = "队列 · 需要确认"
-        clean["step_detail"] = "这个旧的自动队列范围已暂停。继续前请先在聊天中确认数据源和队列。"
-    facts = clean.get("facts")
-    if isinstance(facts, list):
-        normalized_facts: list[object] = []
-        for fact in facts:
-            if isinstance(fact, Mapping):
-                item = dict(fact)
-                value = str(item.get("value") or "")
-                if value == "all eligible stays":
-                    item["value"] = "needs confirmation"
-                elif value == "全量合格 stay":
-                    item["value"] = "需要确认"
-                normalized_facts.append(item)
-            else:
-                normalized_facts.append(fact)
-        clean["facts"] = normalized_facts
-    return clean
-
-
 def _normalized_copilot_message_content(content: str, lang: str) -> str:
     if lang == "en":
         return re.sub(
@@ -3097,28 +2130,6 @@ def _copilot_message_actions_for_current_step(
     ]
 
 
-def _copilot_workflow_snapshot_html(snapshot: Mapping[str, object], lang: str) -> str:
-    snapshot = _normalized_copilot_workflow_snapshot(snapshot, lang)
-    # Slimmed card: the right-hand Study panel already carries the question,
-    # full step map, evidence gate, and API state. The in-thread card keeps
-    # ONLY the current step's "what this does" line so each step has a single,
-    # non-redundant place to act (the edit controls render right below it).
-    step_title = html.escape(str(snapshot.get("step_title") or ""))
-    step_detail = html.escape(str(snapshot.get("step_detail") or ""))
-    if not step_title and not step_detail:
-        return ""
-    eyebrow = html.escape("This step" if lang == "en" else "当前这一步")
-    return (
-        '<div class="eu-copilot-flow-card">'
-        '<div class="flow-current">'
-        f'<span class="flow-eyebrow">{eyebrow}</span>'
-        f'<strong>{step_title}</strong>'
-        f'<p>{step_detail}</p>'
-        '</div>'
-        '</div>'
-    )
-
-
 def _request_copilot_scroll_to_latest(state: MutableMapping[str, object] | None = None) -> None:
     """Ask the Copilot chat shell to scroll to the newest turn on the next render."""
     if state is None:
@@ -3176,56 +2187,6 @@ def _append_copilot_workflow_step_action(step_id: str, lang: str) -> None:
         if lang == "en" else
         f"Workflow 卡已切到{label}。"
     )
-
-
-def _copilot_workflow_button_label(item: Mapping[str, object], lang: str) -> str:
-    """Return a compact label for a workflow button without fake bullets."""
-    label = str(item.get("label") or "")
-    status = str(item.get("status") or "")
-    if status == "done":
-        return f"✓ {label}"
-    if status == "active":
-        return f"{label} · active" if lang == "en" else f"{label} · 当前"
-    return label
-
-
-def _copilot_visible_workflow_step_items(
-    snapshot: Mapping[str, object],
-    lang: str,
-) -> list[dict[str, object]]:
-    """Return only nearby workflow steps for the central chat card.
-
-    The right rail already carries the complete study map. Keeping the central
-    card to the previous/current/next step preserves editability without making
-    the user evaluate the whole workflow at once.
-    """
-    normalized = _normalized_copilot_workflow_snapshot(snapshot, lang)
-    steps = normalized.get("steps") if isinstance(normalized.get("steps"), list) else []
-    step_items = [
-        dict(step)
-        for step in steps
-        if isinstance(step, Mapping) and str(step.get("id") or "")
-    ]
-    if not step_items:
-        return []
-    active_step = str(normalized.get("active_step") or "")
-    active_idx = next(
-        (idx for idx, step in enumerate(step_items) if str(step.get("status") or "") == "active"),
-        None,
-    )
-    if active_idx is None and active_step:
-        active_idx = next(
-            (idx for idx, step in enumerate(step_items) if str(step.get("id") or "") == active_step),
-            None,
-        )
-    if active_idx is None:
-        active_idx = 0
-    visible_indices = [
-        idx
-        for idx in (active_idx - 1, active_idx, active_idx + 1)
-        if 0 <= idx < len(step_items)
-    ]
-    return [step_items[idx] for idx in visible_indices]
 
 
 def _render_copilot_workflow_step_controls(
@@ -3617,7 +2578,6 @@ def _render_copilot_workflow_snapshot(
     _render_copilot_workflow_step_controls(snapshot, lang, key_prefix)
 
 
-
 def _copilot_study_actions(study: MutableMapping[str, object], lang: str) -> list[dict[str, object]]:
     is_en = lang == "en"
     step = str(study.get("step") or "question")
@@ -3683,127 +2643,6 @@ def _copilot_prompt_action(
     if desc:
         action["desc"] = desc
     return action
-
-
-def _copilot_route_family_label(family: str, lang: str) -> str:
-    label_en, label_zh = COPILOT_ROUTE_FAMILY_LABELS.get(
-        family,
-        COPILOT_ROUTE_FAMILY_LABELS["unknown"],
-    )
-    return label_en if lang == "en" else label_zh
-
-
-def _copilot_branch_for_route_family(family: str) -> str:
-    if family == "cross_database":
-        return "crossdb"
-    if family == "quality_audit":
-        return "quality"
-    return "predict"
-
-
-def _copilot_sanitize_route_choice_id(value: str, fallback: str) -> str:
-    token = re.sub(r"[^a-zA-Z0-9_]+", "_", (value or "").strip().lower()).strip("_")
-    return token[:48] or fallback
-
-
-def _copilot_route_choice_actions(route: Mapping[str, object], lang: str) -> list[dict[str, object]]:
-    raw_choices = route.get("choices")
-    if not isinstance(raw_choices, list):
-        return []
-    actions: list[dict[str, object]] = []
-    for idx, raw_choice in enumerate(raw_choices[:5], start=1):
-        if not isinstance(raw_choice, Mapping):
-            continue
-        label = str(raw_choice.get("label") or raw_choice.get("title") or "").strip()
-        prompt = str(raw_choice.get("prompt") or label).strip()
-        if not label or not prompt:
-            continue
-        raw_id = str(raw_choice.get("id") or label)
-        action_id = "route_choice_" + _copilot_sanitize_route_choice_id(raw_id, f"choice_{idx}")
-        if any(action["id"] == action_id for action in actions):
-            action_id = f"{action_id}_{idx}"
-        actions.append({
-            "id": action_id,
-            "kind": "copilot_prompt",
-            "label": label[:80],
-            "prompt": prompt[:600],
-        })
-    return actions
-
-
-def _copilot_route_has_specific_goal(route: Mapping[str, object]) -> bool:
-    family = str(route.get("analysis_family") or "").strip().lower()
-    frame = str(route.get("study_frame") or route.get("question") or "").strip()
-    label = str(route.get("analysis_label") or "").strip()
-    return bool(frame) or (family and family != "unknown") or bool(label)
-
-
-def _copilot_route_uses_broad_question_type_choices(actions: list[dict[str, object]]) -> bool:
-    if not actions:
-        return False
-    broad_prompts = ("question type:", "研究类型：")
-    broad_labels = {
-        "model an icu outcome",
-        "建模 icu 结局",
-        "treatment exposure",
-        "治疗暴露研究",
-        "compare databases",
-        "跨库比较",
-        "audit data quality",
-        "数据质量审计",
-    }
-    broad_count = 0
-    for action in actions:
-        label = str(action.get("label") or "").strip().lower()
-        prompt = str(action.get("prompt") or "").strip().lower()
-        if label in broad_labels or any(fragment in prompt for fragment in broad_prompts):
-            broad_count += 1
-    if len(actions) <= 2:
-        return broad_count >= 1
-    return broad_count >= max(2, min(len(actions), 3))
-
-
-def _copilot_route_next_question_asks_broad_type(text: str) -> bool:
-    raw = text or ""
-    text_l = raw.lower()
-    return any(
-        fragment in text_l
-        for fragment in (
-            "choose the research type",
-            "choose study type",
-            "select study type",
-            "question type",
-        )
-    ) or any(
-        fragment in raw
-        for fragment in (
-            "选择研究类型",
-            "选择研究方向",
-            "请选择研究类型",
-            "请选择研究方向",
-            "研究类型",
-        )
-    )
-
-
-def _copilot_specific_route_next_question(family: str, step: str, lang: str) -> str:
-    if family == "prediction" and step == "question":
-        return (
-            "First choose the event or endpoint you want the warning model to predict; you can also type your own."
-            if lang == "en" else
-            "先确认你要预警的事件或 endpoint；可以直接选择，也可以自己输入。"
-        )
-    if family == "clustering":
-        return (
-            "Next, confirm the data source and the feature space for clustering in this same chat."
-            if lang == "en" else
-            "下一步在当前聊天里确认数据源和用于聚类的特征空间。"
-        )
-    return (
-        "Choose the next concrete workflow item below; we will stay in this Copilot page."
-        if lang == "en" else
-        "请在下面选择下一个具体工作流项；我们仍然留在当前 Copilot 页面。"
-    )
 
 
 def _copilot_nonblocking_goal_fallback_actions(lang: str) -> list[dict[str, object]]:
@@ -3925,31 +2764,6 @@ def _copilot_workflow_control_context(lang: str) -> dict[str, object]:
     }
 
 
-def _copilot_create_route_completion(route_client: object, request_kwargs: dict[str, object]) -> object | None:
-    """Call the route model with a hard wall-clock timeout.
-
-    Some OpenAI-compatible endpoints do not enforce the client timeout as a
-    strict UI budget. The Copilot route must never block the Streamlit rerun
-    longer than the interaction budget, so the request runs in a daemon thread.
-    """
-    result: dict[str, object] = {}
-
-    def _call() -> None:
-        try:
-            result["response"] = route_client.chat.completions.create(**request_kwargs)
-        except Exception as exc:  # noqa: BLE001 - returned to the caller as route unavailable
-            result["error"] = exc
-
-    worker = threading.Thread(target=_call, daemon=True)
-    worker.start()
-    worker.join(COPILOT_ROUTE_TIMEOUT_SECONDS)
-    if worker.is_alive():
-        return None
-    if result.get("error") is not None:
-        raise result["error"]  # type: ignore[misc]
-    return result.get("response")
-
-
 def _copilot_current_state_context(
     state: Mapping[str, object],
     study: Mapping[str, object],
@@ -3976,23 +2790,6 @@ def _copilot_current_state_context(
             if str(item).strip()
         ],
     }
-
-
-def _copilot_extract_route_json(text: str) -> dict[str, object] | None:
-    cleaned = _strip_llm_reasoning(text or "").strip()
-    if not cleaned:
-        return None
-    try:
-        parsed = json.loads(cleaned)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", cleaned, flags=re.S)
-        if not match:
-            return None
-        try:
-            parsed = json.loads(match.group(0))
-        except json.JSONDecodeError:
-            return None
-    return parsed if isinstance(parsed, dict) else None
 
 
 def _copilot_route_transport_enabled(state: Mapping[str, object]) -> bool:
@@ -4208,302 +3005,8 @@ def _copilot_apply_llm_route(
     return _copilot_reply(study, body, lang, include_status=False), actions
 
 
-def _copilot_keyword_route(prompt: str, lang: str) -> dict[str, object] | None:
-    """Deterministic offline fallback for the free-text study goal.
-
-    When no model is reachable, classify the goal with light keyword rules into
-    the SAME route schema `_copilot_apply_llm_route` consumes, so the natural-
-    language entry still flows without an API key. Returns None when the text is
-    too vague to classify (the caller then shows the model/clarify fallback).
-
-    This is an explicit, opt-in degradation (the LLM is still tried first); when
-    a model is configured it always wins. Writes still go through the shared
-    applier, so chat and classic stay consistent.
-    """
-    raw = (prompt or "").strip()
-    if len(raw) < 8:
-        return None
-    t = raw.lower()
-
-    db_names = ("mimic", "eicu", "aumc", "hirid", "sicdb", "amsterdam", "salzburg")
-    db_mentions = sum(1 for d in db_names if d in t)
-    compare_word = any(
-        w in t for w in (
-            "compare", "comparison", "across", "versus", " vs ", "vs.",
-            "benchmark", "multi-center", "multi-centre", "multi-site",
-        )
-    )
-    if (
-        any(k in t for k in (
-            "cross-database", "cross database", "across databases",
-            "multi-database", "multiple databases", "compare database",
-            "compare databases", "external valid", "externally valid", "replicat",
-            "generaliz", "transport",
-        ))
-        # "compare … across … databases" with words in between, or ≥2 DB names.
-        or (compare_word and "database" in t)
-        or db_mentions >= 2
-        or any(k in raw for k in ("跨库", "跨数据库", "多数据库", "比较数据库", "外部验证", "多中心", "泛化"))
-    ):
-        family = "cross_database"
-    elif (
-        any(k in t for k in (
-            "data quality", "missingness", "missing data", "harmoniz",
-            "completeness", "audit",
-        ))
-        or any(k in raw for k in ("数据质量", "缺失", "审计", "质量", "完整性", "一致性"))
-    ):
-        family = "quality_audit"
-    elif (
-        any(k in t for k in ("associat", "risk factor", "correlat", "relationship between"))
-        or any(k in raw for k in ("关联", "相关", "危险因素", "关系"))
-    ):
-        family = "association"
-    else:
-        family = "prediction"
-
-    label_en, label_zh = COPILOT_ROUTE_FAMILY_LABELS.get(
-        family, COPILOT_ROUTE_FAMILY_LABELS["unknown"]
-    )
-    label = label_en if lang == "en" else label_zh
-
-    route: dict[str, object] = {
-        "analysis_family": family,
-        "analysis_label": label,
-        "study_frame": raw,
-        "current_step": "question" if family == "prediction" else "data",
-    }
-
-    disease_kw = {
-        "sepsis": ("sepsis", "septic", "脓毒", "脓毒症"),
-        "aki": ("aki", "acute kidney", "肾损伤", "急性肾"),
-        "ards": ("ards", "acute respiratory distress", "呼吸窘迫"),
-        "pneumonia": ("pneumonia", "肺炎"),
-        "heart_failure": ("heart failure", "心衰", "心力衰竭"),
-        "ami": ("myocardial infarction", "心肌梗死", "心梗"),
-        "stroke": ("stroke", "卒中", "脑卒中", "中风"),
-    }
-    disease_labels = _copilot_full_disease_options(lang)
-    for key, kws in disease_kw.items():
-        if any(kw in t for kw in kws) or any(kw in raw for kw in kws):
-            route["cohort"] = {"label": disease_labels.get(key, key)}
-            break
-
-    concept_kw = {
-        "lact": ("lactate", "乳酸"),
-        "sofa2": ("sofa", "sofa-2", "sofa2"),
-        "creat": ("creatinine", "肌酐"),
-        "map": ("mean arterial", "blood pressure", "血压"),
-        "hr": ("heart rate", "心率"),
-        "spo2": ("spo2", "oxygen satur", "血氧"),
-    }
-    concepts = [
-        key for key, kws in concept_kw.items()
-        if any(kw in t for kw in kws) or any(kw in raw for kw in kws)
-    ]
-    if concepts:
-        route["suggested_concepts"] = concepts
-
-    # Guard against over-eager classification: only classify when there is an
-    # actual clinical/research signal. Otherwise (greeting, off-topic, vague)
-    # return None so the caller shows the clarify/model fallback instead of
-    # silently framing it as a prediction study.
-    explicit_family = family in {"cross_database", "quality_audit", "association"}
-    clinical_terms_en = (
-        "predict", "prognos", "mortality", "death", "died", "outcome", "risk",
-        "survival", "length of stay", " los ", "readmission", "icu", "patient",
-        "cohort", "ventilat", "vasopressor", "dialysis", "rrt", "delirium",
-        "shock", "organ failure", "sofa", "sepsis", "kidney", "respiratory",
-    )
-    clinical_terms_zh = (
-        "预测", "预后", "死亡", "结局", "风险", "生存", "住院时长", "再入院",
-        "机械通气", "升压药", "透析", "谵妄", "休克", "器官衰竭", "患者",
-        "队列", "重症", "脓毒", "肾", "呼吸",
-    )
-    has_signal = (
-        explicit_family
-        or "cohort" in route
-        or bool(concepts)
-        or any(term in t for term in clinical_terms_en)
-        or any(term in raw for term in clinical_terms_zh)
-    )
-    if not has_signal:
-        return None
-
-    prefix = (
-        "Routed locally without a model (configure API for richer parsing). "
-        if lang == "en" else
-        "未连接模型,已用本地规则判断路线(配置 API 可获得更精准解析)。"
-    )
-    route["assistant_text"] = prefix + (
-        f"I read this as **{label}**."
-        if lang == "en" else
-        f"我把它理解为 **{label}**。"
-    )
-    return route
-
-
-def _copilot_explicit_local_command(prompt: str) -> bool:
-    raw = prompt or ""
-    text_l = raw.lower()
-    explicit_fragments = (
-        "question type:",
-        "endpoint:",
-        "exposure:",
-        "cross-database signal:",
-        "quality target:",
-        "set data path",
-        "prepared data path",
-        "prepared path",
-        "module export",
-        "raw icu files",
-        "raw files",
-        "add feature module:",
-        "feature module:",
-        "choose feature modules",
-        "use these modules",
-        "use suggested modules",
-        "use eligible cohort",
-        "describe my own research question",
-        "describe my own endpoint",
-        "describe my own exposure",
-        "describe my cross-database signal",
-        "describe my audit target",
-        "current reviewed cohort",
-        "no disease filter",
-        "why this step",
-        "go back",
-        "run the whole demo",
-        "whole demo",
-    )
-    explicit_zh = (
-        "研究类型：",
-        "endpoint：",
-        "暴露：",
-        "跨库信号：",
-        "质量目标：",
-        "真实数据路径",
-        "prepared 数据路径",
-        "已有 prepared",
-        "模块导出",
-        "原始文件",
-        "选择特征模块",
-        "用这些变量",
-        "全部合格队列",
-        "自己描述研究问题",
-        "自己描述 endpoint",
-        "自己描述暴露",
-        "自己描述跨库信号",
-        "自己描述审计目标",
-        "当前审阅队列",
-        "不加疾病过滤",
-        "为什么这一步",
-        "返回上一步",
-        "跑完整演示",
-    )
-    return any(fragment in text_l for fragment in explicit_fragments) or any(fragment in raw for fragment in explicit_zh)
-
-
-def _copilot_free_study_goal_requested(prompt: str) -> bool:
-    raw = (prompt or "").strip()
-    if len(raw) < 6:
-        return False
-    if _copilot_explicit_local_command(raw):
-        return False
-    text_l = raw.lower()
-    workflow_terms = (
-        "study",
-        "research",
-        "analysis",
-        "analyze",
-        "model",
-        "predict",
-        "cluster",
-        "trajectory",
-        "compare",
-        "audit",
-        "cohort",
-        "endpoint",
-        "outcome",
-    )
-    workflow_terms_zh = (
-        "研究",
-        "分析",
-        "建模",
-        "预测",
-        "聚类",
-        "轨迹",
-        "比较",
-        "审计",
-        "队列",
-        "结局",
-        "预警",
-        "我要做",
-        "我想做",
-    )
-    return any(term in text_l for term in workflow_terms) or any(term in raw for term in workflow_terms_zh)
-
-
-def _copilot_should_use_llm_route(
-    prompt: str,
-    *,
-    usage_help_intent: bool,
-    step_by_step_intent: bool,
-    cohort_step_intent: bool,
-    api_intent: bool,
-    path_help_intent: bool,
-    guided_choice_intent: bool,
-) -> bool:
-    _ = (usage_help_intent, step_by_step_intent, path_help_intent)
-    if api_intent:
-        return False
-    if cohort_step_intent:
-        return False
-    if guided_choice_intent or _copilot_explicit_local_command(prompt):
-        return False
-    if _copilot_extract_patient_count(prompt) is not None:
-        return False
-    if _copilot_extract_data_path_from_text(prompt):
-        return False
-    return len((prompt or "").strip()) >= 3 or _copilot_free_study_goal_requested(prompt)
-
-
-def _copilot_first_pass_goal_allowed(prompt: str) -> bool:
-    """Return True only for natural-language study goals, not workflow controls."""
-    raw = (prompt or "").strip()
-    text_l = raw.lower()
-    if not _copilot_free_study_goal_requested(raw):
-        return False
-    if _copilot_explicit_local_command(raw):
-        return False
-    if _copilot_extract_patient_count(raw) is not None:
-        return False
-    if _copilot_extract_data_path_from_text(raw):
-        return False
-    control_prefixes = (
-        "use ",
-        "set ",
-        "choose ",
-        "select ",
-        "configure ",
-        "save ",
-        "run ",
-        "open ",
-        "walk me through",
-    )
-    if text_l.startswith(control_prefixes):
-        return False
-    open_goal_markers_en = (
-        "i want",
-        "i would like",
-        "i need",
-        "i'm interested",
-        "help me",
-    )
-    open_goal_markers_zh = ("我想", "我要", "想做", "要做", "帮我")
-    return any(marker in text_l for marker in open_goal_markers_en) or any(
-        marker in raw for marker in open_goal_markers_zh
-    )
+# `_copilot_keyword_route` moved to `copilot/routing.py` (Phase-6 split) and is
+# re-imported at the top of this module; callers below resolve unchanged.
 
 
 def _copilot_llm_route_unavailable_reply(
@@ -5262,93 +3765,6 @@ def _copilot_capability_overview_reply(
     return body, actions
 
 
-def _copilot_prepared_data_choice_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    raw = text or ""
-    return any(term in text_l for term in ("prepared data path", "prepared path")) or any(
-        term in raw for term in ("prepared 数据路径", "已有 prepared 路径", "已有 prepared 数据")
-    )
-
-
-def _copilot_module_export_choice_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    raw = text or ""
-    return "module export" in text_l or any(term in raw for term in ("模块导出", "导出文件夹"))
-
-
-def _copilot_raw_files_choice_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    raw = text or ""
-    return "raw icu files" in text_l or "raw files" in text_l or any(
-        term in raw for term in ("原始文件", "原始数据", "只有 ICU 原始")
-    )
-
-
-def _copilot_disease_cohort_choice_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    raw = text or ""
-    return "disease or diagnosis cohort" in text_l or any(
-        term in raw for term in ("疾病或诊断队列", "疾病/诊断", "诊断队列")
-    )
-
-
-def _copilot_age_los_choice_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    raw = text or ""
-    return "age or icu length-of-stay" in text_l or "age / icu los" in text_l or any(
-        term in raw for term in ("年龄或 ICU LOS", "年龄/ICU LOS", "ICU LOS 限制")
-    )
-
-
-def _copilot_current_reviewed_cohort_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    raw = text or ""
-    return "current reviewed cohort" in text_l or any(term in raw for term in ("当前审阅队列", "当前队列"))
-
-
-def _copilot_no_disease_filter_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    raw = text or ""
-    return "no disease filter" in text_l or any(term in raw for term in ("不加疾病过滤", "不按疾病过滤", "无疾病过滤"))
-
-
-def _copilot_module_pack_from_prompt(text: str) -> list[str] | None:
-    text_l = (text or "").lower()
-    raw = text or ""
-    requested = ""
-    if "add feature module:" in text_l:
-        requested = text_l.split("add feature module:", 1)[1]
-    elif "feature module:" in text_l:
-        requested = text_l.split("feature module:", 1)[1]
-    elif "选择特征模块：" in raw:
-        requested = raw.split("选择特征模块：", 1)[1]
-    if requested:
-        requested_clean = requested.strip().strip("。.!? ").lower()
-        for key, pack in COPILOT_FEATURE_MODULE_PACKS.items():
-            labels = {
-                key.lower().replace("_", " "),
-                str(pack.get("label_en") or "").lower(),
-                str(pack.get("label_zh") or "").lower(),
-            }
-            if requested_clean in labels:
-                return [str(concept) for concept in pack["concepts"]]
-
-    # Backward compatibility for buttons stored in older local sessions. New UI
-    # renders real Step 3 module labels from CONCEPT_GROUPS_INTERNAL instead.
-    if "core bedside modules" in text_l or "核心床旁" in raw:
-        return [str(concept) for concept in COPILOT_FEATURE_MODULE_PACKS["vitals"]["concepts"]]
-    if "severity score" in text_l or "严重程度评分" in raw:
-        return [str(concept) for concept in COPILOT_FEATURE_MODULE_PACKS["sofa2_score"]["concepts"]]
-    if "labs and treatment" in text_l or "labs + treatment" in text_l or "化验和治疗" in raw or "化验 + 治疗" in raw:
-        concepts: list[str] = []
-        for key in ("chemistry", "blood_gas", "vasopressors", "respiratory"):
-            for concept in COPILOT_FEATURE_MODULE_PACKS[key]["concepts"]:
-                if str(concept) not in concepts:
-                    concepts.append(str(concept))
-        return concepts
-    return None
-
-
 def _copilot_reply(
     study: MutableMapping[str, object],
     body: str,
@@ -5596,16 +4012,6 @@ def _copilot_submit_review(
     ]
     body = _copilot_reply(study, base + tail, lang, include_status=False)
     return body, actions
-
-
-def _copilot_concept_label_list(study: Mapping[str, object], *, limit: int = 5) -> list[str]:
-    concepts = [
-        str(item)
-        for item in list(study.get("selected_concepts") or [])
-        if str(item).strip()
-    ]
-    labels = [COPILOT_CONCEPT_LABELS.get(concept, concept) for concept in concepts]
-    return labels[:limit]
 
 
 def _copilot_infer_configured_step(study: Mapping[str, object]) -> str:
@@ -5879,7 +4285,6 @@ def _handle_copilot_guided_prompt(
         # language entry flowing offline; the LLM was already tried first above.
         kw_route = _copilot_keyword_route(prompt, lang)
         if kw_route is not None:
-            state["_copilot_routed_locally"] = True
             return _copilot_apply_llm_route(kw_route, state, study, lang)
         # Only truly vague input reaches here → offer Retry + model guidance.
         if _copilot_route_transport_enabled(state):
@@ -6859,49 +5264,6 @@ def _is_idea_exploration_request(text: str) -> bool:
     )
 
 
-def _copilot_research_recommendation_requested(text: str) -> bool:
-    """Return True when the user asks Copilot to recommend research directions."""
-    raw = text or ""
-    text_l = raw.lower()
-    recommend_terms_en = (
-        "recommend",
-        "suggest",
-        "what should i study",
-        "research direction",
-        "study direction",
-        "study idea",
-        "topic idea",
-        "any ideas",
-    )
-    recommend_terms_zh = (
-        "推荐",
-        "建议",
-        "有什么推荐",
-        "有啥推荐",
-        "研究方向",
-        "选题",
-        "课题",
-        "做什么研究",
-        "有什么方向",
-    )
-    research_terms_en = ("research", "study", "topic", "idea", "hypothesis", "icu", "sepsis")
-    research_terms_zh = ("研究", "选题", "课题", "方向", "icu", "ICU", "重症", "脓毒症")
-    return (
-        any(term in text_l for term in recommend_terms_en)
-        and any(term in text_l for term in research_terms_en)
-    ) or (
-        any(term in raw for term in recommend_terms_zh)
-        and any(term in raw for term in research_terms_zh)
-    )
-
-
-def _copilot_idea_topic(text: str) -> str:
-    text_l = (text or "").lower()
-    if any(term in text_l for term in ("sepsis", "sepsis-3", "septic")) or "脓毒症" in str(text or ""):
-        return "sepsis"
-    return "general"
-
-
 def _copilot_idea_candidates_for_prompt(text: str) -> list[dict[str, object]]:
     topic = _copilot_idea_topic(text)
     candidates = COPILOT_IDEA_CANDIDATES.get(topic) or COPILOT_IDEA_CANDIDATES["general"]
@@ -6973,27 +5335,6 @@ def _copilot_idea_recommendation_reply(
     return "\n\n".join(lines), []
 
 
-def _copilot_parse_idea_selection(text: str) -> int | None:
-    raw = (text or "").strip()
-    text_l = raw.lower()
-    if re.fullmatch(r"[123]", text_l):
-        return int(text_l) - 1
-    patterns = [
-        r"(?:pick|choose|select|use|go with|continue)\s*(?:option\s*)?([123])",
-        r"(?:选|选择|继续|用|就用|第)\s*([123])",
-        r"第\s*([123])\s*个",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text_l)
-        if match:
-            return int(match.group(1)) - 1
-    chinese_numbers = {"一": 0, "二": 1, "三": 2}
-    for token, idx in chinese_numbers.items():
-        if re.search(rf"(?:选|选择|继续|用|就用|第)\s*{token}\s*个?", raw):
-            return idx
-    return None
-
-
 def _copilot_handle_idea_selection(
     prompt: str,
     lang: str,
@@ -7058,15 +5399,6 @@ def _copilot_handle_idea_selection(
             "如果这些候选模块可以，就回复“用这些变量”。"
         )
     return _copilot_reply(study, body, lang, include_status=False), _copilot_guided_choice_actions(study, lang)
-
-
-def _copilot_confirm_suggested_concepts_requested(text: str) -> bool:
-    text_l = (text or "").lower()
-    raw = text or ""
-    return any(
-        term in text_l
-        for term in ("use these modules", "use these concepts", "confirm modules", "accept modules")
-    ) or any(term in raw for term in ("用这些变量", "使用这些变量", "确认变量", "确认模块", "就这些模块"))
 
 
 def _suggest_ui_actions(prompt: str, answer: str, lang: str) -> list[dict[str, object]]:
@@ -7308,15 +5640,6 @@ _COPILOT_ACTION_ICON_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
 )
 
 
-def _copilot_action_material_icon(action: Mapping[str, object]) -> str:
-    """Infer a Material icon for an option row from its id/label (polish gd-opt)."""
-    text = (str(action.get("id") or "") + " " + str(action.get("label") or "")).lower()
-    for keys, name in _COPILOT_ACTION_ICON_RULES:
-        if any(k in text for k in keys):
-            return f":material/{name}:"
-    return ":material/arrow_forward:"
-
-
 def _render_nav_actions(actions: list[dict[str, object]], key_prefix: str) -> None:
     """Render in-app navigation and preset actions as buttons.
 
@@ -7404,30 +5727,6 @@ def _copilot_selected_concepts_for_study(state: MutableMapping[str, object]) -> 
     if not concepts:
         concepts = list(config.get("selected_concepts") or [])
     return concepts or ["hr", "map", "temp", "spo2", "sofa2"]
-
-
-def _research_agent_source_label(source: str, lang: str) -> str:
-    """Return the exact cohort-source radio label used by Research Agent."""
-    is_en = lang == "en"
-    if source == "handoff":
-        return (
-            "Use cohort prepared elsewhere in this session"
-            if is_en else
-            "使用本会话其他页面准备好的队列"
-        )
-    if source == "module":
-        return (
-            "Pick an EasyICU module export folder"
-            if is_en else
-            "选择 EasyICU 模块导出文件夹"
-        )
-    if source == "no_data":
-        return (
-            "I haven't extracted data yet — help me do it"
-            if is_en else
-            "我还没有提取数据，请帮我准备"
-        )
-    raise ValueError(f"Unknown Research Agent source label: {source}")
 
 
 def _copilot_patient_ids_for_handoff(state: Mapping[str, object]) -> list[object] | None:
@@ -8484,94 +6783,6 @@ def _stream_text(stream, placeholder):
     return text
 
 
-def _strip_llm_reasoning(text: str) -> str:
-    """Remove model-private reasoning blocks from OpenAI-compatible outputs."""
-    if not text:
-        return ""
-    cleaned = re.sub(r"<think\b[^>]*>.*?</think>", "", text, flags=re.I | re.S)
-    cleaned = re.sub(r"<think\b[^>]*>.*$", "", cleaned, flags=re.I | re.S)
-    return cleaned.strip()
-
-
-def _parse_verification_report(text: str) -> dict[str, object]:
-    """Parse verifier output into a structured result."""
-    text = _strip_llm_reasoning(text)
-    result = {
-        "status": "uncertain",
-        "issues": [],
-        "corrected_answer": "",
-        "raw": text.strip(),
-    }
-    if not text:
-        return result
-
-    status_match = re.search(r"STATUS:\s*(pass|corrected|uncertain)", text, re.I)
-    if status_match:
-        result["status"] = status_match.group(1).lower()
-
-    issues_match = re.search(r"ISSUES:\s*(.*?)\nCORRECTED_ANSWER:", text, re.S | re.I)
-    if issues_match:
-        issue_block = issues_match.group(1).strip()
-        result["issues"] = [
-            line.lstrip("-* ").strip()
-            for line in issue_block.splitlines()
-            if line.strip()
-        ]
-
-    corrected_match = re.search(r"CORRECTED_ANSWER:\s*(.*)$", text, re.S | re.I)
-    if corrected_match:
-        result["corrected_answer"] = corrected_match.group(1).strip()
-
-    return result
-
-
-def _verify_response(client, messages: list[dict[str, str]], draft: str, lang: str) -> dict[str, object]:
-    """Run a second-pass verifier against the generated draft."""
-    verifier_prompt = (
-        "You are a strict medical and technical answer verifier.\n"
-        "Check the assistant draft against the provided EasyICU code context and any PubMed evidence.\n"
-        "Rules:\n"
-        "- Mark `pass` only if the draft is supported and appropriately cautious.\n"
-        "- Mark `corrected` if you rewrote any unsupported, vague, or overclaimed content.\n"
-        "- Mark `uncertain` if the evidence is insufficient.\n"
-        "- Preserve links and concrete file/function references when valid.\n"
-        "- For web workflow questions, make sure the answer tells the user the next concrete UI step.\n"
-        "- Do not reveal hidden chain-of-thought.\n"
-        "- Return exactly this format:\n"
-        "STATUS: <pass|corrected|uncertain>\n"
-        "ISSUES:\n"
-        "- <issue 1>\n"
-        "CORRECTED_ANSWER:\n"
-        "<final answer>\n"
-    )
-    verify_messages = [
-        {"role": "system", "content": verifier_prompt},
-        *messages,
-        {"role": "assistant", "content": draft},
-    ]
-    try:
-        response = client.chat.completions.create(
-            model=st.session_state.get("llm_model", "").strip()
-            or public_provider_defaults(st.session_state.get("llm_provider", public_default_provider_key()))[2],
-            messages=verify_messages,
-            stream=False,
-        )
-        text = response.choices[0].message.content if response.choices else ""
-        parsed = _parse_verification_report(text)
-        if not parsed.get("corrected_answer"):
-            parsed["corrected_answer"] = draft
-        return parsed
-    except Exception as exc:
-        return {
-            "status": "uncertain",
-            "issues": [
-                ("Verification failed: " if lang == "en" else "校验失败：") + str(exc)
-            ],
-            "corrected_answer": draft,
-            "raw": "",
-        }
-
-
 def _needs_api_key(provider: str) -> bool:
     return _shared_needs_api_key(provider)
 
@@ -8634,12 +6845,6 @@ def _provider_default_headers(provider: str) -> dict[str, str] | None:
 
 def _current_provider_choice() -> str:
     return str(st.session_state.get("llm_provider", public_default_provider_key()))
-
-
-def _current_public_provider() -> str:
-    return coerce_public_provider(
-        st.session_state.get("llm_provider", public_default_provider_key())
-    )
 
 
 def _external_llm_ready(lang: str) -> bool:
@@ -10345,153 +8550,6 @@ def _render_copilot_quick_actions(lang: str) -> None:
                     st.rerun()
 
 
-def _workflow_status_step(label: str, detail: str, status: str) -> str:
-    safe_status = status if status in {"done", "active", "todo"} else "todo"
-    return (
-        f'<div class="eu-copilot-step {safe_status}">'
-        '<span class="node"></span>'
-        '<div>'
-        f'<b>{html.escape(label)}</b>'
-        f'<p>{html.escape(detail)}</p>'
-        '</div>'
-        '</div>'
-    )
-
-
-def _copilot_step_label(step: str, lang: str) -> str:
-    label = dict(COPILOT_STUDY_STEPS).get(step, step)
-    if lang == "en":
-        return label
-    return {
-        "question": "研究问题",
-        "data": "数据源",
-        "cohort": "队列",
-        "concepts": "特征模块",
-        "extract": "提取",
-        "review": "审阅",
-        "analysis": "分析运行",
-        "draft": "草稿闸门",
-    }.get(step, label)
-
-
-def _copilot_stage_status(study: MutableMapping[str, object], step: str) -> str:
-    active_step = str(study.get("step") or "question")
-    active_idx = COPILOT_STEP_INDEX.get(active_step, 0)
-    step_idx = COPILOT_STEP_INDEX.get(step, 0)
-    if step_idx < active_idx or (step == "draft" and study.get("draft_signed")):
-        return "done"
-    if step_idx == active_idx:
-        return "active"
-    if step == "draft":
-        return "locked"
-    return "todo"
-
-
-def _copilot_step_complete_for_navigation(
-    study: Mapping[str, object],
-    step: str,
-) -> bool:
-    """Return whether a rail step has enough real state to unlock later steps."""
-    if step == "question":
-        return bool(str(study.get("question") or "").strip())
-    if step == "data":
-        data_status = str(study.get("data_source_status") or "").strip()
-        return data_status in {
-            "pending_validation",
-            "module_export_recorded",
-            "conversion_needed",
-        }
-    if step == "cohort":
-        return bool(study.get("cohort_configured")) or _copilot_uses_eligible_cohort(study)
-    if step == "concepts":
-        return bool(study.get("concepts_configured")) or bool(study.get("selected_concepts"))
-    if step == "extract":
-        return bool(study.get("extraction_configured"))
-    if step == "review":
-        return bool(study.get("review_configured"))
-    if step == "analysis":
-        return bool(study.get("analysis_configured"))
-    if step == "draft":
-        return bool(study.get("draft_signed"))
-    return False
-
-
-def _copilot_step_unlocked_for_navigation(
-    study: Mapping[str, object],
-    step: str,
-) -> bool:
-    """Allow jumps only to completed/current steps or the next satisfied step."""
-    if step == "question":
-        return True
-    # Depth gate: steps past the study's depth goal are locked ("beyond" in the
-    # prototype) until the user takes the study further.
-    if _copilot_engine.is_step_beyond_goal(study.get("depth"), step):
-        return False
-    active_step = str(study.get("step") or "question")
-    if step == active_step:
-        return True
-    step_idx = COPILOT_STEP_INDEX.get(step, 0)
-    sequence = [item[0] for item in COPILOT_STUDY_STEPS]
-    prior_steps = sequence[:step_idx]
-    return all(_copilot_step_complete_for_navigation(study, prior) for prior in prior_steps)
-
-
-def _copilot_rail_step_items(
-    study: Mapping[str, object],
-    lang: str,
-) -> list[dict[str, object]]:
-    """Build the right-rail step model used for gated in-chat navigation."""
-    items: list[dict[str, object]] = []
-    is_en = lang == "en"
-    for step, _label in COPILOT_STUDY_STEPS:
-        status = _copilot_stage_status(dict(study), step)
-        if (
-            status == "todo"
-            and step != "draft"
-            and not _copilot_step_unlocked_for_navigation(study, step)
-        ):
-            status = "locked"
-        label = _copilot_step_label(step, lang)
-        if step == "draft":
-            label = "Manuscript draft" if is_en else "手稿草稿"
-        detail = ""
-        if status in {"done", "active"}:
-            if step == "question" and not str(study.get("question") or "").strip():
-                detail = "Choose an outcome or describe a study" if is_en else "选择结局，或直接描述研究"
-            elif step == "cohort" and not bool(study.get("cohort_configured")):
-                detail = "Waiting for cohort choices" if is_en else "等待队列选择"
-            elif step == "concepts" and not bool(study.get("concepts_configured")):
-                detail = "Waiting for module choices" if is_en else "等待模块选择"
-            else:
-                detail = _copilot_stage_detail(dict(study), step, lang)
-        elif status == "locked":
-            detail = (
-                "Complete the previous step first"
-                if is_en else
-                "先完成上一步"
-            )
-        items.append({
-            "id": step,
-            "label": label,
-            "detail": detail,
-            "status": status,
-            "is_goal": step == _copilot_engine.copilot_goal_step(study.get("depth")),
-            "beyond_goal": _copilot_engine.is_step_beyond_goal(study.get("depth"), step),
-            "unlocked": _copilot_step_unlocked_for_navigation(study, step),
-            "icon": {
-                "question": "spark",
-                "data": "flask",
-                "cohort": "hexagon",
-                "concepts": "layers",
-                "extract": "stack",
-                "review": "eye",
-                "analysis": "robot",
-                "draft": "shield",
-            }.get(step, "grid"),
-        })
-    return items
-
-
 def _append_copilot_rail_step_action(step_id: str, lang: str) -> bool:
     """Gated jump handler for right-rail Study workspace steps."""
     study = _ensure_copilot_study_state(st.session_state)
@@ -10505,288 +8563,6 @@ def _append_copilot_rail_step_action(step_id: str, lang: str) -> bool:
         return False
     _append_copilot_workflow_step_action(step_id, lang)
     return True
-
-
-def _copilot_stage_detail(study: MutableMapping[str, object], step: str, lang: str) -> str:
-    is_en = lang == "en"
-    branch = str(study.get("branch") or "predict")
-    config = COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"])
-    if step == "question":
-        return str(study.get("question") or (config["chip"] if is_en else config["question_zh"]))
-    if step == "data":
-        mode = str(study.get("data_mode") or "real")
-        if mode == "real":
-            choice = str(study.get("data_source_choice") or "")
-            status = str(study.get("data_source_status") or "")
-            db_label = _copilot_database_label(study.get("database") or "miiv", lang)
-            if status == "awaiting_path":
-                if choice == "module_export":
-                    return "module export field open" if is_en else "模块导出输入框已打开"
-                if choice == "raw_files":
-                    return "raw files field open" if is_en else "原始文件输入框已打开"
-                return "prepared path field open" if is_en else "prepared 路径输入框已打开"
-            if status == "module_export_recorded":
-                return f"{db_label} · module export recorded" if is_en else f"{db_label} · 模块导出已记录"
-            if status == "conversion_needed":
-                return f"{db_label} · raw files recorded · conversion needed" if is_en else f"{db_label} · 原始文件已记录 · 需要转换"
-            if status == "pending_validation":
-                return f"{db_label} · prepared path recorded · pending validation" if is_en else f"{db_label} · prepared 路径已记录 · 待验证"
-            return "choose source type" if is_en else "选择来源类型"
-        return "real data source not connected" if is_en else "真实数据源尚未连接"
-    if step == "cohort":
-        if _copilot_cohort_is_empty(study):
-            return "0 stays · strict filters" if is_en else "0 例 stay · 严格过滤"
-        if branch == "crossdb":
-            return f"{int(study.get('db_count') or 6)} databases · shared cohort definition" if is_en else f"{int(study.get('db_count') or 6)} 个数据库 · 共享队列定义"
-        if _copilot_uses_eligible_cohort(study):
-            return "eligible real-data cohort · first ICU stay · first 24h" if is_en else "真实数据合格队列 · 首次 ICU · 前 24h"
-        return f"{int(study.get('patient_n') or 10)} stays · first ICU stay · first 24h" if is_en else f"{int(study.get('patient_n') or 10)} 例 stay · 首次 ICU · 前 24h"
-    if step == "concepts":
-        modules = list(study.get("modules") or COPILOT_DEFAULT_MODULES)
-        return f"{len(modules)} modules · coverage audited before analysis" if is_en else f"{len(modules)} 个模块 · 分析前审计覆盖率"
-    if step == "extract":
-        if _copilot_uses_eligible_cohort(study):
-            return "eligible first-24h frames · frozen normalized export" if is_en else "合格队列前 24h 数据帧 · 冻结标准化导出"
-        n = int(study.get("patient_n") or 10)
-        return f"{n * 24} time points · frozen normalized frames" if is_en else f"{n * 24} 个时间点 · 冻结标准化数据帧"
-    if step == "review":
-        if branch == "crossdb":
-            return "availability matrix and distribution deltas" if is_en else "可用性矩阵与分布差异"
-        if branch == "quality":
-            return "coverage, ranges, missingness, density" if is_en else "覆盖率、范围、缺失和时间密度"
-        return "Table 1, time series, patient overview, quality flags" if is_en else "Table 1、时间序列、患者概览和质量标记"
-    if step == "analysis":
-        return "5 deterministic steps · evidence contract" if is_en else "5 个确定性步骤 · 证据契约"
-    if step == "draft":
-        if study.get("draft_signed"):
-            return "unlocked after local sign-off" if is_en else "本地确认后已解锁"
-        return "locked until checks pass and a human signs off" if is_en else "证据检查和人工确认前保持锁定"
-    return ""
-
-
-def _copilot_guided_artifact(path: str) -> dict[str, str] | None:
-    """Return a guided demo artifact descriptor by path."""
-    for artifact in COPILOT_GUIDED_ARTIFACTS:
-        if artifact["path"] == path:
-            return artifact
-    return None
-
-
-def _copilot_guided_artifact_diff_html(lang: str, *, expanded: bool = False) -> str:
-    """Render the polish guided-demo generated-files diff card."""
-    is_en = lang == "en"
-    shown = COPILOT_GUIDED_ARTIFACTS if expanded else COPILOT_GUIDED_ARTIFACTS[:4]
-    rows = []
-    for artifact in shown:
-        path = artifact["path"]
-        delta = artifact["delta"]
-        kind = artifact["kind"]
-        delta_html = (
-            '<span class="gf-bin">binary</span>'
-            if delta == "bin"
-            else f'<span class="gf-delta">{html.escape(delta)}</span>'
-        )
-        rows.append(
-            '<div class="eu-copilot-file {kind}">'
-            '<span class="gf-ico">{icon}</span>'
-            '<span class="gf-path">{path}</span>'
-            '{delta}'
-            '</div>'.format(
-                kind=html.escape(kind),
-                icon=html.escape({
-                    "rows": "rows",
-                    "viz": "viz",
-                    "shield": "gate",
-                }.get(kind, "file")),
-                path=html.escape(path),
-                delta=delta_html,
-            )
-        )
-    more_count = max(0, len(COPILOT_GUIDED_ARTIFACTS) - len(shown))
-    more_html = ""
-    if more_count:
-        more_html = (
-            '<div class="df-more-placeholder">'
-            f'{html.escape(f"Show {more_count} more files" if is_en else f"显示剩余 {more_count} 个文件")}'
-            '</div>'
-        )
-    return (
-        '<div class="eu-copilot-diff">'
-        '<div class="df-head">'
-        '<span class="df-ico">diff</span>'
-        f'<span class="df-t">{html.escape(f"Generated {len(COPILOT_GUIDED_ARTIFACTS)} files" if is_en else f"已生成 {len(COPILOT_GUIDED_ARTIFACTS)} 个文件")}</span>'
-        '<span class="df-sum"><span class="df-add">+312</span><span class="df-del">-0</span></span>'
-        '</div>'
-        + "".join(rows)
-        + more_html
-        + '<div class="df-foot-note">demo · local · evidence-ledgered</div>'
-        '</div>'
-    )
-
-
-def _copilot_guided_artifact_preview_html(path: str, lang: str) -> str:
-    """Render an inline preview for a selected guided demo artifact."""
-    is_en = lang == "en"
-    artifact = _copilot_guided_artifact(path)
-    if artifact is None:
-        return (
-            '<div class="eu-copilot-artifact-preview">'
-            f'<div class="art-title">{html.escape("No preview" if is_en else "无预览")}</div>'
-            '</div>'
-        )
-    kind = artifact["kind"]
-    if path.endswith(".py"):
-        body = (
-            "# EasyICU - generated analysis pipeline (demo)\n"
-            "from easyicu import cohort, models\n\n"
-            "df = cohort.load('sepsis_demo', window='first_24h')\n"
-            "X = df[['sofa2', 'lactate', 'age', 'map']]\n"
-            "y = df['hospital_death']\n"
-            "result = models.logistic(X, y, repair=True)\n"
-            "models.export(result, ledger='manifest.json')"
-        )
-        body_html = f'<pre class="code-block">{html.escape(body)}</pre>'
-    elif path.endswith(".csv"):
-        body_html = (
-            '<table class="eu-copilot-art-table">'
-            '<thead><tr><th>characteristic</th><th>survived</th><th>deceased</th><th>p</th></tr></thead>'
-            '<tbody>'
-            '<tr><td>n</td><td>demo</td><td>demo</td><td>-</td></tr>'
-            '<tr><td>age</td><td>seeded</td><td>seeded</td><td>logged</td></tr>'
-            '<tr><td>sofa2</td><td>seeded</td><td>seeded</td><td>logged</td></tr>'
-            '</tbody></table>'
-        )
-    elif path.endswith(".json"):
-        body = (
-            "{\n"
-            '  "run": "guided-demo",\n'
-            f'  "artifacts": {len(COPILOT_GUIDED_ARTIFACTS)},\n'
-            '  "evidence_contract": "strict",\n'
-            '  "uploads": 0,\n'
-            '  "tokens": 0\n'
-            "}"
-        )
-        body_html = f'<pre class="json-block">{html.escape(body)}</pre>'
-    else:
-        label = "ROC / calibration figure slot" if "roc" in path or "calibration" in path else "Figure slot"
-        body_html = (
-            '<div class="eu-copilot-art-figure">'
-            '<svg viewBox="0 0 320 180" role="img" aria-label="seeded figure preview">'
-            '<line x1="34" y1="145" x2="292" y2="145"></line>'
-            '<line x1="34" y1="145" x2="34" y2="28"></line>'
-            '<path d="M34,145 C74,84 118,64 158,54 C210,40 250,34 292,30"></path>'
-            '</svg>'
-            f'<span>{html.escape(label)}</span>'
-            '</div>'
-        )
-    return (
-        '<div class="eu-copilot-artifact-preview">'
-        '<div class="art-head">'
-        f'<span class="art-ico">{html.escape({"rows": "rows", "viz": "viz", "shield": "gate"}.get(kind, "file"))}</span>'
-        '<div>'
-        f'<div class="art-title">{html.escape(path)}</div>'
-        f'<div class="art-meta">{html.escape(artifact["meta"])} · demo · local</div>'
-        '</div>'
-        '</div>'
-        f'<div class="art-body">{body_html}</div>'
-        f'<div class="art-foot">{html.escape("seeded demo artifact - not a real result" if is_en else "种子演示产物 - 非真实结果")}</div>'
-        '</div>'
-    )
-
-
-def _copilot_stage_card_html(
-    study: MutableMapping[str, object],
-    step: str,
-    lang: str,
-    *,
-    compact: bool = False,
-) -> str:
-    is_en = lang == "en"
-    status = _copilot_stage_status(study, step)
-    branch = str(study.get("branch") or "predict")
-    config = COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"])
-    why = str(config["why"].get(step, ""))
-    status_label = {
-        "done": "done" if is_en else "完成",
-        "active": "active" if is_en else "当前",
-        "locked": "locked" if is_en else "锁定",
-        "todo": "queued" if is_en else "待定",
-    }[status]
-    if compact:
-        return (
-            f'<div class="eu-copilot-stage collapsed {status}">'
-            '<span class="mark"></span>'
-            f'<b>{html.escape(_copilot_step_label(step, lang))}</b>'
-            f'<em>{html.escape(_copilot_stage_detail(study, step, lang))}</em>'
-            '</div>'
-        )
-    if step == "cohort" and _copilot_cohort_is_empty(study):
-        filters = list(study.get("cohort_filters") or COPILOT_STRICT_COHORT_FILTERS)
-        chips = "".join(f'<span class="eu-state-chip solid">{html.escape(str(item))}</span>' for item in filters)
-        title = "No patients match those filters" if is_en else "没有患者匹配这些过滤条件"
-        detail = (
-            '"Sepsis-3 + age >= 80" is empty in this demo set/export. Loosen a constraint and I will re-match.'
-            if is_en else
-            "“Sepsis-3 + 年龄 ≥ 80” 在这个演示数据/导出中为空。放宽一个条件后我会重新匹配。"
-        )
-        return (
-            f'<div class="eu-copilot-stage active" data-step="{html.escape(step)}">'
-            '<div class="stage-head">'
-            '<span class="mark"></span>'
-            '<div>'
-            f'<b>{html.escape(_copilot_step_label(step, lang))}</b>'
-            f'<p>{html.escape(_copilot_stage_detail(study, step, lang))}</p>'
-            '</div>'
-            f'<span class="stage-status">{html.escape(status_label)}</span>'
-            '</div>'
-            '<div class="eu-state-hero nodata eu-copilot-nodata">'
-            '<div class="glyph"></div>'
-            f'<div class="st-t">{html.escape(title)}</div>'
-            f'<div class="st-d">{html.escape(detail)}</div>'
-            f'<div class="filter-recap">{chips}</div>'
-            '</div>'
-            f'<div class="stage-why"><span>{"WHY THIS STEP" if is_en else "为什么做这一步"}</span>{html.escape(why)}</div>'
-            '</div>'
-        )
-    return (
-        f'<div class="eu-copilot-stage {status}" data-step="{html.escape(step)}">'
-        '<div class="stage-head">'
-        '<span class="mark"></span>'
-        '<div>'
-        f'<b>{html.escape(_copilot_step_label(step, lang))}</b>'
-        f'<p>{html.escape(_copilot_stage_detail(study, step, lang))}</p>'
-        '</div>'
-        f'<span class="stage-status">{html.escape(status_label)}</span>'
-        '</div>'
-        f'<div class="stage-why"><span>{"WHY THIS STEP" if is_en else "为什么做这一步"}</span>{html.escape(why)}</div>'
-        '</div>'
-    )
-
-
-def _copilot_relative_time(iso_str: str, lang: str) -> str:
-    """Human relative time ('2h ago' / '2小时前') from an ISO timestamp."""
-    raw = str(iso_str or "").strip()
-    if not raw:
-        return ""
-    is_en = lang == "en"
-    try:
-        ts = datetime.fromisoformat(raw)
-    except ValueError:
-        return raw[:16].replace("T", " ")
-    delta = datetime.now() - ts
-    secs = max(0, int(delta.total_seconds()))
-    mins, hours, days = secs // 60, secs // 3600, secs // 86400
-    if secs < 60:
-        return "just now" if is_en else "刚刚"
-    if mins < 60:
-        return f"{mins}m ago" if is_en else f"{mins}分钟前"
-    if hours < 24:
-        return f"{hours}h ago" if is_en else f"{hours}小时前"
-    if days == 1:
-        return "yesterday" if is_en else "昨天"
-    if days < 7:
-        return f"{days}d ago" if is_en else f"{days}天前"
-    return ts.strftime("%b %d") if is_en else ts.strftime("%m-%d")
 
 
 def _render_copilot_session_rail(lang: str) -> None:
@@ -13352,7 +11128,6 @@ def render_floating_chat_dock(app_context: dict | None = None):
                 history_height=size_cfg["history_height"],
                 show_starters=False,
             )
-
 
 
 # ---------------------------------------------------------------------------
