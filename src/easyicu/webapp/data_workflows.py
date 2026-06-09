@@ -1122,8 +1122,12 @@ def load_data(app_context: dict[str, Any] | None = None):
                                     all_patient_ids = icustays_df[id_col].unique().tolist()
                                     candidate_ids = _sample_patient_ids_random(all_patient_ids, patient_limit)
                                     break
-                    except Exception:
-                        pass
+                    except Exception as _sample_err:
+                        # 不要静默吞:候选采样失败会让 candidate_ids 退回 None,
+                        # 静默改变后续队列范围(此前 _sample_patient_ids_random 未导入
+                        # 的 NameError 就是被这里吞掉的)。打日志,与下方 [COHORT] 块一致。
+                        print(f"[COHORT] candidate sampling failed, "
+                              f"falling back without max_patients cap: {_sample_err}")
 
                 # Step 2: 在候选集上应用人群筛选
                 data_path_for_cohort = st.session_state.data_path
