@@ -3620,7 +3620,7 @@ def render_entry_redesign_page(lang: str) -> None:
         f'<h1 style="margin:0;font-size:30px;font-weight:600;letter-spacing:-0.02em;color:var(--ink)">'
         f'{_T(lang, "What would you like to study?", "你想研究什么？")}</h1>'
         f'<div class="eu-entry-hero-copy" style="font-size:13.5px;color:var(--ink-3);margin-top:12px">'
-        f'{_T(lang, "Two equal ways in — talk it through, or drive the panels yourself. EasyICU runs locally; nothing is uploaded.", "两种平等入口：可以对话推进，也可以自己操作面板。EasyICU 在本机运行，不上传数据。")}</div>'
+        f'{_T(lang, "New here? Let Research Copilot walk you through it. Know your way around? Drive the panels yourself in Classic Workspace. Same local engine — nothing is uploaded.", "第一次用？让 Research Copilot 带你一步步走。已经熟悉？在经典工作区直接操作面板。两者用的是同一个本机引擎，都不上传数据。")}</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -3637,7 +3637,7 @@ def render_entry_redesign_page(lang: str) -> None:
                     '<path d="M12 3l1.7 4.7L18 9.4l-4.3 1.7L12 16l-1.7-4.9L6 9.4l4.3-1.7L12 3z"/>'
                     '</svg></div><div>'
                     f'<div class="eu-entry-col-title">{_T(lang, "Research Copilot", "研究 Copilot")}</div>'
-                    f'<div class="eu-entry-col-sub">{_T(lang, "talk it through · guided", "对话推进 · 引导式")}</div>'
+                    f'<div class="eu-entry-col-sub">{_T(lang, "talk it through · guided · recommended for new users", "对话推进 · 引导式 · 新用户推荐")}</div>'
                     '</div></div>'
                     f'<p class="eu-entry-col-lead">{_T(lang, "Describe your study in a sentence — I will walk you through each choice before the cohort, analysis, and draft gate.", "用一句话描述你的研究；我会先带你逐项确认，再进入队列、分析和草稿闸门。")}</p>',
                     unsafe_allow_html=True,
