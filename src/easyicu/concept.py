@@ -5000,17 +5000,25 @@ class ConceptResolver:
                             cols_to_convert.add(col)
             
             for col in data.columns:
-                if col in ['start', 'stop']:
+                # Include 'dur_var' alongside start/stop. SIC interval tables
+                # (e.g. data_range for mech_vent: Offset/OffsetEnd in seconds)
+                # produce a 'dur_var' = OffsetEnd - Offset still in SECONDS, while
+                # the index column is converted to hours below. The aumc branch
+                # already converts 'dur_var'; omitting it for SIC left dur_var in
+                # seconds and an hours index, so win_tbl expansion (end = start +
+                # dur) blew up (e.g. vent_ind exploding to tens of millions of
+                # rows). Convert dur_var on the same seconds->hours basis.
+                if col in ['start', 'stop', 'dur_var']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
-            
+
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
                     max_abs = data[col].abs().max()
                     if pd.notna(max_abs) and max_abs > 5000:
                         # Values > 5000 cannot be hours (= 208 days), must be seconds
                         data[col] = data[col] / 3600.0
-            
+
             return data
         
         # Early return checks (no verbose output for performance)

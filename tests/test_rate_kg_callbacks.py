@@ -179,3 +179,38 @@ def test_hirid_rate_kg_without_weight_column_returns_empty():
     )
 
     assert result.empty
+
+
+def test_hirid_rate_kg_with_value_column_pre_renamed_to_concept_name():
+    """Regression: in the real load path the dose column is renamed to the
+    concept name (givendose -> norepi_rate) *before* the callback runs, so
+    val_col='givendose' is absent and actual_val_col collapses onto
+    concept_name. A prior bug then zeroed grouped[concept_name] before reading
+    it as the numerator, dropping every row to an empty result despite valid
+    dose + weight. This guards that the renamed-column path still computes the
+    rate. See callback_utils.hirid_rate_kg."""
+    frame = pd.DataFrame(
+        {
+            "patientid": [1, 1],
+            "datetime": [0.25, 0.25],
+            "infusionid": [10, 10],
+            # value column already renamed to the concept name; no 'givendose'
+            "norepi_rate": [60.0, 60.0],
+            "doseunit": ["ug", "ug"],
+            "weight": [60.0, 60.0],
+        }
+    )
+
+    result = hirid_rate_kg(
+        frame,
+        concept_name="norepi_rate",
+        val_col="givendose",  # absent in frame -> falls back to concept_name
+        unit_col="doseunit",
+        grp_var="infusionid",
+        index_col="datetime",
+        interval_minutes=60.0,
+    )
+
+    assert not result.empty
+    # doses summed within (patient, hour, infusion) = 120; rate = 120/60min/60kg
+    assert result["norepi_rate"].iloc[0] == pytest.approx(120.0 / 60.0 / 60.0)
