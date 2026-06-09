@@ -361,9 +361,13 @@ def _sample_patient_ids(loader: 'BaseICULoader', max_patients: int, verbose: boo
         loader: BaseICULoader 实例
         max_patients: 最大患者数量
         verbose: 是否输出调试信息
-        sample_strategy: 采样策略
-            - 'sorted': 按ID排序取前N个（默认，与RICU金标准一致）
-            - 'random': 随机采样N个（更具代表性，适用于探索性分析）
+        sample_strategy: 采样策略（仅在取「子集」即 max_patients < 全库时影响代表性；
+            全量加载时两者只是排序差异、不影响覆盖）
+            - 'random': seeded 随机采样 N 个（默认，seed=42 可复现）。多中心库(eICU 等)
+              患者 id 按医院/批次聚簇，sorted 前缀会得到非代表性子群、使有覆盖的概念
+              在子集里假性为空，故默认用随机保证代表性。
+            - 'sorted': 按 ID 排序取前 N 个。用于与 ricu 金标准 fixture 对齐(parity/
+              fixture 生成时显式传 'sorted')。
     """
     db_name = loader.database
     
@@ -772,7 +776,7 @@ def load_concepts(
     parallel_backend: str = 'auto',
     max_patients: Optional[int] = None,  # 限制加载的患者数量（自动采样）
     limit: Optional[int] = None,  # max_patients 的别名（兼容 extract_sofa_data.py）
-    sample_strategy: str = 'sorted',  # 🆕 采样策略: 'sorted'=按ID排序前N个, 'random'=随机采样
+    sample_strategy: str = 'random',  # 采样策略: 'random'=seeded 随机(默认,代表性);'sorted'=按ID排序前N个(ricu-parity 用)
     batch_size: Optional[int] = None,  # 🆕 分批处理大小（默认30000，适合12GB内存）
     memory_efficient: bool = False,  # 🆕 内存优化模式（压缩数据类型）
     **kwargs,
@@ -829,6 +833,8 @@ def load_concepts(
         merge: 是否合并多个概念到一个DataFrame
         verbose: 是否显示详细信息
         max_patients: 自动采样的患者上限
+        sample_strategy: 取子集时的采样策略。默认 'random'(seeded, 可复现, 代表性);
+            ricu fixture parity 需显式传 'sorted'。见 _sample_patient_ids 文档。
         limit: max_patients 的别名
         n_patients: max_patients 的兼容别名（可通过 kwargs 传入）
         **kwargs: 其他参数传递给底层API
