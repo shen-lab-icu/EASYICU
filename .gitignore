@@ -125,7 +125,6 @@ tests/
 # Internal-only tests coupled to manuscript/pilot tooling kept out of the package
 tests/research_agent/test_pilot_exit_status_capture.py
 tests/research_agent/test_case_b_bootstrap.py
-tests/research_agent/test_tier2_jury.py
 scripts/*
 !scripts/launch_easyicu.py
 
