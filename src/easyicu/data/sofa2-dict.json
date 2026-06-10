@@ -65,7 +65,9 @@
       "dopa60",
       "dobu60",
       "other_vaso",
-      "mech_circ_support"
+      "mech_circ_support",
+      "ecmo",
+      "ecmo_indication"
     ],
     "description": "SOFA-2 cardiovascular component (combined norepi+epi: ≤0.2/0.2-0.4/>0.4 μg/kg/min; dopamine backup only; mechanical support)",
     "category": "outcome",
@@ -75,6 +77,8 @@
       "max",
       "max",
       "max",
+      null,
+      null,
       null,
       null
     ],

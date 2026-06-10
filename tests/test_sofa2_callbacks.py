@@ -3,6 +3,7 @@ import pandas as pd
 from easyicu.callbacks import sofa2_cns, sofa2_resp
 from easyicu.concept_callbacks import ConceptCallbackContext, _callback_sofa_component
 from easyicu.sofa2 import sofa2_cardio as standalone_sofa2_cardio
+from easyicu.sofa2 import sofa2_resp as standalone_sofa2_resp
 from easyicu.table import ICUTable
 
 
@@ -34,6 +35,46 @@ def test_standalone_sofa2_cardio_mechanical_support_is_not_downgraded():
     )
 
     assert score.tolist() == [4, 4, 4]
+
+
+def test_sofa2_resp_any_ecmo_scores_four_regardless_of_indication():
+    """SOFA-2 footnote (i): ANY ECMO scores 4 on the respiratory component,
+    even with a normal PaO2:FiO2 and a non-respiratory (or unknown) indication.
+    Pins the 2026-06 fix that replaced the respiratory-indication-only gate."""
+    # pafi=400 alone would score 0; ECMO must floor it to 4.
+    cardiovascular = standalone_sofa2_resp(
+        pd.Series([400.0]),
+        ecmo=pd.Series([True]),
+        ecmo_indication=pd.Series(["cardiovascular"]),
+    )
+    assert cardiovascular.tolist() == [4]
+
+    unknown_indication = standalone_sofa2_resp(
+        pd.Series([400.0]),
+        ecmo=pd.Series([True]),
+    )
+    assert unknown_indication.tolist() == [4]
+
+
+def test_sofa2_cardio_va_ecmo_scores_four_but_vv_ecmo_does_not():
+    """SOFA-2 footnotes (i)+(n): cardiovascular-indication (VA) ECMO is
+    mechanical circulatory support and floors the cardiovascular component to 4;
+    respiratory-indication (VV) ECMO is scored only on the respiratory component."""
+    va = standalone_sofa2_cardio(
+        pd.Series([75.0]),
+        norepi60=pd.Series([0.0]),
+        ecmo=pd.Series([True]),
+        ecmo_indication=pd.Series(["cardiovascular"]),
+    )
+    assert va.tolist() == [4]
+
+    vv = standalone_sofa2_cardio(
+        pd.Series([75.0]),
+        norepi60=pd.Series([0.0]),
+        ecmo=pd.Series([True]),
+        ecmo_indication=pd.Series(["respiratory"]),
+    )
+    assert vv.tolist() == [0]
 
 
 def test_sofa2_resp_component_preserves_ecmo_indication_strings():

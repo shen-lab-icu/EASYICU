@@ -2512,7 +2512,7 @@ def _callback_sofa_component(
                 if ctx.concept_name == 'sofa_cardio' and name in ['dopa60', 'norepi60', 'dobu60', 'epi60']:
                     # Optional vasopressor parameters - pass None
                     kwargs[name] = None
-                elif ctx.concept_name == 'sofa2_cardio' and name in ['dopa60', 'norepi60', 'dobu60', 'epi60', 'other_vaso', 'mech_circ_support']:
+                elif ctx.concept_name == 'sofa2_cardio' and name in ['dopa60', 'norepi60', 'dobu60', 'epi60', 'other_vaso', 'mech_circ_support', 'ecmo', 'ecmo_indication']:
                     # SOFA-2 optional vasopressor/support parameters - pass None
                     kwargs[name] = None
                 elif ctx.concept_name == 'sofa_renal' and name == 'urine24':
