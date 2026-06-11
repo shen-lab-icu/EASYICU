@@ -51,6 +51,7 @@ from typing import Dict, List, Literal, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from .icu_agent_bench import ICUAgentBenchTask, grade_bench_task
+from .icu_rules import detect_overadjustment
 
 DimensionLevel = Literal["Full", "Partial", "Marginal", "Fail"]
 """Four-level colour bin for the Fig.3 scorecard heatmap (§M4)."""
@@ -294,6 +295,7 @@ def score_result_validity(
     numeric_audit: Dict[str, object],
     observed_metrics: Optional[Dict[str, float]] = None,
     locked_reference_frozen: bool = False,
+    validity_errors: Optional[Sequence[str]] = None,
 ) -> DimensionScore:
     """Result-validity dimension (§M2 locked reference + numeric_audit).
 
@@ -301,12 +303,34 @@ def score_result_validity(
     the locked reference is not yet frozen or no observed metrics / gold
     numeric targets are available — honest about §5 step 3 being pending.
     The numeric-bound comparison reuses ``grade_bench_task``.
+
+    ``validity_errors`` carries deterministic, gold-free validity flaws (e.g.
+    overadjustment — conditioning on a constituent of the exposure). A detected
+    flaw caps the dimension at ``Fail`` even with no locked reference: an
+    objective error is distinct from the honest *unscored* state where nothing
+    is wrong, so the dimension is not faked, only failed when warranted.
     """
     gold = task.gold_answer
     have_targets = bool(gold and gold.numeric_targets)
     numeric_verified = bool(numeric_audit.get("numeric_verified"))
+    validity_errors = list(validity_errors or [])
 
     if not (locked_reference_frozen and have_targets and observed_metrics):
+        if validity_errors:
+            return DimensionScore(
+                name="result_validity",
+                subscore=0.0,
+                level="Fail",
+                signals={
+                    "locked_reference_frozen": locked_reference_frozen,
+                    "validity_errors": validity_errors,
+                    "numeric_verified": numeric_verified,
+                },
+                notes=[
+                    "validity error(s) detected without a locked reference: "
+                    + "; ".join(validity_errors)
+                ],
+            )
         return DimensionScore(
             name="result_validity",
             subscore=None,
@@ -676,6 +700,7 @@ def score_run(
     observed_outputs: Optional[Sequence[str]] = None,
     cohort_hygiene_cautions: Optional[Sequence[str]] = None,
     reporting_checklist: Optional[Dict[str, object]] = None,
+    validity_errors: Optional[Sequence[str]] = None,
     locked_reference_frozen: bool = False,
     plan_illegal: bool = False,
     run_id: Optional[str] = None,
@@ -706,6 +731,7 @@ def score_run(
             numeric_audit=numeric_audit,
             observed_metrics=observed_metrics,
             locked_reference_frozen=locked_reference_frozen,
+            validity_errors=validity_errors,
         ),
         evidence_binding=score_evidence_binding(
             evidence_audit=evidence_audit,
@@ -763,6 +789,24 @@ def _load_cohort_hygiene_cautions(run_dir: Path) -> List[str]:
     return cautions
 
 
+def _load_regression_covariates(run_dir: Path) -> List[str]:
+    """Best-effort: variable names from any ``regression_results.csv`` the run
+    wrote (used for the gold-free overadjustment check). The intercept row is
+    dropped; missing/malformed files degrade to an empty list.
+    """
+    names: List[str] = []
+    for path in run_dir.rglob("regression_results.csv"):
+        try:
+            with path.open(newline="", encoding="utf-8") as fh:
+                for row in csv.DictReader(fh):
+                    v = (row.get("variable") or "").strip()
+                    if v and v.lower() not in {"const", "intercept"} and v not in names:
+                        names.append(v)
+        except (OSError, ValueError):
+            continue
+    return names
+
+
 def _load_reporting_checklist(run_dir: Path, task: ICUAgentBenchTask) -> Dict[str, object]:
     """Load the kind-matched reporting-guideline checklist a run emitted.
 
@@ -793,11 +837,17 @@ def score_run_from_dir(
     observed_metrics: Optional[Dict[str, float]] = None,
     observed_warnings: Optional[Sequence[str]] = None,
     observed_outputs: Optional[Sequence[str]] = None,
+    exposure_concept: Optional[str] = None,
     locked_reference_frozen: bool = False,
     plan_illegal: bool = False,
     run_id: Optional[str] = None,
 ) -> FiveDimensionScorecard:
     """Load a run's readiness artifacts from ``run_dir`` and score it.
+
+    Pass ``exposure_concept`` (the primary predictor of interest, e.g.
+    ``"sepsis3"``) to enable the gold-free overadjustment check against the
+    run's regression covariates. It must be supplied explicitly — the bench
+    task does not declare the exposure, so it is never inferred heuristically.
 
     Reads ``run_status.json`` (gates), ``evidence_audit.json``,
     ``numeric_audit.json``, ``claim_ledger.csv`` and ``analysis_plan.json``.
@@ -813,6 +863,18 @@ def score_run_from_dir(
     plan_steps = plan_doc.get("steps") if isinstance(plan_doc, dict) else []
     plan_steps = plan_steps if isinstance(plan_steps, list) else []
 
+    validity_errors: List[str] = []
+    if exposure_concept:
+        offenders = detect_overadjustment(
+            exposure_concept, _load_regression_covariates(run_dir)
+        )
+        if offenders:
+            validity_errors.append(
+                "overadjustment: adjusted for "
+                + ", ".join(offenders)
+                + f" which constitute(s)/derive(s) the exposure '{exposure_concept}'"
+            )
+
     return score_run(
         task,
         gates=gates,
@@ -825,6 +887,7 @@ def score_run_from_dir(
         observed_outputs=observed_outputs,
         cohort_hygiene_cautions=_load_cohort_hygiene_cautions(run_dir),
         reporting_checklist=_load_reporting_checklist(run_dir, task),
+        validity_errors=validity_errors,
         locked_reference_frozen=locked_reference_frozen,
         plan_illegal=plan_illegal,
         run_id=(

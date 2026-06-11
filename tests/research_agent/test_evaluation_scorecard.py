@@ -195,6 +195,21 @@ def test_result_validity_fail_out_of_bound():
     assert dim.level == "Fail"
 
 
+def test_result_validity_fails_on_validity_error_without_locked_reference():
+    # An objective validity flaw (overadjustment) caps the dimension at Fail
+    # even with no locked reference -- distinct from the honest *unscored*
+    # state, so the gold-free score is failed only when warranted, not faked.
+    dim = sc.score_result_validity(
+        _task(),
+        numeric_audit={"numeric_verified": True},
+        observed_metrics={"or": 0.8},
+        validity_errors=["overadjustment: adjusted for sofa_max"],
+    )
+    assert dim.level == "Fail"
+    assert dim.subscore == 0.0
+    assert dim.signals["validity_errors"] == ["overadjustment: adjusted for sofa_max"]
+
+
 # ---------------------------------------------------------------------------
 # evidence_binding
 # ---------------------------------------------------------------------------
@@ -374,6 +389,36 @@ def test_score_run_from_dir_roundtrip(tmp_path: Path):
     assert card.plan.level == "Full"
 
 
+def test_score_run_from_dir_flags_overadjustment(tmp_path: Path):
+    # E1-style: a regression that conditions on SOFA while studying Sepsis-3
+    # (which is defined via SOFA) is overadjustment -> gold-free Fail.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_status.json").write_text(
+        json.dumps({"gates": _gates()}), encoding="utf-8"
+    )
+    with (run_dir / "regression_results.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as fh:
+        w = csv.DictWriter(fh, fieldnames=["variable", "coef"])
+        w.writeheader()
+        w.writerow({"variable": "const", "coef": "0.1"})
+        w.writerow({"variable": "age", "coef": "0.02"})
+        w.writerow({"variable": "sofa_max", "coef": "0.5"})
+
+    card = sc.score_run_from_dir(
+        _task(), run_dir, exposure_concept="sepsis3", run_id="oa"
+    )
+    assert card.result_validity.level == "Fail"
+    assert card.result_validity.subscore == 0.0
+    assert any("overadjustment" in n for n in card.result_validity.notes)
+
+    # Without the exposure declared the check stays silent: the dimension
+    # falls back to the honest unscored state, not a fabricated pass/fail.
+    clean = sc.score_run_from_dir(_task(), run_dir, run_id="oa_silent")
+    assert clean.result_validity.level is None
+
+
 def test_score_run_from_dir_missing_files_degrade(tmp_path: Path):
     # Empty run dir -> diagnostic_only, low scores, no crash.
     card = sc.score_run_from_dir(_task(), tmp_path)
@@ -397,15 +442,28 @@ def test_reporting_guideline_routing_is_kind_keyed():
     # Case-neutral routing: keyed on kind, not on any benchmark item.
     assert sc.reporting_guideline_for_kind("mortality_prediction") == "tripod"
     assert sc.reporting_guideline_for_kind("subphenotype_clustering") == "internal"
-    assert sc.reporting_guideline_for_kind("longitudinal_trajectory_analysis") == "internal"
+    assert (
+        sc.reporting_guideline_for_kind("longitudinal_trajectory_analysis")
+        == "internal"
+    )
     assert sc.reporting_guideline_for_kind("descriptive_association") == "strobe"
     assert sc.reporting_guideline_for_kind("sepsis_onset") == "strobe"
 
 
 def test_reporting_completeness_scores_strobe_coverage():
-    checklist = {"summary": {"name": "STROBE", "n_total": 22, "n_addressed": 15,
-                             "n_partial": 0, "n_open": 7, "coverage": 0.682}}
-    dim = sc.score_reporting_completeness(_kind_task("sepsis_onset"), checklist=checklist)
+    checklist = {
+        "summary": {
+            "name": "STROBE",
+            "n_total": 22,
+            "n_addressed": 15,
+            "n_partial": 0,
+            "n_open": 7,
+            "coverage": 0.682,
+        }
+    }
+    dim = sc.score_reporting_completeness(
+        _kind_task("sepsis_onset"), checklist=checklist
+    )
     assert dim.subscore == pytest.approx(0.682, abs=1e-3)
     assert dim.level == "Partial"
     assert dim.signals["guideline"] == "strobe"
@@ -414,15 +472,24 @@ def test_reporting_completeness_scores_strobe_coverage():
 
 def test_reporting_completeness_unscored_for_clustering_without_checklist():
     # No EQUATOR guideline + no emitted internal core -> unscored, not penalised.
-    dim = sc.score_reporting_completeness(_kind_task("subphenotype_clustering"), checklist={})
+    dim = sc.score_reporting_completeness(
+        _kind_task("subphenotype_clustering"), checklist={}
+    )
     assert dim.subscore is None
     assert dim.level is None
     assert dim.signals["guideline"] == "internal"
 
 
 def test_score_run_populates_reporting_completeness_and_six_dim_view():
-    checklist = {"summary": {"n_total": 22, "n_addressed": 22, "n_partial": 0,
-                             "n_open": 0, "coverage": 1.0}}
+    checklist = {
+        "summary": {
+            "n_total": 22,
+            "n_addressed": 22,
+            "n_partial": 0,
+            "n_open": 0,
+            "coverage": 1.0,
+        }
+    }
     card = sc.score_run(
         _kind_task("descriptive_association"),
         gates=_gates(),
@@ -459,11 +526,20 @@ def test_score_run_reporting_unscored_when_no_checklist():
 
 def test_fairness_subgroup_open_when_no_subgroup_analysis():
     # STROBE 12b open (no subgroup analysis reported) -> fairness not addressed.
-    checklist = {"items": [
-        {"item_id": "12b", "status": "open",
-         "statement": "Describe any methods used to examine subgroups and interactions."},
-        {"item_id": "7", "status": "addressed", "statement": "Define all outcomes."},
-    ]}
+    checklist = {
+        "items": [
+            {
+                "item_id": "12b",
+                "status": "open",
+                "statement": "Describe any methods used to examine subgroups and interactions.",
+            },
+            {
+                "item_id": "7",
+                "status": "addressed",
+                "statement": "Define all outcomes.",
+            },
+        ]
+    }
     dim = sc.score_fairness_subgroup(_kind_task("sepsis_onset"), checklist=checklist)
     assert dim.subscore == 0.0
     assert dim.level == "Fail"
@@ -471,19 +547,40 @@ def test_fairness_subgroup_open_when_no_subgroup_analysis():
 
 
 def test_fairness_subgroup_addressed_when_subgroups_reported():
-    checklist = {"items": [
-        {"item_id": "12", "status": "addressed", "statement": "Fairness / subgroup performance plan."},
-        {"item_id": "18", "status": "addressed", "statement": "Subgroup / fairness results."},
-    ]}
-    dim = sc.score_fairness_subgroup(_kind_task("mortality_prediction"), checklist=checklist)
+    checklist = {
+        "items": [
+            {
+                "item_id": "12",
+                "status": "addressed",
+                "statement": "Fairness / subgroup performance plan.",
+            },
+            {
+                "item_id": "18",
+                "status": "addressed",
+                "statement": "Subgroup / fairness results.",
+            },
+        ]
+    }
+    dim = sc.score_fairness_subgroup(
+        _kind_task("mortality_prediction"), checklist=checklist
+    )
     assert dim.subscore == 1.0
     assert dim.level == "Full"
     assert dim.signals["fairness_items"] == 2
 
 
 def test_fairness_subgroup_unscored_when_no_fairness_item():
-    dim = sc.score_fairness_subgroup(_kind_task("sepsis_onset"), checklist={"items": [
-        {"item_id": "7", "status": "addressed", "statement": "Define all outcomes."},
-    ]})
+    dim = sc.score_fairness_subgroup(
+        _kind_task("sepsis_onset"),
+        checklist={
+            "items": [
+                {
+                    "item_id": "7",
+                    "status": "addressed",
+                    "statement": "Define all outcomes.",
+                },
+            ]
+        },
+    )
     assert dim.subscore is None
     assert dim.level is None

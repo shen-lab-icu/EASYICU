@@ -110,6 +110,9 @@ __all__ = [
     # ICU rules
     "ICU_RULES",
     "VariableKind",
+    "detect_overadjustment",
+    "composite_constituents",
+    "COMPOSITE_EXPOSURE_CONSTITUENTS",
     # Architecture / temporal semantics / experiment specs
     "SystemLayer",
     "AgentRole",
@@ -430,7 +433,13 @@ from .schema import (
     ProbeSummary,
     StepRecord,
 )
-from .icu_rules import ICU_RULES, VariableKind
+from .icu_rules import (
+    COMPOSITE_EXPOSURE_CONSTITUENTS,
+    ICU_RULES,
+    VariableKind,
+    composite_constituents,
+    detect_overadjustment,
+)
 
 
 def __getattr__(name: str):
