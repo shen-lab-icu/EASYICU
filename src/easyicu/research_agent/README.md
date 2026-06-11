@@ -40,7 +40,7 @@ adds:
 Many general-purpose analysis pipelines are strong at orchestration
 but weak on ICU semantics: they treat ordinal SOFA components as
 continuous, average GCS values, silently impute missing PaO₂ to 0.21,
-fall for the SOFA==0 high-mortality artefact, and confuse ICU
+skip component-completeness checks on composite scores, and confuse ICU
 mortality with hospital mortality.
 
 `easyicu.research_agent` addresses that gap by injecting an ICU-aware
@@ -387,21 +387,6 @@ matching API key in the environment (`OPENAI_API_KEY`,
 costs opt-in and makes "passes only under mock" testing visible in CI
 reports rather than hidden as a green test.
 
-For a cheap OpenRouter smoke run:
-
-```bash
-export OPENROUTER_API_KEY="..."
-export OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
-python examples/research_agent_real_llm_smoke.py \
-  --provider openrouter \
-  --model openrouter/free \
-  --temperature 0.1
-```
-
-The smoke harness is strict: it fails on missing deliverables, any
-error-severity finding, unresolved evidence placeholders, or a missing
-component-completeness QC finding.
-
 ### Optional VLM figure review
 
 Deterministic figure checks are always available. A vision-language
@@ -572,8 +557,8 @@ ctx = build_lactate_map_vaso_research_context(
 write_research_context(ctx, "research_context.json")
 ```
 
-A self-contained demo that reproduces the SOFA2==0 missingness
-artefact lives at `examples/research_agent_mortality_sofa.py`.
+A self-contained demo that exercises composite-score component-completeness
+QC lives at `examples/research_agent_mortality_sofa.py`.
 
 ### Publication figure contract
 
@@ -692,30 +677,17 @@ The intended publication framing is:
 > store that the manuscript scaffolder is allowed to cite from. In
 > controlled demonstrations, the same off-the-shelf agent loop, run
 > with vs. without the EasyICU context layer, can be audited on
-> canonical ICU pitfalls (SOFA==0 missingness ambiguity,
+> canonical ICU pitfalls (composite-score component-completeness,
 > ordinal-score averaging, mortality-definition conflation) —
 > providing a reproducible, traceable workflow for ICU analysis.
 
-The `examples/research_agent_mortality_sofa.py` demo is the seed for
-the small ablation example: run the same generated cohort with a generic
-agent (no context) and with EasyICU's context layer, and contrast
-their handling of the SOFA2==0 stratum.
-
-For the paper-facing four-quadrant version:
-
-```bash
-python examples/research_agent_real_llm_ablation.py \
-  --provider openrouter \
-  --model openrouter/free \
-  --out-root research_output/ablation_openrouter_free_4q
-```
-
-The output includes mock/real × naive/aware summaries in
-`ablation_4q_summary.json` and `.md`. The paper-facing table reports
-evidence count, step coverage and a full-context post-hoc
-`forbidden_aggregation_count`, so the main figure can separate
-planner/context quality from the downstream statistical safety net.
-`--reuse-existing` resumes a partially completed arm set.
+The `examples/research_agent_mortality_sofa.py` demo can be run with a
+generic context (no ICU-aware metadata) and with EasyICU's context layer
+to contrast their handling of composite-score component completeness —
+the seed of the context-layer ablation. The paper-facing evaluation of
+context on/off is produced through the EasyICU evaluation protocol
+(Tier 1 deterministic scorecard, `evaluation_scorecard.py`), not a
+standalone ablation script.
 
 ## What's intentionally out of scope (v1)
 

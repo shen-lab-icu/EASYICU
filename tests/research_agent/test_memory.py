@@ -11,7 +11,7 @@ def test_record_and_digest_round_trip(ra, tmp_path: Path):
 
     f1 = schema.ValidationFinding(
         validator="statistical_validator", severity="warning",
-        message="sofa2==0 outcome rate exceeds sofa2==1 — likely missing components.",
+        message="ordinal SOFA strata: check component completeness before strata-outcome claims.",
     )
     f2 = schema.ValidationFinding(
         validator="cohort_auditor", severity="error",
@@ -72,7 +72,7 @@ def test_meta_planner_digest_ranks_skill_keys(ra, tmp_path: Path):
             ra.schema.ValidationFinding(
                 validator="statistical_validator",
                 severity="warning",
-                message="sofa2 zero missingness anomaly",
+                message="sofa2 component completeness check before strata claims",
             )
         ],
         workdir=tmp_path / "run_sofa",
@@ -104,7 +104,7 @@ def test_run_memory_distills_strategy_cards(ra, tmp_path: Path):
             ra.schema.ValidationFinding(
                 validator="statistical_validator",
                 severity="warning",
-                message="sofa2==0 outcome rate suggests component missingness in score strata",
+                message="ordinal SOFA strata: component completeness should be checked before strata-outcome claims",
             )
         ],
         workdir=tmp_path / "run_sofa_strategy",

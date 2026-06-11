@@ -233,7 +233,7 @@ def main() -> int:
     print(f"\n✅ Pipeline finished in {elapsed:.0f}s")
     print(f"   Evidence items : {result.evidence_count}")
     print(f"   Findings       : {result.findings_count}")
-    print(f"\n--- Deliverables ---")
+    print("\n--- Deliverables ---")
     deliverables = {
         "manifest"          : rd / "manifest.json",
         "report"            : rd / "results_report.md",
