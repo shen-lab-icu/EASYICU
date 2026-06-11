@@ -507,6 +507,11 @@ def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
         workdir=tmp_path,
         llm=ContractThenCrashLLM(),
         enable_literature=False,
+        # Pin the tight single-attempt budget so the test exercises the exact
+        # starvation case: under the old shared counter the contract repair
+        # consumed the only attempt and the crash fail-closed. The runtime
+        # crash must get its own attempt.
+        max_code_repair_attempts=1,
         # Force the LLM repair path so the runtime crash exercises the budget,
         # not a deterministic pattern repair.
         enable_deterministic_runner_repair=False,
