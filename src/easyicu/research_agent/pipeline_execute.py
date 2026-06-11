@@ -71,6 +71,7 @@ from .pipeline import (
 from .plan_utils import (
     _parent_step_id_for_figure_step,
     _preserve_figure_steps_after_replan,
+    _primary_exposure_contract_findings,
     _step_contract_findings,
     _step_contract_repair_guidance,
     _step_expects_figure,
@@ -1347,6 +1348,15 @@ def run_execute_phase(
                     step=step,
                     step_summary=visual_step_summary,
                     completed_step_records=completed_records_snapshot,
+                )
+                # Exposure-contract audit: if the question names a required
+                # primary exposure and this primary model estimated a clearly
+                # different variable, flag it so the same in-run repair loop
+                # re-fits the step with the correct exposure (no full restart).
+                early_contract_findings += _primary_exposure_contract_findings(
+                    step=step,
+                    step_summary=visual_step_summary,
+                    context=context,
                 )
                 early_contract_errors = [
                     f for f in early_contract_findings if f.severity == "error"
