@@ -2720,6 +2720,169 @@ def _render_prediction_publication_bundle_from_prior_outputs(
     return "prediction_publication_bundle_from_parent_outputs_v1"
 
 
+def _render_association_publication_bundle_from_prior_outputs(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Optional[str]:
+    """Deterministically build a forest-plot figure from a prior association step.
+
+    Mirror of the prediction rescue for adjusted-association analyses. Small
+    models sometimes write a coefficient table (``odds_ratio`` + ``or_ci_low`` /
+    ``or_ci_high`` columns) in the regression step but fail the follow-up
+    figure-only step (e.g. hard-coding a wrong results filename). Rather than
+    failing the whole run, render an odds-ratio forest plot from the registered
+    parent table.
+    """
+    steps_dir = run_dir / "steps"
+    if not steps_dir.exists():
+        return None
+
+    # Resolve the odds-ratio + CI columns by common name variants, so the
+    # rescue works whether the parent step wrote ``or_ci_low/or_ci_high`` (our
+    # deterministic fallback) or ``ci_lower/ci_upper`` etc. (free-model code).
+    # Without this the rescue silently skips a perfectly good coefficient table
+    # and the figure-only step fails the whole run.
+    _OR_ALIASES = ("odds_ratio", "oddsratio", "adjusted_or", "aor", "or")
+    _CI_LOW_ALIASES = (
+        "or_ci_low", "or_ci_lower", "ci_lower", "ci_low", "or_lower",
+        "conf_low", "ci95_low", "ci_low_95", "lower",
+    )
+    _CI_HIGH_ALIASES = (
+        "or_ci_high", "or_ci_upper", "ci_upper", "ci_high", "or_upper",
+        "conf_high", "ci95_high", "ci_high_95", "upper",
+    )
+
+    def _resolve_or_ci_columns(frame: pd.DataFrame):
+        lower_to_orig = {str(c).lower(): c for c in frame.columns}
+        or_c = next((lower_to_orig[a] for a in _OR_ALIASES if a in lower_to_orig), None)
+        lo_c = next((lower_to_orig[a] for a in _CI_LOW_ALIASES if a in lower_to_orig), None)
+        hi_c = next((lower_to_orig[a] for a in _CI_HIGH_ALIASES if a in lower_to_orig), None)
+        if or_c and lo_c and hi_c:
+            return or_c, lo_c, hi_c
+        return None
+
+    parent: Optional[tuple[Path, pd.DataFrame, tuple[str, str, str]]] = None
+    for step_dir in sorted(steps_dir.iterdir()):
+        if not step_dir.is_dir() or step_dir.name == current_step_id:
+            continue
+        outputs_dir = step_dir / "outputs"
+        if not outputs_dir.exists():
+            continue
+        for csv_path in sorted(outputs_dir.glob("*.csv")):
+            try:
+                frame = pd.read_csv(csv_path)
+            except Exception:
+                continue
+            resolved = _resolve_or_ci_columns(frame)
+            if resolved is not None:
+                parent = (csv_path, frame, resolved)
+                break
+        if parent is not None:
+            break
+    if parent is None:
+        return None
+
+    table_path, frame, (or_col, lo_col, hi_col) = parent
+    var_col = "variable" if "variable" in frame.columns else frame.columns[0]
+    # Drop the intercept term; it is not an interpretable effect estimate.
+    plot_df = frame[~frame[var_col].astype(str).str.lower().isin({"const", "intercept"})]
+    for _c in (or_col, lo_col, hi_col):
+        plot_df = plot_df.assign(**{_c: pd.to_numeric(plot_df[_c], errors="coerce")})
+    plot_df = plot_df.dropna(subset=[or_col, lo_col, hi_col])
+    if plot_df.empty:
+        return None
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from easyicu.research_agent.publication_figures import (
+        add_panel_label,
+        apply_publication_style,
+        make_figure_contract,
+        save_publication_figure,
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    labels = plot_df[var_col].astype(str).tolist()
+    or_vals = plot_df[or_col].astype(float).to_numpy()
+    lo = plot_df[lo_col].astype(float).to_numpy()
+    hi = plot_df[hi_col].astype(float).to_numpy()
+    y = list(range(len(labels)))
+
+    fig, ax = plt.subplots(figsize=(120 / 25.4, max(60, 18 * len(labels)) / 25.4),
+                           constrained_layout=True)
+    apply_publication_style(fig)
+    ax.errorbar(
+        or_vals, y,
+        xerr=[or_vals - lo, hi - or_vals],
+        fmt="o", color="#1b4965", ecolor="#5fa8d3",
+        elinewidth=1.4, capsize=3, markersize=4,
+    )
+    ax.axvline(1.0, color="#999999", linewidth=1.0, linestyle="--")
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels)
+    ax.set_xlabel("Adjusted odds ratio (95% CI)")
+    ax.set_title("Adjusted association with the outcome", loc="left", pad=4)
+    ax.invert_yaxis()
+    add_panel_label(ax, "A", x=-0.1)
+
+    contract = make_figure_contract(
+        figure_id="publication_figure",
+        core_claim=(
+            "Adjusted odds ratios are summarised from the registered association "
+            "coefficient table."
+        ),
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Odds-ratio forest plot",
+                "role": "association",
+                "claim": "Per-covariate adjusted odds ratios and 95% CIs are read from the parent association table.",
+                "evidence_ids": ["table_association_results"],
+            },
+        ],
+        source_data=["table_association_results"],
+        statistics_note=(
+            "Deterministic rescue figure generated from parent-step association "
+            "outputs when the figure-only child step did not emit exports."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig, out_dir / "publication_figure", contract=contract, dpi=300
+    )
+    plt.close(fig)
+
+    existing_summary: Dict[str, Any] = {}
+    step_summary_path = out_dir / "step_summary.json"
+    if step_summary_path.exists():
+        try:
+            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing_summary = loaded
+        except Exception:
+            existing_summary = {}
+    existing_summary.setdefault("publication_figure_rescue", {})
+    existing_summary["publication_figure_rescue"].update(
+        {
+            "mode": "association_forest_from_parent_outputs",
+            "source_association_table": str(table_path),
+        }
+    )
+    figure_files = [path.name for key, path in outputs.items() if key != "contract"]
+    existing_summary["figure_files"] = figure_files
+    if figure_files:
+        existing_summary["figure_path"] = figure_files[0]
+    step_summary_path.write_text(
+        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "association_publication_bundle_from_parent_outputs_v1"
+
+
 
 # ---------------------------------------------------------------------------
 # Semantic-alias map
