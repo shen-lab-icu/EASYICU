@@ -1078,6 +1078,13 @@ def run_execute_phase(
                 return step_record
 
         repair_attempts = 0
+        # A runtime crash (returncode != 0) is a distinct, always-actionable
+        # failure class (a real Python traceback) and gets its own repair
+        # budget. Otherwise a success-path repair (contract / visual QA) that
+        # *introduces* a crash could consume the only shared attempt, leaving
+        # nothing to fix the traceback — the step would fail-closed even though
+        # the analysis it produced (e.g. the primary OR) was already valid.
+        runtime_repair_attempts = 0
         runner_repair_name: Optional[str] = None
         while True:
             run_label = "repaired script" if repair_attempts else "generated script"
@@ -1534,7 +1541,7 @@ def run_execute_phase(
                 _clear_output_dir(run_result.out_dir)
                 continue
 
-            if repair_attempts >= pipeline._max_code_repair_attempts:
+            if runtime_repair_attempts >= pipeline._max_code_repair_attempts:
                 fallback_code = _deterministic_fallback_code("execution_failure")
                 if fallback_code is not None:
                     code = fallback_code
@@ -1567,7 +1574,9 @@ def run_execute_phase(
                 return step_record
 
             repair_attempts += 1
+            runtime_repair_attempts += 1
             step_record["code_repair_attempts"] = repair_attempts
+            step_record["runtime_repair_attempts"] = runtime_repair_attempts
             emit_progress(
                 "coder",
                 f"Repairing failed script for {step.step_id}.",
@@ -1604,7 +1613,7 @@ def run_execute_phase(
                 )
                 if (
                     _is_transient
-                    and repair_attempts < pipeline._max_code_repair_attempts
+                    and runtime_repair_attempts < pipeline._max_code_repair_attempts
                 ):
                     emit_progress(
                         "coder",
