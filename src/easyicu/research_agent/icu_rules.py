@@ -24,6 +24,7 @@ either accept it or override it for a specific study.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
@@ -109,7 +110,8 @@ class MethodologicalPrinciple:
 # ``UNKNOWN`` and the LLM is told to be conservative.
 
 _SOFA_COMP = ConceptHint(
-    role=VariableRole.ORDINAL_SCORE, kind=VariableKind.ORDINAL,
+    role=VariableRole.ORDINAL_SCORE,
+    kind=VariableKind.ORDINAL,
     valid_range=(0.0, 4.0),
     is_ordinal=True,
     ordinal_levels=(0, 1, 2, 3, 4),
@@ -151,39 +153,53 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
     ),
     # --- common vitals
     "hr": ConceptHint(
-        role=VariableRole.VITAL, kind=VariableKind.CONTINUOUS,
-        unit="bpm", valid_range=(20.0, 250.0),
+        role=VariableRole.VITAL,
+        kind=VariableKind.CONTINUOUS,
+        unit="bpm",
+        valid_range=(20.0, 250.0),
         aggregation_default=AggregationRule.MEAN_MEDIAN,
     ),
     "map": ConceptHint(
-        role=VariableRole.VITAL, kind=VariableKind.CONTINUOUS,
-        unit="mmHg", valid_range=(20.0, 200.0),
+        role=VariableRole.VITAL,
+        kind=VariableKind.CONTINUOUS,
+        unit="mmHg",
+        valid_range=(20.0, 200.0),
         aggregation_default=AggregationRule.MEAN_MEDIAN,
     ),
     "sbp": ConceptHint(
-        role=VariableRole.VITAL, kind=VariableKind.CONTINUOUS,
-        unit="mmHg", valid_range=(40.0, 260.0),
+        role=VariableRole.VITAL,
+        kind=VariableKind.CONTINUOUS,
+        unit="mmHg",
+        valid_range=(40.0, 260.0),
         aggregation_default=AggregationRule.MEAN_MEDIAN,
     ),
     "dbp": ConceptHint(
-        role=VariableRole.VITAL, kind=VariableKind.CONTINUOUS,
-        unit="mmHg", valid_range=(20.0, 180.0),
+        role=VariableRole.VITAL,
+        kind=VariableKind.CONTINUOUS,
+        unit="mmHg",
+        valid_range=(20.0, 180.0),
         aggregation_default=AggregationRule.MEAN_MEDIAN,
     ),
     "spo2": ConceptHint(
-        role=VariableRole.VITAL, kind=VariableKind.CONTINUOUS,
-        unit="%", valid_range=(40.0, 100.0),
+        role=VariableRole.VITAL,
+        kind=VariableKind.CONTINUOUS,
+        unit="%",
+        valid_range=(40.0, 100.0),
         aggregation_default=AggregationRule.MEDIAN_ONLY,
     ),
     "temp": ConceptHint(
-        role=VariableRole.VITAL, kind=VariableKind.CONTINUOUS,
-        unit="C", valid_range=(28.0, 43.0),
+        role=VariableRole.VITAL,
+        kind=VariableKind.CONTINUOUS,
+        unit="C",
+        valid_range=(28.0, 43.0),
         aggregation_default=AggregationRule.MEAN_MEDIAN,
     ),
     # --- common labs
     "lact": ConceptHint(
-        role=VariableRole.LAB, kind=VariableKind.CONTINUOUS,
-        unit="mmol/L", valid_range=(0.0, 30.0),
+        role=VariableRole.LAB,
+        kind=VariableKind.CONTINUOUS,
+        unit="mmol/L",
+        valid_range=(0.0, 30.0),
         aggregation_default=AggregationRule.MEDIAN_ONLY,
         pitfalls=(
             "Lactate is right-skewed and measurement is often clinically triggered; report median/IQR or clinically meaningful bins, and audit unmeasured lactate separately.",
@@ -191,26 +207,34 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         ),
     ),
     "creat": ConceptHint(
-        role=VariableRole.LAB, kind=VariableKind.CONTINUOUS,
-        unit="mg/dL", valid_range=(0.1, 15.0),
+        role=VariableRole.LAB,
+        kind=VariableKind.CONTINUOUS,
+        unit="mg/dL",
+        valid_range=(0.1, 15.0),
         aggregation_default=AggregationRule.MEDIAN_ONLY,
         pitfalls=(
             "Creatinine is right-skewed; report median (IQR), not mean (SD), unless log-transformed.",
         ),
     ),
     "bili": ConceptHint(
-        role=VariableRole.LAB, kind=VariableKind.CONTINUOUS,
-        unit="mg/dL", valid_range=(0.0, 50.0),
+        role=VariableRole.LAB,
+        kind=VariableKind.CONTINUOUS,
+        unit="mg/dL",
+        valid_range=(0.0, 50.0),
         aggregation_default=AggregationRule.MEDIAN_ONLY,
     ),
     "plt": ConceptHint(
-        role=VariableRole.LAB, kind=VariableKind.CONTINUOUS,
-        unit="K/uL", valid_range=(1.0, 1500.0),
+        role=VariableRole.LAB,
+        kind=VariableKind.CONTINUOUS,
+        unit="K/uL",
+        valid_range=(1.0, 1500.0),
         aggregation_default=AggregationRule.MEDIAN_ONLY,
     ),
     "pafi": ConceptHint(
-        role=VariableRole.LAB, kind=VariableKind.CONTINUOUS,
-        unit="ratio", valid_range=(20.0, 700.0),
+        role=VariableRole.LAB,
+        kind=VariableKind.CONTINUOUS,
+        unit="ratio",
+        valid_range=(20.0, 700.0),
         aggregation_default=AggregationRule.MEDIAN_ONLY,
         pitfalls=(
             "PaO2/FiO2 ratios are only meaningful when FiO2 is reliably recorded; "
@@ -219,7 +243,8 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
     ),
     # --- ordinal scores
     "gcs": ConceptHint(
-        role=VariableRole.ORDINAL_SCORE, kind=VariableKind.ORDINAL,
+        role=VariableRole.ORDINAL_SCORE,
+        kind=VariableKind.ORDINAL,
         valid_range=(3.0, 15.0),
         is_ordinal=True,
         ordinal_levels=tuple(range(3, 16)),
@@ -229,7 +254,8 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         ),
     ),
     "kdigo_stage": ConceptHint(
-        role=VariableRole.ORDINAL_SCORE, kind=VariableKind.ORDINAL,
+        role=VariableRole.ORDINAL_SCORE,
+        kind=VariableKind.ORDINAL,
         valid_range=(0.0, 3.0),
         is_ordinal=True,
         ordinal_levels=(0, 1, 2, 3),
@@ -240,7 +266,8 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         ),
     ),
     "kdigo": ConceptHint(
-        role=VariableRole.ORDINAL_SCORE, kind=VariableKind.ORDINAL,
+        role=VariableRole.ORDINAL_SCORE,
+        kind=VariableKind.ORDINAL,
         valid_range=(0.0, 3.0),
         is_ordinal=True,
         ordinal_levels=(0, 1, 2, 3),
@@ -264,7 +291,8 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
     "sofa2_cns": _SOFA_COMP,
     "sofa2_renal": _SOFA_COMP,
     "sofa": ConceptHint(
-        role=VariableRole.COMPOSITE_SCORE, kind=VariableKind.ORDINAL,
+        role=VariableRole.COMPOSITE_SCORE,
+        kind=VariableKind.ORDINAL,
         valid_range=(0.0, 24.0),
         is_ordinal=True,
         aggregation_default=AggregationRule.MAX_LAST,
@@ -274,7 +302,8 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         ),
     ),
     "sofa2": ConceptHint(
-        role=VariableRole.COMPOSITE_SCORE, kind=VariableKind.ORDINAL,
+        role=VariableRole.COMPOSITE_SCORE,
+        kind=VariableKind.ORDINAL,
         valid_range=(0.0, 24.0),
         is_ordinal=True,
         aggregation_default=AggregationRule.MAX_LAST,
@@ -284,49 +313,59 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         ),
     ),
     "sirs": ConceptHint(
-        role=VariableRole.COMPOSITE_SCORE, kind=VariableKind.ORDINAL,
+        role=VariableRole.COMPOSITE_SCORE,
+        kind=VariableKind.ORDINAL,
         valid_range=(0.0, 4.0),
         is_ordinal=True,
         aggregation_default=AggregationRule.MAX_LAST,
     ),
     "qsofa": ConceptHint(
-        role=VariableRole.COMPOSITE_SCORE, kind=VariableKind.ORDINAL,
+        role=VariableRole.COMPOSITE_SCORE,
+        kind=VariableKind.ORDINAL,
         valid_range=(0.0, 3.0),
         is_ordinal=True,
         aggregation_default=AggregationRule.MAX_LAST,
     ),
     # --- outcomes
     "death": ConceptHint(
-        role=VariableRole.OUTCOME, kind=VariableKind.BINARY,
+        role=VariableRole.OUTCOME,
+        kind=VariableKind.BINARY,
         aggregation_default=AggregationRule.FIRST_VALUE,
         pitfalls=(
             "ICU mortality vs hospital mortality vs 28-day mortality are NOT interchangeable; record which one is in use.",
         ),
     ),
     "death_icu": ConceptHint(
-        role=VariableRole.OUTCOME, kind=VariableKind.BINARY,
+        role=VariableRole.OUTCOME,
+        kind=VariableKind.BINARY,
         aggregation_default=AggregationRule.FIRST_VALUE,
     ),
     "death_hosp": ConceptHint(
-        role=VariableRole.OUTCOME, kind=VariableKind.BINARY,
+        role=VariableRole.OUTCOME,
+        kind=VariableKind.BINARY,
         aggregation_default=AggregationRule.FIRST_VALUE,
     ),
     "los_icu": ConceptHint(
-        role=VariableRole.OUTCOME, kind=VariableKind.CONTINUOUS,
-        unit="days", valid_range=(0.0, 365.0),
+        role=VariableRole.OUTCOME,
+        kind=VariableKind.CONTINUOUS,
+        unit="days",
+        valid_range=(0.0, 365.0),
         aggregation_default=AggregationRule.FIRST_VALUE,
         pitfalls=(
             "ICU LoS is right-skewed and competing-risks-affected; report median (IQR), and consider survival framing rather than linear regression.",
         ),
     ),
     "los_hosp": ConceptHint(
-        role=VariableRole.OUTCOME, kind=VariableKind.CONTINUOUS,
-        unit="days", valid_range=(0.0, 365.0),
+        role=VariableRole.OUTCOME,
+        kind=VariableKind.CONTINUOUS,
+        unit="days",
+        valid_range=(0.0, 365.0),
         aggregation_default=AggregationRule.FIRST_VALUE,
     ),
     # --- interventions
     "vaso": ConceptHint(
-        role=VariableRole.INTERVENTION, kind=VariableKind.BINARY,
+        role=VariableRole.INTERVENTION,
+        kind=VariableKind.BINARY,
         aggregation_default=AggregationRule.MAX_LAST,
         pitfalls=(
             "Vasopressor exposure is conventionally captured as 'any vasopressor in window' (binary) "
@@ -335,7 +374,8 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         ),
     ),
     "norepi_equiv": ConceptHint(
-        role=VariableRole.INTERVENTION, kind=VariableKind.CONTINUOUS,
+        role=VariableRole.INTERVENTION,
+        kind=VariableKind.CONTINUOUS,
         unit="mcg/kg/min",
         valid_range=(0.0, 10.0),
         aggregation_default=AggregationRule.MAX_LAST,
@@ -345,7 +385,8 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         ),
     ),
     "circ_event": ConceptHint(
-        role=VariableRole.COMPOSITE_SCORE, kind=VariableKind.ORDINAL,
+        role=VariableRole.COMPOSITE_SCORE,
+        kind=VariableKind.ORDINAL,
         valid_range=(0.0, 3.0),
         is_ordinal=True,
         ordinal_levels=(0, 1, 2, 3),
@@ -355,18 +396,21 @@ _CONCEPT_HINTS: Dict[str, ConceptHint] = {
         ),
     ),
     "circ_failure": ConceptHint(
-        role=VariableRole.INTERVENTION, kind=VariableKind.BINARY,
+        role=VariableRole.INTERVENTION,
+        kind=VariableKind.BINARY,
         aggregation_default=AggregationRule.MAX_LAST,
         pitfalls=(
             "Circulatory failure is a derived EasyICU concept based on lactate, MAP and vasoactive support; document the underlying rule and time window.",
         ),
     ),
     "vent_ind": ConceptHint(
-        role=VariableRole.INTERVENTION, kind=VariableKind.BINARY,
+        role=VariableRole.INTERVENTION,
+        kind=VariableKind.BINARY,
         aggregation_default=AggregationRule.MAX_LAST,
     ),
     "rrt": ConceptHint(
-        role=VariableRole.INTERVENTION, kind=VariableKind.BINARY,
+        role=VariableRole.INTERVENTION,
+        kind=VariableKind.BINARY,
         aggregation_default=AggregationRule.MAX_LAST,
     ),
     # --- ids / time
@@ -427,35 +471,61 @@ def classify_variable(
             if uniq <= {0, 1}:
                 return ConceptHint(role=VariableRole.OTHER, kind=VariableKind.BINARY)
             if len(uniq) <= 5:
-                return ConceptHint(role=VariableRole.OTHER, kind=VariableKind.ORDINAL,
-                                   is_ordinal=True)
+                return ConceptHint(
+                    role=VariableRole.OTHER, kind=VariableKind.ORDINAL, is_ordinal=True
+                )
         return ConceptHint(role=VariableRole.OTHER, kind=VariableKind.COUNT)
     if "float" in dtype_l or "double" in dtype_l:
-        return ConceptHint(role=VariableRole.OTHER, kind=VariableKind.CONTINUOUS,
-                           aggregation_default=AggregationRule.MEAN_MEDIAN)
+        return ConceptHint(
+            role=VariableRole.OTHER,
+            kind=VariableKind.CONTINUOUS,
+            aggregation_default=AggregationRule.MEAN_MEDIAN,
+        )
     if "object" in dtype_l or "string" in dtype_l or "category" in dtype_l:
         return ConceptHint(role=VariableRole.OTHER, kind=VariableKind.CATEGORICAL)
     return ConceptHint(role=VariableRole.OTHER, kind=VariableKind.UNKNOWN)
 
 
-def aggregation_rule_for(role: VariableRole, kind: VariableKind) -> List[AggregationRule]:
+def aggregation_rule_for(
+    role: VariableRole, kind: VariableKind
+) -> List[AggregationRule]:
     """Return the *allowed* aggregation operations for a (role, kind) pair."""
     if kind == VariableKind.IDENTIFIER:
         return [AggregationRule.NONE, AggregationRule.FIRST_VALUE]
     if kind == VariableKind.TIMESTAMP:
         return [AggregationRule.NONE, AggregationRule.FIRST_VALUE]
     if kind == VariableKind.BINARY:
-        return [AggregationRule.MAX_LAST, AggregationRule.FIRST_VALUE, AggregationRule.SUM]
+        return [
+            AggregationRule.MAX_LAST,
+            AggregationRule.FIRST_VALUE,
+            AggregationRule.SUM,
+        ]
     if kind == VariableKind.ORDINAL:
-        return [AggregationRule.MAX_LAST, AggregationRule.FIRST_VALUE, AggregationRule.MEDIAN_ONLY]
+        return [
+            AggregationRule.MAX_LAST,
+            AggregationRule.FIRST_VALUE,
+            AggregationRule.MEDIAN_ONLY,
+        ]
     if kind == VariableKind.COUNT:
-        return [AggregationRule.SUM, AggregationRule.MEAN_MEDIAN, AggregationRule.MAX_LAST]
+        return [
+            AggregationRule.SUM,
+            AggregationRule.MEAN_MEDIAN,
+            AggregationRule.MAX_LAST,
+        ]
     if kind == VariableKind.CONTINUOUS:
         if role == VariableRole.LAB:
             # labs are typically right-skewed → discourage mean
-            return [AggregationRule.MEDIAN_ONLY, AggregationRule.MAX_LAST, AggregationRule.FIRST_VALUE]
-        return [AggregationRule.MEAN_MEDIAN, AggregationRule.MEDIAN_ONLY,
-                AggregationRule.MAX_LAST, AggregationRule.FIRST_VALUE]
+            return [
+                AggregationRule.MEDIAN_ONLY,
+                AggregationRule.MAX_LAST,
+                AggregationRule.FIRST_VALUE,
+            ]
+        return [
+            AggregationRule.MEAN_MEDIAN,
+            AggregationRule.MEDIAN_ONLY,
+            AggregationRule.MAX_LAST,
+            AggregationRule.FIRST_VALUE,
+        ]
     if kind == VariableKind.CATEGORICAL:
         return [AggregationRule.FIRST_VALUE, AggregationRule.NONE]
     return [AggregationRule.ANY]
@@ -472,15 +542,27 @@ def default_time_windows() -> List[TimeWindow]:
       at discharge — the analysis script must cap end_hours per patient).
     """
     return [
-        TimeWindow(name="first_24h", anchor="icu_admission",
-                   start_hours=0.0, end_hours=24.0,
-                   rationale="Standard window for admission severity scores (SOFA, APACHE)."),
-        TimeWindow(name="first_6h", anchor="icu_admission",
-                   start_hours=0.0, end_hours=6.0,
-                   rationale="Early-resuscitation window for sepsis / shock studies."),
-        TimeWindow(name="full_stay", anchor="icu_admission",
-                   start_hours=0.0, end_hours=24.0 * 30,
-                   rationale="Whole ICU stay; analysis script must cap end_hours per patient."),
+        TimeWindow(
+            name="first_24h",
+            anchor="icu_admission",
+            start_hours=0.0,
+            end_hours=24.0,
+            rationale="Standard window for admission severity scores (SOFA, APACHE).",
+        ),
+        TimeWindow(
+            name="first_6h",
+            anchor="icu_admission",
+            start_hours=0.0,
+            end_hours=6.0,
+            rationale="Early-resuscitation window for sepsis / shock studies.",
+        ),
+        TimeWindow(
+            name="full_stay",
+            anchor="icu_admission",
+            start_hours=0.0,
+            end_hours=24.0 * 30,
+            rationale="Whole ICU stay; analysis script must cap end_hours per patient.",
+        ),
     ]
 
 
@@ -943,6 +1025,110 @@ class _ICURules:
 ICU_RULES = _ICURules()
 
 
+# ---------------------------------------------------------------------------
+# Overadjustment detection (deterministic, case-neutral)
+# ---------------------------------------------------------------------------
+
+# General clinical-knowledge map: composite / derived exposures and the
+# constituent measurement concepts that *define* them. Conditioning on a
+# constituent of the exposure is overadjustment (it removes the exposure's own
+# signal). These are standard ICU score compositions — general, illustrative
+# and extensible clinical knowledge, NOT benchmark-specific entries. Tokens are
+# matched case-insensitively as substrings of a variable name.
+COMPOSITE_EXPOSURE_CONSTITUENTS: Dict[str, Tuple[str, ...]] = {
+    "sofa": (
+        "pao2",
+        "fio2",
+        "spo2",
+        "platelet",
+        "bilirubin",
+        "gcs",
+        "map",
+        "vasopressor",
+        "norepi",
+        "dopamine",
+        "epinephrine",
+        "creatinine",
+        "urine",
+    ),
+    "sepsis3": (
+        "sofa",
+        "suspected_infection",
+        "susp_inf",
+        "pao2",
+        "platelet",
+        "bilirubin",
+        "gcs",
+        "map",
+        "creatinine",
+        "urine",
+    ),
+    "qsofa": ("gcs", "respiratory_rate", "resp_rate", "sbp", "systolic"),
+    "kdigo": ("creatinine", "urine_output", "urine"),
+}
+
+
+def _normalise_token(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
+
+
+def composite_constituents(exposure: str) -> Tuple[str, ...]:
+    """Constituent concept tokens of a composite/derived exposure, or ``()``.
+
+    ``()`` means the exposure is not a known composite, so no overadjustment
+    rule applies — the check stays silent rather than guessing.
+    """
+    key = _normalise_token(exposure)
+    if not key:
+        return ()
+    # A composite's canonical name must appear *within* the exposure variable
+    # name (e.g. ``sofa`` in ``sofa_max``); we do not guess from abbreviations
+    # shorter than the canonical name. When several composites match (``sofa``
+    # is a substring of ``qsofa``), the longest — most specific — name wins, so
+    # ``qsofa`` resolves to qSOFA's own constituents, not SOFA's broader set.
+    best_parts: Tuple[str, ...] = ()
+    best_len = -1
+    for comp, parts in COMPOSITE_EXPOSURE_CONSTITUENTS.items():
+        comp_tok = _normalise_token(comp)
+        if comp_tok and comp_tok in key and len(comp_tok) > best_len:
+            best_parts, best_len = parts, len(comp_tok)
+    return best_parts
+
+
+def detect_overadjustment(
+    exposure: str, adjustment_covariates: Sequence[str]
+) -> List[str]:
+    """Return the adjustment covariates that constitute / derive ``exposure``.
+
+    Conditioning on a constituent of the exposure is overadjustment. Conservative
+    by design: fires only when ``exposure`` is a *known* composite/derived score
+    (``composite_constituents`` non-empty) and a covariate name contains one of
+    its constituent tokens. The exposure variable itself is never flagged. An
+    empty list means no overadjustment detected.
+    """
+    parts = composite_constituents(exposure)
+    if not parts:
+        return []
+    # Normalise constituent tokens the same way as covariate names, otherwise
+    # multi-word constituents ("resp_rate", "urine_output", "susp_inf") could
+    # never match a normalised covariate token.
+    part_toks = [t for t in (_normalise_token(p) for p in parts) if t]
+    exp_tok = _normalise_token(exposure)
+    offenders: List[str] = []
+    for cov in adjustment_covariates:
+        cov_tok = _normalise_token(cov)
+        if (
+            not cov_tok
+            or cov_tok == exp_tok
+            or exp_tok in cov_tok
+            or cov_tok in exp_tok
+        ):
+            continue  # the exposure itself is not an over-adjustment
+        if any(pt in cov_tok for pt in part_toks):
+            offenders.append(str(cov))
+    return offenders
+
+
 __all__ = [
     "VariableKind",
     "ConceptHint",
@@ -953,4 +1139,7 @@ __all__ = [
     "GENERAL_ICU_ANALYSIS_PRINCIPLES",
     "principles_for_phase",
     "ICU_RULES",
+    "COMPOSITE_EXPOSURE_CONSTITUENTS",
+    "composite_constituents",
+    "detect_overadjustment",
 ]

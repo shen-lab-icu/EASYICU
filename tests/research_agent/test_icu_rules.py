@@ -14,8 +14,18 @@ def test_classify_known_sofa_components(ra):
     icu = ra.ICU_RULES
     VariableKind = ra.VariableKind
     for col in [
-        "sofa_resp", "sofa_coag", "sofa_liver", "sofa_cardio", "sofa_cns", "sofa_renal",
-        "sofa2_resp", "sofa2_coag", "sofa2_liver", "sofa2_cardio", "sofa2_cns", "sofa2_renal",
+        "sofa_resp",
+        "sofa_coag",
+        "sofa_liver",
+        "sofa_cardio",
+        "sofa_cns",
+        "sofa_renal",
+        "sofa2_resp",
+        "sofa2_coag",
+        "sofa2_liver",
+        "sofa2_cardio",
+        "sofa2_cns",
+        "sofa2_renal",
     ]:
         hint = icu.classify_variable(col, "int64")
         assert hint.kind == VariableKind.ORDINAL, f"{col} should be ordinal"
@@ -70,7 +80,10 @@ def test_aggregation_rule_matrix(ra):
     and forbidden ops never sneak in for ordinal/identifier kinds."""
     icu = ra.ICU_RULES
     schema = ra.schema
-    forbidden_for_ordinal = {schema.AggregationRule.MEAN_MEDIAN, schema.AggregationRule.SUM}
+    forbidden_for_ordinal = {
+        schema.AggregationRule.MEAN_MEDIAN,
+        schema.AggregationRule.SUM,
+    }
     for role in schema.VariableRole:
         for kind in ra.VariableKind:
             allowed = icu.aggregation_rule_for(role, kind)
@@ -81,11 +94,15 @@ def test_aggregation_rule_matrix(ra):
                     f"{forbidden_for_ordinal & set(allowed)}"
                 )
             if kind == ra.VariableKind.IDENTIFIER:
-                bad = {schema.AggregationRule.MEAN_MEDIAN, schema.AggregationRule.MAX_LAST,
-                       schema.AggregationRule.SUM, schema.AggregationRule.MEDIAN_ONLY}
-                assert all(a not in bad for a in allowed), (
-                    f"Identifier kind wrongly allows {bad & set(allowed)}"
-                )
+                bad = {
+                    schema.AggregationRule.MEAN_MEDIAN,
+                    schema.AggregationRule.MAX_LAST,
+                    schema.AggregationRule.SUM,
+                    schema.AggregationRule.MEDIAN_ONLY,
+                }
+                assert all(
+                    a not in bad for a in allowed
+                ), f"Identifier kind wrongly allows {bad & set(allowed)}"
 
 
 def test_default_time_windows_present(ra):
@@ -103,7 +120,9 @@ def test_lab_continuous_discourages_mean(ra):
     mean must not be the recommended default."""
     icu = ra.ICU_RULES
     schema = ra.schema
-    allowed = icu.aggregation_rule_for(schema.VariableRole.LAB, ra.VariableKind.CONTINUOUS)
+    allowed = icu.aggregation_rule_for(
+        schema.VariableRole.LAB, ra.VariableKind.CONTINUOUS
+    )
     assert allowed[0] == schema.AggregationRule.MEDIAN_ONLY
     assert schema.AggregationRule.MEAN_MEDIAN not in allowed
 
@@ -129,7 +148,12 @@ def test_general_principles_are_well_formed(ra):
     ids = [p.id for p in principles]
     assert len(set(ids)) == len(ids), "principle ids must be unique"
     known_phases = {
-        "cohort", "features", "label", "modeling", "clustering", "interpretation",
+        "cohort",
+        "features",
+        "label",
+        "modeling",
+        "clustering",
+        "interpretation",
     }
     for p in principles:
         assert p.phase in known_phases, f"{p.id} has unknown phase {p.phase}"
@@ -143,9 +167,7 @@ def test_general_principles_cover_the_three_crosswalk_gaps(ra):
     assert "diagnosis_membership_not_timing" in ids
     assert "incident_not_prevalent" in ids
     # gap 13: imbalance-aware evaluation must appear in some principle body.
-    bodies = " ".join(
-        p.principle.lower() for p in ra.ICU_RULES.general_principles
-    )
+    bodies = " ".join(p.principle.lower() for p in ra.ICU_RULES.general_principles)
     assert "recall" in bodies or "imbalance" in bodies or "balance" in bodies
 
 
@@ -204,3 +226,36 @@ def test_objective_errors_vs_defensible_choices(ra):
         "control_for_multiplicity",
     ):
         assert by_id[cid].kind == "caution", f"{cid} should be a caution"
+
+
+def test_detect_overadjustment_flags_exposure_constituents(ra):
+    # Sepsis-3 is defined via SOFA, so adjusting for SOFA is overadjustment.
+    assert ra.detect_overadjustment("sepsis3", ["age", "sex", "sofa_max"]) == [
+        "sofa_max"
+    ]
+    # No constituent in the adjustment set -> clean.
+    assert ra.detect_overadjustment("sepsis3", ["age", "sex"]) == []
+    # The exposure's own measurement is never flagged as over-adjustment.
+    assert ra.detect_overadjustment("sofa", ["sofa_max", "age"]) == []
+    # Unknown / non-composite exposure -> silent (no rule applies).
+    assert ra.detect_overadjustment("lactate", ["age", "sofa_max"]) == []
+    # A genuine SOFA constituent (creatinine) is caught for a SOFA exposure.
+    assert ra.detect_overadjustment("sofa", ["creatinine", "age"]) == ["creatinine"]
+
+
+def test_detect_overadjustment_qsofa_not_swallowed_by_sofa(ra):
+    # "sofa" is a substring of "qsofa": the longest-name match must win so a
+    # qSOFA exposure resolves to qSOFA's own constituents (GCS / resp rate /
+    # SBP), NOT SOFA's broader set -- otherwise bilirubin/creatinine, which are
+    # NOT qSOFA inputs, would be false-positive overadjustment flags.
+    assert (
+        ra.composite_constituents("qsofa")
+        == ra.COMPOSITE_EXPOSURE_CONSTITUENTS["qsofa"]
+    )
+    assert ra.detect_overadjustment("qsofa", ["age", "bilirubin", "creatinine"]) == []
+    # A real qSOFA constituent is still caught.
+    assert ra.detect_overadjustment("qsofa", ["age", "resp_rate"]) == ["resp_rate"]
+    # sofa2 (no own entry) still resolves to SOFA, the only name it contains.
+    assert (
+        ra.composite_constituents("sofa2") == ra.COMPOSITE_EXPOSURE_CONSTITUENTS["sofa"]
+    )
