@@ -79,7 +79,14 @@ class PipelineConfig:
     context_top_k: Optional[int] = None
 
     # --- code-repair / determinism --------------------------------------
-    max_code_repair_attempts: int = 1
+    # 3, not 1: cheap/flaky hosted models (e.g. deepseek-v4-flash) repeatedly
+    # emit syntactically or semantically broken analysis code (SyntaxError,
+    # AttributeError on a renamed column). A single repair attempt routinely
+    # ran out before the model produced runnable code, fail-closing an
+    # otherwise valid analysis. This budget is per failure-class (success-path
+    # contract/visual repairs and runtime-crash repairs each get their own),
+    # so genuinely broken steps still terminate.
+    max_code_repair_attempts: int = 3
     enable_deterministic_code_fallback: bool = False
     enable_deterministic_planner_fallback: bool = False
     enable_deterministic_runner_repair: bool = True

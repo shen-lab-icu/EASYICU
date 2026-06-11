@@ -332,7 +332,7 @@ class ResearchAgentPipeline:
         evidence_enforcement_mode: str = "soft",
         disable_icu_context: bool = False,
         context_top_k: Optional[int] = None,
-        max_code_repair_attempts: int = 1,
+        max_code_repair_attempts: int = 3,
         enable_deterministic_code_fallback: bool = False,
         enable_deterministic_planner_fallback: bool = False,
         enable_deterministic_runner_repair: bool = True,
@@ -1213,7 +1213,45 @@ class ResearchAgentPipeline:
             def role_resolver(role: str):
                 return resolve_role_client(llm, role)
 
-        if skill_obj is not None:
+        # Resume: reuse the locked plan from the prior run instead of
+        # re-planning. A non-deterministic planner would otherwise emit a
+        # *different* plan on resume, whose step_ids no longer match the
+        # completed-step skip set — so the "resume" would silently re-run the
+        # whole analysis under new names. Reusing the saved plan keeps the
+        # already-completed step_ids aligned and continues from the failed step.
+        reused_prior_plan = False
+        if resume_state is not None:
+            _prior_plan_path = run_dir / "analysis_plan.json"
+            if _prior_plan_path.exists():
+                try:
+                    plan = AnalysisPlan.model_validate(
+                        json.loads(_prior_plan_path.read_text(encoding="utf-8"))
+                    )
+                except Exception:
+                    plan = None
+                if plan is not None and plan.steps:
+                    reused_prior_plan = True
+                    plan_generation_mode = "resumed"
+                    findings.append(
+                        ValidationFinding(
+                            validator="planner",
+                            severity="warning",
+                            message=(
+                                "Resuming prior run: reused the locked analysis "
+                                "plan (skipped re-planning) so completed step_ids "
+                                "stay aligned and execution continues from the "
+                                "failed step."
+                            ),
+                            detail={
+                                "generation_mode": "resumed",
+                                "n_steps": len(plan.steps),
+                            },
+                        )
+                    )
+
+        if reused_prior_plan:
+            pass
+        elif skill_obj is not None:
             plan_generation_mode = "deterministic_skill"
             issues = skill_obj.validate_against(pd.read_parquet(cohort_path))
             for msg in issues:
@@ -1303,24 +1341,29 @@ class ResearchAgentPipeline:
                     )
                     used_mock_llm = True
                     plan_generation_mode = "fallback"
-        plan, plan_contract_findings = _enforce_advanced_plan_contract(
-            plan=plan,
-            context=context,
-        )
-        findings.extend(plan_contract_findings)
-        plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
-        findings.extend(split_findings)
-        plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
-            plan=plan,
-            context=context,
-        )
-        findings.extend(figure_guard_findings)
+        # Skip the plan-shaping transforms when resuming: the saved plan is
+        # already in its final, transformed form, and re-running split/cap/
+        # ensure_* could rename or reorder step_ids and break the resume skip
+        # set. A freshly generated plan still gets the full treatment.
+        if not reused_prior_plan:
+            plan, plan_contract_findings = _enforce_advanced_plan_contract(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(plan_contract_findings)
+            plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+            findings.extend(split_findings)
+            plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(figure_guard_findings)
 
-        cap = self._max_total_steps
-        plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
-        findings.extend(cap_findings)
-        plan = ensure_cohort_definition(plan)
-        plan = ensure_robustness_specs(plan)
+            cap = self._max_total_steps
+            plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
+            findings.extend(cap_findings)
+            plan = ensure_cohort_definition(plan)
+            plan = ensure_robustness_specs(plan)
         plan_path = run_dir / "analysis_plan.json"
         plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:
