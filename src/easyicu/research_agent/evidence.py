@@ -196,6 +196,7 @@ _NUMERIC_LEAF_RE = re.compile(
 _NUMERIC_IN_PROSE_RE = re.compile(
     r"(?<![A-Za-z_\d.])"                         # avoid mid-identifier digits
     r"(?P<value>"
+    r"(?:"                                       # --- general numeric form ---
     r"[-+]?"
     r"(?:"
     r"\d{1,3}(?:,\d{3})+(?:\.\d+)?"              # comma-grouped (with optional fraction)
@@ -207,6 +208,15 @@ _NUMERIC_IN_PROSE_RE = re.compile(
     r"\d{3,}"                                    # ≥3-digit integer
     r")"
     r"%?"                                        # optional percent suffix
+    r")"
+    r"|"                                         # --- short percent form ---
+    # A bare 1-2 digit integer is normally rejected (it collides with
+    # SOFA-2, "Section 4", "n=42", ...), but a trailing percent sign
+    # disambiguates it as a data value (mortality 23%, 8% decline), so it
+    # is bound. The lookahead still excludes confidence / credible-interval
+    # *levels* ("95% CI", "90% confidence", "99% credible interval"), which
+    # are labels, not claims.
+    r"\d{1,2}%(?!\s*(?:CI\b|confidence|credible))"
     r")"
     r"(?![A-Za-z_\d]|\.\d)"                       # not followed by identifier / decimal continuation
 )
