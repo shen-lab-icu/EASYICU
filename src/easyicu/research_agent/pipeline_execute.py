@@ -54,7 +54,12 @@ from .code_repair import (
     _deterministic_summary_repair,
     deterministic_concept_audit_repair,
 )
-from .cohort_schema import assert_cohort_definition_locked
+from .cohort_repair import extract_cohort_definition_from_prose
+from .cohort_schema import (
+    assert_cohort_definition_locked,
+    materialize_locked_analysis_cohort,
+    write_locked_cohort_definition,
+)
 from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .estimators import fit_robustness_rows_from_records
 from .llm import MockLLMClient
@@ -71,6 +76,7 @@ from .pipeline import (
 from .plan_utils import (
     _cohort_definition_contract_findings,
     _cohort_definition_is_empty,
+    _cohort_definition_prose,
     _parent_step_id_for_figure_step,
     _plan_expects_analysis_cohort,
     _preserve_figure_steps_after_replan,
@@ -169,6 +175,7 @@ def run_execute_phase(
         "total": 0,
         "disabled": False,
         "cohort_contract_emitted": False,
+        "cohort_materialized": False,
     }
     role_resolver = plan_result.role_resolver
     llm_signature = plan_result.llm_signature
@@ -371,6 +378,138 @@ def run_execute_phase(
             )
         return revision_path
 
+    def _no_analysis_step_has_run() -> bool:
+        """True while only the deterministic probe (00_probe) has executed.
+
+        The cohort may be (re)materialised and the runner re-pointed only at
+        this point; switching the cohort after analysis steps already ran on
+        the universe would split a single run across two populations.
+        """
+        return not any(
+            (rec.get("step_id") or "") != "00_probe"
+            for rec in per_step_records
+        )
+
+    def _universe_columns() -> list:
+        try:
+            import pyarrow.parquet as pq  # type: ignore
+
+            return list(pq.read_schema(universe_path).names)
+        except Exception:
+            try:
+                import pandas as pd  # type: ignore
+
+                return list(pd.read_parquet(universe_path).columns)
+            except Exception:
+                return []
+
+    def _try_materialize_cohort_from_prose(
+        candidate_plan: AnalysisPlan,
+        *,
+        reason: str,
+    ) -> bool:
+        """Extract the agent's prose 纳排 into typed predicates, materialise the
+        filtered analysis cohort, and re-point the runner at it.
+
+        Returns ``True`` when the cohort was materialised (so the caller skips
+        the auditable contract error). The locked initial cohort was an empty
+        placeholder for the bench's 0-step plan; locking the first real
+        definition here is a provisional→real lock, fully provenance-recorded.
+        """
+        nonlocal cohort_path, runner
+        if _replan_state["cohort_materialized"]:
+            return True
+        if _analysis_cohort_path.exists():
+            return True
+        if not _no_analysis_step_has_run():
+            return False
+        columns = _universe_columns()
+        if not columns:
+            return False
+        definition = extract_cohort_definition_from_prose(
+            cohort_prose=_cohort_definition_prose(candidate_plan),
+            universe_columns=columns,
+            llm=role_resolver("planner"),
+            name=getattr(getattr(candidate_plan, "cohort", None), "name", "primary")
+            or "primary",
+        )
+        if definition is None:
+            return False
+        candidate_plan.cohort = definition
+        try:
+            write_locked_cohort_definition(
+                run_dir=run_dir,
+                plan=candidate_plan,
+                evidence=evidence,
+                prompt_pack_version=prompt_version,
+                llm_signature=llm_signature,
+            )
+            result = materialize_locked_analysis_cohort(
+                run_dir=run_dir,
+                plan=candidate_plan,
+                universe_path=universe_path,
+            )
+        except Exception as exc:  # never break the run; fall back to the error
+            findings.append(
+                ValidationFinding(
+                    validator="cohort_materializer",
+                    severity="warning",
+                    message=(
+                        "Extracted a cohort definition from step prose but could "
+                        f"not materialise it: {type(exc).__name__}: {exc}"
+                    ),
+                    detail={"stage": "execute_repair", "reason": reason},
+                )
+            )
+            return False
+        if result.get("status") != "applied":
+            return False
+        cohort_path = _analysis_cohort_path
+        runner = pipeline._build_runner(
+            run_dir=run_dir,
+            cohort_path=cohort_path,
+            target_outcome=context.target_outcome,
+            universe_path=universe_path,
+        )
+        try:
+            evidence.register_file(
+                kind="table",
+                description=(
+                    "Analysis cohort materialised from the agent's prose 纳排, "
+                    "translated to typed CTAS predicates during execution."
+                ),
+                source_path=cohort_path,
+                evidence_id="analysis_cohort_execute_repair",
+                producer="cohort_repair",
+                generation_mode="llm",
+                prompt_pack_version=prompt_version,
+                metadata={"llm_signature": llm_signature, "reason": reason},
+            )
+        except ValueError:
+            pass
+        findings.append(
+            ValidationFinding(
+                validator="cohort_materializer",
+                severity="info",
+                message=(
+                    "Translated the cohort-definition step's prose into typed "
+                    "predicates and applied them: analysis cohort "
+                    f"n={result['n_cohort']} of universe n={result['n_universe']}. "
+                    "Downstream steps now read the filtered cohort "
+                    "(COHORT_PARQUET); the full universe stays available as "
+                    "EASYICU_UNIVERSE_PARQUET."
+                ),
+                detail={
+                    "stage": "execute_repair",
+                    "reason": reason,
+                    "n_universe": result["n_universe"],
+                    "n_analysis_cohort": result["n_cohort"],
+                },
+            )
+        )
+        _replan_state["cohort_materialized"] = True
+        return True
+
     def _enforce_cohort_contract_on_executing_plan(
         candidate_plan: AnalysisPlan,
         *,
@@ -414,7 +553,24 @@ def run_execute_phase(
             )
         _replan_state["cohort_contract_emitted"] = True
 
-    _enforce_cohort_contract_on_executing_plan(plan, reason="execute_start")
+    def _resolve_cohort_definition(
+        candidate_plan: AnalysisPlan,
+        *,
+        reason: str,
+    ) -> None:
+        """For an executing plan that implies a cohort but left it unstructured:
+        first try to materialise it from the step prose (real enforcement); if
+        that fails, surface the auditable contract error (visibility)."""
+        if not (
+            _plan_expects_analysis_cohort(candidate_plan)
+            and _cohort_definition_is_empty(candidate_plan)
+        ):
+            return
+        if _try_materialize_cohort_from_prose(candidate_plan, reason=reason):
+            return
+        _enforce_cohort_contract_on_executing_plan(candidate_plan, reason=reason)
+
+    _resolve_cohort_definition(plan, reason="execute_start")
 
     def _maybe_replan(
         *,
@@ -511,7 +667,7 @@ def run_execute_phase(
         _replan_state["total"] += 1
         plan_path = _register_plan_revision(revised, reason=reason)
         plan_result.plan_path = plan_path
-        _enforce_cohort_contract_on_executing_plan(revised, reason=reason)
+        _resolve_cohort_definition(revised, reason=reason)
         findings.append(
             ValidationFinding(
                 validator="replanner",
