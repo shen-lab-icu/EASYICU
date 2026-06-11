@@ -299,7 +299,7 @@ def test_assert_cohort_definition_locked_catches_post_lock_mutation(
         assert_cohort_definition_locked(run_dir=tmp_path, plan=mutated_plan)
 
 
-def test_builder_rejects_unsupported_aggregation_with_not_implemented() -> None:
+def test_builder_rejects_unknown_aggregation_with_not_implemented() -> None:
     from easyicu.research_agent.cohort_schema import (
         CohortDefinition,
         ConceptPredicate,
@@ -308,18 +308,18 @@ def test_builder_rejects_unsupported_aggregation_with_not_implemented() -> None:
     )
 
     definition = CohortDefinition(
-        name="mean_age",
+        name="unknown_age_aggregation",
         inclusion=(
             ConceptPredicate(
                 "age",
                 TimeWindow("icu_admit", 0, 24),
-                "mean",
+                "mode",
                 ">=",
                 18,
             ),
         ),
     )
-    with pytest.raises(NotImplementedError, match="aggregation 'mean'"):
+    with pytest.raises(NotImplementedError, match="aggregation 'mode'"):
         build_cohort(definition, pd.DataFrame({"age": [21, 17]}))
 
 
