@@ -169,6 +169,18 @@ def run_execute_phase(
     assert_cohort_definition_locked(run_dir=run_dir, plan=plan)
     assert_robustness_specs_locked(run_dir=run_dir, plan=plan)
 
+    # Dual-track cohort. If the plan phase materialised the locked cohort
+    # definition into a filtered analysis cohort, every downstream consumer
+    # (probe, statistical validators, robustness fitter, and the step runner)
+    # reads THAT — so the declared inclusion/exclusion is enforced once,
+    # consistently, instead of being silently re-implemented (or skipped) by
+    # each generated step. The full universe stays reachable via the runner's
+    # EASYICU_UNIVERSE_PARQUET env for explicit robustness steps.
+    universe_path = cohort_path
+    _analysis_cohort_path = run_dir / "cohort_analysis.parquet"
+    if _analysis_cohort_path.exists():
+        cohort_path = _analysis_cohort_path
+
     coder = CoderAgent(role_resolver("coder"))
     analyzer = AnalyzerAgent(role_resolver("analyzer"))
     supervisor = RuntimeSupervisor(
@@ -182,6 +194,7 @@ def run_execute_phase(
         run_dir=run_dir,
         cohort_path=cohort_path,
         target_outcome=context.target_outcome,
+        universe_path=universe_path,
     )
     usage_auditor = ConceptUsageAuditor()
     from .audits.patterns import AnalysisPatternAuditor

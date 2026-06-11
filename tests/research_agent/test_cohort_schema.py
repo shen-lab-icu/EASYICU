@@ -336,3 +336,80 @@ def test_builder_missing_materialised_column_is_data_error() -> None:
     )
     with pytest.raises(CohortDataError, match="missing concept column 'age'"):
         build_cohort(definition, pd.DataFrame({"other_column": [1, 2]}))
+
+
+def _plan_with_cohort(definition):
+    import types
+
+    return types.SimpleNamespace(cohort=definition)
+
+
+def test_materialize_locked_analysis_cohort_applies_inclusion(tmp_path: Path) -> None:
+    """The locked definition must be materialised into a filtered analysis
+    cohort parquet — the bridge that enforces 纳排 on the data steps read."""
+    from easyicu.research_agent.cohort_schema import (
+        CohortDefinition,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe = pd.DataFrame({"age": [10, 18, 40, 70], "los_icu": [5, 2, 0.5, 3]})
+    universe_path = tmp_path / "cohort.parquet"
+    universe.to_parquet(universe_path, index=False)
+
+    definition = CohortDefinition(
+        name="adult_los1",
+        inclusion=(_age_predicate(0, 24),),  # age >= 18 (max)
+    )
+    result = materialize_locked_analysis_cohort(
+        run_dir=tmp_path, plan=_plan_with_cohort(definition), universe_path=universe_path
+    )
+    assert result["status"] == "applied"
+    assert result["n_universe"] == 4
+    assert result["n_cohort"] == 3  # drops the age-10 stay
+    out = tmp_path / "cohort_analysis.parquet"
+    assert out.exists()
+    assert len(pd.read_parquet(out)) == 3
+    assert (tmp_path / "cohort_analysis_provenance.json").exists()
+
+
+def test_materialize_no_definition_returns_no_file(tmp_path: Path) -> None:
+    from easyicu.research_agent.cohort_schema import (
+        CohortDefinition,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe = pd.DataFrame({"age": [20, 30]})
+    universe_path = tmp_path / "cohort.parquet"
+    universe.to_parquet(universe_path, index=False)
+
+    result = materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_plan_with_cohort(CohortDefinition(name="empty")),  # no predicates
+        universe_path=universe_path,
+    )
+    assert result["status"] == "no_definition"
+    assert not (tmp_path / "cohort_analysis.parquet").exists()
+
+
+def test_materialize_missing_column_falls_back_without_breaking(tmp_path: Path) -> None:
+    """A predicate the universe cannot satisfy must not break the run: status
+    'error', no parquet, caller falls back to the universe."""
+    from easyicu.research_agent.cohort_schema import (
+        CohortDefinition,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe = pd.DataFrame({"other_column": [1, 2]})  # no 'age'
+    universe_path = tmp_path / "cohort.parquet"
+    universe.to_parquet(universe_path, index=False)
+
+    result = materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_plan_with_cohort(
+            CohortDefinition(name="adult", inclusion=(_age_predicate(0, 24),))
+        ),
+        universe_path=universe_path,
+    )
+    assert result["status"] == "error"
+    assert result["error"]
+    assert not (tmp_path / "cohort_analysis.parquet").exists()

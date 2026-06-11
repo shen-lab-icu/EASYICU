@@ -119,7 +119,11 @@ from .concept_dict_audit import (
     assert_dict_matches as assert_concept_dict_matches,
     write_concept_dict_fingerprint,
 )
-from .cohort_schema import ensure_cohort_definition, write_locked_cohort_definition
+from .cohort_schema import (
+    ensure_cohort_definition,
+    materialize_locked_analysis_cohort,
+    write_locked_cohort_definition,
+)
 from .robustness_panel import ensure_robustness_specs, write_locked_robustness_specs
 from .pipeline_report import (
     execution_gate_status,
@@ -625,17 +629,25 @@ class ResearchAgentPipeline:
         run_dir: Path,
         cohort_path: Path,
         target_outcome: Optional[str] = None,
+        universe_path: Optional[Path] = None,
     ):
         """Return the configured runner backend for a single ``run()``.
 
         Kept as a method (not a closure) so subclasses or tests can
         stub it cleanly. Returns any object that exposes
         ``run(step_id=..., code=...) -> RunResult``.
+
+        ``cohort_path`` is the canonical analysis cohort the steps read as
+        ``COHORT_PARQUET``. ``universe_path`` (when given) is exposed as
+        ``EASYICU_UNIVERSE_PARQUET`` so explicit robustness steps can reach the
+        pre-纳排 universe without re-running extraction.
         """
         runner_kwargs = dict(self._runner_kwargs)
         extra_env = dict(runner_kwargs.pop("extra_env", {}) or {})
         if target_outcome:
             extra_env.setdefault("OUTCOME_COL", target_outcome)
+        if universe_path is not None:
+            extra_env.setdefault("EASYICU_UNIVERSE_PARQUET", str(universe_path))
         if self._runner_factory is not None:
             # A user-supplied factory (OpenHands, firecracker, ...) also needs
             # the run's outcome column so deterministic repairs resolve it from
@@ -1398,6 +1410,47 @@ class ResearchAgentPipeline:
             prompt_pack_version=prompt_version,
             llm_signature=llm_signature,
         )
+        # Materialize the locked cohort definition into the canonical analysis
+        # cohort so the declared inclusion/exclusion is enforced once, on the
+        # data every downstream step reads — instead of relying on each
+        # LLM-generated step to re-apply 纳排 (which run10/run11 showed it does
+        # not, so the primary model ran on the full universe). The full universe
+        # stays reachable via EASYICU_UNIVERSE_PARQUET for robustness steps.
+        if not reused_prior_plan:
+            analysis_cohort = materialize_locked_analysis_cohort(
+                run_dir=run_dir, plan=plan, universe_path=cohort_path,
+            )
+            if analysis_cohort["status"] == "applied":
+                findings.append(
+                    ValidationFinding(
+                        validator="cohort_materializer",
+                        severity="info",
+                        message=(
+                            "Applied the locked cohort definition: analysis cohort "
+                            f"n={analysis_cohort['n_cohort']} of universe "
+                            f"n={analysis_cohort['n_universe']}. Downstream steps read "
+                            "the filtered cohort (COHORT_PARQUET); the full universe "
+                            "stays available as EASYICU_UNIVERSE_PARQUET."
+                        ),
+                        detail={
+                            "n_universe": analysis_cohort["n_universe"],
+                            "n_analysis_cohort": analysis_cohort["n_cohort"],
+                        },
+                    )
+                )
+            elif analysis_cohort["status"] == "error":
+                findings.append(
+                    ValidationFinding(
+                        validator="cohort_materializer",
+                        severity="warning",
+                        message=(
+                            "Could not auto-apply the locked cohort definition to the "
+                            "universe; downstream steps read the unfiltered universe "
+                            "and must apply inclusion/exclusion themselves. Reason: "
+                            f"{analysis_cohort['error']}"
+                        ),
+                    )
+                )
         emit_progress(
             "plan",
             f"Analysis plan ready with {len(plan.steps)} step(s).",

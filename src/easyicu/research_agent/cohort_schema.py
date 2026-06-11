@@ -394,6 +394,72 @@ def write_locked_cohort_definition(
     return path
 
 
+ANALYSIS_COHORT_FILENAME = "cohort_analysis.parquet"
+
+
+def materialize_locked_analysis_cohort(
+    *,
+    run_dir: Path,
+    plan: Any,
+    universe_path: Path,
+    stem: str = "cohort_analysis",
+) -> Dict[str, Any]:
+    """Apply the locked cohort definition to the universe → analysis cohort.
+
+    This is the missing bridge between *declaring* a cohort (the locked
+    ``CohortDefinition``, recorded for provenance) and *enforcing* it on the
+    data the analysis steps consume. Without it, the universe-mode flow hands
+    every step the unfiltered universe and silently relies on each LLM-generated
+    step to re-apply inclusion/exclusion — which is unenforced and inconsistent.
+
+    Reuses the deterministic, auditable ``build_cohort`` evaluator. Returns a
+    result dict; ``status`` is one of ``applied`` (wrote ``<stem>.parquet`` +
+    provenance), ``no_definition`` (nothing to apply → caller uses the universe),
+    or ``error`` (predicates could not be evaluated → caller falls back to the
+    universe so the run still proceeds).
+    """
+    result: Dict[str, Any] = {
+        "status": "no_definition",
+        "path": None,
+        "n_universe": None,
+        "n_cohort": None,
+        "error": None,
+    }
+    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+    if definition is None or not (definition.inclusion or definition.exclusion):
+        return result
+    try:
+        import pandas as pd  # type: ignore
+
+        universe = pd.read_parquet(universe_path)
+        cohort = build_cohort(definition, universe).reset_index(drop=True)
+    except Exception as exc:  # fall back to the universe; never break the run
+        result.update(status="error", error=f"{type(exc).__name__}: {exc}")
+        return result
+
+    out_path = Path(run_dir) / f"{stem}.parquet"
+    cohort.to_parquet(out_path, index=False)
+    provenance = {
+        "schema_version": "easyicu.analysis_cohort/1",
+        "locked_at": datetime.now(timezone.utc).isoformat(),
+        "universe_parquet": str(universe_path),
+        "cohort_definition": definition.to_dict(),
+        "cohort_sha256": cohort_definition_sha(definition),
+        "n_universe": int(len(universe)),
+        "n_analysis_cohort": int(len(cohort)),
+    }
+    (Path(run_dir) / f"{stem}_provenance.json").write_text(
+        json.dumps(provenance, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    result.update(
+        status="applied",
+        path=out_path,
+        n_universe=int(len(universe)),
+        n_cohort=int(len(cohort)),
+    )
+    return result
+
+
 def assert_cohort_definition_locked(*, run_dir: Path, plan: Any) -> None:
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
     if definition is None:
