@@ -236,6 +236,15 @@ def calculate_circ_failure_status(
     if vaso_rate_col and vaso_rate_col in df.columns:
         df['level3_drugs'] = df['level3_drugs'] | (df[vaso_rate_col] > 0)
     
+    # Normalise the boolean flags before scoring. The comparisons above (e.g.
+    # `df[map_col] <= MAP_THRESHOLD`, `df[col] > 0`) yield pd.NA on nullable
+    # dtypes when the source value is missing, which makes `if row.get(flag)`
+    # raise "boolean value of NA is ambiguous" in get_event_level. An unmeasured
+    # signal means the criterion is not met, matching the default-False init.
+    for _flag in ('lactate_elevated', 'map_low', 'level1_drugs',
+                  'level2_drugs', 'level3_drugs'):
+        df[_flag] = df[_flag].fillna(False).astype(bool)
+
     # Calculate event levels
     def get_event_level(row):
         if not row.get('lactate_elevated', False):
