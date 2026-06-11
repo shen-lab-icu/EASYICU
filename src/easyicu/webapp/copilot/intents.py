@@ -662,10 +662,12 @@ def _copilot_should_use_llm_route(
     path_help_intent: bool,
     guided_choice_intent: bool,
 ) -> bool:
-    _ = (usage_help_intent, step_by_step_intent, path_help_intent)
+    _ = (usage_help_intent, step_by_step_intent)
     if api_intent:
         return False
     if cohort_step_intent:
+        return False
+    if path_help_intent:
         return False
     if guided_choice_intent or _copilot_explicit_local_command(prompt):
         return False
