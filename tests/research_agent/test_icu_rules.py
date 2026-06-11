@@ -115,3 +115,92 @@ def test_known_concept_hints_have_consistent_pitfalls(ra):
     sofa2 = icu.classify_variable("sofa2", "int64")
     pit = " ".join(sofa2.pitfalls).lower()
     assert "missing" in pit or "missingness" in pit
+
+
+# ---------------------------------------------------------------------------
+# Cross-cutting methodological principles (case-neutral, cross-database)
+# ---------------------------------------------------------------------------
+
+
+def test_general_principles_are_well_formed(ra):
+    """Every principle has a unique id, a known phase, and a non-empty body."""
+    principles = ra.ICU_RULES.general_principles
+    assert len(principles) >= 10
+    ids = [p.id for p in principles]
+    assert len(set(ids)) == len(ids), "principle ids must be unique"
+    known_phases = {
+        "cohort", "features", "label", "modeling", "clustering", "interpretation",
+    }
+    for p in principles:
+        assert p.phase in known_phases, f"{p.id} has unknown phase {p.phase}"
+        assert p.principle.strip() and p.rationale.strip()
+
+
+def test_general_principles_cover_the_three_crosswalk_gaps(ra):
+    """The gaps surfaced by the teaching-deck crosswalk must be encoded."""
+    ids = {p.id for p in ra.ICU_RULES.general_principles}
+    # gap 09: ICD code used as timing; gap 12: prevalent vs incident.
+    assert "diagnosis_membership_not_timing" in ids
+    assert "incident_not_prevalent" in ids
+    # gap 13: imbalance-aware evaluation must appear in some principle body.
+    bodies = " ".join(
+        p.principle.lower() for p in ra.ICU_RULES.general_principles
+    )
+    assert "recall" in bodies or "imbalance" in bodies or "balance" in bodies
+
+
+def test_general_principles_are_case_neutral(ra):
+    """Shared principles must not hard-code a benchmark task/case (prompt hygiene)."""
+    import re
+
+    for p in ra.ICU_RULES.general_principles:
+        blob = f"{p.principle} {p.rationale} {p.cross_db_note}"
+        # No benchmark task ids like e1_/m2_/h3_ leaking into the shared layer.
+        assert not re.search(r"\b[emh][123]_", blob), f"{p.id} leaks a benchmark id"
+
+
+def test_principles_for_phase_filters(ra):
+    cohort = ra.ICU_RULES.principles_for_phase("cohort")
+    assert cohort and all(p.phase == "cohort" for p in cohort)
+    assert ra.ICU_RULES.principles_for_phase("nonsense") == []
+
+
+def test_cross_db_notes_present_so_rules_stay_general(ra):
+    """Cross-database variation must be recorded rather than hard-coding one DB."""
+    principles = ra.ICU_RULES.general_principles
+    with_notes = [p for p in principles if p.cross_db_note.strip()]
+    # The majority carry an explicit cross-database note.
+    assert len(with_notes) >= 0.7 * len(principles)
+
+
+def test_principle_kinds_are_valid(ra):
+    """Every principle is tagged error|caution (the impartiality contract)."""
+    for p in ra.ICU_RULES.general_principles:
+        assert p.kind in {"error", "caution"}, f"{p.id} has bad kind {p.kind}"
+
+
+def test_objective_errors_vs_defensible_choices(ra):
+    """Impartiality: objective mistakes are ``error``; analytical *choices*
+    must be ``caution`` so the rule layer never overrides the user's design."""
+    by_id = {p.id: p for p in ra.ICU_RULES.general_principles}
+    # Objective methodological errors (wrong under any design).
+    for eid in (
+        "no_outcome_window_leakage",
+        "split_by_patient",
+        "diagnosis_membership_not_timing",
+        "association_is_not_causation",
+        "window_aggregation_respects_kind",
+        "label_built_in_outcome_window",
+    ):
+        assert by_id[eid].kind == "error", f"{eid} should be an error"
+    # Defensible analytical choices (prompt to document, never impose).
+    for cid in (
+        "missingness_is_information",
+        "metrics_match_task_and_balance",
+        "describe_cohort_before_modeling",
+        "incident_not_prevalent",
+        "state_outcome_definition",
+        "consider_competing_risks",
+        "control_for_multiplicity",
+    ):
+        assert by_id[cid].kind == "caution", f"{cid} should be a caution"
