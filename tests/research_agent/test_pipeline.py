@@ -269,6 +269,62 @@ def test_pipeline_falls_back_when_planner_returns_empty(ra, synthetic_cohort, tm
     assert Path(result.plan_path).exists()
 
 
+def test_pipeline_recovers_when_planner_parses_to_zero_steps(
+    ra, synthetic_cohort, tmp_path: Path
+):
+    """A planner that returns *valid JSON with 0 steps* (E1 20260611 v4-flash)
+    must not run an empty plan: retry the planner, recover on a non-empty reply.
+    """
+    valid_plan = json.dumps(
+        {
+            "research_question": "Is admission SOFA-2 associated with ICU mortality?",
+            "steps": [
+                {
+                    "step_id": "01_assoc",
+                    "intent": "Fit the adjusted association model.",
+                    "expected_outputs": ["or_table"],
+                    "method": "logit",
+                }
+            ],
+            "rationale": "single-step plan",
+        }
+    )
+
+    class FlakyPlanner:
+        name = "flaky-planner"
+
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            self.calls += 1
+            # First call parses to an empty plan; the retry returns a real one.
+            return '{"research_question": "q", "steps": []}' if self.calls == 1 else valid_plan
+
+    flaky = FlakyPlanner()
+    router = ra.LLMRouter(default=ra.MockLLMClient(), planner=flaky)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=router,
+        enable_deterministic_planner_fallback=True,
+    )
+    result = pipeline.run(
+        question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=synthetic_cohort,
+        cohort_name="planner_zero_step_retry",
+        database="synthetic",
+        target_outcome="death",
+    )
+    assert flaky.calls >= 2  # the retry happened
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    assert any(
+        f["validator"] == "planner" and "retry" in (f.get("detail") or {}).get(
+            "generation_mode", ""
+        )
+        for f in manifest["findings"]
+    )
+
+
 def test_remove_tbd_sentences_strips_placeholder_results(ra):
     from easyicu.research_agent.pipeline import _remove_tbd_sentences
 
