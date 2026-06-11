@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import json
 import subprocess
 import sys
@@ -57,14 +58,42 @@ def _bundle(run_id: str, text: str = "Manuscript text.") -> Dict[str, str]:
     }
 
 
-def test_rubric_anchors_match_protocol_doc():
-    protocol = (
+def _tier_protocol_path() -> Path | None:
+    configured = os.environ.get("EASYICU_TIER_PROTOCOL_PATH")
+    candidates = []
+    if configured:
+        candidates.append(Path(configured))
+    candidates.append(
         Path(__file__).resolve().parents[3]
         / "easyicu写作"
         / "00_当前投稿_20260516"
         / "02_npj_Digital_Medicine"
         / "tier_evaluation_protocol_20260527.md"
-    ).read_text(encoding="utf-8")
+    )
+    for path in candidates:
+        if path.is_file():
+            return path
+    return None
+
+
+def test_rubric_definition_is_complete():
+    assert NPJ_DM_RUBRIC_V1.version == "npj_dm_rubric/20260527"
+    assert NPJ_DM_RUBRIC_V1.dimension_ids == [
+        "plan_completeness",
+        "evidence_binding",
+        "missingness_handling",
+        "overclaim_avoidance",
+    ]
+    for dimension in NPJ_DM_RUBRIC_V1.dimensions:
+        assert set(dimension.anchors) == {0, 1, 2, 3}
+        assert all(anchor.strip() for anchor in dimension.anchors.values())
+
+
+def test_rubric_anchors_match_protocol_doc():
+    protocol_path = _tier_protocol_path()
+    if protocol_path is None:
+        pytest.skip("Tier-2 protocol manuscript document is not available in this checkout")
+    protocol = protocol_path.read_text(encoding="utf-8")
     for dimension in NPJ_DM_RUBRIC_V1.dimensions:
         assert dimension.label in protocol
         for anchor in dimension.anchors.values():
