@@ -218,6 +218,7 @@ from .plan_utils import (
     _cap_plan_preserving_figure_steps,
     _cohort_definition_contract_findings,
     _cohort_definition_is_empty,
+    _ensure_audit_panel_step_in_plan,
     _ensure_publication_figure_step_in_plan,
     _enforce_advanced_plan_contract,
     _plan_expects_analysis_cohort,
@@ -1401,11 +1402,24 @@ class ResearchAgentPipeline:
             findings.extend(plan_contract_findings)
             plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
             findings.extend(split_findings)
+            # Force a declared figure step whenever the publication-figure skill
+            # will produce one regardless of the plan: the scorer reads
+            # analysis_plan.json, and the question-only heuristic misses tasks
+            # (e.g. E1) that never say "figure" yet still ship one. Likewise
+            # ensure a declared audit/robustness panel, since that evidence is
+            # produced (locked robustness specs, data-quality summaries) but the
+            # plan often never presents it.
             plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
                 plan=plan,
                 context=context,
+                force=self._enable_publication_figure_skill,
             )
             findings.extend(figure_guard_findings)
+            plan, audit_panel_findings = _ensure_audit_panel_step_in_plan(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(audit_panel_findings)
 
             cap = self._max_total_steps
             plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
