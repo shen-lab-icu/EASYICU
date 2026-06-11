@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .analysis_types import infer_analysis_type, planner_analysis_type_guide
 from .cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
-from .icu_rules import VariableKind, default_time_windows
+from .icu_rules import GENERAL_ICU_ANALYSIS_PRINCIPLES, VariableKind, default_time_windows
 from .llm import LLMClient, LLMMessage
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
 from .schema import (
@@ -412,6 +412,36 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
     )
 
 
+def _render_methodological_principles() -> str:
+    """Render the cross-cutting ICU principles for injection into a prompt.
+
+    Faithful to the impartiality contract on :class:`MethodologicalPrinciple`:
+    ``error`` principles are objective mistakes the plan must avoid, while
+    ``caution`` principles are defensible analytical choices the planner must
+    surface and justify but never have imposed on it. Case-neutral by
+    construction — the principle layer hard-codes no benchmark task, variable,
+    score or database.
+    """
+    errors = [p for p in GENERAL_ICU_ANALYSIS_PRINCIPLES if p.kind == "error"]
+    cautions = [p for p in GENERAL_ICU_ANALYSIS_PRINCIPLES if p.kind == "caution"]
+    lines = [
+        "\n\nCROSS-CUTTING ICU METHODOLOGY (case-neutral; apply when planning):",
+        "Objective errors to avoid — wrong under any study design:",
+    ]
+    lines.extend(f"- [{p.phase}] {p.principle}" for p in errors)
+    lines.append(
+        "Defensible choices — state and justify in the plan; do not let them "
+        "pass silently, but the analyst, not these rules, decides:"
+    )
+    lines.extend(f"- [{p.phase}] {p.principle}" for p in cautions)
+    return "\n".join(lines)
+
+
+# Rendered once: the principle layer is static. Injected into the planner
+# system message so the (previously unused) principles actually steer the plan.
+_PRINCIPLES_GUIDE = _render_methodological_principles()
+
+
 class PlannerAgent:
     """Produces an :class:`AnalysisPlan` from the research context.
 
@@ -429,7 +459,7 @@ class PlannerAgent:
 
     def run(self, context: ResearchContext) -> AnalysisPlan:
         messages = [
-            LLMMessage(role="system", content=_SYSTEM_GUIDE),
+            LLMMessage(role="system", content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE),
             LLMMessage(role="user", content=_build_planner_user_prompt(context)),
         ]
         from .structured_retry import call_llm_with_structured_retry
@@ -1312,6 +1342,14 @@ class WriterAgent:
                     "`mortality was 12% {{evidence:outcome_rate}}`.\n"
                     "- NEVER use a placeholder as a noun. If a number is unavailable, omit the sentence.\n"
                     f"- Only use ids from this list: {evidence_list}\n\n"
+                    "OUTPUT DISCIPLINE:\n"
+                    "- Output ONLY finished, publishable manuscript prose. Do NOT include "
+                    "your reasoning, planning, working notes, or meta-commentary about the "
+                    "evidence digest — e.g. no lines such as 'First, extract ...', 'Let me "
+                    "...', 'Actually, X says ...', a trailing 'no number?', or bullet lists "
+                    "that restate the digest.\n"
+                    "- If you cannot support a sentence from the listed evidence, omit it "
+                    "silently; do not narrate the gap.\n\n"
                     "LANGUAGE POLICY:\n"
                     "- Use ONLY associational phrasing. Forbidden: 'caused by', 'causal', "
                     "'attributable to', 'effect of', 'due to', 'leads to', 'drives'.\n"

@@ -668,6 +668,30 @@ GENERAL_ICU_ANALYSIS_PRINCIPLES: Tuple[MethodologicalPrinciple, ...] = (
             "practice patterns."
         ),
     ),
+    MethodologicalPrinciple(
+        id="no_overadjustment_for_exposure_constituents",
+        phase="modeling",
+        kind="error",
+        principle=(
+            "Do not adjust for a covariate that is a definitional component or "
+            "an upstream derivation input of the exposure itself; adjust only "
+            "for confounders that are neither constituents nor downstream "
+            "mediators of the exposure."
+        ),
+        rationale=(
+            "Conditioning on a variable that helps define the exposure removes "
+            "the very signal under study (overadjustment / adjusting for a "
+            "mediator) and can flip or null the estimate — an objective error, "
+            "not a modelling preference. The exposure's own derivation closure "
+            "(e.g. a composite score or rule that enters the exposure's "
+            "definition) lists the variables to keep out of the adjustment set."
+        ),
+        cross_db_note=(
+            "The exposure's derivation closure comes from the concept "
+            "dictionary, not from any one database's columns, so it is "
+            "database-agnostic."
+        ),
+    ),
     # --- cautions (defensible choices; prompt to document, never override) ---
     MethodologicalPrinciple(
         id="describe_cohort_before_modeling",
