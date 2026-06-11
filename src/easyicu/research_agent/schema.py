@@ -296,6 +296,7 @@ RESEARCH_CONTEXT_FIELDS: tuple = (
     "time_windows",
     "temporal_constraints",
     "target_outcome",
+    "primary_exposure",
     "cross_database_validation",
     "cohort_parquet",
     "user_preferences",
@@ -331,6 +332,14 @@ class ResearchContext(BaseModel):
     target_outcome: Optional[str] = Field(
         default=None,
         description="Name of the primary outcome column.",
+    )
+    primary_exposure: Optional[str] = Field(
+        default=None,
+        description=(
+            "Name of the primary exposure/predictor the question requires the "
+            "association model to estimate (e.g. 'sepsis3'). When set, the "
+            "exposure-contract audit checks the primary model actually uses it."
+        ),
     )
     cross_database_validation: List[str] = Field(
         default_factory=list,

@@ -635,6 +635,7 @@ def _run_one_arm(
         cohort_name=f"bench_{item.key}",
         database="bench",
         target_outcome=item.target_outcome,
+        primary_exposure=(item.primary_predictor or None),
         inclusion_criteria=item.inclusion_criteria,
         resume_run_id=resume_run_id,
         force_writer_probe=bool(force_writer_probe),

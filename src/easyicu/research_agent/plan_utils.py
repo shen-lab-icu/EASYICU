@@ -1031,6 +1031,112 @@ def _primary_effect_from_completed_records(
     return None
 
 
+_EXPOSURE_PREDICTOR_KEYS = (
+    "primary_predictor",
+    "predictor",
+    "exposure",
+    "primary_association_term",
+    "primary_term",
+)
+_ASSOCIATION_EFFECT_KEYS = (
+    "primary_or",
+    "odds_ratio",
+    "adjusted_or",
+    "primary_odds_ratio",
+    "primary_odds_ratio_per_point",
+    "primary_association_estimate",
+    "hazard_ratio",
+)
+
+
+def _summary_primary_predictor(step_summary: Mapping[str, Any]) -> str:
+    for key in _EXPOSURE_PREDICTOR_KEYS:
+        value = step_summary.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _summary_has_association_effect(step_summary: Mapping[str, Any]) -> bool:
+    return any(
+        step_summary.get(key) is not None for key in _ASSOCIATION_EFFECT_KEYS
+    )
+
+
+def _exposure_names_match(required: str, actual: str) -> bool:
+    """Lenient name match: only a *clearly unrelated* predictor counts as wrong.
+
+    Normalises to alphabetic characters, then treats the names as matching on
+    a substring or any shared 4-gram. Being lenient means a false *non*-match
+    (which would trigger an unnecessary repair) is rare; a genuine swap like
+    ``sepsis3`` -> ``sofa_max_int`` shares nothing and is flagged.
+    """
+    r = re.sub(r"[^a-z]", "", required.lower())
+    a = re.sub(r"[^a-z]", "", actual.lower())
+    if not r or not a:
+        return True
+    if r in a or a in r:
+        return True
+    n = 4
+    if len(r) < n or len(a) < n:
+        return False
+    grams = {r[i : i + n] for i in range(len(r) - n + 1)}
+    return any(a[i : i + n] in grams for i in range(len(a) - n + 1))
+
+
+def _primary_exposure_contract_findings(
+    *,
+    step: AnalysisStep,
+    step_summary: Mapping[str, Any],
+    context: ResearchContext,
+) -> List[ValidationFinding]:
+    """Flag when the primary association model estimated the wrong exposure.
+
+    When the question names a required primary exposure
+    (``context.primary_exposure``) and this step fitted an association model
+    whose declared predictor is clearly a different variable, emit an error
+    finding. The exposure named in the question is *what the analysis must
+    estimate* — modelling a different one answers a different question — so
+    this is an objective contract error, not an analytical-preference call
+    (it never dictates the model form, covariates, or estimator). Routed
+    through the existing contract-repair loop so the agent re-fits in-run
+    without restarting the whole pipeline.
+    """
+    if not isinstance(step_summary, Mapping):
+        return []
+    required = (getattr(context, "primary_exposure", None) or "").strip()
+    if not required:
+        return []
+    actual = _summary_primary_predictor(step_summary)
+    # Only judge the primary model step: it declares a predictor *and* an
+    # association-effect estimate. An effect with no declared predictor is the
+    # separate "omitted predictor" case handled by the deterministic repairs.
+    if not actual or not _summary_has_association_effect(step_summary):
+        return []
+    if _exposure_names_match(required, actual):
+        return []
+    return [
+        ValidationFinding(
+            validator="exposure_contract_auditor",
+            severity="error",
+            message=(
+                f"The question's primary exposure is `{required}`, but this "
+                f"primary model estimated `{actual}`. Re-fit the association "
+                f"with `{required}` as the primary exposure — derive its binary "
+                f"indicator from the source columns if needed (an absent event "
+                f"is 0/False, not missing data). Keep illness-severity scores "
+                f"as adjustment covariates only, never as the exposure."
+            ),
+            detail={
+                "kind": "exposure_contract",
+                "step_id": step.step_id,
+                "required_exposure": required,
+                "actual_predictor": actual,
+            },
+        )
+    ]
+
+
 def _step_contract_findings(
     *,
     step: AnalysisStep,
