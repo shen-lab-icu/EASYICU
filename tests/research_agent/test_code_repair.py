@@ -43,6 +43,7 @@ from easyicu.research_agent.code_repair import (
     _extract_missing_index_columns,
     _patch_json_dump_numpy_key_sanitizer,
     _strip_columns_from_list_literals,
+    deterministic_concept_audit_repair,
 )
 
 
@@ -445,3 +446,55 @@ def test_outcome_incidence_repair_rejects_non_binary_outcome(
 
     with pytest.raises(RuntimeError, match="binary 0/1 OUTCOME_COL"):
         exec(generated, {})
+
+
+# ---------------------------------------------------------------------------
+# deterministic_concept_audit_repair — Tier-A mechanical fix in the static
+# concept-audit gate. Pinned because it must stay impartial: it may only
+# rewrite an anti-pattern the auditor *objectively named*, and must leave
+# defensible analytical choices (and count columns) untouched.
+# ---------------------------------------------------------------------------
+
+
+def test_concept_repair_rewrites_flagged_zero_impute_to_complete_case():
+    code = (
+        'mi_df = analysis_df.copy()\n'
+        'mi_df["lact"] = mi_df["lact"].fillna(0)\n'
+        'mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)\n'
+    )
+    out, names = deterministic_concept_audit_repair(
+        code, ["Imputed missing lactate values with 0"]
+    )
+    assert names == ["zero_impute_to_complete_case_v1"]
+    assert ".fillna(0)" not in out  # no executable zero-impute remains
+    assert 'dropna(subset=["lact"])' in out
+    assert "dropna(subset=[primary_predictor])" in out
+
+
+def test_concept_repair_no_op_when_auditor_did_not_flag_zero_impute():
+    # Impartiality: without an objective error naming the anti-pattern we do
+    # not touch the code — the choice to fillna stays the user's to defend.
+    code = 'df["lact"] = df["lact"].fillna(0)\n'
+    out, names = deterministic_concept_audit_repair(
+        code, ["ordinal score summarised as a continuous median"]
+    )
+    assert names == []
+    assert out == code
+
+
+def test_concept_repair_preserves_zero_on_count_columns():
+    # 0 is a real value for a component-completeness count; stripping it
+    # would itself be an error.
+    code = 'df["sofa2_n_components"] = df["sofa2_n_components"].fillna(0)\n'
+    out, names = deterministic_concept_audit_repair(code, ["fillna(0) detected"])
+    assert names == []
+    assert out == code
+
+
+def test_concept_repair_is_idempotent():
+    code = 'df["lact"] = df["lact"].fillna(0)\n'
+    once, names1 = deterministic_concept_audit_repair(code, ["fillna(0) on lactate"])
+    assert names1
+    twice, names2 = deterministic_concept_audit_repair(once, ["fillna(0) on lactate"])
+    assert names2 == []
+    assert twice == once

@@ -210,6 +210,19 @@ def finalise_success(
         cost_md_path.write_text(
             _render_cost_summary(plan_result.cost_meter), encoding="utf-8"
         )
+        # Machine-readable aggregate (token totals + estimated USD, by model)
+        # so the bench scorer and Fig.3 source-data builder can read cost
+        # without re-parsing the markdown or recomputing from raw records.
+        cost_summary_json_path = run_dir / "cost_summary.json"
+        cost_summary_json_path.write_text(
+            json.dumps(
+                plan_result.cost_meter.summary(),
+                indent=2,
+                ensure_ascii=False,
+                default=str,
+            ),
+            encoding="utf-8",
+        )
         evidence.register_file(
             kind="log",
             description="Raw per-call LLM cost records (T3.2).",

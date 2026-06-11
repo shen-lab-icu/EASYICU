@@ -93,6 +93,100 @@ _NULL_PRIMARY_EFFECT_MARKERS = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Tier-A deterministic concept-audit repair.
+#
+# This runs *inside the static concept-audit gate* (before the script is
+# executed), unlike the runner/summary repairs which run after a failure.
+# It exists so the gate does not have to block-and-stop every time a weak
+# model emits a mechanical ICU anti-pattern that has a single, neutral
+# correct fix. It is deliberately narrow: it only rewrites a pattern when
+# an ``error``-severity finding *objectively names* that anti-pattern, so
+# it can never override a defensible analytical choice (impartiality — it
+# touches only the ``error`` class, never the ``caution`` class).
+# ---------------------------------------------------------------------------
+
+# A finding message that objectively reports silent zero-imputation. We only
+# rewrite ``fillna(0)`` when the auditor itself flagged zero-imputation, never
+# on our own initiative.
+_ZERO_IMPUTE_FINDING_RE = re.compile(
+    r"(fillna\(\s*0"
+    r"|impute\w*[^.\n]{0,48}\bwith\s+0\b"
+    r"|impute\w*[^.\n]{0,48}\bzero\b"
+    r"|zero[-\s]*impute"
+    r"|silent\w*[^.\n]{0,48}zero)",
+    re.IGNORECASE,
+)
+
+# Columns where a literal 0 is a real value (counts / indicators / component
+# tallies); we must NOT strip ``fillna(0)`` on these — 0 is correct there.
+_COUNT_LIKE_COL_RE = re.compile(
+    r"(n_components|_components\b|_count\b|_counts\b|\bn_\w+|\bevents?\b"
+    r"|_missing\b|_flag\b|_indicator\b|_dummy\b|_present\b|num_\w+|_n\b)",
+    re.IGNORECASE,
+)
+
+# ``frame[col] = frame[col].fillna(0)`` (col may be a string literal or a
+# variable such as ``primary_predictor``).
+_FILLNA_ZERO_ASSIGN_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<frame>\w+)\[(?P<col>[^\]\n]+)\]"
+    r"[ \t]*=[ \t]*(?P=frame)\[(?P=col)\]\.fillna\(\s*0(?:\.0)?\s*\)[ \t]*$",
+    re.MULTILINE,
+)
+
+
+def deterministic_concept_audit_repair(
+    code: str,
+    audit_messages: Sequence[str],
+) -> tuple[str, List[str]]:
+    """Repair mechanical ICU anti-patterns flagged by the concept-audit gate.
+
+    Returns ``(possibly_rewritten_code, applied_repair_names)``. When no
+    repair applies the original ``code`` is returned with an empty list, so
+    the caller can fall through to the LLM repair / block path.
+
+    Currently handles:
+
+    * **silent zero-imputation of a lab/continuous variable** —
+      ``df[col] = df[col].fillna(0)`` is rewritten to complete-case
+      handling (``df = df.dropna(subset=[col])``). This removes the
+      objectively-wrong fabricated zeros while *keeping the missingness
+      visible* in the cohort; it does not pick an imputation strategy
+      (which would be a ``caution``-class analytical choice we must leave
+      to the user). Count/indicator columns are left untouched because 0
+      is a real value there.
+    """
+    applied: List[str] = []
+    repaired = code
+
+    flagged_zero_impute = any(
+        _ZERO_IMPUTE_FINDING_RE.search(m or "") for m in audit_messages
+    )
+    if flagged_zero_impute and _FILLNA_ZERO_ASSIGN_RE.search(repaired):
+
+        def _sub(match: "re.Match[str]") -> str:
+            col = match.group("col").strip()
+            # Leave count/indicator columns alone: a literal 0 is legitimate
+            # there, so stripping it would itself be an error.
+            if col[:1] in {"'", '"'} and _COUNT_LIKE_COL_RE.search(col):
+                return match.group(0)
+            indent = match.group("indent")
+            frame = match.group("frame")
+            return (
+                f"{indent}{frame} = {frame}.dropna(subset=[{col}])  "
+                f"# auto-repair[zero_impute_to_complete_case_v1]: silent "
+                f"fillna(0) of a lab/continuous value fabricates zeros; "
+                f"complete-case keeps the missingness honest"
+            )
+
+        new_code = _FILLNA_ZERO_ASSIGN_RE.sub(_sub, repaired)
+        if new_code != repaired:
+            repaired = new_code
+            applied.append("zero_impute_to_complete_case_v1")
+
+    return repaired, applied
+
+
 def _deterministic_summary_repair(
     *,
     code: str,
