@@ -42,18 +42,19 @@ def test_sofa2_resp_any_ecmo_scores_four_regardless_of_indication():
     even with a normal PaO2:FiO2 and a non-respiratory (or unknown) indication.
     Pins the 2026-06 fix that replaced the respiratory-indication-only gate."""
     # pafi=400 alone would score 0; ECMO must floor it to 4.
-    cardiovascular = standalone_sofa2_resp(
-        pd.Series([400.0]),
-        ecmo=pd.Series([True]),
-        ecmo_indication=pd.Series(["cardiovascular"]),
-    )
-    assert cardiovascular.tolist() == [4]
+    for scorer in (standalone_sofa2_resp, sofa2_resp):
+        cardiovascular = scorer(
+            pd.Series([400.0]),
+            ecmo=pd.Series([True]),
+            ecmo_indication=pd.Series(["cardiovascular"]),
+        )
+        assert cardiovascular.tolist() == [4]
 
-    unknown_indication = standalone_sofa2_resp(
-        pd.Series([400.0]),
-        ecmo=pd.Series([True]),
-    )
-    assert unknown_indication.tolist() == [4]
+        unknown_indication = scorer(
+            pd.Series([400.0]),
+            ecmo=pd.Series([True]),
+        )
+        assert unknown_indication.tolist() == [4]
 
 
 def test_sofa2_cardio_va_ecmo_scores_four_but_vv_ecmo_does_not():

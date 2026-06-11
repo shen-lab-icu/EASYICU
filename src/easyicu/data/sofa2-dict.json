@@ -36,7 +36,7 @@
       "ecmo",
       "ecmo_indication"
     ],
-    "description": "SOFA-2 respiratory component (P/F≤300/225/150/75 with advanced support; ECMO auto-4 if respiratory indication)",
+    "description": "SOFA-2 respiratory component (P/F≤300/225/150/75 with advanced support; any ECMO auto-4)",
     "category": "outcome",
     "callback": "sofa2_resp",
     "class_name": "rec_cncpt"
