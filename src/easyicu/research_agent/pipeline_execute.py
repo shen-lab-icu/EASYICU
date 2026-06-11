@@ -69,7 +69,10 @@ from .pipeline import (
     _semantic_aliases_for,
 )
 from .plan_utils import (
+    _cohort_definition_contract_findings,
+    _cohort_definition_is_empty,
     _parent_step_id_for_figure_step,
+    _plan_expects_analysis_cohort,
     _preserve_figure_steps_after_replan,
     _primary_exposure_contract_findings,
     _step_contract_findings,
@@ -161,7 +164,12 @@ def run_execute_phase(
     # Replan convergence bookkeeping (see _maybe_replan). ``noop_streak``
     # counts consecutive substantively-identical revisions; ``total`` counts
     # substantive revisions; ``disabled`` latches once a guard trips.
-    _replan_state = {"noop_streak": 0, "total": 0, "disabled": False}
+    _replan_state = {
+        "noop_streak": 0,
+        "total": 0,
+        "disabled": False,
+        "cohort_contract_emitted": False,
+    }
     role_resolver = plan_result.role_resolver
     llm_signature = plan_result.llm_signature
     prompt_version = plan_result.prompt_version
@@ -363,6 +371,51 @@ def run_execute_phase(
             )
         return revision_path
 
+    def _enforce_cohort_contract_on_executing_plan(
+        candidate_plan: AnalysisPlan,
+        *,
+        reason: str,
+    ) -> None:
+        """Re-check the structured-纳排 contract against the plan that actually
+        executes.
+
+        The plan-phase contract (``pipeline._run_plan_phase``) only sees the
+        *initial* plan. For non-deterministic providers that initial plan is
+        commonly a 0-step shell, and the real plan — which carries a
+        cohort-definition step but leaves ``plan.cohort`` structurally empty —
+        is grown here by the replanner. Without this re-check the contract is
+        bypassed and downstream steps silently run on the unfiltered universe
+        while each generated step re-applies 纳排 inconsistently (run12).
+
+        Emitted once, as an auditable error, and only when the locked cohort
+        was *not* materialised into a filtered analysis cohort (an applied
+        definition already enforces 纳排 on the data).
+        """
+        if _replan_state["cohort_contract_emitted"]:
+            return
+        if _analysis_cohort_path.exists():
+            return
+        if not (
+            _plan_expects_analysis_cohort(candidate_plan)
+            and _cohort_definition_is_empty(candidate_plan)
+        ):
+            return
+        for finding in _cohort_definition_contract_findings(candidate_plan):
+            findings.append(
+                finding.model_copy(
+                    update={
+                        "detail": {
+                            **(finding.detail or {}),
+                            "stage": "execute",
+                            "reason": reason,
+                        }
+                    }
+                )
+            )
+        _replan_state["cohort_contract_emitted"] = True
+
+    _enforce_cohort_contract_on_executing_plan(plan, reason="execute_start")
+
     def _maybe_replan(
         *,
         current_plan: AnalysisPlan,
@@ -458,6 +511,7 @@ def run_execute_phase(
         _replan_state["total"] += 1
         plan_path = _register_plan_revision(revised, reason=reason)
         plan_result.plan_path = plan_path
+        _enforce_cohort_contract_on_executing_plan(revised, reason=reason)
         findings.append(
             ValidationFinding(
                 validator="replanner",
