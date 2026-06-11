@@ -151,7 +151,7 @@ _STROBE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
     {"id": "10", "section": "Methods", "statement": "Explain how the study size was arrived at.", "required_evidence_aliases": ("research_context", "table_one")},
     {"id": "11", "section": "Methods", "statement": "Explain how quantitative variables were handled in the analyses.", "required_evidence_aliases": ("analysis_plan",)},
     {"id": "12a", "section": "Methods", "statement": "Describe all statistical methods, including those used to control for confounding.", "required_evidence_aliases": ("analysis_plan", "primary_association")},
-    {"id": "12b", "section": "Methods", "statement": "Describe any methods used to examine subgroups and interactions.", "required_evidence_aliases": ("analysis_plan",)},
+    {"id": "12b", "section": "Methods", "statement": "Describe any methods used to examine subgroups and interactions.", "required_keywords": ("subgroup", "interaction", "stratified", "effect modification", "effect modifier")},
     {"id": "12c", "section": "Methods", "statement": "Explain how missing data were addressed.", "required_evidence_aliases": ("missingness",)},
     {"id": "12d", "section": "Methods", "statement": "If applicable, explain how loss to follow-up was addressed.", "required_keywords": ("loss to follow-up", "censoring")},
     {"id": "12e", "section": "Methods", "statement": "Describe any sensitivity analyses.", "required_evidence_aliases": ("multiple_testing_report", "causal_audit_report")},

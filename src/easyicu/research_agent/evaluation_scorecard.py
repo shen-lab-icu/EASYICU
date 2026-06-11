@@ -120,6 +120,9 @@ class FiveDimensionScorecard(BaseModel):
     # Fig.3 5-column schema is unchanged until promoting it is an explicit
     # design decision; exposed via ``all_dimensions()`` for the six-dim view.
     reporting_completeness: Optional[DimensionScore] = None
+    # Additive fairness / subgroup dimension (TRIPOD+AI emphasis); same
+    # out-of-canonical-order treatment as ``reporting_completeness``.
+    fairness_subgroup: Optional[DimensionScore] = None
 
     tristate: Tristate
 
@@ -134,10 +137,13 @@ class FiveDimensionScorecard(BaseModel):
         ]
 
     def all_dimensions(self) -> List[DimensionScore]:
-        """Canonical five + ``reporting_completeness`` when scored (six-dim view)."""
+        """Canonical five + the additive ``reporting_completeness`` /
+        ``fairness_subgroup`` dimensions when attached (extended view)."""
         dims = list(self.dimensions())
         if self.reporting_completeness is not None:
             dims.append(self.reporting_completeness)
+        if self.fairness_subgroup is not None:
+            dims.append(self.fairness_subgroup)
         return dims
 
     def source_data_row(self) -> Dict[str, object]:
@@ -575,6 +581,74 @@ def score_reporting_completeness(
     )
 
 
+_FAIRNESS_ITEM_HINTS = (
+    "subgroup",
+    "fairness",
+    "interaction",
+    "sociodemographic",
+    "disparit",
+    "equity",
+)
+
+
+def score_fairness_subgroup(
+    task: ICUAgentBenchTask,
+    *,
+    checklist: Optional[Dict[str, object]] = None,
+) -> DimensionScore:
+    """Fairness / subgroup dimension (TRIPOD+AI emphasis): did the run report
+    subgroup / fairness analysis?
+
+    Scores the addressed fraction of the fairness/subgroup-specific items in the
+    kind-matched reporting checklist the run emits (STROBE item 12b; TRIPOD+AI
+    items 12/18). Returns *unscored* when the checklist has no fairness item, so
+    a guideline without an explicit subgroup item is not penalised. Records
+    disclosure, not a mandated analysis — a task that legitimately has no
+    subgroup question simply scores this dimension as not-addressed, which the
+    reader interprets in context (impartiality rule).
+    """
+    items: Sequence[object] = []
+    if isinstance(checklist, dict):
+        raw = checklist.get("items")
+        items = raw if isinstance(raw, list) else []
+    fairness_items = [
+        it
+        for it in items
+        if isinstance(it, dict)
+        and any(h in str(it.get("statement", "")).lower() for h in _FAIRNESS_ITEM_HINTS)
+    ]
+    if not fairness_items:
+        return DimensionScore(
+            name="fairness_subgroup",
+            subscore=None,
+            level=None,
+            signals={"fairness_items": 0},
+            notes=["unscored: no fairness/subgroup item in the emitted checklist"],
+        )
+
+    addressed = sum(1 for it in fairness_items if str(it.get("status")) == "addressed")
+    partial = sum(1 for it in fairness_items if str(it.get("status")) == "partial")
+    n = len(fairness_items)
+    subscore = (addressed + 0.5 * partial) / n
+
+    open_ids = [
+        str(it.get("item_id"))
+        for it in fairness_items
+        if str(it.get("status")) not in {"addressed", "partial"}
+    ]
+    notes: List[str] = []
+    if open_ids:
+        notes.append("fairness/subgroup not addressed: item(s) " + ", ".join(open_ids))
+
+    return DimensionScore(
+        name="fairness_subgroup",
+        subscore=round(subscore, 4),
+        level=bin_level(subscore),
+        signals={"fairness_items": n, "addressed": addressed, "partial": partial},
+        notes=notes,
+    )
+
+
 def compute_tristate(gates: Dict[str, object]) -> Tristate:
     """§M3 tristate from ``gates`` (execution is the hard ceiling)."""
     if bool(gates.get("manuscript_ready")):
@@ -616,6 +690,9 @@ def score_run(
     tristate = compute_tristate(gates)
     return FiveDimensionScorecard(
         reporting_completeness=score_reporting_completeness(
+            task, checklist=reporting_checklist
+        ),
+        fairness_subgroup=score_fairness_subgroup(
             task, checklist=reporting_checklist
         ),
         task_id=task.task_id,
@@ -771,6 +848,7 @@ __all__ = [
     "score_evidence_binding",
     "score_audit_conclusion_safety",
     "score_reporting_completeness",
+    "score_fairness_subgroup",
     "reporting_guideline_for_kind",
     "score_run",
     "score_run_from_dir",

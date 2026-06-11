@@ -434,10 +434,12 @@ def test_score_run_populates_reporting_completeness_and_six_dim_view():
     )
     assert card.reporting_completeness is not None
     assert card.reporting_completeness.level == "Full"
-    # Canonical Fig.3 column order stays at five; six-dim view adds reporting.
+    # Canonical Fig.3 column order stays at five; extended view adds the two
+    # additive dimensions (reporting_completeness + fairness_subgroup).
     assert len(card.dimensions()) == 5
-    assert len(card.all_dimensions()) == 6
-    assert card.all_dimensions()[-1].name == "reporting_completeness"
+    assert len(card.all_dimensions()) == 7
+    assert card.all_dimensions()[5].name == "reporting_completeness"
+    assert card.all_dimensions()[6].name == "fairness_subgroup"
 
 
 def test_score_run_reporting_unscored_when_no_checklist():
@@ -452,4 +454,36 @@ def test_score_run_reporting_unscored_when_no_checklist():
     # Unscored reporting dim is still attached but excluded from the six-dim view.
     assert card.reporting_completeness is not None
     assert card.reporting_completeness.subscore is None
-    assert len(card.all_dimensions()) == 6  # attached even when unscored
+    assert len(card.all_dimensions()) == 7  # reporting + fairness both attached
+
+
+def test_fairness_subgroup_open_when_no_subgroup_analysis():
+    # STROBE 12b open (no subgroup analysis reported) -> fairness not addressed.
+    checklist = {"items": [
+        {"item_id": "12b", "status": "open",
+         "statement": "Describe any methods used to examine subgroups and interactions."},
+        {"item_id": "7", "status": "addressed", "statement": "Define all outcomes."},
+    ]}
+    dim = sc.score_fairness_subgroup(_kind_task("sepsis_onset"), checklist=checklist)
+    assert dim.subscore == 0.0
+    assert dim.level == "Fail"
+    assert dim.signals["fairness_items"] == 1
+
+
+def test_fairness_subgroup_addressed_when_subgroups_reported():
+    checklist = {"items": [
+        {"item_id": "12", "status": "addressed", "statement": "Fairness / subgroup performance plan."},
+        {"item_id": "18", "status": "addressed", "statement": "Subgroup / fairness results."},
+    ]}
+    dim = sc.score_fairness_subgroup(_kind_task("mortality_prediction"), checklist=checklist)
+    assert dim.subscore == 1.0
+    assert dim.level == "Full"
+    assert dim.signals["fairness_items"] == 2
+
+
+def test_fairness_subgroup_unscored_when_no_fairness_item():
+    dim = sc.score_fairness_subgroup(_kind_task("sepsis_onset"), checklist={"items": [
+        {"item_id": "7", "status": "addressed", "statement": "Define all outcomes."},
+    ]})
+    assert dim.subscore is None
+    assert dim.level is None
