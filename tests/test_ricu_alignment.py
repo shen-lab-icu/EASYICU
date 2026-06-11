@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from helpers import (  # type: ignore  # tests dir on sys.path via conftest
@@ -29,6 +30,8 @@ from easyicu.pooling import (
     compute_pooling_decision,
     should_pool_raw,
 )
+from easyicu.concept_callbacks import ConceptCallbackContext, _callback_vent_ind
+from easyicu.table import ICUTable
 from easyicu.time_units import (
     MINUTES_PER_HOUR,
     minutes_to_hours,
@@ -246,7 +249,52 @@ class TestWindowAggregateOverrides:
 
 
 # --------------------------------------------------------------------------- #
-# 5. ricu CSV 黄金基准 (fixture-gated, 缺失时自动跳过)
+# 5. MIMIC-III vent_ind dtype alignment
+# --------------------------------------------------------------------------- #
+class TestVentIndDtypeAlignment:
+    def test_mimic_iii_start_end_id_dtypes_are_harmonized(self):
+        start = ICUTable(
+            pd.DataFrame(
+                {
+                    "icustay_id": pd.Series([10], dtype="int64"),
+                    "charttime": [1.0],
+                    "vent_start": [1],
+                }
+            ),
+            id_columns=["icustay_id"],
+            index_column="charttime",
+            value_column="vent_start",
+        )
+        end = ICUTable(
+            pd.DataFrame(
+                {
+                    "icustay_id": pd.Series([10.0], dtype="float64"),
+                    "charttime": [3.0],
+                    "vent_end": [1],
+                }
+            ),
+            id_columns=["icustay_id"],
+            index_column="charttime",
+            value_column="vent_end",
+        )
+        ctx = ConceptCallbackContext(
+            concept_name="vent_ind",
+            target="win_tbl",
+            interval=pd.Timedelta(hours=1),
+            resolver=None,
+            data_source=None,
+            patient_ids=None,
+        )
+
+        out = _callback_vent_ind({"vent_start": start, "vent_end": end}, ctx)
+
+        assert str(out.data["icustay_id"].dtype) == "Int64"
+        assert out.data["charttime"].tolist() == [1.0, 2.0, 3.0]
+        assert out.data["vent_ind"].tolist() == [True, True, True]
+
+
+# --------------------------------------------------------------------------- #
+# 6. ricu CSV 黄金基准 (fixture-gated, 缺失时自动跳过)
 # --------------------------------------------------------------------------- #
 class TestRicuCsvParity:
     def test_fixture_harness_skips_cleanly_when_absent(self):
