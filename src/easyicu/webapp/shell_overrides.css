@@ -13648,6 +13648,75 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   letter-spacing: -0.01em !important;
   color: var(--ink) !important;
 }
+.stApp .quality-issue-panel {
+  margin: 12px 0 14px !important;
+  padding: 14px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: color-mix(in srgb, var(--surface-2) 68%, var(--surface)) !important;
+}
+.stApp .quality-issue-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  margin-bottom: 10px !important;
+}
+.stApp .quality-issue-head span {
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  color: var(--ink) !important;
+}
+.stApp .quality-issue-head em,
+.stApp .quality-issue-panel p {
+  margin: 0 !important;
+  font-size: 11px !important;
+  font-style: normal !important;
+  color: var(--ink-4) !important;
+}
+.stApp .quality-issue-grid {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+}
+.stApp .quality-issue-card {
+  min-width: 0 !important;
+  padding: 10px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+}
+.stApp .quality-issue-card b,
+.stApp .quality-issue-card span,
+.stApp .quality-issue-card em {
+  display: block !important;
+}
+.stApp .quality-issue-card b {
+  font-size: 12px !important;
+  color: var(--ink) !important;
+}
+.stApp .quality-issue-card span {
+  margin-top: 4px !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  color: var(--ink-3) !important;
+}
+.stApp .quality-issue-card em {
+  margin-top: 8px !important;
+  font-size: 11px !important;
+  font-style: normal !important;
+  color: var(--ink-4) !important;
+  line-height: 1.35 !important;
+}
+@media (max-width: 760px) {
+  .stApp .quality-issue-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .stApp .quality-issue-head {
+    align-items: flex-start !important;
+    flex-direction: column !important;
+  }
+}
 
 /* Patient overview metric tiles */
 .stApp .metric-card {
@@ -14472,6 +14541,9 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
     border-top: 1px solid var(--hair) !important;
     border-bottom: 0 !important;
     box-shadow: 0 -6px 18px rgba(14, 17, 22, 0.06) !important;
+    height: auto !important;
+    max-height: 76px !important;
+    pointer-events: none !important;
   }
 
   .stApp [class*="st-key-main_nav_bar"] div[role="radiogroup"] {
@@ -14484,6 +14556,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
     justify-content: stretch !important;
     overflow-x: hidden !important;
     scrollbar-width: none !important;
+    pointer-events: auto !important;
   }
 
   .stApp [class*="st-key-main_nav_bar"] div[role="radiogroup"]::-webkit-scrollbar {
@@ -14508,6 +14581,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
+    pointer-events: auto !important;
   }
 
   .stApp [class*="st-key-main_nav_bar"] div[role="radiogroup"] > label p {
@@ -14603,6 +14677,69 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
     max-width: 184px;
     font-size: 10px;
     line-height: 1.25;
+  }
+
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_extract_breadcrumb_nav"]),
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_page_breadcrumb_nav_"]) {
+    width: calc(100% + 24px) !important;
+    margin-left: -12px !important;
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+    min-height: auto !important;
+  }
+
+  .stApp [class*="st-key-eu_extract_breadcrumb_nav"],
+  .stApp [class*="st-key-eu_page_breadcrumb_nav_"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: auto !important;
+  }
+
+  .stApp [class*="st-key-eu_extract_breadcrumb_nav"] [data-testid="stHorizontalBlock"],
+  .stApp [class*="st-key-eu_page_breadcrumb_nav_"] [data-testid="stHorizontalBlock"] {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    row-gap: 0 !important;
+  }
+
+  .stApp [class*="st-key-eu_extract_breadcrumb_nav"] .eu-bc-current,
+  .stApp [class*="st-key-eu_page_breadcrumb_nav_"] .eu-bc-current,
+  .stApp [class*="st-key-eu_extract_breadcrumb_nav"] button,
+  .stApp [class*="st-key-eu_page_breadcrumb_nav_"] button {
+    white-space: normal !important;
+  }
+
+  .stApp [class*="st-key-step1_confirm_demo"],
+  .stApp [class*="st-key-step1_confirm_real"],
+  .stApp [class*="st-key-step2_confirm_design"],
+  .stApp [class*="st-key-step3_confirm_design"],
+  .stApp [class*="st-key-final_export_btn"] {
+    scroll-margin-bottom: calc(112px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .stApp [class*="st-key-eu_demo_preview_card"] .eu-source-table-scroll {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    overflow-x: auto !important;
+    box-sizing: border-box !important;
+  }
+
+  .stApp [class*="st-key-eu_demo_preview_card"] table {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: fixed !important;
+    font-size: 10.5px !important;
+  }
+
+  .stApp [class*="st-key-eu_demo_preview_card"] th,
+  .stApp [class*="st-key-eu_demo_preview_card"] td {
+    padding: 5px 4px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
   }
 }
 
@@ -14734,6 +14871,23 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 .stApp [data-baseweb="tag"] * {
   font-size: var(--eu-readable-min) !important;
   line-height: 1.35 !important;
+}
+
+/* Keep icon controls compact while preserving useful accessible names. */
+.stApp [class*="_browse"] button {
+  min-width: 38px !important;
+}
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker)
+  [class*="st-key-_llm_ai_page_workspace_composer_wrap"]
+  [data-testid="stFormSubmitButton"] button [data-testid="stMarkdownContainer"] {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
 }
 
 .stApp [class*="st-key-eu_extract_breadcrumb_nav"] .stButton > button,
@@ -15236,15 +15390,15 @@ body ::-moz-selection,
   line-height: 1;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-topbrand .brand-mark::before {
-  content: "✧";
+  content: "AI";
   display: grid;
   place-items: center;
   width: 100%;
   height: 100%;
   color: #fff;
   font-family: var(--gd-mono);
-  font-size: 17px;
-  font-weight: 800;
+  font-size: 11px;
+  font-weight: 750;
   line-height: 1;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-topbrand .brand-mark svg {
@@ -15628,8 +15782,8 @@ body ::-moz-selection,
   background: var(--accent-soft);
   color: var(--accent-ink);
   font-family: var(--font-mono);
-  font-size: 15px;
-  font-weight: 800;
+  font-size: 11px;
+  font-weight: 750;
   line-height: 1;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-msg .m-bubble {
@@ -17569,6 +17723,32 @@ body ::-moz-selection,
 .stApp [class*="st-key-eu_entry_prompt_links"] button:hover * {
   color: var(--ink) !important;
   background: var(--surface-2) !important;
+}
+
+@media (max-width: 760px) {
+  .stApp [class*="st-key-eu_entry_col_chips"] [data-testid="stHorizontalBlock"] {
+    flex-direction: column !important;
+    gap: 8px !important;
+  }
+  .stApp [class*="st-key-eu_entry_col_chips"] [data-testid="stColumn"] {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+  .stApp [class*="st-key-eu_entry_col_chips"] [class*="st-key-_eu_entry_copilot_starter_"] button,
+  .stApp [class*="st-key-eu_entry_prompt_chips"] button {
+    width: 100% !important;
+    min-height: 36px !important;
+    height: auto !important;
+    padding: 8px 10px !important;
+    white-space: normal !important;
+    line-height: 1.2 !important;
+  }
+  .stApp [class*="st-key-eu_entry_col_chips"] [class*="st-key-_eu_entry_copilot_starter_"] button *,
+  .stApp [class*="st-key-eu_entry_prompt_chips"] button * {
+    white-space: normal !important;
+    line-height: 1.2 !important;
+  }
 }
 
 /* Entry homepage icons are drawn here instead of relying on Streamlit's
