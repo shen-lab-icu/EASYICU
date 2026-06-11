@@ -273,6 +273,35 @@ def test_audit_safety_fail_when_forbidden_leaks():
     assert dim.signals["forbidden_conclusion_leaked"] is True
 
 
+def test_audit_safety_surfaces_cohort_hygiene_without_penalty():
+    """Cohort-hygiene cautions are recorded but must not lower the subscore.
+
+    Penalising them would punish a structural no-source export limitation
+    (no patient id) or a defensible analytical choice (short-stay handling),
+    which the impartiality rule forbids. They surface for the reader; the
+    score-impact lands with the §M2 manuscript-engagement wiring.
+    """
+    gold = ICUAgentBenchGoldAnswer(required_warnings=["immortal time"])
+    common = dict(
+        observed_warnings=["beware immortal time bias"],
+        tristate="gate_reportable",
+    )
+    baseline = sc.score_audit_conclusion_safety(_task(gold=gold), **common)
+    with_cautions = sc.score_audit_conclusion_safety(
+        _task(gold=gold),
+        cohort_hygiene_cautions=[
+            "Cohort is keyed at the ICU-stay level with no patient identifier...",
+            "21% of stays have ICU length-of-stay <1 day...",
+        ],
+        **common,
+    )
+    # Same subscore/level — recorded, not penalised.
+    assert with_cautions.subscore == baseline.subscore
+    assert with_cautions.level == baseline.level
+    assert len(with_cautions.signals["cohort_hygiene_cautions"]) == 2
+    assert baseline.signals["cohort_hygiene_cautions"] == []
+
+
 # ---------------------------------------------------------------------------
 # score_run / score_run_from_dir
 # ---------------------------------------------------------------------------

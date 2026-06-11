@@ -399,6 +399,7 @@ def score_audit_conclusion_safety(
     *,
     observed_warnings: Optional[Sequence[str]] = None,
     observed_outputs: Optional[Sequence[str]] = None,
+    cohort_hygiene_cautions: Optional[Sequence[str]] = None,
     tristate: Tristate,
 ) -> DimensionScore:
     """Audit-conclusion-safety dimension (§M1, EasyICU-specific).
@@ -409,6 +410,18 @@ def score_audit_conclusion_safety(
     out-of-gate conclusion (``gold_answer.forbidden_outputs``). Fail-closed
     demotion (``analysis_only`` / ``diagnostic_only``) is treated as SAFE:
     the selling point is that an error is safely withheld, not published.
+
+    ``cohort_hygiene_cautions`` (the advisory flags from
+    ``CohortAuditor`` / ``cohort_hygiene_findings``) are recorded as a
+    transparent signal but deliberately carry **no subscore penalty here**.
+    Two reasons, both from the impartiality rule: a "no patient identifier"
+    caution is a *structural no-source* property of the export — penalising
+    it would punish the analysis for a data limitation it cannot fix — and a
+    short-stay-exposure caution is a defensible analytical choice whose
+    *engagement* can only be judged against the manuscript's limitations /
+    robustness section. That manuscript-level engagement check lands with the
+    §M2 locked-reference wiring; until then the cautions are surfaced for the
+    reader, not scored.
     """
     graded = grade_bench_task(
         task,
@@ -424,6 +437,13 @@ def score_audit_conclusion_safety(
     no_forbidden = 0.0 if forbidden_tripped else 1.0
 
     notes: List[str] = list(graded.notes)
+
+    hygiene_cautions = list(cohort_hygiene_cautions or [])
+    if hygiene_cautions:
+        notes.append(
+            f"{len(hygiene_cautions)} cohort-hygiene caution(s) surfaced "
+            "(advisory; no subscore impact — see docstring)"
+        )
 
     if has_hazard_key and has_forbidden_key:
         subscore = 0.5 * (hazard_hit or 0.0) + 0.5 * no_forbidden
@@ -454,6 +474,7 @@ def score_audit_conclusion_safety(
             "has_hazard_key": has_hazard_key,
             "hazard_warnings_hit": hazard_hit,
             "forbidden_conclusion_leaked": forbidden_tripped,
+            "cohort_hygiene_cautions": hygiene_cautions,
             "tristate": tristate,
         },
         notes=notes,
@@ -485,6 +506,7 @@ def score_run(
     observed_metrics: Optional[Dict[str, float]] = None,
     observed_warnings: Optional[Sequence[str]] = None,
     observed_outputs: Optional[Sequence[str]] = None,
+    cohort_hygiene_cautions: Optional[Sequence[str]] = None,
     locked_reference_frozen: bool = False,
     plan_illegal: bool = False,
     run_id: Optional[str] = None,
@@ -517,6 +539,7 @@ def score_run(
             task,
             observed_warnings=observed_warnings,
             observed_outputs=observed_outputs,
+            cohort_hygiene_cautions=cohort_hygiene_cautions,
             tristate=tristate,
         ),
         tristate=tristate,
@@ -534,6 +557,33 @@ def _load_claim_rows(path: Path) -> List[Dict[str, str]]:
         return []
     with path.open(newline="", encoding="utf-8") as fh:
         return list(csv.DictReader(fh))
+
+
+def _load_cohort_hygiene_cautions(run_dir: Path) -> List[str]:
+    """Best-effort scan of ``audit_log.jsonl`` for cohort-hygiene cautions.
+
+    Returns the messages of any logged finding whose ``detail.kind`` is
+    ``cohort_hygiene`` (emitted by ``cohort_hygiene_findings``). Missing or
+    malformed logs degrade to an empty list — these cautions are advisory.
+    """
+    path = run_dir / "audit_log.jsonl"
+    if not path.exists():
+        return []
+    cautions: List[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or '"cohort_hygiene"' not in line:
+            continue
+        try:
+            row = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        detail = row.get("detail") if isinstance(row, dict) else None
+        if isinstance(detail, dict) and detail.get("kind") == "cohort_hygiene":
+            msg = row.get("message")
+            if isinstance(msg, str):
+                cautions.append(msg)
+    return cautions
 
 
 def score_run_from_dir(
@@ -573,6 +623,7 @@ def score_run_from_dir(
         observed_metrics=observed_metrics,
         observed_warnings=observed_warnings,
         observed_outputs=observed_outputs,
+        cohort_hygiene_cautions=_load_cohort_hygiene_cautions(run_dir),
         locked_reference_frozen=locked_reference_frozen,
         plan_illegal=plan_illegal,
         run_id=(
