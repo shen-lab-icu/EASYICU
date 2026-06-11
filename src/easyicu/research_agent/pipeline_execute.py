@@ -49,7 +49,11 @@ from .audits.validators import (
     StatisticalGuard,
     StatisticalValidator,
 )
-from .code_repair import _deterministic_runner_repair, _deterministic_summary_repair
+from .code_repair import (
+    _deterministic_runner_repair,
+    _deterministic_summary_repair,
+    deterministic_concept_audit_repair,
+)
 from .cohort_schema import assert_cohort_definition_locked
 from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .estimators import fit_robustness_rows_from_records
@@ -60,6 +64,7 @@ from .pipeline import (
     _has_figure_exports,
     _promote_prior_publication_bundle,
     _promote_sibling_figure_exports,
+    _render_association_publication_bundle_from_prior_outputs,
     _render_prediction_publication_bundle_from_prior_outputs,
     _semantic_aliases_for,
 )
@@ -728,6 +733,9 @@ def run_execute_phase(
 
         concept_repair_attempts = 0
         concept_audit_error_count = 0
+        deterministic_concept_repairs = 0
+        _MAX_DETERMINISTIC_CONCEPT_REPAIRS = 3
+        applied_concept_repair_names: List[str] = []
         while True:
             usage_findings = usage_auditor.audit(
                 context=context,
@@ -770,6 +778,60 @@ def run_execute_phase(
                     findings.extend(usage_findings)
                 break
 
+            # Tier A — deterministic mechanical repair. For a closed set of
+            # objectively-flagged ICU anti-patterns (e.g. silent fillna(0) on
+            # a lab) there is a single neutral fix, so we apply it without a
+            # model round-trip and re-audit. This does NOT consume the LLM
+            # repair budget, and is bounded because each repair removes its
+            # own pattern (a re-audit then finds nothing left to change).
+            if deterministic_concept_repairs < _MAX_DETERMINISTIC_CONCEPT_REPAIRS:
+                _audit_error_msgs = [
+                    f.message for f in usage_findings if f.severity == "error"
+                ]
+                _det_code, _det_names = deterministic_concept_audit_repair(
+                    code, _audit_error_msgs
+                )
+                if _det_names and _det_code != code:
+                    deterministic_concept_repairs += 1
+                    applied_concept_repair_names.extend(_det_names)
+                    step_record["deterministic_concept_repairs"] = (
+                        deterministic_concept_repairs
+                    )
+                    step_record["applied_concept_repair_names"] = list(
+                        applied_concept_repair_names
+                    )
+                    for _name in _det_names:
+                        _record_repair(
+                            repair_id=_name,
+                            step_id=step.step_id,
+                            trigger={
+                                "gate": "concept_audit",
+                                "audit_errors": _audit_error_msgs,
+                            },
+                            transformation=(
+                                "deterministic_concept_audit_repair: rewrote a "
+                                "mechanical ICU anti-pattern flagged as an error "
+                                "by the static concept-audit gate"
+                            ),
+                            before_code=code,
+                            after_code=_det_code,
+                            selection_rule=(
+                                "applied only because an error finding "
+                                "objectively named the anti-pattern"
+                            ),
+                        )
+                    emit_progress(
+                        "coder",
+                        f"Auto-repaired concept-audit anti-pattern "
+                        f"({', '.join(_det_names)}) for {step.step_id}.",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    code = _det_code
+                    continue
+
             if concept_repair_attempts >= pipeline._max_code_repair_attempts:
                 fallback_code = _deterministic_fallback_code("concept_audit")
                 if fallback_code is not None:
@@ -800,13 +862,90 @@ def run_execute_phase(
                     code = fallback_code
                     continue
                 step_record["status"] = "blocked_by_concept_audit"
+                # Tier C — when auto-repair (deterministic + LLM) could not
+                # clear the violation, do NOT just stop with a status code.
+                # Emit an actionable repair ticket so a human can either add a
+                # constraint and re-run, or knowingly accept the withheld
+                # (diagnostic_only) result. We name candidate remedies without
+                # mandating one — the analytical choice stays with the user.
+                _block_errors = [
+                    {"validator": f.validator, "message": f.message}
+                    for f in usage_findings
+                    if f.severity == "error"
+                ]
+                _offending_lines = [
+                    ln.strip()
+                    for ln in code.splitlines()
+                    if any(
+                        tok in ln
+                        for tok in ("fillna(0)", "fillna(0.0)", ".mean()", "dropna(")
+                    )
+                ][:12]
+                _remedies = [
+                    "Add the violated ICU rule as an explicit coder/planner "
+                    "constraint and re-run this question (e.g. 'do not impute a "
+                    "lab with 0; handle missingness with complete-case or a "
+                    "declared imputation + missingness indicator').",
+                    "Use a stronger model for this question — the block was "
+                    "triggered by generated code, not by the cohort or the "
+                    "question itself.",
+                    "Accept the withheld result: diagnostic_only is a valid "
+                    "outcome. The fail-closed gate declined to report an "
+                    "analysis it judged unsafe; nothing wrong was published.",
+                ]
+                step_record["concept_audit_block"] = {
+                    "step_id": step.step_id,
+                    "errors": _block_errors,
+                    "deterministic_repairs_applied": list(
+                        applied_concept_repair_names
+                    ),
+                    "llm_repair_attempts": concept_repair_attempts,
+                    "offending_code_lines": _offending_lines,
+                    "candidate_remedies": _remedies,
+                }
+                try:
+                    _ticket = [
+                        f"# Concept-audit block — step `{step.step_id}`",
+                        "",
+                        "The static ICU concept-audit gate blocked this step "
+                        "before execution and auto-repair could not clear it, "
+                        "so the run withheld this analysis (`diagnostic_only`). "
+                        "This is the fail-closed safety system working — but "
+                        "here is how to move it forward.",
+                        "",
+                        "## What was flagged (objective errors)",
+                        *[
+                            f"- **{e['validator']}**: {e['message']}"
+                            for e in _block_errors
+                        ],
+                        "",
+                        "## Repair already attempted",
+                        f"- deterministic: "
+                        f"{applied_concept_repair_names or 'none matched'}",
+                        f"- LLM coder repair attempts: {concept_repair_attempts}",
+                        "",
+                        "## Offending code lines",
+                        "```python",
+                        *(_offending_lines or ["(no obvious anti-pattern line)"]),
+                        "```",
+                        "",
+                        "## How to resolve (pick one — your analytical choice)",
+                        *[f"{i + 1}. {r}" for i, r in enumerate(_remedies)],
+                        "",
+                    ]
+                    (run_dir / f"concept_audit_block_{step.step_id}.md").write_text(
+                        "\n".join(_ticket), encoding="utf-8"
+                    )
+                except Exception:  # ticket is best-effort, never fatal
+                    pass
                 with shared_lock:
                     findings.extend(usage_findings)
                     per_step_records.append(step_record)
                     _flush_partial_manifest()
                 emit_progress(
                     "audit",
-                    f"Concept audit blocked {step.step_id}.",
+                    f"Concept audit blocked {step.step_id}; "
+                    f"repair ticket written.",
                     status="error",
                     run_id=run_id,
                     step_id=step.step_id,
@@ -1486,17 +1625,35 @@ def run_execute_phase(
                         current_step_id=step.step_id,
                         out_dir=run_result.out_dir,
                     )
+                    rescue_source = "prediction_publication_bundle_rescue"
+                    rescue_note = (
+                        "Rendered deterministic publication figure bundle "
+                        "from prior prediction outputs."
+                    )
+                    if rescued is None:
+                        # Association/regression figures: render an odds-ratio
+                        # forest plot from the parent coefficient table when the
+                        # figure-only child step failed (e.g. small model hard-
+                        # coded a wrong results filename).
+                        rescued = _render_association_publication_bundle_from_prior_outputs(
+                            run_dir=run_dir,
+                            current_step_id=step.step_id,
+                            out_dir=run_result.out_dir,
+                        )
+                        if rescued is not None:
+                            rescue_source = "association_publication_bundle_rescue"
+                            rescue_note = (
+                                "Rendered deterministic odds-ratio forest plot "
+                                "from prior association outputs."
+                            )
                     if rescued is not None:
                         runner_repair_name = rescued
                         step_record["runner_repair"] = rescued
                         _record_repair(
                             repair_id=rescued,
                             step_id=step.step_id,
-                            trigger={"source": "prediction_publication_bundle_rescue"},
-                            transformation=(
-                                "Rendered deterministic publication figure bundle "
-                                "from prior prediction outputs."
-                            ),
+                            trigger={"source": rescue_source},
+                            transformation=rescue_note,
                         )
 
         run_result.artefacts = sorted(
