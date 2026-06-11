@@ -381,7 +381,6 @@ def _render_entry_resume_banner(lang: str, data_mode: str) -> None:
             if st.button(
                 _T(lang, "Open workspace", "打开工作区"),
                 key="_eu_entry_resume_open",
-                icon=":material/arrow_forward:",
                 use_container_width=True,
             ):
                 _apply_entry_resume_open(st.session_state, data_mode)
@@ -1464,7 +1463,6 @@ def render_tutorial_redesign_page(lang: str) -> None:
                 _T(lang, "Start demo", "开始演示"),
                 key="_eu_getstarted_start_demo",
                 type="primary",
-                icon=":material/play_arrow:",
                 use_container_width=True,
             ):
                 _route_to_extract_entry_mode(st.session_state, "demo")
@@ -1472,7 +1470,6 @@ def render_tutorial_redesign_page(lang: str) -> None:
             if st.button(
                 _T(lang, "Browse states", "浏览状态"),
                 key="_eu_getstarted_browse_states",
-                icon=":material/grid_view:",
                 use_container_width=True,
             ):
                 _route_to_workspace_states(st.session_state)
@@ -1630,7 +1627,6 @@ def render_workspace_states_reference_page(lang: str) -> None:
                 _T(lang, "Continue extraction", "继续数据提取"),
                 key="_eu_workspace_continue_extract",
                 type="primary",
-                icon=":material/tune:",
                 use_container_width=True,
             ):
                 state["_active_main_page"] = "extract"
@@ -1640,7 +1636,6 @@ def render_workspace_states_reference_page(lang: str) -> None:
             if st.button(
                 _T(lang, "Patient Review", "患者审阅"),
                 key="_eu_workspace_open_review",
-                icon=":material/table_view:",
                 use_container_width=True,
             ):
                 _apply_workspace_state_action(state, "patient", "demo" if is_demo else "real")
@@ -1649,7 +1644,6 @@ def render_workspace_states_reference_page(lang: str) -> None:
             if st.button(
                 _T(lang, "Cohort Statistics", "队列统计"),
                 key="_eu_workspace_open_cohort",
-                icon=":material/query_stats:",
                 use_container_width=True,
             ):
                 if is_demo:
@@ -1662,7 +1656,6 @@ def render_workspace_states_reference_page(lang: str) -> None:
             if st.button(
                 _T(lang, "Research Agent", "研究智能体"),
                 key="_eu_workspace_open_agent",
-                icon=":material/auto_awesome:",
                 use_container_width=True,
             ):
                 _route_to_research_agent_setup(state, force_real=not is_demo)
@@ -1748,7 +1741,6 @@ def render_workspace_states_reference_page(lang: str) -> None:
                 _workspace_state_action_label(current_context, current_mode, lang),
                 key="_eu_states_open_selected",
                 type="primary",
-                icon=":material/arrow_forward:",
                 use_container_width=True,
             ):
                 _apply_workspace_state_action(state, current_context, current_mode)
@@ -1757,7 +1749,6 @@ def render_workspace_states_reference_page(lang: str) -> None:
             if st.button(
                 _T(lang, "Preview success", "预览成功态"),
                 key="_eu_states_preview_success",
-                icon=":material/check_circle:",
                 use_container_width=True,
             ):
                 state["_eu_states_state"] = "success"
@@ -1775,7 +1766,6 @@ def render_workspace_states_reference_page(lang: str) -> None:
                 file_name="easyicu-workspace-states-bundle.json",
                 mime="application/json",
                 key="_eu_states_export_bundle",
-                icon=":material/download:",
                 use_container_width=True,
             )
 
@@ -3398,7 +3388,7 @@ def _render_entry_copilot_layout(
                     )
                 with send_col:
                     if st.button(
-                        "",
+                        _T(lang, "Start in Research Copilot", "在研究 Copilot 中开始"),
                         key="_eu_entry_copilot_start",
                         help=_T(lang, "Start in Research Copilot", "在研究 Copilot 中开始"),
                         use_container_width=True,
@@ -3669,7 +3659,7 @@ def render_entry_redesign_page(lang: str) -> None:
                             )
                         with send_col:
                             if st.button(
-                                "",
+                                _T(lang, "Start in Research Copilot", "在研究 Copilot 中开始"),
                                 key="_eu_entry_copilot_start",
                                 help=_T(lang, "Start in Research Copilot", "在研究 Copilot 中开始"),
                                 use_container_width=True,

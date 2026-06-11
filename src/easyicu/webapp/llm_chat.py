@@ -138,7 +138,6 @@ from easyicu.webapp.copilot.sessions import (  # noqa: F401  (re-exported)
 # lazy-imports the `COPILOT_*` constants + `_copilot_frame_question` from this
 # module inside the functions, so no import cycle.
 from easyicu.webapp.copilot.presentation import (  # noqa: F401  (re-exported)
-    _copilot_action_material_icon,
     _copilot_cohort_is_empty,
     _copilot_cohort_label,
     _copilot_concept_label_list,
@@ -523,7 +522,7 @@ quality review, and cohort comparison
 ## Workflow (4 Steps)
 1. **Data Source** — choose database & path (or Demo mode with simulated data)
 2. **Cohort Selection** — filter by age, sex, ICU LOS, mortality, disease cohort (e.g. Sepsis-3, AKI, RRT, mechanical ventilation), and ICD keywords where supported
-3. **Select Features** — pick from 19 modules ({_FEATURE_COUNT} concepts); supports SOFA-1, SOFA-2, \
+3. **Select export concepts** — pick from 19 modules ({_FEATURE_COUNT} concepts); supports SOFA-1, SOFA-2, \
 Sepsis-3, KDIGO-AKI, circulatory failure, etc.
 4. **Export Data** — batch export to disk; streaming architecture, subprocess memory isolation
 
@@ -1713,7 +1712,6 @@ def _render_copilot_workflow_inline_edit_controls(
             if st.button(
                 "Edit research question" if is_en else "编辑研究问题",
                 key=f"{key_prefix}_workflow_edit_question",
-                icon=":material/edit:",
                 use_container_width=True,
                 help=(
                     "Open an in-chat field for the study question."
@@ -1734,7 +1732,6 @@ def _render_copilot_workflow_inline_edit_controls(
             if st.button(
                 "Configure API" if is_en else "配置 API",
                 key=f"{key_prefix}_workflow_edit_api",
-                icon=":material/key:",
                 use_container_width=True,
                 help=(
                     f"Current API state: {api_status}. Settings stay in this browser session."
@@ -3535,9 +3532,9 @@ _COPILOT_ACTION_ICON_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("gate", "why", "解释", "为什么"), "help"),
     (("classic", "经典"), "grid_view"),
     (("loosen", "放宽", "broad"), "tune"),
-    (("data path", "数据路径", "set data", "设置路径"), "folder_open"),
+    (("data path", "数据路径", "set data", "设置路径"), "folder"),
     (("api", "设置"), "settings"),
-    (("module", "模块"), "layers"),
+    (("module", "模块"), "category"),
     (("draft", "草稿", "sign"), "description"),
 )
 
@@ -3562,7 +3559,6 @@ def _render_nav_actions(actions: list[dict[str, object]], key_prefix: str) -> No
                 button_label,
                 key=f"{key_prefix}_{action_idx}_{action['id']}",
                 use_container_width=True,
-                icon=_copilot_action_material_icon(action),
             ):
                 if action.get("kind") == "preset":
                     st.session_state["_assistant_preset_request"] = dict(action.get("payload") or {})
@@ -5129,7 +5125,6 @@ def _render_inline_ai_context_and_handoff(lang: str) -> None:
         if st.button(
             "Research Agent setup" if is_en else "Research Agent 配置",
             key="_inline_ai_to_agent_setup",
-            icon=":material/smart_toy:",
             use_container_width=True,
         ):
             _prepare_research_agent_handoff_from_ai(st.session_state)
@@ -5716,7 +5711,6 @@ def _render_ai_assistant_workspace_page(lang: str, *, pending_prompt: bool) -> N
                 if st.button(
                     "Exit" if is_en else "退出",
                     key="_copilot_top_exit",
-                    icon=":material/arrow_back:",
                     use_container_width=True,
                 ):
                     st.session_state["entry_mode"] = "none"
@@ -5730,7 +5724,6 @@ def _render_ai_assistant_workspace_page(lang: str, *, pending_prompt: bool) -> N
                 if st.button(
                     "Classic workspace" if is_en else "经典工作区",
                     key="_copilot_top_classic_workspace",
-                    icon=":material/grid_view:",
                     use_container_width=True,
                 ):
                     _apply_chat_workflow_action("study_extract")
@@ -5880,7 +5873,6 @@ def _render_copilot_session_rail(lang: str) -> None:
     if st.button(
         "New study" if is_en else "新研究",
         key="_copilot_new_study",
-        icon=":material/add:",
         use_container_width=True,
     ):
         _start_new_copilot_study_session(state, lang)
@@ -5936,7 +5928,6 @@ def _render_copilot_session_rail(lang: str) -> None:
     if st.button(
         "Classic workspace" if is_en else "经典工作区",
         key="_copilot_rail_classic_workspace",
-        icon=":material/grid_view:",
         use_container_width=True,
         help="Open the classic workspace only when you explicitly want to leave Copilot" if is_en else "只有明确想离开 Copilot 时才打开经典工作区",
     ):
@@ -6251,11 +6242,11 @@ def _render_chat_welcome(
         st.markdown(
             '<div class="eu-copilot-welcome-thread">'
             '<div class="eu-copilot-msg bot">'
-            '<span class="m-ava">✧</span>'
+            '<span class="m-ava">AI</span>'
             f'<div class="m-bubble">{intro}</div>'
             '</div>'
             '<div class="eu-copilot-msg bot">'
-            '<span class="m-ava">✧</span>'
+            '<span class="m-ava">AI</span>'
             f'<div class="m-bubble compact">{html.escape(ask)}</div>'
             '</div>'
             '</div>',
@@ -7073,7 +7064,7 @@ def _render_compact_chat_panel(
                 )
             with send_col:
                 send_clicked = st.form_submit_button(
-                    "→",
+                    "Send" if lang == "en" else "发送",
                     type="primary",
                     use_container_width=True,
                 )
@@ -7105,7 +7096,6 @@ def _render_compact_chat_panel(
                 mime="text/markdown",
                 use_container_width=True,
                 key=f"{panel_key}_export_chat",
-                icon=":material/download:",
             )
         with action_cols[1]:
             if st.button(
@@ -7508,7 +7498,6 @@ def _render_floating_copilot_context_actions(lang: str) -> None:
             "Full Copilot" if is_en else "完整 Copilot",
             key="_floating_ai_full_copilot",
             use_container_width=True,
-            icon=":material/auto_awesome:",
         ):
             st.session_state["llm_enabled"] = True
             st.session_state["_llm_toggle"] = True
@@ -8019,10 +8008,9 @@ def render_floating_chat_dock(app_context: dict | None = None):
                     unsafe_allow_html=True,
                 )
             if st.button(
-                "",
+                "AI",
                 key="_floating_ai_open_btn",
                 help="Open Research Copilot dock" if lang == "en" else "打开研究 Copilot dock",
-                icon=":material/smart_toy:",
             ):
                 st.session_state["_floating_ai_open"] = True
                 st.rerun()
