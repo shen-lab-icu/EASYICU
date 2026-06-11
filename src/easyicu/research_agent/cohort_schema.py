@@ -69,7 +69,7 @@ PredicateOp = Literal[
 COHORT_LOCK_FILENAME = "cohort_locked.json"
 _CONCEPT_DICT_PATH = Path(__file__).resolve().parents[1] / "data" / "concept-dict.json"
 _ANY_ALL_ALLOWED_OPS = {"==", "!=", "missing", "not_missing"}
-_IMPLEMENTED_AGGREGATIONS = {"max", "min", "last", "first", "any"}
+_IMPLEMENTED_AGGREGATIONS = set(ALLOWED_CTAS_AGGREGATIONS)
 
 
 class CohortSchemaError(ValueError):
@@ -442,8 +442,26 @@ def build_cohort(definition: CohortDefinition, data: Any = None) -> Any:
     return data.loc[mask].copy()
 
 
+# Columns of an externally provided, already-materialised cohort (e.g. the
+# EHRFlowBench path or cohort_materializer output). They are not dictionary
+# concepts, but the data is already present, so a planner may legitimately
+# reference them in a CTAS predicate — `_predicate_mask` reads them straight
+# from `data.columns`. Registered per run so the static planner validation does
+# not reject pre-materialised covariates as "unknown concept_id".
+_EXTRA_COHORT_CONCEPT_IDS: set[str] = set()
+
+
+def register_cohort_concept_ids(concept_ids: Any) -> None:
+    """Allow these ids in CTAS predicate validation (pre-materialised columns)."""
+    _EXTRA_COHORT_CONCEPT_IDS.update(str(c) for c in concept_ids)
+
+
+def clear_cohort_concept_ids() -> None:
+    _EXTRA_COHORT_CONCEPT_IDS.clear()
+
+
 def concept_id_exists(concept_id: str) -> bool:
-    return concept_id in known_concept_ids()
+    return concept_id in known_concept_ids() or concept_id in _EXTRA_COHORT_CONCEPT_IDS
 
 
 @lru_cache(maxsize=1)
@@ -523,12 +541,14 @@ __all__ = [
     "assert_cohort_definition_locked",
     "build_cohort",
     "coerce_cohort_definition",
+    "clear_cohort_concept_ids",
     "cohort_definition_sha",
     "concept_id_exists",
     "default_pattern_registry",
     "ensure_cohort_definition",
     "expand_named_cohort",
     "known_concept_ids",
+    "register_cohort_concept_ids",
     "register_pattern",
     "register_patterns_from_file",
     "reset_pattern_registry",

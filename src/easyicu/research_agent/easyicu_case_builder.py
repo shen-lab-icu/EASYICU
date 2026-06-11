@@ -73,6 +73,25 @@ def index_export_package(export_dir: Union[str, Path]) -> Dict[str, Dict[str, ob
     return index
 
 
+def resolve_exported_concept(
+    index: Mapping[str, Dict[str, object]], concept: str
+) -> Optional[str]:
+    """Resolve ``concept`` to an actual export column name, or ``None``.
+
+    Exact match wins. Otherwise a **conservative** alias is allowed: if the
+    export stored the concept under a single score-variant column name (e.g.
+    ``sep3`` exported as ``sep3_sofa2``), and there is *exactly one* column of
+    the form ``<concept>_<suffix>``, that column is used. Ambiguous cases
+    (e.g. ``los`` -> ``los_icu``/``los_hosp``) deliberately do NOT resolve, so
+    the caller must name the concept explicitly rather than risk a silent
+    wrong match.
+    """
+    if concept in index:
+        return concept
+    candidates = sorted(c for c in index if c.startswith(concept + "_"))
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def read_exported_concept(
     export_dir: Union[str, Path],
     concept: str,
@@ -83,17 +102,28 @@ def read_exported_concept(
 
     ``extra_columns`` lets callers request sibling concepts from the same
     parquet file, for example ``norepi_equiv`` next to ``vaso_ind``.
+
+    A conservative alias is applied (see :func:`resolve_exported_concept`): if
+    ``concept`` is not an exact column but maps unambiguously to a single
+    score-variant column (e.g. ``sep3`` -> ``sep3_sofa2``), that column is read
+    and renamed to ``concept`` so downstream code sees the requested name.
     """
     index = index_export_package(export_dir)
-    if concept not in index:
+    resolved = resolve_exported_concept(index, concept)
+    if resolved is None:
         raise KeyError(
             f"Concept {concept!r} is not present in {Path(export_dir)}. "
             f"Available concepts include: {sorted(index)[:20]}"
         )
-    path = Path(index[concept]["file"])
-    available = set(index[concept]["columns"])
-    columns = [c for c in [ID_COL, TIME_COL, concept, *(extra_columns or [])] if c in available]
-    return read_parquet(path, columns=columns)
+    path = Path(index[resolved]["file"])
+    available = set(index[resolved]["columns"])
+    columns = [
+        c for c in [ID_COL, TIME_COL, resolved, *(extra_columns or [])] if c in available
+    ]
+    df = read_parquet(path, columns=columns)
+    if resolved != concept:
+        df = df.rename(columns={resolved: concept})
+    return df
 
 
 def _window(df: pd.DataFrame, start_hour: float, end_hour: float) -> pd.DataFrame:
