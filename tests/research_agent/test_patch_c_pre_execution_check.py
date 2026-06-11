@@ -153,6 +153,27 @@ def _step() -> AnalysisStep:
     return AnalysisStep(step_id="01_test", intent="cluster")
 
 
+def test_coderagent_requests_full_token_budget():
+    """Regression (E1 20260611): code generation must request the full
+    ``_CODER_MAX_TOKENS`` so a verbose model's analysis.py is not truncated
+    mid-expression (SyntaxError "'(' was never closed")."""
+    from easyicu.research_agent.agents import _CODER_MAX_TOKENS
+
+    captured = {}
+
+    class _RecordingLLM:
+        name = "rec"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            captured["max_tokens"] = max_tokens
+            return _CLEAN_SCRIPT
+
+    agent = CoderAgent(_RecordingLLM())
+    agent.run(context=_ordinal_context(), step=_step())
+    assert _CODER_MAX_TOKENS >= 8192
+    assert captured["max_tokens"] == _CODER_MAX_TOKENS
+
+
 def test_coderagent_run_triggers_repair_on_violation_then_returns_clean_code():
     llm = _ScriptedLLM([_BAD_SCRIPT, _CLEAN_SCRIPT])
     agent = CoderAgent(llm)
