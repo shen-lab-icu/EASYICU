@@ -6061,6 +6061,8 @@ def render_research_agent_demo_page(*, show_header: bool = True) -> None:
         _activate_real_data_mode_from_agent(st.session_state)
         st.rerun()
 
+    _render_copilot_signpost(is_en=is_en)
+
 
 def _render_replication_section(*, default_workdir: Path) -> None:
     """Thin web entry point for the deterministic lactate-MAP-vaso
@@ -7293,6 +7295,51 @@ def _render_setup_controls_intro(*, is_en: bool) -> None:
     )
 
 
+def _render_copilot_signpost(*, is_en: bool) -> None:
+    """Tell users landing on the Research Agent page that the Research
+    Copilot is the conversational front door for the same workflow.
+
+    Without this the relationship is asymmetric: the Copilot says it
+    "hands a gated question to Research Agent", but this page never names
+    the Copilot, so a user who lands here directly cannot discover the
+    chat path or understand how the two surfaces relate.
+    """
+    note = (
+        "Prefer chat? **Research Copilot** walks this same workflow conversationally — "
+        "it frames the question and cohort with you, then hands the gated request back to this page."
+        if is_en else
+        "想用对话？**Research Copilot** 用聊天走同一套流程——先和你一起框定问题与队列，再把带闸门的请求交回到这里。"
+    )
+    col_text, col_btn = st.columns([4, 1])
+    with col_text:
+        st.caption(note)
+    with col_btn:
+        if st.button(
+            "Open Copilot" if is_en else "打开 Copilot",
+            key="ra_open_copilot_signpost",
+            use_container_width=True,
+            help=(
+                "Switch to the chat-first Research Copilot."
+                if is_en else
+                "切换到聊天优先的 Research Copilot。"
+            ),
+        ):
+            # NOTE: do NOT write `_main_nav_widget` here. This button renders
+            # on the Research Agent page — i.e. AFTER app.py has instantiated
+            # st.radio(key="_main_nav_widget"), so assigning that key raises
+            # StreamlitAPIException ("cannot be modified after the widget ...
+            # is instantiated"). Setting `_active_main_page` alone is enough:
+            # it is the routing source of truth, and app.py reconciles
+            # `_main_nav_widget` from it on the next run (see `_visible_active`
+            # ~app.py:4367). The sidebar may set the widget key only because it
+            # renders before that widget.
+            st.session_state["_active_main_page"] = "assistant"
+            st.session_state["_inline_ai_panel_open"] = False
+            st.session_state["_floating_ai_open"] = False
+            st.session_state["_scroll_to_top"] = True
+            st.rerun()
+
+
 def _render_preflight_controls_intro(*, is_en: bool) -> None:
     st.markdown(
         textwrap.dedent(f"""
@@ -7368,6 +7415,7 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
 
     with st.container(key="eu_ra_setup_controls"):
         _render_setup_controls_intro(is_en=_is_en)
+        _render_copilot_signpost(is_en=_is_en)
         with st.expander(_step_titles[0], expanded=True):
             free_question, target_outcome = _section_request_picker()
             skill_key = None
