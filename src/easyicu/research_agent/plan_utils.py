@@ -724,6 +724,7 @@ def _ensure_publication_figure_step_in_plan(
     *,
     plan: AnalysisPlan,
     context: ResearchContext,
+    force: bool = False,
 ) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
     """Append a fallback figure step when the planner forgot one.
 
@@ -735,10 +736,19 @@ def _ensure_publication_figure_step_in_plan(
     coder agent has a concrete target. The step's ``intent`` is broad
     enough that the coder can still tailor the chart shape (bar, box,
     forest, heatmap…) based on the upstream analytics.
+
+    ``force=True`` bypasses the research-question heuristic: the caller
+    already knows a figure will be produced (e.g. the publication-figure
+    skill is enabled), so the plan should *declare* the figure even when
+    the question text never says "figure". Used by the execute phase,
+    where the plan that actually runs is the replanner's — which the
+    plan-phase, question-gated guard never sees.
     """
     if any(_step_produces_figure(step) for step in plan.steps or []):
         return plan, []
-    if not _research_question_implies_figure(context.research_question or ""):
+    if not force and not _research_question_implies_figure(
+        context.research_question or ""
+    ):
         return plan, []
 
     next_index = len(plan.steps or []) + 1
@@ -773,6 +783,75 @@ def _ensure_publication_figure_step_in_plan(
                 f"'{fallback_step.step_id}' to preserve the task contract."
             ),
             detail={"appended_step_id": fallback_step.step_id},
+        )
+    ]
+    return preserved, findings
+
+
+# Mirror of ``evaluation_scorecard._AUDIT_OUTPUT_HINTS`` (kept in sync by hand to
+# avoid a plan_utils -> evaluation_scorecard import cycle). A plan "declares an
+# audit panel" when a step's intent or expected_outputs mention any of these.
+_AUDIT_PANEL_TOKENS = ("audit", "completeness", "sensitivity", "leakage", "calibration")
+
+
+def _step_declares_audit_panel(step: AnalysisStep) -> bool:
+    """True if the step declares an audit/sensitivity/robustness display item."""
+    for text in [step.intent or "", *(step.expected_outputs or [])]:
+        lowered = (text or "").lower()
+        if any(token in lowered for token in _AUDIT_PANEL_TOKENS):
+            return True
+    return False
+
+
+def _ensure_audit_panel_step_in_plan(
+    *,
+    plan: AnalysisPlan,
+    context: ResearchContext,
+) -> Tuple[AnalysisPlan, List[ValidationFinding]]:
+    """Append an audit-panel step when the plan declares none.
+
+    The framework already produces audit/robustness evidence (the locked
+    robustness specs, the missingness/data-quality summaries, the causal-audit
+    report), but the plan that the replanner grows often never *declares* an
+    audit display item, so the manuscript ships without a panel tying those
+    checks together. This appends a step that renders one from the existing
+    step_summary.json files — no new analysis, just a display of what was
+    already computed. Skipped when an audit/sensitivity display is already
+    declared.
+    """
+    if any(_step_declares_audit_panel(step) for step in plan.steps or []):
+        return plan, []
+
+    next_index = len(plan.steps or []) + 1
+    audit_step = AnalysisStep(
+        step_id=f"{next_index:02d}_audit_panel",
+        intent=(
+            "Render an audit panel that summarises the analysis's robustness: "
+            "data completeness / missingness, the pre-specified sensitivity / "
+            "robustness specifications, and any leakage or calibration checks. "
+            "Read the prior step_summary.json files under the run directory, do "
+            "not re-run the primary analysis, and save the panel as both PNG and "
+            "SVG with the same stem into ``os.environ['STEP_OUT_DIR']`` (set by "
+            "the runner). Record every produced path in step_summary.json under "
+            "``figure_files``."
+        ),
+        method="visualization",
+        inputs=[],
+        expected_outputs=["figure:audit_panel"],
+        icu_rule_refs=["visualization_rule"],
+    )
+    new_steps = list(plan.steps or []) + [audit_step]
+    preserved = plan.model_copy(update={"steps": new_steps})
+    findings = [
+        ValidationFinding(
+            validator="plan_contract",
+            severity="warning",
+            message=(
+                "Plan declared no audit / sensitivity display item; appended a "
+                f"fallback audit-panel step '{audit_step.step_id}' so the produced "
+                "robustness and data-quality evidence is presented."
+            ),
+            detail={"appended_step_id": audit_step.step_id},
         )
     ]
     return preserved, findings
