@@ -861,7 +861,7 @@ def _method_binding_for_step(
         audit = _T(lang, "denominator, available variables, missingness", "分母、可用变量、缺失情况")
     elif any(token in text for token in ("missing", "qc", "quality", "audit")):
         label = _T(lang, "Missingness and quality audit", "缺失与质量审计")
-        audit = _T(lang, "high-missingness flags, zero artefacts, cohort loss", "高缺失标记、零值伪影、队列损耗")
+        audit = _T(lang, "high-missingness flags, implausible values, cohort loss", "高缺失标记、异常值、队列损耗")
     elif any(token in text for token in ("model", "association", "regression", "glm", "mortality")):
         label = _T(lang, "Statistical association model", "统计关联模型")
         audit = _T(lang, "estimand, covariates, complete-case risk", "估计目标、协变量、完整病例风险")
