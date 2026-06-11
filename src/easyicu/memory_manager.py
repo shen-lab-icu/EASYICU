@@ -250,6 +250,54 @@ _DB_COEFFICIENTS = {
 # 安全系数：覆盖峰值比最终 RSS 更高的情况
 _SAFETY_MARGIN = 1.5
 
+# 基础开销（Python + easyicu 初始化 + DuckDB 引擎），单位 MB
+_BASE_MB = 300
+
+# 工作集重叠系数（2026-06-11 重新校准）。
+#
+# 关键事实：`_MEMORY_COEFFICIENTS` 里的 (fixed, marginal) 是**单概念独立加载**
+# 的峰值，而不是成组加载的增量。成组加载时各概念共享同一批源表扫描 / DuckDB
+# hash 工作集，峰值由**最重的那个概念主导**，其余概念基本是叠加在已驻留工作集
+# 上的少量增量——尤其是 score 组（如 sofa2 + 6 个子分数）：父概念 sofa2 递归
+# 加载时已经把 6 个子分数全拉进来了，再把子分数列进概念列表只是重复计数。
+#
+# 因此组合成本不是 sum，而是 max + share*(sum-max)：
+#   share=0 → 纯 max（完全重叠，适合"父+自身子分数"这类全冗余组）
+#   share=1 → 纯 sum（完全独立，旧行为）
+# 0.25 是在实测点上拟合出的折中：score 组接近 max（实测 peak 几乎不随概念数、
+# 不随 N 增长），多个**独立**重概念（如 20 个 vitals）仍随概念数增长以保留真实
+# OOM 保护。详见 `.tmp/mem_calib_verify.py` 对所有实测点的回归。
+_WORKINGSET_OVERLAP_SHARE = 0.25
+
+
+def _combine_overlap(values: List[float]) -> float:
+    """把一组单概念成本组合成成组加载的等效成本。
+
+    max(values) + share * (sum(values) - max(values))。
+    见 `_WORKINGSET_OVERLAP_SHARE` 的说明：成组加载共享源表工作集，
+    峰值由最重概念主导，其余按 share 折扣叠加。
+    """
+    if not values:
+        return 0.0
+    mx = max(values)
+    rest = sum(values) - mx
+    return mx + _WORKINGSET_OVERLAP_SHARE * rest
+
+
+def _combined_coefficients(concepts: List[str]) -> tuple:
+    """返回成组加载的 (combined_fixed_mb, combined_marginal_mb_per_patient)。
+
+    `estimate_memory_mb` 与 `auto_batch_size` 共用此函数，保证两者的内存
+    模型完全一致（反算 batch_size 时必须用同一组合规则）。
+    """
+    fixed_list = []
+    marginal_list = []
+    for c in concepts:
+        fixed, marginal = _MEMORY_COEFFICIENTS.get(c, _DEFAULT_COEFFICIENT)
+        fixed_list.append(fixed)
+        marginal_list.append(marginal)
+    return _combine_overlap(fixed_list), _combine_overlap(marginal_list)
+
 
 def estimate_memory_mb(
     concepts: List[str],
@@ -258,40 +306,40 @@ def estimate_memory_mb(
 ) -> float:
     """
     估算加载给定概念所需的峰值内存 (MB)。
-    
-    使用亚线性模型：memory = base + sum(fixed_i) + sum(marginal_i) * db_coeff * N
-    其中固定成本来自 DuckDB 表扫描/工作内存，边际成本来自每患者数据量。
-    
-    实测校准：
-      SOFA 10K → 2454 MB, 94K → 4142 MB
-      模型: 300 + 2000 + 0.022 * N → 10K=2520, 94K=4378 (误差<5%)
-    
+
+    模型：memory = (base + combined_fixed + combined_marginal * db_coeff * N) * safety
+
+    其中 combined_fixed / combined_marginal 由 `_combined_coefficients` 用
+    "max + share*rest" 的重叠模型从单概念系数组合而来（见
+    `_WORKINGSET_OVERLAP_SHARE`）。这反映实测的"成组加载共享工作集、峰值由
+    最重概念主导"行为，而不是把各单概念峰值简单相加。
+
+    实测校准（miiv，单次 in-process 流式加载，EASYICU_FORCE_INPROCESS_BATCH=1）：
+      score 组 [sofa2 + 6 子分数] 的真实 peak ~2-2.85 GB，**几乎不随 N 增长**
+      （10k/20k/40k/94k 基本持平，因为加载按源表流式而非一次性持有全部行）。
+      旧的 sum 模型在 94k 估到 ~9.5 GB（3-5× 高估），会在任何可用内存 < 6 GB
+      的机器上误触发低内存分批；新模型估到 ~5.4 GB，安全留有 1.5× 余量但不再
+      在 6 GB 边缘误触发。
+
     Args:
         concepts: 概念列表
         database: 数据库名称
         num_patients: 患者数量
-    
+
     Returns:
         估计峰值内存 (MB)
     """
-    # 计算概念的固定成本和边际成本
-    total_fixed = 0
-    total_marginal = 0
-    for c in concepts:
-        fixed, marginal = _MEMORY_COEFFICIENTS.get(c, _DEFAULT_COEFFICIENT)
-        total_fixed += fixed
-        total_marginal += marginal
-    
+    combined_fixed, combined_marginal = _combined_coefficients(concepts)
+
     # 数据库系数（影响边际成本：不同DB每患者行数不同）
     db_coeff = _DB_COEFFICIENTS.get(database, 1.0)
-    
-    # 基础开销（Python + easyicu 初始化 + DuckDB 引擎）
-    base_mb = 300
-    
-    # 并行加载多个概念时，固定成本可能有重叠（取 max 更合理）
-    # 但保守估计用 sum，安全系数会补偿
-    estimated = (base_mb + total_fixed + total_marginal * db_coeff * num_patients) * _SAFETY_MARGIN
-    
+
+    estimated = (
+        _BASE_MB
+        + combined_fixed
+        + combined_marginal * db_coeff * num_patients
+    ) * _SAFETY_MARGIN
+
     return estimated
 
 
@@ -333,18 +381,15 @@ def auto_batch_size(
         )
         return None
     
-    # 需要分批：基于 (base + fixed + marginal * N) 模型反算 N
-    # 每批的固定开销 = (base_mb + total_fixed) * safety
-    total_fixed = 0
-    total_marginal = 0
-    for c in concepts:
-        fixed, marginal = _MEMORY_COEFFICIENTS.get(c, _DEFAULT_COEFFICIENT)
-        total_fixed += fixed
-        total_marginal += marginal
+    # 需要分批：基于 (base + combined_fixed + combined_marginal * N) 模型反算 N。
+    # 必须与 estimate_memory_mb 用同一组合规则（_combined_coefficients），否则
+    # 反算出的 batch_size 与触发分批的估算自相矛盾。
+    # 每批的固定开销 = (base_mb + combined_fixed) * safety，每批工作集相同。
+    combined_fixed, combined_marginal = _combined_coefficients(concepts)
     db_coeff = _DB_COEFFICIENTS.get(database, 1.0)
-    
-    batch_fixed = (300 + total_fixed) * _SAFETY_MARGIN
-    batch_marginal = total_marginal * db_coeff * _SAFETY_MARGIN  # MB per patient
+
+    batch_fixed = (_BASE_MB + combined_fixed) * _SAFETY_MARGIN
+    batch_marginal = combined_marginal * db_coeff * _SAFETY_MARGIN  # MB per patient
     
     # batch_fixed + batch_marginal * N ≤ budget → N = (budget - batch_fixed) / batch_marginal
     if batch_marginal > 0:
