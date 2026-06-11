@@ -110,6 +110,80 @@ def _step_expects_figure(step: AnalysisStep) -> bool:
 
 
 
+# Markers that a step is *defining* the analysis population (not merely
+# describing "the cohort"). The bare word "cohort" is deliberately excluded —
+# it appears in descriptive intents ("cohort table", "describe the cohort")
+# that do not apply inclusion/exclusion, and would false-positive the contract.
+_COHORT_DEFINITION_MARKERS = (
+    "cohort_def",  # step_id: 01_cohort_definition
+    "cohort definition",
+    "attrition",
+    "eligib",  # eligibility / eligible
+    "inclusion criteria",
+    "exclusion criteria",
+    "inclusion/exclusion",
+    "纳排",
+    "纳入",
+    "排除",
+)
+
+
+def _plan_expects_analysis_cohort(plan: AnalysisPlan) -> bool:
+    """True when the plan clearly intends to *define* an analysis population.
+
+    A cohort-definition / eligibility / attrition step means the agent is
+    applying inclusion/exclusion, so leaving ``plan.cohort`` empty is a contract
+    violation — not a legitimate whole-universe analysis. Mere descriptive
+    mentions of "the cohort" do not count.
+    """
+    for step in plan.steps or []:
+        blob = " ".join([step.step_id or "", step.intent or ""]).lower()
+        if any(marker in blob for marker in _COHORT_DEFINITION_MARKERS):
+            return True
+    return False
+
+
+def _cohort_definition_is_empty(plan: AnalysisPlan) -> bool:
+    cohort = getattr(plan, "cohort", None)
+    if cohort is None:
+        return True
+    return not (getattr(cohort, "inclusion", ()) or getattr(cohort, "exclusion", ()))
+
+
+def _cohort_definition_contract_findings(
+    plan: AnalysisPlan,
+) -> List[ValidationFinding]:
+    """Reject a 纳排 that lives only in free-text step intents.
+
+    The planner must express the analysis cohort's inclusion/exclusion as
+    structured predicates so the framework can materialise and enforce it
+    (``materialize_locked_analysis_cohort``). When the plan implies a cohort
+    but ``plan.cohort`` has no structured predicates, the 纳排 is unenforceable
+    and unauditable and downstream steps silently run on the full universe.
+    Surface that as an error instead of passing silently.
+    """
+    if not _cohort_definition_is_empty(plan):
+        return []
+    if not _plan_expects_analysis_cohort(plan):
+        return []
+    return [
+        ValidationFinding(
+            validator="cohort_contract",
+            severity="error",
+            message=(
+                "The plan defines an analysis cohort in prose (a cohort / "
+                "eligibility / attrition step) but plan.cohort carries no "
+                "structured inclusion/exclusion predicates. The 纳排 cannot be "
+                "materialised, enforced, or audited, and downstream steps will "
+                "run on the full universe. Express the inclusion/exclusion as "
+                "typed cohort predicates (concept_id, time_window, aggregation, "
+                "op, value)."
+            ),
+            detail={"cohort": "empty", "expects_cohort": True},
+        )
+    ]
+
+
 def _enforce_advanced_plan_contract(
     *,
     plan: AnalysisPlan,
