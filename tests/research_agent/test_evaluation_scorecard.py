@@ -379,3 +379,77 @@ def test_score_run_from_dir_missing_files_degrade(tmp_path: Path):
     card = sc.score_run_from_dir(_task(), tmp_path)
     assert card.tristate == "diagnostic_only"
     assert card.code.level == "Fail"
+
+
+def _kind_task(kind: str):
+    return ICUAgentBenchTask(
+        task_id=f"{kind}_demo",
+        kind=kind,
+        title="demo",
+        objective="demo",
+        expected_outputs=["table one"],
+        difficulty="intermediate",
+        gold_answer_status="planned",
+    )
+
+
+def test_reporting_guideline_routing_is_kind_keyed():
+    # Case-neutral routing: keyed on kind, not on any benchmark item.
+    assert sc.reporting_guideline_for_kind("mortality_prediction") == "tripod"
+    assert sc.reporting_guideline_for_kind("subphenotype_clustering") == "internal"
+    assert sc.reporting_guideline_for_kind("longitudinal_trajectory_analysis") == "internal"
+    assert sc.reporting_guideline_for_kind("descriptive_association") == "strobe"
+    assert sc.reporting_guideline_for_kind("sepsis_onset") == "strobe"
+
+
+def test_reporting_completeness_scores_strobe_coverage():
+    checklist = {"summary": {"name": "STROBE", "n_total": 22, "n_addressed": 15,
+                             "n_partial": 0, "n_open": 7, "coverage": 0.682}}
+    dim = sc.score_reporting_completeness(_kind_task("sepsis_onset"), checklist=checklist)
+    assert dim.subscore == pytest.approx(0.682, abs=1e-3)
+    assert dim.level == "Partial"
+    assert dim.signals["guideline"] == "strobe"
+    assert dim.signals["n_open"] == 7
+
+
+def test_reporting_completeness_unscored_for_clustering_without_checklist():
+    # No EQUATOR guideline + no emitted internal core -> unscored, not penalised.
+    dim = sc.score_reporting_completeness(_kind_task("subphenotype_clustering"), checklist={})
+    assert dim.subscore is None
+    assert dim.level is None
+    assert dim.signals["guideline"] == "internal"
+
+
+def test_score_run_populates_reporting_completeness_and_six_dim_view():
+    checklist = {"summary": {"n_total": 22, "n_addressed": 22, "n_partial": 0,
+                             "n_open": 0, "coverage": 1.0}}
+    card = sc.score_run(
+        _kind_task("descriptive_association"),
+        gates=_gates(),
+        plan_steps=[{"intent": "table one"}],
+        evidence_audit={"evidence_complete": True, "missing_evidence_count": 0},
+        numeric_audit={"numeric_verified": True},
+        claim_rows=[],
+        reporting_checklist=checklist,
+    )
+    assert card.reporting_completeness is not None
+    assert card.reporting_completeness.level == "Full"
+    # Canonical Fig.3 column order stays at five; six-dim view adds reporting.
+    assert len(card.dimensions()) == 5
+    assert len(card.all_dimensions()) == 6
+    assert card.all_dimensions()[-1].name == "reporting_completeness"
+
+
+def test_score_run_reporting_unscored_when_no_checklist():
+    card = sc.score_run(
+        _kind_task("descriptive_association"),
+        gates=_gates(),
+        plan_steps=[{"intent": "table one"}],
+        evidence_audit={"evidence_complete": True, "missing_evidence_count": 0},
+        numeric_audit={"numeric_verified": True},
+        claim_rows=[],
+    )
+    # Unscored reporting dim is still attached but excluded from the six-dim view.
+    assert card.reporting_completeness is not None
+    assert card.reporting_completeness.subscore is None
+    assert len(card.all_dimensions()) == 6  # attached even when unscored
