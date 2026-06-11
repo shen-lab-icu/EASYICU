@@ -159,3 +159,93 @@ def test_primary_or_leaves_non_or_benchmark_unscored(tmp_path: Path) -> None:
         )
         is None
     )
+
+
+def test_bench_item_to_task_surfaces_finding_substrings_as_hazard_key():
+    from types import SimpleNamespace
+
+    from tools.run_research_agent_bench import _bench_item_to_task
+
+    item = SimpleNamespace(
+        key="sofa2_mortality",
+        name="SOFA-2 -> mortality",
+        research_question="Is SOFA-2 associated with mortality?",
+        expected_finding_substrings=["sofa2", "completeness"],
+        expected_artifact_substrings=["table_one", "forest figure"],
+    )
+    task = _bench_item_to_task(item)
+    assert task.task_id == "sofa2_mortality"
+    assert task.gold_answer is not None
+    assert task.gold_answer.required_warnings == ["sofa2", "completeness"]
+    assert task.gold_answer_status == "frozen"
+
+
+def test_five_dim_scorecard_is_additive_and_robust(tmp_path):
+    from types import SimpleNamespace
+
+    from tools.run_research_agent_bench import _five_dim_scorecard
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    gates = {
+        "required_step_count": 3,
+        "completed_step_count": 3,
+        "failed_steps": [],
+        "execution_complete": True,
+        "evidence_complete": True,
+        "numeric_verified": True,
+        "missing_evidence_count": 0,
+        "manuscript_ready": True,
+    }
+    (run_dir / "run_status.json").write_text(
+        json.dumps({"gates": gates}), encoding="utf-8"
+    )
+    (run_dir / "analysis_plan.json").write_text(
+        json.dumps({"steps": [{"intent": "table one + forest figure + completeness audit"}]}),
+        encoding="utf-8",
+    )
+    (run_dir / "evidence_audit.json").write_text(
+        json.dumps(
+            {
+                "evidence_complete": True,
+                "missing_evidence_count": 0,
+                "kinds": {"table": 1, "figure": 1, "metric": 1, "cohort": 1, "model": 1},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "numeric_audit.json").write_text(
+        json.dumps({"numeric_verified": True}), encoding="utf-8"
+    )
+    (run_dir / "claim_ledger.csv").write_text(
+        "claim_id,status\nc1,bound\n", encoding="utf-8"
+    )
+
+    item = SimpleNamespace(
+        key="sofa2_mortality",
+        name="SOFA-2 -> mortality",
+        research_question="Is SOFA-2 associated with mortality?",
+        expected_finding_substrings=["completeness"],
+        expected_artifact_substrings=["table_one"],
+    )
+    card = _five_dim_scorecard(
+        run_dir=run_dir, item=item, or_value=0.8, manifest={"findings": []}
+    )
+    assert card["task_id"] == "sofa2_mortality"
+    assert card["tristate"] == "gate_reportable"
+    assert card["code"]["level"] == "Full"
+    # result-validity stays unscored (no locked reference for legacy items)
+    assert card["result_validity"]["level"] is None
+
+
+def test_five_dim_scorecard_never_raises_on_empty_run(tmp_path):
+    from types import SimpleNamespace
+
+    from tools.run_research_agent_bench import _five_dim_scorecard
+
+    item = SimpleNamespace(key="x", expected_finding_substrings=[])
+    card = _five_dim_scorecard(
+        run_dir=tmp_path, item=item, or_value=None, manifest={"findings": []}
+    )
+    # empty run dir -> diagnostic_only, but never an exception
+    assert card.get("tristate") == "diagnostic_only" or "error" in card
