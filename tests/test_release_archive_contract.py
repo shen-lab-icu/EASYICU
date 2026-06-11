@@ -80,7 +80,6 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(tmp_path: 
             "docs/images/01_mode_selection.jpg",
             "docs/images/06_cross_db_benchmark.jpg",
             "examples/research_agent_mortality_sofa.py",
-            "examples/research_agent_real_llm_smoke.py",
             "pytest.ini",
             "src/easyicu/data/concept-dict.json",
             "src/easyicu/data/data-sources.json",

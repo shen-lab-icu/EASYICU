@@ -74,9 +74,15 @@ def synthetic_cohort():
     n = 800
     age = rng.normal(65, 15, n).clip(18, 95)
     base = rng.integers(1, 14, size=n, endpoint=False)
+    # ``miss`` = component under-measurement (recorded via sofa2_n_components),
+    # ``truly_low`` = a genuine low score. A SOFA-2 of 0 is only ever a real
+    # low score here; under-measured patients keep their real ``base`` score
+    # (we do NOT collapse missing components into a spurious 0). The death
+    # bump on ``miss`` encodes legitimate MNAR (sicker patients measured less),
+    # not a zero artefact.
     miss = rng.random(n) < 0.10
     truly_low = rng.random(n) < 0.05
-    sofa2 = np.where(miss, 0, np.where(truly_low, 0, base))
+    sofa2 = np.where(truly_low, 0, base)
     logit = -3.5 + 0.18 * sofa2 + 0.012 * (age - 65) + np.where(miss, 1.5, 0.0)
     p = 1.0 / (1.0 + np.exp(-logit))
     death = (rng.random(n) < p).astype(int)
