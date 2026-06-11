@@ -24,11 +24,14 @@ underscore-prefixed names by re-import) so the file stays readable.
 
 from __future__ import annotations
 
+import csv
 import json
 import math
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .icu_rules import detect_overadjustment
 from .scalar_utils import (
     _first_numeric_effect_from_text,
     _first_numeric_scalar_with_key_fragment,
@@ -76,7 +79,10 @@ def _problematic_metric_keys(
             bad = not math.isfinite(float(value))
         elif isinstance(value, str):
             text = value.strip().lower()
-            bad = text in {"", "nan", "none", "null", "model not fitted"} or "not fitted" in text
+            bad = (
+                text in {"", "nan", "none", "null", "model not fitted"}
+                or "not fitted" in text
+            )
         if bad:
             problems.append({"key": path, "value": value})
 
@@ -105,9 +111,6 @@ def _step_expects_figure(step: AnalysisStep) -> bool:
         "figure" in str(output or "").lower() or "plot" in str(output or "").lower()
         for output in (step.expected_outputs or [])
     )
-
-
-
 
 
 # Markers that a step is *defining* the analysis population (not merely
@@ -423,7 +426,9 @@ def _enforce_advanced_plan_contract(
         ).lower()
         return any(marker in text for marker in markers)
 
-    relevant_indexes = [idx for idx, step in enumerate(plan.steps) if _is_relevant(step)]
+    relevant_indexes = [
+        idx for idx, step in enumerate(plan.steps) if _is_relevant(step)
+    ]
     if not relevant_indexes:
         return plan, []
 
@@ -441,7 +446,9 @@ def _enforce_advanced_plan_contract(
                 combined_outputs.append(item)
 
     current = relevant_steps[0]
-    missing_outputs = [item for item in required_outputs if item not in current.expected_outputs]
+    missing_outputs = [
+        item for item in required_outputs if item not in current.expected_outputs
+    ]
     needs_normalisation = (
         len(relevant_indexes) != 1
         or bool(missing_outputs)
@@ -650,9 +657,7 @@ def _split_table_and_figure_outputs_in_plan(
         # object with a companion figure, and the agent forgets to draw
         # the figure when both are demanded in the same script.
         has_non_figure_payload = any(
-            (out or "").lower().startswith(
-                ("table:", "statistic:", "log:", "model:")
-            )
+            (out or "").lower().startswith(("table:", "statistic:", "log:", "model:"))
             or (out or "").lower() in {"table", "statistic", "log", "model"}
             for out in non_figure_outputs
         )
@@ -1128,9 +1133,9 @@ def _primary_effect_from_statistic_dicts(payload: Mapping[str, Any]) -> Optional
     for key, value in payload.items():
         source_path = str(key)
         if isinstance(value, Mapping):
-            if source_path.lower().startswith("statistic:") and _primary_effect_name_matches(
-                source_path
-            ):
+            if source_path.lower().startswith(
+                "statistic:"
+            ) and _primary_effect_name_matches(source_path):
                 effect = _primary_effect_from_mapping(
                     value,
                     require_ci=True,
@@ -1228,9 +1233,7 @@ def _summary_primary_predictor(step_summary: Mapping[str, Any]) -> str:
 
 
 def _summary_has_association_effect(step_summary: Mapping[str, Any]) -> bool:
-    return any(
-        step_summary.get(key) is not None for key in _ASSOCIATION_EFFECT_KEYS
-    )
+    return any(step_summary.get(key) is not None for key in _ASSOCIATION_EFFECT_KEYS)
 
 
 def _exposure_names_match(required: str, actual: str) -> bool:
@@ -1307,6 +1310,105 @@ def _primary_exposure_contract_findings(
     ]
 
 
+# Coefficient-table detection rides the stable column contract, not a filename:
+# runs emit primary_association.csv / model_coefficients.csv / regression_results.csv
+# interchangeably, but a model coefficient table always carries a ``variable``
+# column plus at least one coefficient-like column. Requiring both excludes
+# variable-listing tables that are NOT models (missingness.csv, table_one.csv),
+# so they cannot inject phantom covariates into the overadjustment check.
+_COEF_TABLE_VALUE_COLUMNS = frozenset(
+    {"coef", "beta", "estimate", "log_or", "odds_ratio", "or", "hazard_ratio", "hr"}
+)
+_NON_COVARIATE_TERMS = frozenset({"const", "intercept", "(intercept)"})
+
+
+def read_model_covariate_names(directory: Path) -> List[str]:
+    """Variable names from every model coefficient table under ``directory``.
+
+    De-duplicated, intercept rows dropped, first-seen order preserved. Returns
+    ``[]`` when the directory is absent or holds no coefficient table — the
+    overadjustment check then stays silent rather than guessing. Filename-agnostic:
+    a CSV counts as a coefficient table only when its header has a ``variable``
+    column and a coefficient-like column, so non-model tables are ignored.
+    """
+    names: List[str] = []
+    base = Path(directory)
+    if not base.exists():
+        return names
+    for path in sorted(base.rglob("*.csv")):
+        try:
+            with path.open(newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                header = {(h or "").strip().lower() for h in (reader.fieldnames or [])}
+                if "variable" not in header or header.isdisjoint(
+                    _COEF_TABLE_VALUE_COLUMNS
+                ):
+                    continue
+                for row in reader:
+                    value = (row.get("variable") or "").strip()
+                    if (
+                        value
+                        and value.lower() not in _NON_COVARIATE_TERMS
+                        and value not in names
+                    ):
+                        names.append(value)
+        except (OSError, ValueError):
+            continue
+    return names
+
+
+def _primary_exposure_overadjustment_findings(
+    *,
+    step: AnalysisStep,
+    context: ResearchContext,
+    out_dir: Path,
+) -> List[ValidationFinding]:
+    """Hard-block overadjustment: adjusting for a constituent of the exposure.
+
+    When the question names a primary exposure that is a known composite/derived
+    score and this step's fitted model conditioned on one of that exposure's
+    definitional constituents, emit an error finding routed through the same
+    in-run contract-repair loop the exposure-contract auditor uses (re-fit in
+    run, no full restart). This is an objective design error — conditioning on a
+    component of the exposure nulls the very signal under study — never an
+    analytical-preference call: it dictates only the removal of the offending
+    constituent from the adjustment set, not the model form, covariates beyond
+    the offenders, or estimator. The exposure must be declared
+    (``context.primary_exposure``); it is never inferred, so the check stays
+    silent rather than guessing.
+    """
+    exposure = (getattr(context, "primary_exposure", None) or "").strip()
+    if not exposure:
+        return []
+    covariates = read_model_covariate_names(out_dir)
+    if not covariates:
+        return []
+    offenders = detect_overadjustment(exposure, covariates)
+    if not offenders:
+        return []
+    joined = ", ".join(f"`{o}`" for o in offenders)
+    return [
+        ValidationFinding(
+            validator="overadjustment_auditor",
+            severity="error",
+            message=(
+                f"The primary exposure `{exposure}` is a composite/derived score, "
+                f"and this model adjusted for {joined}, which constitute(s) or "
+                f"derive(s) it. Conditioning on a component of the exposure removes "
+                f"the signal under study (overadjustment). Re-fit dropping {joined} "
+                f"from the adjustment set; keep only confounders that are neither "
+                f"constituents nor downstream mediators of the exposure."
+            ),
+            detail={
+                "kind": "overadjustment",
+                "step_id": step.step_id,
+                "exposure": exposure,
+                "offending_covariates": list(offenders),
+            },
+        )
+    ]
+
+
 def _step_contract_findings(
     *,
     step: AnalysisStep,
@@ -1361,21 +1463,18 @@ def _step_contract_findings(
             )
         )
 
-    effect_required = (
-        not figure_only_step
-        and (
-            any(
-                token in expected
-                for token in (
-                    "adjusted_or_ci",
-                    "primary_association",
-                    "odds_ratio",
-                    "primary_or",
-                    "adjusted_or",
-                )
+    effect_required = not figure_only_step and (
+        any(
+            token in expected
+            for token in (
+                "adjusted_or_ci",
+                "primary_association",
+                "odds_ratio",
+                "primary_or",
+                "adjusted_or",
             )
-            or "primary_association" in step_id
         )
+        or "primary_association" in step_id
     )
     if not effect_required and not figure_only_step and "association" in expected:
         effect_required = (
@@ -1384,9 +1483,13 @@ def _step_contract_findings(
             or "estimate" in intent
             or "odds" in expected
         )
-    if not effect_required and not figure_only_step and (
-        ("logistic" in expected or "logistic" in intent or "odds" in intent)
-        and ("model" in step_id or "model" in expected or "regression" in intent)
+    if (
+        not effect_required
+        and not figure_only_step
+        and (
+            ("logistic" in expected or "logistic" in intent or "odds" in intent)
+            and ("model" in step_id or "model" in expected or "regression" in intent)
+        )
     ):
         effect_required = True
     if effect_required:
@@ -1575,9 +1678,8 @@ def _step_contract_findings(
     # splitter handles decomposition in production, so we treat the figure
     # output as an optional companion here. This mirrors how downstream
     # contracts evaluate the parent and the figure-only child separately.
-    figure_required = (
-        ("publication-ready figure" in intent)
-        or (figure_only_step and "figure:" in expected)
+    figure_required = ("publication-ready figure" in intent) or (
+        figure_only_step and "figure:" in expected
     )
     if figure_required:
         # 🔧 2026-05-16: when the step itself declares it skipped (typically
@@ -1588,7 +1690,9 @@ def _step_contract_findings(
         # already treats `skipped` as a first-class signal. Otherwise figure-
         # only steps would block the entire run whenever a sensitivity branch
         # has no eligible cohort.
-        _skipped = step_summary.get("skipped") if isinstance(step_summary, dict) else None
+        _skipped = (
+            step_summary.get("skipped") if isinstance(step_summary, dict) else None
+        )
         if _skipped:
             return findings
         figure_value = None
@@ -1612,7 +1716,12 @@ def _step_contract_findings(
             # recommends recording multiple figure paths in list-valued keys
             # such as ``figure_files`` / ``figure_file`` / ``figure_paths``.
             # Accept those when they contain at least one figure-shaped path.
-            for list_key in ("figure_files", "figure_file", "figure_paths", "plot_files"):
+            for list_key in (
+                "figure_files",
+                "figure_file",
+                "figure_paths",
+                "plot_files",
+            ):
                 candidate = (step_summary or {}).get(list_key)
                 if isinstance(candidate, (list, tuple)):
                     candidate_values = []
@@ -1624,7 +1733,9 @@ def _step_contract_findings(
                         else:
                             candidate_values.append(str(item))
                     if any(
-                        value.lower().endswith((".png", ".svg", ".pdf", ".tiff", ".tif"))
+                        value.lower().endswith(
+                            (".png", ".svg", ".pdf", ".tiff", ".tif")
+                        )
                         for value in candidate_values
                     ):
                         figure_value = candidate
@@ -1635,7 +1746,14 @@ def _step_contract_findings(
                     f"Step {step.step_id} was expected to produce a figure artifact, "
                     "but the step summary did not record any figure path or figure output."
                 ),
-                ("figure_path", "figure_files", "figure_file", "plot_path", "png", "svg"),
+                (
+                    "figure_path",
+                    "figure_files",
+                    "figure_file",
+                    "plot_path",
+                    "png",
+                    "svg",
+                ),
             )
 
     return findings
@@ -1655,9 +1773,7 @@ def _step_contract_repair_guidance(
         # the middle of the loop.
         step_summary = {}
     predictor = str(
-        step_summary.get("primary_predictor")
-        or step_summary.get("predictor")
-        or ""
+        step_summary.get("primary_predictor") or step_summary.get("predictor") or ""
     ).strip()
     summary_text = json.dumps(step_summary or {}, ensure_ascii=False, default=str)
     if predictor and predictor in summary_text:
@@ -1724,16 +1840,19 @@ def _step_contract_repair_guidance(
     expected = " ".join(str(item).lower() for item in (step.expected_outputs or []))
     step_id = (step.step_id or "").lower()
     intent = (step.intent or "").lower()
-    effect_required = any(
-        token in expected
-        for token in (
-            "adjusted_or_ci",
-            "primary_association",
-            "odds_ratio",
-            "primary_or",
-            "adjusted_or",
+    effect_required = (
+        any(
+            token in expected
+            for token in (
+                "adjusted_or_ci",
+                "primary_association",
+                "odds_ratio",
+                "primary_or",
+                "adjusted_or",
+            )
         )
-    ) or "primary_association" in step_id
+        or "primary_association" in step_id
+    )
     if not effect_required and "association" in expected:
         effect_required = (
             "model" in step_id
@@ -1754,7 +1873,15 @@ def _step_contract_repair_guidance(
             "contract by leaving association fields null."
         )
     prediction_step = (
-        any(token in step_id for token in ("prediction", "model_training", "training_and_evaluation", "performance"))
+        any(
+            token in step_id
+            for token in (
+                "prediction",
+                "model_training",
+                "training_and_evaluation",
+                "performance",
+            )
+        )
         or "prediction" in intent
     )
     prediction_required = (
@@ -1790,9 +1917,11 @@ def _step_contract_repair_guidance(
             "to int before fitting scikit-learn pipelines, or route them through a "
             "numeric branch with median imputation after conversion."
         )
-    clustering_required = any(
-        token in expected for token in ("cluster", "silhouette")
-    ) or any(token in step_id for token in ("cluster", "trajectory")) or "clustering" in intent
+    clustering_required = (
+        any(token in expected for token in ("cluster", "silhouette"))
+        or any(token in step_id for token in ("cluster", "trajectory"))
+        or "clustering" in intent
+    )
     if clustering_required:
         guidance.append(
             "This clustering step must write machine-readable clustering metrics "
