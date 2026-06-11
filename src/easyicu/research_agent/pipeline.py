@@ -370,6 +370,8 @@ class ResearchAgentPipeline:
         enable_probe_step: bool = True,
         enable_replanning: bool = True,
         max_total_steps: int = 12,
+        max_consecutive_noop_replans: int = 2,
+        max_replans: int = 0,
         max_numeric_claims_per_step: int = 100,
         writer_digest_widened: bool = False,
         writer_digest_secondary_cap_per_step: int = 20,
@@ -554,6 +556,16 @@ class ResearchAgentPipeline:
         # the replanner overflow guard (see pipeline_execute.py).
         self._max_total_steps = (
             int(max_total_steps) if max_total_steps and max_total_steps > 0 else 0
+        )
+        # Replan convergence guards (see pipeline_config / pipeline_execute).
+        # 0 disables the guard.
+        self._max_consecutive_noop_replans = (
+            int(max_consecutive_noop_replans)
+            if max_consecutive_noop_replans and max_consecutive_noop_replans > 0
+            else 0
+        )
+        self._max_replans = (
+            int(max_replans) if max_replans and max_replans > 0 else 0
         )
         self._max_numeric_claims_per_step = (
             int(max_numeric_claims_per_step)
