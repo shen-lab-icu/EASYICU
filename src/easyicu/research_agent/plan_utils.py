@@ -143,6 +143,23 @@ def _plan_expects_analysis_cohort(plan: AnalysisPlan) -> bool:
     return False
 
 
+def _cohort_definition_prose(plan: AnalysisPlan) -> str:
+    """Concatenated ``intent`` prose of the plan's cohort-defining step(s).
+
+    This is the free-text 纳排 the agent wrote in lieu of a structured
+    ``plan.cohort``; ``cohort_repair`` translates it into typed predicates.
+    Uses the same markers as :func:`_plan_expects_analysis_cohort` so the
+    definition of "a cohort step" stays in one place.
+    """
+    prose: List[str] = []
+    for step in plan.steps or []:
+        blob = " ".join([step.step_id or "", step.intent or ""]).lower()
+        if any(marker in blob for marker in _COHORT_DEFINITION_MARKERS):
+            if step.intent:
+                prose.append(step.intent)
+    return "\n".join(prose)
+
+
 def _cohort_definition_is_empty(plan: AnalysisPlan) -> bool:
     cohort = getattr(plan, "cohort", None)
     if cohort is None:
