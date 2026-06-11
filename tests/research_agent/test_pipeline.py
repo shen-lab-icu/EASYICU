@@ -414,6 +414,122 @@ print(json.dumps(summary))
     ]
 
 
+def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
+    ra, tmp_path: Path
+):
+    """A contract repair that *introduces* a crash must not strand the step.
+
+    Reproduces the E1 20260611 deepseek-v4-flash failure: the primary
+    association step ran (rc=0) but failed the effect-size contract; the
+    contract repair then produced code that computed the OR and wrote its
+    table but crashed on a trailing line (``AttributeError`` on a renamed
+    column). With ``max_code_repair_attempts=1`` the single *shared* budget
+    was consumed by the contract repair, so the runtime crash fail-closed
+    even though the analysis was otherwise valid. Runtime crashes now carry
+    their own repair budget, so the traceback gets a repair pass.
+    """
+
+    class ContractThenCrashLLM:
+        name = "contract-then-crash-llm"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            user = next(
+                (m.content for m in reversed(messages) if m.role == "user"), ""
+            )
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps({
+                    "research_question": "Is the exposure associated with mortality?",
+                    "steps": [{
+                        "step_id": "05_primary_association",
+                        "intent": "Estimate the adjusted odds ratio for the exposure.",
+                        "inputs": ["age", "death"],
+                        "expected_outputs": ["statistic:primary_association"],
+                        "method": "logistic",
+                        "icu_rule_refs": ["aggregation_rule_for"],
+                    }],
+                    "rationale": "minimal contract-then-crash repair test",
+                })
+            if "REPAIR THE PYTHON CODE" in upper:
+                # First repair pass is the *contract* repair (run_log says so):
+                # it computes the OR and writes the table, then crashes on a
+                # trailing line — exactly the run10 trap.
+                if "STEP CONTRACT" in upper:
+                    return (
+                        "import os\n"
+                        "import pandas as pd\n"
+                        "out = os.environ['STEP_OUT_DIR']\n"
+                        "pd.DataFrame({'predictor': ['exposure'], 'odds_ratio': [1.47]})"
+                        ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
+                        "class _Row:\n    pass\n"
+                        "row = _Row()\n"
+                        "_ = row.log_odds  # AttributeError after the OR is written\n"
+                    )
+                # Second repair pass is the *runtime* repair (traceback in
+                # run_log): produce a clean script that records the effect.
+                return (
+                    "import json, os\n"
+                    "import pandas as pd\n"
+                    "out = os.environ['STEP_OUT_DIR']\n"
+                    "pd.DataFrame({'predictor': ['exposure'], 'odds_ratio': [1.47]})"
+                    ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
+                    "summary = {'primary_or': 1.47, 'odds_ratio': 1.47, "
+                    "'primary_predictor': 'exposure'}\n"
+                    "with open(os.path.join(out, 'step_summary.json'), 'w') as f:\n"
+                    "    json.dump(summary, f)\n"
+                    "print(json.dumps(summary))\n"
+                )
+            if "WRITE THE PYTHON CODE" in upper:
+                # Initial script runs fine (rc=0) but omits the effect size,
+                # so it fails the machine-readable effect contract.
+                return (
+                    "import json, os\n"
+                    "import pandas as pd\n"
+                    "out = os.environ['STEP_OUT_DIR']\n"
+                    "pd.DataFrame({'n': [3]})"
+                    ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
+                    "summary = {'n': 3}\n"
+                    "with open(os.path.join(out, 'step_summary.json'), 'w') as f:\n"
+                    "    json.dump(summary, f)\n"
+                    "print(json.dumps(summary))\n"
+                )
+            if "INTERPRET THE RESULTS" in upper:
+                return "The adjusted odds ratio was estimated {evidence:primary_association}."
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return (
+                    "# Title\n\n## Results\n\nThe adjusted odds ratio was estimated "
+                    "{evidence:primary_association}.\n\n(left to the human author)"
+                )
+            return "{}"
+
+    cohort = pd.DataFrame({"age": [50, 60, 70], "death": [0, 1, 0]})
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ContractThenCrashLLM(),
+        enable_literature=False,
+        # Force the LLM repair path so the runtime crash exercises the budget,
+        # not a deterministic pattern repair.
+        enable_deterministic_runner_repair=False,
+    )
+    result = pipeline.run(
+        question="Is the exposure associated with mortality?",
+        cohort=cohort,
+        cohort_name="contract_then_crash_test",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    partial = json.loads(
+        (Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    record = _step_record_by_id(partial["per_step_records"], "05_primary_association")
+    # The step recovered (no fail-closed) and used a contract repair *and* a
+    # separate runtime repair.
+    assert record["status"] == "ok"
+    assert record["code_repair_attempts"] == 2
+    assert record.get("runtime_repair_attempts") == 1
+
+
 def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: Path):
     from easyicu.research_agent.pipeline import _promote_prior_publication_bundle
 
