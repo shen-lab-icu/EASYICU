@@ -29,7 +29,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .agents import (
     AnalyzerAgent,
@@ -122,6 +122,23 @@ def _demote_cosmetic_visual_findings(
     return demoted, blocking_errors
 
 
+def _plan_signature(
+    plan: AnalysisPlan,
+) -> Tuple[Tuple[str, Optional[str], Tuple[str, ...]], ...]:
+    """Substantive fingerprint of a plan's step DAG, ignoring prose.
+
+    Two plans with the same ``(step_id, method, expected_outputs)`` per step
+    are analytically identical even if the replanner reworded each step's
+    ``intent``. Used by ``_maybe_replan`` to suppress no-op revisions that
+    would otherwise burn an LLM call and the convergence budget without
+    changing the analysis.
+    """
+    return tuple(
+        (step.step_id, step.method, tuple(step.expected_outputs))
+        for step in plan.steps
+    )
+
+
 def run_execute_phase(
     pipeline: "ResearchAgentPipeline",
     *,
@@ -140,6 +157,10 @@ def run_execute_phase(
     findings = plan_result.findings
     plan = plan_result.plan
     plan_path = plan_result.plan_path
+    # Replan convergence bookkeeping (see _maybe_replan). ``noop_streak``
+    # counts consecutive substantively-identical revisions; ``total`` counts
+    # substantive revisions; ``disabled`` latches once a guard trips.
+    _replan_state = {"noop_streak": 0, "total": 0, "disabled": False}
     role_resolver = plan_result.role_resolver
     llm_signature = plan_result.llm_signature
     prompt_version = plan_result.prompt_version
@@ -338,6 +359,10 @@ def run_execute_phase(
         nonlocal plan_path
         if not pipeline._enable_replanning or skill_obj is not None:
             return current_plan
+        if _replan_state["disabled"]:
+            # A convergence guard already tripped earlier in this run; stop
+            # paying for replanner calls that cannot change the outcome.
+            return current_plan
         replanner = ReplannerAgent(role_resolver("planner"))
         try:
             revised = replanner.run(
@@ -390,8 +415,33 @@ def run_execute_phase(
                 )
             )
 
-        if revised.model_dump(mode="json") == current_plan.model_dump(mode="json"):
+        # No-op detection on the *substantive* step DAG, not the full
+        # model_dump. A verbose replanner can rewrite each step's ``intent``
+        # prose without changing the analysis; that must not count as a
+        # revision or burn the convergence budget. (E1 20260611: revisions
+        # 4-6 carried an identical DAG, each a wasted LLM call, and the run
+        # was killed mid-step-7 before finishing.)
+        if _plan_signature(revised) == _plan_signature(current_plan):
+            _replan_state["noop_streak"] += 1
+            cap_noop = pipeline._max_consecutive_noop_replans
+            if cap_noop and _replan_state["noop_streak"] >= cap_noop:
+                _replan_state["disabled"] = True
+                findings.append(
+                    ValidationFinding(
+                        validator="replanner",
+                        severity="info",
+                        message=(
+                            f"Replanning disabled after {_replan_state['noop_streak']} "
+                            "consecutive no-op revisions (unchanged step plan)."
+                        ),
+                        detail={"reason": reason},
+                    )
+                )
             return current_plan
+
+        # Substantive revision: reset the no-op streak and register it.
+        _replan_state["noop_streak"] = 0
+        _replan_state["total"] += 1
         plan_path = _register_plan_revision(revised, reason=reason)
         plan_result.plan_path = plan_path
         findings.append(
@@ -405,6 +455,20 @@ def run_execute_phase(
                 },
             )
         )
+        cap_total = pipeline._max_replans
+        if cap_total and _replan_state["total"] >= cap_total:
+            _replan_state["disabled"] = True
+            findings.append(
+                ValidationFinding(
+                    validator="replanner",
+                    severity="info",
+                    message=(
+                        "Replanning disabled after reaching the budget of "
+                        f"{cap_total} substantive revisions."
+                    ),
+                    detail={"reason": reason},
+                )
+            )
         return revised
 
     probe_step_id = "00_probe"

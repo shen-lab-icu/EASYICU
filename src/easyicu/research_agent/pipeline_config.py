@@ -134,6 +134,21 @@ class PipelineConfig:
     # the planner expand a simple SOFA-2 association to 30 steps with 13
     # revisions before being killed at step 20; this cap prevents that.
     max_total_steps: int = 12
+    # --- replanning convergence guards (2026-06-11) ---------------------
+    # The replanner runs after the probe and after every clean step. A
+    # verbose model can return cosmetically-different but substantively
+    # identical plans, each costing a full LLM call: the E1 20260611 real
+    # run produced revisions 4-6 carrying an identical step DAG, and the
+    # run was killed mid-step-7 before finishing. These two guards stop the
+    # churn without removing genuine adaptivity.
+    #   * ``max_consecutive_noop_replans`` — stop invoking the replanner
+    #     once it returns this many revisions in a row whose substantive
+    #     step DAG (step_id + method + expected_outputs) is unchanged.
+    #   * ``max_replans`` — hard backstop on the total number of
+    #     *substantive* revisions in a run.
+    # 0 disables either guard (legacy behaviour).
+    max_consecutive_noop_replans: int = 2
+    max_replans: int = 0
     # Hard cap on numeric-claim leaves registered per single step.
     # Prevents one step that dumps a full interaction matrix into
     # step_summary.json from creating hundreds of footnotes when its
