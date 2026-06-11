@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 from .schema import AggregationRule, TimeWindow, VariableRole
 
@@ -63,6 +63,39 @@ class ConceptHint:
     ordinal_levels: Optional[Tuple[int, ...]] = None
     aggregation_default: AggregationRule = AggregationRule.ANY
     pitfalls: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MethodologicalPrinciple:
+    """A cross-cutting, database-agnostic ICU-analysis reasoning principle.
+
+    Unlike :class:`ConceptHint` (per-concept), these encode reasoning
+    hazards that apply *across* concepts and analysis phases. They are
+    deliberately **case-neutral** — no single benchmark task, variable,
+    score, or database is privileged (prompt hygiene). Database-specific
+    *variation* is recorded separately in ``cross_db_note`` so the agent
+    reasons comprehensively across the supported databases instead of
+    hard-coding one database's behaviour. The ``cross_db_note`` content is
+    illustrative ("e.g. ..."), not an exhaustive per-database contract.
+    """
+
+    id: str
+    # Coarse analysis phase the principle guards: one of
+    # ``cohort`` / ``features`` / ``label`` / ``modeling`` /
+    # ``clustering`` / ``interpretation``.
+    phase: str
+    # Impartiality contract. ``error`` = an objective methodological mistake
+    # that is wrong under *any* study design (e.g. outcome leakage, averaging
+    # an ordinal score, train/test split that leaks a patient across folds) —
+    # safe to flag firmly and to gate on. ``caution`` = a defensible analytical
+    # *choice* (e.g. mean vs median, dedup vs cluster-robust SE, imputation
+    # strategy, which metric) — the agent must only prompt the analyst to
+    # state/justify the choice, NEVER override it. This split is deliberate:
+    # the rule layer must not impose our analytical preferences on the user.
+    kind: Literal["error", "caution"]
+    principle: str
+    rationale: str
+    cross_db_note: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +484,425 @@ def default_time_windows() -> List[TimeWindow]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Cross-cutting methodological principles (case-neutral, cross-database)
+# ---------------------------------------------------------------------------
+#
+# These complement the per-concept hints above with the reasoning hazards
+# that survive any data layer. They are the general half of the "common ICU
+# data-analysis pitfalls" taxonomy (see ``docs/icu_pitfall_crosswalk.md``):
+# the structural half (table location, derived reuse, id hierarchy, time
+# alignment, unit harmonisation) is handled upstream by the EasyICU concept /
+# converter / cohort layer, so it is recorded here only where a *residual*
+# reasoning step remains. Everything below is deliberately database-agnostic;
+# the per-database variation lives in ``cross_db_note`` as illustration.
+
+GENERAL_ICU_ANALYSIS_PRINCIPLES: Tuple[MethodologicalPrinciple, ...] = (
+    # --- objective errors (wrong under any design; safe to flag firmly) ------
+    MethodologicalPrinciple(
+        id="diagnosis_membership_not_timing",
+        phase="cohort",
+        kind="error",
+        principle=(
+            "Use diagnosis codes for cohort membership only, not as event "
+            "timing; derive 'when' from a timestamped source."
+        ),
+        rationale=(
+            "A billing/coding diagnosis says a condition was present during the "
+            "admission, not when it began or whether it was ICU-acquired."
+        ),
+        cross_db_note=(
+            "Timing availability varies — e.g. MIMIC diagnoses_icd has no "
+            "timestamp, eICU diagnosis carries a diagnosisoffset, Amsterdam/HiRID "
+            "do not use ICD; only trust a code's time if the source provides one."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="dedupe_to_patient_unit",
+        phase="cohort",
+        kind="error",
+        principle=(
+            "Do not treat multiple records or stays from the same patient as "
+            "independent observations; account for within-patient correlation "
+            "by the study's chosen design (one record per patient, OR "
+            "cluster-robust / mixed-effects estimation — the choice is yours)."
+        ),
+        rationale=(
+            "The independence assumption is violated by repeated measures; "
+            "ignoring it inflates significance and evaluation metrics. The "
+            "*remedy* is a legitimate design choice — the error is leaving the "
+            "correlation unaccounted for."
+        ),
+        cross_db_note=(
+            "The patient-level id differs: e.g. MIMIC subject_id>hadm_id>stay_id, "
+            "eICU patienthealthsystemstayid>patientunitstayid, Amsterdam "
+            "patientid>admissionid; resolve the patient level per database."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="align_time_to_t0",
+        phase="features",
+        kind="error",
+        principle=(
+            "Align every event time to a single stated per-stay anchor (t0; ICU "
+            "admission by default) before cutting feature and outcome windows."
+        ),
+        rationale=(
+            "Cross-patient comparison and windowing require a common relative "
+            "time axis; raw timestamps are not comparable across patients."
+        ),
+        cross_db_note=(
+            "Time representation differs — e.g. MIMIC stores per-patient "
+            "date-shifted absolute timestamps, while eICU/HiRID/Amsterdam/SICdb "
+            "use relative offsets from admission; normalise before windowing."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="no_outcome_window_leakage",
+        phase="features",
+        kind="error",
+        principle=(
+            "Features may use only data observable strictly before the "
+            "prediction/outcome window; never include outcome-window or future "
+            "values (or the outcome itself)."
+        ),
+        rationale=(
+            "Outcome-window or future values make a model 'time-travel' — the "
+            "AUC looks excellent and the model is clinically worthless."
+        ),
+        cross_db_note="Database-agnostic; the leak is temporal, not source-specific.",
+    ),
+    MethodologicalPrinciple(
+        id="window_aggregation_respects_kind",
+        phase="features",
+        kind="error",
+        principle=(
+            "Never average an ordinal or bounded-integer clinical score; "
+            "aggregate it within the window by a rank-preserving summary "
+            "(worst/max, last, or the level distribution). (How to summarise a "
+            "continuous trend — mean, last, slope — is an analyst choice.)"
+        ),
+        rationale=(
+            "The mean of an ordinal score is not interpretable as a score; this "
+            "is a category error regardless of study design."
+        ),
+        cross_db_note=(
+            "Sampling resolution differs — high-frequency HiRID/Amsterdam vs "
+            "sparser MIMIC/eICU — which changes which continuous aggregates are "
+            "reliable."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="label_built_in_outcome_window",
+        phase="label",
+        kind="error",
+        principle=(
+            "Compute the outcome label inside the outcome window (group by the "
+            "analysis unit, then apply the threshold/duration/OR logic); the "
+            "label is rarely a ready-made column."
+        ),
+        rationale=(
+            "A mis-defined label invalidates every downstream result no matter "
+            "how good the model is."
+        ),
+        cross_db_note=(
+            "Outcome source and granularity differ by database; build the label "
+            "from the timestamped source each database provides."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="winsorize_harmonise_then_scale",
+        phase="features",
+        kind="error",
+        principle=(
+            "Fit any preprocessing that learns from data (scaling, imputation, "
+            "encoders) on the training split only, and harmonise units before "
+            "combining sources. (Whether and how to truncate physiologic "
+            "outliers is an analyst choice to document.)"
+        ),
+        rationale=(
+            "Fitting preprocessing on all data leaks test information; mixing "
+            "unharmonised units silently corrupts pooled values. Both are wrong "
+            "under any design; outlier handling is a defensible choice."
+        ),
+        cross_db_note=(
+            "The same concept may be recorded in different units across "
+            "databases (e.g. creatinine mg/dL vs µmol/L, temperature C vs F); "
+            "rely on EasyICU concept normalisation and never compare raw "
+            "cross-database values/doses without harmonisation."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="split_by_patient",
+        phase="modeling",
+        kind="error",
+        principle=(
+            "Split train/test by the patient-level id, not by row, so one "
+            "patient never appears on both sides."
+        ),
+        rationale=(
+            "Row-level splits leak a patient's own correlated records into the "
+            "test set and inflate performance — a second kind of leakage."
+        ),
+        cross_db_note=(
+            "Use whichever id is the patient level in that database (see "
+            "dedupe_to_patient_unit)."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="association_is_not_causation",
+        phase="interpretation",
+        kind="error",
+        principle=(
+            "Do not state an observational association as causal, and do not "
+            "read feature importance (e.g. SHAP) as a mechanism; keep causal "
+            "language out unless a causal design is actually used."
+        ),
+        rationale=(
+            "Treatment exposures are confounded by indication; 'SHAP shows it' "
+            "is not evidence a feature is clinically causal. Overstating this is "
+            "an interpretation error, not a stylistic preference."
+        ),
+        cross_db_note=(
+            "Confounding structure differs with each database's case-mix and "
+            "practice patterns."
+        ),
+    ),
+    # --- cautions (defensible choices; prompt to document, never override) ---
+    MethodologicalPrinciple(
+        id="describe_cohort_before_modeling",
+        phase="cohort",
+        kind="caution",
+        principle=(
+            "Report the cohort description (counts, outcome prevalence, "
+            "missingness) alongside any model result so a metric is "
+            "interpretable. The analysis order itself is the analyst's choice."
+        ),
+        rationale=(
+            "A discrimination metric is hard to interpret without the "
+            "denominator and outcome prevalence; reporting them is good "
+            "practice, not a mandated workflow."
+        ),
+        cross_db_note=(
+            "Outcome availability differs by database — e.g. hospital-discharge "
+            "mortality in MIMIC/eICU vs limited long-horizon outcomes in HiRID; "
+            "report the denominator actually available."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="incident_not_prevalent",
+        phase="cohort",
+        kind="caution",
+        principle=(
+            "When the question concerns incident (new-onset) events, exclude "
+            "prevalent cases (event already present before follow-up start); if "
+            "prevalence itself is the target, say so. State which, and note this "
+            "is a cohort-definition exclusion, distinct from leakage."
+        ),
+        rationale=(
+            "Whether to exclude prevalent cases depends on the question; the "
+            "hazard is leaving it implicit or conflating it with leakage, not "
+            "the exclusion itself."
+        ),
+        cross_db_note=(
+            "Pre-ICU history depth varies — e.g. MIMIC carries prior admissions "
+            "while HiRID/Amsterdam are ICU-centric; judge prevalence with the "
+            "history each database actually exposes."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="missingness_is_information",
+        phase="features",
+        kind="caution",
+        principle=(
+            "Do not assume ICU missingness is at random; consider whether 'not "
+            "measured' is itself informative (MNAR) when choosing a missing-data "
+            "strategy. The strategy (indicator, imputation method, "
+            "complete-case) is the analyst's choice to state and justify."
+        ),
+        rationale=(
+            "'Not measured' often encodes clinical judgement (e.g. lactate not "
+            "drawn because perfusion looked fine); the hazard is assuming MCAR "
+            "without justification, not any particular handling."
+        ),
+        cross_db_note=(
+            "Missingness mechanisms differ — routine high-frequency capture vs "
+            "clinically-triggered labs — so the same column can be MCAR in one "
+            "database and MNAR in another."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="measurement_frequency_is_informative",
+        phase="features",
+        kind="caution",
+        principle=(
+            "Consider that how often a variable is measured can itself be "
+            "informative: in the ICU, sampling frequency correlates with acuity, "
+            "so measurement counts or carry-forward values may encode severity "
+            "rather than physiology. Decide deliberately how to handle it."
+        ),
+        rationale=(
+            "Informative sampling can bias estimates if treated as ignorable; "
+            "how to model it (e.g. include a measurement-count feature, or not) "
+            "is a legitimate analyst choice."
+        ),
+        cross_db_note=(
+            "Sampling regimes differ — high-frequency monitored signals vs "
+            "intermittently ordered labs — across and within databases."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="metrics_match_task_and_balance",
+        phase="interpretation",
+        kind="caution",
+        principle=(
+            "Report evaluation metrics appropriate to the task and class "
+            "balance, and more than one number; accuracy alone is misleading "
+            "under class imbalance. Which metrics to emphasise is the analyst's "
+            "choice."
+        ),
+        rationale=(
+            "ICU outcomes are usually imbalanced, so a single accuracy figure "
+            "can hide poor minority-class performance; the choice of which "
+            "balanced metrics to show is not ours to dictate."
+        ),
+        cross_db_note=(
+            "Outcome prevalence (hence the relevant operating point) varies by "
+            "database case-mix."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="clusters_need_external_validation",
+        phase="clustering",
+        kind="caution",
+        principle=(
+            "Unsupervised clusters have no ground truth; report cluster "
+            "stability and, where a relevant outcome exists, relate clusters to "
+            "it before interpreting them — and do not present clusters as "
+            "established clinical entities without such support."
+        ),
+        rationale=(
+            "Unsupervised structure is easy to find and easy to over-read; "
+            "external-outcome separation is what makes a subphenotype credible. "
+            "The validation method is a choice; over-claiming is the hazard."
+        ),
+        cross_db_note=(
+            "Cross-database replication is the strongest validation; harmonise "
+            "the clustering feature set across databases first."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="state_outcome_definition",
+        phase="interpretation",
+        kind="caution",
+        principle=(
+            "State exactly which outcome definition is used (ICU vs hospital vs "
+            "28-day mortality, etc.); they are not interchangeable."
+        ),
+        rationale=(
+            "Conflating outcome definitions silently changes the estimand and "
+            "breaks cross-study comparison; which outcome to study is the "
+            "analyst's choice, stating it is the requirement."
+        ),
+        cross_db_note=(
+            "Which outcome is available differs — e.g. hospital-discharge status "
+            "in eICU, limited long-horizon mortality in HiRID."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="control_for_multiplicity",
+        phase="interpretation",
+        kind="caution",
+        principle=(
+            "When many hypotheses or associations are tested, pre-specify the "
+            "primary analysis or control for multiplicity; an unadjusted scan of "
+            "many comparisons inflates false-positive findings. The adjustment "
+            "method is the analyst's choice."
+        ),
+        rationale=(
+            "Testing many endpoints without a plan turns noise into 'findings'; "
+            "the hazard is the unacknowledged multiplicity, not any specific "
+            "correction."
+        ),
+        cross_db_note=(
+            "Database-agnostic; applies wherever multiple endpoints or subgroups "
+            "are screened."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="consider_competing_risks",
+        phase="modeling",
+        kind="caution",
+        principle=(
+            "For time-to-event outcomes, consider competing events (e.g. in-ICU "
+            "death competing with ICU discharge); a naive survival or binary "
+            "model can mislead when a competing event precludes the event of "
+            "interest. Whether/how to model competing risks is the analyst's "
+            "choice."
+        ),
+        rationale=(
+            "Censoring a competing event as if it were independent biases "
+            "cumulative-incidence estimates; the hazard is ignoring the "
+            "competing structure, not the specific estimator."
+        ),
+        cross_db_note=(
+            "Discharge/transfer practices that create competing events differ by "
+            "unit and database."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="report_cohort_attrition",
+        phase="cohort",
+        kind="caution",
+        principle=(
+            "Report inclusion/exclusion attrition (how many records drop at each "
+            "step) so cohort construction is auditable and selection effects are "
+            "visible."
+        ),
+        rationale=(
+            "A transparent attrition flow lets a reader judge selection bias; "
+            "the specific filters are the study's choice, their visibility is "
+            "the requirement."
+        ),
+        cross_db_note=(
+            "Database-agnostic; the starting population and available filters "
+            "differ, so report the flow for each database used."
+        ),
+    ),
+    MethodologicalPrinciple(
+        id="harmonise_before_pooling",
+        phase="cohort",
+        kind="caution",
+        principle=(
+            "When combining databases, map concepts to the same definitions and "
+            "units and assess between-database heterogeneity before pooling; do "
+            "not naively concatenate raw cross-database values. Whether to pool "
+            "or meta-analyse is the analyst's choice."
+        ),
+        rationale=(
+            "Cross-database case-mix and recording differences can dominate a "
+            "naive pooled estimate; the hazard is unexamined heterogeneity, not "
+            "the decision to combine."
+        ),
+        cross_db_note=(
+            "EasyICU's concept layer provides the shared definitions; still "
+            "check heterogeneity (case-mix, era, unit-of-care) across the "
+            "specific databases combined."
+        ),
+    ),
+)
+
+
+def principles_for_phase(phase: str) -> List[MethodologicalPrinciple]:
+    """Return the cross-cutting principles guarding a given analysis ``phase``.
+
+    ``phase`` is one of ``cohort`` / ``features`` / ``label`` / ``modeling`` /
+    ``clustering`` / ``interpretation``. Unknown phases return an empty list.
+    """
+    key = (phase or "").strip().lower()
+    return [p for p in GENERAL_ICU_ANALYSIS_PRINCIPLES if p.phase == key]
+
+
 # A frozen dictionary the agents and validators read. Wrapped in a
 # tiny class so the prompt has a single token to refer to.
 @dataclass(frozen=True)
@@ -458,6 +910,10 @@ class _ICURules:
     aggregation_rule_for: Callable = field(default=aggregation_rule_for)
     classify_variable: Callable = field(default=classify_variable)
     default_time_windows: Callable = field(default=default_time_windows)
+    principles_for_phase: Callable = field(default=principles_for_phase)
+    general_principles: Tuple[MethodologicalPrinciple, ...] = field(
+        default=GENERAL_ICU_ANALYSIS_PRINCIPLES
+    )
 
 
 ICU_RULES = _ICURules()
@@ -466,8 +922,11 @@ ICU_RULES = _ICURules()
 __all__ = [
     "VariableKind",
     "ConceptHint",
+    "MethodologicalPrinciple",
     "classify_variable",
     "aggregation_rule_for",
     "default_time_windows",
+    "GENERAL_ICU_ANALYSIS_PRINCIPLES",
+    "principles_for_phase",
     "ICU_RULES",
 ]

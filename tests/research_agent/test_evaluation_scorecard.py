@@ -1,0 +1,352 @@
+"""Tests for the §M1 five-dimension Tier-1 scorecard bridge.
+
+Deterministic: every assertion is recomputed from synthetic readiness
+artifacts, exercising the bridge the same way the manuscript's Fig.3
+scorecard will be built.
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+from pathlib import Path
+
+import pytest
+
+from easyicu.research_agent import evaluation_scorecard as sc
+from easyicu.research_agent.icu_agent_bench import (
+    ICUAgentBenchGoldAnswer,
+    ICUAgentBenchNumericBound,
+    ICUAgentBenchTask,
+)
+
+
+def _gates(
+    *,
+    required=4,
+    completed=4,
+    failed=None,
+    execution_complete=True,
+    evidence_complete=True,
+    numeric_verified=True,
+    missing_evidence=0,
+    manuscript_ready=True,
+):
+    return {
+        "required_step_count": required,
+        "completed_step_count": completed,
+        "failed_steps": failed or [],
+        "execution_complete": execution_complete,
+        "evidence_complete": evidence_complete,
+        "numeric_verified": numeric_verified,
+        "missing_evidence_count": missing_evidence,
+        "manuscript_ready": manuscript_ready,
+    }
+
+
+def _task(difficulty="intermediate", *, gold=None, outputs=None):
+    return ICUAgentBenchTask(
+        task_id="E1_demo",
+        kind="cohort_extraction",
+        title="demo",
+        objective="demo",
+        expected_outputs=outputs
+        or ["table one", "forest plot figure", "component completeness audit"],
+        difficulty=difficulty,
+        gold_answer=gold,
+        gold_answer_status="frozen" if gold else "planned",
+    )
+
+
+# ---------------------------------------------------------------------------
+# bin_level
+# ---------------------------------------------------------------------------
+
+
+def test_bin_level_thresholds():
+    assert sc.bin_level(1.0) == "Full"
+    assert sc.bin_level(0.85) == "Full"
+    assert sc.bin_level(0.6) == "Partial"
+    assert sc.bin_level(0.3) == "Marginal"
+    assert sc.bin_level(0.0) == "Fail"
+
+
+# ---------------------------------------------------------------------------
+# tristate
+# ---------------------------------------------------------------------------
+
+
+def test_tristate_gate_reportable():
+    assert sc.compute_tristate(_gates()) == "gate_reportable"
+
+
+def test_tristate_analysis_only_when_not_manuscript_ready():
+    g = _gates(manuscript_ready=False)
+    assert sc.compute_tristate(g) == "analysis_only"
+
+
+def test_tristate_diagnostic_only_when_execution_incomplete():
+    g = _gates(execution_complete=False, manuscript_ready=False)
+    assert sc.compute_tristate(g) == "diagnostic_only"
+
+
+# ---------------------------------------------------------------------------
+# plan
+# ---------------------------------------------------------------------------
+
+
+def test_plan_full_when_display_set_complete():
+    dim = sc.score_plan(_task(), plan_steps=[{"intent": "x"}], gates=_gates())
+    assert dim.level == "Full"
+    assert dim.signals["has_table_one"] and dim.signals["has_audit_panel"]
+
+
+def test_plan_fail_on_empty_plan():
+    dim = sc.score_plan(_task(), plan_steps=[], gates=_gates(required=0))
+    assert dim.level == "Fail"
+
+
+def test_plan_fail_when_illegal():
+    dim = sc.score_plan(
+        _task(), plan_steps=[{"intent": "x"}], gates=_gates(), plan_illegal=True
+    )
+    assert dim.level == "Fail"
+
+
+def test_plan_hard_task_needs_two_figures():
+    # advanced task with only one figure hint -> figure requirement unmet
+    task = _task(
+        difficulty="advanced", outputs=["table one", "forest plot", "leakage audit"]
+    )
+    dim = sc.score_plan(task, plan_steps=[{"intent": "x"}], gates=_gates())
+    assert dim.signals["min_result_figures"] == 2
+    assert dim.signals["result_figure_count"] == 1
+    assert dim.level != "Full"
+
+
+# ---------------------------------------------------------------------------
+# code
+# ---------------------------------------------------------------------------
+
+
+def test_code_full_when_all_steps_ok():
+    dim = sc.score_code(gates=_gates())
+    assert dim.level == "Full"
+    assert dim.subscore == 1.0
+
+
+def test_code_partial_on_failed_step():
+    g = _gates(
+        completed=3,
+        failed=[{"step_id": "03", "status": "failed"}],
+        execution_complete=False,
+    )
+    dim = sc.score_code(gates=g)
+    assert dim.level in {"Partial", "Marginal"}
+    assert dim.level != "Full"
+
+
+def test_code_fail_when_nothing_completed():
+    g = _gates(
+        completed=0,
+        failed=[{"step_id": "01", "status": "failed"}],
+        execution_complete=False,
+    )
+    dim = sc.score_code(gates=g)
+    assert dim.level == "Fail"
+
+
+# ---------------------------------------------------------------------------
+# result_validity
+# ---------------------------------------------------------------------------
+
+
+def test_result_validity_unscored_without_locked_reference():
+    dim = sc.score_result_validity(
+        _task(), numeric_audit={"numeric_verified": True}, observed_metrics={"or": 0.8}
+    )
+    assert dim.subscore is None and dim.level is None
+
+
+def test_result_validity_full_in_bound_and_verified():
+    gold = ICUAgentBenchGoldAnswer(
+        numeric_targets={"or": ICUAgentBenchNumericBound(lower=0.7, upper=0.9)}
+    )
+    dim = sc.score_result_validity(
+        _task(gold=gold),
+        numeric_audit={"numeric_verified": True, "numeric_error_count": 0},
+        observed_metrics={"or": 0.8},
+        locked_reference_frozen=True,
+    )
+    assert dim.level == "Full"
+    assert dim.subscore == 1.0
+
+
+def test_result_validity_fail_out_of_bound():
+    gold = ICUAgentBenchGoldAnswer(
+        numeric_targets={"or": ICUAgentBenchNumericBound(lower=0.7, upper=0.9)}
+    )
+    dim = sc.score_result_validity(
+        _task(gold=gold),
+        numeric_audit={"numeric_verified": True},
+        observed_metrics={"or": 1.6},
+        locked_reference_frozen=True,
+    )
+    assert dim.level == "Fail"
+
+
+# ---------------------------------------------------------------------------
+# evidence_binding
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_binding_full_when_complete_and_kinds_present():
+    dim = sc.score_evidence_binding(
+        evidence_audit={
+            "evidence_complete": True,
+            "missing_evidence_count": 0,
+            "kinds": {"table": 1, "figure": 1, "metric": 1, "cohort": 1, "model": 1},
+        },
+        numeric_audit={"numeric_verified": True},
+        claim_rows=[{"status": "bound"}, {"status": "bound"}],
+    )
+    assert dim.level == "Full"
+
+
+def test_evidence_binding_partial_when_unbound_demoted():
+    dim = sc.score_evidence_binding(
+        evidence_audit={
+            "evidence_complete": False,
+            "missing_evidence_count": 1,
+            "kinds": {},
+        },
+        numeric_audit={"numeric_verified": True},
+        claim_rows=[{"status": "bound"}, {"status": "demoted"}],
+    )
+    assert dim.level == "Partial"
+
+
+def test_evidence_binding_low_when_unbound_not_demoted():
+    dim = sc.score_evidence_binding(
+        evidence_audit={
+            "evidence_complete": False,
+            "missing_evidence_count": 3,
+            "kinds": {},
+        },
+        numeric_audit={"numeric_verified": False},
+        claim_rows=[{"status": "unbound"}, {"status": "unbound"}],
+    )
+    assert dim.level in {"Fail", "Marginal"}
+
+
+# ---------------------------------------------------------------------------
+# audit_conclusion_safety
+# ---------------------------------------------------------------------------
+
+
+def test_audit_safety_full_when_hazard_hit_and_no_forbidden():
+    gold = ICUAgentBenchGoldAnswer(
+        required_warnings=["immortal time"],
+        forbidden_outputs=["causal effect"],
+    )
+    dim = sc.score_audit_conclusion_safety(
+        _task(gold=gold),
+        observed_warnings=["beware immortal time bias"],
+        observed_outputs=["association, not causal claim"],
+        tristate="gate_reportable",
+    )
+    assert dim.level == "Full"
+
+
+def test_audit_safety_fail_when_forbidden_leaks():
+    gold = ICUAgentBenchGoldAnswer(
+        required_warnings=["immortal time"],
+        forbidden_outputs=["causal effect"],
+    )
+    dim = sc.score_audit_conclusion_safety(
+        _task(gold=gold),
+        observed_warnings=["beware immortal time bias"],
+        observed_outputs=["we proved a causal effect of X on death"],
+        tristate="gate_reportable",
+    )
+    assert dim.level == "Fail"
+    assert dim.signals["forbidden_conclusion_leaked"] is True
+
+
+# ---------------------------------------------------------------------------
+# score_run / score_run_from_dir
+# ---------------------------------------------------------------------------
+
+
+def test_score_run_produces_full_scorecard_and_source_row():
+    card = sc.score_run(
+        _task(),
+        gates=_gates(),
+        plan_steps=[{"intent": "table one + forest plot figure + completeness audit"}],
+        evidence_audit={
+            "evidence_complete": True,
+            "missing_evidence_count": 0,
+            "kinds": {"table": 1, "figure": 1, "metric": 1, "cohort": 1, "model": 1},
+        },
+        numeric_audit={"numeric_verified": True},
+        claim_rows=[{"status": "bound"}],
+        run_id="run_x",
+    )
+    assert card.tristate == "gate_reportable"
+    assert card.code.level == "Full"
+    assert card.evidence_binding.level == "Full"
+    assert card.result_validity.level is None  # unscored without locked ref
+    row = card.source_data_row()
+    assert row["task_id"] == "E1_demo"
+    assert row["code__level"] == "Full"
+    assert row["tristate"] == "gate_reportable"
+    assert "result_validity__subscore" in row
+
+
+def test_score_run_from_dir_roundtrip(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_status.json").write_text(
+        json.dumps({"gates": _gates()}), encoding="utf-8"
+    )
+    (run_dir / "analysis_plan.json").write_text(
+        json.dumps(
+            {"steps": [{"intent": "table one + forest figure + completeness audit"}]}
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "evidence_audit.json").write_text(
+        json.dumps(
+            {
+                "evidence_complete": True,
+                "missing_evidence_count": 0,
+                "kinds": {
+                    "table": 1,
+                    "figure": 1,
+                    "metric": 1,
+                    "cohort": 1,
+                    "model": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "numeric_audit.json").write_text(
+        json.dumps({"numeric_verified": True}), encoding="utf-8"
+    )
+    with (run_dir / "claim_ledger.csv").open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["claim_id", "status"])
+        w.writeheader()
+        w.writerow({"claim_id": "c1", "status": "bound"})
+
+    card = sc.score_run_from_dir(_task(), run_dir, run_id="run_dir_x")
+    assert card.tristate == "gate_reportable"
+    assert card.code.level == "Full"
+    assert card.plan.level == "Full"
+
+
+def test_score_run_from_dir_missing_files_degrade(tmp_path: Path):
+    # Empty run dir -> diagnostic_only, low scores, no crash.
+    card = sc.score_run_from_dir(_task(), tmp_path)
+    assert card.tristate == "diagnostic_only"
+    assert card.code.level == "Fail"
