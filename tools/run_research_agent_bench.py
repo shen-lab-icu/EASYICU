@@ -80,7 +80,7 @@ def _bootstrap_imports():
 _REQUIRED_KINDS = {"code", "log", "table", "figure", "statistic"}
 _ARM_ORDER = ("naive", "aware")
 _ARM_LABELS = {"naive": "Naive", "aware": "ICU-aware"}
-_DEFAULT_SUBMISSION_PROFILE_REF = "npj_dm/20260527"
+_DEFAULT_SUBMISSION_PROFILE_REF = "npj_dm/20260611"
 
 
 def _local_openai_base_url(base_url: Optional[str]) -> bool:
@@ -450,6 +450,79 @@ def _kinds_complete(manifest: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _bench_item_to_task(item):
+    """Adapt a ``tests.bench`` BenchItem to a minimal ``ICUAgentBenchTask``.
+
+    This lets the §M1 five-dimension Tier-1 scorecard be computed from a run's
+    readiness artifacts for the legacy bench items too. Result-validity stays
+    *unscored* (no locked reference is frozen for these items); the item's
+    ``expected_finding_substrings`` are surfaced as the audit-hazard answer key
+    (required warnings). Kept deliberately thin — the scorecard is additive and
+    does not replace the legacy OR/substring scoring yet.
+    """
+    from easyicu.research_agent.icu_agent_bench import (  # type: ignore
+        ICUAgentBenchGoldAnswer,
+        ICUAgentBenchTask,
+    )
+
+    warns = [w for w in (getattr(item, "expected_finding_substrings", []) or []) if w]
+    gold = ICUAgentBenchGoldAnswer(required_warnings=warns) if warns else None
+    return ICUAgentBenchTask(
+        task_id=getattr(item, "key", "bench_item"),
+        kind="descriptive_association",
+        title=getattr(item, "name", getattr(item, "key", "bench item")),
+        objective=getattr(item, "research_question", ""),
+        expected_outputs=list(getattr(item, "expected_artifact_substrings", []) or []),
+        semantic_guardrails=warns,
+        gold_answer=gold,
+        gold_answer_status="frozen" if gold else "planned",
+    )
+
+
+def _five_dim_scorecard(*, run_dir: Path, item, or_value, manifest) -> Dict[str, Any]:
+    """Compute the additive five-dimension Tier-1 scorecard for an arm run.
+
+    Wrapped so a scorecard failure can never break a (possibly expensive) real
+    bench run — it is reported as a diagnostic field, not raised.
+    """
+    try:
+        from easyicu.research_agent.evaluation_scorecard import (  # type: ignore
+            score_run_from_dir,
+        )
+
+        observed_warnings = [
+            str(f.get("message", "")) for f in manifest.get("findings", [])
+        ]
+        card = score_run_from_dir(
+            _bench_item_to_task(item),
+            run_dir,
+            observed_metrics=(
+                {"primary_or": or_value} if or_value is not None else None
+            ),
+            observed_warnings=observed_warnings,
+        )
+        return card.model_dump()
+    except Exception as exc:  # pragma: no cover - additive diagnostic only
+        return {"error": f"five_dim_scorecard failed: {exc}"}
+
+
+def _load_cost_summary(run_dir: Path) -> Dict[str, Any]:
+    """Read the machine-readable per-run cost aggregate, if present.
+
+    Returns the token totals + estimated USD (``cost_summary.json``, written
+    when cost tracking is enabled). Empty dict when the run predates cost
+    tracking or it was disabled — token counts are the durable truth; the
+    USD figure is ``None`` for models absent from the price table.
+    """
+    path = run_dir / "cost_summary.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
 def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
     manifest = _load_manifest(run_dir)
     or_value = _primary_or(
@@ -484,6 +557,14 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         "evidence_count": len(manifest.get("evidence", [])),
         "evidence_kinds": _kinds_complete(manifest),
         "evidence_missing_in_manuscript": _evidence_missing_count(run_dir),
+        # Additive §M1 Tier-1 five-dimension scorecard (does not yet replace the
+        # legacy OR/substring scoring above — see _bench_item_to_task).
+        "five_dim_scorecard": _five_dim_scorecard(
+            run_dir=run_dir, item=item, or_value=or_value, manifest=manifest
+        ),
+        # Per-run LLM token totals + estimated USD (cost_summary.json). Feeds
+        # the manuscript cost table; {} when cost tracking was off.
+        "cost_summary": _load_cost_summary(run_dir),
     }
 
 
@@ -529,6 +610,12 @@ def _run_one_arm(
     force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
+    from easyicu.research_agent.cohort_schema import register_cohort_concept_ids
+
+    # The provided cohort is already materialised; let the planner reference any
+    # of its columns in a CTAS predicate without tripping the static dictionary
+    # check ("unknown concept_id: <derived column>").
+    register_cohort_concept_ids(list(getattr(cohort, "columns", [])))
 
     workdir.mkdir(parents=True, exist_ok=True)
     pipeline = ResearchAgentPipeline(
@@ -959,6 +1046,64 @@ def _slugify_model(model: str) -> str:
     return slug.strip("._-") or "model"
 
 
+def _git_short_sha() -> str:
+    """Best-effort 7-char git SHA of the EasyICU checkout (``unknown`` if N/A)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short=7", "HEAD"],
+            cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        sha = out.stdout.strip()
+        return sha or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _render_run_registry(payload: Dict[str, Any]) -> str:
+    """Human-readable provenance index for a batch (one row per item/arm).
+
+    Records the model + git SHA the run was produced under and, per item,
+    the status / primary OR / token+USD cost / run directory — so a frozen
+    (定稿) batch is traceable at a glance without opening each run folder.
+    """
+    lines = [
+        "# Run registry",
+        "",
+        f"- generated: `{payload.get('generated_at')}`",
+        f"- provider/model: `{payload.get('provider')}` / `{payload.get('model')}`",
+        f"- git: `{payload.get('git_sha', 'unknown')}`",
+        f"- seed: `{payload.get('seed')}`  ·  arms: `{payload.get('arms')}`",
+        "",
+        "| item | arm | status | primary_OR | total_tokens | est_USD | run_dir |",
+        "|------|-----|--------|-----------|--------------|---------|---------|",
+    ]
+    for item_payload in payload.get("scores", []):
+        item_key = item_payload.get("item_key", "")
+        for arm in ("aware", "naive"):
+            arm_score = item_payload.get(arm)
+            if not isinstance(arm_score, dict):
+                continue
+            cost = arm_score.get("cost_summary") or {}
+            tokens = cost.get("total_tokens", "")
+            usd = cost.get("total_cost_usd", None)
+            usd_str = f"{usd:.4f}" if isinstance(usd, (int, float)) else ""
+            sc = arm_score.get("five_dim_scorecard") or {}
+            status = sc.get("tristate") or sc.get("overall_status") or ""
+            run_dir = arm_score.get("workdir", "")
+            lines.append(
+                f"| {item_key} | {arm} | {status} "
+                f"| {arm_score.get('primary_or', '')} | {tokens} | {usd_str} "
+                f"| `{run_dir}` |"
+            )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _make_llm(*, provider: str, model: str, request_timeout: float):
     from easyicu.research_agent import MockLLMClient, OpenAIClient  # type: ignore
     from easyicu.research_agent.llm import openrouter_reasoning_extra_body  # type: ignore
@@ -1008,6 +1153,7 @@ def _benchmark_pipeline_options(
     disable_replanning: bool,
     max_code_repair_attempts: Optional[int],
     enable_repro_envelope: bool = True,
+    enable_cost_tracking: bool = True,
     llm_seed: Optional[int] = None,
     writer_digest_widened: bool = False,
     strict_evidence: bool = False,
@@ -1037,6 +1183,11 @@ def _benchmark_pipeline_options(
         # SHA256) lands as reproducibility_envelope.json next to each
         # arm's run_status.json.
         options["enable_reproducibility_envelope"] = True
+    if enable_cost_tracking:
+        # Default ON for bench runs so each arm writes cost_records.json /
+        # cost_summary.{md,json} and ``manifest.cost_records`` — the token
+        # totals + estimated USD that become Fig.3 / cost-table source data.
+        options["enable_cost_tracking"] = True
     if writer_digest_widened:
         options["writer_digest_widened"] = True
     if llm_seed is not None:
@@ -1162,6 +1313,7 @@ def _run_suite(
     totals = _aggregate(scores)
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "git_sha": _git_short_sha(),
         "seed": seed,
         "bench_kind": bench_kind,
         "provider": provider,
@@ -1197,6 +1349,9 @@ def _run_suite(
     (out_root / "icu_agent_bench_suite.md").write_text(
         icu_agent_bench_markdown(suite),
         encoding="utf-8",
+    )
+    (out_root / "RUN_REGISTRY.md").write_text(
+        _render_run_registry(payload), encoding="utf-8"
     )
     return payload
 
@@ -1347,6 +1502,18 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--no-cost-tracking",
+        action="store_true",
+        help=(
+            "Disable per-run LLM cost tracking (T3.2). Cost tracking is ON "
+            "by default for bench runs so each arm writes cost_records.json / "
+            "cost_summary.{md,json} and manifest.cost_records — the token "
+            "totals + estimated USD that feed the Fig.3 / cost-table source "
+            "data. Token counts are recorded exactly even when a model's "
+            "price is unknown."
+        ),
+    )
+    parser.add_argument(
         "--writer-digest-widened",
         action="store_true",
         help=(
@@ -1465,6 +1632,7 @@ def main() -> int:
         disable_replanning=bool(args.disable_replanning),
         max_code_repair_attempts=args.max_code_repair_attempts,
         enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
+        enable_cost_tracking=not bool(getattr(args, "no_cost_tracking", False)),
         llm_seed=getattr(args, "llm_seed", None),
         writer_digest_widened=bool(args.writer_digest_widened),
         strict_evidence=bool(args.strict_evidence),
