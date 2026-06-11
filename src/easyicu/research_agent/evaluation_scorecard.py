@@ -115,6 +115,12 @@ class FiveDimensionScorecard(BaseModel):
     evidence_binding: DimensionScore
     audit_conclusion_safety: DimensionScore
 
+    # Additive sixth dimension (kind-routed reporting-guideline coverage).
+    # Kept OUT of the canonical ``dimensions()`` column order so the locked
+    # Fig.3 5-column schema is unchanged until promoting it is an explicit
+    # design decision; exposed via ``all_dimensions()`` for the six-dim view.
+    reporting_completeness: Optional[DimensionScore] = None
+
     tristate: Tristate
 
     def dimensions(self) -> List[DimensionScore]:
@@ -126,6 +132,13 @@ class FiveDimensionScorecard(BaseModel):
             self.evidence_binding,
             self.audit_conclusion_safety,
         ]
+
+    def all_dimensions(self) -> List[DimensionScore]:
+        """Canonical five + ``reporting_completeness`` when scored (six-dim view)."""
+        dims = list(self.dimensions())
+        if self.reporting_completeness is not None:
+            dims.append(self.reporting_completeness)
+        return dims
 
     def source_data_row(self) -> Dict[str, object]:
         """One Fig.3 ``source_data`` row: per-dim subscore+level + tristate."""
@@ -481,6 +494,87 @@ def score_audit_conclusion_safety(
     )
 
 
+# Reporting-guideline routing by task kind (EQUATOR family). Case-neutral:
+# keyed on the analytical *kind*, never on a specific benchmark item,
+# variable, database or score. Prediction models -> TRIPOD+AI; observational
+# association / survival / causal / descriptive -> STROBE; unsupervised
+# clustering and longitudinal trajectory have no EQUATOR guideline, so they
+# route to an internal reporting core (unscored until that core is emitted).
+_REPORTING_GUIDELINE_BY_KIND: Dict[str, str] = {
+    "mortality_prediction": "tripod",
+    "subphenotype_clustering": "internal",
+    "longitudinal_trajectory_analysis": "internal",
+}
+
+
+def reporting_guideline_for_kind(kind: str) -> str:
+    """Map a benchmark task kind to its reporting guideline (default STROBE)."""
+    return _REPORTING_GUIDELINE_BY_KIND.get(kind, "strobe")
+
+
+def score_reporting_completeness(
+    task: ICUAgentBenchTask,
+    *,
+    checklist: Optional[Dict[str, object]] = None,
+) -> DimensionScore:
+    """Reporting-completeness dimension: coverage of the kind-matched reporting
+    guideline checklist the run already emits (e.g. ``reporting_checklist_strobe``).
+
+    Routes by ``task.kind`` (see ``_REPORTING_GUIDELINE_BY_KIND``) and scores the
+    fraction of *applicable* checklist items addressed. Returns an *unscored*
+    dimension when no applicable checklist is available — honest for the
+    clustering / trajectory kinds whose internal reporting core is not yet
+    defined, rather than penalising them against an inapplicable checklist.
+    """
+    guideline = reporting_guideline_for_kind(task.kind)
+    summary: Dict[str, object] = {}
+    if isinstance(checklist, dict):
+        s = checklist.get("summary")
+        summary = s if isinstance(s, dict) else {}
+
+    n_total = int(summary.get("n_total") or 0)
+    if n_total <= 0:
+        return DimensionScore(
+            name="reporting_completeness",
+            subscore=None,
+            level=None,
+            signals={"guideline": guideline, "checklist_present": bool(summary)},
+            notes=[
+                "unscored: no applicable reporting checklist emitted for kind "
+                f"'{task.kind}' (guideline={guideline})"
+            ],
+        )
+
+    n_addressed = int(summary.get("n_addressed") or 0)
+    n_partial = int(summary.get("n_partial") or 0)
+    coverage = summary.get("coverage")
+    subscore = (
+        float(coverage)
+        if isinstance(coverage, (int, float))
+        else (n_addressed + 0.5 * n_partial) / n_total
+    )
+    subscore = max(0.0, min(1.0, subscore))
+
+    n_open = int(summary.get("n_open") or max(0, n_total - n_addressed - n_partial))
+    notes: List[str] = []
+    if n_open:
+        notes.append(f"{n_open}/{n_total} {guideline.upper()} item(s) open")
+
+    return DimensionScore(
+        name="reporting_completeness",
+        subscore=round(subscore, 4),
+        level=bin_level(subscore),
+        signals={
+            "guideline": guideline,
+            "n_total": n_total,
+            "n_addressed": n_addressed,
+            "n_partial": n_partial,
+            "n_open": n_open,
+        },
+        notes=notes,
+    )
+
+
 def compute_tristate(gates: Dict[str, object]) -> Tristate:
     """§M3 tristate from ``gates`` (execution is the hard ceiling)."""
     if bool(gates.get("manuscript_ready")):
@@ -507,6 +601,7 @@ def score_run(
     observed_warnings: Optional[Sequence[str]] = None,
     observed_outputs: Optional[Sequence[str]] = None,
     cohort_hygiene_cautions: Optional[Sequence[str]] = None,
+    reporting_checklist: Optional[Dict[str, object]] = None,
     locked_reference_frozen: bool = False,
     plan_illegal: bool = False,
     run_id: Optional[str] = None,
@@ -514,10 +609,15 @@ def score_run(
     """Compute the full five-dimension scorecard + tristate from loaded artifacts.
 
     Pure function over already-parsed artifact payloads — no I/O. Use
-    :func:`score_run_from_dir` for the file-loading convenience wrapper.
+    :func:`score_run_from_dir` for the file-loading convenience wrapper. The
+    additive ``reporting_completeness`` dimension is populated when a
+    kind-matched reporting checklist payload is supplied.
     """
     tristate = compute_tristate(gates)
     return FiveDimensionScorecard(
+        reporting_completeness=score_reporting_completeness(
+            task, checklist=reporting_checklist
+        ),
         task_id=task.task_id,
         run_id=run_id,
         plan=score_plan(
@@ -586,6 +686,29 @@ def _load_cohort_hygiene_cautions(run_dir: Path) -> List[str]:
     return cautions
 
 
+def _load_reporting_checklist(run_dir: Path, task: ICUAgentBenchTask) -> Dict[str, object]:
+    """Load the kind-matched reporting-guideline checklist a run emitted.
+
+    Returns ``{}`` when the routed guideline has no emitted checklist (e.g. the
+    ``internal`` core for clustering / trajectory), so the dimension degrades to
+    *unscored* rather than scoring against an inapplicable guideline.
+    """
+    guideline = reporting_guideline_for_kind(task.kind)
+    candidates = {
+        "strobe": ["reporting_checklist_strobe.json"],
+        "tripod": [
+            "reporting_checklist_tripod.json",
+            "reporting_checklist_tripod_ai.json",
+        ],
+        "internal": [],
+    }.get(guideline, [])
+    for name in candidates:
+        doc = _load_json(run_dir / name)
+        if doc:
+            return doc
+    return {}
+
+
 def score_run_from_dir(
     task: ICUAgentBenchTask,
     run_dir: Path | str,
@@ -624,6 +747,7 @@ def score_run_from_dir(
         observed_warnings=observed_warnings,
         observed_outputs=observed_outputs,
         cohort_hygiene_cautions=_load_cohort_hygiene_cautions(run_dir),
+        reporting_checklist=_load_reporting_checklist(run_dir, task),
         locked_reference_frozen=locked_reference_frozen,
         plan_illegal=plan_illegal,
         run_id=(
@@ -646,6 +770,8 @@ __all__ = [
     "score_result_validity",
     "score_evidence_binding",
     "score_audit_conclusion_safety",
+    "score_reporting_completeness",
+    "reporting_guideline_for_kind",
     "score_run",
     "score_run_from_dir",
 ]
