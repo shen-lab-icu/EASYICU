@@ -949,7 +949,6 @@ def _render_post_export_guidance(
             review_label,
             key="_post_export_open_review",
             use_container_width=True,
-            icon=":material/table_view:",
         ):
             _apply_post_export_next_step(st.session_state, "review", lang=lang)
             st.rerun()
@@ -958,7 +957,6 @@ def _render_post_export_guidance(
             cohort_label,
             key="_post_export_open_cohort",
             use_container_width=True,
-            icon=":material/query_stats:",
         ):
             _apply_post_export_next_step(st.session_state, "cohort", lang=lang)
             st.rerun()
@@ -967,7 +965,6 @@ def _render_post_export_guidance(
             agent_label,
             key="_post_export_open_agent",
             use_container_width=True,
-            icon=":material/auto_awesome:",
         ):
             _apply_post_export_next_step(st.session_state, "agent", lang=lang)
             st.rerun()
@@ -999,6 +996,7 @@ def _prepare_quick_viz_demo_workspace(
     generate_data_func=generate_lightweight_demo_data,
 ) -> tuple[int, int]:
     """Load the compact demo review workspace from the topbar Render action."""
+    previous_selection = list(state.get('selected_concepts') or [])
     params = state.get('mock_params') if isinstance(state.get('mock_params'), dict) else {}
     params = dict(params)
     try:
@@ -1026,6 +1024,12 @@ def _prepare_quick_viz_demo_workspace(
     state['patient_ids'] = sorted(patient_ids) if patient_ids else []
     state['id_col'] = 'stay_id'
     state['time_col'] = 'time'
+    if previous_selection and len(previous_selection) != len(mock_data):
+        state['_review_source_concept_count'] = len(previous_selection)
+        state['_review_subset_concept_count'] = len(mock_data)
+    else:
+        state.pop('_review_source_concept_count', None)
+        state['_review_subset_concept_count'] = len(mock_data)
     state['selected_concepts'] = list(mock_data.keys())
     state['trigger_export'] = False
     state['_exporting_in_progress'] = False
@@ -1152,9 +1156,9 @@ def _consume_topbar_run_request(
         if state.get('loaded_concepts'):
             counts = cohort_feature_counts(state)
             message = (
-                f"Review workspace already loaded: {counts['features']} concepts, {counts['patients']} patients."
+                f"Review workspace already loaded: {counts['features']} review features, {counts['patients']} ICU stays."
                 if is_en else
-                f"审阅工作区已加载：{counts['features']} 个概念，{counts['patients']} 名患者。"
+                f"审阅工作区已加载：{counts['features']} 个审阅变量，{counts['patients']} 个 ICU stay。"
             )
         elif entry_mode == 'demo':
             n_concepts, n_patients = _prepare_quick_viz_demo_workspace(
@@ -1162,9 +1166,9 @@ def _consume_topbar_run_request(
                 generate_data_func=generate_data_func,
             )
             message = (
-                f"Loaded lightweight demo review workspace: {n_concepts} concepts, {n_patients} patients."
+                f"Loaded lightweight demo review workspace: {n_concepts} review features, {n_patients} ICU stays."
                 if is_en else
-                f"已加载轻量演示审阅工作区：{n_concepts} 个概念，{n_patients} 名患者。"
+                f"已加载轻量演示审阅工作区：{n_concepts} 个审阅特征，{n_patients} 个 ICU stay。"
             )
         else:
             state['viz_data_source_mode'] = 'exported'
@@ -2067,7 +2071,6 @@ def _render_sepsis_ai_button(lang: str) -> None:
         button_label,
         key="ask_ai_about_sepsis_settings",
         use_container_width=True,
-        icon=":material/smart_toy:",
     ):
         si_mode = st.session_state.get('sepsis_si_mode', 'auto')
         abx_hours = st.session_state.get('sepsis_abx_win_hours', 24)
@@ -2263,9 +2266,9 @@ def _handle_sidebar_export_trigger(default_export_container) -> bool:
             # 没有可导出的数据
             lang = st.session_state.get('language', 'en')
             warning_msg = (
-                "⚠️ No features selected. Please select features in Step 3 before exporting."
+                "⚠️ No export concepts selected. Please select export concepts in Step 3 before exporting."
                 if lang == 'en'
-                else "⚠️ 未选择特征。请先在步骤 3 选择要导出的特征。"
+                else "⚠️ 未选择导出概念。请先在步骤 3 选择要导出的概念。"
             )
             st.warning(warning_msg)
             st.session_state['_exporting_in_progress'] = False
@@ -2377,6 +2380,7 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
     _counts = cohort_feature_counts(st.session_state)
     concept_count = _counts['features']
     patient_count = _counts['patients']
+    selected_count = int(st.session_state.get("_review_source_concept_count") or concept_count)
     signature = (
         tuple(sorted(str(k) for k in loaded_concepts.keys())),
         patient_count,
@@ -2388,7 +2392,7 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
     left, right = st.columns([6.0, 1.6])
     with left:
         st.markdown(
-            f'<div class="eu-handoff-note">{html.escape(get_text("ra_handoff_hint").format(concepts=concept_count, patients=patient_count))}</div>',
+            f'<div class="eu-handoff-note">{html.escape(get_text("ra_handoff_hint").format(concepts=concept_count, selected=selected_count, patients=patient_count))}</div>',
             unsafe_allow_html=True,
         )
     with right:
@@ -2415,7 +2419,7 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
             st.session_state["_ra_view"] = "setup"
             st.session_state["research_agent_preflight_confirmed"] = False
             st.session_state.pop("research_agent_preflight_signature", None)
-            message = get_text("ra_handoff_success").format(rows=len(df))
+            message = get_text("ra_handoff_success").format(stays=len(df))
             st.session_state["_eu_ra_handoff_success_message"] = message
             st.rerun()
 
@@ -3971,8 +3975,8 @@ def _render_global_status_strip(lang: str, entry_mode: str) -> None:
         "db": "Database" if lang == "en" else "数据库",
         "path": "Path" if lang == "en" else "路径",
         "cohort": "Cohort" if lang == "en" else "队列",
-        "features": "Features" if lang == "en" else "特征",
-        "patients": "Patients" if lang == "en" else "患者",
+        "features": "Export concepts" if lang == "en" else "导出概念",
+        "patients": "ICU stays" if lang == "en" else "ICU stay",
         "export": "Export" if lang == "en" else "导出",
         "privacy": "Privacy" if lang == "en" else "隐私",
     }
@@ -4303,7 +4307,7 @@ def main():
     page_registry = build_main_page_registry(get_text)
     page_keys = [page["key"] for page in page_registry]
     page_labels = {page["key"]: page["label"] for page in page_registry}
-    mobile_page_keys = ["extract", "quick_viz", "cohort", "cross_db", "research_agent"]
+    mobile_page_keys = ["extract", "quick_viz", "cohort", "cross_db", "research_agent", "assistant"]
     page_labels["extract"] = "Data Extraction" if lang == "en" else "数据提取"
     page_labels["tutorial"] = "Get Started" if lang == "en" else "开始使用"
     page_labels["assistant"] = "Research Copilot" if lang == "en" else "研究 Copilot"
@@ -4315,6 +4319,7 @@ def main():
         "cohort": "Cohort" if lang == "en" else "队列",
         "cross_db": "Cross-DB" if lang == "en" else "跨库",
         "research_agent": "Agent" if lang == "en" else "Agent",
+        "assistant": "Copilot" if lang == "en" else "助手",
     }
 
     # Resolve any pending navigation request (set by "Go to ..." buttons,
@@ -4342,14 +4347,14 @@ def main():
     elif _nav_request in _nav_page_map:
         st.session_state['_active_main_page'] = _nav_page_map[_nav_request]
 
-    # The polish(2) mobile shell keeps the bottom bar focused on the five
-    # primary workflow pages. Support/reference pages remain routable from
+    # The polish(2) mobile shell keeps the bottom bar focused on the primary
+    # workflow pages. Support/reference pages remain routable from
     # the sidebar, topbar, and programmatic actions but do not occupy bottom
     # navigation slots.
     # 'extract' is a special main page (the relocated data-extraction
     # workflow) reached via the sidebar pipeline; it is intentionally
     # NOT in the radio page_keys but is still a valid active page.
-    _EXTRA_PAGES = {'extract', 'tutorial', 'assistant', 'states', 'settings'}
+    _EXTRA_PAGES = {'extract', 'tutorial', 'states', 'settings'}
     if st.session_state.get('_active_main_page') not in (set(mobile_page_keys) | _EXTRA_PAGES):
         st.session_state['_active_main_page'] = mobile_page_keys[0]
 
@@ -4626,7 +4631,6 @@ def main():
                 with _seg_l:
                     if st.button(
                         "Setup" if lang == 'en' else "配置",
-                        icon=":material/tune:",
                         key="_eu_ra_view_setup", use_container_width=True,
                         type="primary" if _ra_view == 'setup' else "secondary",
                     ):
@@ -4636,7 +4640,6 @@ def main():
                 with _seg_m:
                     if st.button(
                         "Workbench" if lang == 'en' else "工作台",
-                        icon=":material/grid_view:",
                         key="_eu_ra_view_workbench", use_container_width=True,
                         type="primary" if _ra_view == 'workbench' else "secondary",
                     ):
@@ -4646,7 +4649,6 @@ def main():
                 with _seg_h:
                     if st.button(
                         "History" if lang == 'en' else "历史",
-                        icon=":material/history:",
                         key="_eu_ra_view_history", use_container_width=True,
                         type="primary" if _ra_view == 'history' else "secondary",
                     ):
@@ -4656,7 +4658,6 @@ def main():
                 with _seg_r:
                     if st.button(
                         "Summary" if lang == 'en' else "总览",
-                        icon=":material/shield:",
                         key="_eu_ra_view_summary", use_container_width=True,
                         type="primary" if _ra_view == 'summary' else "secondary",
                     ):
@@ -4667,7 +4668,6 @@ def main():
                     if _ra_run_context:
                         if st.button(
                             "Re-run" if lang == 'en' else "重新运行",
-                            icon=":material/replay:",
                             key="_eu_ra_header_rerun",
                             type="primary",
                             use_container_width=False,
@@ -4695,7 +4695,7 @@ def main():
                 render_agent_output_summary(lang, show_header=False)
             else:
                 _render_research_agent_handoff(
-                    "Loaded concepts" if lang == "en" else "已加载概念",
+                    "Loaded review workspace" if lang == "en" else "已加载审阅工作区",
                     lang,
                     key_suffix="setup",
                 )
@@ -4783,10 +4783,10 @@ def main():
         with footer_cols[0]:
             if st.session_state.language == 'en':
                 data_status = "✅ Data Loaded" if len(st.session_state.loaded_concepts) > 0 else "⏳ No Data"
-                patients_label = "Patients"
+                patients_label = "ICU stays"
             else:
                 data_status = "✅ 数据已加载" if len(st.session_state.loaded_concepts) > 0 else "⏳ 未加载数据"
-                patients_label = "患者"
+                patients_label = "ICU stay"
             # 2026-05 unified counts: route through cohort_feature_counts
             # so footer / handoff / gate guide / launcher always agree
             # on the loaded-feature number. Also show "loaded / dictionary

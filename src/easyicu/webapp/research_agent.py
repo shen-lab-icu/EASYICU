@@ -5753,9 +5753,38 @@ def _render_resume_panel(
 
 def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
     """Render the Claude-reference setup overview without launching a run."""
+    loaded_concepts = st.session_state.get("loaded_concepts")
+    loaded_concepts = loaded_concepts if isinstance(loaded_concepts, dict) else {}
+    review_feature_count = len(loaded_concepts)
+    try:
+        selected_export_count = int(st.session_state.get("_review_source_concept_count") or review_feature_count)
+    except (TypeError, ValueError):
+        selected_export_count = review_feature_count
+    patient_ids = list(st.session_state.get("patient_ids") or [])
+    try:
+        demo_stays = int((st.session_state.get("mock_params") or {}).get("n_patients") or 10)
+    except (TypeError, ValueError):
+        demo_stays = 10
+    stay_count = len(patient_ids) or demo_stays
+    if review_feature_count:
+        dataset_value = (
+            f"review workspace · {stay_count} ICU stays · {review_feature_count} review features"
+            if is_en else
+            f"审阅工作区 · {stay_count} 个 ICU stay · {review_feature_count} 个审阅特征"
+        )
+        module_value = (
+            f"selected export concepts · {selected_export_count}"
+            if is_en else
+            f"已选导出概念 · {selected_export_count}"
+        )
+        data_card_value = dataset_value
+    else:
+        dataset_value = "demo preview · no bound cohort" if is_en else "演示预览 · 尚未绑定队列"
+        module_value = "module catalog preview" if is_en else "模块目录预览"
+        data_card_value = "demo preview · no bound cohort" if is_en else "演示预览 · 尚未绑定队列"
     stages = [
         ("01", "play", "Plan" if is_en else "规划", "question -> recipe" if is_en else "问题 -> 配方"),
-        ("02", "layers", "Build" if is_en else "组装", "exports -> one row / stay" if is_en else "导出 -> 每次住院一行"),
+        ("02", "layers", "Build" if is_en else "组装", "exports -> stay-level table" if is_en else "导出 -> stay 级表"),
         ("03", "bars", "Analyze" if is_en else "分析", "tables, figures, checks" if is_en else "表格、图、检查"),
         ("04", "agent", "Gate" if is_en else "关口", "evidence before drafting" if is_en else "写作前证据检查"),
         ("05", "check", "Review" if is_en else "复核", "approve, rerun, export" if is_en else "批准、重跑、导出"),
@@ -5769,9 +5798,9 @@ def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
         for idx, icon_name, title, body in stages
     )
     context_items = [
-        ("Dataset" if is_en else "数据集", "demo · 10 stays · 19 modules"),
+        ("Dataset" if is_en else "数据集", dataset_value),
         ("Mode" if is_en else "模式", "static preview" if is_en else "静态预览"),
-        ("Modules" if is_en else "模块", "19 feature groups" if is_en else "19 个特征组"),
+        ("Review features" if is_en else "审阅变量", module_value),
         ("Privacy" if is_en else "隐私", "local only" if is_en else "仅本机"),
     ]
     context_html = "".join(
@@ -5827,7 +5856,7 @@ def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
             <div class="ra-setup-flow-strip">{stage_html}</div>
             <div class="ra-core-grid">
               <div class="ra-core-card ok"><span>1</span><div><b>{"Task" if is_en else "任务"}</b><p>{"Analysis run with a locked manuscript gate." if is_en else "正式分析运行，手稿关口保持锁定。"}</p></div><em>{"demo" if is_en else "演示"}</em></div>
-              <div class="ra-core-card ok"><span>2</span><div><b>{"Data" if is_en else "数据"}</b><p>{"demo · 10 stays · 19 modules" if is_en else "演示 · 10 次住院 · 19 个模块"}</p></div><em>{"ready" if is_en else "就绪"}</em></div>
+              <div class="ra-core-card ok"><span>2</span><div><b>{"Data" if is_en else "数据"}</b><p>{html.escape(data_card_value)}</p></div><em>{"ready" if is_en else "就绪"}</em></div>
               <div class="ra-core-card todo"><span>3</span><div><b>{"Run" if is_en else "运行"}</b><p>{"Switch to Real Data Mode to bind a cohort and launch the backend pipeline." if is_en else "切到真实数据模式后绑定队列并启动后端 pipeline。"}</p></div><em>{"locked" if is_en else "锁定"}</em></div>
             </div>
             <div class="ra-core-question">
@@ -6370,7 +6399,7 @@ def _render_research_agent_setup_overview(
     else:
         stages = [
             ("01", "play", "Plan" if is_en else "规划", "question -> recipe" if is_en else "问题 -> 配方", question_ready),
-            ("02", "layers", "Build" if is_en else "组装", "cohort -> one row / stay" if is_en else "队列 -> 每次住院一行", cohort_ready),
+            ("02", "layers", "Build" if is_en else "组装", "cohort -> stay-level table" if is_en else "队列 -> stay 级表", cohort_ready),
             ("03", "bars", "Analyze" if is_en else "分析", "tables, figures, checks" if is_en else "表格、图、检查", cohort_ready and question_ready and llm_ready),
             ("04", "agent", "Gate" if is_en else "关口", "evidence before drafting" if is_en else "写作前证据检查", preflight_confirmed),
             ("05", "check", "Review" if is_en else "复核", "approve, rerun, export" if is_en else "批准、重跑、导出", preflight_confirmed),
@@ -6414,7 +6443,7 @@ def _render_research_agent_setup_overview(
             ),
             (
                 "Cohort concept map" if is_en else "队列概念映射",
-                f"{rows:,} rows available" if cohort_ready else ("select a cohort for feasibility" if is_en else "选择队列后做可行性"),
+                f"{rows:,} ICU stays available" if cohort_ready else ("select a cohort for feasibility" if is_en else "选择队列后做可行性"),
                 "ready" if cohort_ready else "missing",
             ),
             (
@@ -6447,7 +6476,7 @@ def _render_research_agent_setup_overview(
             ),
             (
                 "Cohort context" if is_en else "队列上下文",
-                f"{rows:,} stay-level rows" if cohort_ready else ("select or upload a cohort" if is_en else "选择或上传队列"),
+                f"{rows:,} ICU stays" if cohort_ready else ("select or upload a cohort" if is_en else "选择或上传队列"),
                 "ready" if cohort_ready else "missing",
             ),
             (
@@ -6493,7 +6522,7 @@ def _render_research_agent_setup_overview(
         ),
         _gate_row(
             "Cohort" if is_en else "队列",
-            f"{rows:,} rows" if cohort_ready else ("not selected" if is_en else "未选择"),
+            f"{rows:,} ICU stays" if cohort_ready else ("not selected" if is_en else "未选择"),
             cohort_ready,
         ),
         _gate_row(
@@ -6513,7 +6542,7 @@ def _render_research_agent_setup_overview(
     ])
     context_values = [
         (("Cohort" if is_en else "队列"), contract.get("cohort_label") or ("not selected" if is_en else "未选择")),
-        (("Rows" if is_en else "行数"), f"{rows:,}" if rows else "0"),
+        (("ICU stays" if is_en else "ICU stay"), f"{rows:,}" if rows else "0"),
         (("Model" if is_en else "模型"), f"{llm_label} · {model_label}"),
         (("Mode" if is_en else "模式"), mode_label),
     ]
@@ -6594,7 +6623,7 @@ def _render_research_agent_setup_overview(
         )
     )
     data_body = (
-        f"{contract.get('cohort_label') or ('selected cohort' if is_en else '已选队列')} · {rows:,} rows"
+        f"{contract.get('cohort_label') or ('selected cohort' if is_en else '已选队列')} · {rows:,} ICU stays"
         if cohort_ready else
         ("Choose demo, upload, module export, or cross-DB data below." if is_en else "在下方选择演示、上传、模块导出或跨库数据。")
     )
@@ -6775,7 +6804,7 @@ def _render_execution_preflight(
             "02",
             "Cohort" if is_en else "队列",
             ready_label if cohort_ready else missing_cohort_label,
-            "rows + schema" if is_en else "行数和 schema",
+            "stay-level table" if is_en else "stay 级表",
             "ok" if cohort_ready else "warn",
         ),
     ]
@@ -6819,7 +6848,11 @@ def _render_execution_preflight(
     )
     cohort_value = (
         f"{contract['cohort_label'] or ('not selected' if is_en else '未选择')} · "
-        f"{contract['cohort_rows']:,} rows"
+        + (
+            f"{contract['cohort_rows']:,} ICU stays"
+            if is_en else
+            f"{contract['cohort_rows']:,} 个 ICU stay"
+        )
     )
     llm_value = f"{contract['llm_choice']} · {contract['model']}"
     if not llm_ready and llm_issue_msg:
@@ -7102,13 +7135,13 @@ def _render_idea_exploration_panel(
     cohort_ready = cohort is not None and rows > 0
     st.caption(
         (
-            f"Feasibility will use the current web cohort: {cohort_label or 'selected cohort'} · {rows:,} rows."
+            f"Feasibility will use the current web cohort: {cohort_label or 'selected cohort'} · {rows:,} ICU stays."
             if cohort_ready else
             "Select or build a cohort above before running outcome-blind feasibility."
         )
         if is_en else
         (
-            f"可行性将使用当前 web 队列：{cohort_label or '已选队列'} · {rows:,} 行。"
+            f"可行性将使用当前 web 队列：{cohort_label or '已选队列'} · {rows:,} 个 ICU stay。"
             if cohort_ready else
             "请先在上方选择或构建队列，再运行 outcome-blind 可行性检查。"
         )
@@ -7587,7 +7620,7 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
         request_ready = bool(str(free_question or "").strip()) or force_manuscript
         consent_ready = not external_llm_selected or bool(st.session_state.get("llm_enabled", False))
         run_button_clicked = st.button(
-            "▶  " + (_ra_text("draft_button") if force_manuscript else _ra_text("run_button")),
+            _ra_text("draft_button") if force_manuscript else _ra_text("run_button"),
             type="primary",
             disabled=cohort is None or not request_ready or not preflight_confirmed or not llm_ready or not consent_ready,
             use_container_width=True,

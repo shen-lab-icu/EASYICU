@@ -93,9 +93,9 @@ def _render_data_table_detail_gate(
         button_key = "data_table_hide_details"
     else:
         body = (
-            "Keep the review workspace light by default. Open details only when you need raw rows, filters, or a CSV preview."
+            "Keep the review workspace light by default. Open details only when you need source records, filters, or a CSV preview."
             if lang == "en"
-            else "默认保持审阅工作区轻量；需要原始行、筛选或 CSV 预览时再打开细节。"
+            else "默认保持审阅工作区轻量；需要来源记录、筛选或 CSV 预览时再打开细节。"
         )
         action = "Open table details" if lang == "en" else "打开表格细节"
         tone = "collapsed"
@@ -105,8 +105,8 @@ def _render_data_table_detail_gate(
         f'<span><b>{html.escape(str(value))}</b>{html.escape(str(label))}</span>'
         for label, value in (
             ("module" if lang == "en" else "模块", selected_module),
-            ("features" if lang == "en" else "特征", module_feature_count),
-            ("patients" if lang == "en" else "患者", patient_count),
+            ("review features" if lang == "en" else "审阅特征", module_feature_count),
+            ("ICU stays" if lang == "en" else "ICU stay", patient_count),
         )
     )
     st.markdown(
@@ -114,7 +114,7 @@ def _render_data_table_detail_gate(
         <div class="dt-detail-gate {tone}">
             <div>
                 <div class="dt-detail-gate-kicker">{html.escape(title)}</div>
-                <div class="dt-detail-gate-title">{html.escape("Raw rows are optional" if lang == "en" else "原始行按需查看")}</div>
+                <div class="dt-detail-gate-title">{html.escape("Source records are optional" if lang == "en" else "来源记录按需查看")}</div>
                 <p>{html.escape(body)}</p>
                 <div class="dt-detail-gate-metrics">{metric_html}</div>
             </div>
@@ -187,10 +187,18 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
     unique_feature_count = len(st.session_state.loaded_concepts)
 
     patient_count = len(st.session_state.patient_ids) if st.session_state.patient_ids else 0
+    selected_source_count = int(st.session_state.get("_review_source_concept_count") or unique_feature_count)
+    selection_suffix = ""
+    if selected_source_count and selected_source_count != unique_feature_count:
+        selection_suffix = (
+            f" · from {selected_source_count} selected export concepts"
+            if lang == 'en'
+            else f" · 来自 {selected_source_count} 个已选导出概念"
+        )
     loaded_summary = (
-        f"{len(loaded_by_module)} modules loaded · {unique_feature_count} features · {patient_count} patients"
+        f"{patient_count} ICU stays · {unique_feature_count} review features{selection_suffix}"
         if lang == 'en'
-        else f"已加载 {len(loaded_by_module)} 个模块 · {unique_feature_count} 个特征 · {patient_count} 名患者"
+        else f"{patient_count} 个 ICU stay · {unique_feature_count} 个审阅特征{selection_suffix}"
     )
     st.markdown(
         f'''
@@ -233,7 +241,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
             )
         with picker_cols[2]:
             st.markdown(
-                f'<div class="tiny-stat-card"><div class="tiny-label">{"Features" if lang == "en" else "特征数"}</div><div class="tiny-value">{unique_feature_count}</div></div>',
+                f'<div class="tiny-stat-card"><div class="tiny-label">{"Review features" if lang == "en" else "审阅变量"}</div><div class="tiny-value">{unique_feature_count}</div></div>',
                 unsafe_allow_html=True,
             )
 
@@ -254,8 +262,8 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
             tags_html += f'<span class="module-feature-chip muted">+{preview_meta["overflow_count"]}</span>'
 
         selected_label = "Selected Module" if lang == 'en' else "当前模块"
-        features_label = "Features" if lang == 'en' else "特征数"
-        patients_label = "Patients" if lang == 'en' else "患者数"
+        features_label = "Review features" if lang == 'en' else "审阅变量"
+        patients_label = "ICU stays" if lang == 'en' else "ICU stay"
         glance_title = "Module at a glance" if lang == 'en' else "模块一览"
         glance_note = (
             "Workspace-wide context for the selected module before you switch to preview mode."

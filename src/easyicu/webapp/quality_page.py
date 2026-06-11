@@ -91,7 +91,7 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
     los_by_patient = _get_quality_los_by_patient(st.session_state)
 
     records_col = "Records" if lang == 'en' else "记录数"
-    patients_col = "Patients" if lang == 'en' else "患者数"
+    patients_col = "ICU stays" if lang == 'en' else "ICU stay"
     missing_col = "Missing %" if lang == 'en' else "缺失率"
     denom_col = "Denom" if lang == 'en' else "分母"
     out_col = "% Out-of-physio" if lang == 'en' else "越出生理范围%"
@@ -202,11 +202,123 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
     </div>
     ''', unsafe_allow_html=True)
 
+    def _quality_action_for_row(row: Any) -> str:
+        concept = str(row.get('Concept') or "").lower()
+        denom = str(row.get('_denominator_tag') or "")
+        missing_rate = float(row.get('_missing_rate') or 0.0)
+        is_demo = st.session_state.get('entry_mode') == 'demo' or st.session_state.get('use_mock_data') or denom == "demo"
+        if missing_rate < 25:
+            return (
+                "No action unless this is a required endpoint."
+                if lang == 'en' else
+                "除非是必需终点，否则通常无需处理。"
+            )
+        if is_demo:
+            if concept in {"cort", "abx", "vaso_ind", "rrt", "ecmo", "mech_circ_support"}:
+                return (
+                    "Demo event sparsity: treat as a workflow stress test; do not model this exposure from the demo cohort."
+                    if lang == 'en' else
+                    "演示事件稀疏：只作为工作流压力测试；不要用演示队列建模该暴露。"
+                )
+            if concept in {"samp", "cult", "culture"} or "samp" in concept or "cult" in concept:
+                return (
+                    "Demo sampling sparsity: check the infection-window definition before using this as suspected-infection evidence."
+                    if lang == 'en' else
+                    "演示采样稀疏：作为疑似感染证据前，先检查感染时间窗定义。"
+                )
+            if "vent" in concept:
+                return (
+                    "Demo support indicator: verify ventilation eligibility/window before using it as an exposure or subgroup."
+                    if lang == 'en' else
+                    "演示支持治疗指标：作为暴露或亚组前，先确认通气资格和时间窗。"
+                )
+            return (
+                "Demo sparsity: use this to review denominator handling, not to draw clinical conclusions."
+                if lang == 'en' else
+                "演示稀疏性：用于检查分母处理，不用于临床结论。"
+            )
+        if concept in {"cort", "abx", "vaso_ind", "rrt", "ecmo", "mech_circ_support"}:
+            return (
+                "Sparse treatment/event variable: report availability, consider an availability indicator, and prespecify the exposure window."
+                if lang == 'en' else
+                "稀疏治疗/事件变量：报告可用性，考虑可用性指示变量，并预先指定暴露时间窗。"
+            )
+        if concept in {"samp", "cult", "culture"} or "samp" in concept or "cult" in concept:
+            return (
+                "Sampling variable: audit microbiology/lab source coverage and infection-window logic before Sepsis-3 grouping."
+                if lang == 'en' else
+                "采样变量：用于 Sepsis-3 分组前，先审计微生物/化验来源覆盖和感染时间窗逻辑。"
+            )
+        if "vent" in concept:
+            return (
+                "Respiratory support variable: verify device table coverage and align the exposure window to the cohort index time."
+                if lang == 'en' else
+                "呼吸支持变量：确认设备表覆盖，并把暴露时间窗对齐到队列 index time。"
+            )
+        if denom == "static":
+            return (
+                "Confirm the static source table before using this field as an adjustment variable."
+                if lang == 'en' else
+                "作为调整变量前，先确认静态来源表覆盖。"
+            )
+        if denom in {"LOS", "72h", "demo"}:
+            return (
+                "Check whether sparse measurement is expected; model availability or narrow the analysis window."
+                if lang == 'en' else
+                "先判断稀疏测量是否符合预期；必要时建模可用性或收窄分析窗口。"
+            )
+        return (
+            "Review source coverage before modeling."
+            if lang == 'en' else
+            "建模前先复核来源覆盖。"
+        )
+
+    def _render_quality_top_issues() -> None:
+        if quality_df.empty:
+            return
+        high_missing = (
+            quality_df.sort_values(['_missing_rate', '_records'], ascending=[False, False])
+            .head(3)
+            .copy()
+        )
+        issue_cards = []
+        for _, row in high_missing.iterrows():
+            concept = str(row.get('Concept') or "")
+            missing_rate = float(row.get('_missing_rate') or 0.0)
+            records = int(row.get('_records') or 0)
+            denom = str(row.get('_denominator_tag') or "")
+            denom_label = denom if denom.startswith("d=") else f"d={denom or 'unknown'}"
+            issue_cards.append(
+                '<div class="quality-issue-card">'
+                f'<b>{html.escape(concept)}</b>'
+                f'<span>{missing_rate:.1f}% {html.escape("missing" if lang == "en" else "缺失")} · {records:,} {html.escape("records" if lang == "en" else "条记录")} · {html.escape(denom_label)}</span>'
+                f'<em>{html.escape(_quality_action_for_row(row))}</em>'
+                '</div>'
+            )
+        outlier_concepts = int((quality_df['_out_rate'] > 0).sum())
+        duplicate_concepts = int((quality_df['_dup_rate'] > 0).sum())
+        footer_note = (
+            f"{outlier_concepts} concepts have physiologic-range flags; {duplicate_concepts} have duplicate timestamps."
+            if lang == 'en' else
+            f"{outlier_concepts} 个概念存在生理范围标记；{duplicate_concepts} 个概念存在重复时间戳。"
+        )
+        st.markdown(
+            '<div class="quality-issue-panel">'
+            f'<div class="quality-issue-head"><span>{html.escape("Top quality issues" if lang == "en" else "优先质控问题")}</span>'
+            f'<em>{html.escape("review before modeling" if lang == "en" else "建模前先复核")}</em></div>'
+            f'<div class="quality-issue-grid">{"".join(issue_cards)}</div>'
+            f'<p>{html.escape(footer_note)}</p>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    _render_quality_top_issues()
+
     detail_title = "Detailed QC Report" if lang == 'en' else "详细质控报告"
     denom_caption = (
-        "Missingness denominator tags: d=LOS uses patient-specific ICU stay, d=72h uses the fallback window, d=demo uses the demo horizon, d=static means one observation per patient."
+        "Missingness denominator tags: d=LOS uses stay-specific ICU time, d=72h uses the fallback window, d=demo uses the demo horizon, d=static means one observation per ICU stay."
         if lang == 'en'
-        else "缺失率分母说明：d=LOS 表示按患者 ICU 住院时长估算，d=72h 表示 72 小时兜底窗口，d=demo 表示演示数据预设时间窗，d=static 表示每位患者一次静态观测。"
+        else "缺失率分母说明：d=LOS 表示按 ICU stay 时长估算，d=72h 表示 72 小时兜底窗口，d=demo 表示演示数据预设时间窗，d=static 表示每个 ICU stay 一次静态观测。"
     )
 
     def _render_quality_detail_report() -> None:
@@ -270,7 +382,7 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
 
             st.caption(denom_caption)
             if missing_plot_df[missing_rate_label].sum() == 0:
-                good_msg = "✅ Missingness is negligible across loaded concepts." if lang == 'en' else "✅ 当前已加载概念几乎没有缺失。"
+                good_msg = "Missingness is negligible across loaded concepts." if lang == 'en' else "当前已加载概念几乎没有缺失。"
                 st.success(good_msg)
             else:
                 # In screenshot mode keep a compact fixed size; in the
