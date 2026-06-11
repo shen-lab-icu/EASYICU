@@ -122,6 +122,13 @@ def _copilot_message_actions_for_current_step(
     normalized = _normalized_copilot_message_actions(actions, lang)
     current_actions = _copilot_current_prompt_actions(state, lang)
     current_ids = {str(action.get("id") or "") for action in current_actions}
+    recovery_ids = {"choice_retry_routing"}
+    recovery_actions = [
+        action
+        for action in normalized
+        if str(action.get("kind") or "") == "copilot_prompt"
+        and str(action.get("id") or "") in recovery_ids
+    ]
     step_actions = [
         action
         for action in normalized
@@ -129,7 +136,20 @@ def _copilot_message_actions_for_current_step(
         and str(action.get("id") or "") in current_ids
     ]
     if step_actions:
+        if is_latest and recovery_actions:
+            return recovery_actions + [
+                action
+                for action in step_actions
+                if str(action.get("id") or "") not in recovery_ids
+            ]
         return step_actions
+    if is_latest and recovery_actions:
+        current_without_recovery = [
+            action
+            for action in current_actions
+            if str(action.get("id") or "") not in recovery_ids
+        ]
+        return recovery_actions + current_without_recovery
     if is_latest and current_actions:
         return current_actions
     if not is_latest:

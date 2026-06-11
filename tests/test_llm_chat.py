@@ -491,3 +491,56 @@ def test_pending_sidebar_toggle_sync_is_applied_before_toggle_render(monkeypatch
     assert fake_streamlit.session_state["_llm_toggle"] is False
     assert fake_streamlit.session_state.get("_llm_toggle_sync_pending") is None
     assert fake_streamlit.toggle_calls[0]["value"] is False
+
+
+def test_copilot_retry_routing_action_survives_current_step_filter() -> None:
+    actions = [
+        {
+            "id": "choice_retry_routing",
+            "kind": "copilot_prompt",
+            "label": "↻ Retry routing",
+            "prompt": "what real data path should I use?",
+        },
+    ]
+    state = {"_copilot_guided_study": {"step": "question", "branch": "predict"}}
+
+    rendered = llm_chat._copilot_message_actions_for_current_step(
+        actions,
+        "en",
+        state,
+        is_latest=True,
+    )
+
+    assert rendered[0]["id"] == "choice_retry_routing"
+    assert any(action["id"] == "choice_question_outcome_model" for action in rendered)
+
+
+def test_copilot_real_data_path_help_uses_local_data_step(monkeypatch) -> None:
+    monkeypatch.setattr(
+        llm_chat,
+        "_copilot_route_with_llm",
+        lambda *_args, **_kwargs: pytest.fail("path-help prompt should not route through LLM"),
+    )
+    state = {
+        "entry_mode": "none",
+        "use_mock_data": True,
+        "database": "mock",
+        "llm_provider": "easyicu_hosted",
+        "llm_model": "hosted-default",
+    }
+
+    reply = llm_chat._handle_copilot_guided_prompt(
+        "what real data path should I use?",
+        "en",
+        state,
+    )
+
+    assert reply is not None
+    body, actions = reply
+    study = state["_copilot_guided_study"]
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert study["step"] == "data"
+    assert study["data_source_choice"] == "prepared_path"
+    assert "path field below this conversation" in body
+    assert any(action["id"] == "choice_data_prepared_path" for action in actions)
