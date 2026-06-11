@@ -137,3 +137,34 @@ def test_ctas_builder_accepts_schema_declared_aggregations_on_materialised_colum
     )
     out = build_cohort(cdef, wide)
     assert out.stay_id.tolist() == [1]
+
+
+# ----------- event-indicator NA normalization (sep3-style flags) -----------
+
+def test_is_positive_only_boolean_distinguishes_event_from_numeric():
+    # event flag: only True observed, rest NA
+    assert M._is_positive_only_boolean(pd.Series([True, None, True])) is True
+    # numeric score with NA -> NOT an event flag (real missingness)
+    assert M._is_positive_only_boolean(pd.Series([3.0, None, 8.0])) is False
+    # 0/1 numeric -> NOT a positive-only bool flag
+    assert M._is_positive_only_boolean(pd.Series([0.0, 1.0, None])) is False
+    # all-NA -> not detectable
+    assert M._is_positive_only_boolean(pd.Series([None, None])) is False
+
+
+def test_normalize_event_indicator_decodes_na_as_zero():
+    wide = pd.DataFrame({
+        "stay_id": [1, 2, 3],
+        "sep3_max": pd.Series([True, None, True], dtype=object),
+        "sep3_first": pd.Series([True, None, True], dtype=object),
+        "sep3_mean": pd.Series([1.0, None, 1.0]),
+        "sofa_max": pd.Series([3.0, None, 8.0]),  # numeric: must stay untouched
+    })
+    normalized = M._normalize_event_indicator_columns(wide)
+    # the sep3_* event family is decoded; the absent stay becomes 0, not NA
+    assert wide["sep3_max"].tolist() == [1, 0, 1]
+    assert wide["sep3_first"].tolist() == [1, 0, 1]
+    assert wide["sep3_mean"].tolist() == [1.0, 0.0, 1.0]
+    assert set(normalized) == {"sep3_max", "sep3_first", "sep3_mean"}
+    # a real numeric score keeps its NA (measurement-missing preserved)
+    assert wide["sofa_max"].isna().tolist() == [False, True, False]

@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
+import numpy as np
 import pandas as pd
 
 from .easyicu_case_builder import (
@@ -64,6 +65,70 @@ def _truthy_series(values: pd.Series) -> pd.Series:
     text_known = ~numeric_known & ~missing
     out.loc[text_known] = ~normalized.loc[text_known].isin(_FALSE_TOKENS)
     return out
+
+
+def _is_positive_only_boolean(series: pd.Series) -> bool:
+    """True iff every non-NA value is boolean ``True`` (the positive level).
+
+    Such a column is a sparse *event indicator*: the event is recorded as
+    ``True`` and its absence is left as NA. A numeric column (e.g. a SOFA
+    score) or a 0/1 column never matches, so the normalisation below cannot
+    corrupt a measured variable.
+    """
+    nonnull = series.dropna()
+    if nonnull.empty:
+        return False
+    return all(
+        (v is True) or (isinstance(v, np.bool_) and bool(v))
+        for v in nonnull.unique()
+    )
+
+
+# Summary suffixes emitted by `_summarize_timeseries` for a time-series concept.
+_EVENT_SUMMARY_SUFFIXES = ("_max", "_min", "_mean", "_first")
+
+
+def _normalize_event_indicator_columns(wide: pd.DataFrame) -> List[str]:
+    """Decode sparse boolean event concepts so NA means "did not occur" (0).
+
+    A concept like ``sep3_sofa2`` records only the positive event (``True``);
+    a stay with no event has NA in ``<c>_max`` / ``<c>_first`` etc. Left as-is
+    that NA reads as *measurement-missing* (e.g. an agent computing 66 %
+    missingness and discarding the exposure), when it is really *structural
+    absence* — the event did not happen. For any concept whose representative
+    summary column is positive-only boolean, fill the negative level: integer
+    summaries (max/min/first) become a clean 0/1 indicator and the mean
+    becomes the within-window event fraction (0 when absent). Returns the list
+    of normalised columns for provenance. Purely a representation decode — it
+    never imputes a *measured* value (see ``_is_positive_only_boolean``).
+    """
+    normalized: List[str] = []
+    bases: set[str] = set()
+    for col in wide.columns:
+        for suffix in _EVENT_SUMMARY_SUFFIXES:
+            if col.endswith(suffix):
+                bases.add(col[: -len(suffix)])
+    for base in sorted(bases):
+        probe = next(
+            (
+                f"{base}{s}"
+                for s in ("_max", "_first", "_min")
+                if f"{base}{s}" in wide.columns
+            ),
+            None,
+        )
+        if probe is None or not _is_positive_only_boolean(wide[probe]):
+            continue
+        for suffix in _EVENT_SUMMARY_SUFFIXES:
+            col = f"{base}{suffix}"
+            if col not in wide.columns:
+                continue
+            if suffix == "_mean":
+                wide[col] = pd.to_numeric(wide[col], errors="coerce").fillna(0.0)
+            else:
+                wide[col] = (wide[col] == True).astype(int)  # noqa: E712
+            normalized.append(col)
+    return normalized
 
 
 def _any_truthy(values: pd.Series) -> bool:
@@ -288,6 +353,11 @@ def materialize_cohort(
             wide[col] = wide[col].fillna(0)
             if col.endswith("_measured"):
                 wide[col] = wide[col].astype(int)
+    # Decode sparse boolean event concepts (e.g. sep3_sofa2): NA = event did
+    # not occur -> 0, not measurement-missing. Prevents a downstream consumer
+    # from misreading a structural absence as missing data and discarding the
+    # exposure.
+    event_indicator_columns = _normalize_event_indicator_columns(wide)
     n_all = int(len(wide))
 
     # ---- apply CTAS inclusion/exclusion (纳排), deterministic + auditable
@@ -310,6 +380,7 @@ def materialize_cohort(
         "n_stays_extracted": n_all,
         "n_stays_after_inclusion_exclusion": n_after,
         "unavailable_concepts": unavailable,
+        "event_indicator_columns_normalized": event_indicator_columns,
         "columns": list(cohort.columns),
         "cohort_sha256": _hash_df(cohort.reset_index(drop=True)),
         "build_seconds": round(time.time() - t0, 2),
