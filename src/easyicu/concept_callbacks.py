@@ -29,13 +29,19 @@ from .callbacks import (
     sofa_coag,
     sofa_liver,
     sofa_renal,
+    sofa_resp,
+)
+# SOFA-2 components: import the canonical, footnote-correct implementations from
+# sofa2.py (rewritten in 82fea9e to score ECMO and accept ecmo/ecmo_indication).
+# The legacy copies in callbacks.py predate that fix and lack the ecmo params,
+# so the dict-driven dispatcher (which passes ecmo by keyword) would TypeError.
+from .sofa2 import (
     sofa2_renal,
     sofa2_resp,
     sofa2_coag,
     sofa2_liver,
     sofa2_cardio,
     sofa2_cns,
-    sofa_resp,
 )
 from .sepsis import sep3 as sep3_detector, susp_inf as susp_inf_detector
 from .sepsis_sofa2 import sep3_sofa2 as sep3_sofa2_detector

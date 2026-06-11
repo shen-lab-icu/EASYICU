@@ -382,6 +382,7 @@ __all__ = [
     "ResearchAgentPipeline",
     "SubmissionProfile",
     "NPJ_DM_2026_05",
+    "NPJ_DM_2026_06",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",
@@ -889,6 +890,7 @@ def __getattr__(name: str):
     if name in {
         "SubmissionProfile",
         "NPJ_DM_2026_05",
+        "NPJ_DM_2026_06",
         "DEFAULT_SUBMISSION_PROFILE_REF",
         "SUBMISSION_PROFILE_REGISTRY",
         "get_submission_profile",

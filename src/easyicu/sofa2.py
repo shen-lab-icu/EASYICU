@@ -7,7 +7,7 @@ callback style.
 Components implemented (0-4 each):
 - Respiratory (PaO2/FiO2 or SpO2/FiO2 + advanced support/ECMO)
   * SOFA-2 thresholds: ≤300/225/150/75 mmHg (vs SOFA-1: >400/300-400/200-299/100-199/<100)
-  * ECMO for respiratory indication → auto 4pt
+  * Any ECMO → respiratory auto 4pt
   * Advanced support includes: IMV, NIV, HFNC, CPAP, BiPAP, home ventilation
   
 - Hemostasis/Coagulation (platelets)
@@ -100,7 +100,7 @@ def sofa2_resp(
     │   2    │ 200-299     │ ≤225          │ None                │
     │   3    │ 100-199+MV  │ ≤150          │ Advanced support^   │
     │   4    │ <100+MV     │ ≤75           │ Advanced support^   │
-    │        │             │ OR ECMO (respiratory indication)        │
+    │        │             │ OR ECMO                                 │
     └────────┴─────────────┴───────────────┴─────────────────────┘
 
     ^ Advanced support: HFNC, CPAP, BiPAP, NIV, IMV, long-term home ventilation
@@ -109,8 +109,8 @@ def sofa2_resp(
     - 0: >300  │ 1: ≤300  │ 2: ≤250  │ 3: ≤200+support  │ 4: ≤120+support or ECMO
     
     ECMO special rules:
-    - If ECMO for respiratory indication → auto 4pt (regardless of P/F)
-    - If ECMO for cardiovascular indication → score both respiratory AND cardiovascular
+    - Any ECMO → respiratory auto 4pt (regardless of P/F)
+    - ECMO for cardiovascular indication → additionally score cardiovascular
     
     Args:
         pafi: PaO2/FiO2 ratio (mmHg)

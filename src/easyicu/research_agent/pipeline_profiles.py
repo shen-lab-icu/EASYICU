@@ -83,9 +83,25 @@ NPJ_DM_2026_05 = SubmissionProfile(
     expected_sofa2_dict_sha="e1844deafad9151aa5069824ff335bf59e228b97040a8bd884d23e0457047b25",
 )
 
-DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_05.ref
+NPJ_DM_2026_06 = SubmissionProfile(
+    name="npj_dm",
+    version="20260611",
+    locked_at="2026-06-11T00:00:00Z",
+    evidence_enforcement_mode="strict",
+    writer_digest_widened=True,
+    enable_reproducibility_envelope=True,
+    requires_arm="aware",
+    requires_runner="docker",
+    # Locked after the 2026-06-09 concept coverage and tracker audit refresh
+    # that added the SICdb ventilation mapping and SOFA-2 dictionary updates.
+    expected_concept_dict_sha="85bf8b5fd819881e41b4ba57167ca664db5ec5b83e8524e40291bb9c56a719df",
+    expected_sofa2_dict_sha="22c4de886b6cb98ccb9145ce9e310780cb1b9b3feaf7a0c3f8b283647e4777b5",
+)
+
+DEFAULT_SUBMISSION_PROFILE_REF = NPJ_DM_2026_06.ref
 SUBMISSION_PROFILE_REGISTRY: Dict[str, SubmissionProfile] = {
     NPJ_DM_2026_05.ref: NPJ_DM_2026_05,
+    NPJ_DM_2026_06.ref: NPJ_DM_2026_06,
 }
 
 
@@ -103,6 +119,7 @@ def get_submission_profile(ref: Optional[str] = None) -> SubmissionProfile:
 __all__ = [
     "SubmissionProfile",
     "NPJ_DM_2026_05",
+    "NPJ_DM_2026_06",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",

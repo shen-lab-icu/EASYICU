@@ -15,6 +15,10 @@ from easyicu.research_agent.concept_dict_audit import (
     verify_replay_dict_match,
 )
 from easyicu.research_agent.pipeline_profiles import NPJ_DM_2026_05
+from easyicu.research_agent.pipeline_profiles import (
+    DEFAULT_SUBMISSION_PROFILE_REF,
+    get_submission_profile,
+)
 
 
 def test_fingerprint_is_stable_across_calls() -> None:
@@ -36,6 +40,17 @@ def test_assert_dict_matches_passes_on_identical_sha() -> None:
             mode="strict",
         )
         == []
+    )
+
+
+def test_default_submission_profile_matches_packaged_dictionaries() -> None:
+    fingerprint = compute_concept_dict_fingerprint()
+    profile = get_submission_profile(DEFAULT_SUBMISSION_PROFILE_REF)
+    assert_dict_matches(
+        fingerprint,
+        expected_concept_dict_sha=profile.expected_concept_dict_sha,
+        expected_sofa2_dict_sha=profile.expected_sofa2_dict_sha,
+        mode="strict",
     )
 
 
