@@ -81,6 +81,7 @@ from .plan_utils import (
     _plan_expects_analysis_cohort,
     _preserve_figure_steps_after_replan,
     _primary_exposure_contract_findings,
+    _primary_exposure_overadjustment_findings,
     _step_contract_findings,
     _step_contract_repair_guidance,
     _step_expects_figure,
@@ -111,10 +112,7 @@ def _is_cosmetic_visual_finding(finding: ValidationFinding) -> bool:
     if finding.severity != "error" or finding.validator != "visual_qa":
         return False
     message = (finding.message or "").lower()
-    return (
-        "overlapping text elements" in message
-        and "spacing" in message
-    )
+    return "overlapping text elements" in message and "spacing" in message
 
 
 def _demote_cosmetic_visual_findings(
@@ -144,8 +142,7 @@ def _plan_signature(
     changing the analysis.
     """
     return tuple(
-        (step.step_id, step.method, tuple(step.expected_outputs))
-        for step in plan.steps
+        (step.step_id, step.method, tuple(step.expected_outputs)) for step in plan.steps
     )
 
 
@@ -229,9 +226,7 @@ def run_execute_phase(
         try:
             prior_records = [
                 rec
-                for rec in (
-                    plan_result.resume_state.get("per_step_records", []) or []
-                )
+                for rec in (plan_result.resume_state.get("per_step_records", []) or [])
                 if isinstance(rec, dict) and rec.get("step_id")
             ]
             prior_ok_step_ids = {
@@ -288,9 +283,7 @@ def run_execute_phase(
             "notes": notes,
             "runtime_state": runtime_state.model_dump(mode="json"),
             "repair_ledger_path": str(repair_ledger.path.relative_to(run_dir)),
-            "repairs_applied": [
-                record.__dict__ for record in repair_ledger.records
-            ],
+            "repairs_applied": [record.__dict__ for record in repair_ledger.records],
         }
         if extra:
             payload.update(extra)
@@ -327,9 +320,7 @@ def run_execute_phase(
         *,
         reason: str,
     ) -> Path:
-        revision_path = (
-            run_dir / f"analysis_plan_revision_{revised_plan.revision}.json"
-        )
+        revision_path = run_dir / f"analysis_plan_revision_{revised_plan.revision}.json"
         revision_path.write_text(
             revised_plan.model_dump_json(indent=2),
             encoding="utf-8",
@@ -356,14 +347,11 @@ def run_execute_phase(
             # artefact.
             import hashlib
 
-            digest = hashlib.sha256(
-                revision_path.read_bytes()
-            ).hexdigest()[:8]
+            digest = hashlib.sha256(revision_path.read_bytes()).hexdigest()[:8]
             evidence.register_file(
                 kind="log",
                 description=(
-                    f"Revised analysis plan (reason={reason}; "
-                    f"resume re-revision)."
+                    f"Revised analysis plan (reason={reason}; " f"resume re-revision)."
                 ),
                 source_path=revision_path,
                 evidence_id=f"{base_id}_{digest}",
@@ -386,8 +374,7 @@ def run_execute_phase(
         the universe would split a single run across two populations.
         """
         return not any(
-            (rec.get("step_id") or "") != "00_probe"
-            for rec in per_step_records
+            (rec.get("step_id") or "") != "00_probe" for rec in per_step_records
         )
 
     def _universe_columns() -> list:
@@ -835,9 +822,7 @@ def run_execute_phase(
     ) -> None:
         severity = _finding_severity(findings_for_step)
         messages = [
-            f.message
-            for f in findings_for_step
-            if f.severity in {"warning", "error"}
+            f.message for f in findings_for_step if f.severity in {"warning", "error"}
         ]
         for evidence_id in evidence_ids:
             evidence.update_record(
@@ -1139,13 +1124,14 @@ def run_execute_phase(
                             # fallback; reviewer still sees the
                             # original violation in the manifest.
                             if f.severity == "error":
-                                f = f.model_copy(update={
-                                    "severity": "warning",
-                                    "message": (
-                                        "[surfaced after fallback] "
-                                        + f.message
-                                    ),
-                                })
+                                f = f.model_copy(
+                                    update={
+                                        "severity": "warning",
+                                        "message": (
+                                            "[surfaced after fallback] " + f.message
+                                        ),
+                                    }
+                                )
                             findings.append(f)
                     code = fallback_code
                     continue
@@ -1184,9 +1170,7 @@ def run_execute_phase(
                 step_record["concept_audit_block"] = {
                     "step_id": step.step_id,
                     "errors": _block_errors,
-                    "deterministic_repairs_applied": list(
-                        applied_concept_repair_names
-                    ),
+                    "deterministic_repairs_applied": list(applied_concept_repair_names),
                     "llm_repair_attempts": concept_repair_attempts,
                     "offending_code_lines": _offending_lines,
                     "candidate_remedies": _remedies,
@@ -1232,8 +1216,7 @@ def run_execute_phase(
                     _flush_partial_manifest()
                 emit_progress(
                     "audit",
-                    f"Concept audit blocked {step.step_id}; "
-                    f"repair ticket written.",
+                    f"Concept audit blocked {step.step_id}; " f"repair ticket written.",
                     status="error",
                     run_id=run_id,
                     step_id=step.step_id,
@@ -1268,9 +1251,7 @@ def run_execute_phase(
                     attempt=concept_repair_attempts,
                 )
             except Exception as exc:
-                fallback_code = _deterministic_fallback_code(
-                    "concept_repair_failed"
-                )
+                fallback_code = _deterministic_fallback_code("concept_repair_failed")
                 if fallback_code is not None:
                     code = fallback_code
                     continue
@@ -1323,7 +1304,9 @@ def run_execute_phase(
             run_result = runner.run(step_id=step.step_id, code=code)
             step_record["returncode"] = run_result.returncode
             step_record["timed_out"] = run_result.timed_out
-            step_record["requested_network_policy"] = run_result.requested_network_policy
+            step_record["requested_network_policy"] = (
+                run_result.requested_network_policy
+            )
             step_record["effective_isolation"] = run_result.effective_isolation
             step_record["isolation_degraded"] = run_result.isolation_degraded
             if run_result.isolation_degradation_reason:
@@ -1351,9 +1334,7 @@ def run_execute_phase(
                 prompt_pack_version=prompt_version,
                 metadata={
                     "repair_attempts": repair_attempts,
-                    "fallback_reason": step_record.get(
-                        "deterministic_code_fallback"
-                    ),
+                    "fallback_reason": step_record.get("deterministic_code_fallback"),
                     "runner_repair": runner_repair_name,
                     "llm_signature": llm_signature,
                 },
@@ -1453,9 +1434,7 @@ def run_execute_phase(
                     ]
                     if visual_errors:
                         if repair_attempts >= pipeline._max_code_repair_attempts:
-                            fallback_code = _deterministic_fallback_code(
-                                "visual_qa"
-                            )
+                            fallback_code = _deterministic_fallback_code("visual_qa")
                             if fallback_code is not None:
                                 code = fallback_code
                                 _clear_output_dir(run_result.out_dir)
@@ -1588,10 +1567,22 @@ def run_execute_phase(
                     step_summary=visual_step_summary,
                     context=context,
                 )
+                # Overadjustment hard-block: if the primary exposure is a
+                # composite/derived score and this model conditioned on one of
+                # its constituents, route an error through the same repair loop
+                # so the step re-fits without the offending covariate.
+                early_contract_findings += _primary_exposure_overadjustment_findings(
+                    step=step,
+                    context=context,
+                    out_dir=run_result.out_dir,
+                )
                 early_contract_errors = [
                     f for f in early_contract_findings if f.severity == "error"
                 ]
-                if early_contract_errors and repair_attempts < pipeline._max_code_repair_attempts:
+                if (
+                    early_contract_errors
+                    and repair_attempts < pipeline._max_code_repair_attempts
+                ):
                     repair_attempts += 1
                     step_record["code_repair_attempts"] = repair_attempts
                     emit_progress(
@@ -1714,9 +1705,7 @@ def run_execute_phase(
             if log_path.exists():
                 run_log = log_path.read_text(encoding="utf-8", errors="replace")
             else:
-                run_log = (
-                    (run_result.stdout or "") + "\n" + (run_result.stderr or "")
-                )
+                run_log = (run_result.stdout or "") + "\n" + (run_result.stderr or "")
             if pipeline._enable_deterministic_runner_repair:
                 before_repair_code = code
                 plugin_repair = pipeline._case_plugin_registry.repair_code(
@@ -1725,10 +1714,7 @@ def run_execute_phase(
                     code=code,
                     run_log=run_log,
                 )
-                if (
-                    plugin_repair is not None
-                    and plugin_repair[0] != runner_repair_name
-                ):
+                if plugin_repair is not None and plugin_repair[0] != runner_repair_name:
                     runner_repair = plugin_repair
                 else:
                     runner_repair = _deterministic_runner_repair(
@@ -1895,9 +1881,7 @@ def run_execute_phase(
         figure_role = (
             "publication_figure"
             if publication_step
-            else "analysis_figure"
-            if _step_expects_figure(step)
-            else None
+            else "analysis_figure" if _step_expects_figure(step) else None
         )
         if publication_step and not _has_figure_exports(run_result.out_dir):
             promoted = _promote_sibling_figure_exports(out_dir=run_result.out_dir)
@@ -1941,10 +1925,12 @@ def run_execute_phase(
                         # forest plot from the parent coefficient table when the
                         # figure-only child step failed (e.g. small model hard-
                         # coded a wrong results filename).
-                        rescued = _render_association_publication_bundle_from_prior_outputs(
-                            run_dir=run_dir,
-                            current_step_id=step.step_id,
-                            out_dir=run_result.out_dir,
+                        rescued = (
+                            _render_association_publication_bundle_from_prior_outputs(
+                                run_dir=run_dir,
+                                current_step_id=step.step_id,
+                                out_dir=run_result.out_dir,
+                            )
                         )
                         if rescued is not None:
                             rescue_source = "association_publication_bundle_rescue"
@@ -2099,7 +2085,8 @@ def run_execute_phase(
             except Exception as exc:
                 logger.warning(
                     "Failed to register numeric claims for step %s: %s",
-                    step.step_id, exc,
+                    step.step_id,
+                    exc,
                 )
             # Phase-1 derived-claim hook (Commit 2). After every leaf
             # is registered, evaluate any ``derived_claims`` the coder
@@ -2132,7 +2119,8 @@ def run_execute_phase(
             except Exception as exc:
                 logger.warning(
                     "Failed to register derived claims for step %s: %s",
-                    step.step_id, exc,
+                    step.step_id,
+                    exc,
                 )
         stat_findings = stat_validator.audit(
             context=context,
@@ -2167,13 +2155,9 @@ def run_execute_phase(
             findings.extend(guard_findings)
             findings.extend(contract_findings)
         step_record["stat_findings"] = [f.model_dump() for f in stat_findings]
-        step_record["clinical_findings"] = [
-            f.model_dump() for f in clinical_findings
-        ]
+        step_record["clinical_findings"] = [f.model_dump() for f in clinical_findings]
         step_record["guard_findings"] = [f.model_dump() for f in guard_findings]
-        step_record["contract_findings"] = [
-            f.model_dump() for f in contract_findings
-        ]
+        step_record["contract_findings"] = [f.model_dump() for f in contract_findings]
         step_record["generation_mode"] = _script_generation_mode(
             repair_attempts=repair_attempts,
             fallback_used=deterministic_fallback_used,
@@ -2335,9 +2319,7 @@ def run_execute_phase(
         or pipeline._enable_replanning
     ):
         executed_step_ids = set(resumed_step_ids)
-        remaining_steps = [
-            s for s in plan.steps if s.step_id not in executed_step_ids
-        ]
+        remaining_steps = [s for s in plan.steps if s.step_id not in executed_step_ids]
         while remaining_steps:
             step = remaining_steps.pop(0)
             record = _execute_one_step(step)
@@ -2373,9 +2355,9 @@ def run_execute_phase(
                             ValidationFinding(
                                 validator="step_executor",
                                 severity="error",
-                            message=f"Worker raised an unhandled exception: {exc!r}",
+                                message=f"Worker raised an unhandled exception: {exc!r}",
+                            )
                         )
-                    )
 
     try:
         robustness_specs = robustness_specs_for_execution(run_dir=run_dir, plan=plan)
@@ -2440,18 +2422,16 @@ def run_execute_phase(
             run_id=run_id,
         )
         fig_paths = [
-            run_dir / r.relative_path
-            for r in evidence.records()
-            if r.kind == "figure"
+            run_dir / r.relative_path for r in evidence.records() if r.kind == "figure"
         ]
         vlm_adapter = pipeline._visual_qa_adapter
         if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
             client = pipeline._vlm_client or role_resolver("analyzer")
             if client is not None:
                 vlm_adapter = VLMVisualQAAdapter(client)
-        final_visual_findings = VisualQAAuditor(
-            vlm_adapter=vlm_adapter
-        ).audit(figure_paths=fig_paths)
+        final_visual_findings = VisualQAAuditor(vlm_adapter=vlm_adapter).audit(
+            figure_paths=fig_paths
+        )
         demoted_final_findings, _ = _demote_cosmetic_visual_findings(
             final_visual_findings
         )

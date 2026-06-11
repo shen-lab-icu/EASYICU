@@ -530,7 +530,8 @@ class ReplannerAgent(PlannerAgent):
         completed = list(completed_step_records or [])
         messages = [
             LLMMessage(
-                role="system", content=_SYSTEM_GUIDE + "\n\n" + _REPLANNER_GUIDE
+                role="system",
+                content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE + "\n\n" + _REPLANNER_GUIDE,
             ),
             LLMMessage(
                 role="user",

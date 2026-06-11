@@ -52,6 +52,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .icu_agent_bench import ICUAgentBenchTask, grade_bench_task
 from .icu_rules import detect_overadjustment
+from .plan_utils import read_model_covariate_names
 
 DimensionLevel = Literal["Full", "Partial", "Marginal", "Fail"]
 """Four-level colour bin for the Fig.3 scorecard heatmap (§M4)."""
@@ -717,9 +718,7 @@ def score_run(
         reporting_completeness=score_reporting_completeness(
             task, checklist=reporting_checklist
         ),
-        fairness_subgroup=score_fairness_subgroup(
-            task, checklist=reporting_checklist
-        ),
+        fairness_subgroup=score_fairness_subgroup(task, checklist=reporting_checklist),
         task_id=task.task_id,
         run_id=run_id,
         plan=score_plan(
@@ -790,24 +789,21 @@ def _load_cohort_hygiene_cautions(run_dir: Path) -> List[str]:
 
 
 def _load_regression_covariates(run_dir: Path) -> List[str]:
-    """Best-effort: variable names from any ``regression_results.csv`` the run
-    wrote (used for the gold-free overadjustment check). The intercept row is
-    dropped; missing/malformed files degrade to an empty list.
+    """Best-effort: variable names from any model coefficient table the run
+    wrote (used for the gold-free overadjustment check).
+
+    Delegates to the shared content-based reader so the post-hoc backstop and
+    the mid-flight auditor agree on what counts as a coefficient table — runs
+    emit ``primary_association.csv`` / ``model_coefficients.csv`` /
+    ``regression_results.csv`` interchangeably, so a filename match alone would
+    miss real outputs. Missing/malformed files degrade to an empty list.
     """
-    names: List[str] = []
-    for path in run_dir.rglob("regression_results.csv"):
-        try:
-            with path.open(newline="", encoding="utf-8") as fh:
-                for row in csv.DictReader(fh):
-                    v = (row.get("variable") or "").strip()
-                    if v and v.lower() not in {"const", "intercept"} and v not in names:
-                        names.append(v)
-        except (OSError, ValueError):
-            continue
-    return names
+    return read_model_covariate_names(run_dir)
 
 
-def _load_reporting_checklist(run_dir: Path, task: ICUAgentBenchTask) -> Dict[str, object]:
+def _load_reporting_checklist(
+    run_dir: Path, task: ICUAgentBenchTask
+) -> Dict[str, object]:
     """Load the kind-matched reporting-guideline checklist a run emitted.
 
     Returns ``{}`` when the routed guideline has no emitted checklist (e.g. the
