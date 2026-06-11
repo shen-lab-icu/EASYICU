@@ -1265,6 +1265,44 @@ class ResearchAgentPipeline:
                         detail={"dropped_keys": dropped_keys},
                     )
                 )
+            # A hosted model occasionally emits structurally-broken plan JSON
+            # (e.g. a stray time-window at the top level and no usable steps
+            # array) that normalises to 0 steps. An empty plan must never run:
+            # retry the real planner once, then fall back to the deterministic
+            # plan so the pipeline always executes a real analysis.
+            if not plan.steps and self._enable_deterministic_planner_fallback:
+                retry_plan = None
+                try:
+                    retry_plan = planner.run(agent_context)
+                except Exception:
+                    retry_plan = None
+                if retry_plan is not None and retry_plan.steps:
+                    plan = retry_plan
+                    findings.append(
+                        ValidationFinding(
+                            validator="planner",
+                            severity="warning",
+                            message="Planner returned an empty plan; recovered on retry.",
+                            detail={"generation_mode": "retry"},
+                        )
+                    )
+                else:
+                    findings.append(
+                        ValidationFinding(
+                            validator="planner",
+                            severity="warning",
+                            message=(
+                                "Planner returned an empty plan (0 steps after schema "
+                                "validation) twice; using deterministic fallback plan."
+                            ),
+                            detail={"generation_mode": "fallback"},
+                        )
+                    )
+                    plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
+                        agent_context
+                    )
+                    used_mock_llm = True
+                    plan_generation_mode = "fallback"
         plan, plan_contract_findings = _enforce_advanced_plan_contract(
             plan=plan,
             context=context,
