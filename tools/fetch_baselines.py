@@ -78,17 +78,14 @@ def _parse_registry_yaml(text: str) -> List[BaselineEntry]:
     body = m.group(1)
     entries: List[Dict[str, object]] = []
     current: Optional[Dict[str, object]] = None
-    current_indent = 0
     last_list_key: Optional[str] = None
     for raw_line in body.splitlines():
         if not raw_line.strip() or raw_line.strip().startswith("#"):
             continue
         stripped = raw_line.lstrip()
-        indent = len(raw_line) - len(stripped)
         if stripped.startswith("- "):
             current = {}
             entries.append(current)
-            current_indent = indent
             last_list_key = None
             kv = stripped[2:].split(":", 1)
             if len(kv) == 2:
