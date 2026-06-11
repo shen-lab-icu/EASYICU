@@ -216,8 +216,11 @@ from .pipeline_writer_aux import (
 )
 from .plan_utils import (
     _cap_plan_preserving_figure_steps,
+    _cohort_definition_contract_findings,
+    _cohort_definition_is_empty,
     _ensure_publication_figure_step_in_plan,
     _enforce_advanced_plan_contract,
+    _plan_expects_analysis_cohort,
     _infer_primary_predictor_from_context,
     _parent_step_id_for_figure_step,
     _predictor_tokens,
@@ -1353,6 +1356,39 @@ class ResearchAgentPipeline:
                     )
                     used_mock_llm = True
                     plan_generation_mode = "fallback"
+            # Structured-纳排 retry: if the plan implies an analysis cohort (a
+            # cohort / eligibility / attrition step) but left plan.cohort
+            # unstructured, the 纳排 is unenforceable free text. Give the planner
+            # one focused retry; adopt it only if it actually structures the
+            # cohort, so a good plan is never discarded when the retry doesn't.
+            if (
+                not used_mock_llm
+                and _plan_expects_analysis_cohort(plan)
+                and _cohort_definition_is_empty(plan)
+            ):
+                cohort_retry = None
+                try:
+                    cohort_retry = planner.run(agent_context)
+                except Exception:
+                    cohort_retry = None
+                if (
+                    cohort_retry is not None
+                    and cohort_retry.steps
+                    and not _cohort_definition_is_empty(cohort_retry)
+                ):
+                    plan = cohort_retry
+                    findings.append(
+                        ValidationFinding(
+                            validator="cohort_contract",
+                            severity="warning",
+                            message=(
+                                "Planner initially left the analysis cohort "
+                                "unstructured; recovered structured inclusion/"
+                                "exclusion on retry."
+                            ),
+                            detail={"generation_mode": "cohort_retry"},
+                        )
+                    )
         # Skip the plan-shaping transforms when resuming: the saved plan is
         # already in its final, transformed form, and re-running split/cap/
         # ensure_* could rename or reorder step_ids and break the resume skip
@@ -1376,6 +1412,11 @@ class ResearchAgentPipeline:
             findings.extend(cap_findings)
             plan = ensure_cohort_definition(plan)
             plan = ensure_robustness_specs(plan)
+            # Final gate: if the plan implies a cohort but still has no
+            # structured inclusion/exclusion (the retry above didn't recover
+            # it), record a loud, auditable contract error instead of silently
+            # running the analysis on the full universe.
+            findings.extend(_cohort_definition_contract_findings(plan))
         plan_path = run_dir / "analysis_plan.json"
         plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:
