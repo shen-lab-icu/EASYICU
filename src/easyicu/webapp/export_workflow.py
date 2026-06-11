@@ -79,7 +79,7 @@ def _render_export_progress_shell(
             </div>
           </div>
           <div class="eu-export-progress-meta">
-            <span>{html.escape("Features" if lang == "en" else "特征")} <b>{len(selected_concepts)}</b></span>
+            <span>{html.escape("Export concepts" if lang == "en" else "导出概念")} <b>{len(selected_concepts)}</b></span>
             <span>{html.escape("Format" if lang == "en" else "格式")} <b>{html.escape(export_format.upper())}</b></span>
             <span>{html.escape("Privacy" if lang == "en" else "隐私")} <b>{html.escape("local only" if lang == "en" else "仅本地")}</b></span>
           </div>
@@ -448,7 +448,6 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
             key="stop_export_btn",
             use_container_width=True,
             help=stop_help,
-            icon=":material/stop_circle:",
         ):
             _queue_export_cancel(st.session_state, lang=lang)
             st.rerun()
@@ -603,6 +602,9 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
                 existing_files = [str(existing_modules[group_key]) for group_key in skipped_modules if group_key in existing_modules]
                 existing_patient_count = st.session_state.get('_exported_patient_count') or len(st.session_state.get('patient_ids', []))
                 _prime_export_completion(export_dir, existing_files, auto_load=True)
+                st.session_state['_review_expected_export_concepts'] = list(dict.fromkeys(selected_concepts))
+                st.session_state['_review_source_concept_count'] = len(st.session_state['_review_expected_export_concepts'])
+                st.session_state['_review_subset_concept_count'] = 0
                 st.session_state['_export_success_result'] = {
                     'files': existing_files,
                     'export_dir': str(export_dir),
@@ -2058,7 +2060,7 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
 
                 # 概念计数：已导出 = exported_files 中的概念数（后面统计）
                 _n_loaded_concepts = len(valid_concepts) - len(failed_concepts) - len(unsupported_concepts)
-                loaded_msg = f"✅ Loaded & exported {_n_loaded_concepts} concepts" if lang == 'en' else f"✅ 已加载并导出 {_n_loaded_concepts} 个概念"
+                loaded_msg = f"✅ Loaded & exported {_n_loaded_concepts} export concepts" if lang == 'en' else f"✅ 已加载并导出 {_n_loaded_concepts} 个导出概念"
                 _set_status(loaded_msg, level="success")
 
             except Exception as e:
@@ -2314,6 +2316,9 @@ def execute_sidebar_export(app_context: dict[str, Any] | None = None):
 
             # 🆕 保存导出结果到 session state，rerun 后在 Guide: Complete 中显示
             total_elapsed = time_module.time() - export_start_time
+            st.session_state['_review_expected_export_concepts'] = list(dict.fromkeys(selected_concepts))
+            st.session_state['_review_source_concept_count'] = len(st.session_state['_review_expected_export_concepts'])
+            st.session_state['_review_subset_concept_count'] = exported_concept_count
             st.session_state['_export_success_result'] = {
                 'files': exported_files,
                 'export_dir': str(export_dir),

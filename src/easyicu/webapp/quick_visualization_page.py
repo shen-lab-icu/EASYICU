@@ -267,6 +267,10 @@ def _quick_viz_reset_review_workspace(state: dict[str, Any]) -> None:
     state.pop("available_patient_ids", None)
     state.pop("patient_view_id", None)
     state.pop("quick_viz_active_panel", None)
+    state.pop("_review_expected_export_concepts", None)
+    state.pop("_review_source_concept_count", None)
+    state.pop("_review_subset_concept_count", None)
+    state.pop("_review_missing_export_concepts", None)
     state["_scroll_to_top"] = True
 
 
@@ -274,10 +278,18 @@ def _render_quick_viz_loaded_bar(lang: str) -> None:
     """Render the loaded-workspace status bar and concrete actions."""
     is_en = lang == "en"
     summary = _quick_viz_workspace_summary(st.session_state, lang)
+    selected_source_count = int(st.session_state.get("_review_source_concept_count") or summary["concept_count"])
+    selection_suffix = ""
+    if selected_source_count and selected_source_count != summary["concept_count"]:
+        selection_suffix = (
+            f" · from {selected_source_count} selected export concepts"
+            if is_en else
+            f" · 来自 {selected_source_count} 个已选导出概念"
+        )
     status_text = (
-        f"{summary['loaded_patient_count']} stays · {summary['module_count']} modules · {summary['error_count']} errors"
+        f"{summary['loaded_patient_count']} ICU stays · {summary['concept_count']} review features{selection_suffix} · {summary['error_count']} errors"
         if is_en else
-        f"{summary['loaded_patient_count']} 例 stay · {summary['module_count']} 个模块 · {summary['error_count']} 个错误"
+        f"{summary['loaded_patient_count']} 个 ICU stay · {summary['concept_count']} 个审阅特征{selection_suffix} · {summary['error_count']} 个错误"
     )
     is_demo_review = str(summary.get("source_label") or "").startswith("Demo review")
     title = "Demo review workspace ready" if is_demo_review and is_en else summary["source_label"]
@@ -299,7 +311,6 @@ def _render_quick_viz_loaded_bar(lang: str) -> None:
             if st.button(
                 "Edit setup" if is_en else "编辑设置",
                 key="quick_viz_edit_setup",
-                icon=":material/tune:",
                 use_container_width=True,
             ):
                 _quick_viz_reset_review_workspace(st.session_state)
@@ -311,7 +322,6 @@ def _render_quick_viz_loaded_bar(lang: str) -> None:
                 file_name="easyicu_review_workspace_summary.json",
                 mime="application/json",
                 key="quick_viz_export_summary",
-                icon=":material/download:",
                 use_container_width=True,
             )
 
@@ -496,7 +506,7 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                                 -1: "All (May Lag)" if lang == 'en' else "全部 (可能卡顿)",
                             }
                             max_patients_opt = st.selectbox(
-                                "Max Patients to Load" if lang == 'en' else "最大加载患者数",
+                                "Max ICU stays to load" if lang == 'en' else "最大加载 ICU stay 数",
                                 options=patient_options,
                                 index=0,
                                 format_func=lambda value: option_labels[value],
@@ -556,7 +566,7 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                 col1, col2 = st.columns(2)
                 with col1:
                     n_patients = st.slider(
-                        "Number of Patients" if lang == 'en' else "患者数量",
+                        "Number of ICU stays" if lang == 'en' else "ICU stay 数量",
                         10,
                         48,
                         demo_patients,

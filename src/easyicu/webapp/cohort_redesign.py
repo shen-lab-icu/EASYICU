@@ -88,9 +88,7 @@ def _patient_count_from_state() -> int:
 
 
 def _cohort_page_title(lang: str) -> tuple[str, str]:
-    if st.session_state.get("entry_mode") != "demo" and not _has_bound_cohort_context():
-        return _T(lang, "Cohort statistics", "队列统计"), _T(lang, "队列统计", "队列统计")
-    return _T(lang, "Sepsis vs Non-sepsis", "脓毒症对照"), _T(lang, "脓毒症对照", "脓毒症对照")
+    return _T(lang, "Cohort statistics", "队列统计"), _T(lang, "队列统计", "队列统计")
 
 
 def _render_page_header(
@@ -160,9 +158,9 @@ def _render_cohort_readiness_strip(lang: str) -> None:
         review_tone = "warn"
     else:
         input_body = (
-            _T(lang, f"{patient_count:,} stays · {concept_count} concepts", f"{patient_count:,} 例 · {concept_count} 概念")
+            _T(lang, f"{patient_count:,} ICU stays · {concept_count} review features", f"{patient_count:,} 个 ICU stay · {concept_count} 个审阅特征")
             if concept_count else
-            _T(lang, f"{patient_count:,} stays · demo concept set", f"{patient_count:,} 例 · 演示概念集")
+            _T(lang, f"{patient_count:,} ICU stays · demo review feature set", f"{patient_count:,} 个 ICU stay · 演示审阅特征集")
         )
         evidence_body = _T(lang, "coverage + denominators ready", "覆盖率 + 分母已就绪")
         review_body = _T(lang, "agent drafts only after review", "复核后智能体才会起草")
@@ -1013,7 +1011,6 @@ def _render_crossdb_loaded_bar(lang: str) -> None:
             st.button(
                 _T(lang, "Change selection", "更改选择"),
                 key="eu_crossdb_change_selection",
-                icon=":material/tune:",
                 use_container_width=True,
                 on_click=_crossdb_open_selection_panel,
                 args=(st.session_state,),
@@ -1025,7 +1022,6 @@ def _render_crossdb_loaded_bar(lang: str) -> None:
                 file_name="easyicu_crossdb_benchmark_summary.json",
                 mime="application/json",
                 key="eu_crossdb_export_summary",
-                icon=":material/download:",
                 use_container_width=True,
             )
 
