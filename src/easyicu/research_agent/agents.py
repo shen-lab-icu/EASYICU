@@ -1036,6 +1036,16 @@ class RuntimeSupervisor:
 _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS = 2
 
 
+# Output-token budget for analysis-script generation and repair. A full
+# robustness step (multiple model fits + an aic/ci summary block) easily runs
+# past 4096 output tokens with a verbose model; the E1 20260611 v4-flash run
+# truncated analysis.py mid-expression ("models.append(res", "float(aic_linear
+# - a") -> SyntaxError "'(' was never closed". 8192 is the DeepSeek v4 output
+# ceiling and roughly doubles the headroom. If truncation recurs at this cap,
+# add a finish_reason=="length" continuation rather than raising it blindly.
+_CODER_MAX_TOKENS = 8192
+
+
 class CoderAgent:
     """Generates a self-contained Python analysis script for one step.
 
@@ -1083,7 +1093,7 @@ class CoderAgent:
                 ),
             ),
         ]
-        raw = self.llm.complete(messages, max_tokens=4096, temperature=0.1)
+        raw = self.llm.complete(messages, max_tokens=_CODER_MAX_TOKENS, temperature=0.1)
         code = _strip_code_fence(raw.strip())
 
         # Patch C: post-codegen pre-execution compatibility enforcement.
@@ -1201,7 +1211,7 @@ class CoderAgent:
                 ),
             ),
         ]
-        raw = self.llm.complete(messages, max_tokens=4096, temperature=0.05)
+        raw = self.llm.complete(messages, max_tokens=_CODER_MAX_TOKENS, temperature=0.05)
         return _strip_code_fence(raw.strip())
 
 
