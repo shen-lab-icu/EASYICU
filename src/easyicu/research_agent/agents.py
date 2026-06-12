@@ -163,11 +163,37 @@ def _format_variable(v: ConceptDescriptor) -> str:
     pit = f" pitfalls={v.pitfalls!r}" if v.pitfalls else ""
     rng = f" range={v.valid_range}" if v.valid_range else ""
     unit = f" unit={v.unit}" if v.unit else ""
+    obs = _format_observed_domain(v.observed_domain)
     return (
-        f"- {v.name} | role={v.role.value} dtype={v.dtype}{unit}{rng}"
+        f"- {v.name} | role={v.role.value} dtype={v.dtype}{unit}{rng}{obs}"
         f" agg_default={_ctas_aggregation_hint(v.aggregation_default)}"
         f"{miss}{pit}"
     )
+
+
+def _format_observed_domain(domain: Optional[Dict[str, Any]]) -> str:
+    """Render the cohort-observed value domain as a compact, fact-only hint.
+
+    Surfaces ``is_binary`` / ``is_constant`` and the observed [min, max] so the
+    planner interprets a column by its real values, not its name (a
+    ``<score>_max`` column observed binary {0,1} must not be thresholded as a
+    0-24 scale). States facts only — never prescribes a derivation.
+    """
+    if not domain:
+        return ""
+    if domain.get("is_constant"):
+        return " observed=CONSTANT(single value; no variation to model)"
+    if domain.get("is_binary"):
+        return (
+            " observed={0,1} BINARY(already 2-level; a numeric cutoff >1 is degenerate)"
+        )
+    lo, hi = domain.get("min"), domain.get("max")
+    n_unique = domain.get("n_unique")
+    if lo is not None and hi is not None:
+        return f" observed=[{lo:g},{hi:g}] n_unique={n_unique}"
+    if n_unique is not None:
+        return f" observed_n_unique={n_unique}"
+    return ""
 
 
 def _format_context(ctx: ResearchContext) -> str:
