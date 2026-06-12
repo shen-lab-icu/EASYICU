@@ -24,7 +24,8 @@ def _recs(*ids):
 
 def test_strobe_empty_inputs_are_mostly_open(ra):
     report = ra.build_strobe_checklist(
-        evidence_records=[], bound_manuscript="",
+        evidence_records=[],
+        bound_manuscript="",
     )
     assert report.name == "STROBE"
     # All items instantiated.
@@ -55,15 +56,16 @@ def test_strobe_common_ids_fill_key_methods_items(ra):
         "The study was supported by grant 123."
     )
     report = ra.build_strobe_checklist(
-        evidence_records=recs, bound_manuscript=scaffold,
+        evidence_records=recs,
+        bound_manuscript=scaffold,
     )
     by_id = {i.item_id: i for i in report.items}
     # A cross-section of items should now be addressed.
-    assert by_id["3"].status == "addressed"   # objectives/hypotheses
-    assert by_id["4"].status == "addressed"   # design elements
-    assert by_id["6"].status == "addressed"   # eligibility
-    assert by_id["9"].status == "addressed"   # sources of bias
-    assert by_id["12e"].status == "addressed" # sensitivity
+    assert by_id["3"].status == "addressed"  # objectives/hypotheses
+    assert by_id["4"].status == "addressed"  # design elements
+    assert by_id["6"].status == "addressed"  # eligibility
+    assert by_id["9"].status == "addressed"  # sources of bias
+    assert by_id["12e"].status == "addressed"  # sensitivity
     assert by_id["15"].status == "addressed"  # outcome events
     assert by_id["16"].status == "addressed"  # primary association
     # Funding keyword picked up.
@@ -77,9 +79,7 @@ def test_strobe_partial_when_only_some_requirements_present(ra):
     # required keywords (cohort/observational/retrospective/case-control).
     # With only the evidence present, status should be "partial".
     recs = _recs("manuscript_scaffold_bound")
-    report = ra.build_strobe_checklist(
-        evidence_records=recs, bound_manuscript=""
-    )
+    report = ra.build_strobe_checklist(evidence_records=recs, bound_manuscript="")
     by_id = {i.item_id: i for i in report.items}
     assert by_id["1a"].status == "partial"
 
@@ -125,6 +125,48 @@ def test_choose_checklist_selects_tripod_for_prediction_family(ra):
     # Generic / association should get STROBE only.
     assert ra.choose_checklist("association_study") == ("strobe",)
     assert ra.choose_checklist(None) == ("strobe",)
+
+
+def test_choose_checklist_routes_phenotype_to_internal_core(ra):
+    # Clustering / trajectory have no EQUATOR guideline -> internal core, not
+    # STROBE. The family key "trajectory_clustering" must be caught before the
+    # prediction branch.
+    assert ra.choose_checklist("trajectory_clustering") == ("internal_phenotype",)
+    assert ra.choose_checklist("subphenotype clustering") == ("internal_phenotype",)
+    assert ra.choose_checklist("phenotype discovery") == ("internal_phenotype",)
+
+
+def test_checklist_names_for_kind_is_authoritative(ra):
+    assert ra.checklist_names_for_kind("subphenotype_clustering") == (
+        "internal_phenotype",
+    )
+    assert ra.checklist_names_for_kind("longitudinal_trajectory_analysis") == (
+        "internal_phenotype",
+    )
+    assert "tripod_ai" in ra.checklist_names_for_kind("mortality_prediction")
+    # Observational / unknown kinds default to STROBE.
+    assert ra.checklist_names_for_kind("sepsis_onset") == ("strobe",)
+    assert ra.checklist_names_for_kind(None) == ("strobe",)
+
+
+def test_internal_phenotype_core_marks_trajectory_items_applicable_by_run(ra):
+    # Cross-sectional clustering run: the trajectory-only item (P9) is N/A and
+    # excluded from the denominator, not counted as an open failure.
+    cross = ra.build_internal_phenotype_checklist(
+        evidence_records=[],
+        bound_manuscript="k-means clustering; silhouette and bootstrap stability",
+    )
+    p9 = {i.item_id: i for i in cross.items}["P9"]
+    assert p9.status == "not_applicable"
+    assert cross.summary()["n_not_applicable"] == 1
+
+    # Longitudinal run: the trajectory keywords now apply and resolve P9.
+    longit = ra.build_internal_phenotype_checklist(
+        evidence_records=[],
+        bound_manuscript="group-based trajectory model (GBTM) over time with BIC",
+    )
+    p9b = {i.item_id: i for i in longit.items}["P9"]
+    assert p9b.status == "addressed"
 
 
 # ---------------------------------------------------------------------------
@@ -208,3 +250,24 @@ def test_pipeline_explicit_override_selects_tripod_too(ra, synthetic_cohort, tmp
     run_dir = Path(result.manifest_path).parent
     assert (run_dir / "reporting_checklist_strobe.md").exists()
     assert (run_dir / "reporting_checklist_tripod_ai.md").exists()
+
+
+def test_pipeline_emits_internal_phenotype_core_when_requested(
+    ra, synthetic_cohort, tmp_path
+):
+    # A phenotype-discovery run emits the internal core so its reporting
+    # dimension is no longer permanently unscored.
+    cohort_path = _write_cohort(synthetic_cohort, tmp_path)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "out",
+        llm=ra.MockLLMClient(),
+        reporting_checklist_names=["internal_phenotype"],
+    )
+    result = pipeline.run(
+        skill="association_analysis",
+        cohort=cohort_path,
+        database="miiv",
+    )
+    run_dir = Path(result.manifest_path).parent
+    assert (run_dir / "reporting_checklist_internal_phenotype.md").exists()
+    assert (run_dir / "reporting_checklist_internal_phenotype.json").exists()

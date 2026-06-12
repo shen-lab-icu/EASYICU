@@ -584,3 +584,96 @@ def test_fairness_subgroup_unscored_when_no_fairness_item():
     )
     assert dim.subscore is None
     assert dim.level is None
+
+
+# ---------------------------------------------------------------------------
+# Phenotype (clustering / trajectory) reporting + validity (eval fix "b")
+# ---------------------------------------------------------------------------
+
+
+def test_clustering_reporting_completeness_scored_when_internal_core_emitted(
+    ra, tmp_path
+):
+    # A clustering run that emits the internal phenotype core is now SCORED on
+    # reporting completeness instead of being permanently unscored.
+    report = ra.build_internal_phenotype_checklist(
+        evidence_records=[],
+        bound_manuscript="k-means clustering; silhouette and bootstrap stability",
+    )
+    (tmp_path / "reporting_checklist_internal_phenotype.json").write_text(
+        json.dumps(report.to_json()), encoding="utf-8"
+    )
+    card = sc.score_run_from_dir(_kind_task("subphenotype_clustering"), tmp_path)
+    assert card.reporting_completeness.subscore is not None
+    assert card.reporting_completeness.signals["guideline"] == "internal"
+
+
+def test_phenotype_validity_fails_on_objective_degeneracy(tmp_path):
+    # Silhouette <= 0 means groups are no better than chance: an objective error
+    # that caps result_validity at Fail even with no locked reference.
+    (tmp_path / "cluster_validity.json").write_text(
+        json.dumps({"silhouette": -0.02, "n_clusters": 3, "min_cluster_fraction": 0.2}),
+        encoding="utf-8",
+    )
+    card = sc.score_run_from_dir(_kind_task("subphenotype_clustering"), tmp_path)
+    assert card.result_validity.level == "Fail"
+    assert any("silhouette" in n for n in card.result_validity.notes)
+
+
+def test_phenotype_validity_flags_single_group_solution(tmp_path):
+    (tmp_path / "cluster_validity.json").write_text(
+        json.dumps({"silhouette": 0.3, "n_clusters": 1}), encoding="utf-8"
+    )
+    card = sc.score_run_from_dir(
+        _kind_task("longitudinal_trajectory_analysis"), tmp_path
+    )
+    assert card.result_validity.level == "Fail"
+    assert any("single-group" in n for n in card.result_validity.notes)
+
+
+def test_phenotype_validity_healthy_solution_stays_unscored(tmp_path):
+    # A non-degenerate solution is NOT given a fabricated pass: result_validity
+    # stays honestly unscored (no locked reference). The dimension never imposes
+    # a "good enough" silhouette threshold on a valid partition.
+    (tmp_path / "cluster_validity.json").write_text(
+        json.dumps({"silhouette": 0.41, "n_clusters": 3, "min_cluster_fraction": 0.18}),
+        encoding="utf-8",
+    )
+    card = sc.score_run_from_dir(_kind_task("subphenotype_clustering"), tmp_path)
+    assert card.result_validity.subscore is None
+    assert card.result_validity.level is None
+
+
+def test_phenotype_validity_unscored_without_metrics(tmp_path):
+    # No metrics emitted -> honest NA, not a guess.
+    card = sc.score_run_from_dir(_kind_task("subphenotype_clustering"), tmp_path)
+    assert card.result_validity.level is None
+    # And the objective-error check never fires for a non-phenotype kind.
+    (tmp_path / "cluster_validity.json").write_text(
+        json.dumps({"silhouette": -0.5, "n_clusters": 1}), encoding="utf-8"
+    )
+    card2 = sc.score_run_from_dir(_kind_task("sepsis_onset"), tmp_path)
+    assert card2.result_validity.level is None
+
+
+def test_prediction_kind_routes_reporting_to_tripod_file(tmp_path):
+    # M2 (mortality_prediction) routes reporting completeness to the TRIPOD
+    # file, not STROBE -- closing the by-kind routing gap.
+    assert sc.reporting_guideline_for_kind("mortality_prediction") == "tripod"
+    (tmp_path / "reporting_checklist_tripod_ai.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "n_total": 27,
+                    "n_addressed": 20,
+                    "n_partial": 0,
+                    "n_open": 7,
+                    "coverage": 0.74,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    card = sc.score_run_from_dir(_kind_task("mortality_prediction"), tmp_path)
+    assert card.reporting_completeness.signals["guideline"] == "tripod"
+    assert card.reporting_completeness.subscore == pytest.approx(0.74, abs=1e-2)

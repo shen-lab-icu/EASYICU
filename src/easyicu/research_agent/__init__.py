@@ -326,7 +326,9 @@ __all__ = [
     "ChecklistReport",
     "build_strobe_checklist",
     "build_tripod_ai_checklist",
+    "build_internal_phenotype_checklist",
     "choose_checklist",
+    "checklist_names_for_kind",
     # Reviewer round (O15)
     "ReviewerComment",
     "ReviewerCritique",
@@ -794,7 +796,9 @@ def __getattr__(name: str):
         "ChecklistReport",
         "build_strobe_checklist",
         "build_tripod_ai_checklist",
+        "build_internal_phenotype_checklist",
         "choose_checklist",
+        "checklist_names_for_kind",
     }:
         from . import reporting_checklist as _rc
 
