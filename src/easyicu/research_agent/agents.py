@@ -187,6 +187,11 @@ def _format_observed_domain(domain: Optional[Dict[str, Any]]) -> str:
         return (
             " observed={0,1} BINARY(already 2-level; a numeric cutoff >1 is degenerate)"
         )
+    levels = domain.get("levels")
+    if levels:
+        shown = ",".join(levels[:6])
+        more = "…" if len(levels) > 6 else ""
+        return f" observed_levels={{{shown}{more}}}(categorical; encode as-is)"
     lo, hi = domain.get("min"), domain.get("max")
     n_unique = domain.get("n_unique")
     if lo is not None and hi is not None:
