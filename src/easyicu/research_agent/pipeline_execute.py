@@ -29,7 +29,17 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from .agents import (
     AnalyzerAgent,
@@ -99,9 +109,21 @@ from .scalar_utils import _expected_numeric_annotations_for_step
 from .side_findings import SideFinding
 from .skills import ClinicalSkill
 from .summary_repair import salvage_step_summary
+from .viability import (
+    CohortViability,
+    assess_cohort_viability,
+    step_requires_model_performance,
+    step_summary_block_signal,
+)
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 logger = logging.getLogger(__name__)
+
+# Max directed full-replans fired when a model/estimation step self-blocks on a
+# task-viable cohort. Two attempts give the replanner a fair chance to honour
+# the override directive; beyond that the run falls back to an honest
+# diagnostic_only rather than burning the replanner on a stuck plan.
+_MAX_DIRECTED_MODEL_REPLANS = 2
 
 if TYPE_CHECKING:
     from .pipeline import ResearchAgentPipeline
@@ -147,6 +169,59 @@ def _plan_signature(
     )
 
 
+def build_self_block_replan_directive(
+    *,
+    failed_step: AnalysisStep,
+    failed_record: Mapping[str, Any],
+    completed_records: Sequence[Mapping[str, Any]],
+    viability: "CohortViability",
+) -> Optional[str]:
+    """Return a viability-conditioned override directive when a model/estimation
+    step self-blocked on a task-viable cohort, else ``None``.
+
+    Pure and deterministic so the trigger logic is unit-testable without a run.
+    Fires only when ALL hold: the failed step's contract requires model
+    performance statistics (``statistic:auroc`` / ``statistic:brier_score``); the
+    cohort cleared the viability floor; and a deliberate block signal is present
+    on the failed step or an upstream completed step (e.g. a
+    ``modeling_block_registration`` step). Stays silent otherwise — a genuinely
+    non-viable cohort or a hard crash leaves blocking legitimate.
+
+    Impartiality: the directive is conditioned on viability twice over — the
+    trigger requires ``viability.viable`` and the directive text itself reaffirms
+    that blocking stays legitimate on genuinely non-viable data. It never
+    dictates which model to fit, only that a model must actually be fit.
+    """
+    if not step_requires_model_performance(failed_step.expected_outputs):
+        return None
+    if not viability.viable:
+        return None
+    block_reason = step_summary_block_signal(failed_record.get("step_summary") or {})
+    if not block_reason:
+        for rec in completed_records:
+            if not isinstance(rec, Mapping):
+                continue
+            block_reason = step_summary_block_signal(rec.get("step_summary") or {})
+            if block_reason:
+                break
+    if not block_reason:
+        return None
+    return (
+        "The locked analysis cohort is task-viable (" + viability.note + "), yet "
+        "the modeling step recorded a non-execution/blocked status "
+        f'("{block_reason}") and produced no model and no required performance '
+        "statistics (AUROC / Brier). On a cohort this populated, declaring the "
+        "repaired artifacts unusable, registering a modeling block, or emitting a "
+        "non-execution model stub is NOT an acceptable outcome for this task. "
+        "Revise the remaining plan so the primary modeling step actually fits a "
+        "model on the available predictors and emits the required performance "
+        "statistics. Do NOT re-insert artifact-viability-gate or "
+        "modeling-block-registration steps. (Blocking would be legitimate only if "
+        "the data were genuinely non-viable — too few rows, no outcome variation, "
+        "or no usable predictors — which is not the case here.)"
+    )
+
+
 def run_execute_phase(
     pipeline: "ResearchAgentPipeline",
     *,
@@ -174,6 +249,11 @@ def run_execute_phase(
         "disabled": False,
         "cohort_contract_emitted": False,
         "cohort_materialized": False,
+        # Directed replans fired when a model/estimation step self-blocks on a
+        # task-viable cohort (see _maybe_directed_model_replan). Bounded so a
+        # run that keeps self-blocking falls back to an honest diagnostic_only
+        # rather than looping the replanner indefinitely.
+        "directed_model_replans": 0,
     }
     role_resolver = plan_result.role_resolver
     llm_signature = plan_result.llm_signature
@@ -566,13 +646,18 @@ def run_execute_phase(
         reason: str,
         probe_summary_payload: Optional[Dict[str, Any]] = None,
         completed_records: Optional[Sequence[Dict[str, Any]]] = None,
+        directive: Optional[str] = None,
+        force: bool = False,
     ) -> AnalysisPlan:
         nonlocal plan_path
         if not pipeline._enable_replanning or skill_obj is not None:
             return current_plan
-        if _replan_state["disabled"]:
+        if _replan_state["disabled"] and not force:
             # A convergence guard already tripped earlier in this run; stop
-            # paying for replanner calls that cannot change the outcome.
+            # paying for replanner calls that cannot change the outcome. A
+            # ``force``d directed replan (bounded by its own caller-side budget)
+            # bypasses this — it carries a new instruction the replanner has not
+            # yet seen, so the prior no-op/budget verdict does not apply.
             return current_plan
         replanner = ReplannerAgent(role_resolver("planner"))
         try:
@@ -581,6 +666,7 @@ def run_execute_phase(
                 current_plan=current_plan,
                 probe_summary=probe_summary_payload,
                 completed_step_records=completed_records,
+                directive=directive,
             )
         except Exception as exc:
             findings.append(
@@ -2329,12 +2415,94 @@ def run_execute_phase(
         or len(steps_to_run) <= 1
         or pipeline._enable_replanning
     ):
+
+        def _maybe_directed_model_replan(
+            *,
+            failed_step: AnalysisStep,
+            failed_record: Dict[str, Any],
+        ) -> Optional[AnalysisPlan]:
+            """Fire a forced, directive-carrying replan when a model/estimation
+            step self-blocks on a task-viable cohort, else return ``None``.
+
+            This is the active half of the self-inflicted-block fix: the
+            post-hoc scorecard only *labels* the self-paralysis, whereas here we
+            give the replanner a viability-conditioned override so a populated
+            cohort is not silently abandoned with a non-execution stub. Bounded
+            by ``_MAX_DIRECTED_MODEL_REPLANS``; conservative — silent on a hard
+            crash, an unreadable cohort, or genuinely non-viable data.
+            """
+            if not pipeline._enable_replanning:
+                return None
+            if failed_record.get("status") == "ok":
+                return None
+            if _replan_state["directed_model_replans"] >= _MAX_DIRECTED_MODEL_REPLANS:
+                return None
+            if not step_requires_model_performance(failed_step.expected_outputs):
+                return None
+            try:
+                import pandas as pd  # lazy: only on the rare self-block path
+
+                viability = assess_cohort_viability(
+                    pd.read_parquet(cohort_path), outcome=None
+                )
+            except Exception:
+                return None
+            directive = build_self_block_replan_directive(
+                failed_step=failed_step,
+                failed_record=failed_record,
+                completed_records=per_step_records,
+                viability=viability,
+            )
+            if directive is None:
+                return None
+            _replan_state["directed_model_replans"] += 1
+            findings.append(
+                ValidationFinding(
+                    validator="replanner",
+                    severity="warning",
+                    message=(
+                        "Directed replan: modeling step "
+                        f"{failed_step.step_id} self-blocked on a task-viable "
+                        f"cohort ({viability.note}); issued a viability-conditioned "
+                        "override to fit the model rather than register a block."
+                    ),
+                    detail={
+                        "step_id": failed_step.step_id,
+                        "directed_model_replans": _replan_state[
+                            "directed_model_replans"
+                        ],
+                    },
+                )
+            )
+            return _maybe_replan(
+                current_plan=plan,
+                reason=f"{failed_step.step_id}:self_inflicted_block_on_viable_cohort",
+                probe_summary_payload=probe_summary,
+                completed_records=per_step_records,
+                directive=directive,
+                force=True,
+            )
+
         executed_step_ids = set(resumed_step_ids)
         remaining_steps = [s for s in plan.steps if s.step_id not in executed_step_ids]
         while remaining_steps:
             step = remaining_steps.pop(0)
             record = _execute_one_step(step)
             executed_step_ids.add(step.step_id)
+            directed_plan = _maybe_directed_model_replan(
+                failed_step=step, failed_record=record
+            )
+            if directed_plan is not None:
+                plan = directed_plan
+                # Re-run the modeling step against the revised, de-gated plan.
+                executed_step_ids.discard(step.step_id)
+                step_order.clear()
+                step_order.update({s.step_id: i for i, s in enumerate(plan.steps)})
+                remaining_steps = [
+                    s for s in plan.steps if s.step_id not in executed_step_ids
+                ]
+                total_steps = len(plan.steps)
+                continue
             if (
                 pipeline._enable_replanning
                 and record.get("status") == "ok"
