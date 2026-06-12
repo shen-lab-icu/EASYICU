@@ -232,6 +232,64 @@ def test_result_validity_fails_on_validity_error_without_locked_reference():
     assert dim.signals["validity_errors"] == ["overadjustment: adjusted for sofa_max"]
 
 
+def test_positive_validity_requires_execution_complete():
+    # A run that never produced a result (execution_complete=False) must NOT get a
+    # positive result_validity from an early-step check passing — there is no
+    # result to validate. It stays honestly unscored (None), not the contradiction
+    # of "fully valid" alongside a diagnostic_only tristate.
+    sigs = [sc.ValiditySignal("patient_level_split_no_overlap", "pass", "overlap=0")]
+    blocked = sc.score_result_validity(
+        _task(),
+        numeric_audit={"numeric_verified": False},
+        positive_subscore=1.0,
+        positive_signals=sigs,
+        execution_complete=False,
+    )
+    assert blocked.subscore is None and blocked.level is None
+    completed = sc.score_result_validity(
+        _task(),
+        numeric_audit={"numeric_verified": True},
+        positive_subscore=1.0,
+        positive_signals=sigs,
+        execution_complete=True,
+    )
+    assert completed.subscore == 1.0
+
+
+def test_single_assessable_signal_label_capped_below_full():
+    # One assessable check that passes -> subscore 1.0 but the LABEL must not be
+    # "Full": one check cannot establish full result validity. Numeric subscore is
+    # unchanged; n_assessed is surfaced.
+    sigs = [sc.ValiditySignal("patient_level_split_no_overlap", "pass", "overlap=0")]
+    dim = sc.score_result_validity(
+        _task(),
+        numeric_audit={"numeric_verified": True},
+        positive_subscore=1.0,
+        positive_signals=sigs,
+        execution_complete=True,
+    )
+    assert dim.subscore == 1.0
+    assert dim.level == "Partial"
+    assert dim.signals["n_assessed"] == 1
+
+
+def test_two_assessable_signals_can_reach_full():
+    # With >=2 assessable checks all passing, Full is legitimately awarded.
+    sigs = [
+        sc.ValiditySignal("covariate_balance_achieved", "pass", "max|SMD|=0.05"),
+        sc.ValiditySignal("positivity_assessed", "pass", "overlap holds"),
+    ]
+    dim = sc.score_result_validity(
+        _task(),
+        numeric_audit={"numeric_verified": True},
+        positive_subscore=1.0,
+        positive_signals=sigs,
+        execution_complete=True,
+    )
+    assert dim.level == "Full"
+    assert dim.signals["n_assessed"] == 2
+
+
 # ---------------------------------------------------------------------------
 # evidence_binding
 # ---------------------------------------------------------------------------

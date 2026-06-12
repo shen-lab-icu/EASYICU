@@ -182,6 +182,27 @@ def _mortality_prediction_signals(
     ]
 
 
+# Markers that the causal design is *balance-based* (weighting / matching) — the
+# only family for which covariate balance (SMD) is a required diagnostic. A
+# g-computation / outcome-regression / TMLE design produces no SMD balance table
+# and MUST NOT be failed for lacking one (that would impose one analytical
+# paradigm on a defensible alternative — [[feedback_rules_must_be_impartial]]).
+_WEIGHTING_MATCHING_MARKERS = (
+    "iptw",
+    "ipw",
+    "propensity",
+    "ps_score",
+    "ps_weight",
+    "weights",
+    "matched",
+    "matching",
+)
+
+
+def _uses_weighting_or_matching(run_dir: Path) -> bool:
+    return bool(_find_artifacts(run_dir, *_WEIGHTING_MATCHING_MARKERS))
+
+
 def _causal_signals(
     run_dir: Path, summaries: Sequence[Mapping[str, object]]
 ) -> List[ValiditySignal]:
@@ -218,13 +239,28 @@ def _causal_signals(
             )
         )
     elif not all_bal:
-        # No balance assessment ANYWHERE for a causal contrast = a required check
-        # was not performed (confident: searched all balance/smd-named artifacts).
-        out.append(
-            ValiditySignal(
-                "covariate_balance_achieved", "fail", "no balance/SMD assessment found"
+        # No balance assessment anywhere. Only a Fail if the design is actually
+        # balance-based (weighting/matching), where balance is a REQUIRED check it
+        # skipped. For a non-balance-based causal design (g-computation / outcome
+        # regression / TMLE) balance is not the relevant diagnostic, so demanding
+        # it would impose one paradigm — stay na (impartial), not fail.
+        if _uses_weighting_or_matching(run_dir):
+            out.append(
+                ValiditySignal(
+                    "covariate_balance_achieved",
+                    "fail",
+                    "weighting/matching design with no balance/SMD assessment",
+                )
             )
-        )
+        else:
+            out.append(
+                ValiditySignal(
+                    "covariate_balance_achieved",
+                    "na",
+                    "no balance table; design is not weighting/matching-based "
+                    "(balance not a required diagnostic)",
+                )
+            )
     else:
         # Balance artifacts exist but the post-adjustment one is not machine-readable
         # in our columns — do not guess correctness from the crude table.
