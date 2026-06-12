@@ -49,6 +49,47 @@ def test_reader_detects_coef_table_regardless_of_filename(tmp_path: Path):
     assert read_model_covariate_names(tmp_path) == ["age", "sofa_max"]  # const dropped
 
 
+def test_reader_detects_coef_table_with_term_identifier_column(tmp_path: Path):
+    # R broom::tidy and many hand-rolled statsmodels exports name the identifier
+    # column ``term`` (+ odds_ratio/coefficient), not ``variable``. The real E1
+    # run wrote exactly this header and the overadjustment guard read [] -> 0
+    # fires -> the overadjustment slipped through. Detection must ride the id
+    # column being any standard name, not literally ``variable``.
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    with (tmp_path / "adjusted_odds_ratios.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as fh:
+        w = csv.DictWriter(
+            fh, fieldnames=["model_id", "term", "coefficient", "odds_ratio"]
+        )
+        w.writeheader()
+        for v in ["const", "sepsis3", "age", "map_first"]:
+            w.writerow(
+                {"model_id": "m1", "term": v, "coefficient": "0.1", "odds_ratio": "1.1"}
+            )
+    assert read_model_covariate_names(tmp_path) == ["sepsis3", "age", "map_first"]
+
+
+def test_reader_detects_predictor_identifier_column(tmp_path: Path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    with (tmp_path / "coefs.csv").open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["predictor", "beta"])
+        w.writeheader()
+        w.writerow({"predictor": "age", "beta": "0.02"})
+    assert read_model_covariate_names(tmp_path) == ["age"]
+
+
+def test_reader_ignores_term_table_without_coefficient_column(tmp_path: Path):
+    # A ``term`` column alone (no coef-value column) is not a model table — the
+    # value-column requirement is what keeps the broadened id set safe.
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    with (tmp_path / "glossary.csv").open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["term", "definition"])
+        w.writeheader()
+        w.writerow({"term": "sofa_max", "definition": "max SOFA in window"})
+    assert read_model_covariate_names(tmp_path) == []
+
+
 def test_reader_ignores_non_model_variable_tables(tmp_path: Path):
     # missingness.csv has a `variable` column but no coefficient column: it must
     # NOT inject phantom covariates into the overadjustment check.
