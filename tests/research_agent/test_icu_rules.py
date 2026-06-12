@@ -244,18 +244,46 @@ def test_detect_overadjustment_flags_exposure_constituents(ra):
 
 
 def test_detect_overadjustment_qsofa_not_swallowed_by_sofa(ra):
-    # "sofa" is a substring of "qsofa": the longest-name match must win so a
-    # qSOFA exposure resolves to qSOFA's own constituents (GCS / resp rate /
-    # SBP), NOT SOFA's broader set -- otherwise bilirubin/creatinine, which are
-    # NOT qSOFA inputs, would be false-positive overadjustment flags.
-    assert (
-        ra.composite_constituents("qsofa")
-        == ra.COMPOSITE_EXPOSURE_CONSTITUENTS["qsofa"]
-    )
+    # "sofa" is a substring of "qsofa": qSOFA must resolve to its OWN bedside
+    # components (GCS / resp rate / SBP), NOT SOFA's broader organ-system set --
+    # otherwise bilirubin/creatinine, which are NOT qSOFA inputs, would be
+    # false-positive overadjustment flags. (Property check, not an exact tuple:
+    # composite_constituents is now a dictionary-driven union, not the raw table.)
+    qsofa = set(ra.composite_constituents("qsofa"))
+    assert {"gcs", "sbp"} <= qsofa
+    assert any("resp" in tok for tok in qsofa)
+    assert "bilirubin" not in qsofa and "creatinine" not in qsofa
     assert ra.detect_overadjustment("qsofa", ["age", "bilirubin", "creatinine"]) == []
     # A real qSOFA constituent is still caught.
     assert ra.detect_overadjustment("qsofa", ["age", "resp_rate"]) == ["resp_rate"]
-    # sofa2 (no own entry) still resolves to SOFA, the only name it contains.
-    assert (
-        ra.composite_constituents("sofa2") == ra.COMPOSITE_EXPOSURE_CONSTITUENTS["sofa"]
-    )
+    # sofa2 (no own fallback entry) still resolves through the concept dictionary
+    # to a SOFA-family closure carrying the organ-system labs that define it.
+    sofa2 = set(ra.composite_constituents("sofa2"))
+    assert {"creatinine", "bilirubin", "platelet"} <= sofa2
+
+
+def test_detect_overadjustment_is_dictionary_general_not_table_bound(ra):
+    # Generality: a SOFA sub-score has no curated table entry, yet its narrower
+    # derivation closure (creatinine / urine) is read straight from the concept
+    # dictionary -- the renal sub-score must NOT pull in unrelated SOFA organs.
+    renal = set(ra.composite_constituents("sofa_renal"))
+    assert "creatinine" in renal
+    assert "bilirubin" not in renal and "platelet" not in renal
+    # A distinct sub-score that merely shares the "sofa" prefix is a constituent,
+    # not the exposure itself, so a SOFA exposure adjusted for it is flagged...
+    assert ra.detect_overadjustment("sofa", ["sofa_renal", "age"]) == ["sofa_renal"]
+    # ...while the exposure's own measurement (prefix + pure stat suffix) is not.
+    assert ra.detect_overadjustment("sofa", ["sofa_max", "age"]) == []
+
+
+def test_detect_overadjustment_degrades_to_table_without_dictionary(ra):
+    # If the concept dictionary cannot be loaded (e.g. a data-isolated sandbox),
+    # the detector must still work from the curated fallback table rather than
+    # going silent. A broken dictionary object stands in for "unavailable".
+    broken = object()
+    assert ra.detect_overadjustment(
+        "sepsis3", ["age", "sex", "sofa_max"], dictionary=broken
+    ) == ["sofa_max"]
+    assert ra.detect_overadjustment(
+        "sofa", ["creatinine", "age"], dictionary=broken
+    ) == ["creatinine"]
