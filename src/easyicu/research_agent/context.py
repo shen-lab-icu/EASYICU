@@ -385,6 +385,8 @@ def _observed_domain(series: "pd.Series") -> Optional[Dict[str, Any]]:
     domain: Dict[str, Any] = {
         "n_unique": n_unique,
         "is_constant": n_unique <= 1,
+        # is_binary means a NUMERIC {0,1} indicator only — never a 2-level
+        # categorical like sex {Male, Female}, which must keep its own labels.
         "is_binary": False,
     }
     is_numeric = bool(pd.api.types.is_numeric_dtype(nonnull))
@@ -396,16 +398,21 @@ def _observed_domain(series: "pd.Series") -> Optional[Dict[str, Any]]:
             domain["max"] = hi
         except (TypeError, ValueError):
             pass
-        # binary = at most two distinct numeric values drawn from {0, 1}.
+        # numeric binary = at most two distinct values drawn from {0, 1}.
         if n_unique <= 2:
             try:
                 vals = set(int(v) for v in nonnull.unique() if float(v).is_integer())
                 domain["is_binary"] = vals.issubset({0, 1}) and len(vals) >= 1
             except (TypeError, ValueError):
                 domain["is_binary"] = False
-    else:
-        # categorical/boolean: binary if exactly two levels.
-        domain["is_binary"] = n_unique == 2
+    elif n_unique <= 8:
+        # low-cardinality categorical: surface the ACTUAL levels so the planner
+        # encodes them as-is (e.g. sex {Male, Female}) rather than assuming a
+        # numeric {0,1} coding it then "cleans" into NaN.
+        try:
+            domain["levels"] = sorted(str(v) for v in nonnull.unique())
+        except (TypeError, ValueError):
+            pass
     return domain
 
 

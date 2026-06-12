@@ -72,10 +72,23 @@ def test_two_level_nonzero_numeric_is_not_binary():
     assert d["n_unique"] == 2
 
 
-def test_categorical_two_level_is_binary():
-    s = pd.Series(["m", "f", "m", "f", "f"] * 20, dtype="object")
+def test_categorical_two_level_is_not_numeric_binary():
+    # A 2-level STRING column (e.g. sex {Male, Female}) must NOT be labelled a
+    # numeric {0,1} binary — that misled the agent into coercing it to {0,1} and
+    # spiralling into a "sex cleaning failure" repair loop. It keeps its labels.
+    s = pd.Series(["Male", "Female", "Male", "Female", "Female"] * 20, dtype="object")
     d = _observed_domain(s)
-    assert d["is_binary"] is True
+    assert d["is_binary"] is False
+    assert d["levels"] == ["Female", "Male"]
+    hint = _format_observed_domain(d)
+    assert "{0,1}" not in hint and "Male" in hint and "categorical" in hint
+
+
+def test_high_cardinality_categorical_omits_levels():
+    s = pd.Series([f"cat{i}" for i in range(30)] * 3, dtype="object")
+    d = _observed_domain(s)
+    assert "levels" not in d
+    assert d["is_binary"] is False
 
 
 def test_descriptor_carries_observed_domain():
