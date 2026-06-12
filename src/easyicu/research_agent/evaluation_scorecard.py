@@ -817,13 +817,80 @@ def _load_reporting_checklist(
             "reporting_checklist_tripod.json",
             "reporting_checklist_tripod_ai.json",
         ],
-        "internal": [],
+        "internal": ["reporting_checklist_internal_phenotype.json"],
     }.get(guideline, [])
     for name in candidates:
         doc = _load_json(run_dir / name)
         if doc:
             return doc
     return {}
+
+
+_PHENOTYPE_KINDS = frozenset(
+    {"subphenotype_clustering", "longitudinal_trajectory_analysis"}
+)
+
+
+def _load_cluster_validity(run_dir: Path) -> Dict[str, object]:
+    """Best-effort read of a phenotype run's emitted validity metrics.
+
+    Looks for a small documented metrics file (silhouette / n_clusters /
+    min_cluster_fraction / ...). Returns ``{}`` when none is present, so the
+    dimension stays honestly *unscored* rather than inventing a verdict.
+    """
+    for name in (
+        "cluster_validity.json",
+        "clustering_validity.json",
+        "validity_metrics.json",
+    ):
+        doc = _load_json(run_dir / name)
+        if doc:
+            return doc
+    for path in run_dir.glob("steps/*/outputs/cluster_validity.json"):
+        doc = _load_json(path)
+        if doc:
+            return doc
+    return {}
+
+
+def _phenotype_validity_errors(run_dir: Path, kind: str) -> List[str]:
+    """Impartial, deterministic objective-error check for clustering/trajectory.
+
+    Flags only the *degenerate* end — a partition that is objectively broken
+    regardless of analytical taste (silhouette no better than chance, a single
+    group, a near-empty group). It never imposes a "good enough" threshold on a
+    valid solution; softer process gaps (which selection criterion, how many
+    models compared) belong to the reporting checklist, not a validity Fail.
+    Returns ``[]`` (→ honest NA) when the run emitted no validity metrics.
+    """
+    if str(kind) not in _PHENOTYPE_KINDS:
+        return []
+    doc = _load_cluster_validity(run_dir)
+    if not doc:
+        return []
+    errs: List[str] = []
+    sil = doc.get("silhouette")
+    if isinstance(sil, (int, float)) and not isinstance(sil, bool) and sil <= 0:
+        errs.append(
+            f"degenerate clustering: silhouette={float(sil):.3f} ≤ 0 "
+            "(groups no better than chance)"
+        )
+    k = doc.get("n_clusters")
+    if k is None:
+        k = doc.get("n_classes")
+    if isinstance(k, (int, float)) and not isinstance(k, bool) and k < 2:
+        errs.append(f"single-group solution (k={int(k)}): no subphenotypes separated")
+    frac = doc.get("min_cluster_fraction")
+    if (
+        isinstance(frac, (int, float))
+        and not isinstance(frac, bool)
+        and 0 <= frac < 0.01
+    ):
+        errs.append(
+            f"near-empty group ({float(frac) * 100:.2f}% of cohort): "
+            "unstable/degenerate partition"
+        )
+    return errs
 
 
 def score_run_from_dir(
@@ -870,6 +937,7 @@ def score_run_from_dir(
                 + ", ".join(offenders)
                 + f" which constitute(s)/derive(s) the exposure '{exposure_concept}'"
             )
+    validity_errors.extend(_phenotype_validity_errors(run_dir, task.kind))
 
     return score_run(
         task,

@@ -126,12 +126,12 @@ def _register_case_patterns(case_name: Optional[str]) -> Optional[Dict[str, Any]
     try:
         module = importlib.import_module(module_name)
     except ModuleNotFoundError as exc:
-        raise SystemExit(f"Unknown case {case_name!r}: {module_name} not found") from exc
+        raise SystemExit(
+            f"Unknown case {case_name!r}: {module_name} not found"
+        ) from exc
     register = getattr(module, "register_patterns", None)
     if register is None:
-        raise SystemExit(
-            f"Case {case_name!r} must expose register_patterns()"
-        )
+        raise SystemExit(f"Case {case_name!r} must expose register_patterns()")
     register(default_pattern_registry())
     patterns_path = getattr(module, "COHORT_PATTERNS_PATH", None)
     config_path = getattr(module, "CASE_CONFIG_PATH", None)
@@ -173,11 +173,7 @@ def _arm_was_run(score: Optional[Dict[str, Any]]) -> bool:
 
 
 def _run_arms_in_scores(scores: List[Dict[str, Any]]) -> List[str]:
-    arms = [
-        arm
-        for arm in _ARM_ORDER
-        if any(_arm_was_run(s.get(arm)) for s in scores)
-    ]
+    arms = [arm for arm in _ARM_ORDER if any(_arm_was_run(s.get(arm)) for s in scores)]
     return arms or list(_ARM_ORDER)
 
 
@@ -303,30 +299,37 @@ def _primary_or_from_logistic_summary(
     allow_level_contrast = predictor in _BINARY_CONTRAST_PREDICTORS
     for data in records:
         primary_model = data.get("primary_model") or {}
-        method = str(
-            data.get("method")
-            or primary_model.get("model_type")
-            or data.get("model_type")
-            or ""
-        ).strip().lower()
+        method = (
+            str(
+                data.get("method")
+                or primary_model.get("model_type")
+                or data.get("model_type")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
         if method in _LOGISTIC_METHODS and data.get("primary_or") is not None:
             return _finite_float(data.get("primary_or"))
         term = data.get("primary_association_term") or data.get("primary_term")
         value = _finite_float(data.get("primary_association_estimate"))
         if value is not None and (
-            allow_level_contrast
-            or not _term_is_single_level_contrast(term, predictor)
+            allow_level_contrast or not _term_is_single_level_contrast(term, predictor)
         ):
             return value
         for node in _iter_dicts(data):
             node_primary_model = node.get("primary_model") or {}
-            method = str(
-                node.get("method")
-                or node.get("model_type")
-                or node.get("fit_method")
-                or node_primary_model.get("model_type")
-                or ""
-            ).strip().lower()
+            method = (
+                str(
+                    node.get("method")
+                    or node.get("model_type")
+                    or node.get("fit_method")
+                    or node_primary_model.get("model_type")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
             if method and method not in _LOGISTIC_METHODS and "logit" not in method:
                 continue
             term = (
@@ -500,6 +503,10 @@ def _five_dim_scorecard(*, run_dir: Path, item, or_value, manifest) -> Dict[str,
                 {"primary_or": or_value} if or_value is not None else None
             ),
             observed_warnings=observed_warnings,
+            # The bench item declares its primary predictor; pass it so the
+            # gold-free overadjustment check runs in the runner path too (it is
+            # the declared exposure, never inferred).
+            exposure_concept=(getattr(item, "primary_predictor", "") or None),
         )
         return card.model_dump()
     except Exception as exc:  # pragma: no cover - additive diagnostic only
@@ -587,8 +594,7 @@ def _find_resumable_run(workdir: Path) -> Optional[str]:
         rs = run_dir / "run_status.json"
         if rs.exists():
             try:
-                gates = json.loads(rs.read_text(encoding="utf-8")).get(
-                    "gates", {})
+                gates = json.loads(rs.read_text(encoding="utf-8")).get("gates", {})
                 if gates.get("execution_complete"):
                     continue  # already finished — nothing to resume
             except (json.JSONDecodeError, OSError):
@@ -626,8 +632,10 @@ def _run_one_arm(
     )
     resume_run_id = _find_resumable_run(workdir) if reuse_existing else None
     if resume_run_id:
-        print(f"[research_agent] resuming interrupted run {resume_run_id} "
-              f"(step-level checkpoint) for {item.key}/{label}")
+        print(
+            f"[research_agent] resuming interrupted run {resume_run_id} "
+            f"(step-level checkpoint) for {item.key}/{label}"
+        )
     started = time.monotonic()
     result = pipeline.run(
         question=item.research_question,
@@ -806,15 +814,9 @@ def _aggregate(scores: List[Dict[str, Any]]) -> Dict[str, Any]:
     for arm in aggregate_arms:
         arm_scores = [s for s in scores if _arm_was_run(s.get(arm))]
         n_total = len(arm_scores)
-        n_dir_correct = sum(
-            1 for s in arm_scores if s[arm]["direction_match"] is True
-        )
-        n_dir_wrong = sum(
-            1 for s in arm_scores if s[arm]["direction_match"] is False
-        )
-        n_dir_missing = sum(
-            1 for s in arm_scores if s[arm]["direction_match"] is None
-        )
+        n_dir_correct = sum(1 for s in arm_scores if s[arm]["direction_match"] is True)
+        n_dir_wrong = sum(1 for s in arm_scores if s[arm]["direction_match"] is False)
+        n_dir_missing = sum(1 for s in arm_scores if s[arm]["direction_match"] is None)
         n_findings_full_hit = 0
         n_findings_partial = 0
         for s in arm_scores:
@@ -991,7 +993,9 @@ def _render_markdown(
 
     lines.append("## Aggregate (across all items)")
     lines.append("")
-    lines.append("| Metric | " + " | ".join(_ARM_LABELS[arm] for arm in ran_arms) + " |")
+    lines.append(
+        "| Metric | " + " | ".join(_ARM_LABELS[arm] for arm in ran_arms) + " |"
+    )
     lines.append("|---" + "|---:" * len(ran_arms) + "|")
     rows = [
         ("Number of items", "n_items"),
@@ -1005,7 +1009,10 @@ def _render_markdown(
         ("Items with all artifact expectations hit", "artifact_full_hit"),
         ("Items with partial artifact expectations", "artifact_partial_hit"),
         ("Items with all 5 evidence kinds", "evidence_kinds_complete"),
-        ("Total `[evidence missing]` lines (lower is better)", "evidence_missing_in_manuscripts"),
+        (
+            "Total `[evidence missing]` lines (lower is better)",
+            "evidence_missing_in_manuscripts",
+        ),
     ]
     for name, key in rows:
         values = [str(totals[arm][key]) for arm in ran_arms]
@@ -1372,7 +1379,11 @@ def _render_model_matrix(runs: List[Dict[str, Any]]) -> str:
                 (f"ICU findings full-hit ({suffix})", arm, "icu_findings_full_hit"),
                 (f"Workflow full-hit ({suffix})", arm, "workflow_full_hit"),
                 (f"Artifact full-hit ({suffix})", arm, "artifact_full_hit"),
-                (f"Evidence missing ({suffix})", arm, "evidence_missing_in_manuscripts"),
+                (
+                    f"Evidence missing ({suffix})",
+                    arm,
+                    "evidence_missing_in_manuscripts",
+                ),
             ]
         )
     lines = [
@@ -1443,7 +1454,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", "openai/gpt-oss-120b:free"),
+        default=os.environ.get(
+            "EASYICU_HOSTED_DEFAULT_MODEL", "openai/gpt-oss-120b:free"
+        ),
         help="Single model name for real-provider runs.",
     )
     parser.add_argument(
@@ -1883,13 +1896,17 @@ def _run_ehrflowbench_jsonl(
             )
             scores.append(score)
         except Exception as exc:  # noqa: BLE001 — keep batch alive on 502/etc.
-            print(f"[ehrflowbench] item {key} FAILED: {type(exc).__name__}: "
-                  f"{str(exc)[:200]}")
-            pending.append({
-                "key": key,
-                "status": "item_exception",
-                "error": f"{type(exc).__name__}: {str(exc)[:300]}",
-            })
+            print(
+                f"[ehrflowbench] item {key} FAILED: {type(exc).__name__}: "
+                f"{str(exc)[:200]}"
+            )
+            pending.append(
+                {
+                    "key": key,
+                    "status": "item_exception",
+                    "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                }
+            )
             continue
 
     totals = _aggregate(scores) if scores else {"naive": {}, "aware": {}}
@@ -1945,9 +1962,7 @@ def _run_one_item_from_cohort(
     reuse_existing: bool = False,
     force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
-    llm = _make_llm(
-        provider=provider, model=model, request_timeout=request_timeout
-    )
+    llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
     naive = _skipped_arm("naive")
