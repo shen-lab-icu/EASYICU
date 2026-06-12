@@ -1414,10 +1414,171 @@ def overadjustment_caution(
     )
 
 
+# ---------------------------------------------------------------------------
+# Per-concept methodological profile (advisory layer)
+# ---------------------------------------------------------------------------
+#
+# The deterministic auditors above are the *teeth* (they flag/gate objective
+# errors after the fact). This is the *advisory* complement: a methodological
+# role profile derived from each concept's STRUCTURE — its dictionary category,
+# whether it is computed (callback / depends_on), and whether it is ordinal — so
+# the agent reasons about a variable's hazards up front when it assigns roles.
+# Derived from structure, not a hand-written 198-row table: adding a concept to
+# the dictionary gives it a profile for free. Mirrors the impartiality contract:
+# the objective-leakage role (outcome) is stated firmly; the defensible-choice
+# role (treatment confounder-vs-mediator) is framed as a prompt to decide.
+
+_TREATMENT_CATEGORIES = frozenset({"medications", "ventilator"})
+_MEASUREMENT_CATEGORIES = frozenset(
+    {
+        "chemistry",
+        "hematology",
+        "vitals",
+        "blood gas",
+        "respiratory",
+        "renal",
+        "output",
+        "microbiology",
+        "cardiovascular",
+        "neurology",
+        "neurological",
+    }
+)
+
+# Full hazard sentence per role (for the profile / deeper injection).
+_ROLE_HAZARD: Dict[str, str] = {
+    "outcome": (
+        "outcome concept — using it as a predictor/covariate for this or a "
+        "derived outcome is leakage"
+    ),
+    "treatment": (
+        "intervention — on the causal pathway; as a covariate decide whether it "
+        "is a confounder or a mediator/collider before adjusting"
+    ),
+    "derived_composite": (
+        "derived/composite score — if the exposure, keep its component inputs "
+        "out of the adjustment set (overadjustment); as a covariate watch "
+        "collinearity with its inputs"
+    ),
+    "ordinal_score": (
+        "ordinal score — aggregate by worst/max within the window; do not "
+        "average or model as continuous without justification"
+    ),
+    "measurement": (
+        "time-varying measurement — fix the window and aggregation; its "
+        "missingness may be informative (not missing-at-random)"
+    ),
+}
+
+# Compact tag per role for an inline catalog/prompt line. Plain measurements and
+# demographics get no tag (the default safe case) to keep the catalog readable.
+_ROLE_TAG: Dict[str, str] = {
+    "outcome": "outcome→predictor=leakage",
+    "treatment": "treatment: confounder vs mediator?",
+    "derived_composite": "derived: keep inputs out of adjustment if exposure",
+    "ordinal_score": "ordinal: aggregate by worst, don't average",
+}
+
+
+@dataclass(frozen=True)
+class ConceptMethodologyProfile:
+    """Structure-derived methodological roles + hazards for one concept."""
+
+    concept: str
+    category: str
+    roles: Tuple[str, ...]
+    hazards: Tuple[str, ...]
+
+    def tag(self) -> str:
+        """Compact inline advisory tag, or ``""`` for a plain-safe concept."""
+        parts = [_ROLE_TAG[r] for r in self.roles if r in _ROLE_TAG]
+        return "; ".join(parts)
+
+
+def _concept_category(name: str, dictionary: Optional[object]) -> str:
+    if dictionary is None:
+        return ""
+    candidates = [name, _resolve_concept(_strip_stat_suffix(name), dictionary)]
+    for key in candidates:
+        if not key:
+            continue
+        try:
+            return str(getattr(dictionary[key], "category", "") or "")  # type: ignore[index]
+        except (KeyError, TypeError):
+            continue
+    return ""
+
+
+def concept_methodology_profile(
+    name: str,
+    *,
+    category: Optional[str] = None,
+    dictionary: Optional[object] = None,
+) -> ConceptMethodologyProfile:
+    """Methodological role profile for a concept, derived from its structure.
+
+    ``category`` may be passed when the caller already enriched it (the data
+    catalog does), avoiding a second dictionary lookup; otherwise it is read
+    from the concept dictionary. Roles are non-exclusive (a derived score can
+    also be ordinal).
+    """
+    dic = dictionary if dictionary is not None else _concept_dictionary()
+    cat = category if category is not None else _concept_category(name, dic) or ""
+    cat = cat.lower().strip()
+
+    found: set = set()
+    # A computed concept (callback / depends_on) — overadjustment/collinearity.
+    is_derived = is_derived_exposure(name, dic)
+    if is_derived:
+        found.add("derived_composite")
+    # The dictionary's "outcome" category lumps true endpoints (death, LoS) with
+    # derived severity scores (sofa / sep3 / news). Only the NON-derived ones are
+    # study endpoints whose use as a predictor is leakage; a derived score in the
+    # same category is a score, already covered by ``derived_composite``.
+    if cat == "outcome" and not is_derived:
+        found.add("outcome")
+    if cat in _TREATMENT_CATEGORIES:
+        found.add("treatment")
+    hint = _lookup_hint(name)
+    if hint is not None and hint.is_ordinal:
+        found.add("ordinal_score")
+    # Plain time-varying measurement (only when it carries no sharper hazard).
+    if cat in _MEASUREMENT_CATEGORIES and not (
+        found & {"derived_composite", "treatment"}
+    ):
+        found.add("measurement")
+
+    order = (
+        "outcome",
+        "treatment",
+        "derived_composite",
+        "ordinal_score",
+        "measurement",
+    )
+    roles = tuple(r for r in order if r in found)
+    hazards = tuple(_ROLE_HAZARD[r] for r in roles if r in _ROLE_HAZARD)
+    return ConceptMethodologyProfile(
+        concept=name, category=cat, roles=roles, hazards=hazards
+    )
+
+
+def concept_methodology_tag(
+    name: str,
+    *,
+    category: Optional[str] = None,
+    dictionary: Optional[object] = None,
+) -> str:
+    """Compact advisory tag for one concept, or ``""`` for a plain-safe one."""
+    return concept_methodology_profile(
+        name, category=category, dictionary=dictionary
+    ).tag()
+
+
 __all__ = [
     "VariableKind",
     "ConceptHint",
     "MethodologicalPrinciple",
+    "ConceptMethodologyProfile",
     "classify_variable",
     "aggregation_rule_for",
     "default_time_windows",
@@ -1429,4 +1590,6 @@ __all__ = [
     "detect_overadjustment",
     "is_derived_exposure",
     "overadjustment_caution",
+    "concept_methodology_profile",
+    "concept_methodology_tag",
 ]

@@ -1,4 +1,5 @@
 """Tests for the L2 data-foundation catalog + coverage judgement."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -6,6 +7,7 @@ import pandas as pd
 from easyicu.research_agent.data_catalog import (
     AvailableCatalog,
     CatalogConcept,
+    _methodology_tag,
     assess_coverage,
     build_available_catalog,
 )
@@ -53,7 +55,9 @@ def test_coverage_ambiguous_alias_does_not_resolve():
 def test_extra_available_marks_provided_cohort_columns_present():
     # A pre-filtered cohort parquet carries its own columns; mark them present.
     cat = _catalog("death")
-    rep = assess_coverage(["custom_score", "death"], cat, extra_available=["custom_score"])
+    rep = assess_coverage(
+        ["custom_score", "death"], cat, extra_available=["custom_score"]
+    )
     assert rep.sufficient
     assert rep.resolved["custom_score"] == "custom_score"
 
@@ -81,3 +85,61 @@ def test_render_for_prompt_groups_by_category_and_lists_ids():
     rendered = cat.render_for_prompt()
     assert "[blood gas]" in rendered and "[scores]" in rendered
     assert "lact" in rendered and "lactate" in rendered
+
+
+def test_catalog_annotates_methodology_for_hazard_concepts():
+    cat = AvailableCatalog(
+        source="mem",
+        concepts=[
+            CatalogConcept(
+                "death_icu",
+                description="ICU mortality",
+                category="outcome",
+                methodology=_methodology_tag("death_icu", "outcome"),
+            ),
+            CatalogConcept(
+                "norepi",
+                description="norepinephrine",
+                category="medications",
+                methodology=_methodology_tag("norepi", "medications"),
+            ),
+            CatalogConcept(
+                "sofa",
+                description="SOFA score",
+                category="outcome",
+                methodology=_methodology_tag("sofa", "outcome"),
+            ),
+            CatalogConcept(
+                "age",
+                description="age",
+                category="demographics",
+                methodology=_methodology_tag("age", "demographics"),
+            ),
+        ],
+    )
+    rendered = cat.render_for_prompt()
+    # The true endpoint gets a leakage caution; a vasopressor gets the
+    # treatment caution; a plain demographic gets none.
+    assert "leakage" in rendered
+    assert "confounder vs mediator" in rendered
+    # A SOFA score sits in the dictionary's "outcome" category but is NOT a study
+    # endpoint -> it must NOT be mislabelled as a leakage outcome; it is a
+    # derived score instead.
+    sofa_line = next(line for line in rendered.splitlines() if "- sofa " in line)
+    assert "leakage" not in sofa_line
+    assert "derived" in sofa_line
+    # The legend appears only because at least one concept carries a tag.
+    assert "methodological cautions" in rendered
+
+
+def test_build_available_catalog_populates_methodology(tmp_path):
+    import pandas as pd
+
+    pd.DataFrame({"stay_id": [1], "value": [1.0]}).to_parquet(
+        tmp_path / "norepi.parquet"
+    )
+    cat = build_available_catalog(tmp_path)
+    by_id = {c.concept_id: c for c in cat.concepts}
+    # norepi is a medication -> treatment caution attached from the dictionary.
+    if "norepi" in by_id and by_id["norepi"].category == "medications":
+        assert "treatment" in by_id["norepi"].methodology

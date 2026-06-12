@@ -316,3 +316,35 @@ def test_overadjustment_caution_covers_unresolvable_composites(ra):
     assert ra.overadjustment_caution("age", covs) is None
     # No covariates -> nothing to verify.
     assert ra.overadjustment_caution("news", []) is None
+
+
+def test_concept_methodology_profile_classifies_by_structure(ra):
+    # True endpoint (non-derived "outcome" category) -> leakage role.
+    death = ra.concept_methodology_profile("death_icu", category="outcome")
+    assert "outcome" in death.roles
+    assert "leakage" in death.tag()
+
+    # A severity score sits in the dictionary "outcome" category but is derived,
+    # so it must NOT be mislabelled as a study endpoint -- it's a derived score.
+    sofa = ra.concept_methodology_profile("sofa", category="outcome")
+    assert "outcome" not in sofa.roles
+    assert "derived_composite" in sofa.roles
+    assert "ordinal_score" in sofa.roles  # SOFA is ordinal -> no averaging
+
+    # Medication -> treatment (confounder vs mediator caution).
+    norepi = ra.concept_methodology_profile("norepi", category="medications")
+    assert "treatment" in norepi.roles
+    assert "mediator" in norepi.tag()
+
+    # Plain demographic / raw lab -> no hazard tag (default safe case).
+    assert ra.concept_methodology_profile("age", category="demographics").tag() == ""
+    assert (
+        ra.concept_methodology_profile("creatinine", category="chemistry").tag() == ""
+    )
+
+
+def test_concept_methodology_tag_is_convenience_for_profile_tag(ra):
+    assert (
+        ra.concept_methodology_tag("norepi", category="medications")
+        == ra.concept_methodology_profile("norepi", category="medications").tag()
+    )
