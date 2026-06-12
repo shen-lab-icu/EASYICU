@@ -110,11 +110,26 @@ def test_balance_only_unweighted_present_is_na(tmp_path):
     assert bal.status == "na"
 
 
-def test_no_balance_assessment_fails(tmp_path):
+def test_no_balance_with_weighting_design_fails(tmp_path):
+    # A weighting/matching design (here: an IPTW weights artifact) for which NO
+    # balance table exists skipped a REQUIRED check -> objective Fail.
+    ev = tmp_path / "evidence"
+    ev.mkdir(parents=True, exist_ok=True)
+    (ev / "iptw_weights.csv").write_text("id,weight\n1,0.9\n", encoding="utf-8")
+    sig = assess_validity_signals("causal_inference", tmp_path)
+    bal = next(s for s in sig if s.name == "covariate_balance_achieved")
+    assert bal.status == "fail"
+
+
+def test_no_balance_without_weighting_design_is_na_not_fail(tmp_path):
+    # No balance table AND no weighting/matching evidence: the causal estimate may
+    # be g-computation / outcome regression / TMLE, which does not produce an SMD
+    # table. Demanding one would impose a paradigm -> must stay NA, not Fail
+    # (impartiality: never fail a defensible analytical choice).
     (tmp_path / "evidence").mkdir(parents=True, exist_ok=True)
     sig = assess_validity_signals("causal_inference", tmp_path)
     bal = next(s for s in sig if s.name == "covariate_balance_achieved")
-    assert bal.status == "fail"  # a causal contrast with no balance check at all
+    assert bal.status == "na"
 
 
 def test_causal_graded_subscore_balance_fail_positivity_pass(tmp_path):

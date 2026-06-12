@@ -326,6 +326,7 @@ def score_result_validity(
     validity_cautions: Optional[Sequence[str]] = None,
     positive_subscore: Optional[float] = None,
     positive_signals: Optional[Sequence[ValiditySignal]] = None,
+    execution_complete: bool = True,
 ) -> DimensionScore:
     """Result-validity dimension (§M2 locked reference + numeric_audit).
 
@@ -371,21 +372,43 @@ def score_result_validity(
         # These read actual values (split overlap, adjusted-set SMD, positivity
         # verdict) and judge correctness against standard thresholds; a kind with
         # no value-readable central check contributes None → stays NA below.
-        if positive_subscore is not None:
+        #
+        # Gate behind execution_complete: result_validity judges *a produced
+        # result*. A run that never completed its analysis (e.g. a self-blocked /
+        # diagnostic_only run) has no result to validate, so an early-step check
+        # passing must not award positive validity — that would contradict the
+        # tristate. Such a run stays honestly unscored here (teeth above still cap
+        # to Fail if an objective error was nonetheless detectable).
+        if positive_subscore is not None and execution_complete:
             sig_pairs = [(s.name, s.status, s.detail) for s in (positive_signals or [])]
+            n_assessed = sum(1 for _, st, _ in sig_pairs if st in ("pass", "fail"))
+            level = bin_level(positive_subscore)
+            extra_notes: List[str] = []
+            # A single assessable check cannot establish FULL result validity — it
+            # only tells us the one thing we could verify. Cap the label below Full
+            # so a 1/1 pass is not overstated; the numeric subscore is unchanged and
+            # n_assessed is surfaced for transparency.
+            if n_assessed < 2 and level == "Full":
+                level = "Partial"
+                extra_notes.append(
+                    f"label capped to Partial: only {n_assessed} central validity "
+                    "check assessable for this kind (subscore unchanged)"
+                )
             return DimensionScore(
                 name="result_validity",
                 subscore=round(positive_subscore, 4),
-                level=bin_level(positive_subscore),
+                level=level,
                 signals={
                     "scoring_mode": "gold_free_kind_value_signals",
                     "validity_positive_subscore": round(positive_subscore, 4),
                     "validity_signals": [(n, st) for n, st, _ in sig_pairs],
+                    "n_assessed": n_assessed,
                     "locked_reference_frozen": locked_reference_frozen,
                     "validity_cautions": validity_cautions,
                 },
                 notes=(
                     [f"{n}={st}: {d}" for n, st, d in sig_pairs]
+                    + extra_notes
                     + [f"caution: {c}" for c in validity_cautions]
                 ),
             )
@@ -809,6 +832,7 @@ def score_run(
         validity_cautions=validity_cautions,
         positive_subscore=validity_positive_subscore,
         positive_signals=validity_signals,
+        execution_complete=bool(gates.get("execution_complete")),
     )
     tristate = compute_tristate(gates, result_validity_level=result_validity.level)
     return FiveDimensionScorecard(
