@@ -59,6 +59,11 @@ from .icu_rules import (
     treatment_mediator_caution,
 )
 from .plan_utils import read_adjustment_covariates
+from .validity_signals import (
+    ValiditySignal,
+    assess_validity_signals,
+    validity_positive_subscore,
+)
 from .viability import assess_cohort_viability, step_summary_block_signal
 
 DimensionLevel = Literal["Full", "Partial", "Marginal", "Fail"]
@@ -319,6 +324,8 @@ def score_result_validity(
     locked_reference_frozen: bool = False,
     validity_errors: Optional[Sequence[str]] = None,
     validity_cautions: Optional[Sequence[str]] = None,
+    positive_subscore: Optional[float] = None,
+    positive_signals: Optional[Sequence[ValiditySignal]] = None,
 ) -> DimensionScore:
     """Result-validity dimension (§M2 locked reference + numeric_audit).
 
@@ -356,6 +363,29 @@ def score_result_validity(
                         "validity error(s) detected without a locked reference: "
                         + "; ".join(validity_errors)
                     ]
+                    + [f"caution: {c}" for c in validity_cautions]
+                ),
+            )
+        # No objective error: score the gold-free, kind-routed VALUE-based validity
+        # signals (the manuscript's Fig.3 baseline — no frozen reference needed).
+        # These read actual values (split overlap, adjusted-set SMD, positivity
+        # verdict) and judge correctness against standard thresholds; a kind with
+        # no value-readable central check contributes None → stays NA below.
+        if positive_subscore is not None:
+            sig_pairs = [(s.name, s.status, s.detail) for s in (positive_signals or [])]
+            return DimensionScore(
+                name="result_validity",
+                subscore=round(positive_subscore, 4),
+                level=bin_level(positive_subscore),
+                signals={
+                    "scoring_mode": "gold_free_kind_value_signals",
+                    "validity_positive_subscore": round(positive_subscore, 4),
+                    "validity_signals": [(n, st) for n, st, _ in sig_pairs],
+                    "locked_reference_frozen": locked_reference_frozen,
+                    "validity_cautions": validity_cautions,
+                },
+                notes=(
+                    [f"{n}={st}: {d}" for n, st, d in sig_pairs]
                     + [f"caution: {c}" for c in validity_cautions]
                 ),
             )
@@ -754,6 +784,8 @@ def score_run(
     reporting_checklist: Optional[Dict[str, object]] = None,
     validity_errors: Optional[Sequence[str]] = None,
     validity_cautions: Optional[Sequence[str]] = None,
+    validity_positive_subscore: Optional[float] = None,
+    validity_signals: Optional[Sequence[ValiditySignal]] = None,
     locked_reference_frozen: bool = False,
     plan_illegal: bool = False,
     self_inflicted_block: Optional[str] = None,
@@ -775,6 +807,8 @@ def score_run(
         locked_reference_frozen=locked_reference_frozen,
         validity_errors=validity_errors,
         validity_cautions=validity_cautions,
+        positive_subscore=validity_positive_subscore,
+        positive_signals=validity_signals,
     )
     tristate = compute_tristate(gates, result_validity_level=result_validity.level)
     return FiveDimensionScorecard(
@@ -1279,6 +1313,10 @@ def score_run_from_dir(
         run_dir, gates, outcome=outcome_concept
     )
 
+    # Gold-free, kind-routed VALUE-based validity signals (the Fig.3 baseline).
+    # Used only when no objective validity error fired — an error still caps Fail.
+    _validity_signals = assess_validity_signals(task.kind, run_dir)
+
     return score_run(
         task,
         gates=gates,
@@ -1293,6 +1331,8 @@ def score_run_from_dir(
         reporting_checklist=_load_reporting_checklist(run_dir, task),
         validity_errors=validity_errors,
         validity_cautions=validity_cautions,
+        validity_signals=_validity_signals,
+        validity_positive_subscore=validity_positive_subscore(_validity_signals),
         locked_reference_frozen=locked_reference_frozen,
         plan_illegal=plan_illegal,
         self_inflicted_block=self_inflicted_block,
