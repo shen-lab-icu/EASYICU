@@ -31,7 +31,13 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from .icu_rules import detect_overadjustment, overadjustment_caution
+from .icu_rules import (
+    detect_outcome_as_predictor,
+    detect_overadjustment,
+    outcome_leakage_caution,
+    overadjustment_caution,
+    treatment_mediator_caution,
+)
 from .scalar_utils import (
     _first_numeric_effect_from_text,
     _first_numeric_scalar_with_key_fragment,
@@ -1428,6 +1434,96 @@ def _primary_exposure_overadjustment_findings(
             },
         )
     ]
+
+
+def _primary_model_leakage_findings(
+    *,
+    step: AnalysisStep,
+    context: ResearchContext,
+    out_dir: Path,
+) -> List[ValidationFinding]:
+    """Outcome-leakage (error) + endpoint/treatment-as-mediator (caution).
+
+    Complements the overadjustment hard-block with two more model-methodology
+    checks on this step's fitted covariates, keeping the same impartiality split:
+
+    - ERROR: the declared primary outcome appears among the model's predictors.
+      Conditioning a model on its own dependent variable is target leakage by
+      construction — an objective design error routed through the same in-run
+      re-fit loop (no full restart), like overadjustment.
+    - CAUTION (warning, never gates): a *different* endpoint concept used as a
+      predictor (timing-dependent leakage), or a treatment/intervention covariate
+      that may be a mediator on the exposure→outcome path. Both are defensible
+      depending on timing/DAG the auditor cannot see, so they prompt the analyst
+      to verify rather than re-fitting or blocking.
+
+    The outcome / exposure must be declared (``context.target_outcome`` /
+    ``context.primary_exposure``); they are never inferred, so each check stays
+    silent rather than guessing.
+    """
+    covariates = read_model_covariate_names(out_dir)
+    if not covariates:
+        return []
+    outcome = (getattr(context, "target_outcome", None) or "").strip()
+    exposure = (getattr(context, "primary_exposure", None) or "").strip()
+    findings: List[ValidationFinding] = []
+
+    leak = detect_outcome_as_predictor(covariates, study_outcome=outcome)
+    if leak:
+        joined = ", ".join(f"`{o}`" for o in leak)
+        findings.append(
+            ValidationFinding(
+                validator="outcome_leakage_auditor",
+                severity="error",
+                message=(
+                    f"The declared primary outcome `{outcome}` appears among this "
+                    f"model's predictors ({joined}). Conditioning a model on its own "
+                    f"dependent variable is target leakage. Re-fit dropping {joined} "
+                    f"from the predictors; the outcome must appear only as the "
+                    f"dependent variable."
+                ),
+                detail={
+                    "kind": "outcome_leakage",
+                    "step_id": step.step_id,
+                    "outcome": outcome,
+                    "offending_predictors": list(leak),
+                },
+            )
+        )
+
+    endpoint_caution = outcome_leakage_caution(covariates, study_outcome=outcome)
+    if endpoint_caution:
+        findings.append(
+            ValidationFinding(
+                validator="outcome_leakage_auditor",
+                severity="warning",
+                message="Possible outcome leakage: " + endpoint_caution,
+                detail={
+                    "kind": "outcome_leakage_caution",
+                    "step_id": step.step_id,
+                    "outcome": outcome,
+                    "adjustment_covariates": list(covariates),
+                },
+            )
+        )
+
+    if exposure:
+        mediator_caution = treatment_mediator_caution(exposure, covariates)
+        if mediator_caution:
+            findings.append(
+                ValidationFinding(
+                    validator="overadjustment_auditor",
+                    severity="warning",
+                    message="Possible mediator adjustment: " + mediator_caution,
+                    detail={
+                        "kind": "treatment_mediator_caution",
+                        "step_id": step.step_id,
+                        "exposure": exposure,
+                        "adjustment_covariates": list(covariates),
+                    },
+                )
+            )
+    return findings
 
 
 def _step_contract_findings(

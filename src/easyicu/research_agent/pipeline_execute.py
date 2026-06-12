@@ -82,6 +82,7 @@ from .plan_utils import (
     _preserve_figure_steps_after_replan,
     _primary_exposure_contract_findings,
     _primary_exposure_overadjustment_findings,
+    _primary_model_leakage_findings,
     _step_contract_findings,
     _step_contract_repair_guidance,
     _step_expects_figure,
@@ -1572,6 +1573,16 @@ def run_execute_phase(
                 # its constituents, route an error through the same repair loop
                 # so the step re-fits without the offending covariate.
                 early_contract_findings += _primary_exposure_overadjustment_findings(
+                    step=step,
+                    context=context,
+                    out_dir=run_result.out_dir,
+                )
+                # Outcome-leakage hard-block + treatment-mediator / other-endpoint
+                # cautions: the declared outcome appearing among predictors is
+                # target leakage (error → same re-fit loop); a treatment covariate
+                # or a different endpoint as predictor surfaces as a non-gating
+                # caution for the analyst to verify.
+                early_contract_findings += _primary_model_leakage_findings(
                     step=step,
                     context=context,
                     out_dir=run_result.out_dir,
