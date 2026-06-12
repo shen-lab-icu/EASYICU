@@ -776,6 +776,31 @@ GENERAL_ICU_ANALYSIS_PRINCIPLES: Tuple[MethodologicalPrinciple, ...] = (
     ),
     # --- cautions (defensible choices; prompt to document, never override) ---
     MethodologicalPrinciple(
+        id="robust_fit_under_collinearity_or_separation",
+        phase="modeling",
+        kind="caution",
+        principle=(
+            "Before fitting a regression, drop constant and perfectly collinear "
+            "predictors (a rank-deficient design makes the fit singular), and if "
+            "the model is still singular or fails to converge under "
+            "(quasi-)separation, use a penalised fit (e.g. Firth or ridge) rather "
+            "than reporting a failed or non-converged estimate."
+        ),
+        rationale=(
+            "A constant column (e.g. a missing-indicator that becomes constant "
+            "after imputation) or two collinear covariates make the design "
+            "matrix non-invertible — the fit dies with 'Singular matrix' and no "
+            "effect size is produced. Removing redundant columns and using a "
+            "penalised estimator under separation are standard, defensible "
+            "remedies; which remedy to use is the analyst's choice, so this is a "
+            "caution, not a mandated estimator."
+        ),
+        cross_db_note=(
+            "Rank-deficiency and separation arise from each database's case-mix "
+            "and missingness, so the same robustness step applies everywhere."
+        ),
+    ),
+    MethodologicalPrinciple(
         id="describe_cohort_before_modeling",
         phase="cohort",
         kind="caution",
