@@ -59,6 +59,7 @@ from .icu_rules import (
     treatment_mediator_caution,
 )
 from .plan_utils import read_adjustment_covariates
+from .viability import assess_cohort_viability, step_summary_block_signal
 
 DimensionLevel = Literal["Full", "Partial", "Marginal", "Fail"]
 """Four-level colour bin for the Fig.3 scorecard heatmap (§M4)."""
@@ -259,8 +260,17 @@ def score_plan(
     )
 
 
-def score_code(*, gates: Dict[str, object]) -> DimensionScore:
-    """Code dimension: end-to-end execution from ``gates``."""
+def score_code(
+    *, gates: Dict[str, object], self_inflicted_block: Optional[str] = None
+) -> DimensionScore:
+    """Code dimension: end-to-end execution from ``gates``.
+
+    ``self_inflicted_block`` (when supplied by ``score_run_from_dir``) is a
+    factual note that the run blocked its primary deliverable on a task-viable
+    cohort — surfaced so a ``diagnostic_only`` verdict is not mistaken for an
+    infeasible task. It does not change the subscore (execution genuinely did
+    not complete); it only labels *why*.
+    """
     required = int(gates.get("required_step_count") or 0)
     completed = int(gates.get("completed_step_count") or 0)
     failed = list(gates.get("failed_steps") or [])
@@ -282,16 +292,21 @@ def score_code(*, gates: Dict[str, object]) -> DimensionScore:
         level = "Fail"
         notes.append("no core analysis step completed")
 
+    signals: Dict[str, object] = {
+        "execution_complete": execution_complete,
+        "required_step_count": required,
+        "completed_step_count": completed,
+        "failed_step_count": len(failed),
+    }
+    if self_inflicted_block:
+        signals["self_inflicted_block"] = True
+        notes.append(self_inflicted_block)
+
     return DimensionScore(
         name="code",
         subscore=round(subscore, 4),
         level=level,
-        signals={
-            "execution_complete": execution_complete,
-            "required_step_count": required,
-            "completed_step_count": completed,
-            "failed_step_count": len(failed),
-        },
+        signals=signals,
         notes=notes,
     )
 
@@ -692,13 +707,31 @@ def score_fairness_subgroup(
     )
 
 
-def compute_tristate(gates: Dict[str, object]) -> Tristate:
-    """§M3 tristate from ``gates`` (execution is the hard ceiling)."""
+def compute_tristate(
+    gates: Dict[str, object],
+    *,
+    result_validity_level: Optional[str] = None,
+) -> Tristate:
+    """§M3 tristate from ``gates`` (execution is the hard ceiling).
+
+    A hard validity failure (``result_validity_level == "Fail"``) caps the
+    verdict at ``analysis_only``: the analysis executed and may have produced a
+    bound manuscript, but its primary result is not defensible enough to license
+    a reportable conclusion (e.g. overadjustment for a constituent of the
+    exposure, or a finite estimate from an invalid model). The validity ceiling
+    can only DEMOTE a ``gate_reportable`` verdict, never promote — a run that did
+    not execute stays ``diagnostic_only`` regardless. ``None`` (validity not
+    scored for this task kind) leaves the gate-based verdict unchanged.
+    """
     if bool(gates.get("manuscript_ready")):
-        return "gate_reportable"
-    if bool(gates.get("execution_complete")):
+        base: Tristate = "gate_reportable"
+    elif bool(gates.get("execution_complete")):
+        base = "analysis_only"
+    else:
+        base = "diagnostic_only"
+    if base == "gate_reportable" and str(result_validity_level) == "Fail":
         return "analysis_only"
-    return "diagnostic_only"
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -723,6 +756,7 @@ def score_run(
     validity_cautions: Optional[Sequence[str]] = None,
     locked_reference_frozen: bool = False,
     plan_illegal: bool = False,
+    self_inflicted_block: Optional[str] = None,
     run_id: Optional[str] = None,
 ) -> FiveDimensionScorecard:
     """Compute the full five-dimension scorecard + tristate from loaded artifacts.
@@ -732,7 +766,17 @@ def score_run(
     additive ``reporting_completeness`` dimension is populated when a
     kind-matched reporting checklist payload is supplied.
     """
-    tristate = compute_tristate(gates)
+    # Score result_validity first so a hard validity Fail can cap the tristate
+    # (it must never license a reportable conclusion from an invalid result).
+    result_validity = score_result_validity(
+        task,
+        numeric_audit=numeric_audit,
+        observed_metrics=observed_metrics,
+        locked_reference_frozen=locked_reference_frozen,
+        validity_errors=validity_errors,
+        validity_cautions=validity_cautions,
+    )
+    tristate = compute_tristate(gates, result_validity_level=result_validity.level)
     return FiveDimensionScorecard(
         reporting_completeness=score_reporting_completeness(
             task, checklist=reporting_checklist
@@ -743,15 +787,8 @@ def score_run(
         plan=score_plan(
             task, plan_steps=plan_steps, gates=gates, plan_illegal=plan_illegal
         ),
-        code=score_code(gates=gates),
-        result_validity=score_result_validity(
-            task,
-            numeric_audit=numeric_audit,
-            observed_metrics=observed_metrics,
-            locked_reference_frozen=locked_reference_frozen,
-            validity_errors=validity_errors,
-            validity_cautions=validity_cautions,
-        ),
+        code=score_code(gates=gates, self_inflicted_block=self_inflicted_block),
+        result_validity=result_validity,
         evidence_binding=score_evidence_binding(
             evidence_audit=evidence_audit,
             numeric_audit=numeric_audit,
@@ -853,13 +890,51 @@ _PHENOTYPE_KINDS = frozenset(
 )
 
 
+def _find_run_artifacts(run_dir: Path, *substrings: str) -> List[Path]:
+    """All emitted files whose name contains any of ``substrings`` (case-folded).
+
+    Searches the run root, the ``evidence/`` store (where files carry a
+    ``<kind>_<hash>__<name>`` prefix), and ``steps/*/outputs/``. Newest first so
+    a re-run's artifact wins. Used to locate validity metrics the agent emitted
+    under its own filename rather than a fixed contract name.
+    """
+    subs = tuple(s.lower() for s in substrings)
+    hits: List[Path] = []
+    for path in (
+        list(run_dir.glob("*"))
+        + list(run_dir.glob("evidence/*"))
+        + list(run_dir.glob("steps/*/outputs/*"))
+    ):
+        if path.is_file() and any(s in path.name.lower() for s in subs):
+            hits.append(path)
+    hits.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return hits
+
+
+def _num(value: object) -> Optional[float]:
+    """Coerce to float, rejecting bools/NaN/non-numeric — else ``None``."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else f  # NaN check
+
+
 def _load_cluster_validity(run_dir: Path) -> Dict[str, object]:
     """Best-effort read of a phenotype run's emitted validity metrics.
 
-    Looks for a small documented metrics file (silhouette / n_clusters /
-    min_cluster_fraction / ...). Returns ``{}`` when none is present, so the
+    Normalises to ``{silhouette, n_clusters, min_cluster_fraction, algorithm}``
+    from whatever the run actually emitted. An explicit validity file wins; if
+    absent we recover the same fields from the agent's own clustering artifacts
+    (``clustering_algorithm_details.json`` selection record, ``cluster_sizes``
+    table, ``*selection_metrics*`` / ``*quality_and_stability*`` tables) — so a
+    run is not invisible to the impartial degeneracy check merely because it
+    named its outputs differently. Returns ``{}`` when nothing is found, so the
     dimension stays honestly *unscored* rather than inventing a verdict.
     """
+    # 1. An explicit, contract-named validity file is authoritative when present.
     for name in (
         "cluster_validity.json",
         "clustering_validity.json",
@@ -872,18 +947,116 @@ def _load_cluster_validity(run_dir: Path) -> Dict[str, object]:
         doc = _load_json(path)
         if doc:
             return doc
-    return {}
+
+    # 2. Recover the same fields from the agent's own emitted artifacts.
+    out: Dict[str, object] = {}
+
+    for p in _find_run_artifacts(run_dir, "clustering_algorithm_details"):
+        details = _load_json(p)
+        if not isinstance(details, dict):
+            continue
+        if details.get("algorithm"):
+            out.setdefault("algorithm", str(details["algorithm"]))
+        if _num(details.get("selected_k")) is not None:
+            out.setdefault("n_clusters", int(_num(details["selected_k"])))
+        if _num(details.get("selected_silhouette_score")) is not None:
+            out.setdefault("silhouette", _num(details["selected_silhouette_score"]))
+        # H3-style: a per-k selection_metrics list with the selected row flagged.
+        sel = details.get("selection_metrics")
+        if isinstance(sel, list):
+            chosen = next(
+                (r for r in sel if isinstance(r, dict) and r.get("selected")), None
+            )
+            if isinstance(chosen, dict):
+                if _num(chosen.get("silhouette_score")) is not None:
+                    out.setdefault("silhouette", _num(chosen["silhouette_score"]))
+                if _num(chosen.get("min_cluster_pct")) is not None:
+                    out.setdefault(
+                        "min_cluster_fraction",
+                        _num(chosen["min_cluster_pct"]) / 100.0,
+                    )
+        if out.get("silhouette") is not None and "n_clusters" in out:
+            break
+
+    # min_cluster_fraction from the emitted cluster-sizes table if still unknown.
+    if "min_cluster_fraction" not in out:
+        for p in _find_run_artifacts(run_dir, "cluster_sizes"):
+            try:
+                with p.open(newline="", encoding="utf-8") as fh:
+                    rows = list(csv.DictReader(fh))
+            except (OSError, ValueError):
+                continue
+            if not rows:
+                continue
+            pcts = [_num(r.get("percentage")) for r in rows]
+            pcts = [x for x in pcts if x is not None]
+            ns = [_num(r.get("n")) for r in rows]
+            ns = [x for x in ns if x is not None]
+            if pcts:
+                out["min_cluster_fraction"] = min(pcts) / 100.0
+                out.setdefault("n_clusters", len(rows))
+                break
+            if ns and sum(ns) > 0:
+                out["min_cluster_fraction"] = min(ns) / sum(ns)
+                out.setdefault("n_clusters", len(rows))
+                break
+
+    return out
+
+
+# Internal indices whose geometry is only valid for distance/centroid-based
+# partitions. For model-based clustering (mixtures) the native fit criterion is
+# the likelihood/BIC, so a poor silhouette is informative but not a definitional
+# failure — it surfaces as a caution, never a Fail.
+_DISTANCE_BASED_CLUSTERING = (
+    "kmeans",
+    "k-means",
+    "agglomerative",
+    "hierarchical",
+    "ward",
+    "spectral",
+    "dbscan",
+    "kmedoids",
+    "k-medoids",
+    "birch",
+)
+_MODEL_BASED_CLUSTERING = (
+    "gaussianmixture",
+    "gmm",
+    "mixture",
+    "bayesian",
+    "lcga",
+    "gbtm",
+)
+
+
+def _is_distance_based(algorithm: Optional[str]) -> Optional[bool]:
+    """True=distance/centroid, False=model-based, None=unknown.
+
+    Unknown defaults to treating silhouette conservatively as a *caution* (we do
+    not know the partition geometry), never a Fail.
+    """
+    a = (algorithm or "").lower()
+    if any(k in a for k in _MODEL_BASED_CLUSTERING):
+        return False
+    if any(k in a for k in _DISTANCE_BASED_CLUSTERING):
+        return True
+    return None
 
 
 def _phenotype_validity_errors(run_dir: Path, kind: str) -> List[str]:
     """Impartial, deterministic objective-error check for clustering/trajectory.
 
     Flags only the *degenerate* end — a partition that is objectively broken
-    regardless of analytical taste (silhouette no better than chance, a single
-    group, a near-empty group). It never imposes a "good enough" threshold on a
-    valid solution; softer process gaps (which selection criterion, how many
-    models compared) belong to the reporting checklist, not a validity Fail.
-    Returns ``[]`` (→ honest NA) when the run emitted no validity metrics.
+    regardless of analytical taste or clustering family: a single group, a
+    near-empty group, or (for a distance/centroid method only) a non-positive
+    silhouette meaning the geometry is no better than chance. It never imposes a
+    "good enough" threshold on a valid solution; softer process gaps (which
+    selection criterion, how many models compared) belong to the reporting
+    checklist, not a validity Fail. A non-positive silhouette under a *model-
+    based* method is a caution, not an error (see ``_phenotype_validity_cautions``)
+    because silhouette is not that method's fit criterion. Returns ``[]`` (→
+    honest NA) when the run emitted no validity metrics.
     """
     if str(kind) not in _PHENOTYPE_KINDS:
         return []
@@ -891,28 +1064,142 @@ def _phenotype_validity_errors(run_dir: Path, kind: str) -> List[str]:
     if not doc:
         return []
     errs: List[str] = []
-    sil = doc.get("silhouette")
-    if isinstance(sil, (int, float)) and not isinstance(sil, bool) and sil <= 0:
-        errs.append(
-            f"degenerate clustering: silhouette={float(sil):.3f} ≤ 0 "
-            "(groups no better than chance)"
-        )
-    k = doc.get("n_clusters")
+    k = _num(doc.get("n_clusters"))
     if k is None:
-        k = doc.get("n_classes")
-    if isinstance(k, (int, float)) and not isinstance(k, bool) and k < 2:
+        k = _num(doc.get("n_classes"))
+    if k is not None and k < 2:
         errs.append(f"single-group solution (k={int(k)}): no subphenotypes separated")
-    frac = doc.get("min_cluster_fraction")
-    if (
-        isinstance(frac, (int, float))
-        and not isinstance(frac, bool)
-        and 0 <= frac < 0.01
-    ):
+    frac = _num(doc.get("min_cluster_fraction"))
+    if frac is not None and 0 <= frac < 0.01:
         errs.append(
-            f"near-empty group ({float(frac) * 100:.2f}% of cohort): "
-            "unstable/degenerate partition"
+            f"near-empty group ({frac * 100:.2f}% of cohort): "
+            "degenerate partition — one dominant cluster plus an outlier pocket, "
+            "not separated subphenotypes"
+        )
+    # A non-positive silhouette means points are, on average, closer to a
+    # neighbouring cluster than their own — objectively poor separation. We fail
+    # it for distance/centroid methods and for an UNKNOWN family (flag firmly);
+    # only an explicitly *model-based* family is carved out to a caution, because
+    # there silhouette is not the fit criterion (see the cautions helper).
+    sil = _num(doc.get("silhouette"))
+    if (
+        sil is not None
+        and sil <= 0
+        and _is_distance_based(doc.get("algorithm")) is not False
+    ):
+        algo = doc.get("algorithm") or "unspecified method"
+        errs.append(
+            f"degenerate clustering: silhouette={sil:.3f} ≤ 0 under {algo} — "
+            "groups no better than chance separation"
         )
     return errs
+
+
+def _phenotype_validity_cautions(run_dir: Path, kind: str) -> List[str]:
+    """Impartial caution-tier signals for clustering/trajectory (never gate).
+
+    A non-positive silhouette under a *model-based* method (e.g. a Gaussian
+    mixture, whose fit criterion is the likelihood/BIC, not silhouette) or under
+    an *unknown* clustering family is surfaced for human review but does NOT fail
+    the dimension — silhouette geometry may simply be the wrong lens for that
+    partition. Returns ``[]`` when nothing applies.
+    """
+    if str(kind) not in _PHENOTYPE_KINDS:
+        return []
+    doc = _load_cluster_validity(run_dir)
+    if not doc:
+        return []
+    cautions: List[str] = []
+    sil = _num(doc.get("silhouette"))
+    if (
+        sil is not None
+        and sil <= 0
+        and _is_distance_based(doc.get("algorithm")) is False
+    ):
+        algo = doc.get("algorithm") or "unspecified method"
+        cautions.append(
+            f"weak cluster separation: silhouette={sil:.3f} ≤ 0 under {algo}; "
+            "silhouette is not this family's fit criterion, so verify separation "
+            "against the criterion actually used (e.g. BIC/likelihood) before "
+            "interpreting the classes"
+        )
+    return cautions
+
+
+def _locked_cohort_path(run_dir: Path) -> Optional[Path]:
+    """The materialised analysis cohort a run actually modelled on."""
+    for name in ("cohort_analysis.parquet", "cohort.parquet"):
+        p = run_dir / name
+        if p.exists():
+            return p
+    return None
+
+
+def _deliberate_block_reason(run_dir: Path) -> Optional[str]:
+    """A short reason if a step *deliberately* recorded a non-execution /
+    blocked-modeling status (the agent chose not to run), vs a hard crash.
+
+    Distinguishing a chosen block from a crash matters: a crash is a code
+    failure (already reflected in ``code``); a deliberate block on viable data is
+    a self-paralysis failure mode that would otherwise be invisible.
+    """
+    summaries = list(run_dir.glob("steps/*/outputs/step_summary.json")) + list(
+        run_dir.glob("steps/*/step_summary.json")
+    )
+    for p in summaries:
+        doc = _load_json(p)
+        if not isinstance(doc, dict):
+            continue
+        signal = step_summary_block_signal(doc)
+        if signal:
+            return signal
+    return None
+
+
+def detect_self_inflicted_block(
+    run_dir: Path,
+    gates: Dict[str, object],
+    *,
+    outcome: Optional[str] = None,
+) -> Optional[str]:
+    """Impartial, deterministic check: did the run block its primary deliverable
+    on a task-VIABLE cohort?
+
+    Reports facts only — that the locked analysis cohort had enough rows, both
+    outcome classes with a non-trivial minority (when ``outcome`` is supplied),
+    and well-populated predictor columns — yet the run chose a
+    non-execution/blocked status with no data-driven cause. It never asserts
+    which model should have been fit; it only separates an *agent self-paralysis*
+    failure (a solvable task the run fumbled) from a *genuinely infeasible* task,
+    so a ``diagnostic_only`` verdict is not silently read as the latter. Fires
+    conservatively: stays silent (→ no claim) on a hard crash, a small/eventless
+    cohort, or when the cohort cannot be read.
+    """
+    if bool(gates.get("execution_complete")):
+        return None
+    reason = _deliberate_block_reason(run_dir)
+    if not reason:
+        return None  # a hard crash / genuine failure, not a deliberate self-block
+    path = _locked_cohort_path(run_dir)
+    if path is None:
+        return None
+    try:
+        import pandas as pd  # lazy: keep the scorecard module import light
+
+        df = pd.read_parquet(path)
+    except Exception:
+        return None
+
+    verdict = assess_cohort_viability(df, outcome=outcome)
+    if not verdict.viable:
+        return None  # too small / no outcome variation / too few usable predictors
+
+    return (
+        "execution block appears self-inflicted: the locked analysis cohort is "
+        "task-viable (" + verdict.note + ") yet the run recorded a "
+        f'non-execution/blocked status ("{reason}") with no data-driven cause — '
+        "an agent self-paralysis failure mode, distinct from an infeasible task"
+    )
 
 
 def score_run_from_dir(
@@ -986,6 +1273,11 @@ def score_run_from_dir(
         if endpoint_caution:
             validity_cautions.append(endpoint_caution)
     validity_errors.extend(_phenotype_validity_errors(run_dir, task.kind))
+    validity_cautions.extend(_phenotype_validity_cautions(run_dir, task.kind))
+
+    self_inflicted_block = detect_self_inflicted_block(
+        run_dir, gates, outcome=outcome_concept
+    )
 
     return score_run(
         task,
@@ -1003,6 +1295,7 @@ def score_run_from_dir(
         validity_cautions=validity_cautions,
         locked_reference_frozen=locked_reference_frozen,
         plan_illegal=plan_illegal,
+        self_inflicted_block=self_inflicted_block,
         run_id=(
             run_id or run_status.get("run_id")
             if isinstance(run_status, dict)
@@ -1026,6 +1319,7 @@ __all__ = [
     "score_reporting_completeness",
     "score_fairness_subgroup",
     "reporting_guideline_for_kind",
+    "detect_self_inflicted_block",
     "score_run",
     "score_run_from_dir",
 ]
