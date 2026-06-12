@@ -38,7 +38,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .analysis_types import infer_analysis_type, planner_analysis_type_guide
 from .cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
-from .icu_rules import GENERAL_ICU_ANALYSIS_PRINCIPLES, VariableKind, default_time_windows
+from .icu_rules import (
+    GENERAL_ICU_ANALYSIS_PRINCIPLES,
+    VariableKind,
+    default_time_windows,
+)
 from .llm import LLMClient, LLMMessage
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
 from .schema import (
@@ -248,11 +252,11 @@ def _format_concept_id_allowlist() -> str:
     lines = [
         "ALLOWED concept_ids — the ONLY values acceptable in any "
         "CohortDefinition or RobustnessSpec.cohort_override.concept_id field. "
-        "Synthesizing new names (e.g. \"sofa2_admission\", "
-        "\"kdigo_aki_max\", \"sepsis_onset_window\") is forbidden — these "
+        'Synthesizing new names (e.g. "sofa2_admission", '
+        '"kdigo_aki_max", "sepsis_onset_window") is forbidden — these '
         "are operationalizations, not concepts. To operationalize a concept "
         "over a time window, use the 5-tuple form: "
-        "concept_id=\"<one from the list below>\" + time_window + aggregation.",
+        'concept_id="<one from the list below>" + time_window + aggregation.',
         "",
     ]
     lines.extend(f"- `{concept_id}`" for concept_id in concept_ids)
@@ -277,14 +281,14 @@ def _format_ctas_schema_constraints() -> str:
         "time_window.start_offset_hours. Zero-width windows (end == start) "
         "are invalid. If you want a single instant, use a small window like "
         "[0h, 1h] instead.\n\n"
-        "3. aggregation \"any\" / \"all\" can only be paired with op in "
-        "{\"==\", \"!=\", \"missing\", \"not_missing\"}; they yield "
+        '3. aggregation "any" / "all" can only be paired with op in '
+        '{"==", "!=", "missing", "not_missing"}; they yield '
         "booleans, not numeric thresholds.\n\n"
         "4. If the ResearchContext shows an ICU rule label in an "
         "`agg_default=... (icu_rule=...)` annotation, translate it before "
-        "writing CTAS JSON: first_value -> \"first\"; max_or_last -> "
+        'writing CTAS JSON: first_value -> "first"; max_or_last -> '
         '"max" or "last" (prefer "max" for acuity scores); '
-        "mean_or_median / mean_median -> \"mean\" or \"median\" (prefer "
+        'mean_or_median / mean_median -> "mean" or "median" (prefer '
         '"median" for robustness checks); median_only -> "median".'
     )
 
@@ -326,7 +330,7 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "Every cohort/exposure/outcome concept used to define the "
         "analysis population must be represented as a typed cohort "
         "definition: concept_id, time_window, aggregation, operator, "
-        "and value. You may write `cohort: {\"from_named\": \"...\"}` "
+        'and value. You may write `cohort: {"from_named": "..."}` '
         "only when the caller has explicitly registered that named "
         "pattern for this case; otherwise supply the full five-tuple "
         "predicate. Free-text cohort strings are invalid.\n"
@@ -526,8 +530,17 @@ class ReplannerAgent(PlannerAgent):
         current_plan: AnalysisPlan,
         probe_summary: Optional[Dict[str, Any]] = None,
         completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
+        directive: Optional[str] = None,
     ) -> AnalysisPlan:
         completed = list(completed_step_records or [])
+        # A ``directive`` is a high-priority, runtime-issued instruction (e.g. a
+        # self-inflicted-block override on a task-viable cohort). It is surfaced
+        # first so the replanner cannot bury it under the routine revise prose.
+        directive_block = (
+            f"PRIORITY RUNTIME DIRECTIVE (override prior plan revisions):\n{directive}\n\n"
+            if directive
+            else ""
+        )
         messages = [
             LLMMessage(
                 role="system",
@@ -536,7 +549,8 @@ class ReplannerAgent(PlannerAgent):
             LLMMessage(
                 role="user",
                 content=(
-                    "Revise the ICU-AWARE RESEARCH PLAN as JSON matching the "
+                    directive_block
+                    + "Revise the ICU-AWARE RESEARCH PLAN as JSON matching the "
                     "AnalysisPlan schema. Keep completed steps unchanged and "
                     "revise only the remaining steps when the probe summary or "
                     "completed step outputs justify it.\n\n"
@@ -1247,7 +1261,9 @@ class CoderAgent:
                 ),
             ),
         ]
-        raw = self.llm.complete(messages, max_tokens=_CODER_MAX_TOKENS, temperature=0.05)
+        raw = self.llm.complete(
+            messages, max_tokens=_CODER_MAX_TOKENS, temperature=0.05
+        )
         return _strip_code_fence(raw.strip())
 
 
@@ -1327,7 +1343,9 @@ class WriterAgent:
         max_tokens: int = 2048,
     ) -> str:
         lang_inst = _writer_language_instruction(self.language)
-        evidence_list = ", ".join(str(eid) for eid in evidence_ids) if evidence_ids else "(none)"
+        evidence_list = (
+            ", ".join(str(eid) for eid in evidence_ids) if evidence_ids else "(none)"
+        )
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _WRITER_GUIDE),
             LLMMessage(
@@ -1365,7 +1383,9 @@ class WriterAgent:
                 ),
             ),
         ]
-        raw = self.llm.complete(messages, max_tokens=max_tokens, temperature=0.3).strip()
+        raw = self.llm.complete(
+            messages, max_tokens=max_tokens, temperature=0.3
+        ).strip()
         return _strip_code_fence(raw)
 
     def run(
@@ -1526,7 +1546,16 @@ class WriterAgent:
         )
 
         # Concatenate all sections.
-        parts = [title, abstract, introduction, methods, results, discussion, limitations, conclusion]
+        parts = [
+            title,
+            abstract,
+            introduction,
+            methods,
+            results,
+            discussion,
+            limitations,
+            conclusion,
+        ]
         manuscript = "\n\n".join(p.strip() for p in parts if p.strip())
         return manuscript
 
@@ -1795,9 +1824,8 @@ def _sentences_missing_evidence_tokens(scaffold: str) -> List[str]:
         sentence = raw_sentence.strip()
         if not sentence:
             continue
-        if (
-            "{evidence:" in sentence
-            or re.search(r"\]\(\s*evidence/[^)]+\)", sentence, flags=re.I)
+        if "{evidence:" in sentence or re.search(
+            r"\]\(\s*evidence/[^)]+\)", sentence, flags=re.I
         ):
             continue
         if re.search(
