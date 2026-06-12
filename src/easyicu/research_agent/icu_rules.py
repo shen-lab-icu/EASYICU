@@ -1029,12 +1029,19 @@ ICU_RULES = _ICURules()
 # Overadjustment detection (deterministic, case-neutral)
 # ---------------------------------------------------------------------------
 
-# General clinical-knowledge map: composite / derived exposures and the
-# constituent measurement concepts that *define* them. Conditioning on a
-# constituent of the exposure is overadjustment (it removes the exposure's own
-# signal). These are standard ICU score compositions — general, illustrative
-# and extensible clinical knowledge, NOT benchmark-specific entries. Tokens are
-# matched case-insensitively as substrings of a variable name.
+# Constituent resolution is dictionary-first, not table-first. The authoritative
+# source of "what defines the exposure" is the EasyICU concept dictionary's
+# ``depends_on`` derivation closure (see ``composite_constituents`` below), so
+# ANY declared composite/derived concept — sofa, sofa2, the sofa_* sub-scores,
+# and concepts added later — is covered with no edit here. The table below is a
+# curated *fallback* used in two situations only:
+#   1. the concept dictionary cannot be loaded (e.g. a data-isolated sandbox);
+#   2. bridging ricu-style abbreviations in the dictionary (``crea``, ``pafi``)
+#      to the clinical spellings a fitted model's covariate columns tend to use
+#      (``creatinine``), so substring matching is not brittle to either spelling.
+# These are standard ICU score compositions — general, illustrative clinical
+# knowledge, NOT benchmark-specific entries. Tokens are matched case-insensitively
+# as substrings of a variable name.
 COMPOSITE_EXPOSURE_CONSTITUENTS: Dict[str, Tuple[str, ...]] = {
     "sofa": (
         "pao2",
@@ -1068,24 +1075,159 @@ COMPOSITE_EXPOSURE_CONSTITUENTS: Dict[str, Tuple[str, ...]] = {
 }
 
 
+# Composites whose composition lives in a Python callback rather than the
+# dictionary's ``depends_on`` field, so their declared closure is empty. Each
+# value names the immediate concept(s) the exposure is *built from*; those seeds
+# are then expanded through the dictionary closure like any other concept. This
+# is the minimal structural gap-filler — not a per-benchmark table.
+_CALLBACK_COMPOSITE_SEED: Dict[str, Tuple[str, ...]] = {
+    "sep3": ("sofa", "susp_inf"),  # sepsis-3 = suspected infection + SOFA rise
+    "sepsis3": ("sofa", "susp_inf"),
+    "qsofa": ("gcs", "resp_rate", "sbp"),  # qSOFA bedside components
+    "kdigo": ("crea", "urine"),  # KDIGO AKI = creatinine + urine-output
+    "kdigoaki": ("crea", "urine"),
+}
+
+# Bridge dictionary abbreviations to clinical spellings a model's covariates use,
+# per constituent (so a sub-score exposure does not pull in unrelated names).
+_CONCEPT_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "crea": ("creatinine",),
+    "pafi": ("pao2", "fio2", "pao2fio2", "pfratio"),
+    "safi": ("spo2", "fio2", "spo2fio2"),
+    "map": ("meanarterialpressure",),
+    "bili": ("bilirubin",),
+    "plt": ("platelet", "platelets"),
+    "norepi60": ("norepinephrine", "norepi", "noradrenaline"),
+    "dopa60": ("dopamine",),
+    "epi60": ("epinephrine", "adrenaline"),
+    "dobu60": ("dobutamine",),
+    "vaso_ind": ("vasopressor", "pressor"),
+    "vent_ind": ("ventilation", "mechanicalventilation"),
+    "urine24": ("urine", "urineoutput"),
+    "urine": ("urineoutput",),
+    "susp_inf": ("suspectedinfection", "suspinf"),
+    "resp_rate": ("respiratoryrate", "resprate"),
+    "sbp": ("systolic", "systolicbp"),
+    "gcs": ("glasgow",),
+}
+
+# Pure statistic / derivation suffixes appended to a concept to make a model
+# variable (``sofa_max``, ``sepsis3_corrected``). Used to recognise the exposure
+# variable itself — so it is never mistaken for one of its own constituents.
+_STAT_SUFFIXES: frozenset[str] = frozenset(
+    {
+        "max",
+        "min",
+        "mean",
+        "median",
+        "avg",
+        "last",
+        "first",
+        "sum",
+        "total",
+        "score",
+        "corrected",
+        "adj",
+        "adjusted",
+        "baseline",
+        "init",
+        "initial",
+        "admission",
+        "worst",
+        "peak",
+        "nadir",
+        "delta",
+        "change",
+        "value",
+        "val",
+        "cat",
+        "bin",
+        "group",
+        "level",
+        "norm",
+        "std",
+        "zscore",
+        "flag",
+    }
+)
+
+_DICT_CACHE: Dict[str, object] = {}
+
+
 def _normalise_token(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name).lower())
 
 
-def composite_constituents(exposure: str) -> Tuple[str, ...]:
-    """Constituent concept tokens of a composite/derived exposure, or ``()``.
+# Aliases keyed by normalised concept token, so closure tokens (``vasoind``,
+# ``resprate``, ``suspinf``, ``urine24``) actually resolve their clinical
+# spelling bridges regardless of the dictionary's punctuation.
+_CONCEPT_ALIASES_NORM: Dict[str, Tuple[str, ...]] = {
+    _normalise_token(k): v for k, v in _CONCEPT_ALIASES.items()
+}
 
-    ``()`` means the exposure is not a known composite, so no overadjustment
-    rule applies — the check stays silent rather than guessing.
+
+def _strip_stat_suffix(exposure: str) -> str:
+    """Normalised exposure with trailing pure stat/derivation suffixes removed."""
+    parts = [p for p in re.split(r"[^a-z0-9]+", str(exposure).lower()) if p]
+    while len(parts) > 1 and parts[-1] in _STAT_SUFFIXES:
+        parts = parts[:-1]
+    return "".join(parts)
+
+
+def _concept_dictionary() -> Optional[object]:
+    """The EasyICU concept dictionary, loaded once; ``None`` if unavailable.
+
+    A missing dictionary (e.g. a data-isolated sandbox) is not an error — the
+    detector degrades to the curated fallback table rather than failing.
     """
+    if "d" in _DICT_CACHE:
+        return _DICT_CACHE["d"]  # type: ignore[return-value]
+    dictionary: Optional[object] = None
+    try:  # local import to avoid import-time cost / cycles
+        from ..concept_loader import load_dictionary
+
+        dictionary = load_dictionary()
+    except Exception:
+        dictionary = None
+    _DICT_CACHE["d"] = dictionary
+    return dictionary
+
+
+def _depends_on_closure(name: str, dictionary: object, seen: set) -> None:
+    if name in seen:
+        return
+    try:
+        definition = dictionary[name]  # type: ignore[index]
+    except (KeyError, TypeError, AttributeError):
+        return
+    seen.add(name)
+    for dep in getattr(definition, "depends_on", ()) or ():
+        _depends_on_closure(str(dep), dictionary, seen)
+
+
+def _resolve_concept(base: str, dictionary: object) -> Optional[str]:
+    """Match a normalised exposure to a dictionary concept name, or ``None``."""
+    try:
+        names = list(dictionary.keys())  # type: ignore[attr-defined]
+    except (AttributeError, TypeError):
+        return None
+    best: Optional[str] = None
+    best_len = 0
+    for cname in names:
+        ctok = _normalise_token(cname)
+        if not ctok:
+            continue
+        # exact, or the concept name is the exposure stripped of a stat suffix
+        if ctok == base and len(ctok) > best_len:
+            best, best_len = cname, len(ctok)
+    return best
+
+
+def _fallback_constituents(exposure: str) -> Tuple[str, ...]:
+    """Curated table match (longest composite name wins), or ``()``."""
     key = _normalise_token(exposure)
     if not key:
         return ()
-    # A composite's canonical name must appear *within* the exposure variable
-    # name (e.g. ``sofa`` in ``sofa_max``); we do not guess from abbreviations
-    # shorter than the canonical name. When several composites match (``sofa``
-    # is a substring of ``qsofa``), the longest — most specific — name wins, so
-    # ``qsofa`` resolves to qSOFA's own constituents, not SOFA's broader set.
     best_parts: Tuple[str, ...] = ()
     best_len = -1
     for comp, parts in COMPOSITE_EXPOSURE_CONSTITUENTS.items():
@@ -1095,34 +1237,111 @@ def composite_constituents(exposure: str) -> Tuple[str, ...]:
     return best_parts
 
 
+def composite_constituents(
+    exposure: str, dictionary: Optional[object] = None
+) -> Tuple[str, ...]:
+    """Constituent concept tokens of a composite/derived exposure, or ``()``.
+
+    Dictionary-first and general: the exposure's ``depends_on`` derivation
+    closure from the concept dictionary is the authoritative source, so any
+    declared composite is covered without hard-coding. Callback-defined
+    composites (sep3 / qsofa / kdigo, whose declared closure is empty) are
+    seeded from ``_CALLBACK_COMPOSITE_SEED`` and then expanded the same way.
+    The curated ``COMPOSITE_EXPOSURE_CONSTITUENTS`` table is unioned in as a
+    fallback and to bridge abbreviation/clinical spellings.
+
+    ``()`` means the exposure is not a recognised composite, so no
+    overadjustment rule applies — the check stays silent rather than guessing.
+    """
+    base = _strip_stat_suffix(exposure)
+    full = _normalise_token(exposure)
+    if not full:
+        return ()
+
+    tokens: set[str] = set()
+
+    # (1) Seeds: the exposure's own concept + any callback-composite inputs.
+    seeds: set[str] = set()
+    for comp, parts in _CALLBACK_COMPOSITE_SEED.items():
+        if comp in base or comp in full:
+            seeds.update(parts)
+
+    dic = dictionary if dictionary is not None else _concept_dictionary()
+    resolved: Optional[str] = None
+    if dic is not None:
+        resolved = _resolve_concept(base, dic)
+        if resolved:
+            seeds.add(resolved)
+        # (2) Expand every seed through the dictionary derivation closure.
+        closure: set[str] = set()
+        for seed in seeds:
+            _depends_on_closure(seed, dic, closure)
+        for cname in closure | seeds:
+            ctok = _normalise_token(cname)
+            if not ctok or ctok == base or ctok == full:
+                continue  # the exposure itself is not a constituent
+            tokens.add(ctok)
+            tokens.update(_CONCEPT_ALIASES_NORM.get(ctok, ()))
+
+    # (3) Curated fallback. The dictionary's ``depends_on`` graph stops at each
+    # organ sub-score (sofa_liver / sofa_coag carry their leaf lab in a callback
+    # ``source``, not ``depends_on``), so a TOP-LEVEL composite's closure under
+    # -covers its leaves (bilirubin / platelet / gcs). Union the table in for a
+    # top-level composite (the resolved concept is itself a table key, or the
+    # dictionary could not resolve the exposure at all). A resolved *sub-score*
+    # (sofa_renal) is trusted as-is, so its narrow closure is never broadened by
+    # the coarse substring table.
+    fallback_keys = {_normalise_token(k) for k in COMPOSITE_EXPOSURE_CONSTITUENTS}
+    if resolved is None or _normalise_token(resolved) in fallback_keys:
+        for part in _fallback_constituents(exposure):
+            ptok = _normalise_token(part)
+            if ptok and ptok != base and ptok != full:
+                tokens.add(ptok)
+
+    return tuple(sorted(tokens))
+
+
+def _is_exposure_self(cov_tok: str, exp_tok: str) -> bool:
+    """True when a covariate token is the exposure variable itself.
+
+    Recognises the exposure spelled with a pure stat/derivation suffix
+    (``sofa_max``, ``sepsis3_corrected``) but NOT a distinct sub-score that
+    merely shares a prefix (``sofa_renal`` is a constituent, not the exposure).
+    """
+    if not exp_tok or not cov_tok:
+        return False
+    if cov_tok == exp_tok:
+        return True
+    longer, shorter = (
+        (cov_tok, exp_tok) if len(cov_tok) >= len(exp_tok) else (exp_tok, cov_tok)
+    )
+    if longer.startswith(shorter):
+        remainder = longer[len(shorter) :]
+        return remainder in _STAT_SUFFIXES
+    return False
+
+
 def detect_overadjustment(
-    exposure: str, adjustment_covariates: Sequence[str]
+    exposure: str,
+    adjustment_covariates: Sequence[str],
+    dictionary: Optional[object] = None,
 ) -> List[str]:
     """Return the adjustment covariates that constitute / derive ``exposure``.
 
     Conditioning on a constituent of the exposure is overadjustment. Conservative
-    by design: fires only when ``exposure`` is a *known* composite/derived score
-    (``composite_constituents`` non-empty) and a covariate name contains one of
-    its constituent tokens. The exposure variable itself is never flagged. An
-    empty list means no overadjustment detected.
+    by design: fires only when ``exposure`` is a recognised composite/derived
+    score (``composite_constituents`` non-empty) and a covariate name contains
+    one of its constituent tokens. The exposure variable itself is never flagged.
+    An empty list means no overadjustment detected.
     """
-    parts = composite_constituents(exposure)
-    if not parts:
+    part_toks = [t for t in composite_constituents(exposure, dictionary) if t]
+    if not part_toks:
         return []
-    # Normalise constituent tokens the same way as covariate names, otherwise
-    # multi-word constituents ("resp_rate", "urine_output", "susp_inf") could
-    # never match a normalised covariate token.
-    part_toks = [t for t in (_normalise_token(p) for p in parts) if t]
-    exp_tok = _normalise_token(exposure)
+    exp_tok = _strip_stat_suffix(exposure)
     offenders: List[str] = []
     for cov in adjustment_covariates:
         cov_tok = _normalise_token(cov)
-        if (
-            not cov_tok
-            or cov_tok == exp_tok
-            or exp_tok in cov_tok
-            or cov_tok in exp_tok
-        ):
+        if not cov_tok or _is_exposure_self(cov_tok, exp_tok):
             continue  # the exposure itself is not an over-adjustment
         if any(pt in cov_tok for pt in part_toks):
             offenders.append(str(cov))
