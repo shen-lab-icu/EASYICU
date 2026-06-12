@@ -503,10 +503,11 @@ def _five_dim_scorecard(*, run_dir: Path, item, or_value, manifest) -> Dict[str,
                 {"primary_or": or_value} if or_value is not None else None
             ),
             observed_warnings=observed_warnings,
-            # The bench item declares its primary predictor; pass it so the
-            # gold-free overadjustment check runs in the runner path too (it is
-            # the declared exposure, never inferred).
+            # The bench item declares its primary predictor + outcome; pass them
+            # so the gold-free overadjustment / treatment-mediator / outcome-
+            # leakage checks run in the runner path too (declared, never inferred).
             exposure_concept=(getattr(item, "primary_predictor", "") or None),
+            outcome_concept=(getattr(item, "target_outcome", "") or None),
         )
         return card.model_dump()
     except Exception as exc:  # pragma: no cover - additive diagnostic only

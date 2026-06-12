@@ -114,6 +114,9 @@ __all__ = [
     "composite_constituents",
     "is_derived_exposure",
     "overadjustment_caution",
+    "detect_outcome_as_predictor",
+    "outcome_leakage_caution",
+    "treatment_mediator_caution",
     "concept_methodology_profile",
     "concept_methodology_tag",
     "ConceptMethodologyProfile",
@@ -448,9 +451,12 @@ from .icu_rules import (
     composite_constituents,
     concept_methodology_profile,
     concept_methodology_tag,
+    detect_outcome_as_predictor,
     detect_overadjustment,
     is_derived_exposure,
+    outcome_leakage_caution,
     overadjustment_caution,
+    treatment_mediator_caution,
 )
 
 

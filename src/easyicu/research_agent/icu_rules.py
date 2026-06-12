@@ -1574,6 +1574,146 @@ def concept_methodology_tag(
     ).tag()
 
 
+# ---------------------------------------------------------------------------
+# Outcome-leakage and treatment-mediator detectors (teeth)
+# ---------------------------------------------------------------------------
+#
+# These mirror detect_overadjustment / overadjustment_caution: a firm error for
+# the objective-leakage case, a caution for the timing/DAG-dependent case the
+# detector cannot adjudicate. They keep the impartiality contract — only an
+# unambiguous, definitional error gates; a defensible analytical choice is
+# surfaced as a caution and never re-fits or blocks. The advisory profile above
+# warns when a role is *assigned*; these flag the hazard once a model has been
+# fitted.
+
+
+def _is_true_outcome_concept(name: str, dictionary: Optional[object]) -> bool:
+    """True when ``name`` is a study endpoint, not a derived severity score.
+
+    The dictionary's ``outcome`` category lumps genuine endpoints (death_icu,
+    los_icu, readmission) with derived scores (sofa / sep3 / news). Only the
+    NON-derived ones are endpoints whose use as a predictor risks leakage; a
+    derived score is covered by the overadjustment / derived-composite rules.
+    Degrades to ``False`` when the dictionary is unavailable (no false positives
+    without evidence).
+    """
+    cat = (_concept_category(name, dictionary) or "").lower().strip()
+    if cat != "outcome":
+        return False
+    return not is_derived_exposure(name, dictionary)
+
+
+def detect_outcome_as_predictor(
+    predictors: Sequence[str],
+    *,
+    study_outcome: Optional[str] = None,
+    dictionary: Optional[object] = None,
+) -> List[str]:
+    """Return predictors that ARE the study outcome — self-leakage.
+
+    Conditioning a model on its own dependent variable (the declared
+    ``study_outcome`` appearing among the right-hand-side predictors, spelled
+    with a stat/derivation suffix too) is target leakage by construction — an
+    objective error like overadjustment, never an analytical-preference call.
+    Conservative: fires only when ``study_outcome`` is declared and a predictor
+    token matches it. A *different* endpoint concept among the predictors is a
+    timing-dependent hazard handled by ``outcome_leakage_caution`` (a caution),
+    not flagged here. ``dictionary`` is accepted for signature symmetry but the
+    self-leakage match is purely token-based and does not need it. An empty list
+    means none detected.
+    """
+    out_tok = _strip_stat_suffix(study_outcome or "")
+    if not out_tok:
+        return []
+    offenders: List[str] = []
+    for pred in predictors:
+        pred_tok = _normalise_token(pred)
+        if not pred_tok:
+            continue
+        if _is_exposure_self(pred_tok, out_tok):
+            offenders.append(str(pred))
+    return offenders
+
+
+def outcome_leakage_caution(
+    predictors: Sequence[str],
+    *,
+    study_outcome: Optional[str] = None,
+    dictionary: Optional[object] = None,
+) -> Optional[str]:
+    """A caution when a (different) endpoint concept is used as a predictor.
+
+    A true endpoint concept (death_icu, los_icu, readmission — dictionary
+    category ``outcome`` and not a derived score) used as a covariate is a
+    leakage hazard *if* it is concurrent with or downstream of the study
+    endpoint. Whether it actually leaks depends on timing the detector cannot
+    see (a genuinely pre-baseline endpoint can be a legitimate covariate), so
+    this is a caution, never a gating error. The declared ``study_outcome``
+    itself is excluded (that self-leakage case is the firm
+    ``detect_outcome_as_predictor`` error). Returns a one-line caution naming the
+    offenders, or ``None``.
+    """
+    dic = dictionary if dictionary is not None else _concept_dictionary()
+    out_tok = _strip_stat_suffix(study_outcome or "")
+    flagged: List[str] = []
+    for pred in predictors:
+        pred_tok = _normalise_token(pred)
+        if not pred_tok:
+            continue
+        if out_tok and _is_exposure_self(pred_tok, out_tok):
+            continue  # the study outcome itself -> firm error path
+        if _is_true_outcome_concept(pred, dic):
+            flagged.append(str(pred))
+    if not flagged:
+        return None
+    joined = ", ".join(f"'{f}'" for f in flagged)
+    return (
+        f"predictor(s) {joined} are outcome/endpoint concepts; if they are "
+        "concurrent with or downstream of the study endpoint, using them as "
+        "covariates leaks the outcome — confirm each is measured before the "
+        "exposure/baseline and is not a competing or nested endpoint"
+    )
+
+
+def treatment_mediator_caution(
+    exposure: str,
+    adjustment_covariates: Sequence[str],
+    *,
+    dictionary: Optional[object] = None,
+) -> Optional[str]:
+    """A caution when a treatment/intervention concept is in the adjustment set.
+
+    A treatment that lies on the exposure->outcome causal pathway is a mediator;
+    adjusting for it biases the total-effect estimate. But adjusting for a
+    *pre-exposure* treatment is legitimate confounder control. The detector
+    cannot see the causal DAG or treatment timing, so this is a caution that
+    prompts the analyst to confirm the role — never an error, and it never
+    re-fits or gates. Fires only when an exposure is declared and at least one
+    covariate is a treatment concept (and is not the exposure itself). Returns a
+    one-line caution naming the treatment covariates, or ``None``.
+    """
+    exp_tok = _strip_stat_suffix(exposure or "")
+    if not exp_tok:
+        return None
+    dic = dictionary if dictionary is not None else _concept_dictionary()
+    flagged: List[str] = []
+    for cov in adjustment_covariates:
+        cov_tok = _normalise_token(cov)
+        if not cov_tok or _is_exposure_self(cov_tok, exp_tok):
+            continue
+        if "treatment" in concept_methodology_profile(cov, dictionary=dic).roles:
+            flagged.append(str(cov))
+    if not flagged:
+        return None
+    joined = ", ".join(f"'{f}'" for f in flagged)
+    return (
+        f"adjustment covariate(s) {joined} are treatment/intervention concepts; "
+        "if a treatment lies on the exposure->outcome pathway it is a mediator "
+        "and adjusting for it biases the total effect — confirm each is a "
+        "pre-exposure confounder rather than a mediator before adjusting"
+    )
+
+
 __all__ = [
     "VariableKind",
     "ConceptHint",
@@ -1590,6 +1730,9 @@ __all__ = [
     "detect_overadjustment",
     "is_derived_exposure",
     "overadjustment_caution",
+    "detect_outcome_as_predictor",
+    "outcome_leakage_caution",
+    "treatment_mediator_caution",
     "concept_methodology_profile",
     "concept_methodology_tag",
 ]

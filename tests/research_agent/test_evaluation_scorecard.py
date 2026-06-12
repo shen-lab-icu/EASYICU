@@ -419,6 +419,34 @@ def test_score_run_from_dir_flags_overadjustment(tmp_path: Path):
     assert clean.result_validity.level is None
 
 
+def test_score_run_from_dir_flags_outcome_leakage(tmp_path: Path):
+    # A model that conditions on its own declared outcome is target leakage ->
+    # gold-free Fail, distinct from the honest unscored state.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "run_status.json").write_text(
+        json.dumps({"gates": _gates()}), encoding="utf-8"
+    )
+    with (run_dir / "regression_results.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as fh:
+        w = csv.DictWriter(fh, fieldnames=["variable", "coef"])
+        w.writeheader()
+        w.writerow({"variable": "age", "coef": "0.02"})
+        w.writerow({"variable": "death_icu", "coef": "2.0"})
+
+    card = sc.score_run_from_dir(
+        _task(), run_dir, outcome_concept="death_icu", run_id="leak"
+    )
+    assert card.result_validity.level == "Fail"
+    assert card.result_validity.subscore == 0.0
+    assert any("outcome leakage" in n for n in card.result_validity.notes)
+
+    # Without the outcome declared the self-leakage error stays silent.
+    clean = sc.score_run_from_dir(_task(), run_dir, run_id="leak_silent")
+    assert clean.result_validity.level is None
+
+
 def test_score_run_from_dir_missing_files_degrade(tmp_path: Path):
     # Empty run dir -> diagnostic_only, low scores, no crash.
     card = sc.score_run_from_dir(_task(), tmp_path)

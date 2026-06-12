@@ -348,3 +348,70 @@ def test_concept_methodology_tag_is_convenience_for_profile_tag(ra):
         ra.concept_methodology_tag("norepi", category="medications")
         == ra.concept_methodology_profile("norepi", category="medications").tag()
     )
+
+
+def test_detect_outcome_as_predictor_flags_self_leakage(ra):
+    # The declared outcome appearing among the predictors is target leakage by
+    # construction -> objective error, like overadjustment.
+    assert ra.detect_outcome_as_predictor(
+        ["age", "death_icu", "sofa"], study_outcome="death_icu"
+    ) == ["death_icu"]
+    # Suffix-tolerant: a stat/derivation spelling of the outcome still matches.
+    assert ra.detect_outcome_as_predictor(
+        ["death_icu_max"], study_outcome="death_icu"
+    ) == ["death_icu_max"]
+    # Clean model (outcome only on the left-hand side) -> nothing.
+    assert (
+        ra.detect_outcome_as_predictor(
+            ["age", "sofa", "lactate"], study_outcome="death_icu"
+        )
+        == []
+    )
+    # No declared outcome -> silent (never inferred).
+    assert ra.detect_outcome_as_predictor(["age", "death_icu"]) == []
+
+
+def test_outcome_leakage_caution_flags_other_endpoint_not_study_outcome(ra):
+    # A *different* endpoint concept (los_icu) used as a predictor is a
+    # timing-dependent hazard -> caution, not the firm self-leakage error.
+    assert ra.outcome_leakage_caution(["age", "los_icu"], study_outcome="death_icu")
+    # The study outcome itself is excluded here (it is the firm-error path).
+    assert ra.outcome_leakage_caution(["death_icu"], study_outcome="death_icu") is None
+    # Plain covariates / a derived severity score never caution as endpoints.
+    assert (
+        ra.outcome_leakage_caution(["age", "sofa", "lactate"], study_outcome="death_icu")
+        is None
+    )
+
+
+def test_treatment_mediator_caution_is_caution_only(ra):
+    # A treatment/intervention covariate may be a mediator on the exposure->
+    # outcome path -> caution (the DAG/timing is unknown), never an error.
+    assert ra.treatment_mediator_caution("sepsis3", ["age", "furosemide", "lactate"])
+    # No treatment covariate -> silent.
+    assert ra.treatment_mediator_caution("sepsis3", ["age", "lactate", "sofa"]) is None
+    # No exposure declared -> no mediator interpretation, stays silent.
+    assert ra.treatment_mediator_caution("", ["furosemide"]) is None
+    # The exposure being itself a treatment is not flagged as its own mediator.
+    assert ra.treatment_mediator_caution("furosemide", ["furosemide"]) is None
+
+
+def test_leakage_detectors_degrade_without_dictionary(ra):
+    # In a data-isolated sandbox (no concept dictionary) the dictionary-backed
+    # checks must not fabricate flags. The self-leakage match is purely token
+    # based, so it still works; the category-driven ones stay silent.
+    assert (
+        ra.detect_outcome_as_predictor(
+            ["age", "death_icu"], study_outcome="death_icu", dictionary={}
+        )
+        == ["death_icu"]
+    )
+    assert (
+        ra.outcome_leakage_caution(
+            ["age", "los_icu"], study_outcome="death_icu", dictionary={}
+        )
+        is None
+    )
+    assert (
+        ra.treatment_mediator_caution("sepsis3", ["furosemide"], dictionary={}) is None
+    )

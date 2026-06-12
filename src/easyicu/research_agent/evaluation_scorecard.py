@@ -51,7 +51,13 @@ from typing import Dict, List, Literal, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from .icu_agent_bench import ICUAgentBenchTask, grade_bench_task
-from .icu_rules import detect_overadjustment, overadjustment_caution
+from .icu_rules import (
+    detect_outcome_as_predictor,
+    detect_overadjustment,
+    outcome_leakage_caution,
+    overadjustment_caution,
+    treatment_mediator_caution,
+)
 from .plan_utils import read_model_covariate_names
 
 DimensionLevel = Literal["Full", "Partial", "Marginal", "Fail"]
@@ -915,6 +921,7 @@ def score_run_from_dir(
     observed_warnings: Optional[Sequence[str]] = None,
     observed_outputs: Optional[Sequence[str]] = None,
     exposure_concept: Optional[str] = None,
+    outcome_concept: Optional[str] = None,
     locked_reference_frozen: bool = False,
     plan_illegal: bool = False,
     run_id: Optional[str] = None,
@@ -922,9 +929,11 @@ def score_run_from_dir(
     """Load a run's readiness artifacts from ``run_dir`` and score it.
 
     Pass ``exposure_concept`` (the primary predictor of interest, e.g.
-    ``"sepsis3"``) to enable the gold-free overadjustment check against the
-    run's regression covariates. It must be supplied explicitly — the bench
-    task does not declare the exposure, so it is never inferred heuristically.
+    ``"sepsis3"``) to enable the gold-free overadjustment + treatment-mediator
+    checks against the run's regression covariates, and ``outcome_concept`` (the
+    study endpoint, e.g. ``"death_icu"``) to enable the outcome-leakage check.
+    Both must be supplied explicitly — the bench task does not declare them, so
+    they are never inferred heuristically.
 
     Reads ``run_status.json`` (gates), ``evidence_audit.json``,
     ``numeric_audit.json``, ``claim_ledger.csv`` and ``analysis_plan.json``.
@@ -942,19 +951,38 @@ def score_run_from_dir(
 
     validity_errors: List[str] = []
     validity_cautions: List[str] = []
-    if exposure_concept:
+    if exposure_concept or outcome_concept:
         covariates = _load_regression_covariates(run_dir)
-        offenders = detect_overadjustment(exposure_concept, covariates)
-        if offenders:
+        if exposure_concept:
+            offenders = detect_overadjustment(exposure_concept, covariates)
+            if offenders:
+                validity_errors.append(
+                    "overadjustment: adjusted for "
+                    + ", ".join(offenders)
+                    + f" which constitute(s)/derive(s) the exposure '{exposure_concept}'"
+                )
+            else:
+                caution = overadjustment_caution(exposure_concept, covariates)
+                if caution:
+                    validity_cautions.append(caution)
+            mediator_caution = treatment_mediator_caution(exposure_concept, covariates)
+            if mediator_caution:
+                validity_cautions.append(mediator_caution)
+        # Outcome leakage: the declared endpoint among the predictors is
+        # self-leakage (objective error); a different endpoint concept used as a
+        # covariate is a timing-dependent caution. The caution-tier scan does not
+        # require ``outcome_concept`` to be declared.
+        leak = detect_outcome_as_predictor(covariates, study_outcome=outcome_concept)
+        if leak:
             validity_errors.append(
-                "overadjustment: adjusted for "
-                + ", ".join(offenders)
-                + f" which constitute(s)/derive(s) the exposure '{exposure_concept}'"
+                f"outcome leakage: the study outcome '{outcome_concept}' appears "
+                "among the model predictors " + ", ".join(leak)
             )
-        else:
-            caution = overadjustment_caution(exposure_concept, covariates)
-            if caution:
-                validity_cautions.append(caution)
+        endpoint_caution = outcome_leakage_caution(
+            covariates, study_outcome=outcome_concept
+        )
+        if endpoint_caution:
+            validity_cautions.append(endpoint_caution)
     validity_errors.extend(_phenotype_validity_errors(run_dir, task.kind))
 
     return score_run(
