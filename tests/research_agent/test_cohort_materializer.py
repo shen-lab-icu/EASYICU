@@ -24,6 +24,40 @@ def test_summarize_timeseries_basic():
     assert r1.lact_measured == 1
 
 
+def test_summarize_timeseries_categorical_concept_becomes_presence():
+    # A concept stored as object/text (e.g. a ventilation status or a
+    # vasopressor name) cannot be reduced with max/mean and used to raise
+    # "agg function failed dtype->object". It must instead summarise PRESENCE:
+    # 1 where the event is recorded, 0 for an explicit negative token.
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2, 3],
+            "charttime": [1, 2, 1, 5],
+            "vent": ["invasive", "invasive", "niv", "none"],
+        }
+    )
+    out = M._summarize_timeseries(df, "vent", (0.0, 24.0))
+    r1 = out[out.stay_id == 1].iloc[0]
+    assert r1.vent_max == 1.0  # ever ventilated in window
+    assert r1.vent_mean == 1.0
+    assert r1.vent_n == 2
+    r3 = out[out.stay_id == 3].iloc[0]
+    assert r3.vent_max == 0.0  # "none" is a negative token
+    assert r3.vent_measured == 1
+
+
+def test_summarize_timeseries_numeric_stored_as_text_uses_numeric_view():
+    # Numbers stored as strings stay numeric (the object branch coerces);
+    # an unparseable cell honestly drops to NaN, not a crash.
+    df = pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [1, 2], "crea": ["1.2", "bad"]}
+    )
+    out = M._summarize_timeseries(df, "crea", (0.0, 24.0))
+    r1 = out[out.stay_id == 1].iloc[0]
+    assert r1.crea_max == 1.2
+    assert r1.crea_n == 1  # only the parseable value counts
+
+
 def test_window_excludes_out_of_window_records():
     df = pd.DataFrame({"stay_id": [1, 1], "charttime": [1, 30], "lact": [3.0, 9.0]})
     out = M._summarize_timeseries(df, "lact", (0.0, 24.0))

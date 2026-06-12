@@ -84,6 +84,9 @@ output
 # Audit / 校验报告产物 - 这些是脚本产出的中间文件，不入库
 audit_reports/
 research_output/
+task_logs/
+# Generated concept coverage matrices (snapshots from private data runs)
+docs/concept_coverage_matrix_*.csv
 recycle_*/
 **/recycle_*/
 

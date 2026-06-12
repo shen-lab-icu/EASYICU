@@ -181,6 +181,20 @@ def _summarize_timeseries(df: pd.DataFrame, concept: str, window: Window) -> pd.
     w = _window(df, window[0], window[1])
     if w.empty or concept not in w.columns:
         return pd.DataFrame(columns=[ID_COL])
+    # The wide summary emits numeric _max/_min/_mean. A concept stored as object
+    # (e.g. a ventilation status or a vasopressor drug name) cannot be reduced
+    # with max/mean and would raise. Coerce: if any value parses as a number the
+    # concept is numeric-stored-as-text (use the numeric view; unparseable rows
+    # honestly become NaN/measurement-missing); otherwise it is a categorical /
+    # event concept and we summarise its PRESENCE (1 = recorded in window), so
+    # `_max` reads as "ever" and `_mean` as the within-window event fraction.
+    col = w[concept]
+    if not pd.api.types.is_numeric_dtype(col) and not pd.api.types.is_bool_dtype(col):
+        numeric = pd.to_numeric(col, errors="coerce")
+        if numeric.notna().any():
+            w = w.assign(**{concept: numeric})
+        else:
+            w = w.assign(**{concept: _truthy_series(col).astype(float)})
     grp = w.groupby(ID_COL)[concept]
     out = grp.agg(["max", "min", "mean", "count"]).reset_index()
     out.columns = [ID_COL, f"{concept}_max", f"{concept}_min", f"{concept}_mean", f"{concept}_n"]
