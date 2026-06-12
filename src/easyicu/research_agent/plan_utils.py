@@ -1326,6 +1326,15 @@ def _primary_exposure_contract_findings(
 _COEF_TABLE_VALUE_COLUMNS = frozenset(
     {"coef", "beta", "estimate", "log_or", "odds_ratio", "or", "hazard_ratio", "hr"}
 )
+# A coefficient table's identifier column is named differently across ecosystems:
+# statsmodels summary frames use ``variable``; R's broom::tidy and many hand-rolled
+# tables use ``term``; others use ``predictor`` / ``covariate`` / ``parameter`` /
+# ``feature``. Recognise any of these, but only paired with a coefficient-value
+# column (above) — that pairing is what distinguishes a model coefficient table
+# from a missingness / table-one CSV, so broadening the id column stays safe.
+_COEF_TABLE_ID_COLUMNS = frozenset(
+    {"variable", "term", "predictor", "covariate", "parameter", "feature"}
+)
 _NON_COVARIATE_TERMS = frozenset({"const", "intercept", "(intercept)"})
 
 
@@ -1346,13 +1355,26 @@ def read_model_covariate_names(directory: Path) -> List[str]:
         try:
             with path.open(newline="", encoding="utf-8") as fh:
                 reader = csv.DictReader(fh)
-                header = {(h or "").strip().lower() for h in (reader.fieldnames or [])}
-                if "variable" not in header or header.isdisjoint(
+                raw_fields = reader.fieldnames or []
+                header = {(h or "").strip().lower() for h in raw_fields}
+                if header.isdisjoint(_COEF_TABLE_ID_COLUMNS) or header.isdisjoint(
                     _COEF_TABLE_VALUE_COLUMNS
                 ):
                     continue
+                # The identifier column actually present (first in file order);
+                # read variable names from it rather than assuming ``variable``.
+                id_field = next(
+                    (
+                        h
+                        for h in raw_fields
+                        if (h or "").strip().lower() in _COEF_TABLE_ID_COLUMNS
+                    ),
+                    None,
+                )
+                if id_field is None:
+                    continue
                 for row in reader:
-                    value = (row.get("variable") or "").strip()
+                    value = (row.get(id_field) or "").strip()
                     if (
                         value
                         and value.lower() not in _NON_COVARIATE_TERMS
