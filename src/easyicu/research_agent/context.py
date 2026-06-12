@@ -366,6 +366,49 @@ def build_research_context(
 # ---------------------------------------------------------------------------
 
 
+def _observed_domain(series: "pd.Series") -> Optional[Dict[str, Any]]:
+    """Facts about a column's ACTUAL values in the provided cohort.
+
+    Returns ``{n_unique, is_constant, is_binary[, min, max]}`` or ``None`` when
+    the column is empty. This is deliberately interpretation-free: it states
+    what values are present so the planner reads a column by its data rather
+    than guessing a scale from its name. The motivating failure: a column named
+    ``sep3_sofa2_max`` (the within-window max of a BINARY sepsis criterion) was
+    misread as a 0-24 SOFA score and thresholded ``>= 2``, yielding a degenerate
+    (all-zero) exposure. Surfacing ``is_binary``/observed values prevents that
+    without ever telling the agent which derivation to use.
+    """
+    nonnull = series.dropna()
+    if len(nonnull) == 0:
+        return None
+    n_unique = int(nonnull.nunique())
+    domain: Dict[str, Any] = {
+        "n_unique": n_unique,
+        "is_constant": n_unique <= 1,
+        "is_binary": False,
+    }
+    is_numeric = bool(pd.api.types.is_numeric_dtype(nonnull))
+    if is_numeric:
+        try:
+            lo = float(nonnull.min())
+            hi = float(nonnull.max())
+            domain["min"] = lo
+            domain["max"] = hi
+        except (TypeError, ValueError):
+            pass
+        # binary = at most two distinct numeric values drawn from {0, 1}.
+        if n_unique <= 2:
+            try:
+                vals = set(int(v) for v in nonnull.unique() if float(v).is_integer())
+                domain["is_binary"] = vals.issubset({0, 1}) and len(vals) >= 1
+            except (TypeError, ValueError):
+                domain["is_binary"] = False
+    else:
+        # categorical/boolean: binary if exactly two levels.
+        domain["is_binary"] = n_unique == 2
+    return domain
+
+
 def _describe_column(
     *,
     df: pd.DataFrame,
@@ -437,6 +480,7 @@ def _describe_column(
         dtype=str(series.dtype),
         unit=hint.unit,
         valid_range=list(hint.valid_range) if hint.valid_range else None,
+        observed_domain=_observed_domain(series),
         allowed_aggregations=allowed,
         aggregation_default=hint.aggregation_default,
         is_ordinal=hint.is_ordinal,

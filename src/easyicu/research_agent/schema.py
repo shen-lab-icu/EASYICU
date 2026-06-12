@@ -173,6 +173,17 @@ class ConceptDescriptor(BaseModel):
         default=None,
         description="[lower, upper] physiologically plausible range. None if not applicable.",
     )
+    observed_domain: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Value domain ACTUALLY OBSERVED in the provided cohort (not the "
+            "dictionary's plausible range): keys may include n_unique, min, max, "
+            "is_binary, is_constant. Lets the planner interpret a column by its "
+            "real values instead of guessing a scale from its name — e.g. a "
+            "column named '<score>_max' that is observed binary {0,1} must not be "
+            "thresholded as if it ran 0-24."
+        ),
+    )
     allowed_aggregations: List[AggregationRule] = Field(default_factory=lambda: [AggregationRule.ANY])
     aggregation_default: Optional[AggregationRule] = None
     is_ordinal: bool = False
