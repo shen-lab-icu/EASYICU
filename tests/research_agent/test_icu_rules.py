@@ -287,3 +287,32 @@ def test_detect_overadjustment_degrades_to_table_without_dictionary(ra):
     assert ra.detect_overadjustment(
         "sofa", ["creatinine", "age"], dictionary=broken
     ) == ["creatinine"]
+
+
+def test_is_derived_exposure_recognises_computed_concepts(ra):
+    # Composite / derived scores are computed (callback or depends_on).
+    for derived in ("sofa", "sepsis3", "news", "mews", "sirs", "pafi", "anion_gap"):
+        assert ra.is_derived_exposure(derived), derived
+    # Raw measurements / demographics are not.
+    for raw in ("lactate", "age", "sex"):
+        assert not ra.is_derived_exposure(raw), raw
+
+
+def test_overadjustment_caution_covers_unresolvable_composites(ra):
+    # mews/news/sirs are callback scores with an empty dependency closure, so
+    # detect_overadjustment is blind to them -> a caution must surface instead
+    # of a silent pass. This is the 200+-feature generality gap.
+    covs = ["age", "sex", "heart_rate"]
+    for derived in ("news", "mews", "sirs", "pafi", "anion_gap"):
+        assert ra.overadjustment_caution(derived, covs), derived
+        # ...and the deterministic check is genuinely silent for them.
+        assert ra.detect_overadjustment(derived, covs) == []
+
+    # Resolvable composites are handled by the error path, not the caution.
+    assert ra.overadjustment_caution("sofa", ["age"]) is None
+    assert ra.overadjustment_caution("sepsis3", ["age"]) is None
+    # Non-derived exposures never caution.
+    assert ra.overadjustment_caution("lactate", covs) is None
+    assert ra.overadjustment_caution("age", covs) is None
+    # No covariates -> nothing to verify.
+    assert ra.overadjustment_caution("news", []) is None

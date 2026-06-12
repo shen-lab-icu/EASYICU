@@ -116,6 +116,32 @@ def test_no_flag_when_no_coefficient_table(tmp_path: Path):
     )
 
 
+def test_unresolvable_derived_exposure_emits_caution_not_error(tmp_path: Path):
+    # NEWS is a callback score with an empty dependency closure: the
+    # deterministic check is blind, so instead of silently passing, a non-gating
+    # caution (warning) is emitted to prompt manual verification.
+    _write_coef_table(tmp_path, ["const", "news", "age", "sex", "heart_rate"])
+    findings = _primary_exposure_overadjustment_findings(
+        step=_step(), context=_ctx("news"), out_dir=tmp_path
+    )
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity == "warning"  # caution, never the gating "error"
+    assert f.detail["kind"] == "overadjustment_caution"
+    assert f.detail["exposure"] == "news"
+
+
+def test_non_derived_exposure_emits_nothing(tmp_path: Path):
+    # A raw lab exposure is not derived -> no caution, no error (silent).
+    _write_coef_table(tmp_path, ["const", "lact", "age", "sex"])
+    assert (
+        _primary_exposure_overadjustment_findings(
+            step=_step(), context=_ctx("lact"), out_dir=tmp_path
+        )
+        == []
+    )
+
+
 # ---------------------------------------------------------------------------
 # Prevention layer: the replanner must also see the methodological principles
 # (the planner already did via 94cf8db; the replanner revises the model spec,
