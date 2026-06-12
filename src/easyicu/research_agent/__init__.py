@@ -114,6 +114,9 @@ __all__ = [
     "composite_constituents",
     "is_derived_exposure",
     "overadjustment_caution",
+    "concept_methodology_profile",
+    "concept_methodology_tag",
+    "ConceptMethodologyProfile",
     "COMPOSITE_EXPOSURE_CONSTITUENTS",
     # Architecture / temporal semantics / experiment specs
     "SystemLayer",
@@ -440,8 +443,11 @@ from .schema import (
 from .icu_rules import (
     COMPOSITE_EXPOSURE_CONSTITUENTS,
     ICU_RULES,
+    ConceptMethodologyProfile,
     VariableKind,
     composite_constituents,
+    concept_methodology_profile,
+    concept_methodology_tag,
     detect_overadjustment,
     is_derived_exposure,
     overadjustment_caution,

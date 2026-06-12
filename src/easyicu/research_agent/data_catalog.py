@@ -21,6 +21,7 @@ agent's LLM judgement and lives in the data-foundation agent; this module
 only provides the catalog it chooses from and checks its choice against
 reality.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -39,6 +40,9 @@ class CatalogConcept:
     category: str = ""
     file_name: str = ""
     n_rows: int = 0
+    # Compact advisory methodology tag (derived from concept structure), e.g.
+    # "treatment: confounder vs mediator?". Empty for a plain-safe concept.
+    methodology: str = ""
 
 
 @dataclass
@@ -63,17 +67,24 @@ class AvailableCatalog:
         ``max_per_category`` 0 means list all; a positive cap truncates long
         categories (the agent still sees the category exists).
         """
+        has_tags = any(c.methodology for c in self.concepts)
         lines = [
             f"Available concepts in the provided data ({len(self.concepts)} "
             f"total). The agent may ONLY request concepts from this list; "
             f"anything else counts as not-extracted (advise re-extraction):"
         ]
+        if has_tags:
+            lines.append(
+                "  [⚠ tags are methodological cautions for the role you assign a "
+                "concept — heed them when choosing exposure / outcome / covariates.]"
+            )
         for category, items in sorted(self.by_category().items()):
             shown = items if max_per_category <= 0 else items[:max_per_category]
             lines.append(f"\n[{category}] ({len(items)})")
             for c in sorted(shown, key=lambda x: x.concept_id):
                 desc = f" — {c.description}" if c.description else ""
-                lines.append(f"  - {c.concept_id}{desc}")
+                warn = f"  ⚠ {c.methodology}" if c.methodology else ""
+                lines.append(f"  - {c.concept_id}{desc}{warn}")
             if max_per_category > 0 and len(items) > max_per_category:
                 lines.append(f"  … (+{len(items) - max_per_category} more)")
         return "\n".join(lines)
@@ -129,10 +140,7 @@ def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
         if not isinstance(entry, Mapping):
             continue
         description = (
-            entry.get("description")
-            or entry.get("desc")
-            or entry.get("name")
-            or ""
+            entry.get("description") or entry.get("desc") or entry.get("name") or ""
         )
         category = (
             entry.get("category")
@@ -148,6 +156,20 @@ def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
     return meta
 
 
+def _methodology_tag(concept_id: str, category: str) -> str:
+    """Compact advisory methodology tag for a concept (best-effort).
+
+    Derived from concept structure by the rules layer; never raises — a failure
+    just yields no tag (the catalog still lists the concept).
+    """
+    try:
+        from .icu_rules import concept_methodology_tag
+
+        return concept_methodology_tag(concept_id, category=category)
+    except Exception:
+        return ""
+
+
 def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
     """Enumerate the concepts present in an EasyICU export package.
 
@@ -161,13 +183,15 @@ def build_available_catalog(export_dir: Union[str, Path]) -> AvailableCatalog:
     concepts: List[CatalogConcept] = []
     for cid, info in index.items():
         m = meta.get(cid, {})
+        category = m.get("category", "")
         concepts.append(
             CatalogConcept(
                 concept_id=cid,
                 description=m.get("description", ""),
-                category=m.get("category", ""),
+                category=category,
                 file_name=str(info.get("file_name", "")),
                 n_rows=int(info.get("rows", 0) or 0),
+                methodology=_methodology_tag(cid, category),
             )
         )
     return AvailableCatalog(source=str(export_dir), concepts=concepts)
