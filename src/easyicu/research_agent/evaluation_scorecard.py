@@ -58,7 +58,7 @@ from .icu_rules import (
     overadjustment_caution,
     treatment_mediator_caution,
 )
-from .plan_utils import read_model_covariate_names
+from .plan_utils import read_adjustment_covariates
 
 DimensionLevel = Literal["Full", "Partial", "Marginal", "Fail"]
 """Four-level colour bin for the Fig.3 scorecard heatmap (§M4)."""
@@ -809,16 +809,18 @@ def _load_cohort_hygiene_cautions(run_dir: Path) -> List[str]:
 
 
 def _load_regression_covariates(run_dir: Path) -> List[str]:
-    """Best-effort: variable names from any model coefficient table the run
-    wrote (used for the gold-free overadjustment check).
+    """Best-effort: the model's adjustment set (used for the gold-free
+    overadjustment / leakage checks).
 
-    Delegates to the shared content-based reader so the post-hoc backstop and
-    the mid-flight auditor agree on what counts as a coefficient table — runs
-    emit ``primary_association.csv`` / ``model_coefficients.csv`` /
-    ``regression_results.csv`` interchangeably, so a filename match alone would
-    miss real outputs. Missing/malformed files degrade to an empty list.
+    Delegates to the shared reader so the post-hoc backstop and the mid-flight
+    auditor agree on the adjustment set: a per-covariate coefficient table when
+    the run wrote one (``primary_association.csv`` / ``model_coefficients.csv`` /
+    ``regression_results.csv``, matched by content not filename), else the
+    covariate set recovered from the analysis code — so a run that reports only a
+    model-level OR summary is not invisible to the check. Missing/malformed
+    sources degrade to an empty list.
     """
-    return read_model_covariate_names(run_dir)
+    return read_adjustment_covariates(run_dir)
 
 
 def _load_reporting_checklist(

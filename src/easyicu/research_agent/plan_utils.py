@@ -24,6 +24,7 @@ underscore-prefixed names by re-import) so the file stays readable.
 
 from __future__ import annotations
 
+import ast
 import csv
 import json
 import math
@@ -1363,6 +1364,146 @@ def read_model_covariate_names(directory: Path) -> List[str]:
     return names
 
 
+# A coefficient table is the ground truth of what entered a model, but a run
+# that reports only a model-level OR summary (rows = models, cols = OR/CI) never
+# writes one — the per-covariate adjustment set then lives only in the analysis
+# code. These recover it from the code as a fallback, generally: the patterns
+# below are how any statsmodels/patsy analysis declares its adjustment set, and
+# every extracted token is routed through the dictionary-driven detectors, so no
+# case (exposure / covariate / score) is hard-coded here.
+#
+# A variable whose name *intends* the adjustment set (covariates, confounders,
+# adjustment_cols, predictors, ...) assigned a list/tuple of string column names.
+# Names that denote the predictor / adjustment side of a model. Deliberately
+# NOT "all model variables" names (``model_vars`` / ``vars`` / ``cols``): those
+# bundle the outcome in with the predictors, which would let a study endpoint
+# leak into the recovered adjustment set and trip a spurious outcome-leakage
+# error. X / design / regressors / rhs exclude the outcome by convention.
+_COVARIATE_INTENT_SUBSTRINGS = ("covariate", "covar", "confound", "adjust", "predictor")
+_COVARIATE_INTENT_EXACT = frozenset(
+    {"x_cols", "design_cols", "regressors", "rhs", "rhs_cols"}
+)
+
+
+def _name_intends_covariates(name: str) -> bool:
+    low = name.lower()
+    if low in _COVARIATE_INTENT_EXACT:
+        return True
+    return any(sub in low for sub in _COVARIATE_INTENT_SUBSTRINGS)
+
+
+def _string_list_elements(node: ast.AST) -> List[str]:
+    """String constants in a list/tuple literal, or ``[]`` if not one."""
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return []
+    out: List[str] = []
+    for elt in node.elts:
+        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+            tok = elt.value.strip()
+            if tok:
+                out.append(tok)
+    return out
+
+
+def _formula_rhs_terms(formula: str) -> List[str]:
+    """Right-hand-side column tokens of a patsy/statsmodels formula string.
+
+    ``"death ~ sepsis3 + age + C(sex) + map_max"`` -> ``[sepsis3, age, sex,
+    map_max]``. Interaction (``:`` / ``*``) is split to its main terms; the
+    ``C(...)`` categorical wrapper is unwrapped; intercept tokens are dropped.
+    The exposure may appear on the RHS — that is fine, the detectors exclude the
+    exposure itself.
+
+    Conservative: a term is kept only if it is a clean Python identifier, so
+    prose strings that merely contain ``~`` (e.g. a note "adjusted OR ~1.11") do
+    not masquerade as a formula — their "terms" are not identifiers and the
+    string yields nothing.
+    """
+    if "~" not in formula:
+        return []
+    # Require an identifier-ish left-hand side so "OR ~1.11" still parses to a
+    # RHS, but the identifier check below is what actually rejects the prose.
+    rhs = formula.split("~", 1)[1]
+    terms: List[str] = []
+    for raw in re.split(r"[+*:]", rhs):
+        tok = raw.strip()
+        # unwrap C(col), C(col, Treatment(...)) -> col
+        m = re.match(r"^[A-Za-z_]\w*\(\s*([A-Za-z_]\w*)", tok)
+        if m:
+            tok = m.group(1)
+        if re.fullmatch(r"[A-Za-z_]\w*", tok) and tok not in ("C", "I"):
+            terms.append(tok)
+    return terms
+
+
+def _covariate_names_from_code(directory: Path) -> List[str]:
+    """Adjustment-set column names recovered from a run's analysis code.
+
+    General + conservative: parses the analysis ``*.py`` near ``directory`` and
+    collects column names from (1) a list/tuple literal assigned to a variable
+    whose name intends the adjustment set (``covariates`` / ``confounders`` /
+    ``adjustment_cols`` / ``x_cols`` ...) and (2) statsmodels/patsy formula
+    strings (the RHS of ``y ~ ...``). Anything it cannot read with confidence is
+    skipped (unparseable file, ambiguous slice) so it never invents covariates.
+    First-seen order, de-duplicated. Returns ``[]`` when nothing recognisable.
+    """
+    base = Path(directory)
+    seen: List[str] = []
+
+    def _add(tok: str) -> None:
+        value = tok.strip()
+        if value and value.lower() not in _NON_COVARIATE_TERMS and value not in seen:
+            seen.append(value)
+
+    # Search the directory, its parent (a step's outputs/ sits beside analysis.py),
+    # and any steps/*/analysis.py beneath it (the post-hoc run-root case). Bounded.
+    candidates: List[Path] = []
+    for src in (base, base.parent):
+        if src.exists():
+            candidates.extend(sorted(src.glob("*.py")))
+    if base.exists():
+        candidates.extend(sorted(base.rglob("analysis.py")))
+
+    visited: set = set()
+    for path in candidates:
+        rp = path.resolve()
+        if rp in visited or not path.is_file():
+            continue
+        visited.add(rp)
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, SyntaxError):
+            continue  # a file we cannot read with confidence is skipped
+        for node in ast.walk(tree):
+            # (1) covariate-intent list/tuple assignment
+            if isinstance(node, ast.Assign):
+                targets = [t for t in node.targets if isinstance(t, ast.Name)]
+                if any(_name_intends_covariates(t.id) for t in targets):
+                    for tok in _string_list_elements(node.value):
+                        _add(tok)
+            # (2) formula strings anywhere (y ~ rhs)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if "~" in node.value and len(node.value) <= 4000:
+                    for tok in _formula_rhs_terms(node.value):
+                        _add(tok)
+    return seen
+
+
+def read_adjustment_covariates(directory: Path) -> List[str]:
+    """The model's adjustment set, preferring the coefficient table.
+
+    A per-covariate coefficient table is the ground truth of what entered the
+    model, so it wins when present. When a run reports only a model-level OR
+    summary (no coefficient table), the adjustment set is recovered from the
+    analysis code instead, so the overadjustment / leakage auditors are not blind
+    to summary-only outputs. Returns ``[]`` when neither source yields anything.
+    """
+    coef_names = read_model_covariate_names(directory)
+    if coef_names:
+        return coef_names
+    return _covariate_names_from_code(directory)
+
+
 def _primary_exposure_overadjustment_findings(
     *,
     step: AnalysisStep,
@@ -1386,7 +1527,7 @@ def _primary_exposure_overadjustment_findings(
     exposure = (getattr(context, "primary_exposure", None) or "").strip()
     if not exposure:
         return []
-    covariates = read_model_covariate_names(out_dir)
+    covariates = read_adjustment_covariates(out_dir)
     if not covariates:
         return []
     offenders = detect_overadjustment(exposure, covariates)
@@ -1461,7 +1602,7 @@ def _primary_model_leakage_findings(
     ``context.primary_exposure``); they are never inferred, so each check stays
     silent rather than guessing.
     """
-    covariates = read_model_covariate_names(out_dir)
+    covariates = read_adjustment_covariates(out_dir)
     if not covariates:
         return []
     outcome = (getattr(context, "target_outcome", None) or "").strip()

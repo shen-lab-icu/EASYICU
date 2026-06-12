@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from easyicu.research_agent.plan_utils import (
     _primary_exposure_overadjustment_findings,
+    read_adjustment_covariates,
     read_model_covariate_names,
 )
 
@@ -140,6 +141,80 @@ def test_non_derived_exposure_emits_nothing(tmp_path: Path):
         )
         == []
     )
+
+
+# ---------------------------------------------------------------------------
+# read_adjustment_covariates — recover the adjustment set from analysis code
+# when the run reports only a model-level OR summary (no coefficient table).
+# This closes the auditor-blindness gap surfaced by the bench_run14 E1 run.
+# General by construction: it recovers column *names*; whether any is an
+# exposure constituent is left to the dictionary-driven detector.
+# ---------------------------------------------------------------------------
+
+
+def _write_code(out_dir: Path, body: str, *, name="analysis.py"):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / name).write_text(body, encoding="utf-8")
+
+
+def test_coef_table_preferred_over_code(tmp_path: Path):
+    # Ground truth wins: when a coefficient table exists it is used as-is and the
+    # code is not consulted.
+    _write_coef_table(tmp_path, ["const", "age", "sofa_max"])
+    _write_code(tmp_path, "covariates = ['map_max', 'lact_max']\n")
+    assert read_adjustment_covariates(tmp_path) == ["age", "sofa_max"]
+
+
+def test_recover_covariates_from_intent_named_list(tmp_path: Path):
+    # No coefficient table — only a model-level summary would exist. The
+    # adjustment set is recovered from a covariate-intent list literal.
+    _write_code(
+        tmp_path,
+        "covariate_cols = ['hr_max', 'map_max', 'lact_max']\n"
+        "model = sm.Logit(y, X).fit()\n",
+    )
+    assert read_adjustment_covariates(tmp_path) == ["hr_max", "map_max", "lact_max"]
+
+
+def test_recover_covariates_from_formula(tmp_path: Path):
+    _write_code(
+        tmp_path,
+        "res = smf.logit('death ~ sepsis3 + age + C(sex) + map_max', df).fit()\n",
+    )
+    got = read_adjustment_covariates(tmp_path)
+    assert got == ["sepsis3", "age", "sex", "map_max"]
+
+
+def test_code_recovery_then_overadjustment_fires(tmp_path: Path):
+    # End-to-end: summary-only run (no coef table) + a covariate list that
+    # includes map (a Sepsis-3 constituent via SOFA) -> the in-run auditor now
+    # flags it instead of staying blind.
+    _write_code(
+        tmp_path,
+        "covariates = ['hr_max', 'map_max', 'resp_max', 'lact_max']\n",
+    )
+    findings = _primary_exposure_overadjustment_findings(
+        step=_step(), context=_ctx("sepsis3"), out_dir=tmp_path
+    )
+    assert len(findings) == 1
+    assert findings[0].severity == "error"
+    assert findings[0].detail["offending_covariates"] == ["map_max"]
+
+
+def test_prose_tilde_string_is_not_a_formula(tmp_path: Path):
+    # A note containing "~" as "approximately" must NOT be parsed as a formula
+    # (its RHS terms are not identifiers) -> nothing recovered, no junk tokens.
+    _write_code(tmp_path, "note = 'adjusted OR ~1.11, identical (coding bug)'\n")
+    assert read_adjustment_covariates(tmp_path) == []
+
+
+def test_all_model_vars_list_does_not_leak_outcome(tmp_path: Path):
+    # A list named for ALL model variables bundles the outcome with predictors;
+    # it must NOT be treated as the adjustment set, or the outcome would leak in
+    # and trip a spurious outcome-leakage error. Only predictor/covariate-side
+    # names are recovered.
+    _write_code(tmp_path, "model_vars = ['sepsis3', 'age', 'death']\n")
+    assert read_adjustment_covariates(tmp_path) == []
 
 
 # ---------------------------------------------------------------------------
