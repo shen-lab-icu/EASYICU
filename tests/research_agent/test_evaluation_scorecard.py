@@ -90,6 +90,28 @@ def test_tristate_diagnostic_only_when_execution_incomplete():
     assert sc.compute_tristate(g) == "diagnostic_only"
 
 
+def test_tristate_validity_fail_caps_gate_reportable_at_analysis_only():
+    # A manuscript-ready run with a hard validity failure (e.g. overadjustment)
+    # must NOT be reported as gate_reportable — it is demoted to analysis_only.
+    assert (
+        sc.compute_tristate(_gates(), result_validity_level="Fail") == "analysis_only"
+    )
+
+
+def test_tristate_validity_fail_does_not_promote_diagnostic_only():
+    # The validity ceiling can only demote: a run that never executed stays
+    # diagnostic_only regardless of the validity level.
+    g = _gates(execution_complete=False, manuscript_ready=False)
+    assert sc.compute_tristate(g, result_validity_level="Fail") == "diagnostic_only"
+
+
+def test_tristate_validity_none_leaves_gate_verdict_unchanged():
+    # Validity not scored for this task kind (None) must not change the verdict.
+    assert (
+        sc.compute_tristate(_gates(), result_validity_level=None) == "gate_reportable"
+    )
+
+
 # ---------------------------------------------------------------------------
 # plan
 # ---------------------------------------------------------------------------
@@ -454,6 +476,83 @@ def test_score_run_from_dir_missing_files_degrade(tmp_path: Path):
     assert card.code.level == "Fail"
 
 
+def _write_blocked_run(tmp_path: Path, *, n_rows: int, n_events: int, n_feats: int):
+    """A run that did NOT complete and recorded a deliberate modeling block,
+    plus a locked analysis cohort of the given size/event count."""
+    import pandas as pd
+
+    run_dir = tmp_path / "run"
+    (run_dir / "steps" / "01_model_training" / "outputs").mkdir(parents=True)
+    g = _gates(execution_complete=False, manuscript_ready=False)
+    g["failed_steps"] = [{"step_id": "01_model_training", "status": "contract_failed"}]
+    g["completed_step_count"] = 3
+    (run_dir / "run_status.json").write_text(json.dumps({"gates": g}), encoding="utf-8")
+    (
+        run_dir / "steps" / "01_model_training" / "outputs" / "step_summary.json"
+    ).write_text(
+        json.dumps(
+            {
+                "step_id": "01_model_training",
+                "execution_status": "blocked_non_execution",
+                "modeling_blocked": True,
+                "modeling_block_reason": "upstream viability gate said unusable",
+            }
+        ),
+        encoding="utf-8",
+    )
+    death = [1] * n_events + [0] * (n_rows - n_events)
+    data = {"death": death}
+    for i in range(n_feats):
+        data[f"f{i}_first"] = list(range(n_rows))  # fully populated
+    pd.DataFrame(data).to_parquet(run_dir / "cohort_analysis.parquet", index=False)
+    return run_dir
+
+
+def test_self_inflicted_block_flagged_on_viable_cohort(tmp_path: Path):
+    # Blocked its own model on a large, event-rich, well-populated cohort:
+    # surfaced as a factual self-paralysis note WITHOUT changing the verdict
+    # (execution genuinely did not complete -> still diagnostic_only).
+    run_dir = _write_blocked_run(tmp_path, n_rows=2000, n_events=200, n_feats=8)
+    card = sc.score_run_from_dir(
+        _kind_task("mortality_prediction"), run_dir, outcome_concept="death"
+    )
+    assert card.tristate == "diagnostic_only"
+    assert card.code.signals.get("self_inflicted_block") is True
+    assert any("self-inflicted" in n for n in card.code.notes)
+
+
+def test_self_inflicted_block_silent_when_execution_completed(tmp_path: Path):
+    run_dir = _write_blocked_run(tmp_path, n_rows=2000, n_events=200, n_feats=8)
+    (run_dir / "run_status.json").write_text(
+        json.dumps({"gates": _gates()}), encoding="utf-8"  # execution_complete=True
+    )
+    card = sc.score_run_from_dir(
+        _kind_task("mortality_prediction"), run_dir, outcome_concept="death"
+    )
+    assert card.code.signals.get("self_inflicted_block") is None
+
+
+def test_self_inflicted_block_silent_on_too_few_events(tmp_path: Path):
+    # A genuinely event-poor cohort is NOT accused of a spurious block.
+    run_dir = _write_blocked_run(tmp_path, n_rows=2000, n_events=3, n_feats=8)
+    card = sc.score_run_from_dir(
+        _kind_task("mortality_prediction"), run_dir, outcome_concept="death"
+    )
+    assert card.code.signals.get("self_inflicted_block") is None
+
+
+def test_self_inflicted_block_silent_on_hard_crash(tmp_path: Path):
+    # A run that failed without a *deliberate* block signal (a real crash) is
+    # not labelled self-inflicted, even on a viable cohort.
+    run_dir = _write_blocked_run(tmp_path, n_rows=2000, n_events=200, n_feats=8)
+    summ = run_dir / "steps" / "01_model_training" / "outputs" / "step_summary.json"
+    summ.write_text(json.dumps({"step_id": "01_model_training"}), encoding="utf-8")
+    card = sc.score_run_from_dir(
+        _kind_task("mortality_prediction"), run_dir, outcome_concept="death"
+    )
+    assert card.code.signals.get("self_inflicted_block") is None
+
+
 def _kind_task(kind: str):
     return ICUAgentBenchTask(
         task_id=f"{kind}_demo",
@@ -682,6 +781,70 @@ def test_phenotype_validity_unscored_without_metrics(tmp_path):
     )
     card2 = sc.score_run_from_dir(_kind_task("sepsis_onset"), tmp_path)
     assert card2.result_validity.level is None
+
+
+def test_phenotype_validity_reads_agent_emitted_artifacts(tmp_path):
+    # The agent names its outputs itself (clustering_algorithm_details.json +
+    # cluster_sizes.csv), not a fixed cluster_validity.json. The reader must still
+    # recover silhouette / k / min-fraction so the degeneracy check is not blind.
+    (tmp_path / "clustering_algorithm_details.json").write_text(
+        json.dumps(
+            {"algorithm": "KMeans", "selected_k": 2, "selected_silhouette_score": 0.80}
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "cluster_sizes.csv").write_text(
+        "cluster,n,percentage\n0,38584,99.48\n1,203,0.52\n", encoding="utf-8"
+    )
+    card = sc.score_run_from_dir(_kind_task("subphenotype_clustering"), tmp_path)
+    # 0.52% group -> objective near-empty degeneracy regardless of the high
+    # silhouette (which is a one-blob-plus-outlier artifact).
+    assert card.result_validity.level == "Fail"
+    assert any("near-empty" in n for n in card.result_validity.notes)
+
+
+def test_phenotype_model_based_negative_silhouette_is_caution_not_fail(tmp_path):
+    # A GaussianMixture's fit criterion is the likelihood/BIC, not silhouette, so
+    # a negative silhouette on a balanced, stable partition is surfaced as a
+    # caution — NOT a fabricated Fail. result_validity stays honestly unscored.
+    (tmp_path / "clustering_algorithm_details.json").write_text(
+        json.dumps(
+            {
+                "algorithm": "GaussianMixture",
+                "selected_k": 2,
+                "selection_metrics": [
+                    {
+                        "k": 2,
+                        "silhouette_score": -0.015,
+                        "min_cluster_pct": 21.9,
+                        "selected": True,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    card = sc.score_run_from_dir(
+        _kind_task("longitudinal_trajectory_analysis"), tmp_path
+    )
+    assert card.result_validity.level is None  # not failed
+    assert any("weak cluster separation" in n for n in card.result_validity.notes)
+
+
+def test_phenotype_distance_based_negative_silhouette_still_fails(tmp_path):
+    # For a distance/centroid method silhouette IS the right lens: <= 0 fails.
+    (tmp_path / "clustering_algorithm_details.json").write_text(
+        json.dumps(
+            {"algorithm": "KMeans", "selected_k": 3, "selected_silhouette_score": -0.02}
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "cluster_sizes.csv").write_text(
+        "cluster,n,percentage\n0,40,33.3\n1,40,33.3\n2,40,33.4\n", encoding="utf-8"
+    )
+    card = sc.score_run_from_dir(_kind_task("subphenotype_clustering"), tmp_path)
+    assert card.result_validity.level == "Fail"
+    assert any("silhouette" in n for n in card.result_validity.notes)
 
 
 def test_prediction_kind_routes_reporting_to_tripod_file(tmp_path):
