@@ -677,3 +677,33 @@ def test_prediction_kind_routes_reporting_to_tripod_file(tmp_path):
     card = sc.score_run_from_dir(_kind_task("mortality_prediction"), tmp_path)
     assert card.reporting_completeness.signals["guideline"] == "tripod"
     assert card.reporting_completeness.subscore == pytest.approx(0.74, abs=1e-2)
+
+
+def test_unresolvable_derived_exposure_surfaces_caution_without_failing(tmp_path):
+    # A callback-only composite exposure (news) whose constituents can't be
+    # resolved: result_validity must stay honestly unscored (NOT Fail) but carry
+    # the caution so the overadjustment risk is not silently passed.
+    (tmp_path / "regression_results.csv").write_text(
+        "variable,coef\nconst,1\nnews_score,0.5\nage,0.1\nsex,0.2\n",
+        encoding="utf-8",
+    )
+    card = sc.score_run_from_dir(
+        _kind_task("descriptive_association"), tmp_path, exposure_concept="news"
+    )
+    assert card.result_validity.level is None
+    assert card.result_validity.subscore is None
+    assert card.result_validity.signals.get("validity_cautions")
+    assert any("could not be checked" in n for n in card.result_validity.notes)
+
+
+def test_resolvable_exposure_still_fails_not_cautions(tmp_path):
+    # sofa adjusting for creatinine is a *resolvable* constituent -> the error
+    # path Fails it; the caution path must not swallow it into a soft note.
+    (tmp_path / "regression_results.csv").write_text(
+        "variable,coef\nconst,1\nsofa,0.5\ncreatinine,0.1\nage,0.2\n",
+        encoding="utf-8",
+    )
+    card = sc.score_run_from_dir(
+        _kind_task("descriptive_association"), tmp_path, exposure_concept="sofa"
+    )
+    assert card.result_validity.level == "Fail"

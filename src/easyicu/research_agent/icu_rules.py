@@ -1348,6 +1348,72 @@ def detect_overadjustment(
     return offenders
 
 
+def is_derived_exposure(exposure: str, dictionary: Optional[object] = None) -> bool:
+    """True when the exposure resolves to a *computed* concept.
+
+    A computed concept has a callback or a non-empty ``depends_on`` — its value
+    is a function of other concepts (a composite/derived score), which makes it
+    overadjustment-prone as an exposure. Callback-defined composites whose name
+    is not a clean dictionary key (sep3 / sepsis3 / qsofa / kdigo) are recognised
+    too. Returns ``False`` for a raw measurement, a demographic, or when the
+    dictionary is unavailable (no false positives without evidence).
+    """
+    base = _strip_stat_suffix(exposure)
+    full = _normalise_token(exposure)
+    if not full:
+        return False
+    if any(comp in base or comp in full for comp in _CALLBACK_COMPOSITE_SEED):
+        return True
+    dic = dictionary if dictionary is not None else _concept_dictionary()
+    if dic is None:
+        return False
+    resolved = _resolve_concept(base, dic)
+    if not resolved:
+        return False
+    try:
+        definition = dic[resolved]  # type: ignore[index]
+    except (KeyError, TypeError):
+        return False
+    has_callback = bool(getattr(definition, "callback", None))
+    has_depends = bool(getattr(definition, "depends_on", ()) or ())
+    return has_callback or has_depends
+
+
+def overadjustment_caution(
+    exposure: str,
+    adjustment_covariates: Sequence[str],
+    dictionary: Optional[object] = None,
+) -> Optional[str]:
+    """A *caution* (not an error) when overadjustment cannot be checked.
+
+    Fires when the exposure is structurally a derived/composite concept (so an
+    adjustment covariate *could* be one of its inputs) but its constituents
+    could NOT be resolved from the dictionary — e.g. a callback-defined score
+    (mews / news / sirs / anion_gap / pafi …) whose ``depends_on`` is empty. The
+    deterministic ``detect_overadjustment`` check is silent there, so without
+    this the risk would pass unflagged. Returns a one-line caution prompting
+    manual verification, or ``None``.
+
+    Distinct from an error: it never gates or re-fits, it asks the analyst to
+    confirm the adjustment set. Returns ``None`` when the exposure is not
+    derived, when its constituents *were* resolvable (``detect_overadjustment``
+    already covers it), or when there are no adjustment covariates.
+    """
+    has_covariates = any(_normalise_token(c) for c in adjustment_covariates)
+    if not has_covariates:
+        return None
+    if not is_derived_exposure(exposure, dictionary):
+        return None
+    if composite_constituents(exposure, dictionary):
+        return None  # constituents resolvable -> the deterministic check applies
+    return (
+        f"exposure '{exposure}' is a derived/composite concept, but its "
+        "constituent inputs could not be resolved from the concept dictionary, "
+        "so overadjustment could not be checked automatically; verify the "
+        "adjustment set excludes any variable that feeds its computation"
+    )
+
+
 __all__ = [
     "VariableKind",
     "ConceptHint",
@@ -1361,4 +1427,6 @@ __all__ = [
     "COMPOSITE_EXPOSURE_CONSTITUENTS",
     "composite_constituents",
     "detect_overadjustment",
+    "is_derived_exposure",
+    "overadjustment_caution",
 ]

@@ -31,7 +31,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from .icu_rules import detect_overadjustment
+from .icu_rules import detect_overadjustment, overadjustment_caution
 from .scalar_utils import (
     _first_numeric_effect_from_text,
     _first_numeric_scalar_with_key_fragment,
@@ -1385,7 +1385,28 @@ def _primary_exposure_overadjustment_findings(
         return []
     offenders = detect_overadjustment(exposure, covariates)
     if not offenders:
-        return []
+        # No resolvable constituent matched. If the exposure is nonetheless a
+        # derived/composite concept whose inputs could not be resolved (a
+        # callback score with an empty dependency closure, e.g. mews/news/sirs),
+        # the deterministic check is blind — surface a caution so the risk is
+        # not silently passed. A caution is a warning, never a gating error: it
+        # prompts the analyst to verify, it does not re-fit or block.
+        caution = overadjustment_caution(exposure, covariates)
+        if not caution:
+            return []
+        return [
+            ValidationFinding(
+                validator="overadjustment_auditor",
+                severity="warning",
+                message="Overadjustment could not be auto-checked: " + caution,
+                detail={
+                    "kind": "overadjustment_caution",
+                    "step_id": step.step_id,
+                    "exposure": exposure,
+                    "adjustment_covariates": list(covariates),
+                },
+            )
+        ]
     joined = ", ".join(f"`{o}`" for o in offenders)
     return [
         ValidationFinding(

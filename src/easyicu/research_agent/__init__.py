@@ -112,6 +112,8 @@ __all__ = [
     "VariableKind",
     "detect_overadjustment",
     "composite_constituents",
+    "is_derived_exposure",
+    "overadjustment_caution",
     "COMPOSITE_EXPOSURE_CONSTITUENTS",
     # Architecture / temporal semantics / experiment specs
     "SystemLayer",
@@ -441,6 +443,8 @@ from .icu_rules import (
     VariableKind,
     composite_constituents,
     detect_overadjustment,
+    is_derived_exposure,
+    overadjustment_caution,
 )
 
 

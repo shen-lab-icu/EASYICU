@@ -51,7 +51,7 @@ from typing import Dict, List, Literal, Optional, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from .icu_agent_bench import ICUAgentBenchTask, grade_bench_task
-from .icu_rules import detect_overadjustment
+from .icu_rules import detect_overadjustment, overadjustment_caution
 from .plan_utils import read_model_covariate_names
 
 DimensionLevel = Literal["Full", "Partial", "Marginal", "Fail"]
@@ -297,6 +297,7 @@ def score_result_validity(
     observed_metrics: Optional[Dict[str, float]] = None,
     locked_reference_frozen: bool = False,
     validity_errors: Optional[Sequence[str]] = None,
+    validity_cautions: Optional[Sequence[str]] = None,
 ) -> DimensionScore:
     """Result-validity dimension (§M2 locked reference + numeric_audit).
 
@@ -315,6 +316,7 @@ def score_result_validity(
     have_targets = bool(gold and gold.numeric_targets)
     numeric_verified = bool(numeric_audit.get("numeric_verified"))
     validity_errors = list(validity_errors or [])
+    validity_cautions = list(validity_cautions or [])
 
     if not (locked_reference_frozen and have_targets and observed_metrics):
         if validity_errors:
@@ -325,13 +327,22 @@ def score_result_validity(
                 signals={
                     "locked_reference_frozen": locked_reference_frozen,
                     "validity_errors": validity_errors,
+                    "validity_cautions": validity_cautions,
                     "numeric_verified": numeric_verified,
                 },
-                notes=[
-                    "validity error(s) detected without a locked reference: "
-                    + "; ".join(validity_errors)
-                ],
+                notes=(
+                    [
+                        "validity error(s) detected without a locked reference: "
+                        + "; ".join(validity_errors)
+                    ]
+                    + [f"caution: {c}" for c in validity_cautions]
+                ),
             )
+        # A caution (e.g. overadjustment could not be auto-checked) surfaces as a
+        # note but does NOT score or fail the dimension — it stays honestly
+        # unscored. Errors gate; cautions only prompt verification.
+        notes = ["unscored: locked reference not frozen / no observed metrics yet"]
+        notes += [f"caution: {c}" for c in validity_cautions]
         return DimensionScore(
             name="result_validity",
             subscore=None,
@@ -341,8 +352,9 @@ def score_result_validity(
                 "has_numeric_targets": have_targets,
                 "has_observed_metrics": bool(observed_metrics),
                 "numeric_verified": numeric_verified,
+                "validity_cautions": validity_cautions,
             },
-            notes=["unscored: locked reference not frozen / no observed metrics yet"],
+            notes=notes,
         )
 
     graded = grade_bench_task(task, observed_metrics=observed_metrics)
@@ -702,6 +714,7 @@ def score_run(
     cohort_hygiene_cautions: Optional[Sequence[str]] = None,
     reporting_checklist: Optional[Dict[str, object]] = None,
     validity_errors: Optional[Sequence[str]] = None,
+    validity_cautions: Optional[Sequence[str]] = None,
     locked_reference_frozen: bool = False,
     plan_illegal: bool = False,
     run_id: Optional[str] = None,
@@ -731,6 +744,7 @@ def score_run(
             observed_metrics=observed_metrics,
             locked_reference_frozen=locked_reference_frozen,
             validity_errors=validity_errors,
+            validity_cautions=validity_cautions,
         ),
         evidence_binding=score_evidence_binding(
             evidence_audit=evidence_audit,
@@ -927,16 +941,20 @@ def score_run_from_dir(
     plan_steps = plan_steps if isinstance(plan_steps, list) else []
 
     validity_errors: List[str] = []
+    validity_cautions: List[str] = []
     if exposure_concept:
-        offenders = detect_overadjustment(
-            exposure_concept, _load_regression_covariates(run_dir)
-        )
+        covariates = _load_regression_covariates(run_dir)
+        offenders = detect_overadjustment(exposure_concept, covariates)
         if offenders:
             validity_errors.append(
                 "overadjustment: adjusted for "
                 + ", ".join(offenders)
                 + f" which constitute(s)/derive(s) the exposure '{exposure_concept}'"
             )
+        else:
+            caution = overadjustment_caution(exposure_concept, covariates)
+            if caution:
+                validity_cautions.append(caution)
     validity_errors.extend(_phenotype_validity_errors(run_dir, task.kind))
 
     return score_run(
@@ -952,6 +970,7 @@ def score_run_from_dir(
         cohort_hygiene_cautions=_load_cohort_hygiene_cautions(run_dir),
         reporting_checklist=_load_reporting_checklist(run_dir, task),
         validity_errors=validity_errors,
+        validity_cautions=validity_cautions,
         locked_reference_frozen=locked_reference_frozen,
         plan_illegal=plan_illegal,
         run_id=(
