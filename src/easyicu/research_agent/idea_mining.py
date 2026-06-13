@@ -10,6 +10,7 @@ manifests.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import re
 from datetime import datetime, timezone
@@ -1098,16 +1099,21 @@ def _build_pair_feasibility_signals(
     records: List[IdeaMiningFeasibilityRecord] = []
     for pair in pairs:
         predictor, outcome = pair
-        raw_result = probe(
+        probe_kwargs: Dict[str, Any] = dict(
             concepts=[predictor, outcome],
             database=database,
             data_path=data_path,
             cohort=cohort,
             analytic_unit=analytic_unit,
-            # Exposure-side answerability only: never request contrast for the
-            # outcome (its modal share would leak the event rate).
-            contrast_concepts=[predictor],
         )
+        # Exposure-side answerability only: never request contrast for the
+        # outcome (its modal share would leak the event rate). Pass the kwarg
+        # only when the (possibly caller-injected) probe accepts it, so probes
+        # with a fixed legacy signature keep working — they simply do not emit
+        # a contrast value.
+        if _probe_accepts_contrast(probe):
+            probe_kwargs["contrast_concepts"] = [predictor]
+        raw_result = probe(**probe_kwargs)
         value = _lookup_probe_value(raw_result, predictor)
         if value is None:
             warnings.append(
@@ -1138,6 +1144,25 @@ def _build_pair_feasibility_signals(
 # almost no exposure contrast; flagged as a caution, not a hard reject (the
 # human gate decides adequacy). A share of exactly 0 is a degenerate exposure.
 _MIN_EXPOSURE_CONTRAST = 0.01
+
+
+def _probe_accepts_contrast(probe: FeasibilityProbe) -> bool:
+    """Whether ``probe`` accepts the ``contrast_concepts`` keyword.
+
+    A caller-injected feasibility probe may keep the legacy signature (no
+    ``contrast_concepts``); passing the kwarg unconditionally would raise. We
+    pass it only for probes that declare the parameter or accept ``**kwargs``.
+    """
+    try:
+        params = inspect.signature(probe).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    for param in params:
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if param.name == "contrast_concepts":
+            return True
+    return False
 
 
 def _exposure_contrast_warnings(
