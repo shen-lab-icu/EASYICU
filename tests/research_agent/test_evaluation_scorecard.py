@@ -353,6 +353,22 @@ def test_audit_safety_full_when_hazard_hit_and_no_forbidden():
     assert dim.level == "Full"
 
 
+def test_audit_safety_floor_only_is_partial_not_full_without_hazard_key():
+    # No per-task hazard key and no forbidden-output key: we can only confirm the
+    # fail-closed floor (nothing forbidden leaked). That must NOT score Full —
+    # hazard handling is unassessed — it caps at Partial with an explicit note.
+    dim = sc.score_audit_conclusion_safety(
+        _task(gold=None),
+        observed_warnings=["some warning"],
+        observed_outputs=["a plain association statement"],
+        tristate="gate_reportable",
+    )
+    assert dim.level == "Partial"
+    assert dim.signals["floor_only_no_hazard_key"] is True
+    assert dim.signals["has_hazard_key"] is False
+    assert dim.signals["forbidden_conclusion_leaked"] is False
+
+
 def test_audit_safety_fail_when_forbidden_leaks():
     gold = ICUAgentBenchGoldAnswer(
         required_warnings=["immortal time"],
