@@ -52,16 +52,26 @@ def test_administration_exposure_concepts_are_not_default_outcomes() -> None:
         assert key not in cat.outcome_determinability
 
 
-def test_ordinal_scores_are_not_declared_as_binary_outcomes() -> None:
+def test_ordinal_scores_are_determinable_but_not_binary() -> None:
     cat = load_concept_catalog()
-    # SOFA / qSOFA / components are 0-N scales, must NOT be 0/1 outcomes.
+    # SOFA / qSOFA / components are 0-N scales: not 0/1 outcomes, but the
+    # present/NA coding trap does not apply, so they are determinable outcomes
+    # (must leave the dry run executable, not gated out as "unknown").
     for key in ("sofa", "qsofa", "sofa_cardio", "mews", "news"):
-        assert key not in cat.outcome_determinability
+        assert cat.outcome_determinability[key]["status"] == "non_binary_determinable"
 
 
-def test_continuous_outcomes_are_not_declared_as_binary() -> None:
+def test_continuous_outcomes_are_determinable_but_not_binary() -> None:
     cat = load_concept_catalog()
     for key in ("los_icu", "los_hosp"):
+        assert cat.outcome_determinability[key]["status"] == "non_binary_determinable"
+
+
+def test_treatment_exposure_concepts_stay_undeterminable() -> None:
+    # Using a treatment/exposure as an outcome is genuinely ambiguous; the
+    # conservative block (no determinability spec -> "unknown" gate) is kept.
+    cat = load_concept_catalog()
+    for key in ("rrt", "vaso_ind", "norepi60"):
         assert key not in cat.outcome_determinability
 
 

@@ -28,6 +28,7 @@ SourceAdapterLevel = Literal[
 
 OutcomeDeterminabilityStatus = Literal[
     "known_0_1",
+    "non_binary_determinable",
     "event_present_na",
     "unknown",
 ]

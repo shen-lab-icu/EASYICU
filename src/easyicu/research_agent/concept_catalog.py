@@ -268,6 +268,28 @@ def _is_binary_outcome(concept: Mapping) -> bool:
     return concept.get("category") == "outcome"
 
 
+def _is_non_binary_determinable(concept: Mapping) -> bool:
+    """Return whether a numeric/ordinal concept is a determinable outcome.
+
+    These are not clean 0/1 outcomes (so :func:`_is_binary_outcome` rejects
+    them), but the present/NA coding trap that the determinability gate guards
+    against does not apply to a measured value or an ordinal score: a continuous
+    lab, an ordinal severity scale, a survival time, or a trajectory endpoint is
+    perfectly determinable, just not binary. Marking them ``non_binary_determinable``
+    lets such ideas leave the dry run as executable instead of being silently
+    gated out as ``unknown``. Treatment/exposure concepts stay excluded: using
+    one as an outcome is genuinely ambiguous and the conservative block is kept.
+    """
+    desc = str(concept.get("description", "")).lower()
+    if any(word in desc for word in ("administration", "infusion", "dose", " rate")):
+        return False  # treatment/exposure concept; keep the conservative block
+    if any(k in concept for k in ("unit", "min", "max")):
+        return True  # numeric / continuous measurement
+    if "score" in desc or "component" in desc:
+        return True  # ordinal severity scale
+    return False
+
+
 def load_concept_catalog(
     *,
     restrict_to: Optional[Iterable[str]] = None,
@@ -298,17 +320,26 @@ def load_concept_catalog(
 
     aliases: Dict[str, List[str]] = {}
     outcomes: Dict[str, Dict[str, str]] = {}
+    # The alias-disambiguation guard below is scoped to BINARY outcomes only.
+    # Non-binary determinable outcomes (continuous/ordinal/survival) are recorded
+    # for the determinability gate but must NOT widen the guard, or shared
+    # numeric-concept synonyms would be dropped and resolver recall would regress.
+    binary_outcome_keys: set[str] = set()
 
-    def _declare_outcome(key: str) -> None:
+    def _declare_outcome(key: str, status: str = "known_0_1") -> None:
         # The resolver canonicalizes concept keys (e.g. aki -> kdigo_aki), so we
         # register the determinability spec under BOTH the raw and canonical key
         # to guarantee the feasibility probe's lookup hits regardless of which
         # form the resolved outcome takes.
         norm = normalize_concept_name(key)
-        spec = {"outcome": norm, "status": "known_0_1"}
+        spec = {"outcome": norm, "status": status}
         outcomes[key] = spec
         if norm and norm != key:
             outcomes[norm] = spec
+        if status == "known_0_1":
+            binary_outcome_keys.add(key)
+            if norm:
+                binary_outcome_keys.add(norm)
 
     for key in keys:
         concept = dicts.get(key)
@@ -320,6 +351,8 @@ def load_concept_catalog(
                 aliases[key] = derived
             if _is_binary_outcome(concept):
                 _declare_outcome(key)
+            elif _is_non_binary_determinable(concept):
+                _declare_outcome(key, status="non_binary_determinable")
         elif key in DERIVED_CONCEPT_HINTS:
             hint_aliases, is_binary = DERIVED_CONCEPT_HINTS[key]
             if hint_aliases:
@@ -332,7 +365,7 @@ def load_concept_catalog(
             merged = [*aliases.get(str(key), []), *[str(e) for e in extra]]
             aliases[str(key)] = _dedup(merged)
 
-    aliases = _drop_ambiguous_outcome_aliases(aliases, outcomes.keys())
+    aliases = _drop_ambiguous_outcome_aliases(aliases, binary_outcome_keys)
 
     return ConceptCatalog(
         available_concepts=tuple(keys),

@@ -33,7 +33,6 @@ from .concept_availability import (
     normalize_concept_name,
     real_data_concept_feasibility,
 )
-from .concept_catalog import SYNONYM_GROUPS
 from .hypothesis_generator import (
     HypothesisFeasibilitySignal,
     HypothesisGeneratorResult,
@@ -413,20 +412,25 @@ def map_literature_idea_to_executable_candidate(
         candidate.exposure_core_concept or ""
     ).strip() or candidate.exposure_or_predictor
     predictor_key = _resolve_concept(predictor_term, lookup)
-    if predictor_key is None:
-        reasons.append(
-            f"predictor concept is not available: {candidate.exposure_or_predictor}"
-        )
     feature_status, feature_requirements, feature_note = _feature_derivation_status(
         candidate.exposure_or_predictor,
         resolved_key=predictor_key,
+        lookup=lookup,
     )
+    # A requires_derived_feature predictor (e.g. a two-component ratio) supersedes
+    # the "not available" reason: its component concepts ARE available, the gap is
+    # derivation, not availability. Otherwise an unresolved predictor is reported
+    # as unavailable, and a resolved-but-unsupported derivation is reported as such.
     if feature_status == "requires_derived_feature":
         reasons.append(
             "predictor requires derived feature engineering before execution: "
             f"{candidate.exposure_or_predictor}"
         )
-    elif feature_status == "unsupported" and predictor_key is not None:
+    elif predictor_key is None:
+        reasons.append(
+            f"predictor concept is not available: {candidate.exposure_or_predictor}"
+        )
+    elif feature_status == "unsupported":
         reasons.append(
             "predictor feature derivation is unsupported: "
             f"{candidate.exposure_or_predictor}"
@@ -443,6 +447,10 @@ def map_literature_idea_to_executable_candidate(
         outcome_determinability or {},
     )
     normalized_outcome = None
+    # ``known_0_1`` and ``non_binary_determinable`` both pass clean: the gate only
+    # blocks the present/NA binary coding trap (``event_present_na``) and the case
+    # where determinability could not be established at all (``unknown``). A
+    # continuous/ordinal/survival outcome is determinable and must not be gated out.
     if determinability.status == "event_present_na":
         if determinability.normalized_outcome_concept:
             normalized = _resolve_concept(
@@ -693,6 +701,17 @@ def run_idea_mining_dry_run(
     )
 
     warnings: List[str] = []
+    if parsed_materials and all(
+        material.source_adapter_level == "metadata_only"
+        for material in parsed_materials
+    ):
+        warnings.append(
+            "All source material is metadata_only (title/venue/relevance), so "
+            "gap extraction has no access to discussion/limitations/future-work "
+            "text. Unresolved-question mining is capped by source richness here; "
+            "supply abstract-level or user_supplied_excerpt material to mine "
+            "genuine gaps rather than inferring them from titles."
+        )
     if executable_candidates and yield_report.n_executable == 0:
         warnings.append(
             "No executable candidates after concept mapping and outcome "
@@ -1562,27 +1581,73 @@ def _build_concept_lookup(
     return lookup
 
 
-def _resolve_concept(term: str, lookup: Mapping[str, str]) -> Optional[str]:
+def _resolve_concept_exact(term: str, lookup: Mapping[str, str]) -> Optional[str]:
+    """Variant-table-only resolution (no inexact token fallback).
+
+    A non-``None`` result means the whole phrase is itself a known concept or
+    alias, which is how a genuine unified ratio concept (``"P/F ratio"`` ->
+    ``pafi``) is told apart from a derived ratio of two component concepts.
+    """
     for variant in _concept_lookup_variants(term):
         if variant in lookup:
             return lookup[variant]
+    return None
+
+
+def _token_specificity(lookup: Mapping[str, str]) -> Dict[str, float]:
+    """Weight each signal token by how *discriminating* it is across the lookup.
+
+    A token is weighted ``1 / (number of distinct concepts it appears in)``.
+    Tokens that name a single concept (``"urea"``, ``"creatinine"``) keep full
+    weight 1.0; tokens shared across many concepts (``"ratio"`` -> pafi, safi,
+    nlr...; ``"index"``; ``"acid"``) decay toward zero and can no longer let an
+    incidental shared word tie a real clinical signal. This is the general,
+    enumeration-free cure for the bug class where one generic token in a query
+    (``"urea-to-creatinine ratio"``) matched an unrelated concept (``pafi``).
+    """
+    concepts_per_token: Dict[str, set] = {}
+    for key, canonical in lookup.items():
+        for token in _concept_signal_tokens(key):
+            concepts_per_token.setdefault(token, set()).add(canonical)
+    return {
+        token: 1.0 / len(concepts) for token, concepts in concepts_per_token.items()
+    }
+
+
+def _resolve_concept(term: str, lookup: Mapping[str, str]) -> Optional[str]:
+    exact = _resolve_concept_exact(term, lookup)
+    if exact is not None:
+        return exact
+    # A derived ratio of distinct components ("urea-to-creatinine ratio") has no
+    # unified concept; anchor it to its first real component rather than letting a
+    # generic shared token ("ratio") drag the match onto an unrelated concept
+    # (pafi). The downstream feature-derivation check then flags it as needing
+    # both components. (Fragment resolution recurses one level and terminates: a
+    # bare component carries no "ratio" token.)
+    components = _ratio_component_concepts(term, lookup)
+    if len(components) >= 2:
+        return components[0]
     term_tokens = _concept_signal_tokens(term)
     if not term_tokens:
         return None
     # Pick the MOST SPECIFIC subset match, not the first one encountered: rank by
-    # token overlap, then by the most concise key. This stops an incidental
-    # single-token hit (e.g. "ventilation" in "ventilation-induced acute kidney
-    # injury" matching vent_ind) from beating the 3-token semantic match
-    # ("acute kidney injury" -> kdigo_aki). Deterministic: ties keep the first
-    # key seen in insertion order.
+    # the summed *specificity* (inverse document frequency) of the overlapping
+    # tokens, then by the most concise key. Specificity weighting stops a generic
+    # shared word (e.g. "ratio", shared by pafi/safi/nlr, or "ventilation" in
+    # "ventilation-induced acute kidney injury") from beating the discriminating
+    # clinical signal ("acute kidney injury" -> kdigo_aki, or urea+creatinine ->
+    # their components). Deterministic: ties keep the first key in insertion order.
+    specificity = _token_specificity(lookup)
     best: Optional[str] = None
-    best_score = (0, 0)
+    best_score = (0.0, 0)
     for key, canonical in lookup.items():
         key_tokens = _concept_signal_tokens(key)
         if not key_tokens:
             continue
         if key_tokens <= term_tokens or term_tokens <= key_tokens:
-            score = (len(key_tokens & term_tokens), -len(key_tokens))
+            overlap = key_tokens & term_tokens
+            weight = sum(specificity.get(token, 1.0) for token in overlap)
+            score = (weight, -len(key_tokens))
             if score > best_score:
                 best_score = score
                 best = canonical
@@ -1643,11 +1708,59 @@ def _concept_signal_tokens(value: str) -> set[str]:
     }
 
 
+# Connector words that join the numerator/denominator of a named clinical ratio.
+_RATIO_CONNECTOR_WORDS = frozenset({"to", "over", "per", "vs", "versus", "and", "the"})
+
+
+def _ratio_component_concepts(term: str, lookup: Mapping[str, str]) -> List[str]:
+    """Resolve the components of an ``X-to-Y ratio`` phrase to distinct concepts.
+
+    Returns the ordered, de-duplicated list of canonical concepts the ratio is
+    built from, but only when the phrase actually names the word "ratio" and its
+    fragments map to two or more *different* concepts. A single unified ratio
+    concept (``"P/F ratio"`` -> ``pafi``, whose fragments ``p``/``f`` resolve to
+    nothing) yields ``[]`` and is therefore never mistaken for a derived ratio.
+    """
+    tokens = [t for t in re.split(r"[^a-z0-9]+", normalize_concept_name(term)) if t]
+    if "ratio" not in tokens:
+        return []
+    fragments = [
+        token
+        for token in tokens
+        if token != "ratio" and token not in _RATIO_CONNECTOR_WORDS and len(token) > 2
+    ]
+    components: List[str] = []
+    for fragment in fragments:
+        resolved = _resolve_concept(fragment, lookup)
+        if resolved and resolved not in components:
+            components.append(resolved)
+    return components if len(components) >= 2 else []
+
+
 def _feature_derivation_status(
     term: str,
     *,
     resolved_key: Optional[str],
+    lookup: Optional[Mapping[str, str]] = None,
 ) -> Tuple[FeatureDerivationStatus, List[str], Optional[str]]:
+    # A two-component clinical ratio (e.g. "urea-to-creatinine ratio") is a
+    # derived feature, not a raw concept. A genuine *unified* ratio concept
+    # ("P/F ratio" -> pafi) resolves through the exact variant table; a derived
+    # ratio does not, and only its fragments resolve. So: when there is no exact
+    # concept for the whole phrase but its fragments map to >=2 distinct
+    # concepts, flag it as requiring derivation from those components.
+    if lookup is not None and _resolve_concept_exact(term, lookup) is None:
+        components = _ratio_component_concepts(term, lookup)
+        if len(components) >= 2:
+            return (
+                "requires_derived_feature",
+                [
+                    f"requires component concepts: {', '.join(components)}",
+                    "requires ratio computation",
+                ],
+                "term is a ratio of distinct concepts; derive it from "
+                f"{' / '.join(components)}",
+            )
     markers = _derived_feature_markers(term)
     if not markers:
         return "raw_concept_available", [], None
