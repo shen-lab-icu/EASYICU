@@ -253,28 +253,53 @@ _STROBE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "required_evidence_aliases": ("multiple_testing_report", "causal_audit_report"),
     },
     {
+        # "Numbers at each stage" is the participant-flow / attrition item, NOT
+        # the baseline-characteristics table — the prior ``table_one`` alias was
+        # mis-specified. EasyICU agents emit the flow as a cohort_attrition /
+        # cohort-flow artefact; credit it when that real artefact exists.
         "id": "13a",
         "section": "Results",
         "statement": "Report numbers of individuals at each stage of study.",
-        "required_evidence_aliases": ("table_one",),
+        "required_evidence_aliases": (
+            "cohort_attrition", "attrition", "cohort_flow", "participant_flow",
+            "study_flow",
+        ),
     },
     {
+        # Baseline characteristics table. Kept strict on purpose: it stays open
+        # unless the agent actually surfaced a baseline-characteristics artefact
+        # (a computed-but-unbound Table 1 is an honest reporting gap, not a
+        # detector miss).
         "id": "14a",
         "section": "Results",
         "statement": "Give characteristics of study participants and information on exposures and potential confounders.",
-        "required_evidence_aliases": ("table_one",),
+        "required_evidence_aliases": (
+            "table_one", "baseline_characteristics", "cohort_characteristics",
+        ),
     },
     {
         "id": "15",
         "section": "Results",
         "statement": "Report numbers of outcome events or summary measures over time.",
-        "required_evidence_aliases": ("outcome_rate", "outcome_incidence"),
+        "required_evidence_aliases": (
+            "outcome_rate", "outcome_incidence", "outcome_events",
+            "mortality_by_exposure", "event_counts",
+        ),
     },
     {
+        # Effect estimate(s) with precision. The prior single ``primary_association``
+        # alias missed the equivalent results artefacts EasyICU agents actually
+        # emit (final_results_summary / evidence_bound_answer / robustness panel);
+        # credit any of those real deliverables, consistent with the
+        # artefact-bound == reported contract used across this checklist.
         "id": "16",
         "section": "Results",
         "statement": "Give unadjusted estimates and, if applicable, confounder-adjusted estimates and their precision.",
-        "required_evidence_aliases": ("primary_association",),
+        "required_evidence_aliases": (
+            "primary_association", "final_results_summary", "adjusted_association",
+            "association_estimates", "evidence_bound_answer_to_research",
+            "robustness_panel", "robustness_summary",
+        ),
     },
     {
         "id": "22",
@@ -645,12 +670,50 @@ def _internal_phenotype_items() -> List[ChecklistItem]:
 # ---------------------------------------------------------------------------
 
 
+_ARTIFACT_ID_PREFIXES = ("table_", "figure_", "statistic_", "log_", "code_")
+_HASH_SUFFIX = re.compile(r"_[0-9a-f]{6,}$")
+
+
+def _semantic_aliases_from_record(rec: Any) -> set:
+    """Recover the agent's *semantic* artefact name(s) from one evidence record.
+
+    Evidence ids are emitted as ``<type>_<name>_<hash>`` and the relative path as
+    ``evidence/<type>_<name>_<hash>__<name>.<ext>`` — so the clean, run-stable
+    name the agent chose (e.g. ``cohort_attrition``, ``final_results_summary``)
+    is recoverable. ``_available_aliases`` previously kept only the hashed id, so
+    every checklist item keyed to a step-output artefact was systematically
+    false-open. This reads the real names; it does not loosen matching — an item
+    is still credited only when the agent actually produced the named artefact.
+    """
+    out: set = set()
+    rec_id = getattr(rec, "evidence_id", None)
+    if rec_id:
+        out.add(rec_id)
+        # Strip the leading type prefix and the trailing content hash.
+        stem = rec_id
+        for pfx in _ARTIFACT_ID_PREFIXES:
+            if stem.startswith(pfx):
+                stem = stem[len(pfx):]
+                break
+        stem = _HASH_SUFFIX.sub("", stem)
+        if stem:
+            out.add(stem)
+    rel = getattr(rec, "relative_path", None) or ""
+    if rel:
+        base = rel.rsplit("/", 1)[-1]
+        # The substantive name follows the ``__`` separator: ``..__<name>.<ext>``.
+        if "__" in base:
+            tail = base.split("__", 1)[1]
+            tail = tail.rsplit(".", 1)[0]  # drop extension
+            if tail:
+                out.add(tail)
+    return {a.lower() for a in out if a}
+
+
 def _available_aliases(evidence_records: Iterable[Any]) -> set:
     ids: set = set()
     for rec in evidence_records:
-        rec_id = getattr(rec, "evidence_id", None)
-        if rec_id:
-            ids.add(rec_id)
+        ids |= _semantic_aliases_from_record(rec)
     return ids
 
 

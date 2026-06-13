@@ -271,3 +271,57 @@ def test_pipeline_emits_internal_phenotype_core_when_requested(
     run_dir = Path(result.manifest_path).parent
     assert (run_dir / "reporting_checklist_internal_phenotype.md").exists()
     assert (run_dir / "reporting_checklist_internal_phenotype.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Semantic alias recovery (hashed evidence ids -> real artefact names)
+# ---------------------------------------------------------------------------
+
+
+class _EvRecRP:
+    """Evidence record with the REAL shape: hashed id + relative_path."""
+
+    def __init__(self, evidence_id, relative_path=None):
+        self.evidence_id = evidence_id
+        self.relative_path = relative_path
+
+
+def test_strobe_credits_real_artefact_names_not_only_hashed_ids(ra):
+    # Regression for the systematic false-open: step-output artefacts carry
+    # hashed ids (table_cohort_attrition_492925c7) while the checklist keyed on
+    # clean tokens, so flow/estimate items never matched. The matcher must
+    # recover the agent's real artefact name from id/relative_path.
+    recs = [
+        _EvRecRP(
+            "table_cohort_attrition_492925c7",
+            "evidence/table_cohort_attrition_492925c7__cohort_attrition.csv",
+        ),
+        _EvRecRP(
+            "table_final_results_summary_8a99df86",
+            "evidence/table_final_results_summary_8a99df86__final_results_summary.csv",
+        ),
+        _EvRecRP("manuscript_scaffold_bound", "evidence/manuscript_scaffold_bound.md"),
+    ]
+    report = ra.build_strobe_checklist(
+        evidence_records=recs,
+        bound_manuscript="A retrospective cohort study.",
+    )
+    by_id = {i.item_id: i for i in report.items}
+    # 13a (participant flow) credited by the real cohort_attrition artefact...
+    assert by_id["13a"].status == "addressed"
+    # ...16 (estimates) credited by the real final_results_summary artefact.
+    assert by_id["16"].status == "addressed"
+    # But a genuinely absent baseline table / outcome incidence stays honestly
+    # open — semantic recovery must not fabricate credit.
+    assert by_id["14a"].status == "open"
+    assert by_id["15"].status == "open"
+
+
+def test_strobe_13a_not_satisfied_by_table_one_alone(ra):
+    # 13a is the participant-flow item; a baseline table must NOT silently
+    # satisfy it (the prior mis-specified ``table_one`` alias did exactly that).
+    recs = _recs("table_one")
+    report = ra.build_strobe_checklist(evidence_records=recs, bound_manuscript="")
+    by_id = {i.item_id: i for i in report.items}
+    assert by_id["13a"].status == "open"
+    assert by_id["14a"].status == "addressed"
