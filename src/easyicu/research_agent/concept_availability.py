@@ -151,6 +151,7 @@ class RealDataConceptFeasibility(BaseModel):
     aggregation_requested: Optional[str] = None
     cohort_filter_summary: str = "none"
     missingness_severity: Literal["low", "medium", "high"]
+    value_contrast_fraction: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     non_outcome_blind_fields_checked: List[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -281,6 +282,7 @@ def real_data_concept_feasibility(
     aggregation: Optional[str] = None,
     analytic_unit: Literal["stay", "patient"] = "stay",
     event_default_false_concepts: Optional[Iterable[str]] = None,
+    contrast_concepts: Optional[Iterable[str]] = None,
 ) -> Dict[str, RealDataConceptFeasibility]:
     """Return outcome-blind data-layer feasibility for EasyICU concepts.
 
@@ -298,6 +300,12 @@ def real_data_concept_feasibility(
     whose present column covers the full cohort even when event-negative rows
     are encoded as ``NaN``. Measurement concepts keep the default ``NaN`` means
     missing semantics.
+
+    ``contrast_concepts`` opts specific concepts into the exposure-side
+    answerability signal ``value_contrast_fraction`` (1 - modal share over
+    non-missing analytic units). This stays outcome-blind: callers must pass
+    ONLY predictor/exposure concepts, never the outcome, because a binary
+    outcome's modal share equals its event rate (a forbidden outcome field).
     """
 
     db = normalize_database_name(database)
@@ -306,6 +314,11 @@ def real_data_concept_feasibility(
     event_default_false = _normalise_event_default_false_concepts(
         event_default_false_concepts
     )
+    contrast_set = {
+        normalize_concept_name(str(c))
+        for c in (contrast_concepts or ())
+        if str(c or "").strip()
+    }
     cells = {
         concept: explain_concept_availability(
             concept=normalize_concept_name(concept),
@@ -385,6 +398,7 @@ def real_data_concept_feasibility(
             analytic_unit=unit,
             cohort=cohort,
             event_default_false_concepts=event_default_false,
+            compute_contrast=normalize_concept_name(concept) in contrast_set,
         )
         note = _join_notes(
             structural_note,
@@ -418,6 +432,7 @@ def real_data_concept_feasibility(
             aggregation_requested=str(aggregation) if aggregation is not None else None,
             cohort_filter_summary=single["cohort_filter_summary"],
             missingness_severity=_missingness_severity(single["fraction_missing"]),
+            value_contrast_fraction=single.get("value_contrast_fraction"),
         )
     return out
 
@@ -688,6 +703,7 @@ def _probe_single_concept_from_frame(
     analytic_unit: Literal["stay", "patient"],
     cohort: Optional[Mapping[str, Any]],
     event_default_false_concepts: Optional[Iterable[str]] = None,
+    compute_contrast: bool = False,
 ) -> Dict[str, Any]:
     filtered, cohort_summary = _apply_cohort_filter(frame, cohort)
     unit = _normalise_analytic_unit(analytic_unit)
@@ -711,6 +727,11 @@ def _probe_single_concept_from_frame(
         else 0
     )
     fraction_missing = _fraction_missing(n_present=n_present, denominator_n=denominator)
+    value_contrast_fraction = (
+        _value_contrast_fraction(filtered, column)
+        if compute_contrast and column is not None
+        else None
+    )
     return {
         "concept": normalize_concept_name(concept),
         "denominator_n": denominator,
@@ -719,7 +740,29 @@ def _probe_single_concept_from_frame(
         "cohort_filter_summary": cohort_summary,
         "column_resolved": column is not None,
         "column_candidates": column_candidates,
+        "value_contrast_fraction": value_contrast_fraction,
     }
+
+
+def _value_contrast_fraction(frame: Any, column: Any) -> Optional[float]:
+    """Exposure-side answerability: ``1 - modal share`` over non-missing values.
+
+    A near-zero value means the predictor is essentially constant in the cohort
+    (e.g. an intervention present in ~0% or ~100% of units), so there is no
+    exposure contrast to estimate an association from no matter how complete the
+    data is. ``0.0`` is a degenerate (single-valued) exposure. Returns ``None``
+    when nothing is observed (missingness already captures that).
+
+    Computed over the prepared wide cohort table (≈one row per analytic unit).
+    Callers gate this to predictor/exposure concepts only: a binary outcome's
+    modal share equals its event rate, which the outcome-blind guard forbids.
+    """
+    series = frame[column].dropna()
+    n = int(len(series))
+    if n == 0:
+        return None
+    modal_count = int(series.value_counts().iloc[0])
+    return max(0.0, min(1.0, 1.0 - modal_count / n))
 
 
 def _probe_joint_from_frame(

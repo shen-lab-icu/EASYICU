@@ -1291,6 +1291,71 @@ def test_dry_run_does_not_warn_metadata_only_for_excerpt_sources(tmp_path) -> No
     assert not any("metadata_only" in warning for warning in result.warnings)
 
 
+def test_dry_run_warns_on_degenerate_exposure_contrast(tmp_path) -> None:
+    # Data may be fully present yet unanswerable: a single-valued predictor has
+    # no exposure contrast. The dry run must request contrast for the PREDICTOR
+    # only (never the outcome) and surface the degeneracy as a warning.
+    quote = "early vasopressin exposure and intensive-care unit mortality"
+    material = SourceMaterial(
+        citation=_citation(),
+        source_adapter_level="user_supplied_excerpt",
+        source_text=(
+            "The review highlights early vasopressin exposure and "
+            "intensive-care unit mortality as an unresolved ICU research direction."
+        ),
+    )
+    llm = CapturingIdeaLLM(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "early vasopressin exposure",
+                "outcome": "intensive-care unit mortality",
+                "rationale": "The source describes this direction.",
+                "source_quote": quote,
+                "analysis_family": "association",
+            }
+        ]
+    )
+    contrast_requests: list[object] = []
+
+    def fake_probe(**kwargs):
+        pair = tuple(kwargs["concepts"])
+        contrast_requests.append(kwargs.get("contrast_concepts"))
+        return {
+            concept: {
+                "joint_fraction_complete": 0.9,
+                "n_joint_complete": 90,
+                "denominator_n": 100,
+                "source": "synthetic_s1_fixture",
+                # degenerate exposure contrast on the predictor only
+                **(
+                    {"predictor_contrast_fraction": 0.0}
+                    if concept == pair[0]
+                    else {}
+                ),
+            }
+            for concept in pair
+        }
+
+    result = run_idea_mining_dry_run(
+        materials=[material],
+        llm=llm,
+        available_concepts=["adh_rate", "death"],
+        output_dir=tmp_path / "dry_run",
+        feasibility_probe=fake_probe,
+    )
+
+    # contrast requested for the predictor only, never the outcome
+    assert contrast_requests == [["adh_rate"]]
+    assert any(
+        "no exposure contrast" in warning or "single-valued" in warning
+        for warning in result.warnings
+    )
+    record = result.feasibility_signals[0]
+    assert record.predictor_contrast_fraction == 0.0
+
+
 def test_dry_run_surfaces_structural_unavailable_feasibility_note(tmp_path) -> None:
     import easyicu.research_agent.concept_availability as ca
 

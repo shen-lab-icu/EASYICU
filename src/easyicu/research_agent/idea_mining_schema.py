@@ -304,6 +304,9 @@ class IdeaMiningFeasibilityRecord(BaseModel):
     denominator_n: Optional[int] = Field(default=None, ge=0)
     source: str = "precomputed"
     note: Optional[str] = None
+    # Exposure-side answerability for the predictor (outcome-blind): ~0 means no
+    # exposure contrast in the cohort. None when not computed.
+    predictor_contrast_fraction: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
 
 class PriorArtSearchHit(BaseModel):

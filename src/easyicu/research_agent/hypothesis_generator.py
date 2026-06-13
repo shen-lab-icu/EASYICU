@@ -74,6 +74,10 @@ class HypothesisFeasibilitySignal:
     denominator_n: Optional[int] = None
     source: str = "precomputed"
     note: Optional[str] = None
+    # Exposure-side answerability (predictor only; outcome-blind): 1 - modal
+    # share of the predictor over non-missing units. ~0 means no exposure
+    # contrast. None when not computed.
+    predictor_contrast_fraction: Optional[float] = None
 
 
 @dataclass
