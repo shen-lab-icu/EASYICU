@@ -178,7 +178,50 @@ class FiveDimensionScorecard(BaseModel):
 # figure + applicable audit panel. Hard tasks (H1/H2/H3) require ≥2 result
 # figures — encoded via ``min_result_figures`` derived from difficulty.
 _AUDIT_OUTPUT_HINTS = ("audit", "completeness", "sensitivity", "leakage", "calibration")
-_TABLE_ONE_HINTS = ("table_one", "table one", "table 1", "baseline")
+# A "Table 1" is the cohort baseline-characteristics table (STROBE item 14).
+# Agents name it very diversely (table_one, baseline characteristics, cohort
+# summary, "covariate summary by exposure", "distribution summary of core
+# covariates", "cohort profile", "cohort overview", ...), so a fixed substring
+# list either misses real Table-1s or, if broadened with a bare "summary",
+# false-matches results/robustness summaries. Detect by NAMING PATTERN instead:
+# a direct literal, OR a cohort/sample noun co-occurring with a descriptive-stats
+# word. This is general (no per-task names), and excludes flow/audit tables
+# (e.g. cohort_attrition, covariate_missingness_audit) that lack a descriptor.
+_TABLE_ONE_DIRECT = ("table_one", "table one", "table 1", "baseline characteristic")
+_TABLE_ONE_SUBJECT_TOKENS = (
+    "cohort",
+    "covariate",
+    "patient",
+    "baseline",
+    "demographic",
+)
+# Tight descriptors: a baseline *characteristics summary*. Deliberately EXCLUDES
+# "distribution"/"profile"/"description" — those match single-variable
+# distributions and missingness profiles that are not a Table 1.
+_TABLE_ONE_DESCRIPTOR_TOKENS = ("summary", "characteristic", "overview")
+
+
+def _declares_table_one(items: Sequence[str]) -> bool:
+    """True if the plan declares a Table-1 (baseline characteristics) ARTIFACT.
+
+    Checks declared table artifacts only (``table:`` items) — never prose step
+    intents, whose long sentences incidentally co-mention a cohort noun and a
+    stats word. Matches a direct literal, or a cohort/sample noun co-occurring
+    with a characteristics-summary descriptor.
+    """
+    for it in items:
+        s = it.lower()
+        if "table:" not in s and "table_" not in s and "table " not in s:
+            continue
+        if any(d in s for d in _TABLE_ONE_DIRECT):
+            return True
+        if any(t in s for t in _TABLE_ONE_SUBJECT_TOKENS) and any(
+            t in s for t in _TABLE_ONE_DESCRIPTOR_TOKENS
+        ):
+            return True
+    return False
+
+
 _FIGURE_HINTS = ("figure", "plot", "forest", "curve")
 
 
@@ -218,7 +261,7 @@ def score_plan(
     required = int(gates.get("required_step_count") or 0)
     items = _output_items(task, plan_steps)
 
-    has_table_one = any(any(h in it for h in _TABLE_ONE_HINTS) for it in items)
+    has_table_one = _declares_table_one(items)
     figure_hits = sum(1 for it in items if any(h in it for h in _FIGURE_HINTS))
     has_audit_panel = any(any(h in it for h in _AUDIT_OUTPUT_HINTS) for it in items)
     n_required_figs = _min_result_figures(task)
@@ -1304,7 +1347,20 @@ def score_run_from_dir(
     gates = run_status.get("gates") if isinstance(run_status, dict) else {}
     gates = gates if isinstance(gates, dict) else {}
 
-    plan_doc = _load_json(run_dir / "analysis_plan.json")
+    # Score the plan the agent ACTUALLY EXECUTED, i.e. the latest revision, not
+    # the initial analysis_plan.json. The replanner improves the plan in place
+    # (e.g. adds a Table-1 / cohort-characteristics step in a later revision);
+    # reading only the base plan undercounts those improvements.
+    plan_path = run_dir / "analysis_plan.json"
+    _best_rev = -1
+    for _rev in run_dir.glob("analysis_plan_revision_*.json"):
+        try:
+            _n = int(_rev.stem.rsplit("_", 1)[-1])
+        except ValueError:
+            continue
+        if _n > _best_rev:
+            _best_rev, plan_path = _n, _rev
+    plan_doc = _load_json(plan_path)
     plan_steps = plan_doc.get("steps") if isinstance(plan_doc, dict) else []
     plan_steps = plan_steps if isinstance(plan_steps, list) else []
 
