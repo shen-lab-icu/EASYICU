@@ -1104,6 +1104,9 @@ def _build_pair_feasibility_signals(
             data_path=data_path,
             cohort=cohort,
             analytic_unit=analytic_unit,
+            # Exposure-side answerability only: never request contrast for the
+            # outcome (its modal share would leak the event rate).
+            contrast_concepts=[predictor],
         )
         value = _lookup_probe_value(raw_result, predictor)
         if value is None:
@@ -1114,6 +1117,7 @@ def _build_pair_feasibility_signals(
             continue
         signal = _coerce_probe_feasibility_signal(value)
         signals[pair] = signal
+        warnings.extend(_exposure_contrast_warnings(predictor, pair, signal))
         records.append(
             IdeaMiningFeasibilityRecord(
                 predictor=predictor,
@@ -1124,9 +1128,40 @@ def _build_pair_feasibility_signals(
                 denominator_n=signal.denominator_n,
                 source=signal.source,
                 note=signal.note,
+                predictor_contrast_fraction=signal.predictor_contrast_fraction,
             )
         )
     return signals, records, warnings
+
+
+# A predictor whose minority share falls below this rule-of-thumb floor offers
+# almost no exposure contrast; flagged as a caution, not a hard reject (the
+# human gate decides adequacy). A share of exactly 0 is a degenerate exposure.
+_MIN_EXPOSURE_CONTRAST = 0.01
+
+
+def _exposure_contrast_warnings(
+    predictor: str,
+    pair: Tuple[str, str],
+    signal: HypothesisFeasibilitySignal,
+) -> List[str]:
+    contrast = signal.predictor_contrast_fraction
+    if contrast is None:
+        return []
+    if contrast <= 0.0:
+        return [
+            f"Predictor {predictor!r} is single-valued in the cohort (no "
+            f"exposure contrast) for pair {pair!r}; an association cannot be "
+            "estimated regardless of how complete the data is."
+        ]
+    if contrast < _MIN_EXPOSURE_CONTRAST:
+        return [
+            f"Predictor {predictor!r} has very low exposure contrast "
+            f"(minority share {contrast:.4f}) for pair {pair!r}; effect "
+            "estimates will be imprecise — confirm exposure adequacy at the "
+            "human gate."
+        ]
+    return []
 
 
 def _ordered_unique_pairs(
@@ -1166,6 +1201,7 @@ def _coerce_probe_feasibility_signal(value: Any) -> HypothesisFeasibilitySignal:
             denominator_n=value.denominator_n,
             source=value.source,
             note=value.note,
+            predictor_contrast_fraction=value.predictor_contrast_fraction,
         )
     if isinstance(value, Mapping):
         joint = value.get("joint_fraction_complete")
@@ -1179,6 +1215,11 @@ def _coerce_probe_feasibility_signal(value: Any) -> HypothesisFeasibilitySignal:
             denominator_n=_optional_int(value.get("denominator_n")),
             source=str(value.get("source") or "precomputed"),
             note=str(value["note"]) if value.get("note") is not None else None,
+            predictor_contrast_fraction=_optional_bounded_fraction(
+                value.get("predictor_contrast_fraction")
+                if value.get("predictor_contrast_fraction") is not None
+                else value.get("value_contrast_fraction")
+            ),
         )
     joint = getattr(value, "joint_fraction_complete", None)
     if joint is None:
@@ -1189,6 +1230,11 @@ def _coerce_probe_feasibility_signal(value: Any) -> HypothesisFeasibilitySignal:
         denominator_n=_optional_int(getattr(value, "denominator_n", None)),
         source=value.__class__.__name__,
         note=getattr(value, "note", None),
+        predictor_contrast_fraction=_optional_bounded_fraction(
+            getattr(value, "predictor_contrast_fraction", None)
+            if getattr(value, "predictor_contrast_fraction", None) is not None
+            else getattr(value, "value_contrast_fraction", None)
+        ),
     )
 
 
@@ -1201,6 +1247,12 @@ def _optional_int(value: Any) -> Optional[int]:
     if value is None:
         return None
     return int(value)
+
+
+def _optional_bounded_fraction(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    return _bounded_fraction(value)
 
 
 _RANKABLE_PREDICTOR_ROLES = {

@@ -105,6 +105,75 @@ def test_real_data_feasibility_reports_single_and_joint_completeness(
     assert "death" not in crea.model_dump().keys()
 
 
+def _write_contrast_fixture(tmp_path: Path) -> Path:
+    path = tmp_path / "contrast_fixture.parquet"
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4, 5, 6],
+            "vaso": [1, 1, 1, 1, 1, 1],  # single-valued exposure: no contrast
+            "crea": [1.0, 1.2, 0.9, 1.5, 2.0, 1.1],  # varying exposure
+            "death": [0, 1, 1, 0, 1, 0],
+        }
+    ).to_parquet(path, index=False)
+    return path
+
+
+def test_exposure_contrast_computed_only_for_requested_predictor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ca = _allow_all_concepts(monkeypatch)
+    path = _write_contrast_fixture(tmp_path)
+
+    result = ca.real_data_concept_feasibility(
+        ["crea", "death"],
+        "miiv",
+        path,
+        analytic_unit="stay",
+        contrast_concepts=["crea"],
+    )
+
+    # The predictor gets an exposure-contrast value; the outcome NEVER does, so
+    # its modal share (== event rate) cannot leak through the outcome-blind guard.
+    assert result["crea"].value_contrast_fraction == pytest.approx(1.0 - 1.0 / 6.0)
+    assert result["death"].value_contrast_fraction is None
+
+
+def test_single_valued_exposure_reports_zero_contrast(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ca = _allow_all_concepts(monkeypatch)
+    path = _write_contrast_fixture(tmp_path)
+
+    result = ca.real_data_concept_feasibility(
+        ["vaso", "death"],
+        "miiv",
+        path,
+        analytic_unit="stay",
+        contrast_concepts=["vaso"],
+    )
+
+    assert result["vaso"].value_contrast_fraction == 0.0
+
+
+def test_contrast_is_not_computed_without_optin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ca = _allow_all_concepts(monkeypatch)
+    path = _write_contrast_fixture(tmp_path)
+
+    result = ca.real_data_concept_feasibility(
+        ["crea", "death"],
+        "miiv",
+        path,
+        analytic_unit="stay",
+    )
+
+    assert result["crea"].value_contrast_fraction is None
+
+
 def test_event_default_false_concepts_treat_sparse_nan_as_observed_false(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
