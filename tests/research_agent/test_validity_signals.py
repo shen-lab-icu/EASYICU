@@ -78,6 +78,70 @@ def test_missing_split_metadata_is_na_not_false_fail(tmp_path):
     assert validity_positive_subscore(sig) is None
 
 
+def _write_named_summary(run_dir, step, payload):
+    out = run_dir / "steps" / step / "outputs"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "step_summary.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_split_strategy_vocabulary_with_patient_equivalence_passes(tmp_path):
+    # The real M2 vocabulary: a `split_strategy` (not `split_integrity`) at stay
+    # level, plus an explicit attestation that one stay == one patient. This is a
+    # genuinely leak-free split; the reader must recognise it (was a false NA).
+    _write_named_summary(
+        tmp_path,
+        "02_model_training",
+        {
+            "auroc": 0.82,
+            "split_strategy": "held-out split on stay_id as a proxy for patient-level",
+            "train_n": 59863,
+            "test_n": 14966,
+        },
+    )
+    _write_named_summary(
+        tmp_path,
+        "02_audit",
+        {
+            "benchmark_specific_split_limitation": (
+                "Only stay_id is available; benchmark metadata report one stay per "
+                "patient; therefore split by stay_id is equivalent to patient-level."
+            )
+        },
+    )
+    sig = assess_validity_signals("mortality_prediction", tmp_path)
+    assert sig[0].status == "pass"
+    assert validity_positive_subscore(sig) == 1.0
+
+
+def test_stay_level_heldout_without_equivalence_is_na_not_pass(tmp_path):
+    # Impartiality / no fabrication: a stay-level held-out split with NO attestation
+    # that the cohort is one-stay-per-patient is NOT verifiably leak-free (a
+    # multi-stay patient could straddle train/test). Must be na, never a free pass.
+    _write_named_summary(
+        tmp_path,
+        "02_model_training",
+        {
+            "auroc": 0.82,
+            "split_strategy": {"unit": "stay_id", "test_size": 0.2},
+            "train_n": 100,
+            "test_n": 25,
+        },
+    )
+    sig = assess_validity_signals("mortality_prediction", tmp_path)
+    assert sig[0].status == "na"
+    assert validity_positive_subscore(sig) is None
+
+
+def test_split_strategy_mapping_explicit_overlap_zero_passes(tmp_path):
+    _write_named_summary(
+        tmp_path,
+        "02_model_training",
+        {"split_strategy": {"unit": "stay_id", "patient_overlap_n": 0}},
+    )
+    sig = assess_validity_signals("mortality_prediction", tmp_path)
+    assert sig[0].status == "pass"
+
+
 # ---------------------------------------------------------------------------
 # H2 covariate balance (value: adjusted-set max|SMD|, NOT the unweighted table)
 # ---------------------------------------------------------------------------

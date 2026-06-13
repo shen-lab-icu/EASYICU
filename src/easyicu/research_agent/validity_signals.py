@@ -126,60 +126,138 @@ def _floats(rows: Sequence[Mapping[str, str]], *col_aliases: str) -> List[float]
 # ---------------------------------------------------------------------------
 
 
+# An ID-level split unit (patient or stay/admission) is leak-free at the patient
+# level either directly (patient/subject) or when the cohort is one-stay-per-patient
+# (stay/admission). A row/observation-level split mixes a patient across train and
+# test → leakage.
+_PATIENT_UNIT_TOKENS = ("patient", "subject", "uniquepid")
+_STAY_UNIT_TOKENS = ("stay", "icustay", "hadm", "admission", "encounter")
+_ROW_UNIT_TOKENS = ("row", "observation", "record-level", "row-level", "row level")
+# Phrases by which the agent attests the stay-level split is patient-equivalent.
+_PATIENT_EQUIV_PHRASES = (
+    "one stay per patient",
+    "one row per patient",
+    "one admission per patient",
+    "single stay per patient",
+    "equivalent to patient-level",
+    "equivalent to a patient-level",
+    "patient-level split",
+)
+
+
+def _scan_split_evidence(
+    summaries: Sequence[Mapping[str, object]],
+) -> Dict[str, object]:
+    """Aggregate train/test split evidence across the agent's varied vocabulary.
+
+    The agent records the split under different keys/shapes run to run
+    (``split_integrity`` mapping, a ``split_strategy`` string or mapping, a
+    free-text ``*_split_limitation`` note, ``train_n``/``test_n`` counts). Reading
+    only one schema false-NAs a perfectly valid split, so we scan every step
+    summary for the leakage-relevant facts: the split UNIT, any recorded patient
+    OVERLAP count, whether a held-out partition exists, and whether the agent
+    attested stay==patient equivalence.
+    """
+    unit = ""
+    overlap_n: Optional[int] = None
+    has_heldout = False
+    patient_equiv = False
+
+    def _note_unit(text: str) -> None:
+        nonlocal unit
+        t = text.lower()
+        if unit:
+            return
+        if any(tok in t for tok in _ROW_UNIT_TOKENS):
+            unit = "row"
+        elif any(tok in t for tok in _PATIENT_UNIT_TOKENS):
+            unit = "patient"
+        elif any(tok in t for tok in _STAY_UNIT_TOKENS):
+            unit = "stay"
+
+    def _note_overlap(val: object) -> None:
+        nonlocal overlap_n
+        try:
+            n = int(float(val))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return
+        overlap_n = n if overlap_n is None else max(overlap_n, n)
+
+    for doc in summaries:
+        for k, v in doc.items():
+            kl = (k or "").lower()
+            relevant = any(
+                t in kl for t in ("split", "overlap", "train", "test", "leak")
+            )
+            if isinstance(v, Mapping):
+                if relevant or any(("unit" in (sk or "").lower()) for sk in v.keys()):
+                    u = str(v.get("split_unit") or v.get("unit") or v.get("type") or "")
+                    if u:
+                        _note_unit(u)
+                    if "test_size" in v or "n_test" in v or "test_n" in v:
+                        has_heldout = True
+                    for ok in ("patient_overlap_n", "overlap_n", "n_overlap"):
+                        if v.get(ok) is not None:
+                            _note_overlap(v.get(ok))
+                    blob = json.dumps(v).lower()
+                    if any(p in blob for p in _PATIENT_EQUIV_PHRASES):
+                        patient_equiv = True
+            elif isinstance(v, str) and relevant:
+                _note_unit(v)
+                if any(p in v.lower() for p in _PATIENT_EQUIV_PHRASES):
+                    patient_equiv = True
+                if "held-out" in v.lower() or "held out" in v.lower():
+                    has_heldout = True
+            elif relevant and ("overlap" in kl) and v is not None:
+                _note_overlap(v)
+            elif kl in ("train_n", "n_train", "test_n", "n_test") and v is not None:
+                has_heldout = True
+
+    return {
+        "unit": unit,
+        "overlap_n": overlap_n,
+        "has_heldout": has_heldout,
+        "patient_equiv": patient_equiv,
+    }
+
+
 def _mortality_prediction_signals(
     run_dir: Path, summaries: Sequence[Mapping[str, object]]
 ) -> List[ValiditySignal]:
-    # Central validity property of a prediction AUROC: the train/test split is at
-    # the patient level with NO patient overlap. A row-level split (or overlap) is
-    # leakage that inflates discrimination — an objective Fail. A prediction model
-    # that reports no split integrity at all has skipped a required check → fail.
-    split = _summary_get(summaries, "split_integrity")
-    if isinstance(split, Mapping):
-        unit = str(split.get("split_unit") or "").lower()
-        overlap = split.get("patient_overlap_n")
-        patient_unit = any(t in unit for t in ("patient", "stay", "subject"))
-        try:
-            overlap_n = int(float(overlap)) if overlap is not None else None
-        except (TypeError, ValueError):
-            overlap_n = None
-        if patient_unit and overlap_n == 0:
-            return [
-                ValiditySignal(
-                    "patient_level_split_no_overlap", "pass", f"unit={unit}, overlap=0"
-                )
-            ]
-        if overlap_n is not None and overlap_n > 0:
-            return [
-                ValiditySignal(
-                    "patient_level_split_no_overlap",
-                    "fail",
-                    f"patient overlap={overlap_n}",
-                )
-            ]
-        if not patient_unit and unit:
-            # An explicitly NON-patient (row-level) split is leakage: an objective Fail.
-            return [
-                ValiditySignal(
-                    "patient_level_split_no_overlap",
-                    "fail",
-                    f"row-level split unit ({unit})",
-                )
-            ]
+    # Central validity property of a prediction AUROC: the train/test split keeps
+    # every patient on ONE side (no patient overlap). Leakage inflates
+    # discrimination — an objective Fail. We read the leakage facts from whatever
+    # vocabulary the agent used (see _scan_split_evidence), not one fixed schema.
+    ev = _scan_split_evidence(summaries)
+    unit = str(ev["unit"])
+    overlap_n = ev["overlap_n"]
+    name = "patient_level_split_no_overlap"
+
+    # Explicit patient overlap > 0 → leakage, objective Fail.
+    if isinstance(overlap_n, int) and overlap_n > 0:
+        return [ValiditySignal(name, "fail", f"patient overlap={overlap_n}")]
+    # Explicit row/observation-level split → leakage, objective Fail.
+    if unit == "row":
+        return [ValiditySignal(name, "fail", "row-level split unit")]
+    # Leak-free established: patient/subject unit, OR stay unit attested
+    # patient-equivalent (one-stay-per-patient), OR an explicit overlap==0.
+    if unit == "patient" or (unit == "stay" and ev["patient_equiv"]) or overlap_n == 0:
+        detail = f"unit={unit or 'patient'}"
+        if unit == "stay" and ev["patient_equiv"]:
+            detail += ", attested one-stay-per-patient (patient-equivalent)"
+        elif overlap_n == 0:
+            detail += ", overlap=0"
+        return [ValiditySignal(name, "pass", detail)]
+    # A stay-level split with no patient-equivalence attestation and no overlap
+    # count is defensible but not VERIFIABLY leak-free here — do not fabricate a
+    # pass, do not false-fail. Same for no readable split evidence at all.
+    if unit == "stay" and ev["has_heldout"]:
         return [
             ValiditySignal(
-                "patient_level_split_no_overlap", "na", "split metadata unreadable"
+                name, "na", "stay-level held-out split; patient overlap not verifiable"
             )
         ]
-    # No split-integrity metadata in the field we read. We CANNOT conclude the run
-    # skipped the split (it may record it elsewhere) — absence in our format is not
-    # evidence of wrongness, so stay na rather than false-fail.
-    return [
-        ValiditySignal(
-            "patient_level_split_no_overlap",
-            "na",
-            "no readable split-integrity metadata",
-        )
-    ]
+    return [ValiditySignal(name, "na", "no readable split-integrity evidence")]
 
 
 # Markers that the causal design is *balance-based* (weighting / matching) — the
