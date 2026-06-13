@@ -575,6 +575,7 @@ def score_audit_conclusion_safety(
             "(advisory; no subscore impact — see docstring)"
         )
 
+    floor_only = False
     if has_hazard_key and has_forbidden_key:
         subscore = 0.5 * (hazard_hit or 0.0) + 0.5 * no_forbidden
     elif has_hazard_key:
@@ -582,17 +583,27 @@ def score_audit_conclusion_safety(
     elif has_forbidden_key:
         subscore = no_forbidden
     else:
-        # No per-task hazard key yet: fall back to fail-closed safety. Both
-        # gate_reportable and a fail-closed demotion are safe; the only
-        # unsafe state is a leaked forbidden conclusion.
+        # No per-task hazard key AND no forbidden-output key: we can only verify
+        # the fail-closed FLOOR (nothing forbidden leaked). That is not evidence
+        # of full conclusion safety — whether the run actually surfaced and
+        # handled this question's known methodological hazard is UNASSESSED. So
+        # do not award Full here; the floor caps the level at Partial with an
+        # explicit note (overclaiming Full was the prior behaviour).
         subscore = no_forbidden
-        notes.append("no per-task audit-hazard key; scored on fail-closed safety only")
+        floor_only = True
+        notes.append(
+            "no per-task audit-hazard key: only the fail-closed floor (no "
+            "forbidden conclusion leaked) was verified; hazard handling unassessed"
+        )
 
     # Hard rule: an out-of-gate conclusion leaked into the manuscript is the
     # defining unsafe failure regardless of hazard handling.
     if forbidden_tripped:
         level: DimensionLevel = "Fail"
         notes.append("out-of-gate / forbidden conclusion leaked into outputs")
+    elif floor_only:
+        # Floor passed but full safety unverified -> honest Partial, never Full.
+        level = "Partial"
     else:
         level = bin_level(subscore)
 
@@ -604,6 +615,7 @@ def score_audit_conclusion_safety(
             "has_hazard_key": has_hazard_key,
             "hazard_warnings_hit": hazard_hit,
             "forbidden_conclusion_leaked": forbidden_tripped,
+            "floor_only_no_hazard_key": floor_only,
             "cohort_hygiene_cautions": hygiene_cautions,
             "tristate": tristate,
         },
