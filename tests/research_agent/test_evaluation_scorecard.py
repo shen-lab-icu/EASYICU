@@ -146,6 +146,75 @@ def test_plan_hard_task_needs_two_figures():
     assert dim.level != "Full"
 
 
+def test_declares_table_one_matches_diverse_baseline_table_names():
+    # Real agent vocabulary for a Table 1 (baseline characteristics) — must match
+    # despite diverse naming, via a cohort/sample noun + a summary descriptor.
+    for name in [
+        "table:cohort_summary",
+        "table:covariate_summary_by_exposure",
+        "table:adult_cohort_characteristics_by_lactate_measured",
+        "table:patient_overview",
+        "table_one",
+    ]:
+        assert sc._declares_table_one([name]), name
+
+
+def test_declares_table_one_rejects_non_table_one_artifacts_and_prose():
+    # Flow tables, single-variable distributions, missingness profiles, and a
+    # generic results summary are NOT a Table 1 — and a prose step intent that
+    # merely co-mentions "cohort" and a stats word must not count.
+    for name in [
+        "table:cohort_attrition",  # flow, not characteristics
+        "table:stage_distribution_in_cohort",  # one-variable distribution
+        "table:covariate_missingness_profile",  # missingness, not baseline
+        "table:robustness_summary",  # no cohort/sample subject
+        "table:final_results_summary",  # results, not baseline
+        "Define the adult cohort and summarise its distribution before modelling",  # prose intent, no table: artifact
+    ]:
+        assert not sc._declares_table_one([name]), name
+
+
+def test_score_run_from_dir_reads_latest_plan_revision(tmp_path):
+    # The plan dimension must score the EXECUTED plan (latest revision), not the
+    # initial analysis_plan.json. Here the base plan lacks a Table 1 but a later
+    # revision adds one -> plan must see it.
+    (tmp_path / "run_status.json").write_text(
+        json.dumps(
+            {
+                "gates": {
+                    "required_step_count": 1,
+                    "completed_step_count": 1,
+                    "execution_complete": True,
+                    "manuscript_ready": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    base_steps = {"steps": [{"intent": "fit model", "expected_outputs": ["figure:x"]}]}
+    revised = {
+        "steps": [
+            {
+                "intent": "fit model",
+                "expected_outputs": [
+                    "figure:x",
+                    "table:cohort_summary",
+                    "figure:audit_panel",
+                ],
+            }
+        ]
+    }
+    (tmp_path / "analysis_plan.json").write_text(json.dumps(base_steps), "utf-8")
+    (tmp_path / "analysis_plan_revision_2.json").write_text(
+        json.dumps(revised), "utf-8"
+    )
+    task = ICUAgentBenchTask(
+        task_id="t", kind="causal_inference", title="t", objective="t"
+    )
+    card = sc.score_run_from_dir(task, tmp_path)
+    assert card.plan.signals["has_table_one"] is True
+
+
 # ---------------------------------------------------------------------------
 # code
 # ---------------------------------------------------------------------------
