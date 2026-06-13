@@ -656,3 +656,88 @@ def test_statistical_guard_accepts_v14_cv_prediction_summary(ra, tmp_path: Path)
     assert "held-out performance" not in messages
     assert "train/test split" not in messages
     assert "calibration_slope" not in messages
+
+
+# ---------------------------------------------------------------------------
+# Degenerate-partition disclosure caution (clustering / trajectory)
+# ---------------------------------------------------------------------------
+
+
+def _cluster_sizes_dir(tmp_path: Path, sizes) -> Path:
+    out = tmp_path / "out"
+    out.mkdir(exist_ok=True)
+    total = float(sum(sizes))
+    pd.DataFrame({
+        "cluster": list(range(len(sizes))),
+        "n": sizes,
+        "pct": [s / total * 100.0 for s in sizes],
+    }).to_csv(out / "cluster_sizes.csv", index=False)
+    return out
+
+
+def test_statistical_validator_flags_degenerate_partition(ra, tmp_path: Path):
+    # The M3 scenario: a "2-cluster solution" that is really 99.5% / 0.5%.
+    # silhouette/ARI on such a split are inflated by outlier isolation, so the
+    # agent must be cautioned to disclose the size imbalance.
+    ctx = _ctx_with_sofa(ra)
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(cohort, index=False)
+    out_dir = _cluster_sizes_dir(tmp_path, [38584, 203])
+    step = ra.schema.AnalysisStep(
+        step_id="01_phenotype_trajectory_clustering", intent="subphenotype clustering"
+    )
+    findings = ra.StatisticalValidator().audit(
+        context=ctx, cohort_path=cohort, step=step, out_dir=out_dir,
+        step_summary={"silhouette": 0.808, "mean_ari": 1.0},
+    )
+    deg = [f for f in findings if "degenerate" in f.message.lower()]
+    assert deg, findings
+    assert all(f.severity == "warning" for f in deg)  # never blocks honest reporting
+    assert deg[0].detail["min_cluster_fraction"] < 0.01
+
+
+def test_statistical_validator_silent_on_balanced_partition(ra, tmp_path: Path):
+    # A genuinely separated partition must NOT be flagged — the rule layer only
+    # surfaces objective degeneracy, never imposes a "good enough" threshold.
+    ctx = _ctx_with_sofa(ra)
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(cohort, index=False)
+    out_dir = _cluster_sizes_dir(tmp_path, [12000, 9000, 7500, 6000])
+    step = ra.schema.AnalysisStep(
+        step_id="01_phenotype_trajectory_clustering", intent="subphenotype clustering"
+    )
+    findings = ra.StatisticalValidator().audit(
+        context=ctx, cohort_path=cohort, step=step, out_dir=out_dir, step_summary={},
+    )
+    assert not [f for f in findings if "degenerate" in f.message.lower()]
+
+
+def test_statistical_validator_degeneracy_silent_without_cluster_evidence(ra, tmp_path: Path):
+    # Absence of a cluster-size distribution is not degeneracy: a non-clustering
+    # step must never trip this caution.
+    ctx = _ctx_with_sofa(ra)
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(cohort, index=False)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "primary_association.csv").write_text("variable,odds_ratio\nage,1.1\n", encoding="utf-8")
+    step = ra.schema.AnalysisStep(step_id="04_primary_association", intent="association")
+    findings = ra.StatisticalValidator().audit(
+        context=ctx, cohort_path=cohort, step=step, out_dir=out_dir, step_summary={},
+    )
+    assert not [f for f in findings if "degenerate" in f.message.lower()]
+
+
+def test_statistical_validator_flags_single_group_partition(ra, tmp_path: Path):
+    ctx = _ctx_with_sofa(ra)
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1, 2], "death": [0, 1]}).to_parquet(cohort, index=False)
+    out_dir = _cluster_sizes_dir(tmp_path, [38787])
+    step = ra.schema.AnalysisStep(
+        step_id="01_phenotype_trajectory_clustering", intent="subphenotype clustering"
+    )
+    findings = ra.StatisticalValidator().audit(
+        context=ctx, cohort_path=cohort, step=step, out_dir=out_dir, step_summary={},
+    )
+    deg = [f for f in findings if "single-group" in f.message.lower() or "degenerate" in f.message.lower()]
+    assert deg and all(f.severity == "warning" for f in deg)
