@@ -1035,7 +1035,95 @@ class StatisticalValidator:
                     message=f"Could not parse {perf_csv.name}: {exc}",
                 ))
 
+        # 5. Degenerate-partition disclosure caution (clustering / trajectory).
+        #    When a step emits a cluster-size distribution, surface an OBJECTIVE
+        #    degeneracy fact — a single group, or one dominant cluster plus a
+        #    near-empty (<1% of cohort) pocket — as an advisory caution. This is
+        #    the agent-facing mirror of the post-hoc phenotype validity check:
+        #    silhouette / ARI computed on such a partition are inflated by
+        #    outlier isolation and must NOT be reported as evidence of robust
+        #    subphenotypes without disclosing the size imbalance. It is a
+        #    WARNING, never a block: a degenerate partition is still a legitimate
+        #    (negative) finding to report honestly — the rule layer surfaces the
+        #    fact and never imposes k, algorithm, scaling or outlier handling.
+        deg = self._degenerate_partition(out_dir, step_summary)
+        if deg is not None:
+            findings.append(ValidationFinding(
+                validator=self.name, severity="warning",
+                message=(
+                    f"Degenerate cluster partition ({deg['reason']}). Silhouette "
+                    "and resampling ARI on such a partition are inflated by "
+                    "outlier isolation, not evidence of separated subphenotypes; "
+                    "disclose the cluster sizes and do not present this as a "
+                    "robust multi-subphenotype solution."
+                ),
+                detail=deg,
+            ))
+
         return findings
+
+    @staticmethod
+    def _degenerate_partition(
+        out_dir: Path, step_summary: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Return a degeneracy descriptor when a cluster-size distribution is
+        objectively broken, else ``None``.
+
+        Reuses the post-hoc scorecard threshold (single group, or smallest
+        group < 1% of the cohort). Reads ``cluster_sizes.csv`` (columns include
+        ``n`` and/or ``pct``) or a ``cluster_sizes`` mapping/list in the step
+        summary. Stays silent (``None``) when the step produced no cluster-size
+        evidence — absence is not degeneracy.
+        """
+        ns: List[float] = []
+        # Prefer the emitted table; fall back to the step summary.
+        try:
+            csv_path = out_dir / "cluster_sizes.csv"
+            if not csv_path.exists():
+                for p in out_dir.glob("*cluster_sizes*.csv"):
+                    csv_path = p
+                    break
+            if csv_path.exists():
+                tbl = pd.read_csv(csv_path)
+                if "n" in tbl.columns:
+                    ns = [float(x) for x in tbl["n"].dropna().tolist()]
+                elif "pct" in tbl.columns:
+                    ns = [float(x) for x in tbl["pct"].dropna().tolist()]
+        except Exception:
+            ns = []
+        if not ns:
+            raw = (step_summary or {}).get("cluster_sizes")
+            try:
+                if isinstance(raw, dict):
+                    ns = [float(v) for v in raw.values()]
+                elif isinstance(raw, (list, tuple)):
+                    ns = [float(v) for v in raw]
+            except Exception:
+                ns = []
+        ns = [x for x in ns if x is not None and x >= 0]
+        if not ns:
+            return None
+        k = len(ns)
+        total = sum(ns)
+        if total <= 0:
+            return None
+        min_frac = min(ns) / total
+        if k < 2:
+            return {
+                "reason": f"single-group solution (k={k})",
+                "n_clusters": k,
+                "min_cluster_fraction": round(min_frac, 6),
+            }
+        if min_frac < 0.01:
+            return {
+                "reason": (
+                    f"one dominant cluster plus a near-empty group "
+                    f"({min_frac * 100:.2f}% of cohort) across k={k}"
+                ),
+                "n_clusters": k,
+                "min_cluster_fraction": round(min_frac, 6),
+            }
+        return None
 
 
 class ClinicalConstraintValidator:
