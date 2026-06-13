@@ -664,6 +664,69 @@ def test_map_idea_to_executable_candidate_aligns_canonical_concept_keys() -> Non
     assert executable.feasibility_pair_key == ("crea", "endpoint_known")
 
 
+def test_non_binary_determinable_outcome_is_not_gated_as_unknown() -> None:
+    # A continuous/ordinal outcome is determinable (the present/NA binary trap
+    # does not apply). It must leave the dry run executable, not be blocked with
+    # an "outcome determinability is unknown" reason.
+    candidate = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="metadata_only",
+        population="adult ICU patients",
+        exposure_or_predictor="creatinine",
+        outcome="organ dysfunction severity",
+        rationale="The source suggests a severity-graded endpoint.",
+        source_quote="future work should study severity scores",
+    )
+    concepts = [
+        ConceptDescriptor(
+            name="creatinine_first24h",
+            source_concept="crea",
+            role=VariableRole.LAB,
+            dtype="float64",
+        ),
+        ConceptDescriptor(
+            name="sofa_total",
+            source_concept="sofa",
+            derived_from_concepts=["organ dysfunction severity"],
+            role=VariableRole.ORDINAL_SCORE,
+            dtype="int64",
+        ),
+    ]
+
+    executable = map_literature_idea_to_executable_candidate(
+        candidate,
+        available_concepts=concepts,
+        outcome_determinability={
+            "sofa": OutcomeDeterminability(
+                outcome="sofa", status="non_binary_determinable"
+            )
+        },
+    )
+
+    assert executable.outcome_determinability_status == "non_binary_determinable"
+    assert not any(
+        "determinability is unknown" in reason
+        for reason in executable.non_executable_reasons
+    )
+    assert executable.resolved_outcome_concept == "sofa"
+    assert executable.executable
+
+
+def test_ordinal_and_continuous_outcomes_get_non_binary_determinability_from_catalog() -> None:
+    # End-to-end with the real catalog: ordinal scores and continuous labs are
+    # auto-declared determinable, so the default idea-mining path stops gating
+    # them out as "unknown".
+    from easyicu.research_agent.concept_catalog import load_concept_catalog
+
+    od = load_concept_catalog().outcome_determinability
+    for key in ("sofa", "qsofa", "los_icu", "lact", "crea"):
+        assert od[key]["status"] == "non_binary_determinable"
+    # binary outcomes are unchanged; treatment/exposure concepts stay unscored.
+    assert od["death"]["status"] == "known_0_1"
+    assert "norepi60" not in od
+
+
 def test_derived_feature_requires_feature_engineering_before_execution() -> None:
     candidate = LiteratureIdeaCandidate(
         source_snapshot_id="source-snapshot/sha256:abc123",
@@ -1185,6 +1248,47 @@ def test_dry_run_uses_dictionary_catalog_by_default(tmp_path) -> None:
     assert candidate.outcome_determinability_status == "known_0_1"
     assert candidate.feasibility_pair_key == ("adh_rate", "death")
     assert candidate.non_executable_reasons == []
+
+
+def test_dry_run_warns_when_all_sources_are_metadata_only(tmp_path) -> None:
+    # metadata_only sources expose only title/venue/relevance, so gap mining has
+    # no discussion/limitations text to work from. The dry run must surface that
+    # the discovery yield is capped by source richness, not silently proceed.
+    material = SourceMaterial(
+        citation=_citation(),
+        source_adapter_level="metadata_only",
+    )
+    llm = CapturingIdeaLLM([])
+
+    result = run_idea_mining_dry_run(
+        materials=[material],
+        llm=llm,
+        available_concepts=["adh_rate", "death"],
+        output_dir=tmp_path / "dry_run",
+    )
+
+    assert any(
+        "metadata_only" in warning and "source richness" in warning
+        for warning in result.warnings
+    )
+
+
+def test_dry_run_does_not_warn_metadata_only_for_excerpt_sources(tmp_path) -> None:
+    material = SourceMaterial(
+        citation=_citation(),
+        source_adapter_level="user_supplied_excerpt",
+        source_text="The review names an unresolved direction in its limitations.",
+    )
+    llm = CapturingIdeaLLM([])
+
+    result = run_idea_mining_dry_run(
+        materials=[material],
+        llm=llm,
+        available_concepts=["adh_rate", "death"],
+        output_dir=tmp_path / "dry_run",
+    )
+
+    assert not any("metadata_only" in warning for warning in result.warnings)
 
 
 def test_dry_run_surfaces_structural_unavailable_feasibility_note(tmp_path) -> None:
