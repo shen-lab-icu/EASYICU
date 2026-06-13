@@ -259,15 +259,16 @@ _FORBIDDEN_AGG_PATTERNS_BY_KIND = {
 }
 
 
-# Stage-aware severity hook (added 2026-05-26).
+# Severity policy for forbidden-aggregation patterns (added 2026-05-26,
+# corrected 2026-06-13).
 #
-# Default behaviour preserves the strict fail-closed benchmark: every
-# matched pattern produces a severity="error" finding regardless of step
-# stage. Setting EASYICU_AUDIT_RELAX_PROBE=1 downgrades matches to
-# severity="warning" when the step is recognised as descriptive / probe /
-# exploratory, while keeping severity="error" for primary-analysis,
-# manuscript and final-report stages. This hook exists so that a future
-# supplementary ablation can compare strict vs stage-calibrated audit
+# Default behaviour: severity="warning" (advisory). Mean/SD of an ordinal
+# or composite clinical score is a reporting-practice preference, not an
+# objective error, so per the impartiality contract it is surfaced as a
+# caution and never hard-blocks a run. Setting EASYICU_AUDIT_ORDINAL_STRICT=1
+# restores the historical strict fail-closed benchmark (severity="error" /
+# block for primary-analysis & manuscript stages, "warning" for
+# probe/descriptive stages) so a supplementary ablation can compare the two
 # policies on the same benchmark without re-running unrelated logic.
 _PROBE_STAGE_TOKENS = (
     "probe", "descriptive", "exploratory", "qc", "summary",
@@ -279,23 +280,40 @@ _BLOCKING_STAGE_TOKENS = (
 
 
 def _forbidden_agg_severity(step: Optional["AnalysisStep"]) -> str:
-    """Return 'error' (block) or 'warning' for a forbidden-agg pattern.
+    """Severity for a forbidden-*aggregation* pattern (mean/std of an
+    ordinal / composite clinical score).
 
-    Strict (default): always returns 'error'.
-    Relaxed (EASYICU_AUDIT_RELAX_PROBE=1): returns 'warning' when the
-    step id contains a probe/descriptive token and 'error' when it
-    contains a primary-analysis or manuscript token.
+    Default: ``"warning"`` (advisory caution, does NOT block the run).
+
+    These patterns are *reporting-practice preferences*, not objective
+    mathematical errors — the same column may legitimately enter a model
+    as a covariate, and a generic ``describe()``-style helper that returns
+    ``{"mean": ..., "median": ...}`` for a selection-bias diagnostic is a
+    defensible use of ``.mean()``. The impartiality contract (see
+    ``ICU_RULES.general_principles`` kind=="caution": mean-vs-median is a
+    *choice* the rule layer must surface but never impose) means these must
+    advise, not hard-block. This also matches the sibling lab-mean rule,
+    which is already a ``"warning"``. Hard-blocking on a single helper-level
+    ``.mean()`` was observed to degrade an otherwise-correct run (whose
+    primary analysis treated the score as ordinal categories) all the way
+    to ``diagnostic_only`` — a false fail-closed.
+
+    Escape hatch for an ablation that wants the historical strict
+    fail-closed benchmark: ``EASYICU_AUDIT_ORDINAL_STRICT=1`` restores
+    ``"error"`` (block) for primary-analysis / manuscript stages while
+    keeping probe/descriptive stages advisory.
     """
     import os
-    if os.environ.get("EASYICU_AUDIT_RELAX_PROBE") != "1":
-        return "error"
+    if os.environ.get("EASYICU_AUDIT_ORDINAL_STRICT") != "1":
+        return "warning"
     sid = (getattr(step, "step_id", "") or "").lower()
-    for tok in _BLOCKING_STAGE_TOKENS:
-        if tok in sid:
-            return "error"
     for tok in _PROBE_STAGE_TOKENS:
         if tok in sid:
             return "warning"
+    for tok in _BLOCKING_STAGE_TOKENS:
+        if tok in sid:
+            return "error"
+    # Strict ablation, ambiguous stage: block (historical behaviour).
     return "error"
 
 

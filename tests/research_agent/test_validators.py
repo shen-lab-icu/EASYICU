@@ -32,14 +32,43 @@ def _ctx_with_sofa(ra) -> "ra.ResearchContext":
 
 
 def test_concept_usage_flags_mean_of_sofa(ra):
+    # Impartiality contract: mean/SD of an ordinal/composite score is a
+    # reporting-practice *preference*, not an objective error, so it is a
+    # WARNING (advisory) that never hard-blocks a run. The caution must
+    # still be raised (so a reviewer sees it), just not as severity="error".
     ctx = _ctx_with_sofa(ra)
     auditor = ra.ConceptUsageAuditor()
-    code = "x = df['sofa2'].mean()  # forbidden"
+    code = "x = df['sofa2'].mean()  # advisory"
     findings = auditor.audit(context=ctx, script_text=code)
-    assert any(f.severity == "error" and "sofa" in f.message.lower() or "ordinal" in f.message.lower()
-               for f in findings), findings
-    # at least one error finding with the right validator name
-    assert any(f.severity == "error" and f.validator == auditor.name for f in findings)
+    matched = [
+        f for f in findings
+        if f.validator == auditor.name
+        and ("sofa" in f.message.lower() or "ordinal" in f.message.lower())
+    ]
+    assert matched, findings
+    assert all(f.severity == "warning" for f in matched), matched
+    # ...and no forbidden-aggregation finding is escalated to a blocking error.
+    assert not any(
+        f.severity == "error" and "misleading" in f.message.lower()
+        for f in findings
+    ), findings
+
+
+def test_concept_usage_mean_of_sofa_blocks_under_strict_ablation(ra, monkeypatch):
+    # The historical strict fail-closed benchmark stays reproducible behind
+    # EASYICU_AUDIT_ORDINAL_STRICT=1, which restores severity="error" for
+    # primary-analysis / manuscript stages.
+    monkeypatch.setenv("EASYICU_AUDIT_ORDINAL_STRICT", "1")
+    ctx = _ctx_with_sofa(ra)
+    auditor = ra.ConceptUsageAuditor()
+    schema = ra.schema
+    step = schema.AnalysisStep(step_id="primary_association", intent="primary")
+    findings = auditor.audit(
+        context=ctx, script_text="x = df['sofa2'].mean()", step=step
+    )
+    assert any(
+        f.severity == "error" and f.validator == auditor.name for f in findings
+    ), findings
 
 
 def test_concept_usage_flags_mean_of_lact_without_median(ra):
@@ -79,12 +108,13 @@ def test_concept_usage_fillna_zero_ignores_env_string_subscripts(ra):
 
 
 def test_concept_usage_flags_agg_mean_of_sofa(ra):
+    # Detection still fires across call forms; severity is advisory (warning).
     ctx = _ctx_with_sofa(ra)
     findings = ra.ConceptUsageAuditor().audit(
         context=ctx,
         script_text='x = df["sofa2"].agg("mean")',
     )
-    assert any(f.severity == "error" and "sofa" in f.message.lower() for f in findings)
+    assert any(f.severity == "warning" and "sofa" in f.message.lower() for f in findings)
 
 
 def test_concept_usage_flags_numpy_mean_of_sofa(ra):
@@ -93,7 +123,7 @@ def test_concept_usage_flags_numpy_mean_of_sofa(ra):
         context=ctx,
         script_text='import numpy as np\nx = np.mean(df["sofa2"])',
     )
-    assert any(f.severity == "error" and "sofa" in f.message.lower() for f in findings)
+    assert any(f.severity == "warning" and "sofa" in f.message.lower() for f in findings)
 
 
 def test_concept_usage_flags_rolling_mean_of_sofa(ra):
@@ -102,7 +132,7 @@ def test_concept_usage_flags_rolling_mean_of_sofa(ra):
         context=ctx,
         script_text='x = df["sofa2"].rolling(3).mean()',
     )
-    assert any(f.severity == "error" and "sofa" in f.message.lower() for f in findings)
+    assert any(f.severity == "warning" and "sofa" in f.message.lower() for f in findings)
 
 
 def test_statistical_validator_flags_outcome_mismatch(ra, tmp_path: Path):
