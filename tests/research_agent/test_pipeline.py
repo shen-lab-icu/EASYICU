@@ -576,8 +576,15 @@ def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: P
     ]
 
 
-def test_pipeline_repairs_concept_audit_violation(ra, tmp_path: Path):
-    """A generated mean-of-SOFA script should be repaired before execution."""
+def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(ra, tmp_path: Path):
+    """Impartiality: a script that computes ``.mean()`` of an ordinal SOFA
+    score (here inside a generic describe-style summary that ALSO reports the
+    level distribution) must NOT hard-block or trigger an auto-repair that
+    imposes median/max over the agent's choice. The caution is recorded as a
+    WARNING and the step completes. This is the regression guard for the M1
+    false-degradation, where a single helper-level ``.mean()`` dragged an
+    otherwise-correct ordinal analysis down to ``diagnostic_only``.
+    """
 
     class ConceptRepairLLM:
         name = "concept-repair-llm"
@@ -596,7 +603,7 @@ def test_pipeline_repairs_concept_audit_violation(ra, tmp_path: Path):
                         "method": "regression",
                         "icu_rule_refs": ["aggregation_rule_for"],
                     }],
-                    "rationale": "minimal concept repair test",
+                    "rationale": "minimal advisory-ordinal-mean test",
                 })
             if "REPAIR THE PYTHON CODE" in upper:
                 return """
@@ -620,12 +627,31 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
 print(json.dumps(summary))
 """
             if "WRITE THE PYTHON CODE" in upper:
+                # Generic describe-style summary: reports the ordinal LEVEL
+                # DISTRIBUTION (the clinically appropriate summary) AND a
+                # supplementary .mean() inside the same helper. The .mean()
+                # is advisory, must not block or trigger a repair.
                 return """
+import json
 import os
 import pandas as pd
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
-bad = df["sofa2"].mean()
-pd.DataFrame({"bad": [bad]}).to_csv(os.path.join(os.environ["STEP_OUT_DIR"], "primary_association.csv"), index=False)
+out = os.environ["STEP_OUT_DIR"]
+
+levels = df["sofa2"].value_counts().sort_index()
+pd.DataFrame({
+    "sofa2_level": levels.index,
+    "n": levels.values,
+}).to_csv(os.path.join(out, "primary_association.csv"), index=False)
+summary = {
+    "predictor": "sofa2",
+    "sofa2_level_distribution": {int(k): int(v) for k, v in levels.items()},
+    "sofa2_supplementary_mean": float(df["sofa2"].mean()),
+    "primary_or": 1.0,
+}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+print(json.dumps(summary))
 """
             if "INTERPRET THE RESULTS" in upper:
                 return "The repaired table was produced {evidence:primary_association_table}."
@@ -650,12 +676,23 @@ pd.DataFrame({"bad": [bad]}).to_csv(os.path.join(os.environ["STEP_OUT_DIR"], "pr
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
     partial = json.loads((Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8"))
     record = _step_record_by_id(partial["per_step_records"], "04_primary_association")
+    # The step completes without being blocked and without an auto-repair that
+    # would impose a different aggregation over the agent's choice.
     assert record["status"] == "ok"
-    assert record["concept_repair_attempts"] == 1
+    assert record.get("concept_repair_attempts", 0) == 0
+    assert record.get("status") != "blocked_by_concept_audit"
+    # No forbidden-aggregation finding is escalated to a blocking error...
     assert not [
         f for f in manifest["findings"]
         if f["severity"] == "error" and f["validator"] == "concept_usage_auditor"
     ]
+    # ...but the advisory caution is still surfaced for the reviewer.
+    assert any(
+        f["validator"] == "concept_usage_auditor"
+        and f["severity"] == "warning"
+        and ("ordinal" in f["message"].lower() or "sofa" in f["message"].lower())
+        for f in record.get("usage_findings", [])
+    ), record.get("usage_findings")
 
 
 def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(

@@ -1504,12 +1504,14 @@ def _run_pipeline(
 ):
     """Invoke the pipeline; return the :class:`PipelineResult`.
 
-    ``audit_relax_probe`` is a per-run override of
-    ``EASYICU_AUDIT_RELAX_PROBE`` — when True, the probe-stage of the
-    concept-usage auditor downgrades reporting-practice violations from
-    block to warning. Used by the webapp resume editor as a documented
-    ablation; the strict default is preserved across the process by
-    restoring the prior env var value after the run.
+    ``audit_relax_probe`` sets the legacy ``EASYICU_AUDIT_RELAX_PROBE``
+    env var for the duration of the run. As of 2026-06-13 the concept-usage
+    auditor treats reporting-practice aggregation preferences (mean/SD of an
+    ordinal/composite score) as advisory warnings by DEFAULT — never a block
+    — so this toggle is effectively a no-op kept for backward compatibility.
+    The historical strict fail-closed benchmark is now opt-in via
+    ``EASYICU_AUDIT_ORDINAL_STRICT=1`` instead. The prior env var value is
+    restored across the process after the run regardless.
     """
     prior_relax = os.environ.get("EASYICU_AUDIT_RELAX_PROBE")
     if audit_relax_probe:
@@ -5597,9 +5599,10 @@ def _render_resume_panel(
         what will be reused vs replanned);
       * a free-form notes field that is appended to ``notes`` for the
         planner / coder agents on the re-run;
-      * a toggle for ``EASYICU_AUDIT_RELAX_PROBE`` so the user can opt
-        into the documented ablation (probe-stage block → warning) when
-        the prior run was halted by ``blocked_by_concept_audit``;
+      * a legacy ``EASYICU_AUDIT_RELAX_PROBE`` toggle (now a no-op: the
+        ordinal/composite reporting-aggregation auditor is advisory by
+        default, so it no longer halts a run with
+        ``blocked_by_concept_audit``; kept for backward compatibility);
       * a "Force manuscript" shortcut (reuses the existing
         ``force_manuscript`` flag) — useful when analysis is complete but
         the writer step needs to re-run after a manual evidence fix.

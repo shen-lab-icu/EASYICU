@@ -124,7 +124,13 @@ def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
         "script_text": 'df["sofa2"].mean()',
     })
     assert audited["validator"] == "concept_usage_auditor"
-    assert any(f["severity"] == "error" for f in audited["findings"])
+    # Mean of an ordinal score is an advisory caution (impartiality contract),
+    # surfaced as a warning rather than a blocking error.
+    assert any(
+        f["severity"] == "warning"
+        and ("ordinal" in f["message"].lower() or "sofa" in f["message"].lower())
+        for f in audited["findings"]
+    )
 
     availability = dispatch("research_agent.cross_database_concept_availability", {
         "concepts": ["sofa2", "creatinine"],
