@@ -42,7 +42,7 @@ EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 
 | 启动 research-agent 用的 LLM 代理服务 | `easyicu-llm-server` |
 | 可直接复制运行的脚本 | [`examples/`](examples/) —— 从 [`quickstart_convert_and_load.py`](examples/quickstart_convert_and_load.py) 开始 |
 
-所有控制台脚本都在 `pyproject.toml` 的 `[project.scripts]` 里声明,执行 `pip install -e ".[dev,webapp]"`(或 `".[all]"`)后即可使用。
+所有控制台脚本都在 `pyproject.toml` 的 `[project.scripts]` 里声明,安装本包后即可使用 —— 安装方式（使用版 / 开发版）见 **[路线 B](#路线-bpython-api)**。
 
 ### 文档地图
 
@@ -84,9 +84,30 @@ http://127.0.0.1:8501
 - 自动化特征提取流程
 - 在代码里构建可复现的队列管线
 
-最小安装方式：
-
 当前打包依赖建议使用 Python 3.10+。
+
+**直接安装使用**（无需 clone）：
+
+```bash
+pip install "easyicu[webapp] @ git+https://github.com/shen-lab-icu/easyicu.git"
+```
+
+按需替换方括号里的 extra：
+
+| 你想要…… | 安装 |
+|----------|------|
+| Python API —— 提取概念、SOFA / SOFA-2、sepsis-3、各类评分 | `easyicu` |
+| Streamlit Web 应用（含可选 AI 助手） | `easyicu[webapp]` |
+| Plotly / Kaleido 图表导出 | `easyicu[viz]` |
+| 托管 research-agent 的 LLM 代理 | `easyicu[llmserver]` |
+| 可选的 LangGraph agent graph | `easyicu[agentic]` |
+| 以上全部 | `easyicu[all]` |
+
+**核心安装（`easyicu`）已内置 research-agent 的分析栈**（`scikit-learn`、`statsmodels`），
+所以 Python API 和确定性 agent 路径开箱即用。research-agent CLI 另需一个 LLM 客户端
+—— 装 `easyicu[webapp]`（内含 `openai`）或运行 `easyicu-llm-server` 即可。
+
+**克隆开发**（可编辑安装）：
 
 ```bash
 git clone "https://github.com/shen-lab-icu/easyicu.git"
