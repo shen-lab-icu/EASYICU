@@ -1853,6 +1853,17 @@ def _sentences_missing_evidence_tokens(scaffold: str) -> List[str]:
             continue
         if re.match(r"^#{1,6}\s+", stripped):
             continue
+        # Skip footnote/provenance DEFINITION lines (``[^claim_1]: value=...;
+        # step=...; evidence=<name>``). These are auto-appended by the numeric
+        # binder as machine provenance, not author-written result sentences:
+        # they carry numbers + claimy words (auroc/brier/death) but reference
+        # evidence via a plaintext ``evidence=<step>`` token (no ``](evidence/)``
+        # link) when a claim binds to a step-level virtual evidence, so the
+        # support check mis-flagged the whole footnote block as one unsupported
+        # result sentence and falsely tripped manuscript_ready=False (E2). The
+        # block proves the claims ARE bound; it must not be scanned as prose.
+        if re.match(r"^\[\^[^\]]+\]:", stripped):
+            continue
         match = section_label_re.match(stripped)
         if match:
             stripped = stripped[match.end() :].strip()

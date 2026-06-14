@@ -3386,6 +3386,39 @@ def test_manuscript_numeric_auditor_allows_normal_rounding(ra):
     assert findings == []
 
 
+def test_manuscript_numeric_auditor_ignores_between_estimate_delta(ra):
+    """Regression (M2): a difference/tolerance number near the metric word
+    ('AUROC estimates differing by less than 0.001') is a delta between two
+    estimates, not a reported point estimate, and must not be bound to the
+    registered AUROC as a 0.001 claim. The genuine 0.827/0.83 claims in the
+    same manuscript must still be checked and pass."""
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "Discrimination was good, with an AUROC of 0.827 "
+        "[model_performance](evidence/model_performance.csv). The two registered "
+        "summaries agreed closely, with AUROC estimates differing by less than 0.001 "
+        "and Brier scores differing by less than 0.001 "
+        "[model_performance](evidence/model_performance.csv). A Brier score of 0.172 "
+        "was reported [model_performance](evidence/model_performance.csv).\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {
+                    "statistic:auroc": 0.8267455907381426,
+                    "statistic:brier_score": 0.1716274488483539,
+                },
+            }
+        ],
+    )
+
+    assert findings == []
+
+
 def test_manuscript_numeric_auditor_ignores_ci_percent_near_outcome_phrase(ra):
     """Regression: '95% confidence interval' must not be read as a 0.95
     prevalence claim when an outcome phrase ('death'/'mortality') appears
@@ -3465,6 +3498,83 @@ def test_manuscript_numeric_auditor_still_flags_overall_prevalence_mismatch(ra):
     )
 
     assert any("prevalence claim 0.056" in finding.message for finding in findings)
+
+
+def test_manuscript_numeric_auditor_accepts_any_registered_step_auroc(ra):
+    """Regression (N3, 2026-06-14): a prediction run registers more than one
+    AUROC — the primary model step (0.868) and a feature-eligibility / audit
+    step (0.812). The writer correctly cites the primary model's 0.868 in the
+    Results headline and the audit step's 0.812 in a robustness sentence, each
+    against its own evidence id. The auditor previously collapsed to the FIRST
+    registered value (0.812, because that step's summary came first) and flagged
+    the correctly-cited 0.868 as 'does not match registered AUROC 0.812',
+    blocking an honest manuscript. Both values are registered, so neither is a
+    hallucination and the audit must stay silent."""
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "Discrimination in the development workflow reached an AUROC of 0.868 "
+        "and a Brier score of 0.141 "
+        "[01_model_training](evidence/model_training.json). In a feature-"
+        "eligibility audit, the AUROC was 0.812 with a Brier score of 0.164 "
+        "[01_feature_eligibility](evidence/feature_eligibility.json).\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "01_feature_eligibility_range_audit",
+                "status": "ok",
+                "step_summary": {
+                    "statistic:auroc": 0.8117303969867427,
+                    "statistic:brier_score": 0.1635597216840789,
+                },
+            },
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {
+                    "statistic:auroc": 0.8682892909365074,
+                    "statistic:brier_score": 0.14099160242679873,
+                    "statistic:baseline_prevalence": 0.10021385165893837,
+                },
+            },
+        ],
+    )
+
+    assert findings == [], [f.message for f in findings]
+
+
+def test_manuscript_numeric_auditor_flags_value_matching_no_registered_step(ra):
+    """Guard for the match-any relaxation: a manuscript AUROC that matches
+    NONE of the registered per-step values (here 0.95 against {0.812, 0.868})
+    is still a hallucination and must be flagged. Match-any must not become
+    match-nothing."""
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "The model achieved an AUROC of 0.95 "
+        "[01_model_training](evidence/model_training.json).\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "01_feature_eligibility_range_audit",
+                "status": "ok",
+                "step_summary": {"statistic:auroc": 0.8117303969867427},
+            },
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {"statistic:auroc": 0.8682892909365074},
+            },
+        ],
+    )
+
+    assert any("AUROC claim 0.95" in f.message for f in findings), [
+        f.message for f in findings
+    ]
 
 
 def test_repair_common_writer_placeholders_prediction_fallbacks(ra, tmp_path: Path):
@@ -3958,6 +4068,40 @@ def test_critic_accepts_bound_markdown_evidence_links_but_blocks_hidden_missing_
 
     assert blocked.status == "blocked"
     assert blocked.missing_evidence_refs == ["table_one"]
+
+
+def test_critic_does_not_flag_footnote_provenance_block(ra):
+    # Regression (E2): the numeric binder appends a machine-provenance footnote
+    # block (``[^claim_N]: value=...; step=...; evidence=<step>``). When a claim
+    # binds to a step-level virtual evidence the footnote uses a plaintext
+    # ``evidence=robustness_panel`` token (no ``](evidence/)`` link), carries
+    # numbers + claimy words (auroc/brier), and has no end punctuation, so the
+    # support check mis-read the whole block as one unsupported result sentence
+    # and falsely set manuscript_ready=False. Footnote definition lines must be
+    # excluded — the block PROVES the claims are bound.
+    critic = ra.CriticAgent()
+    scaffold = (
+        "## Results\n"
+        "Peak lactate was associated with death with a point estimate of 1.006[^claim_1] "
+        "[primary_association](evidence/step_summary.json \"sha256=abc\").\n\n"
+        "[^claim_1]: value=1.00643; step=robustness_panel; field=primary_point_estimate; evidence=robustness_panel "
+        "[^claim_5]: value=0.788645; step=03_complete_case_robustness; field=auroc; evidence=robustness_panel "
+        "[^claim_6]: value=0.0914; step=03_complete_case_robustness; field=brier_score; evidence=robustness_panel\n"
+    )
+    critique = critic.review_manuscript(
+        scaffold=scaffold, available_evidence_ids=["primary_association"]
+    )
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
+
+    # A genuine unsupported result sentence in the BODY is still caught.
+    bad = (
+        "## Results\n"
+        "The model achieved an AUROC of 0.91 in the cohort and showed strong calibration.\n"
+    )
+    flagged = critic.review_manuscript(scaffold=bad, available_evidence_ids=[])
+    assert flagged.status == "needs_revision"
+    assert flagged.unsupported_claims
 
 
 def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
