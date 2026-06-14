@@ -169,6 +169,41 @@ def test_internal_phenotype_core_marks_trajectory_items_applicable_by_run(ra):
     assert p9b.status == "addressed"
 
 
+def test_internal_phenotype_kind_overrides_fragile_trajectory_wording(ra):
+    # M3 regression: a cross-sectional subphenotype_clustering run whose agent
+    # MISLABELS the analysis "trajectory clustering" (step name) and whose prose
+    # mentions a generic "clinical trajectory" must still mark the longitudinal
+    # item P9 not-applicable — the authoritative task_kind wins over wording.
+    mislabelled = (
+        "We performed phenotype trajectory clustering on first-24h features. "
+        "Decisions are made before a stable clinical trajectory is apparent. "
+        "[01_phenotype_trajectory_clustering](evidence/x.json) k-means, silhouette."
+    )
+    cross = ra.build_internal_phenotype_checklist(
+        evidence_records=[],
+        bound_manuscript=mislabelled,
+        task_kind="subphenotype_clustering",
+    )
+    assert {i.item_id: i for i in cross.items}["P9"].status == "not_applicable"
+
+    # And the kind-unknown fallback must NOT flip to longitudinal on the generic
+    # word "trajectory" alone (only on an explicit longitudinal-modelling cue).
+    fallback = ra.build_internal_phenotype_checklist(
+        evidence_records=[],
+        bound_manuscript=mislabelled,
+        task_kind=None,
+    )
+    assert {i.item_id: i for i in fallback.items}["P9"].status == "not_applicable"
+
+    # A genuine longitudinal kind keeps P9 applicable even with terse prose.
+    longit = ra.build_internal_phenotype_checklist(
+        evidence_records=[],
+        bound_manuscript="k-means on cross-sectional features",  # no cue in prose
+        task_kind="longitudinal_trajectory_analysis",
+    )
+    assert {i.item_id: i for i in longit.items}["P9"].status != "not_applicable"
+
+
 # ---------------------------------------------------------------------------
 # Markdown rendering
 # ---------------------------------------------------------------------------
@@ -317,6 +352,35 @@ def test_strobe_credits_real_artefact_names_not_only_hashed_ids(ra):
     assert by_id["15"].status == "open"
 
 
+def test_strobe_alias_matched_by_suffixed_artifact_name(ra):
+    # Regression (E1 12c): the agent emits a missing-data artefact under a
+    # descriptive suffix (missingness_summary / missingness_profile); the
+    # checklist item keyed on the bare token "missingness" must credit it via a
+    # `_`-delimited prefix match, not false-open on exact membership.
+    recs = [
+        _EvRecRP(
+            "table_missingness_summary_b2f04651",
+            "evidence/table_missingness_summary_b2f04651__missingness_summary.csv",
+        ),
+    ]
+    report = ra.build_strobe_checklist(
+        evidence_records=recs, bound_manuscript="A retrospective cohort study."
+    )
+    by_id = {i.item_id: i for i in report.items}
+    assert by_id["12c"].status == "addressed"  # missing-data item credited
+
+
+def test_strobe_alias_prefix_does_not_overcredit_unrelated_token(ra):
+    # Impartiality: a different artefact that merely shares letters must NOT
+    # satisfy an item — the prefix match is `_`-delimited, not a substring.
+    from easyicu.research_agent.reporting_checklist import _alias_satisfied
+
+    assert _alias_satisfied("missingness", {"missingness_summary"}) is True
+    assert _alias_satisfied("missingness", {"completeness_audit"}) is False
+    assert _alias_satisfied("table_one", {"table_one_locked_cohort"}) is True
+    assert _alias_satisfied("table_one", {"table_two_summary"}) is False
+
+
 def test_strobe_13a_not_satisfied_by_table_one_alone(ra):
     # 13a is the participant-flow item; a baseline table must NOT silently
     # satisfy it (the prior mis-specified ``table_one`` alias did exactly that).
@@ -325,3 +389,144 @@ def test_strobe_13a_not_satisfied_by_table_one_alone(ra):
     by_id = {i.item_id: i for i in report.items}
     assert by_id["13a"].status == "open"
     assert by_id["14a"].status == "addressed"
+
+
+# ---------------------------------------------------------------------------
+# Keyword stem matching (Fix I): truncated stems must match inflected forms,
+# short whole-word keywords must stay exact.
+# ---------------------------------------------------------------------------
+
+
+def test_keyword_stem_matches_inflected_forms(ra):
+    from easyicu.research_agent.reporting_checklist import _keyword_hit
+
+    # Truncated stems (length>=6, single lowercase token) match as word prefixes,
+    # so a writer who DID describe scaling is credited. A trailing \b previously
+    # made these impossible (\bstandardi\b never matches "standardized").
+    assert _keyword_hit("features were standardized before clustering", "standardi")
+    assert _keyword_hit("we applied z-score normalization", "normaliz")
+    assert _keyword_hit("inputs were normalised per feature", "normalis")
+    assert _keyword_hit("a reproducibility check across seeds", "reproducib")
+
+
+def test_keyword_short_tokens_stay_exact_no_overmatch(ra):
+    from easyicu.research_agent.reporting_checklist import _keyword_hit
+
+    # Short / non-stem keywords keep exact whole-word matching so the stem rule
+    # cannot, e.g., credit the BIC model-selection keyword against "bicarbonate".
+    assert _keyword_hit("model selection used the BIC", "bic")
+    assert not _keyword_hit("serum bicarbonate was 24 mmol/L", "bic")
+    assert not _keyword_hit("the agency reviewed the protocol", "age")
+    assert _keyword_hit("patient age was recorded", "age")
+    # Hyphenated / multiword keywords are unaffected (kept exact).
+    assert _keyword_hit("a z-score transform", "z-score")
+
+
+def test_phenotype_p3_credited_when_manuscript_describes_scaling(ra):
+    # Regression (M3/H3 P3): the writer reported standardisation ("normalized" /
+    # "standardized") but the truncated-stem keyword never matched, so a real
+    # scaling description was scored open. With stem prefix matching it resolves.
+    report = ra.build_internal_phenotype_checklist(
+        evidence_records=[],
+        bound_manuscript=(
+            "Features were normalized with z-score standardization and log1p "
+            "before k-means clustering; silhouette and bootstrap stability."
+        ),
+        task_kind="subphenotype_clustering",
+    )
+    assert {i.item_id: i for i in report.items}["P3"].status == "addressed"
+
+
+# ---------------------------------------------------------------------------
+# P8 phenotype-native aliases (Fix J)
+# ---------------------------------------------------------------------------
+
+
+def test_phenotype_p8_credited_by_native_cluster_artifacts(ra):
+    # The clustering agent emits cluster_characteristics / cluster_mortality, not
+    # the generic STROBE names (primary_association / outcome_rate). P8 must
+    # credit those phenotype-native artefacts (variable profile + outcome compare).
+    recs = [
+        _EvRecRP(
+            "table_cluster_characteristics_acd6546f",
+            "evidence/table_cluster_characteristics_acd6546f__cluster_characteristics.csv",
+        ),
+        _EvRecRP(
+            "table_cluster_mortality_8e775741",
+            "evidence/table_cluster_mortality_8e775741__cluster_mortality.csv",
+        ),
+    ]
+    report = ra.build_internal_phenotype_checklist(
+        evidence_records=recs,
+        bound_manuscript="k-means clustering",
+        task_kind="subphenotype_clustering",
+    )
+    assert {i.item_id: i for i in report.items}["P8"].status == "addressed"
+
+
+# ---------------------------------------------------------------------------
+# STROBE item 12d design-conditional N/A (Fix K)
+# ---------------------------------------------------------------------------
+
+
+def test_strobe_12d_not_applicable_for_cross_sectional_kinds(ra):
+    # Loss to follow-up cannot apply to a fixed-endpoint / point-treatment design
+    # with no longitudinal follow-up: STROBE 12d is "if applicable", so it is N/A
+    # (removed from the denominator), not a penalised open.
+    for kind in ("mortality_prediction", "sepsis_onset", "causal_inference"):
+        report = ra.build_strobe_checklist(
+            evidence_records=[], bound_manuscript="", task_kind=kind
+        )
+        item = {i.item_id: i for i in report.items}["12d"]
+        assert item.status == "not_applicable", kind
+
+
+def test_tripod_internal_validation_and_imbalance_and_calibration_figure_credited(ra):
+    # Regression (M2): the prediction run genuinely handled class imbalance,
+    # used a held-out patient-level split (internal validation), and emitted a
+    # calibration/reliability FIGURE — but the TRIPOD items keyed on phrasings /
+    # cross-database aliases the run did not use, so all three stayed open
+    # (reporting 0.78). They must be credited from what the run actually produced.
+    recs = [
+        _EvRecRP(
+            "figure_discrimination_calibration_16b4237d",
+            "evidence/figure_discrimination_calibration_16b4237d__discrimination_calibration.png",
+        ),
+    ]
+    manuscript = (
+        "We addressed class-imbalance with imbalance-aware metrics. "
+        "Discrimination and calibration were evaluated in a held-out patient-level split."
+    )
+    report = ra.build_tripod_ai_checklist(
+        evidence_records=recs, bound_manuscript=manuscript
+    )
+    by_id = {i.item_id: i for i in report.items}
+    assert by_id["9"].status == "addressed"   # class imbalance (bare stem)
+    assert by_id["11"].status == "addressed"  # internal validation (held-out split)
+    assert by_id["17"].status == "addressed"  # calibration figure
+    # External validation (16) stays honestly open for a single-database study.
+    assert by_id["16"].status == "open"
+
+
+def test_tripod_items_not_satisfied_without_the_content(ra):
+    # Negative: with neither the figure nor the prose, the same items stay open
+    # (the fix credits real content, it does not blanket-pass).
+    report = ra.build_tripod_ai_checklist(evidence_records=[], bound_manuscript="")
+    by_id = {i.item_id: i for i in report.items}
+    assert by_id["9"].status == "open"
+    assert by_id["11"].status == "open"
+    assert by_id["17"].status == "open"
+
+
+def test_strobe_12d_applicable_for_followup_and_unknown_kinds(ra):
+    # A survival kind genuinely has follow-up -> 12d stays applicable (open when
+    # the writer did not address censoring; we never auto-N/A a follow-up design).
+    surv = ra.build_strobe_checklist(
+        evidence_records=[], bound_manuscript="", task_kind="survival_analysis"
+    )
+    assert {i.item_id: i for i in surv.items}["12d"].status == "open"
+    # Unknown kind (None) stays applicable for backward compatibility.
+    unknown = ra.build_strobe_checklist(
+        evidence_records=[], bound_manuscript="", task_kind=None
+    )
+    assert {i.item_id: i for i in unknown.items}["12d"].status != "not_applicable"

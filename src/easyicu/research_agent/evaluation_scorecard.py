@@ -261,22 +261,39 @@ def score_plan(
     required = int(gates.get("required_step_count") or 0)
     items = _output_items(task, plan_steps)
 
+    # The expected display set is kind-aware, consistent with the planner's
+    # kind-aware Table-1 guidance and the reporting-checklist routing: a baseline
+    # characteristics "Table 1" is a STROBE/TRIPOD artifact and is NOT expected
+    # for clustering / trajectory (phenotype-discovery) kinds, whose guideline is
+    # the internal phenotype core. Counting Table-1 against those kinds penalised
+    # a plan for correctly omitting an inapplicable artifact (H3 false 0.8).
+    table_one_expected = reporting_guideline_for_kind(task.kind) != "internal"
+
     has_table_one = _declares_table_one(items)
     figure_hits = sum(1 for it in items if any(h in it for h in _FIGURE_HINTS))
     has_audit_panel = any(any(h in it for h in _AUDIT_OUTPUT_HINTS) for it in items)
     n_required_figs = _min_result_figures(task)
-    figure_ok = figure_hits >= n_required_figs
+    # Credit a result figure that was either declared in the plan OR actually
+    # produced as a publication-figure bundle. The publication-figure skill emits
+    # the result figure outside the declared plan steps, and the replanner can
+    # drop an initially-declared figure step across revisions; in both cases a
+    # figure IS delivered, so reading only declared steps undercounts it.
+    produced_publication_figure = bool(
+        gates.get("publication_figure_bundle_ready")
+    ) or bool(gates.get("publication_figure_stems"))
+    figure_ok = figure_hits >= n_required_figs or produced_publication_figure
 
     structural_ok = bool(plan_steps) and required > 0
-    display = (
-        (1.0 if has_table_one else 0.0)
-        + (1.0 if figure_ok else 0.0)
-        + (1.0 if has_audit_panel else 0.0)
-    ) / 3.0
+    display_components: List[float] = []
+    if table_one_expected:
+        display_components.append(1.0 if has_table_one else 0.0)
+    display_components.append(1.0 if figure_ok else 0.0)
+    display_components.append(1.0 if has_audit_panel else 0.0)
+    display = sum(display_components) / len(display_components)
     subscore = 0.4 * (1.0 if structural_ok else 0.0) + 0.6 * display
 
     notes: List[str] = []
-    if not has_table_one:
+    if table_one_expected and not has_table_one:
         notes.append("no table-one display item declared")
     if not figure_ok:
         notes.append(f"declares {figure_hits} figure(s); needs >= {n_required_figs}")
@@ -298,9 +315,11 @@ def score_plan(
         level=level,
         signals={
             "required_step_count": required,
+            "table_one_expected": table_one_expected,
             "has_table_one": has_table_one,
             "result_figure_count": figure_hits,
             "min_result_figures": n_required_figs,
+            "produced_publication_figure": produced_publication_figure,
             "has_audit_panel": has_audit_panel,
             "plan_illegal": plan_illegal,
         },
@@ -1103,14 +1122,21 @@ def _load_cluster_validity(run_dir: Path) -> Dict[str, object]:
                 continue
             pcts = [_num(r.get("percentage")) for r in rows]
             pcts = [x for x in pcts if x is not None]
-            ns = [_num(r.get("n")) for r in rows]
+            ns = [_num(r.get("n")) or _num(r.get("count")) for r in rows]
             ns = [x for x in ns if x is not None]
             if pcts:
-                out["min_cluster_fraction"] = min(pcts) / 100.0
+                fracs = sorted(x / 100.0 for x in pcts)
+                out["cluster_fractions"] = fracs
+                out["min_cluster_fraction"] = fracs[0]
+                out["max_cluster_fraction"] = fracs[-1]
                 out.setdefault("n_clusters", len(rows))
                 break
             if ns and sum(ns) > 0:
-                out["min_cluster_fraction"] = min(ns) / sum(ns)
+                total = sum(ns)
+                fracs = sorted(x / total for x in ns)
+                out["cluster_fractions"] = fracs
+                out["min_cluster_fraction"] = fracs[0]
+                out["max_cluster_fraction"] = fracs[-1]
                 out.setdefault("n_clusters", len(rows))
                 break
 
@@ -1157,6 +1183,44 @@ def _is_distance_based(algorithm: Optional[str]) -> Optional[bool]:
     return None
 
 
+# A single cluster holding at least this share of the cohort is the "one
+# dominant cluster" the degeneracy guard is named for. Below it, several
+# substantial groups coexist and a sub-1% cluster is a rare phenotype, not a
+# collapsed partition.
+_DOMINANT_CLUSTER_SHARE = 0.80
+# A cluster clearing this floor counts as a substantial, characterisable group.
+_SUBSTANTIAL_CLUSTER_FLOOR = 0.01
+
+
+def _partition_is_degenerate(doc: Dict[str, object]) -> bool:
+    """True only when a sub-1% cluster sits inside a genuinely collapsed partition.
+
+    A small cluster is an OBJECTIVE failure only when it is the symptom of "one
+    dominant cluster plus an outlier pocket" — i.e. effectively a single group.
+    When several substantial clusters coexist (the agent chose k by a principled
+    criterion and got a balanced solution with one rare group), the small cluster
+    is a defensible analytical outcome, not a broken partition, so it is a caution
+    rather than a Fail. We decide this from the full size distribution when
+    available (count of clusters clearing the 1% floor, or the largest share);
+    when only ``min_cluster_fraction`` was recoverable and the distribution cannot
+    be reconstructed, we stay fail-closed on the sub-1% signal.
+    """
+    fracs = doc.get("cluster_fractions")
+    if isinstance(fracs, list):
+        substantial = sum(
+            1
+            for f in fracs
+            if _num(f) is not None and _num(f) >= _SUBSTANTIAL_CLUSTER_FLOOR
+        )
+        return substantial <= 1
+    max_frac = _num(doc.get("max_cluster_fraction"))
+    if max_frac is not None:
+        return max_frac >= _DOMINANT_CLUSTER_SHARE
+    # No distribution to disambiguate: a contract validity file declared a
+    # near-empty group with nothing else to weigh, so keep the firm signal.
+    return True
+
+
 def _phenotype_validity_errors(run_dir: Path, kind: str) -> List[str]:
     """Impartial, deterministic objective-error check for clustering/trajectory.
 
@@ -1183,7 +1247,7 @@ def _phenotype_validity_errors(run_dir: Path, kind: str) -> List[str]:
     if k is not None and k < 2:
         errs.append(f"single-group solution (k={int(k)}): no subphenotypes separated")
     frac = _num(doc.get("min_cluster_fraction"))
-    if frac is not None and 0 <= frac < 0.01:
+    if frac is not None and 0 <= frac < 0.01 and _partition_is_degenerate(doc):
         errs.append(
             f"near-empty group ({frac * 100:.2f}% of cohort): "
             "degenerate partition — one dominant cluster plus an outlier pocket, "
@@ -1235,6 +1299,37 @@ def _phenotype_validity_cautions(run_dir: Path, kind: str) -> List[str]:
             "silhouette is not this family's fit criterion, so verify separation "
             "against the criterion actually used (e.g. BIC/likelihood) before "
             "interpreting the classes"
+        )
+    # A sub-1% cluster inside an otherwise multi-cluster partition is a rare
+    # group, not a degeneracy (that case is handled as an error). Surface it for
+    # human review without gating: report its size and verify stability before
+    # interpreting it as a distinct subphenotype.
+    frac = _num(doc.get("min_cluster_fraction"))
+    if (
+        frac is not None
+        and 0 <= frac < _SUBSTANTIAL_CLUSTER_FLOOR
+        and not _partition_is_degenerate(doc)
+    ):
+        fracs = doc.get("cluster_fractions")
+        n_substantial = (
+            sum(
+                1
+                for f in fracs
+                if _num(f) is not None and _num(f) >= _SUBSTANTIAL_CLUSTER_FLOOR
+            )
+            if isinstance(fracs, list)
+            else None
+        )
+        detail = (
+            f" alongside {n_substantial} clusters ≥1%"
+            if n_substantial is not None
+            else ""
+        )
+        cautions.append(
+            f"small cluster ({frac * 100:.2f}% of cohort){detail}: a rare group "
+            "within a multi-cluster partition, not a degenerate solution — report "
+            "its size and verify stability before interpreting it as a distinct "
+            "subphenotype"
         )
     return cautions
 

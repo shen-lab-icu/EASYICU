@@ -132,6 +132,33 @@ def test_stay_level_heldout_without_equivalence_is_na_not_pass(tmp_path):
     assert validity_positive_subscore(sig) is None
 
 
+def test_one_row_per_stay_attestation_not_misread_as_row_level_split(tmp_path):
+    # Regression (M2): the agent's free-text split_strategy describes a stay-level
+    # split ("split on unique stay_id") and uses the phrase "the file is one row
+    # per stay" as a granularity attestation. A naive bare-"row" token scan read
+    # this as a row-level (leaky) split and hard-failed it. The split unit is the
+    # id the split was performed ON (stay_id) → stay; with no patient-equivalence
+    # attestation it is honestly NA, never a false Fail.
+    _write_named_summary(
+        tmp_path,
+        "01_model_training",
+        {
+            "auroc": 0.825,
+            "split_strategy": (
+                "Stratified 80/20 hold-out split on unique stay_id, interpreted "
+                "as patient-separated because source metadata reports equal counts "
+                "of stays and patients and the file is one row per stay."
+            ),
+            "train_n": 59863,
+            "test_n": 14966,
+        },
+    )
+    sig = assess_validity_signals("mortality_prediction", tmp_path)
+    assert sig[0].status == "na"
+    assert "row-level" not in sig[0].detail
+    assert validity_positive_subscore(sig) is None
+
+
 def test_split_strategy_mapping_explicit_overlap_zero_passes(tmp_path):
     _write_named_summary(
         tmp_path,

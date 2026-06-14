@@ -472,7 +472,8 @@ def _bench_item_to_task(item):
     gold = ICUAgentBenchGoldAnswer(required_warnings=warns) if warns else None
     return ICUAgentBenchTask(
         task_id=getattr(item, "key", "bench_item"),
-        kind="descriptive_association",
+        kind=getattr(item, "kind", "descriptive_association")
+        or "descriptive_association",
         title=getattr(item, "name", getattr(item, "key", "bench item")),
         objective=getattr(item, "research_question", ""),
         expected_outputs=list(getattr(item, "expected_artifact_substrings", []) or []),
@@ -618,6 +619,7 @@ def _run_one_arm(
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
     from easyicu.research_agent.cohort_schema import register_cohort_concept_ids
+    from easyicu.research_agent.reporting_checklist import checklist_names_for_kind
 
     # The provided cohort is already materialised; let the planner reference any
     # of its columns in a CTAS predicate without tripping the static dictionary
@@ -625,11 +627,28 @@ def _run_one_arm(
     register_cohort_concept_ids(list(getattr(cohort, "columns", [])))
 
     workdir.mkdir(parents=True, exist_ok=True)
+    # Force the kind-matched reporting checklist(s) so the EMITTED file matches
+    # what the scorecard READS by task kind (single source of truth:
+    # ``checklist_names_for_kind``). Without this the pipeline falls back to
+    # free-text analysis-family inference, which emitted STROBE for the
+    # mortality_prediction task while the scorecard expected TRIPOD+AI — so
+    # reporting_completeness was silently NA on a run that did reach the write
+    # phase (detector/emitter contract mismatch, G-2). ``setdefault`` lets an
+    # explicit pipeline_options override win.
+    opts = dict(pipeline_options or {})
+    opts.setdefault(
+        "reporting_checklist_names",
+        list(checklist_names_for_kind(getattr(item, "kind", None))),
+    )
+    # The authoritative task kind lets the internal phenotype checklist decide
+    # trajectory-item applicability by kind (cross-sectional clustering vs
+    # longitudinal) instead of fragile manuscript wording (M3 false-open).
+    opts.setdefault("task_kind", getattr(item, "kind", None))
     pipeline = ResearchAgentPipeline(
         workdir=workdir,
         llm=llm,
         disable_icu_context=disable_icu_context,
-        **dict(pipeline_options or {}),
+        **opts,
     )
     resume_run_id = _find_resumable_run(workdir) if reuse_existing else None
     if resume_run_id:
@@ -1871,6 +1890,11 @@ def _run_ehrflowbench_jsonl(
                 row.get("expected_finding_substrings") or []
             ),
             inclusion_criteria=list(row.get("inclusion_criteria") or []),
+            # Optional task kind so the five-dim scorecard routes the right
+            # reporting checklist (prediction->TRIPOD, clustering/trajectory->
+            # internal phenotype core) instead of always assuming an
+            # association. Absent -> descriptive_association (back-compat).
+            kind=str(row.get("kind") or "descriptive_association"),
         )
         # Resume support: skip items that already finished cleanly so a quota
         # 502 mid-batch never forces a full redo. An item counts as "done" only
@@ -1897,10 +1921,20 @@ def _run_ehrflowbench_jsonl(
             )
             scores.append(score)
         except Exception as exc:  # noqa: BLE001 — keep batch alive on 502/etc.
+            import traceback as _tb
+
+            tb = _tb.format_exc()
             print(
                 f"[ehrflowbench] item {key} FAILED: {type(exc).__name__}: "
-                f"{str(exc)[:200]}"
+                f"{str(exc)[:200]}\n{tb}"
             )
+            try:
+                (out_root / key).mkdir(parents=True, exist_ok=True)
+                (out_root / key / "item_exception_traceback.txt").write_text(
+                    tb, encoding="utf-8"
+                )
+            except Exception:
+                pass
             pending.append(
                 {
                     "key": key,

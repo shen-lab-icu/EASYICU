@@ -401,9 +401,14 @@ _TRIPOD_AI_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "statement": "Handling of class imbalance and cohort composition.",
         "required_keywords": (
             "class imbalance",
+            # bare stem (matches "imbalance"/"imbalanced"/"class-imbalance") so a
+            # run that handled imbalance is credited even when it does not use the
+            # exact two-word phrase.
+            "imbalance",
             "weighting",
             "oversampling",
             "undersampling",
+            "minority class",
         ),
     },
     {
@@ -432,7 +437,23 @@ _TRIPOD_AI_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "id": "11",
         "section": "Methods",
         "statement": "Validation strategy: internal (resampling) and external (other cohort / database).",
-        "required_evidence_aliases": ("cross_database_summary", "primary_association"),
+        # The item asks for the validation STRATEGY, described in Methods prose.
+        # An internal scheme (held-out / patient-level split / cross-validation /
+        # bootstrap) is the realistic bar for a single-database development study;
+        # the previous cross-database-only evidence alias never matched it.
+        # External RESULTS are a separate item (16), which stays open when no
+        # external cohort exists. Keyword-only so a described internal strategy
+        # is credited on its own.
+        "required_keywords": (
+            "held-out",
+            "hold-out",
+            "cross-validation",
+            "resampling",
+            "bootstrap",
+            "internal validation",
+            "patient-level split",
+            "train-test split",
+        ),
     },
     {
         "id": "12",
@@ -468,7 +489,19 @@ _TRIPOD_AI_TEMPLATE: Tuple[Dict[str, Any], ...] = (
         "id": "17",
         "section": "Results",
         "statement": "Calibration plot / reliability diagram.",
-        "required_keywords": ("calibration plot", "reliability"),
+        # This Results item is a FIGURE (a calibration plot / reliability
+        # diagram). A produced calibration/reliability figure satisfies it even
+        # when the prose does not use the exact words "calibration plot" /
+        # "reliability diagram" (the prior keyword-only criteria never matched a
+        # figure the run actually emitted). These are generic, case-neutral
+        # figure-artefact names; `_alias_satisfied` prefix-matching credits e.g.
+        # `discrimination_calibration` / `discrimination_calibration_panel`.
+        "required_evidence_aliases": (
+            "calibration_plot",
+            "calibration_curve",
+            "reliability_diagram",
+            "discrimination_calibration",
+        ),
     },
     {
         "id": "18",
@@ -609,6 +642,19 @@ _INTERNAL_PHENOTYPE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
             "table_one",
             "outcome_rate",
             "outcome_incidence",
+            # Phenotype-native artefact names the clustering/trajectory agents
+            # actually emit for this item: a per-cluster/-class variable profile
+            # and a per-group outcome comparison. These are generic, case-neutral
+            # names (not tied to any one benchmark cohort) and ``_alias_satisfied``
+            # still credits only when the agent produced one of them.
+            "cluster_characteristics",
+            "cluster_profiles",
+            "class_characteristics",
+            "class_profiles",
+            "cluster_mortality",
+            "cluster_outcomes",
+            "outcome_by_cluster",
+            "outcome_by_class",
         ),
     },
     {
@@ -634,17 +680,51 @@ _INTERNAL_PHENOTYPE_TEMPLATE: Tuple[Dict[str, Any], ...] = (
 )
 
 # Manuscript cues that a phenotype run is longitudinal (so the trajectory-only
-# items apply rather than being marked not-applicable).
+# items apply rather than being marked not-applicable). Used only as a FALLBACK
+# when the task kind is unknown — the bare word "trajectory" is deliberately
+# excluded because it appears in generic clinical prose ("a stable clinical
+# trajectory") and in step/evidence names ("01_phenotype_trajectory_clustering")
+# that do not imply longitudinal trajectory MODELLING. These cues name an actual
+# longitudinal-modelling method or repeated-measures design.
 _LONGITUDINAL_CUES: Tuple[str, ...] = (
-    "trajector",
     "longitudinal",
     "time-updated",
-    "over time",
+    "repeated measures",
     "gbtm",
     "lcga",
     "latent class growth",
-    "group-based",
+    "group-based trajector",
+    "trajectory model",
+    "growth mixture",
 )
+
+# Task kinds whose longitudinal status is known authoritatively (so an agent that
+# mislabels a cross-sectional k-means run as "trajectory clustering" — M3 — does
+# not flip the trajectory-only items on via incidental wording).
+_CROSS_SECTIONAL_PHENOTYPE_KINDS = frozenset({"subphenotype_clustering"})
+_LONGITUDINAL_PHENOTYPE_KINDS = frozenset({"longitudinal_trajectory_analysis"})
+
+
+def _phenotype_run_is_longitudinal(
+    task_kind: Optional[str], bound_manuscript: str
+) -> bool:
+    """Decide whether trajectory-only checklist items apply.
+
+    The task kind is authoritative when known: ``subphenotype_clustering`` is
+    cross-sectional, ``longitudinal_trajectory_analysis`` is longitudinal. Only
+    when the kind is unknown do we fall back to scanning the manuscript prose
+    (with markdown citations/links stripped, so step names like
+    ``01_phenotype_trajectory_clustering`` do not count) for an explicit
+    longitudinal-modelling cue.
+    """
+    k = (task_kind or "").strip().lower()
+    if k in _LONGITUDINAL_PHENOTYPE_KINDS:
+        return True
+    if k in _CROSS_SECTIONAL_PHENOTYPE_KINDS:
+        return False
+    text = re.sub(r"\[[^\]]+\]\([^)]*\)", "", bound_manuscript or "")
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL).lower()
+    return any(cue in text for cue in _LONGITUDINAL_CUES)
 
 
 _LONGITUDINAL_ONLY_ITEMS = frozenset(
@@ -717,11 +797,49 @@ def _available_aliases(evidence_records: Iterable[Any]) -> set:
     return ids
 
 
+# Single-token, lowercase, length>=6 keywords are treated as inflectable stems:
+# several checklist keywords are deliberately truncated before the inflection
+# point (``standardi``, ``normaliz``, ``normalis``, ``reproducib``) so they can
+# match ``standardized`` / ``normalization`` etc. A trailing ``\b`` made that
+# impossible — ``\bstandardi\b`` never matches ``standardized`` (no boundary
+# between ``i`` and ``z``), so a writer who DID describe standardisation was
+# scored as not having reported it. We match those as a word *prefix* instead.
+# Short tokens (``age``, ``bic``, ``sex``, ``aic``) and any keyword with a hyphen
+# or space (``z-score``, ``loss to follow-up``) keep exact whole-word matching so
+# the stem rule cannot, e.g., credit ``bic`` against ``bicarbonate``.
+_STEM_KEYWORD_RE = re.compile(r"[a-z]{6,}$")
+
+
 def _keyword_hit(text: str, keyword: str) -> bool:
     if not text or not keyword:
         return False
-    pattern = r"\b" + re.escape(keyword) + r"\b"
+    kw = keyword.strip()
+    if _STEM_KEYWORD_RE.fullmatch(kw):
+        pattern = r"\b" + re.escape(kw) + r"[a-z]*"
+    else:
+        pattern = r"\b" + re.escape(kw) + r"\b"
     return re.search(pattern, text, flags=re.IGNORECASE) is not None
+
+
+def _alias_satisfied(required: str, available_aliases: set) -> bool:
+    """A required alias is satisfied by an exact match OR by an available alias
+    that is the same artefact under a more specific name.
+
+    The agent names artefacts with descriptive suffixes (``missingness`` →
+    ``missingness_summary`` / ``missingness_profile``; ``table_one`` →
+    ``table_one_locked_cohort``; ``outcome_rate`` → ``outcome_rate_by_stage``).
+    Exact set membership false-opens those, so match on a ``_``-delimited token
+    prefix in either direction. The ``_`` boundary keeps it precise — it credits
+    ``missingness_summary`` for ``missingness`` but not ``completeness`` (no
+    prefix relation).
+    """
+    if required in available_aliases:
+        return True
+    pref = required + "_"
+    for avail in available_aliases:
+        if avail.startswith(pref) or required.startswith(avail + "_"):
+            return True
+    return False
 
 
 def _autofill_item(
@@ -731,7 +849,8 @@ def _autofill_item(
     manuscript_text: str,
 ) -> None:
     matched_evidence = [
-        a for a in item.required_evidence_aliases if a in available_aliases
+        a for a in item.required_evidence_aliases
+        if _alias_satisfied(a, available_aliases)
     ]
     matched_keywords = [
         k for k in item.required_keywords if _keyword_hit(manuscript_text, k)
@@ -766,15 +885,41 @@ def _autofill_item(
             item.rationale = "Awaiting: " + ", ".join(needed)
 
 
+# STROBE item 12d ("If applicable, explain how loss to follow-up was addressed")
+# lives under item 12 (statistical methods) and is, by STROBE's own design, a
+# COHORT-with-follow-up item. For a cross-sectional / point-treatment analysis of
+# an ICU admission there is no follow-up and hence no loss to follow-up, so the
+# honest score is *not applicable*, not *open* — penalising it would mark a
+# design feature as a reporting omission. We treat it as applicable only for kinds
+# that inherently carry a time-to-event / follow-up dimension; everything else
+# routes 12d to N/A. This is deliberately narrow: a survival kind that genuinely
+# should discuss censoring/loss to follow-up stays applicable (and open if the
+# writer did not address it) — we never auto-N/A a follow-up design.
+_STROBE_FOLLOWUP_KINDS = frozenset({"survival_analysis"})
+
+
 def build_strobe_checklist(
     *,
     evidence_records: Iterable[Any],
     bound_manuscript: str,
     version: str = "2007",
+    task_kind: Optional[str] = None,
 ) -> ChecklistReport:
     aliases = _available_aliases(evidence_records)
     items = _strobe_items()
+    kind = str(task_kind) if task_kind else None
+    followup_applicable = kind is None or kind in _STROBE_FOLLOWUP_KINDS
     for item in items:
+        if item.item_id == "12d" and not followup_applicable:
+            # No follow-up dimension in this design: loss to follow-up cannot
+            # apply. Honest N/A (removed from the applicable denominator), not a
+            # penalised open. When the kind is unknown we leave it applicable.
+            item.status = "not_applicable"
+            item.rationale = (
+                "Not applicable: cross-sectional / point-treatment design with no "
+                "longitudinal follow-up, so there is no loss to follow-up to address."
+            )
+            continue
         _autofill_item(
             item=item,
             available_aliases=aliases,
@@ -805,18 +950,19 @@ def build_internal_phenotype_checklist(
     evidence_records: Iterable[Any],
     bound_manuscript: str,
     version: str = "internal-1",
+    task_kind: Optional[str] = None,
 ) -> ChecklistReport:
     """Internal reporting core for subphenotype clustering / trajectory runs.
 
-    Whether the trajectory-only items apply is inferred from the manuscript
-    (a longitudinal run mentions trajectories / latent-class growth / GBTM); for
-    a cross-sectional clustering run those items are marked ``not_applicable`` so
-    the coverage denominator is not inflated.
+    Whether the trajectory-only items apply is decided by ``task_kind`` when
+    known (``subphenotype_clustering`` → cross-sectional, trajectory items
+    ``not_applicable``; ``longitudinal_trajectory_analysis`` → longitudinal), and
+    otherwise inferred from the manuscript prose. This avoids inflating the
+    coverage denominator with a longitudinal-modelling item on a cross-sectional
+    run that an agent merely labelled "trajectory clustering".
     """
     aliases = _available_aliases(evidence_records)
-    is_longitudinal = any(
-        cue in (bound_manuscript or "").lower() for cue in _LONGITUDINAL_CUES
-    )
+    is_longitudinal = _phenotype_run_is_longitudinal(task_kind, bound_manuscript)
     items = _internal_phenotype_items()
     for item in items:
         if item.item_id in _LONGITUDINAL_ONLY_ITEMS and not is_longitudinal:
