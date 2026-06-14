@@ -352,8 +352,21 @@ def extract_literature_ideas(
     materials: Sequence[SourceMaterial | Mapping[str, Any]],
     source_snapshot_id: str,
     llm: LLMClient,
+    untraceable_quote_policy: Literal["raise", "skip"] = "raise",
+    dropped_untraceable: Optional[List[str]] = None,
 ) -> List[LiteratureIdeaCandidate]:
-    """Extract structured literature ideas with a case-neutral JSON prompt."""
+    """Extract structured literature ideas with a case-neutral JSON prompt.
+
+    ``untraceable_quote_policy`` controls what happens when an extracted idea's
+    ``source_quote`` is not a verbatim substring of its cited source text (the
+    anti-hallucination provenance gate). The default ``"raise"`` preserves the
+    strict single-idea contract. ``"skip"`` drops only the offending idea and
+    continues — appropriate for a large multi-article batch where one
+    paraphrased quote should not discard every other (correctly grounded)
+    idea. Dropped citation keys are appended to ``dropped_untraceable`` when a
+    list is supplied. Either way an untraceable quote is NEVER admitted, so the
+    provenance guarantee is unchanged; only the blast radius differs.
+    """
 
     messages = build_idea_extraction_messages(
         materials,
@@ -382,6 +395,10 @@ def extract_literature_ideas(
         data.setdefault("source_adapter_level", adapter_level_by_key.get(citation_key))
         quote = str(data.get("source_quote") or "").strip()
         if not _quote_is_traceable(quote, source_text_by_key.get(citation_key, "")):
+            if untraceable_quote_policy == "skip":
+                if dropped_untraceable is not None:
+                    dropped_untraceable.append(citation_key)
+                continue
             raise IdeaExtractionError(
                 f"source_quote for citation_key={citation_key!r} is not traceable"
             )
@@ -605,6 +622,7 @@ def run_idea_mining_dry_run(
     source_search_client: Optional[Any] = None,
     scope_reference_year: Optional[int] = None,
     scope_retmax: int = 20,
+    untraceable_quote_policy: Literal["raise", "skip"] = "raise",
 ) -> IdeaMiningDryRunResult:
     """Run the S4→S1→S3→S2 idea-triage dry run and stop at the human gate.
 
@@ -668,10 +686,13 @@ def run_idea_mining_dry_run(
     manifest_path = out_dir / "source_snapshot_manifest.json"
     manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
 
+    dropped_untraceable: List[str] = []
     literature_ideas = extract_literature_ideas(
         materials=parsed_materials,
         source_snapshot_id=manifest.source_snapshot_id,
         llm=llm,
+        untraceable_quote_policy=untraceable_quote_policy,
+        dropped_untraceable=dropped_untraceable,
     )
     default_catalog = _default_concept_catalog_for_idea_run(available_concepts)
     effective_aliases = _merge_concept_aliases(
@@ -702,6 +723,13 @@ def run_idea_mining_dry_run(
     )
 
     warnings: List[str] = []
+    if dropped_untraceable:
+        warnings.append(
+            f"Dropped {len(dropped_untraceable)} idea(s) with untraceable "
+            f"source_quote under untraceable_quote_policy='skip' "
+            f"(citation_keys: {sorted(set(dropped_untraceable))}); the provenance "
+            "gate still admitted no unverbatim quote."
+        )
     if parsed_materials and all(
         material.source_adapter_level == "metadata_only"
         for material in parsed_materials

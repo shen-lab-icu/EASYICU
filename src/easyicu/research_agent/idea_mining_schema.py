@@ -29,6 +29,13 @@ SourceAdapterLevel = Literal[
 OutcomeDeterminabilityStatus = Literal[
     "known_0_1",
     "non_binary_determinable",
+    # An organ-support therapy ("received RRT", "mechanically ventilated", "on
+    # ECMO") used AS a binary 0/1 outcome. It is determinable like ``known_0_1``,
+    # but this distinct label preserves the fact that the endpoint is a
+    # treatment/organ-support DECISION, not a physiological state — so downstream
+    # triage and the manuscript carry the confounding-by-indication caveat
+    # instead of silently treating it as a clean clinical outcome.
+    "organ_support_intervention",
     "event_present_na",
     "unknown",
 ]

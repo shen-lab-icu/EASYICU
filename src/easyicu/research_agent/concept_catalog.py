@@ -251,6 +251,27 @@ def _dedup(items: Iterable[str]) -> List[str]:
     return out
 
 
+# Organ-support therapies the dictionary records as "in use" interventions.
+# Each can be an EXPOSURE ("does early RRT change mortality?") or an OUTCOME
+# ("who escalates to RRT / ventilation / ECMO?"). The outcome gate deliberately
+# does not auto-pass interventions, but these specific modalities are legitimate,
+# commonly-studied binary clinical endpoints. We expose them as determinable
+# outcomes under the DISTINCT ``organ_support_intervention`` status (not plain
+# ``known_0_1``) so their treatment / organ-support nature stays explicit
+# downstream — the manuscript must carry the confounding-by-indication caveat
+# rather than read them as clean physiological outcomes.
+_ORGAN_SUPPORT_OUTCOME_CONCEPTS = frozenset(
+    {"rrt", "mech_vent", "ecmo", "mech_circ_support"}
+)
+
+
+def _is_organ_support_outcome(key: str, concept: Mapping) -> bool:
+    return (
+        key in _ORGAN_SUPPORT_OUTCOME_CONCEPTS
+        or normalize_concept_name(key) in _ORGAN_SUPPORT_OUTCOME_CONCEPTS
+    )
+
+
 def _is_binary_outcome(concept: Mapping) -> bool:
     """Return whether a dictionary concept is safe as a 0/1 outcome.
 
@@ -351,6 +372,8 @@ def load_concept_catalog(
                 aliases[key] = derived
             if _is_binary_outcome(concept):
                 _declare_outcome(key)
+            elif _is_organ_support_outcome(key, concept):
+                _declare_outcome(key, status="organ_support_intervention")
             elif _is_non_binary_determinable(concept):
                 _declare_outcome(key, status="non_binary_determinable")
         elif key in DERIVED_CONCEPT_HINTS:

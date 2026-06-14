@@ -594,6 +594,53 @@ def test_extract_literature_ideas_rejects_untraceable_quote() -> None:
         )
 
 
+def test_extract_literature_ideas_skip_policy_drops_only_untraceable() -> None:
+    """untraceable_quote_policy='skip' must drop ONLY the idea whose quote is
+    not verbatim and keep the grounded ones, so one paraphrased quote does not
+    discard an entire multi-article batch. The provenance gate still admits no
+    unverbatim quote."""
+    material = SourceMaterial(
+        citation=_citation(),
+        source_adapter_level="user_supplied_excerpt",
+        source_text="Lactate clearance was associated with survival in shock.",
+    )
+    llm = CapturingIdeaLLM(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "lactate clearance",
+                "outcome": "survival",
+                "rationale": "Grounded.",
+                "source_quote": "lactate clearance was associated with survival",
+                "analysis_family": "association",
+            },
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "marker",
+                "outcome": "endpoint",
+                "rationale": "Not anchored.",
+                "source_quote": "a sentence that is not in the source",
+                "analysis_family": "association",
+            },
+        ]
+    )
+
+    dropped: list[str] = []
+    ideas = extract_literature_ideas(
+        materials=[material],
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        llm=llm,
+        untraceable_quote_policy="skip",
+        dropped_untraceable=dropped,
+    )
+
+    assert len(ideas) == 1
+    assert ideas[0].exposure_or_predictor == "lactate clearance"
+    assert dropped == ["neutral_review_2026"]
+
+
 def test_licensed_source_snapshot_does_not_store_full_text() -> None:
     secret_body = "copyrighted licensed full text body that must not be stored"
     manifest = freeze_source_snapshot(
