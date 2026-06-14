@@ -262,6 +262,11 @@ def test_real_judge_parser_tolerates_reasoning_preamble():
 
 def test_cli_smoke_with_mock_judges(tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
+    if not (repo_root / "tools" / "run_tier2_jury.py").exists():
+        # tools/run_tier2_jury.py is excluded from the slimmed public
+        # repository surface (see 874db1c); the CLI smoke can only run where
+        # the script is kept.
+        pytest.skip("tools/run_tier2_jury.py not present (excluded from the public repo surface)")
     for idx in range(2):
         run_dir = tmp_path / f"run_{idx}"
         run_dir.mkdir()
