@@ -649,6 +649,17 @@ def _discovery_risks(
         if candidate.feature_derivation_note:
             risks.append(candidate.feature_derivation_note)
         risks.extend(candidate.feature_derivation_requirements)
+        if candidate.outcome_determinability_status == "organ_support_intervention":
+            # The endpoint is an organ-support THERAPY (RRT / mechanical
+            # ventilation / ECMO) used as an outcome. It is determinable, but it
+            # reflects a treatment DECISION, so it must not be read as a clean
+            # physiological outcome: confounding by indication and unit/clinician
+            # treatment thresholds drive who receives it.
+            risks.append(
+                "outcome is an organ-support intervention (treatment-decision "
+                "endpoint): interpret with confounding-by-indication caution, not "
+                "as a physiological outcome"
+            )
     if not assessment.has_specific_differentiator:
         risks.append("no specific differentiator; needs screening")
     if "NOT screened" in assessment.same_topic_screen_status:

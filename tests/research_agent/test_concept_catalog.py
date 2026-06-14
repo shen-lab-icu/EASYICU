@@ -40,10 +40,31 @@ def test_binary_outcomes_are_declared_known_0_1() -> None:
         assert cat.outcome_determinability[key]["status"] == "known_0_1"
 
 
-def test_intervention_logical_concepts_are_not_default_outcomes() -> None:
+def test_indication_flag_concepts_are_not_default_outcomes() -> None:
     cat = load_concept_catalog()
-    for key in ("rrt", "vaso_ind", "vent_ind", "mech_vent"):
+    # Indication flags stay out of the outcome menu — they describe WHY a therapy
+    # might be considered, not a clean endpoint.
+    for key in ("vaso_ind", "vent_ind"):
         assert key not in cat.outcome_determinability
+
+
+def test_organ_support_therapies_are_intervention_outcomes() -> None:
+    cat = load_concept_catalog()
+    # RRT / mechanical ventilation / ECMO / mechanical circulatory support are
+    # legitimate binary clinical endpoints ("who escalates to organ support?"),
+    # so they ARE determinable outcomes — but under the distinct
+    # ``organ_support_intervention`` status, NOT plain ``known_0_1``, so their
+    # treatment / confounding-by-indication nature is preserved downstream.
+    for key in ("rrt", "mech_vent", "ecmo", "mech_circ_support"):
+        spec = cat.outcome_determinability.get(key)
+        assert spec is not None, key
+        assert spec["status"] == "organ_support_intervention", (key, spec)
+    # And they are NOT silently treated as clean binary physiological outcomes.
+    assert "rrt" not in {
+        k
+        for k, v in cat.outcome_determinability.items()
+        if v["status"] == "known_0_1"
+    }
 
 
 def test_administration_exposure_concepts_are_not_default_outcomes() -> None:
@@ -68,10 +89,13 @@ def test_continuous_outcomes_are_determinable_but_not_binary() -> None:
 
 
 def test_treatment_exposure_concepts_stay_undeterminable() -> None:
-    # Using a treatment/exposure as an outcome is genuinely ambiguous; the
-    # conservative block (no determinability spec -> "unknown" gate) is kept.
+    # Using a drug/infusion treatment or an indication flag as an outcome is
+    # genuinely ambiguous; the conservative block (no determinability spec ->
+    # "unknown" gate) is kept. (Organ-support MODALITIES like rrt/mech_vent/ecmo
+    # are the deliberate exception — see
+    # test_organ_support_therapies_are_intervention_outcomes.)
     cat = load_concept_catalog()
-    for key in ("rrt", "vaso_ind", "norepi60"):
+    for key in ("vaso_ind", "norepi60"):
         assert key not in cat.outcome_determinability
 
 
