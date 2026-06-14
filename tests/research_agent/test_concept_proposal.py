@@ -8,6 +8,8 @@ import inspect
 from easyicu.research_agent.concept_proposal import (
     ConceptProposalDraft,
     DistributionStat,
+    gather_candidate_rows,
+    propose_concept_selection,
     validate_concept_proposal,
 )
 from easyicu.research_agent.idea_mining_feasibility_tier import SourceItemIndex
@@ -177,9 +179,67 @@ def test_no_probe_cannot_be_approved():
     assert any(f.gate == "distribution" for f in res.findings)
 
 
+def test_measurement_without_unit_or_bounds_warns():
+    # the LDH run exposed this: LLM returned unit=None/bounds=None, so the
+    # plausibility gate silently skipped — must surface a warning.
+    draft = ConceptProposalDraft(
+        "ldh", (50954,), role="measurement", target_fluid="Blood"
+    )
+    probe = _probe_factory(
+        {50954: DistributionStat(50954, 5000, 4000, 0.2, 100, 230, 2300, ("iu/l",))}
+    )
+    res = validate_concept_proposal(
+        draft, source_index=_index(), distribution_probe=probe
+    )
+    assert res.status == "needs_human_review"
+    metadata = [f for f in res.findings if f.gate == "declared_metadata"]
+    assert any("unit" in f.message for f in metadata)
+    assert any("min, max" in f.message for f in metadata)
+
+
 def test_draft_is_quarantined_by_default():
     draft = ConceptProposalDraft("hr", (220045,))
     assert draft.quarantine is True
+
+
+def test_gather_candidate_rows_returns_catalog_rows_for_concept():
+    rows = gather_candidate_rows(_index(), "lactate dehydrogenase")
+    ids = {r["itemid"] for r in rows}
+    assert 50954 in ids and 50843 in ids
+
+
+def test_selection_constrains_to_offered_itemids_and_drops_invented():
+    rows = gather_candidate_rows(_index(), "lactate dehydrogenase")
+
+    def fake_complete(system, user):
+        # model tries to smuggle in an itemid (99999) that was not offered.
+        return (
+            '{"selected_itemids": [50954, 99999], "role": "measurement", '
+            '"unit": "IU/L", "min_value": 0, "max_value": 5000, '
+            '"target_fluid": "Blood", "rationale": "serum LDH"}'
+        )
+
+    draft = propose_concept_selection("ldh", rows, complete=fake_complete)
+    assert draft.candidate_itemids == (50954,)
+    assert 99999 not in draft.candidate_itemids
+    assert draft.role == "measurement"
+    assert draft.target_fluid == "Blood"
+
+
+def test_selection_parses_fenced_json():
+    rows = gather_candidate_rows(_index(), "heart rate")
+
+    def fake_complete(system, user):
+        return (
+            "```json\n"
+            '{"selected_itemids": [220045], "role": "measurement", '
+            '"unit": "bpm", "min_value": 0, "max_value": 300, '
+            '"target_fluid": null, "rationale": "HR"}\n```'
+        )
+
+    draft = propose_concept_selection("hr", rows, complete=fake_complete)
+    assert draft.candidate_itemids == (220045,)
+    assert draft.min_value == 0 and draft.max_value == 300
 
 
 def test_module_is_a_leaf_does_not_import_idea_mining():

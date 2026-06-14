@@ -118,6 +118,109 @@ def _catalog_rows(source_index, itemids: Sequence[int]) -> Dict[int, dict]:
     return {iid: by_id[iid] for iid in itemids if iid in by_id}
 
 
+# --- LLM selection-only step -------------------------------------------------
+# The model never writes extraction code; it only *selects* itemids from the
+# frozen catalog and proposes declarative metadata. complete(system, user) ->
+# JSON string. Injected so tests stay hermetic.
+LLMComplete = Callable[[str, str], str]
+
+_SELECTION_SYSTEM_PROMPT = (
+    "You map a clinical concept to source-database item ids. You are given a "
+    "fixed list of catalog items (itemid, label, fluid, category, param_type, "
+    "table). SELECT ONLY itemids from that list that represent the concept — "
+    "never invent an itemid. Prefer blood/serum/plasma specimens for blood "
+    "analytes. Do NOT write extraction code. Return ONLY JSON with keys: "
+    "selected_itemids (list of int), role (one of measurement/event/duration), "
+    "unit (string or null), min_value (number or null), max_value (number or "
+    "null), target_fluid (string or null), rationale (string). For a "
+    "measurement role you MUST give a unit and clinically plausible "
+    "min_value/max_value bounds."
+)
+
+
+def gather_candidate_rows(
+    source_index, concept_name: str, *, limit: int = 15
+) -> List[dict]:
+    """Catalog rows whose label/abbrev share specific tokens with the concept."""
+    hits = source_index.match(concept_name, limit=limit)
+    rows = _catalog_rows(source_index, [h.itemid for h in hits])
+    # preserve match order
+    return [rows[h.itemid] for h in hits if h.itemid in rows]
+
+
+def build_selection_messages(
+    concept_name: str, rows: Sequence[dict]
+) -> tuple[str, str]:
+    lines = [
+        f"{r['itemid']}\t{r.get('label')}\tfluid={r.get('fluid') or '-'}"
+        f"\tcategory={r.get('category') or '-'}\tparam_type={r.get('param_type') or '-'}"
+        f"\ttable={r.get('table')}"
+        for r in rows
+    ]
+    user = (
+        f"Concept to map: {concept_name!r}\n\n"
+        "Catalog items (tab-separated):\n" + "\n".join(lines)
+    )
+    return _SELECTION_SYSTEM_PROMPT, user
+
+
+def _extract_json(text: str) -> dict:
+    raw = str(text or "").strip()
+    if "```" in raw:
+        # strip the first fenced block
+        import re as _re
+
+        m = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, _re.DOTALL)
+        if m:
+            raw = m.group(1)
+    start, end = raw.find("{"), raw.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError("no JSON object found in LLM selection response")
+    import json as _json
+
+    return _json.loads(raw[start : end + 1])
+
+
+def _coerce_float(value) -> Optional[float]:
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def propose_concept_selection(
+    concept_name: str,
+    rows: Sequence[dict],
+    *,
+    complete: LLMComplete,
+) -> ConceptProposalDraft:
+    """Turn an LLM selection over the candidate rows into a declarative draft.
+
+    Defense in depth: selected itemids are intersected with the supplied
+    catalog rows here (the model cannot smuggle in an itemid that was not
+    offered), and ``validate_concept_proposal`` re-checks against the catalog.
+    """
+    system, user = build_selection_messages(concept_name, rows)
+    payload = _extract_json(complete(system, user))
+    offered = {int(r["itemid"]) for r in rows}
+    selected = [
+        int(i)
+        for i in (payload.get("selected_itemids") or [])
+        if str(i).lstrip("-").isdigit() and int(i) in offered
+    ]
+    role = str(payload.get("role") or MEASUREMENT_ROLE).strip().lower()
+    return ConceptProposalDraft(
+        concept_name=concept_name,
+        candidate_itemids=tuple(dict.fromkeys(selected)),
+        role=role if role in VALID_ROLES else MEASUREMENT_ROLE,
+        unit=(payload.get("unit") or None),
+        min_value=_coerce_float(payload.get("min_value")),
+        max_value=_coerce_float(payload.get("max_value")),
+        target_fluid=(payload.get("target_fluid") or None),
+        rationale=str(payload.get("rationale") or ""),
+    )
+
+
 def validate_concept_proposal(
     draft: ConceptProposalDraft,
     *,
@@ -232,6 +335,29 @@ def validate_concept_proposal(
             resolved_itemids=(),
             dropped_itemids=tuple(dict.fromkeys(dropped + invalid)),
         )
+
+    # --- Gate 3b: declared metadata completeness (measurement) -----------
+    # A measurement concept with no declared unit/bounds means the
+    # distribution-plausibility gate cannot run — flag it so a clean
+    # ``needs_human_review`` does not hide a skipped check.
+    if draft.role == MEASUREMENT_ROLE:
+        if not (draft.unit or "").strip():
+            findings.append(
+                GateFinding(
+                    "declared_metadata",
+                    "warning",
+                    "measurement concept has no declared unit — set it before use",
+                )
+            )
+        if draft.min_value is None or draft.max_value is None:
+            findings.append(
+                GateFinding(
+                    "declared_metadata",
+                    "warning",
+                    "measurement concept has no declared [min, max] — the "
+                    "real-distribution plausibility gate could not run",
+                )
+            )
 
     # --- Gate 4: unit consistency (catalog hint) -------------------------
     units = {
