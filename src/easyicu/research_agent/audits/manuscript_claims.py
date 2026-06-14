@@ -256,12 +256,35 @@ _METRIC_DELTA_CUE = re.compile(
 )
 
 
+def _strip_manuscript_noise(text: str) -> str:
+    """Remove markdown links, HTML comments, and binder footnote-definition
+    lines before metric extraction.
+
+    Footnote-definition lines (``[^claim_2]: value=...; field=metrics.auroc;
+    evidence=statistic_step_summary_1c8c8ff2; display=0.831``) are auto-appended
+    machine provenance, not author prose. They contain metric field NAMES
+    ("metrics.auroc") followed by content-addressed step IDs whose leading digit
+    can be parsed as a spurious bare ``0``/``1`` AUROC/Brier claim — an
+    intermittent false positive that fires only when the sha happens to start
+    with a digit. The critic already skips these lines (see agents.py); the
+    numeric auditor must too.
+    """
+    clean = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")
+    clean = re.sub(r"<!--.*?-->", "", clean, flags=re.DOTALL)
+    clean = re.sub(r"(?m)^\s*\[\^[^\]]+\]:.*$", "", clean)
+    return clean
+
+
 def _extract_metric_claims(text: str, metric_pattern: str) -> List[float]:
     claims: List[float] = []
-    clean_text = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")
-    clean_text = re.sub(r"<!--.*?-->", "", clean_text, flags=re.DOTALL)
+    clean_text = _strip_manuscript_noise(text)
+    # Require a DECIMAL point: a real AUROC/Brier point estimate is always
+    # reported with decimals (0.83, not 1). A bare integer near the metric word
+    # is a figure/table number, an enumeration, or a step-id digit, never a
+    # reported metric — excluding it removes that whole false-positive class
+    # while still catching an implausible "1.0"/"0.0" claim written with decimals.
     pattern = re.compile(
-        metric_pattern + r"([^0-9]{0,40})([01](?:\.\d+)?)",
+        metric_pattern + r"([^0-9]{0,40})([01]\.\d+)",
         flags=re.IGNORECASE,
     )
     for match in pattern.finditer(clean_text):
@@ -296,8 +319,7 @@ def _extract_percent_claims_near(
     skip_stratified_context: bool = False,
 ) -> List[float]:
     claims: List[float] = []
-    clean_text = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")
-    clean_text = re.sub(r"<!--.*?-->", "", clean_text, flags=re.DOTALL)
+    clean_text = _strip_manuscript_noise(text)
     pattern = re.compile(
         phrase_pattern + r".{0,80}?([0-9]+(?:\.[0-9]+)?)\s*%",
         flags=re.IGNORECASE | re.DOTALL,

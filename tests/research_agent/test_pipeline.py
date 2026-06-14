@@ -3545,6 +3545,39 @@ def test_manuscript_numeric_auditor_accepts_any_registered_step_auroc(ra):
     assert findings == [], [f.message for f in findings]
 
 
+def test_manuscript_numeric_auditor_ignores_footnote_provenance_stepid_digit(ra):
+    """Regression (M2, 2026-06-14): the binder auto-appends footnote-definition
+    lines like ``[^claim_2]: value=0.830918; field=metrics.auroc;
+    evidence=statistic_step_summary_1c8c8ff2; display=0.831``. The metric field
+    name ``metrics.auroc`` followed by the content-addressed step id's leading
+    digit (``_1c8c8ff2``) was parsed as a spurious AUROC claim of ``1``, which
+    then "did not match registered 0.831" and blocked the manuscript — an
+    intermittent false positive that fired only when the sha started with a
+    digit. The footnote line is machine provenance and must not be scanned; a
+    real AUROC is always a decimal anyway."""
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "On the held-out set the model achieved an AUROC of 0.83 "
+        "[01_model_training](evidence/m.json).\n\n"
+        "[^claim_2]: value=0.830918; step=01_model_training_figure; "
+        "field=metrics.auroc; evidence=statistic_step_summary_1c8c8ff2; "
+        "display=0.831\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {"statistic:auroc": 0.831, "statistic:brier_score": 0.169},
+            }
+        ],
+    )
+
+    assert findings == [], [f.message for f in findings]
+
+
 def test_manuscript_numeric_auditor_flags_value_matching_no_registered_step(ra):
     """Guard for the match-any relaxation: a manuscript AUROC that matches
     NONE of the registered per-step values (here 0.95 against {0.812, 0.868})
