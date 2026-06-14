@@ -14526,8 +14526,8 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
     line-height: 1.12 !important;
   }
 
-  /* Promote main_nav_bar to a fixed bottom-nav. The polish(2) design has
-     exactly five primary workflow targets, so keep all five visible. */
+  /* Promote main_nav_bar to a fixed bottom-nav. Keep each primary workflow
+     target, including Copilot, visible without wrapping. */
   .stApp [class*="st-key-main_nav_bar"] {
     position: fixed !important;
     top: auto !important;
@@ -14548,7 +14548,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 
   .stApp [class*="st-key-main_nav_bar"] div[role="radiogroup"] {
     display: grid !important;
-    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
     background: transparent !important;
     border: 0 !important;
     padding: 0 !important;

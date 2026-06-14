@@ -304,7 +304,8 @@ def test_step2_confirm_seeds_all_concepts_before_rerun() -> None:
         source.index("with right:\n        _render_cohort_live_preview")
     ]
 
-    assert "_reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))" in confirm_block
+    # Redesign seeds the core concept groups (not every group) on confirm.
+    assert "_reset_concepts_to_groups(concept_groups, _core_concept_groups_for_design(concept_groups))" in confirm_block
     assert confirm_block.index("_reset_concepts_to_groups") < confirm_block.index("st.rerun()")
 
 
@@ -2049,14 +2050,14 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "_entry_home_layout" in source_text
     assert "_eu_entry_home_layout" in source_text
     assert "What would you like to study?" in source_text
-    assert "Two equal ways in" in source_text
+    assert "Local-first ICU research workspace" in source_text
     assert "How would you like to work?" in source_text
     assert "Pick a way in. Your data choice applies to either." in source_text
     assert "Research Copilot walks you through question, data, cohort, modules" in source_text
     assert "Research Copilot" in source_text
     assert "Classic Workspace" in source_text
     assert "Polish plan" in source_text
-    assert "Model outcome" in source_text
+    assert "Study question" in source_text
     assert "Compare databases" in source_text
     assert "Audit quality" in source_text
     assert "Data Extraction" in source_text
@@ -2119,7 +2120,7 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "st-key-eu_entry_floating_copilot" in css_text
     assert "max-width: 1100px" in css_text
     assert "max-width: 760px" in css_text
-    assert "min-height: 373px" in css_text
+    assert "min-height: 408px" in css_text
     assert '> [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]' in css_text
     assert 'min-height: 100% !important' in css_text
     assert '[data-testid="stElementContainer"]:has(.eu-entry-classic-dataline)' in css_text
@@ -2745,11 +2746,11 @@ def test_get_started_buttons_route_to_real_destinations() -> None:
     assert 'state["_inline_ai_panel_open"] = False' in page_source
     render_source = inspect.getsource(pages_redesign.render_tutorial_redesign_page)
     assert 'st.session_state["_main_nav_widget"] = target' not in render_source
-    assert "_EXTRA_PAGES = {'extract', 'tutorial', 'assistant', 'states', 'settings'}" in app_source
-    assert 'mobile_page_keys = ["extract", "quick_viz", "cohort", "cross_db", "research_agent"]' in app_source
+    assert "_EXTRA_PAGES = {'extract', 'tutorial', 'states', 'settings'}" in app_source
+    assert 'mobile_page_keys = ["extract", "quick_viz", "cohort", "cross_db", "research_agent", "assistant"]' in app_source
     assert "_visible_active = _current_active if _current_active in mobile_page_keys else mobile_page_keys[0]" in app_source
     assert 'page_labels["extract"] = "Data Extraction" if lang == "en" else "数据提取"' in app_source
-    assert 'render_ai_assistant_page(lang)' in app_source
+    assert 'render_ai_assistant_page(lang, app_context=globals())' in app_source
     assert 'render_workspace_states_reference_page(lang)' in app_source
     assert 'render_settings_redesign_page(lang)' in app_source
     assert "'section.stMain'" in app_source
@@ -3081,6 +3082,9 @@ def test_demo_entry_routes_to_data_extraction_before_visualization(tmp_path, mon
     at = streamlit_testing.AppTest.from_file(app.__file__)
     at.session_state["entry_lang_select"] = "EN"
     at.session_state["language"] = "en"
+    # New entry design: the Data Extraction CTA follows the demo/real data-mode
+    # toggle (default real). Select demo before clicking the extraction button.
+    at.session_state["_eu_entry_copilot_data_mode"] = "demo"
     at.run(timeout=60)
     at.button(key="_eu_entry_demo").click().run(timeout=60)
     assert at.session_state["_active_main_page"] == "extract"
@@ -3304,6 +3308,9 @@ def test_entry_how_it_works_opens_get_started_shell(tmp_path, monkeypatch) -> No
     at = streamlit_testing.AppTest.from_file(app.__file__)
     at.session_state["entry_lang_select"] = "EN"
     at.session_state["language"] = "en"
+    # New entry design: "How it works" routes through the demo/real data-mode
+    # toggle (default real). Select demo to reach the demo tutorial shell.
+    at.session_state["_eu_entry_copilot_data_mode"] = "demo"
     at.run(timeout=60)
 
     assert at.button(key="_eu_entry_how_it_works") is not None
@@ -3447,6 +3454,9 @@ def test_topbar_render_loads_quick_preview_from_demo_mode(tmp_path, monkeypatch)
     at = streamlit_testing.AppTest.from_file(app.__file__)
     at.session_state["entry_lang_select"] = "EN"
     at.session_state["language"] = "en"
+    # New entry design: the Data Extraction CTA follows the demo/real data-mode
+    # toggle (default real). Select demo to load the lightweight demo preview.
+    at.session_state["_eu_entry_copilot_data_mode"] = "demo"
     at.run(timeout=60)
     at.button(key="_eu_entry_demo").click().run(timeout=60)
     at.session_state["_active_main_page"] = "quick_viz"
@@ -3507,7 +3517,7 @@ def test_validate_data_path_is_accent_secondary_action() -> None:
     ]
 
     assert 'key="validate_path"' in validate_source
-    assert 'icon=":material/search:"' in validate_source
+    # Redesign dropped the inline search icon; it stays a plain accent secondary.
     assert 'type="primary"' not in validate_source
     assert "🔍 Validate Data Path" not in validate_source
     assert "validate_spacer, validate_action = st.columns([5, 1.8], gap=\"small\")" in validate_source
@@ -4733,10 +4743,10 @@ def test_research_copilot_embeds_workflow_snapshot_in_chat_reply() -> None:
     assert result is not None
     snapshot = llm_chat._copilot_workflow_snapshot(state, "en")
     html = llm_chat._copilot_workflow_snapshot_html(snapshot, "en")
-    assert "Workflow" in html
-    assert "Model ICU outcomes" in html
-    assert "Feature modules" in html
-    assert "configured" in html
+    assert "This step" in html
+    assert "Feature modules · 2" in html
+    assert "Feature set is mapped" in html
+    assert "configured" not in html
     assert "flow-steps" not in html
     assert "flow-facts" not in html
     assert "demo" not in html.lower()
@@ -6209,17 +6219,17 @@ def test_research_copilot_inline_prepared_path_form_saves_without_navigation(tmp
     assert state["data_path"] == str(prepared_dir)
     assert state["path_validated"] is False
     assert "_copilot_data_source_choice" not in state
-    assert study["step"] == "cohort"
-    assert study["data_source_status"] == "pending_validation"
-    assert "pending validation" in reply
+    assert study["step"] == "data"
+    assert study["data_source_status"] == "conversion_needed"
+    assert "couldn't validate this folder as a converted EasyICU dataset" in reply
     assert {
         (action["id"], action["kind"], action.get("label"))
         for action in actions
     } == {
-        ("choice_cohort_eligible", "copilot_prompt", "Eligible cohort"),
-        ("choice_cohort_disease", "copilot_prompt", "Disease / diagnosis"),
-        ("choice_cohort_age_los", "copilot_prompt", "Age / ICU LOS"),
-        ("choice_cohort_current", "copilot_prompt", "Current reviewed cohort"),
+        ("workflow_study_extract", "workflow", "Open classic extraction"),
+        ("choice_data_prepared_path", "copilot_prompt", "Prepared data path"),
+        ("choice_data_module_export", "copilot_prompt", "Module export folder"),
+        ("choice_data_raw_files", "copilot_prompt", "Raw ICU files"),
     }
 
 
@@ -6540,7 +6550,7 @@ def test_research_copilot_inline_prepared_path_saves_selected_database(tmp_path:
     assert state["data_path"] == str(prepared_dir)
     study = state["_copilot_guided_study"]
     assert study["database"] == "eicu"
-    assert study["data_source_status"] == "pending_validation"
+    assert study["data_source_status"] == "conversion_needed"
 
 
 def test_research_copilot_inline_cohort_filter_syncs_classic_step2_state() -> None:
@@ -6754,11 +6764,16 @@ def test_research_copilot_prepare_extraction_stays_in_chat_after_modules() -> No
     reply, actions = result
     study = state["_copilot_guided_study"]
     assert state["_active_main_page"] == "assistant"
-    assert "Extraction plan assembled in Copilot" in reply
-    assert "eICU-CRD" in reply
-    assert study["step"] == "review"
-    assert study["extraction_configured"] is True
-    assert actions
+    assert "I don't have a real data source bound yet" in reply
+    assert "set data path /path/to/prepared_data" in reply
+    assert study["step"] == "extract"
+    assert study.get("extraction_configured") is not True
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_set_data_path", "copilot_prompt", "Set data path"),
+    }
 
 
 def test_research_copilot_cohort_choice_surfaces_in_chat_options() -> None:
@@ -6909,7 +6924,8 @@ def test_research_copilot_eligible_cohort_waits_for_real_source_and_sanitizes_le
     assert "Predict sepsis mortality" not in legacy_html
     assert "Among Sepsis-3 patients" not in legacy_html
     assert "all eligible stays" not in legacy_html
-    assert "Model ICU outcomes" in legacy_html
+    assert "Cohort · needs confirmation" in legacy_html
+    assert "Confirm the data source and cohort" in legacy_html
     assert "needs confirmation" in legacy_html
 
     normalized_content = llm_chat._normalized_copilot_message_content(
@@ -7118,10 +7134,13 @@ def test_research_copilot_starter_prompt_keeps_sepsis3_out_of_denominator() -> N
     assert update is not None
     update_reply, update_actions = update
     assert state["_copilot_guided_study"]["patient_n"] == 30
-    assert state["_copilot_guided_study"]["step"] == "concepts"
+    assert state["_copilot_guided_study"]["step"] == "cohort"
     assert "Configured cohort denominator **30 stays**" in update_reply
-    assert "feature set" in update_reply
-    assert "Agent setup" in {str(action.get("label")) for action in update_actions}
+    assert "feature set" not in update_reply
+    assert {str(action.get("label")) for action in update_actions} == {
+        "Classic workspace",
+        "Set data path in chat",
+    }
 
 
 def test_research_copilot_guided_study_drives_review_workspace(monkeypatch) -> None:
@@ -8170,8 +8189,6 @@ def test_research_copilot_page_uses_minimal_chat_workspace(tmp_path, monkeypatch
     assert "What would you like to study?" in page_text
     assert "Recent" in page_text
     assert "No studies yet" in page_text
-    assert "Research directory" in page_text
-    assert "not created" in page_text
     assert "Study workspace" in page_text
     assert "Building your study" in page_text
     assert "Evidence-bound" in page_text
@@ -8200,7 +8217,10 @@ def test_research_copilot_page_uses_minimal_chat_workspace(tmp_path, monkeypatch
     assert "COPILOT_SESSION_MESSAGE_SAVE_LIMIT = 80" in llm_source
     assert "COPILOT_RENDER_MESSAGE_LIMIT = 5" in llm_source
     assert "COPILOT_RECENT_SESSION_RENDER_LIMIT = 6" in llm_source
-    assert "research_output\" / \"copilot_studies" in llm_source
+    copilot_sessions_source = (
+        Path(llm_chat.__file__).with_name("copilot") / "sessions.py"
+    ).read_text(encoding="utf-8")
+    assert '_repo_root() / "research_output" / "copilot_studies"' in copilot_sessions_source
     session_rail_source = inspect.getsource(llm_chat._render_copilot_session_rail)
     assert "_touch_current_copilot_study_session" not in session_rail_source
     assert "sessions[:COPILOT_RECENT_SESSION_RENDER_LIMIT]" in session_rail_source
@@ -8308,8 +8328,8 @@ def test_research_copilot_page_keeps_guided_hint_chips(tmp_path, monkeypatch) ->
     assert ".eu-copilot-hint-row" in css
     assert '[class*="guided_intents"]' in css
     assert "justify-content: flex-start" in css
-    assert "--copilot-content-max: 960px;" in css
-    assert "--copilot-user-message-max: 640px;" in css
+    assert "--copilot-content-max: 768px;" in css
+    assert "--copilot-user-message-max: 560px;" in css
     assert "width: min(calc(100% - 52px), var(--copilot-content-max))" in css
     assert "max-width: var(--copilot-content-max)" in css
     assert "max-width: 1280px" not in css
@@ -8871,12 +8891,12 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
     assert "_eu_ra_header_rerun" in app_branch
     assert app_branch.index("with _seg_tail:") < app_branch.index("_eu_ra_header_rerun")
     assert "_prime_research_agent_header_rerun(st.session_state, _ra_run_context)" in app_branch
-    assert 'icon=":material/tune:"' in app_branch
+    assert 'key="_eu_ra_view_setup"' in app_branch
     assert '"Workbench" if lang == \'en\' else "工作台"' in app_branch
-    assert 'icon=":material/grid_view:"' in app_branch
-    assert 'icon=":material/history:"' in app_branch
-    assert 'icon=":material/shield:"' in app_branch
-    assert 'icon=":material/replay:"' in app_branch
+    assert 'key="_eu_ra_view_workbench"' in app_branch
+    assert 'key="_eu_ra_view_history"' in app_branch
+    assert 'key="_eu_ra_view_summary"' in app_branch
+    assert 'key="_eu_ra_header_rerun"' in app_branch
     assert "render_research_agent_history_page(lang, show_header=False)" in app_branch
     assert 'view: str = "setup"' in app_source
     assert 'view == "history"' in app_source
@@ -9463,12 +9483,12 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
     assert "Pick the task, bind the cohort, then review the evidence gate" in overview_source
     assert "Current request" in overview_source
     assert "Next action" in overview_source
-    assert "ra-setup-flow-strip" in overview_source
-    assert "Plan\" if is_en else \"规划\"" in overview_source
-    assert "Build\" if is_en else \"组装\"" in overview_source
-    assert "Analyze\" if is_en else \"分析\"" in overview_source
-    assert "Gate\" if is_en else \"关口\"" in overview_source
-    assert "Review\" if is_en else \"复核\"" in overview_source
+    assert "ra-setup-flow-strip" in ra_source
+    assert "Plan\" if is_en else \"规划\"" in ra_source
+    assert "Build\" if is_en else \"组装\"" in ra_source
+    assert "Analyze\" if is_en else \"分析\"" in ra_source
+    assert "Gate\" if is_en else \"关口\"" in ra_source
+    assert "Review\" if is_en else \"复核\"" in ra_source
     assert "core_ready_count = int(question_ready) + int(cohort_ready) + int(preflight_confirmed)" in overview_source
     assert 'gate_state_label = f"{core_ready_count} / 3 ready"' in overview_source
     assert 'gate_state_label = f"{preflight_count} / 4 ready"' not in overview_source
@@ -9527,8 +9547,18 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
     assert ".ra-context-policy" in css_source
     assert ".ra-preflight-details" in css_source
     assert "grid-template-columns: repeat(auto-fit, minmax(150px, 1fr))" in css_source
-    assert 'st.session_state["research_agent_preflight_signature"] = signature\n            st.rerun()' in preflight_source
-    assert 'st.session_state["research_agent_preflight_confirmed"] = False\n            st.rerun()' in preflight_source
+    assert 'st.session_state["research_agent_preflight_signature"] = signature' in preflight_source
+    assert 'st.session_state["research_agent_preflight_confirmed"] = False' in preflight_source
+    confirm_idx = preflight_source.index("if confirm_clicked:")
+    reset_idx = preflight_source.index("if reset_clicked:")
+    assert confirm_idx < preflight_source.index(
+        'st.session_state["research_agent_preflight_signature"] = signature',
+        confirm_idx,
+    ) < preflight_source.index("st.rerun()", confirm_idx)
+    assert reset_idx < preflight_source.index(
+        'st.session_state["research_agent_preflight_confirmed"] = False',
+        reset_idx,
+    ) < preflight_source.index("st.rerun()", reset_idx)
     assert "llm_ready, llm_issue = _llm_run_readiness" in page_source
     assert "preview_signature = _preflight_signature(preview_contract)" in page_source
     assert 'st.session_state["research_agent_preflight_confirmed"] = False' in page_source
@@ -9868,7 +9898,7 @@ def test_cohort_group_table_reports_numeric_smd_without_inline_labels() -> None:
     assert "st.toggle(" in source
     assert 'label="📥 " +' not in source
     assert 'label="Download table" if lang == \'en\' else "下载表格"' in source
-    assert 'icon=":material/download:"' in source
+    assert 'icon=":material/download:"' not in source
     assert 'return f"{value:.2f}"' in format_smd_source
     assert "_smd_severity_tag" not in format_smd_source
     assert "_smd_min_group_n" not in source
@@ -11049,7 +11079,7 @@ def test_sidebar_pipeline_concept_meta_uses_fresh_group_selection(monkeypatch) -
     steps = sidebar._compute_pipeline_steps()
 
     assert steps[2].key == "concepts"
-    assert steps[2].meta == "4 features"
+    assert steps[2].meta == "4 export concepts"
 
 
 def test_concept_module_toggle_callback_updates_summary_before_render(monkeypatch) -> None:
@@ -11573,7 +11603,7 @@ def test_cohort_redesign_defaults_to_real_panel_body(monkeypatch) -> None:
     page_source = "\n".join(streamlit_stub.markdown_calls)
     assert "Agent preflight" in page_source
     assert "Draft gate" in page_source
-    assert "10 stays · demo concept set" in page_source
+    assert "10 ICU stays · demo review feature set" in page_source
     assert "agent drafts only after review" in page_source
     assert "current session" in page_source
     assert "cohort_statistics:250:0" not in page_source
@@ -11675,7 +11705,7 @@ def test_cohort_redesign_real_loaded_export_uses_patient_ids_for_readiness(monke
 
     page_source = "\n".join(streamlit_stub.markdown_calls)
     assert rendered == ["coverage"]
-    assert "3 stays · 2 concepts" in page_source
+    assert "3 ICU stays · 2 review features" in page_source
     assert "coverage + denominators ready" in page_source
     assert "Draft gate" in page_source
     assert "agent drafts only after review" in page_source
@@ -12283,7 +12313,7 @@ def test_sidebar_context_summary_uses_plain_setup_language(monkeypatch) -> None:
 
     assert "Current setup" in html
     assert "Dataset" in html
-    assert "Demo · 64 patients" in html
+    assert "Demo · 64 ICU stays" in html
     assert "demo defaults" in html
     assert "Data context" not in html
     assert "not a project" not in html
@@ -12377,7 +12407,7 @@ def test_sidebar_agent_setup_view_describes_new_setup_not_previous_run(monkeypat
     assert "Mode" in html
     assert "Real" in html
     assert "Cohort" in html
-    assert "800 rows" in html
+    assert "800 synthetic stays" in html
     assert "Last run" in html
     assert "run_202…c7b109" in html
     assert "Local run" not in html
@@ -12447,7 +12477,7 @@ def test_sidebar_agent_rail_reports_agent_cohort_not_extraction_step(monkeypatch
 
     built_html = sidebar._agent_state_summary_html("real", "en")
 
-    assert "3 rows" in built_html
+    assert "3 ICU stays" in built_html
     assert "not selected" not in built_html
 
     streamlit_stub.session_state.pop("research_agent_module_built", None)
@@ -12456,7 +12486,7 @@ def test_sidebar_agent_rail_reports_agent_cohort_not_extraction_step(monkeypatch
 
     synthetic_html = sidebar._agent_state_summary_html("real", "en")
 
-    assert "800 rows" in synthetic_html
+    assert "800 synthetic stays" in synthetic_html
     assert "not selected" not in synthetic_html
 
 
@@ -12624,9 +12654,9 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     app_text = Path(app.__file__).read_text(encoding="utf-8")
     llm_text = Path(app.__file__).with_name("llm_chat.py").read_text(encoding="utf-8")
     ai_optin_text = Path(app.__file__).with_name("ai_optin.py").read_text(encoding="utf-8")
-    assert "render_floating_chat_dock()" in app_text
+    assert "render_floating_chat_dock(app_context=globals())" in app_text
     assert "render_inline_ai_panel()" not in app_text
-    assert "render_ai_assistant_page(lang)" in app_text
+    assert "render_ai_assistant_page(lang, app_context=globals())" in app_text
     assert "_open_embedded_ai_assistant" in app_text
     assert "_inline_ai_panel_open" in app_text
     assert 'if active_page != "assistant":' in app_text
@@ -12743,7 +12773,7 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert "overflow-y: auto !important;" in shell_styles._load_shell_overrides_css()
     assert "height: calc(100vh - 190px) !important;" not in shell_styles._load_shell_overrides_css()
     assert "height: min(520px, calc(100vh - 190px))" not in shell_styles._load_shell_overrides_css()
-    assert "--copilot-content-max: 960px;" in shell_styles._load_shell_overrides_css()
+    assert "--copilot-content-max: 768px;" in shell_styles._load_shell_overrides_css()
     assert "max-width: var(--copilot-content-max) !important;" in shell_styles._load_shell_overrides_css()
     assert "max-width: 1280px !important;" not in shell_styles._load_shell_overrides_css()
     assert "max-width: min(var(--copilot-user-message-max), 74%)" in shell_styles._load_shell_overrides_css()
@@ -12801,10 +12831,10 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert 'content: "YOU";' in llm_text
     assert 'content: "AI";' in llm_text
     assert "st.form_submit_button(" in llm_text
-    assert '"→"' in llm_text
+    assert '"Send" if lang == "en" else "发送"' in llm_text
     assert "st.session_state.llm_messages and not is_codex_workspace" in llm_text
     assert '"Export Chat" if lang == "en" else "导出对话"' in llm_text
-    assert 'icon=":material/download:"' in llm_text
+    assert 'icon=":material/download:"' not in llm_text
     assert '"Clear Chat" if lang == "en" else "清空对话"' in llm_text
     assert 'icon=":material/delete:"' in llm_text
     assert "📄 Export Chat" not in llm_text
@@ -12813,7 +12843,7 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert "✍️ Generating response..." not in llm_text
     for legacy_emoji in ("🤖", "💬", "💡", "🛠️", "📦", "🔑", "⚙️", "✅", "⚠️", "❌", "⏳"):
         assert legacy_emoji not in llm_text
-    assert 'icon=":material/smart_toy:"' in llm_text
+    assert 'avatar = ":material/person:" if role == "user" else ":material/smart_toy:"' in llm_text
     assert "_render_inline_ai_context_and_handoff" in llm_text
 
 
@@ -12949,8 +12979,8 @@ def test_step1_source_mode_tabs_only_show_actionable_modes() -> None:
         sidebar_text.index("def _render_data_source_page_header")
     ]
 
-    assert '("demo", "Demo", "模拟数据", ":material/science:")' in mode_tabs_source
-    assert '("real", "Real Data", "真实数据", ":material/database:")' in mode_tabs_source
+    assert '("demo", "Demo", "模拟数据")' in mode_tabs_source
+    assert '("real", "Real Data", "真实数据")' in mode_tabs_source
     assert "st.columns(2, gap=\"small\")" in mode_tabs_source
     assert "_eu_source_mode_none" not in mode_tabs_source
     assert "No Data" not in mode_tabs_source
@@ -12968,7 +12998,7 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert '<svg viewBox="0 0 24 24"' in sidebar_text
     assert '<div class="banner-icon">⚗</div>' not in sidebar_text
     assert '"🤖 Ask AI about Sepsis settings"' not in app_text
-    assert 'icon=":material/smart_toy:"' in app_text
+    assert 'icon=":material/smart_toy:"' not in app_text
     assert sidebar_text.count("st.columns([5, 1.45, 2.25], gap=\"small\")") == 2
     assert "prev_col, reset_col, preset_col, restore_col, confirm_col = st.columns(" in sidebar_text
     assert "[1.05, 1.15, 1.15, 1.3, 1.75]" in sidebar_text
@@ -13114,15 +13144,15 @@ def test_step4_export_footer_actions_have_overlap_guard() -> None:
     assert "Bundle preview" in sidebar_text
     assert "This bundle reproduces" in sidebar_text
     assert "Agent code, figures, evidence ledger" in sidebar_text
-    assert 'icon=":material/arrow_back:"' in sidebar_text
-    assert 'icon=":material/check:"' in sidebar_text
+    assert 'icon=":material/arrow_back:"' not in sidebar_text
+    assert 'icon=":material/check:"' not in sidebar_text
     assert "'sanity_back': 'Previous step'" in i18n_text
     assert "'sanity_back': '上一步'" in i18n_text
     assert "_sidebar_set_extract_step_state(st.session_state, 3)" in sidebar_text
     assert "✅ Confirm & Export" not in i18n_text
     assert "↩️ Go Back & Modify" not in i18n_text
-    assert 'browse_label = ""' in data_paths_text
-    assert 'icon=":material/folder_open:"' in data_paths_text
+    assert 'browse_label = "Browse" if lang == "en" else "浏览"' in data_paths_text
+    assert 'icon=":material/folder_open:"' not in data_paths_text
     assert 'browse_label = "📂"' not in data_paths_text
     assert "_module_display_name(group, lang)" in sidebar_text
     assert "sofa2 score" not in sidebar._module_display_name("sofa2_score", "en")
@@ -13294,9 +13324,9 @@ def test_low_memory_export_continue_button_sets_resume_flags(monkeypatch, tmp_pa
 def test_export_patient_limit_hint_tracks_selected_limit() -> None:
     assert sidebar._export_patient_limit_label(0, "en") == "All"
     assert sidebar._export_patient_limit_label(1000, "en") == "1k"
-    assert sidebar._export_patient_limit_hint(0, "en") == "All patients for final runs"
-    assert sidebar._export_patient_limit_hint(100, "en") == "Export first 100 patients"
-    assert sidebar._export_patient_limit_hint(5000, "en") == "Export first 5k patients"
+    assert sidebar._export_patient_limit_hint(0, "en") == "All ICU stays for final runs"
+    assert sidebar._export_patient_limit_hint(100, "en") == "Export first 100 ICU stays"
+    assert sidebar._export_patient_limit_hint(5000, "en") == "Export first 5k ICU stays"
 
 
 def test_export_conflicts_are_scoped_to_selected_format() -> None:
@@ -13509,7 +13539,7 @@ def test_demo_step2_preview_does_not_render_negative_zero_drop(monkeypatch) -> N
     sidebar._render_cohort_live_preview("en")
     preview_html = "\n".join(rendered)
 
-    assert "of 10 stays · 0.0%" in preview_html
+    assert "of 10 stays · no exclusions" in preview_html
     assert "Clear all" not in preview_html
     assert "-0.0%" not in preview_html
 
@@ -13547,8 +13577,8 @@ def test_demo_step2_live_preview_applies_icd_exclude_estimate(monkeypatch) -> No
     sidebar._render_cohort_live_preview("en")
     preview_html = "\n".join(rendered)
 
-    assert "of 10 stays · -90.0%" in preview_html
-    assert "after filters: 1" in preview_html
+    assert "of 10 stays · 90.0% excluded" in preview_html
+    assert "included stays: 1" in preview_html
     assert "ICD + A41" in preview_html
     assert "ICD - I50,C34" in preview_html
 
@@ -13679,13 +13709,14 @@ def test_mobile_bottom_nav_labels_clip_with_ellipsis() -> None:
     app_source = Path(app.__file__).read_text(encoding="utf-8")
     css_text = shell_styles._load_shell_overrides_css()
 
-    assert 'mobile_page_keys = ["extract", "quick_viz", "cohort", "cross_db", "research_agent"]' in app_source
+    assert 'mobile_page_keys = ["extract", "quick_viz", "cohort", "cross_db", "research_agent", "assistant"]' in app_source
     assert 'mobile_page_keys + ["assistant"' not in app_source
     assert 'mobile_page_keys + ["states"' not in app_source
     assert 'mobile_page_keys + ["settings"' not in app_source
     assert '"extract": "Extract" if lang == "en" else "提取"' in app_source
     assert '"quick_viz": "Patient" if lang == "en" else "患者"' in app_source
     assert '"cross_db": "Cross-DB" if lang == "en" else "跨库"' in app_source
+    assert '"assistant": "Copilot" if lang == "en" else "助手"' in app_source
     assert "mobile_page_labels.get(key, page_labels.get(key, key))" in app_source
     assert 'st-key-main_nav_bar"] div[role="radiogroup"] > label p' in css_text
     assert 'label:has(input:checked) *' in css_text
@@ -13693,7 +13724,7 @@ def test_mobile_bottom_nav_labels_clip_with_ellipsis() -> None:
     assert "flex: 1 1 0% !important" in css_text
     assert "min-width: 0 !important" in css_text
     assert "width: 100% !important" in css_text
-    assert "grid-template-columns: repeat(5, minmax(0, 1fr)) !important" in css_text
+    assert "grid-template-columns: repeat(6, minmax(0, 1fr)) !important" in css_text
     assert "overflow-x: hidden !important" in css_text
     assert "max-width: 100% !important" in css_text
     assert "text-overflow: ellipsis !important" in css_text
