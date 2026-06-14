@@ -43,6 +43,21 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from .code_hygiene import reorder_forward_references
 
 
+def _as_text(stream: object) -> str:
+    """Normalise a subprocess stdout/stderr capture to ``str``.
+
+    On ``subprocess.TimeoutExpired`` the partial output can come back as
+    ``bytes`` even when the process was launched in text mode (a CPython
+    wrinkle), so concatenating it with the ``str`` timeout message raises
+    ``TypeError: can't concat str to bytes``. Decode defensively; ``None`` -> "".
+    """
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", errors="replace")
+    return str(stream)
+
+
 @dataclass
 class RunResult:
     """Everything captured from one code execution."""
@@ -84,7 +99,9 @@ class CodeRunner:
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.cohort_parquet = Path(cohort_parquet).resolve()
         if not self.cohort_parquet.exists():
-            raise FileNotFoundError(f"Cohort parquet does not exist: {self.cohort_parquet}")
+            raise FileNotFoundError(
+                f"Cohort parquet does not exist: {self.cohort_parquet}"
+            )
         self.timeout_seconds = timeout_seconds
         self.python_executable = python_executable or sys.executable
         self.extra_env = dict(extra_env or {})
@@ -191,7 +208,10 @@ class CodeRunner:
         requested_isolation = self._isolation_backend_for_cmd(original_cmd)
         isolation_degraded = False
         isolation_degradation_reason: Optional[str] = None
-        if self.network_policy in {"none", "disabled"} and requested_isolation == "host_subprocess":
+        if (
+            self.network_policy in {"none", "disabled"}
+            and requested_isolation == "host_subprocess"
+        ):
             isolation_degraded = True
             isolation_degradation_reason = (
                 "No sandbox-exec or unshare network isolation backend was available; "
@@ -217,16 +237,20 @@ class CodeRunner:
                 and "unshare failed" in stderr.lower()
             ):
                 retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(self.timeout_seconds - (time.monotonic() - started), 1.0)
-                retry_proc = subprocess.run(  # noqa: S603 - intentional, generated script
-                    retry_cmd,
-                    cwd=str(step_dir),
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=retry_timeout,
-                    encoding="utf-8",
-                    errors="replace",
+                retry_timeout = max(
+                    self.timeout_seconds - (time.monotonic() - started), 1.0
+                )
+                retry_proc = (
+                    subprocess.run(  # noqa: S603 - intentional, generated script
+                        retry_cmd,
+                        cwd=str(step_dir),
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=retry_timeout,
+                        encoding="utf-8",
+                        errors="replace",
+                    )
                 )
                 stdout = retry_proc.stdout
                 stderr = (
@@ -238,9 +262,7 @@ class CodeRunner:
                 returncode = retry_proc.returncode
                 cmd = retry_cmd
                 isolation_degraded = True
-                isolation_degradation_reason = (
-                    "unshare network namespace isolation failed; retried as a host subprocess."
-                )
+                isolation_degradation_reason = "unshare network namespace isolation failed; retried as a host subprocess."
             if (
                 returncode != 0
                 and original_cmd
@@ -253,7 +275,9 @@ class CodeRunner:
                 )
             ):
                 retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(self.timeout_seconds - (time.monotonic() - started), 1.0)
+                retry_timeout = max(
+                    self.timeout_seconds - (time.monotonic() - started), 1.0
+                )
                 retry_proc = subprocess.run(  # noqa: S603 - argv list, no shell
                     retry_cmd,
                     cwd=str(step_dir),
@@ -288,7 +312,9 @@ class CodeRunner:
                 and "shm" in stderr.lower()
             ):
                 retry_cmd = [self.python_executable, str(script_path)]
-                retry_timeout = max(self.timeout_seconds - (time.monotonic() - started), 1.0)
+                retry_timeout = max(
+                    self.timeout_seconds - (time.monotonic() - started), 1.0
+                )
                 retry_proc = subprocess.run(  # noqa: S603 - argv list, no shell
                     retry_cmd,
                     cwd=str(step_dir),
@@ -316,8 +342,13 @@ class CodeRunner:
                 )
             duration = time.monotonic() - started
         except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout or ""
-            stderr = (exc.stderr or "") + f"\n[CodeRunner] timed out after {self.timeout_seconds}s\n"
+            # exc.stdout/stderr may be bytes even under text mode — decode before
+            # concatenating the str status line (else TypeError: can't concat
+            # str to bytes; observed once on a slow clustering step).
+            stdout = _as_text(exc.stdout)
+            stderr = _as_text(exc.stderr) + (
+                f"\n[CodeRunner] timed out after {self.timeout_seconds}s\n"
+            )
             returncode = -1
             duration = time.monotonic() - started
             timed_out = True
@@ -433,13 +464,9 @@ class DockerRunner:
                 f"Cohort parquet does not exist: {self.cohort_parquet}"
             )
         self.timeout_seconds = timeout_seconds
-        self.image = image or os.environ.get(
-            "EASYICU_RUNNER_IMAGE", self.DEFAULT_IMAGE
-        )
+        self.image = image or os.environ.get("EASYICU_RUNNER_IMAGE", self.DEFAULT_IMAGE)
         self.docker_executable = (
-            docker_executable
-            or os.environ.get("EASYICU_DOCKER_EXECUTABLE")
-            or "docker"
+            docker_executable or os.environ.get("EASYICU_DOCKER_EXECUTABLE") or "docker"
         )
         self.network = network
         self.extra_mounts = list(extra_mounts or [])
@@ -503,18 +530,20 @@ class DockerRunner:
         # Mounts: cohort RO, step_dir RW. The step_dir mount carries
         # both the script AND the outputs/ subdir, so the container
         # writes its artefacts into the same place the host reads.
-        cmd.extend([
-            "--mount",
-            (
-                f"type=bind,source={str(script_path.parent.resolve())},"
-                f"target={self.CONTAINER_WORKDIR}"
-            ),
-            "--mount",
-            (
-                f"type=bind,source={str(self.cohort_parquet)},"
-                f"target={self.CONTAINER_COHORT_PATH},readonly"
-            ),
-        ])
+        cmd.extend(
+            [
+                "--mount",
+                (
+                    f"type=bind,source={str(script_path.parent.resolve())},"
+                    f"target={self.CONTAINER_WORKDIR}"
+                ),
+                "--mount",
+                (
+                    f"type=bind,source={str(self.cohort_parquet)},"
+                    f"target={self.CONTAINER_COHORT_PATH},readonly"
+                ),
+            ]
+        )
         for source, target, mode in self.extra_mounts:
             entry = f"type=bind,source={source},target={target}"
             if mode and "ro" in mode.lower():
@@ -525,9 +554,7 @@ class DockerRunner:
         # path is irrelevant inside.
         env = {
             "COHORT_PARQUET": self.CONTAINER_COHORT_PATH,
-            "STEP_OUT_DIR": (
-                f"{self.CONTAINER_WORKDIR}/outputs"
-            ),
+            "STEP_OUT_DIR": (f"{self.CONTAINER_WORKDIR}/outputs"),
             "MPLBACKEND": "Agg",
             "PYTHONIOENCODING": "utf-8",
             "PYTHONDONTWRITEBYTECODE": "1",
@@ -539,11 +566,13 @@ class DockerRunner:
         cmd.append(self.image)
         # The script is at /workspace/<basename>. Use python -u for
         # unbuffered stdout so streaming logs don't surprise people.
-        cmd.extend([
-            "python",
-            "-u",
-            f"{self.CONTAINER_WORKDIR}/{script_path.name}",
-        ])
+        cmd.extend(
+            [
+                "python",
+                "-u",
+                f"{self.CONTAINER_WORKDIR}/{script_path.name}",
+            ]
+        )
         return cmd
 
     # ------------------------------------------------------------------
@@ -573,7 +602,9 @@ class DockerRunner:
                 pass
 
         cmd = self.build_command(
-            step_id=step_id, script_path=script_path, out_dir=out_dir,
+            step_id=step_id,
+            script_path=script_path,
+            out_dir=out_dir,
         )
 
         timed_out = False
@@ -591,16 +622,9 @@ class DockerRunner:
             stdout, stderr, returncode = proc.stdout, proc.stderr, proc.returncode
             duration = time.monotonic() - started
         except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout if isinstance(exc.stdout, str) else (
-                (exc.stdout or b"").decode("utf-8", errors="replace")
-                if exc.stdout is not None else ""
-            )
-            stderr = (
-                (exc.stderr if isinstance(exc.stderr, str) else (
-                    (exc.stderr or b"").decode("utf-8", errors="replace")
-                    if exc.stderr is not None else ""
-                ))
-                + f"\n[DockerRunner] timed out after {self.timeout_seconds}s\n"
+            stdout = _as_text(exc.stdout)
+            stderr = _as_text(exc.stderr) + (
+                f"\n[DockerRunner] timed out after {self.timeout_seconds}s\n"
             )
             returncode = -1
             duration = time.monotonic() - started

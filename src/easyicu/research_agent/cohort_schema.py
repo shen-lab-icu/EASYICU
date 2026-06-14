@@ -539,17 +539,67 @@ def known_concept_ids() -> set[str]:
     return set(payload.keys())
 
 
+# A few EasyICU concepts materialise their value under an output-column name
+# that differs from the dictionary ``concept_id`` because the concept's callback
+# emits a clinically-named column (e.g. the ``kdigo_aki`` concept emits
+# ``aki_stage``; see ``kdigo_aki.py`` and ``api.py``'s SPECIAL_CONCEPTS dispatch
+# ``_KDIGO_OUTPUTS``/``_CIRC_OUTPUTS``). A planner that references the cohort
+# concept by its *dictionary id* (the canonical, cross-database way per the
+# concept layer) then names a predicate whose ``concept_id`` never appears as a
+# universe column, even though the data is present under the output name. This
+# is a general EasyICU concept-layer fact, not a benchmark-specific alias: the
+# mapping holds for every database and every analysis that uses these concepts.
+_CONCEPT_OUTPUT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    "kdigo_aki": ("aki_stage",),
+    "kdigo_creat": ("aki_stage_creat",),
+    "kdigo_uo": ("aki_stage_uo",),
+    "circ_failure": ("circ_failure", "circ_event"),
+}
+
+
+def _resolve_predicate_column(
+    columns: Any, concept_id: str, aggregation: str
+) -> Optional[str]:
+    """Resolve a predicate ``concept_id`` to an actual universe column.
+
+    The universe wide table names id-level concepts bare (``age``, ``los_icu``,
+    ``death``) and time-series concepts as ``<output>_<aggregation>``
+    (``aki_stage_max`` …). A predicate carries the *dictionary* ``concept_id``
+    plus the requested ``aggregation``; resolve against the columns present,
+    trying in order: the bare id, the wide ``<concept_id>_<aggregation>`` form,
+    and the concept's known output-column alias(es) (bare and aggregated). Return
+    ``None`` when no column honours the requested aggregation, so the caller can
+    fail loudly rather than silently skip an unenforceable predicate.
+    """
+    cols = set(columns)
+    if concept_id in cols:
+        return concept_id
+    aggregated = f"{concept_id}_{aggregation}"
+    if aggregated in cols:
+        return aggregated
+    for stem in _CONCEPT_OUTPUT_COLUMN_ALIASES.get(concept_id, ()):
+        if stem in cols:
+            return stem
+        stem_aggregated = f"{stem}_{aggregation}"
+        if stem_aggregated in cols:
+            return stem_aggregated
+    return None
+
+
 def _predicate_mask(data: Any, pred: ConceptPredicate) -> Any:
     if pred.aggregation not in _IMPLEMENTED_AGGREGATIONS:
         raise NotImplementedError(
             f"aggregation {pred.aggregation!r} is not implemented by the CTAS "
             "dataframe builder"
         )
-    if pred.concept_id not in data.columns:
+    column = _resolve_predicate_column(data.columns, pred.concept_id, pred.aggregation)
+    if column is None:
         raise CohortDataError(
-            f"cohort dataframe is missing concept column {pred.concept_id!r}"
+            f"cohort dataframe is missing concept column {pred.concept_id!r} "
+            f"(also tried {pred.concept_id}_{pred.aggregation} and known output "
+            "aliases)"
         )
-    series = data[pred.concept_id]
+    series = data[column]
     return _apply_op(series, pred.op, pred.value)
 
 
