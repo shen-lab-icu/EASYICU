@@ -260,6 +260,9 @@ def render_discovery_report(
             f"searched {assessment.searched_at}"
         )
         feasibility = _format_feasibility(record.database_feasibility)
+        if getattr(record, "feasibility_tier", None):
+            tier_line = _format_feasibility_tier(record)
+            feasibility = f"{tier_line}\n{feasibility}" if feasibility else tier_line
         risks = "<br>".join(_escape_md_cell(risk) for risk in record.risks) or "n/a"
         lines.append(
             "| {idx} | {source} | {gap} | {topic} | {prior} | {feas} | {decision} | {risks} |".format(
@@ -557,6 +560,31 @@ def _format_feasibility(payload: Mapping[str, Any]) -> str:
     if payload.get("feasibility_note"):
         parts.append(str(payload["feasibility_note"]))
     return "; ".join(parts) if parts else "not available"
+
+
+_TIER_LABELS = {
+    "executable": "executable",
+    "T1_reextract": "T1 re-extract/derive",
+    "T2_new_concept": "T2 new concept authorable",
+    "T3_not_in_db": "T3 not in this database",
+}
+
+
+def _format_feasibility_tier(record: DiscoveryCandidateRecord) -> str:
+    tier = record.feasibility_tier
+    label = _TIER_LABELS.get(tier, tier or "")
+    note = (record.feasibility_tier_note or "").strip()
+    line = f"**{label}**"
+    if note:
+        line += f" — {note}"
+    items = list(record.feasibility_source_items or [])[:2]
+    if items:
+        rendered = "; ".join(
+            f"itemid {it.get('itemid')} '{it.get('label')}' ({it.get('table')})"
+            for it in items
+        )
+        line += f" [source: {rendered}]"
+    return line
 
 
 def _discovery_report_counts(

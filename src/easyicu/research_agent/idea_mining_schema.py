@@ -409,6 +409,11 @@ class DiscoveryCandidateRecord(BaseModel):
     go_no_go_reason: str
     risks: List[str] = Field(default_factory=list)
     clinical_plausibility_requires_human: bool = True
+    # Three-tier source-feasibility triage (None when no source-item catalog was
+    # supplied): executable / T1_reextract / T2_new_concept / T3_not_in_db.
+    feasibility_tier: Optional[str] = None
+    feasibility_tier_note: Optional[str] = None
+    feasibility_source_items: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class DiscoveryTriageResult(BaseModel):

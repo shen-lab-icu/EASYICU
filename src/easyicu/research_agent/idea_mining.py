@@ -132,6 +132,10 @@ from .idea_mining_priorart import (  # noqa: F401  (re-exported for back-compat)
     build_prior_art_queries,
     render_discovery_report,
 )
+from .idea_mining_feasibility_tier import (  # noqa: F401  (re-exported)
+    SourceItemIndex,
+    classify_feasibility_tier,
+)
 
 
 IDEA_EXTRACTION_SYSTEM_PROMPT = (
@@ -623,6 +627,7 @@ def run_idea_mining_dry_run(
     scope_reference_year: Optional[int] = None,
     scope_retmax: int = 20,
     untraceable_quote_policy: Literal["raise", "skip"] = "raise",
+    source_item_index: Optional["SourceItemIndex"] = None,
 ) -> IdeaMiningDryRunResult:
     """Run the S4→S1→S3→S2 idea-triage dry run and stop at the human gate.
 
@@ -865,6 +870,7 @@ def run_idea_mining_dry_run(
             prior_art_assessments=prior_art_assessments,
             candidate_records=candidate_records,
             source_materials=parsed_materials,
+            source_item_index=source_item_index,
         )
         discovery_counts = _discovery_report_counts(discovery_records)
         discovery_path = out_dir / "discovery_report.md"
@@ -979,8 +985,15 @@ def build_discovery_candidate_records(
     prior_art_assessments: Sequence[PriorArtAssessment],
     candidate_records: Sequence[IdeaMiningCandidateTriageRecord],
     source_materials: Sequence[SourceMaterial],
+    source_item_index: Optional["SourceItemIndex"] = None,
 ) -> List[DiscoveryCandidateRecord]:
-    """Build S6 human-facing discovery records from frozen structured inputs."""
+    """Build S6 human-facing discovery records from frozen structured inputs.
+
+    When ``source_item_index`` is supplied, each record is annotated with a
+    three-tier source-feasibility verdict (executable / T1 re-extract / T2 new
+    concept authorable / T3 not in this database) so the report no longer
+    collapses every blocked candidate into one ``db-cannot-do`` cell.
+    """
 
     candidates_by_idea = {
         candidate.literature_idea_id: candidate for candidate in executable_candidates
@@ -1018,6 +1031,24 @@ def build_discovery_candidate_records(
             assessment=assessment,
             triage=triage,
         )
+        tier = tier_note = None
+        tier_items: List[Dict[str, Any]] = []
+        if source_item_index is not None and candidate is not None:
+            tier_result = classify_feasibility_tier(
+                candidate, source_index=source_item_index
+            )
+            tier = tier_result.tier
+            tier_note = tier_result.human_note
+            tier_items = [
+                {
+                    "itemid": hit.itemid,
+                    "label": hit.label,
+                    "table": hit.table,
+                    "category": hit.category,
+                    "matched_tokens": list(hit.matched_tokens),
+                }
+                for hit in tier_result.source_item_hits
+            ]
         records.append(
             DiscoveryCandidateRecord(
                 literature_idea_id=str(idea.literature_idea_id),
@@ -1038,6 +1069,9 @@ def build_discovery_candidate_records(
                 go_no_go_reason=decision_reason,
                 risks=risks,
                 clinical_plausibility_requires_human=True,
+                feasibility_tier=tier,
+                feasibility_tier_note=tier_note,
+                feasibility_source_items=tier_items,
             )
         )
     return records
