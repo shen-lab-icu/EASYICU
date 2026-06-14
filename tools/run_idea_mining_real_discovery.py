@@ -15,8 +15,6 @@ Everything stops at the human gate (candidates are ``proposed``, never
 from __future__ import annotations
 
 import argparse
-import os
-import re
 import sys
 from pathlib import Path
 
@@ -50,7 +48,6 @@ def _event_aware_probe(**kwargs):
         event_default_false_concepts=EVENT_DEFAULT_FALSE, **kwargs
     )
 from easyicu.research_agent.idea_mining import (  # noqa: E402
-    OutcomeDeterminability,
     run_idea_mining_dry_run,
 )
 from easyicu.research_agent.schema import ConceptDescriptor, VariableRole  # noqa: E402
