@@ -572,6 +572,7 @@ def _copilot_explicit_local_command(prompt: str) -> bool:
         "use these modules",
         "use suggested modules",
         "use eligible cohort",
+        "filter cohort to",
         "describe my own research question",
         "describe my own endpoint",
         "describe my own exposure",
@@ -598,6 +599,7 @@ def _copilot_explicit_local_command(prompt: str) -> bool:
         "选择特征模块",
         "用这些变量",
         "全部合格队列",
+        "队列过滤为",
         "自己描述研究问题",
         "自己描述 endpoint",
         "自己描述暴露",
@@ -657,13 +659,18 @@ def _copilot_should_use_llm_route(
     *,
     usage_help_intent: bool,
     step_by_step_intent: bool,
+    full_cohort_intent: bool = False,
     cohort_step_intent: bool,
     api_intent: bool,
     path_help_intent: bool,
     guided_choice_intent: bool,
 ) -> bool:
-    _ = (usage_help_intent, step_by_step_intent)
+    _ = usage_help_intent
     if api_intent:
+        return False
+    if step_by_step_intent:
+        return False
+    if full_cohort_intent:
         return False
     if cohort_step_intent:
         return False

@@ -2542,6 +2542,7 @@ def _handle_copilot_guided_prompt(
             prompt,
             usage_help_intent=usage_help_intent,
             step_by_step_intent=step_by_step_intent,
+            full_cohort_intent=full_cohort_intent,
             cohort_step_intent=cohort_step_intent,
             api_intent=api_intent,
             path_help_intent=path_help_intent,
@@ -5990,9 +5991,16 @@ def _render_copilot_depth_control(study: Mapping[str, object], lang: str) -> Non
     # widget is instantiated — the only point where writing the key is allowed.
     pending = st.session_state.pop("_copilot_depth_seg_pending", None)
     if pending in labels:
-        st.session_state[key] = pending
-    elif st.session_state.get(key) not in labels:
-        st.session_state[key] = current
+        current = str(pending)
+    else:
+        widget_value = st.session_state.get(key)
+        if isinstance(widget_value, str) and widget_value in labels:
+            current = widget_value
+    # Streamlit 1.54's testing tree serializes button-group widget state as an
+    # index array. A manually seeded string key is iterable there ("full" ->
+    # "f", "u", ...), which breaks format_func. Let the widget initialize from
+    # `default` instead of carrying stale session-state values across renders.
+    st.session_state.pop(key, None)
     st.markdown(
         '<div class="eu-copilot-rail-eyebrow">'
         f'{html.escape("How far to run" if is_en else "本次跑多远")}</div>',
@@ -6001,12 +6009,15 @@ def _render_copilot_depth_control(study: Mapping[str, object], lang: str) -> Non
     choice = st.segmented_control(
         "How far to run" if is_en else "本次跑多远",
         options=["extract", "review", "full"],
+        selection_mode="multi",
+        default=[current],
         format_func=lambda d: labels[d],
         key=key,
         label_visibility="collapsed",
     )
-    if choice and choice != current:
-        _apply_chat_workflow_action(f"study_depth_{choice}")
+    selected = choice[-1] if isinstance(choice, list) and choice else choice
+    if selected and selected != current:
+        _apply_chat_workflow_action(f"study_depth_{selected}")
         st.rerun()
 
 

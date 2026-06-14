@@ -1582,7 +1582,7 @@ def test_summary_review_gate_uses_checklist_and_locked_draft_card() -> None:
     assert "Export package" in summary_source
     assert "eu-summary-bundle-details" in summary_source
     assert "eu-summary-bundle-summary" in summary_source
-    assert "No package until evidence is bound" in summary_source
+    assert "Export package is demo-only" in summary_source
     assert "Export bundle" in summary_source
     assert "One reviewer sign-off outstanding" in summary_source
     assert "eu-summary-review-control-head" in summary_source
@@ -1598,8 +1598,8 @@ def test_summary_review_gate_uses_checklist_and_locked_draft_card() -> None:
     assert "force_manuscript" in source
     assert "Draft methods + results" in source[source.index("def _render_summary_review_controls"):source.index("def render_agent_output_summary")]
     assert "def _summary_empty_html" in source
-    assert "No draft until evidence is bound" in source
-    assert "Bundle index unavailable" in source
+    assert "locked until review" in source
+    assert "Results and export appear here after a run" in source
     assert "_render_summary_empty_state(lang, show_header=show_header)" in render_source
     assert "_render_workbench_empty_state(lang, summary=True)" not in render_source
     assert "eu-summary-reference-grid" in summary_source
@@ -1785,7 +1785,7 @@ def test_research_agent_question_widget_uses_session_state_without_duplicate_def
 
     assert 'st.session_state.setdefault("research_agent_question", "")' in request_source
     assert 'key="research_agent_question"' in request_source
-    assert 'key="research_agent_apply_question"' in request_source
+    assert "on_change=_on_research_agent_question_change" in request_source
     assert '_research_agent_question_applied_notice' in request_source
     assert '_research_agent_question_empty_notice' in request_source
     assert 'value=st.session_state.get("research_agent_question", "")' not in request_source
@@ -2155,12 +2155,13 @@ def test_research_agent_shell_identity_card_precedes_view_tabs() -> None:
     assert agent_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)") < agent_branch.index('st.container(key="_eu_ra_tabs")')
     assert "_research_agent_active_run_context(st.session_state)" in agent_branch
     assert "_prime_research_agent_header_rerun(st.session_state, _ra_run_context)" in agent_branch
-    assert 'icon=":material/tune:"' in agent_branch
+    # View tabs are now a plain text segmented control (Setup / Workbench /
+    # History / Summary), not inline material-icon buttons.
+    assert 'key="_eu_ra_view_setup"' in agent_branch
     assert '"Workbench" if lang == \'en\' else "工作台"' in agent_branch
-    assert 'icon=":material/grid_view:"' in agent_branch
-    assert 'icon=":material/history:"' in agent_branch
-    assert 'icon=":material/shield:"' in agent_branch
-    assert 'icon=":material/replay:"' in agent_branch
+    assert 'key="_eu_ra_view_workbench"' in agent_branch
+    assert 'key="_eu_ra_view_history"' in agent_branch
+    assert 'key="_eu_ra_view_summary"' in agent_branch
     assert "render_agent_workbench(lang, show_header=False)" in agent_branch
     assert "render_agent_output_summary(lang, show_header=False)" in agent_branch
     assert "render_research_agent_history_page(lang, show_header=False)" in agent_branch
@@ -2376,7 +2377,12 @@ def test_demo_agent_copy_matches_backend_scope() -> None:
         source.index("def render_research_agent_demo_page")
     ]
 
-    assert "demo · 10 stays · 19 modules" in demo_source
+    # Demo copy now reports backend scope dynamically (stays + review features)
+    # instead of a hard-coded "demo · N stays · M modules" string.
+    assert "review workspace · " in demo_source
+    assert "ICU stays · " in demo_source
+    assert "review features" in demo_source
+    assert "selected export concepts · " in demo_source
     assert "Demo · no LLM call" in demo_source
     assert "demo · 10 stays · 8 modules" not in demo_source
     assert "gpt-oss · sidebar AI" not in demo_source
