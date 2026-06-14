@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from easyicu.webapp.cohort_filters import _read_table, _resolve_table_path
+from easyicu.webapp.concept_catalog import _sample_patient_ids_random
 from easyicu.webapp.data_paths import find_database_path
 from easyicu.webapp.services import count_unique_concepts, normalize_column_name
 
@@ -15,6 +16,91 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
     for name, value in app_context.items():
         if not name.startswith("__") and name not in protected:
             globals()[name] = value
+
+
+def _sync_review_export_lineage(loaded_concepts: dict[str, Any]) -> tuple[int, int, list[str]]:
+    """Keep export-selection and loaded-review counts distinct after loading tables."""
+    loaded_names = [str(name) for name in loaded_concepts.keys()]
+    loaded_count = len(loaded_names)
+    expected = [
+        str(name)
+        for name in dict.fromkeys(st.session_state.get("_review_expected_export_concepts") or [])
+        if str(name)
+    ]
+    try:
+        stored_source_count = int(st.session_state.get("_review_source_concept_count") or 0)
+    except (TypeError, ValueError):
+        stored_source_count = 0
+    source_count = len(expected) or stored_source_count or loaded_count
+
+    loaded_raw = set(loaded_names)
+    loaded_normalized = {normalize_column_name(name) for name in loaded_names}
+    missing = [
+        name
+        for name in expected
+        if name not in loaded_raw and normalize_column_name(name) not in loaded_normalized
+    ]
+    st.session_state["_review_source_concept_count"] = source_count
+    st.session_state["_review_subset_concept_count"] = loaded_count
+    if missing:
+        st.session_state["_review_missing_export_concepts"] = missing
+    else:
+        st.session_state.pop("_review_missing_export_concepts", None)
+    return source_count, loaded_count, missing
+
+
+def _review_load_success_text(
+    *,
+    lang: str,
+    loaded_count: int,
+    source_count: int,
+    loaded_stays: int,
+    total_stays: int | None,
+    elapsed: float,
+) -> str:
+    """Format review workspace load feedback with explicit count lineage."""
+    if lang == "en":
+        feature_part = (
+            f"{loaded_count} review features from {source_count} selected export concepts"
+            if source_count and source_count != loaded_count
+            else f"{loaded_count} review features"
+        )
+        stay_part = (
+            f"{loaded_stays}/{total_stays} ICU stays"
+            if total_stays is not None
+            else f"{loaded_stays} ICU stays"
+        )
+        return f"✅ Loaded {feature_part}, {stay_part} ({elapsed:.1f}s)"
+
+    feature_part = (
+        f"{loaded_count} 个审阅特征（来自 {source_count} 个已选导出概念）"
+        if source_count and source_count != loaded_count
+        else f"{loaded_count} 个审阅特征"
+    )
+    stay_part = (
+        f"{loaded_stays}/{total_stays} 个 ICU stay"
+        if total_stays is not None
+        else f"{loaded_stays} 个 ICU stay"
+    )
+    return f"✅ 已加载 {feature_part}，{stay_part} ({elapsed:.1f}秒)"
+
+
+def _render_review_missing_concepts_notice(missing: list[str], lang: str) -> None:
+    """Explain export concepts that are absent from the loaded review tables."""
+    if not missing:
+        return
+    preview = ", ".join(missing[:8])
+    more = f" (+{len(missing) - 8})" if len(missing) > 8 else ""
+    if lang == "en":
+        st.info(
+            f"{len(missing)} selected export concept(s) were not found in loaded review table columns: "
+            f"{preview}{more}. They may have been unavailable, empty, skipped by module reuse, or collapsed by column normalization."
+        )
+    else:
+        st.info(
+            f"{len(missing)} 个已选导出概念未出现在已加载审阅表列中：{preview}{more}。"
+            "可能原因包括当前数据源不可用、为空、模块复用时被跳过，或列名规范化后被合并。"
+        )
 
 
 def check_data_status(data_path: str, database: str, app_context: dict[str, Any] | None = None) -> dict:
@@ -984,7 +1070,13 @@ def load_from_exported(export_dir: str, max_patients: int = 50, selected_files: 
             preview_patient_ids = sorted(list(patient_ids))
             is_limited = False
         else:
-            preview_patient_ids = sorted(list(patient_ids))[:max_patients]
+            # 用「固定种子的随机采样」而非「sorted 前缀」做预览裁剪：
+            # 某些库(如 eICU)患者 id 按医院/批次聚簇，取最低 N 个 id 会得到
+            # 非代表性子集，使本来有覆盖的概念在预览里显示为空/异常稀疏。
+            # _sample_patient_ids_random(seed=42) 保证预览可复现，同时避免偏差。
+            preview_patient_ids = sorted(
+                _sample_patient_ids_random(list(patient_ids), max_patients)
+            )
             is_limited = all_patient_count > max_patients
 
         # 筛选数据只保留限制的患者
@@ -1010,6 +1102,7 @@ def load_from_exported(export_dir: str, max_patients: int = 50, selected_files: 
         # 🔧 FIX (2026-02-12): 规范化后每列就是一个概念，直接统计列数
         # 由于在加载时已经去重，这里直接使用 len(filtered_data)
         unique_concept_count = len(filtered_data)
+        source_concept_count, _, missing_export_concepts = _sync_review_export_lineage(filtered_data)
 
         # 🔧 FIX (2026-02-03): Load Data后重置导出触发状态，避免白屏
         # 注意：不应该重置 export_completed，因为 Quick Visualization 的 Load Data
@@ -1030,13 +1123,29 @@ def load_from_exported(export_dir: str, max_patients: int = 50, selected_files: 
         # 🔧 FIX (2026-02-12): 规范化后 concepts = columns (已去重)
         lang = st.session_state.get('language', 'en')
         if lang == 'en':
-            st.success(f"✅ Loaded {unique_concept_count} concepts, {len(preview_patient_ids)}/{all_patient_count} patients ({load_elapsed:.1f}s)")
+            st.success(_review_load_success_text(
+                lang=lang,
+                loaded_count=unique_concept_count,
+                source_count=source_concept_count,
+                loaded_stays=len(preview_patient_ids),
+                total_stays=all_patient_count,
+                elapsed=load_elapsed,
+            ))
+            _render_review_missing_concepts_notice(missing_export_concepts, lang)
             if is_limited:
-                st.info(f"💡 For better performance, preview is limited to {max_patients} patients. Full data has been exported to disk.")
+                st.info(f"💡 For better performance, preview is limited to {max_patients} ICU stays. Full data has been exported to disk.")
         else:
-            st.success(f"✅ 已加载 {unique_concept_count} 个概念，{len(preview_patient_ids)}/{all_patient_count} 个患者 ({load_elapsed:.1f}秒)")
+            st.success(_review_load_success_text(
+                lang=lang,
+                loaded_count=unique_concept_count,
+                source_count=source_concept_count,
+                loaded_stays=len(preview_patient_ids),
+                total_stays=all_patient_count,
+                elapsed=load_elapsed,
+            ))
+            _render_review_missing_concepts_notice(missing_export_concepts, lang)
             if is_limited:
-                st.info(f"💡 为保证流畅性，可视化预览仅加载前 {max_patients} 个患者。完整数据已导出到磁盘，可使用Python/R进行完整分析。")
+                st.info(f"💡 为保证流畅性，可视化预览仅加载前 {max_patients} 个 ICU stay。完整数据已导出到磁盘，可使用Python/R进行完整分析。")
 
     except Exception as e:
         lang = st.session_state.get('language', 'en')
@@ -1115,8 +1224,12 @@ def load_data(app_context: dict[str, Any] | None = None):
                                     all_patient_ids = icustays_df[id_col].unique().tolist()
                                     candidate_ids = _sample_patient_ids_random(all_patient_ids, patient_limit)
                                     break
-                    except Exception:
-                        pass
+                    except Exception as _sample_err:
+                        # 不要静默吞:候选采样失败会让 candidate_ids 退回 None,
+                        # 静默改变后续队列范围(此前 _sample_patient_ids_random 未导入
+                        # 的 NameError 就是被这里吞掉的)。打日志,与下方 [COHORT] 块一致。
+                        print(f"[COHORT] candidate sampling failed, "
+                              f"falling back without max_patients cap: {_sample_err}")
 
                 # Step 2: 在候选集上应用人群筛选
                 data_path_for_cohort = st.session_state.data_path
@@ -1454,11 +1567,28 @@ def load_data(app_context: dict[str, Any] | None = None):
             all_patient_ids = sorted(list(patient_ids))
             st.session_state.all_patient_count = len(all_patient_ids)  # 保存真实患者数
             st.session_state.patient_ids = all_patient_ids[:5000]  # UI选择器限制5000个
+            source_concept_count, loaded_concept_count, missing_export_concepts = _sync_review_export_lineage(data)
 
             if lang == 'en':
-                st.success(f"✅ Loaded {len(data)} concepts, {len(all_patient_ids)} patients ({load_elapsed:.1f}s)")
+                st.success(_review_load_success_text(
+                    lang=lang,
+                    loaded_count=loaded_concept_count,
+                    source_count=source_concept_count,
+                    loaded_stays=len(all_patient_ids),
+                    total_stays=None,
+                    elapsed=load_elapsed,
+                ))
+                _render_review_missing_concepts_notice(missing_export_concepts, lang)
             else:
-                st.success(f"✅ 成功加载 {len(data)} 个 Concepts，{len(all_patient_ids)} 个患者 ({load_elapsed:.1f}秒)")
+                st.success(_review_load_success_text(
+                    lang=lang,
+                    loaded_count=loaded_concept_count,
+                    source_count=source_concept_count,
+                    loaded_stays=len(all_patient_ids),
+                    total_stays=None,
+                    elapsed=load_elapsed,
+                ))
+                _render_review_missing_concepts_notice(missing_export_concepts, lang)
 
         except Exception as e:
             err_msg = f"Loading failed: {e}" if lang == 'en' else f"加载失败: {e}"
@@ -1662,6 +1792,10 @@ def load_data_for_preview(max_patients: int = 50, app_context: dict[str, Any] | 
         st.session_state.patient_ids = preview_patient_ids
         st.session_state.all_patient_count = all_patient_count
         st.session_state.id_col = id_col_found
+        st.session_state.pop("_review_expected_export_concepts", None)
+        st.session_state.pop("_review_source_concept_count", None)
+        st.session_state["_review_subset_concept_count"] = len(filtered_data)
+        st.session_state.pop("_review_missing_export_concepts", None)
 
         load_elapsed = time.time() - load_start
 
@@ -1670,13 +1804,13 @@ def load_data_for_preview(max_patients: int = 50, app_context: dict[str, Any] | 
 
         lang = st.session_state.get('language', 'en')
         if lang == 'en':
-            st.success(f"✅ Preview data loaded: {unique_concept_count} concepts ({len(filtered_data)} columns), {len(preview_patient_ids)}/{all_patient_count} patients ({load_elapsed:.1f}s)")
+            st.success(f"✅ Preview data loaded: {unique_concept_count} review features, {len(preview_patient_ids)}/{all_patient_count} ICU stays ({load_elapsed:.1f}s)")
             if all_patient_count > max_patients:
-                st.info(f"💡 For better performance, visualization is limited to {max_patients} patients. Export data first for full analysis with Python/R.")
+                st.info(f"💡 For better performance, visualization is limited to {max_patients} ICU stays. Export data first for full analysis with Python/R.")
         else:
-            st.success(f"✅ 预览数据已加载：{unique_concept_count} 个概念（{len(filtered_data)} 列），{len(preview_patient_ids)}/{all_patient_count} 个患者 ({load_elapsed:.1f}秒)")
+            st.success(f"✅ 预览数据已加载：{unique_concept_count} 个审阅特征，{len(preview_patient_ids)}/{all_patient_count} 个 ICU stay ({load_elapsed:.1f}秒)")
             if all_patient_count > max_patients:
-                st.info(f"💡 为保证流畅性，可视化仅加载前 {max_patients} 个患者。建议先导出数据，再用Python/R工具进行完整分析。")
+                st.info(f"💡 为保证流畅性，可视化仅加载前 {max_patients} 个 ICU stay。建议先导出数据，再用Python/R工具进行完整分析。")
 
     except Exception as e:
         lang = st.session_state.get('language', 'en')

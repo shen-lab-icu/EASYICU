@@ -24,15 +24,10 @@ they need a provider key in the environment (e.g. `OPENROUTER_API_KEY` /
 | [`clean_cohort_demo.py`](clean_cohort_demo.py) | Generates a clean synthetic cohort (no SOFA=0 artefact) and runs the full pipeline end-to-end. |
 | [`research_agent_mortality_sofa.py`](research_agent_mortality_sofa.py) | Minimal end-to-end research-agent demo (mortality ~ SOFA). |
 | [`research_agent_full_paper.py`](research_agent_full_paper.py) | Full paper run: WriterAgent produces a complete manuscript → PDF. |
-| [`research_agent_crossdb.py`](research_agent_crossdb.py) | Cross-database replication protocol across supported databases. |
-| [`research_agent_ablation.py`](research_agent_ablation.py) | Hero ablation: agent **with** vs **without** ICU context. |
-| [`research_agent_real_llm_ablation.py`](research_agent_real_llm_ablation.py) | Four-quadrant ablation: naive vs aware × mock vs real LLM. |
-| [`research_agent_real_llm_smoke.py`](research_agent_real_llm_smoke.py) | Real-LLM end-to-end smoke test of the agent. |
 | [`research_agent_freeform_cluster.py`](research_agent_freeform_cluster.py) | Free-form clustering: no skill, the agent decides everything. |
 | [`research_agent_pattern_audit_demo.py`](research_agent_pattern_audit_demo.py) | The analysis-pattern auditor running on free-form clustering code. |
 | [`research_agent_openrouter_paper.py`](research_agent_openrouter_paper.py) | Full paper via an OpenRouter free model. |
 | [`research_agent_openhands.py`](research_agent_openhands.py) | Run the agent against an OpenHands-style runtime image. |
-| [`research_agent_qwen3_local.py`](research_agent_qwen3_local.py) | Drive the agent with a local Qwen3-8B served via vLLM. |
 
 > The research-agent scripts are working examples kept close to ongoing
 > development; flags and model names may change. The quickstart is the stable

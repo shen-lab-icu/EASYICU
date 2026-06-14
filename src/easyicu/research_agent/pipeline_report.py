@@ -100,13 +100,34 @@ def _count_missing_evidence_markers(text: str) -> int:
 
 
 def _publication_figure_bundle_ready(
-    *, evidence: EvidenceStore, run_dir: Path
+    *,
+    evidence: EvidenceStore,
+    run_dir: Path,
+    findings: Optional[Sequence[ValidationFinding]] = None,
 ) -> Dict[str, Any]:
     stems: Dict[str, set[str]] = {}
+    source_ready = False
+    contract_ready = evidence.get("publication_figure_contract") is not None
+    visual_errors = [
+        finding
+        for finding in (findings or [])
+        if finding.severity == "error"
+        and finding.validator in {"visual_qa", "vlm_visual_qa"}
+    ]
     for record in evidence.records():
+        metadata = record.metadata or {}
+        if record.evidence_id.startswith("publication_figure_source_"):
+            source_ready = True
+        is_contract_record = record.evidence_id == "publication_figure_contract"
         if record.kind != "figure":
+            if is_contract_record and (
+                metadata.get("source_evidence_id")
+                or metadata.get("source_evidence_ids")
+                or metadata.get("source_data")
+            ):
+                source_ready = True
             continue
-        role = str((record.metadata or {}).get("figure_role") or "").lower()
+        role = str(metadata.get("figure_role") or "").lower()
         haystack = " ".join(
             [
                 record.evidence_id,
@@ -115,19 +136,19 @@ def _publication_figure_bundle_ready(
                 role,
             ]
         ).lower()
-        is_explicit_publication = "publication" in haystack
-        is_association_fallback = any(
-            token in haystack
-            for token in (
-                "forest_plot",
-                "forest plot",
-                "association_model",
-                "association model",
-                "association figure",
-            )
+        is_explicit_publication = (
+            role == "publication_figure"
+            or record.evidence_id.startswith("publication_figure_")
+            or "publication_figure" in haystack
         )
-        if not is_explicit_publication and not is_association_fallback:
+        if not is_explicit_publication:
             continue
+        if (
+            metadata.get("source_evidence_id")
+            or metadata.get("source_evidence_ids")
+            or metadata.get("source_data")
+        ):
+            source_ready = True
         path = run_dir / record.relative_path
         stem = path.with_suffix("").name.split("__", 1)[-1]
         stems.setdefault(stem, set()).add(path.suffix.lower().lstrip("."))
@@ -138,10 +159,17 @@ def _publication_figure_bundle_ready(
         or {"svg", "png", "pdf", "tiff"} <= suffixes
         or {"svg", "png", "pdf", "tif"} <= suffixes
     ]
+    visual_qa_passed = not visual_errors
+    contract_complete = contract_ready and source_ready and visual_qa_passed
+    if not contract_complete:
+        ready_stems = []
     return {
-        "publication_figure_bundle_ready": bool(ready_stems),
+        "publication_figure_bundle_ready": bool(ready_stems) and contract_complete,
         "publication_figure_stems": sorted(stems),
         "publication_ready_stems": sorted(ready_stems),
+        "publication_figure_contract_ready": contract_ready,
+        "publication_figure_source_data_ready": source_ready,
+        "publication_figure_visual_qa_passed": visual_qa_passed,
     }
 
 
@@ -393,7 +421,11 @@ def _compute_readiness_gates(
         and numeric_verified
         and analysis_validated
     )
-    publication = _publication_figure_bundle_ready(evidence=evidence, run_dir=run_dir)
+    publication = _publication_figure_bundle_ready(
+        evidence=evidence,
+        run_dir=run_dir,
+        findings=active_findings,
+    )
     return {
         **execution,
         "evidence_complete": evidence_complete,

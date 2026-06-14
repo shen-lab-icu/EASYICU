@@ -3,7 +3,7 @@
 These primitives mirror the design-canvas / page-cohort-subtabs charts:
 they are pure SVG strings driven by simple Python data (lists / dicts)
 and styled with the design tokens defined in ``tokens.css``
-(``--ink``, ``--accent``, ``--warn``, ``--bad``, ``--hair-2``,
+(``--ink``, ``--accent``, ``--ok``, ``--warn``, ``--bad``, ``--hair-2``,
 ``--ink-3``, ``--ink-4``).
 
 Cohort / Cross-DB pages call these helpers in place of matplotlib /
@@ -357,17 +357,25 @@ def render_availability_matrix(
         )
         for v in values:
             if v is None or (isinstance(v, float) and math.isnan(v)):
-                fill, op, text = "var(--bad)", 0.7, "—"
+                fill = "color-mix(in srgb, var(--bad) 10%, var(--surface))"
+                border = "color-mix(in srgb, var(--bad) 30%, var(--hair))"
+                fg, text = "var(--bad)", "—"
             elif v >= 0.95:
-                fill, op, text = "var(--ink)", 0.85, "✓"
+                fill = "color-mix(in srgb, var(--ok) 16%, var(--surface))"
+                border = "color-mix(in srgb, var(--ok) 36%, var(--hair))"
+                fg, text = "var(--ok)", "✓"
             elif v >= 0.5:
-                fill, op, text = "var(--warn)", 0.7, f"{int(round(v * 100))}%"
+                fill = "color-mix(in srgb, var(--warn) 14%, var(--surface))"
+                border = "color-mix(in srgb, var(--warn) 34%, var(--hair))"
+                fg, text = "var(--warn)", f"{int(round(v * 100))}%"
             else:
-                fill, op, text = "var(--bad)", 0.7, f"{int(round(v * 100))}%"
+                fill = "color-mix(in srgb, var(--bad) 12%, var(--surface))"
+                border = "color-mix(in srgb, var(--bad) 32%, var(--hair))"
+                fg, text = "var(--bad)", f"{int(round(v * 100))}%"
             body_cells.append(
-                f'<div style="height:{cell_h}px;background:{fill};opacity:{op};'
+                f'<div style="height:{cell_h}px;background:{fill};border:1px solid {border};'
                 f'border-radius:3px;display:flex;align-items:center;justify-content:center;'
-                f'font-size:10.5px;color:#fff;font-family:var(--font-mono)">'
+                f'font-size:10.5px;color:{fg};font-family:var(--font-mono);font-weight:600">'
                 f'{_esc(text)}</div>'
             )
     return (
@@ -658,14 +666,14 @@ def render_design_page_header(
         '<div class="eu-design-page-header">'
         f'<div class="mono" style="font-size:11px;color:var(--ink-4);'
         f'letter-spacing:0.06em;text-transform:uppercase">{_esc(kicker)}</div>'
-        '<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-top:6px">'
-        '<div>'
+        '<div class="eu-design-page-header-row" style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-top:6px">'
+        '<div class="eu-design-page-header-copy">'
         f'<h1 style="margin:0;font-size:22px;font-weight:500;letter-spacing:0;color:var(--ink)">'
         f'{_esc(title)}'
         '</h1>'
         f'<div style="margin-top:4px;color:var(--ink-3);font-size:12.5px">{_esc(desc)}</div>'
         '</div>'
-        f'<div style="display:flex;gap:6px;flex-shrink:0">{right_html}</div>'
+        f'<div class="eu-design-page-header-actions" style="display:flex;gap:6px;flex-shrink:0">{right_html}</div>'
         '</div></div>'
     )
 

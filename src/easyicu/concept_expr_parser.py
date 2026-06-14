@@ -194,7 +194,7 @@ def _maybe_float(value: object) -> Optional[float]:
 def _default_aggregator_for_dtype(series: pd.Series) -> str:
     dtype = series.dtype
     if pd.api.types.is_bool_dtype(dtype):
-        return "sum"
+        return "any"
     if pd.api.types.is_numeric_dtype(dtype):
         return "median"
     return "first"

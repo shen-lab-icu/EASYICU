@@ -29,7 +29,17 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from .agents import (
     AnalyzerAgent,
@@ -49,8 +59,17 @@ from .audits.validators import (
     StatisticalGuard,
     StatisticalValidator,
 )
-from .code_repair import _deterministic_runner_repair, _deterministic_summary_repair
-from .cohort_schema import assert_cohort_definition_locked
+from .code_repair import (
+    _deterministic_runner_repair,
+    _deterministic_summary_repair,
+    deterministic_concept_audit_repair,
+)
+from .cohort_repair import extract_cohort_definition_from_prose
+from .cohort_schema import (
+    assert_cohort_definition_locked,
+    materialize_locked_analysis_cohort,
+    write_locked_cohort_definition,
+)
 from .contracts import ValidationFinding, _ExecutePhaseResult, _PlanPhaseResult
 from .estimators import fit_robustness_rows_from_records
 from .llm import MockLLMClient
@@ -60,12 +79,20 @@ from .pipeline import (
     _has_figure_exports,
     _promote_prior_publication_bundle,
     _promote_sibling_figure_exports,
+    _render_association_publication_bundle_from_prior_outputs,
     _render_prediction_publication_bundle_from_prior_outputs,
     _semantic_aliases_for,
 )
 from .plan_utils import (
+    _cohort_definition_contract_findings,
+    _cohort_definition_is_empty,
+    _cohort_definition_prose,
     _parent_step_id_for_figure_step,
+    _plan_expects_analysis_cohort,
     _preserve_figure_steps_after_replan,
+    _primary_exposure_contract_findings,
+    _primary_exposure_overadjustment_findings,
+    _primary_model_leakage_findings,
     _step_contract_findings,
     _step_contract_repair_guidance,
     _step_expects_figure,
@@ -82,12 +109,118 @@ from .scalar_utils import _expected_numeric_annotations_for_step
 from .side_findings import SideFinding
 from .skills import ClinicalSkill
 from .summary_repair import salvage_step_summary
+from .viability import (
+    CohortViability,
+    assess_cohort_viability,
+    step_requires_model_performance,
+    step_summary_block_signal,
+)
 from .visual_qa import VLMVisualQAAdapter, VisualQAAuditor
 
 logger = logging.getLogger(__name__)
 
+# Max directed full-replans fired when a model/estimation step self-blocks on a
+# task-viable cohort. Two attempts give the replanner a fair chance to honour
+# the override directive; beyond that the run falls back to an honest
+# diagnostic_only rather than burning the replanner on a stuck plan.
+_MAX_DIRECTED_MODEL_REPLANS = 2
+
 if TYPE_CHECKING:
     from .pipeline import ResearchAgentPipeline
+
+
+def _is_cosmetic_visual_finding(finding: ValidationFinding) -> bool:
+    """Return true only for deterministic layout errors safe to demote."""
+
+    if finding.severity != "error" or finding.validator != "visual_qa":
+        return False
+    message = (finding.message or "").lower()
+    return "overlapping text elements" in message and "spacing" in message
+
+
+def _demote_cosmetic_visual_findings(
+    findings: Sequence[ValidationFinding],
+) -> tuple[List[ValidationFinding], List[ValidationFinding]]:
+    """Demote cosmetic visual errors and return remaining hard errors."""
+
+    demoted: List[ValidationFinding] = []
+    for finding in findings:
+        if _is_cosmetic_visual_finding(finding):
+            demoted.append(finding.model_copy(update={"severity": "warning"}))
+        else:
+            demoted.append(finding)
+    blocking_errors = [f for f in demoted if f.severity == "error"]
+    return demoted, blocking_errors
+
+
+def _plan_signature(
+    plan: AnalysisPlan,
+) -> Tuple[Tuple[str, Optional[str], Tuple[str, ...]], ...]:
+    """Substantive fingerprint of a plan's step DAG, ignoring prose.
+
+    Two plans with the same ``(step_id, method, expected_outputs)`` per step
+    are analytically identical even if the replanner reworded each step's
+    ``intent``. Used by ``_maybe_replan`` to suppress no-op revisions that
+    would otherwise burn an LLM call and the convergence budget without
+    changing the analysis.
+    """
+    return tuple(
+        (step.step_id, step.method, tuple(step.expected_outputs)) for step in plan.steps
+    )
+
+
+def build_self_block_replan_directive(
+    *,
+    failed_step: AnalysisStep,
+    failed_record: Mapping[str, Any],
+    completed_records: Sequence[Mapping[str, Any]],
+    viability: "CohortViability",
+) -> Optional[str]:
+    """Return a viability-conditioned override directive when a model/estimation
+    step self-blocked on a task-viable cohort, else ``None``.
+
+    Pure and deterministic so the trigger logic is unit-testable without a run.
+    Fires only when ALL hold: the failed step's contract requires model
+    performance statistics (``statistic:auroc`` / ``statistic:brier_score``); the
+    cohort cleared the viability floor; and a deliberate block signal is present
+    on the failed step or an upstream completed step (e.g. a
+    ``modeling_block_registration`` step). Stays silent otherwise — a genuinely
+    non-viable cohort or a hard crash leaves blocking legitimate.
+
+    Impartiality: the directive is conditioned on viability twice over — the
+    trigger requires ``viability.viable`` and the directive text itself reaffirms
+    that blocking stays legitimate on genuinely non-viable data. It never
+    dictates which model to fit, only that a model must actually be fit.
+    """
+    if not step_requires_model_performance(failed_step.expected_outputs):
+        return None
+    if not viability.viable:
+        return None
+    block_reason = step_summary_block_signal(failed_record.get("step_summary") or {})
+    if not block_reason:
+        for rec in completed_records:
+            if not isinstance(rec, Mapping):
+                continue
+            block_reason = step_summary_block_signal(rec.get("step_summary") or {})
+            if block_reason:
+                break
+    if not block_reason:
+        return None
+    return (
+        "The locked analysis cohort is task-viable (" + viability.note + "), yet "
+        "the modeling step recorded a non-execution/blocked status "
+        f'("{block_reason}") and produced no model and no required performance '
+        "statistics (AUROC / Brier). On a cohort this populated, declaring the "
+        "repaired artifacts unusable, registering a modeling block, or emitting a "
+        "non-execution model stub is NOT an acceptable outcome for this task. "
+        "Revise the remaining plan so the primary modeling step actually fits a "
+        "model on the available predictors and emits the required performance "
+        "statistics. Do NOT re-insert any step whose purpose is to gate, block, "
+        "or declare the modeling unexecutable on this cohort. (Blocking would be "
+        "legitimate only if "
+        "the data were genuinely non-viable — too few rows, no outcome variation, "
+        "or no usable predictors — which is not the case here.)"
+    )
 
 
 def run_execute_phase(
@@ -108,12 +241,39 @@ def run_execute_phase(
     findings = plan_result.findings
     plan = plan_result.plan
     plan_path = plan_result.plan_path
+    # Replan convergence bookkeeping (see _maybe_replan). ``noop_streak``
+    # counts consecutive substantively-identical revisions; ``total`` counts
+    # substantive revisions; ``disabled`` latches once a guard trips.
+    _replan_state = {
+        "noop_streak": 0,
+        "total": 0,
+        "disabled": False,
+        "cohort_contract_emitted": False,
+        "cohort_materialized": False,
+        # Directed replans fired when a model/estimation step self-blocks on a
+        # task-viable cohort (see _maybe_directed_model_replan). Bounded so a
+        # run that keeps self-blocking falls back to an honest diagnostic_only
+        # rather than looping the replanner indefinitely.
+        "directed_model_replans": 0,
+    }
     role_resolver = plan_result.role_resolver
     llm_signature = plan_result.llm_signature
     prompt_version = plan_result.prompt_version
     prompt_files = plan_result.prompt_files
     assert_cohort_definition_locked(run_dir=run_dir, plan=plan)
     assert_robustness_specs_locked(run_dir=run_dir, plan=plan)
+
+    # Dual-track cohort. If the plan phase materialised the locked cohort
+    # definition into a filtered analysis cohort, every downstream consumer
+    # (probe, statistical validators, robustness fitter, and the step runner)
+    # reads THAT — so the declared inclusion/exclusion is enforced once,
+    # consistently, instead of being silently re-implemented (or skipped) by
+    # each generated step. The full universe stays reachable via the runner's
+    # EASYICU_UNIVERSE_PARQUET env for explicit robustness steps.
+    universe_path = cohort_path
+    _analysis_cohort_path = run_dir / "cohort_analysis.parquet"
+    if _analysis_cohort_path.exists():
+        cohort_path = _analysis_cohort_path
 
     coder = CoderAgent(role_resolver("coder"))
     analyzer = AnalyzerAgent(role_resolver("analyzer"))
@@ -128,6 +288,7 @@ def run_execute_phase(
         run_dir=run_dir,
         cohort_path=cohort_path,
         target_outcome=context.target_outcome,
+        universe_path=universe_path,
     )
     usage_auditor = ConceptUsageAuditor()
     from .audits.patterns import AnalysisPatternAuditor
@@ -147,9 +308,7 @@ def run_execute_phase(
         try:
             prior_records = [
                 rec
-                for rec in (
-                    plan_result.resume_state.get("per_step_records", []) or []
-                )
+                for rec in (plan_result.resume_state.get("per_step_records", []) or [])
                 if isinstance(rec, dict) and rec.get("step_id")
             ]
             prior_ok_step_ids = {
@@ -206,9 +365,7 @@ def run_execute_phase(
             "notes": notes,
             "runtime_state": runtime_state.model_dump(mode="json"),
             "repair_ledger_path": str(repair_ledger.path.relative_to(run_dir)),
-            "repairs_applied": [
-                record.__dict__ for record in repair_ledger.records
-            ],
+            "repairs_applied": [record.__dict__ for record in repair_ledger.records],
         }
         if extra:
             payload.update(extra)
@@ -245,9 +402,7 @@ def run_execute_phase(
         *,
         reason: str,
     ) -> Path:
-        revision_path = (
-            run_dir / f"analysis_plan_revision_{revised_plan.revision}.json"
-        )
+        revision_path = run_dir / f"analysis_plan_revision_{revised_plan.revision}.json"
         revision_path.write_text(
             revised_plan.model_dump_json(indent=2),
             encoding="utf-8",
@@ -274,14 +429,11 @@ def run_execute_phase(
             # artefact.
             import hashlib
 
-            digest = hashlib.sha256(
-                revision_path.read_bytes()
-            ).hexdigest()[:8]
+            digest = hashlib.sha256(revision_path.read_bytes()).hexdigest()[:8]
             evidence.register_file(
                 kind="log",
                 description=(
-                    f"Revised analysis plan (reason={reason}; "
-                    f"resume re-revision)."
+                    f"Revised analysis plan (reason={reason}; " f"resume re-revision)."
                 ),
                 source_path=revision_path,
                 evidence_id=f"{base_id}_{digest}",
@@ -296,15 +448,217 @@ def run_execute_phase(
             )
         return revision_path
 
+    def _no_analysis_step_has_run() -> bool:
+        """True while only the deterministic probe (00_probe) has executed.
+
+        The cohort may be (re)materialised and the runner re-pointed only at
+        this point; switching the cohort after analysis steps already ran on
+        the universe would split a single run across two populations.
+        """
+        return not any(
+            (rec.get("step_id") or "") != "00_probe" for rec in per_step_records
+        )
+
+    def _universe_columns() -> list:
+        try:
+            import pyarrow.parquet as pq  # type: ignore
+
+            return list(pq.read_schema(universe_path).names)
+        except Exception:
+            try:
+                import pandas as pd  # type: ignore
+
+                return list(pd.read_parquet(universe_path).columns)
+            except Exception:
+                return []
+
+    def _try_materialize_cohort_from_prose(
+        candidate_plan: AnalysisPlan,
+        *,
+        reason: str,
+    ) -> bool:
+        """Extract the agent's prose 纳排 into typed predicates, materialise the
+        filtered analysis cohort, and re-point the runner at it.
+
+        Returns ``True`` when the cohort was materialised (so the caller skips
+        the auditable contract error). The locked initial cohort was an empty
+        placeholder for the bench's 0-step plan; locking the first real
+        definition here is a provisional→real lock, fully provenance-recorded.
+        """
+        nonlocal cohort_path, runner
+        if _replan_state["cohort_materialized"]:
+            return True
+        if _analysis_cohort_path.exists():
+            return True
+        if not _no_analysis_step_has_run():
+            return False
+        columns = _universe_columns()
+        if not columns:
+            return False
+        definition = extract_cohort_definition_from_prose(
+            cohort_prose=_cohort_definition_prose(candidate_plan),
+            universe_columns=columns,
+            llm=role_resolver("planner"),
+            name=getattr(getattr(candidate_plan, "cohort", None), "name", "primary")
+            or "primary",
+        )
+        if definition is None:
+            return False
+        candidate_plan.cohort = definition
+        try:
+            write_locked_cohort_definition(
+                run_dir=run_dir,
+                plan=candidate_plan,
+                evidence=evidence,
+                prompt_pack_version=prompt_version,
+                llm_signature=llm_signature,
+            )
+            result = materialize_locked_analysis_cohort(
+                run_dir=run_dir,
+                plan=candidate_plan,
+                universe_path=universe_path,
+            )
+        except Exception as exc:  # never break the run; fall back to the error
+            findings.append(
+                ValidationFinding(
+                    validator="cohort_materializer",
+                    severity="warning",
+                    message=(
+                        "Extracted a cohort definition from step prose but could "
+                        f"not materialise it: {type(exc).__name__}: {exc}"
+                    ),
+                    detail={"stage": "execute_repair", "reason": reason},
+                )
+            )
+            return False
+        if result.get("status") != "applied":
+            return False
+        cohort_path = _analysis_cohort_path
+        runner = pipeline._build_runner(
+            run_dir=run_dir,
+            cohort_path=cohort_path,
+            target_outcome=context.target_outcome,
+            universe_path=universe_path,
+        )
+        try:
+            evidence.register_file(
+                kind="table",
+                description=(
+                    "Analysis cohort materialised from the agent's prose 纳排, "
+                    "translated to typed CTAS predicates during execution."
+                ),
+                source_path=cohort_path,
+                evidence_id="analysis_cohort_execute_repair",
+                producer="cohort_repair",
+                generation_mode="llm",
+                prompt_pack_version=prompt_version,
+                metadata={"llm_signature": llm_signature, "reason": reason},
+            )
+        except ValueError:
+            pass
+        findings.append(
+            ValidationFinding(
+                validator="cohort_materializer",
+                severity="info",
+                message=(
+                    "Translated the cohort-definition step's prose into typed "
+                    "predicates and applied them: analysis cohort "
+                    f"n={result['n_cohort']} of universe n={result['n_universe']}. "
+                    "Downstream steps now read the filtered cohort "
+                    "(COHORT_PARQUET); the full universe stays available as "
+                    "EASYICU_UNIVERSE_PARQUET."
+                ),
+                detail={
+                    "stage": "execute_repair",
+                    "reason": reason,
+                    "n_universe": result["n_universe"],
+                    "n_analysis_cohort": result["n_cohort"],
+                },
+            )
+        )
+        _replan_state["cohort_materialized"] = True
+        return True
+
+    def _enforce_cohort_contract_on_executing_plan(
+        candidate_plan: AnalysisPlan,
+        *,
+        reason: str,
+    ) -> None:
+        """Re-check the structured-纳排 contract against the plan that actually
+        executes.
+
+        The plan-phase contract (``pipeline._run_plan_phase``) only sees the
+        *initial* plan. For non-deterministic providers that initial plan is
+        commonly a 0-step shell, and the real plan — which carries a
+        cohort-definition step but leaves ``plan.cohort`` structurally empty —
+        is grown here by the replanner. Without this re-check the contract is
+        bypassed and downstream steps silently run on the unfiltered universe
+        while each generated step re-applies 纳排 inconsistently (run12).
+
+        Emitted once, as an auditable error, and only when the locked cohort
+        was *not* materialised into a filtered analysis cohort (an applied
+        definition already enforces 纳排 on the data).
+        """
+        if _replan_state["cohort_contract_emitted"]:
+            return
+        if _analysis_cohort_path.exists():
+            return
+        if not (
+            _plan_expects_analysis_cohort(candidate_plan)
+            and _cohort_definition_is_empty(candidate_plan)
+        ):
+            return
+        for finding in _cohort_definition_contract_findings(candidate_plan):
+            findings.append(
+                finding.model_copy(
+                    update={
+                        "detail": {
+                            **(finding.detail or {}),
+                            "stage": "execute",
+                            "reason": reason,
+                        }
+                    }
+                )
+            )
+        _replan_state["cohort_contract_emitted"] = True
+
+    def _resolve_cohort_definition(
+        candidate_plan: AnalysisPlan,
+        *,
+        reason: str,
+    ) -> None:
+        """For an executing plan that implies a cohort but left it unstructured:
+        first try to materialise it from the step prose (real enforcement); if
+        that fails, surface the auditable contract error (visibility)."""
+        if not (
+            _plan_expects_analysis_cohort(candidate_plan)
+            and _cohort_definition_is_empty(candidate_plan)
+        ):
+            return
+        if _try_materialize_cohort_from_prose(candidate_plan, reason=reason):
+            return
+        _enforce_cohort_contract_on_executing_plan(candidate_plan, reason=reason)
+
+    _resolve_cohort_definition(plan, reason="execute_start")
+
     def _maybe_replan(
         *,
         current_plan: AnalysisPlan,
         reason: str,
         probe_summary_payload: Optional[Dict[str, Any]] = None,
         completed_records: Optional[Sequence[Dict[str, Any]]] = None,
+        directive: Optional[str] = None,
+        force: bool = False,
     ) -> AnalysisPlan:
         nonlocal plan_path
         if not pipeline._enable_replanning or skill_obj is not None:
+            return current_plan
+        if _replan_state["disabled"] and not force:
+            # A convergence guard already tripped earlier in this run; stop
+            # paying for replanner calls that cannot change the outcome. A
+            # ``force``d directed replan (bounded by its own caller-side budget)
+            # bypasses this — it carries a new instruction the replanner has not
+            # yet seen, so the prior no-op/budget verdict does not apply.
             return current_plan
         replanner = ReplannerAgent(role_resolver("planner"))
         try:
@@ -313,6 +667,7 @@ def run_execute_phase(
                 current_plan=current_plan,
                 probe_summary=probe_summary_payload,
                 completed_step_records=completed_records,
+                directive=directive,
             )
         except Exception as exc:
             findings.append(
@@ -358,10 +713,36 @@ def run_execute_phase(
                 )
             )
 
-        if revised.model_dump(mode="json") == current_plan.model_dump(mode="json"):
+        # No-op detection on the *substantive* step DAG, not the full
+        # model_dump. A verbose replanner can rewrite each step's ``intent``
+        # prose without changing the analysis; that must not count as a
+        # revision or burn the convergence budget. (E1 20260611: revisions
+        # 4-6 carried an identical DAG, each a wasted LLM call, and the run
+        # was killed mid-step-7 before finishing.)
+        if _plan_signature(revised) == _plan_signature(current_plan):
+            _replan_state["noop_streak"] += 1
+            cap_noop = pipeline._max_consecutive_noop_replans
+            if cap_noop and _replan_state["noop_streak"] >= cap_noop:
+                _replan_state["disabled"] = True
+                findings.append(
+                    ValidationFinding(
+                        validator="replanner",
+                        severity="info",
+                        message=(
+                            f"Replanning disabled after {_replan_state['noop_streak']} "
+                            "consecutive no-op revisions (unchanged step plan)."
+                        ),
+                        detail={"reason": reason},
+                    )
+                )
             return current_plan
+
+        # Substantive revision: reset the no-op streak and register it.
+        _replan_state["noop_streak"] = 0
+        _replan_state["total"] += 1
         plan_path = _register_plan_revision(revised, reason=reason)
         plan_result.plan_path = plan_path
+        _resolve_cohort_definition(revised, reason=reason)
         findings.append(
             ValidationFinding(
                 validator="replanner",
@@ -373,6 +754,20 @@ def run_execute_phase(
                 },
             )
         )
+        cap_total = pipeline._max_replans
+        if cap_total and _replan_state["total"] >= cap_total:
+            _replan_state["disabled"] = True
+            findings.append(
+                ValidationFinding(
+                    validator="replanner",
+                    severity="info",
+                    message=(
+                        "Replanning disabled after reaching the budget of "
+                        f"{cap_total} substantive revisions."
+                    ),
+                    detail={"reason": reason},
+                )
+            )
         return revised
 
     probe_step_id = "00_probe"
@@ -515,9 +910,7 @@ def run_execute_phase(
     ) -> None:
         severity = _finding_severity(findings_for_step)
         messages = [
-            f.message
-            for f in findings_for_step
-            if f.severity in {"warning", "error"}
+            f.message for f in findings_for_step if f.severity in {"warning", "error"}
         ]
         for evidence_id in evidence_ids:
             evidence.update_record(
@@ -701,6 +1094,9 @@ def run_execute_phase(
 
         concept_repair_attempts = 0
         concept_audit_error_count = 0
+        deterministic_concept_repairs = 0
+        _MAX_DETERMINISTIC_CONCEPT_REPAIRS = 3
+        applied_concept_repair_names: List[str] = []
         while True:
             usage_findings = usage_auditor.audit(
                 context=context,
@@ -743,6 +1139,60 @@ def run_execute_phase(
                     findings.extend(usage_findings)
                 break
 
+            # Tier A — deterministic mechanical repair. For a closed set of
+            # objectively-flagged ICU anti-patterns (e.g. silent fillna(0) on
+            # a lab) there is a single neutral fix, so we apply it without a
+            # model round-trip and re-audit. This does NOT consume the LLM
+            # repair budget, and is bounded because each repair removes its
+            # own pattern (a re-audit then finds nothing left to change).
+            if deterministic_concept_repairs < _MAX_DETERMINISTIC_CONCEPT_REPAIRS:
+                _audit_error_msgs = [
+                    f.message for f in usage_findings if f.severity == "error"
+                ]
+                _det_code, _det_names = deterministic_concept_audit_repair(
+                    code, _audit_error_msgs
+                )
+                if _det_names and _det_code != code:
+                    deterministic_concept_repairs += 1
+                    applied_concept_repair_names.extend(_det_names)
+                    step_record["deterministic_concept_repairs"] = (
+                        deterministic_concept_repairs
+                    )
+                    step_record["applied_concept_repair_names"] = list(
+                        applied_concept_repair_names
+                    )
+                    for _name in _det_names:
+                        _record_repair(
+                            repair_id=_name,
+                            step_id=step.step_id,
+                            trigger={
+                                "gate": "concept_audit",
+                                "audit_errors": _audit_error_msgs,
+                            },
+                            transformation=(
+                                "deterministic_concept_audit_repair: rewrote a "
+                                "mechanical ICU anti-pattern flagged as an error "
+                                "by the static concept-audit gate"
+                            ),
+                            before_code=code,
+                            after_code=_det_code,
+                            selection_rule=(
+                                "applied only because an error finding "
+                                "objectively named the anti-pattern"
+                            ),
+                        )
+                    emit_progress(
+                        "coder",
+                        f"Auto-repaired concept-audit anti-pattern "
+                        f"({', '.join(_det_names)}) for {step.step_id}.",
+                        run_id=run_id,
+                        step_id=step.step_id,
+                        current_step=step_current,
+                        total_steps=total_steps,
+                    )
+                    code = _det_code
+                    continue
+
             if concept_repair_attempts >= pipeline._max_code_repair_attempts:
                 fallback_code = _deterministic_fallback_code("concept_audit")
                 if fallback_code is not None:
@@ -762,24 +1212,99 @@ def run_execute_phase(
                             # fallback; reviewer still sees the
                             # original violation in the manifest.
                             if f.severity == "error":
-                                f = f.model_copy(update={
-                                    "severity": "warning",
-                                    "message": (
-                                        "[surfaced after fallback] "
-                                        + f.message
-                                    ),
-                                })
+                                f = f.model_copy(
+                                    update={
+                                        "severity": "warning",
+                                        "message": (
+                                            "[surfaced after fallback] " + f.message
+                                        ),
+                                    }
+                                )
                             findings.append(f)
                     code = fallback_code
                     continue
                 step_record["status"] = "blocked_by_concept_audit"
+                # Tier C — when auto-repair (deterministic + LLM) could not
+                # clear the violation, do NOT just stop with a status code.
+                # Emit an actionable repair ticket so a human can either add a
+                # constraint and re-run, or knowingly accept the withheld
+                # (diagnostic_only) result. We name candidate remedies without
+                # mandating one — the analytical choice stays with the user.
+                _block_errors = [
+                    {"validator": f.validator, "message": f.message}
+                    for f in usage_findings
+                    if f.severity == "error"
+                ]
+                _offending_lines = [
+                    ln.strip()
+                    for ln in code.splitlines()
+                    if any(
+                        tok in ln
+                        for tok in ("fillna(0)", "fillna(0.0)", ".mean()", "dropna(")
+                    )
+                ][:12]
+                _remedies = [
+                    "Add the violated ICU rule as an explicit coder/planner "
+                    "constraint and re-run this question (e.g. 'do not impute a "
+                    "lab with 0; handle missingness with complete-case or a "
+                    "declared imputation + missingness indicator').",
+                    "Use a stronger model for this question — the block was "
+                    "triggered by generated code, not by the cohort or the "
+                    "question itself.",
+                    "Accept the withheld result: diagnostic_only is a valid "
+                    "outcome. The fail-closed gate declined to report an "
+                    "analysis it judged unsafe; nothing wrong was published.",
+                ]
+                step_record["concept_audit_block"] = {
+                    "step_id": step.step_id,
+                    "errors": _block_errors,
+                    "deterministic_repairs_applied": list(applied_concept_repair_names),
+                    "llm_repair_attempts": concept_repair_attempts,
+                    "offending_code_lines": _offending_lines,
+                    "candidate_remedies": _remedies,
+                }
+                try:
+                    _ticket = [
+                        f"# Concept-audit block — step `{step.step_id}`",
+                        "",
+                        "The static ICU concept-audit gate blocked this step "
+                        "before execution and auto-repair could not clear it, "
+                        "so the run withheld this analysis (`diagnostic_only`). "
+                        "This is the fail-closed safety system working — but "
+                        "here is how to move it forward.",
+                        "",
+                        "## What was flagged (objective errors)",
+                        *[
+                            f"- **{e['validator']}**: {e['message']}"
+                            for e in _block_errors
+                        ],
+                        "",
+                        "## Repair already attempted",
+                        f"- deterministic: "
+                        f"{applied_concept_repair_names or 'none matched'}",
+                        f"- LLM coder repair attempts: {concept_repair_attempts}",
+                        "",
+                        "## Offending code lines",
+                        "```python",
+                        *(_offending_lines or ["(no obvious anti-pattern line)"]),
+                        "```",
+                        "",
+                        "## How to resolve (pick one — your analytical choice)",
+                        *[f"{i + 1}. {r}" for i, r in enumerate(_remedies)],
+                        "",
+                    ]
+                    (run_dir / f"concept_audit_block_{step.step_id}.md").write_text(
+                        "\n".join(_ticket), encoding="utf-8"
+                    )
+                except Exception:  # ticket is best-effort, never fatal
+                    pass
                 with shared_lock:
                     findings.extend(usage_findings)
                     per_step_records.append(step_record)
                     _flush_partial_manifest()
                 emit_progress(
                     "audit",
-                    f"Concept audit blocked {step.step_id}.",
+                    f"Concept audit blocked {step.step_id}; " f"repair ticket written.",
                     status="error",
                     run_id=run_id,
                     step_id=step.step_id,
@@ -814,9 +1339,7 @@ def run_execute_phase(
                     attempt=concept_repair_attempts,
                 )
             except Exception as exc:
-                fallback_code = _deterministic_fallback_code(
-                    "concept_repair_failed"
-                )
+                fallback_code = _deterministic_fallback_code("concept_repair_failed")
                 if fallback_code is not None:
                     code = fallback_code
                     continue
@@ -847,6 +1370,13 @@ def run_execute_phase(
                 return step_record
 
         repair_attempts = 0
+        # A runtime crash (returncode != 0) is a distinct, always-actionable
+        # failure class (a real Python traceback) and gets its own repair
+        # budget. Otherwise a success-path repair (contract / visual QA) that
+        # *introduces* a crash could consume the only shared attempt, leaving
+        # nothing to fix the traceback — the step would fail-closed even though
+        # the analysis it produced (e.g. the primary OR) was already valid.
+        runtime_repair_attempts = 0
         runner_repair_name: Optional[str] = None
         while True:
             run_label = "repaired script" if repair_attempts else "generated script"
@@ -862,6 +1392,15 @@ def run_execute_phase(
             run_result = runner.run(step_id=step.step_id, code=code)
             step_record["returncode"] = run_result.returncode
             step_record["timed_out"] = run_result.timed_out
+            step_record["requested_network_policy"] = (
+                run_result.requested_network_policy
+            )
+            step_record["effective_isolation"] = run_result.effective_isolation
+            step_record["isolation_degraded"] = run_result.isolation_degraded
+            if run_result.isolation_degradation_reason:
+                step_record["isolation_degradation_reason"] = (
+                    run_result.isolation_degradation_reason
+                )
             step_record["code_repair_attempts"] = repair_attempts
 
             script_description = (
@@ -883,9 +1422,7 @@ def run_execute_phase(
                 prompt_pack_version=prompt_version,
                 metadata={
                     "repair_attempts": repair_attempts,
-                    "fallback_reason": step_record.get(
-                        "deterministic_code_fallback"
-                    ),
+                    "fallback_reason": step_record.get("deterministic_code_fallback"),
                     "runner_repair": runner_repair_name,
                     "llm_signature": llm_signature,
                 },
@@ -985,38 +1522,45 @@ def run_execute_phase(
                     ]
                     if visual_errors:
                         if repair_attempts >= pipeline._max_code_repair_attempts:
-                            fallback_code = _deterministic_fallback_code(
-                                "visual_qa"
-                            )
+                            fallback_code = _deterministic_fallback_code("visual_qa")
                             if fallback_code is not None:
                                 code = fallback_code
                                 _clear_output_dir(run_result.out_dir)
                                 continue
-                            # Demote unrecoverable visual_qa errors to
-                            # warnings — visual layout issues (overlapping
-                            # text, panel-label spacing, etc.) should not
-                            # block scientifically-valid analysis outputs
-                            # from being accepted. The issues remain
-                            # visible to reviewers via
-                            # ``step_record["visual_findings"]`` and the
-                            # demoted warnings recorded on the manifest.
-                            demoted_findings = [
-                                (
-                                    finding.model_copy(
-                                        update={"severity": "warning"}
-                                    )
-                                    if finding.severity == "error"
-                                    else finding
-                                )
-                                for finding in visual_findings
-                            ]
+                            demoted_findings, blocking_visual_errors = (
+                                _demote_cosmetic_visual_findings(visual_findings)
+                            )
                             with shared_lock:
                                 findings.extend(demoted_findings)
-                            step_record["visual_qa_demoted"] = True
+                            step_record["visual_qa_demoted"] = any(
+                                original.severity == "error"
+                                and demoted.severity == "warning"
+                                for original, demoted in zip(
+                                    visual_findings, demoted_findings
+                                )
+                            )
+                            if blocking_visual_errors:
+                                step_record["status"] = "execution_failed"
+                                with shared_lock:
+                                    per_step_records.append(step_record)
+                                    _flush_partial_manifest()
+                                emit_progress(
+                                    "visual_qa",
+                                    (
+                                        f"Visual QA blocked {step.step_id} after "
+                                        f"{repair_attempts} repair attempts."
+                                    ),
+                                    status="error",
+                                    run_id=run_id,
+                                    step_id=step.step_id,
+                                    current_step=step_current,
+                                    total_steps=total_steps,
+                                )
+                                return step_record
                             emit_progress(
                                 "visual_qa",
                                 (
-                                    f"Visual QA findings demoted to warning "
+                                    f"Cosmetic visual QA findings demoted to warning "
                                     f"for {step.step_id} after "
                                     f"{repair_attempts} repair attempts."
                                 ),
@@ -1027,9 +1571,8 @@ def run_execute_phase(
                                 total_steps=total_steps,
                             )
                             # Fall through to contract checks and evidence
-                            # registration — the step's analytic outputs
-                            # remain valid even if the figure layout has
-                            # cosmetic issues.
+                            # registration only when every remaining visual
+                            # error was a deterministic layout/cosmetic issue.
                         else:
                             repair_attempts += 1
                             step_record["code_repair_attempts"] = repair_attempts
@@ -1103,10 +1646,41 @@ def run_execute_phase(
                     step_summary=visual_step_summary,
                     completed_step_records=completed_records_snapshot,
                 )
+                # Exposure-contract audit: if the question names a required
+                # primary exposure and this primary model estimated a clearly
+                # different variable, flag it so the same in-run repair loop
+                # re-fits the step with the correct exposure (no full restart).
+                early_contract_findings += _primary_exposure_contract_findings(
+                    step=step,
+                    step_summary=visual_step_summary,
+                    context=context,
+                )
+                # Overadjustment hard-block: if the primary exposure is a
+                # composite/derived score and this model conditioned on one of
+                # its constituents, route an error through the same repair loop
+                # so the step re-fits without the offending covariate.
+                early_contract_findings += _primary_exposure_overadjustment_findings(
+                    step=step,
+                    context=context,
+                    out_dir=run_result.out_dir,
+                )
+                # Outcome-leakage hard-block + treatment-mediator / other-endpoint
+                # cautions: the declared outcome appearing among predictors is
+                # target leakage (error → same re-fit loop); a treatment covariate
+                # or a different endpoint as predictor surfaces as a non-gating
+                # caution for the analyst to verify.
+                early_contract_findings += _primary_model_leakage_findings(
+                    step=step,
+                    context=context,
+                    out_dir=run_result.out_dir,
+                )
                 early_contract_errors = [
                     f for f in early_contract_findings if f.severity == "error"
                 ]
-                if early_contract_errors and repair_attempts < pipeline._max_code_repair_attempts:
+                if (
+                    early_contract_errors
+                    and repair_attempts < pipeline._max_code_repair_attempts
+                ):
                     repair_attempts += 1
                     step_record["code_repair_attempts"] = repair_attempts
                     emit_progress(
@@ -1194,6 +1768,7 @@ def run_execute_phase(
                         code=code,
                         step_summary=visual_step_summary,
                         previous_repair=runner_repair_name,
+                        analysis_family=local_runtime_state.analysis_family,
                     )
                 else:
                     summary_repair = None
@@ -1228,9 +1803,7 @@ def run_execute_phase(
             if log_path.exists():
                 run_log = log_path.read_text(encoding="utf-8", errors="replace")
             else:
-                run_log = (
-                    (run_result.stdout or "") + "\n" + (run_result.stderr or "")
-                )
+                run_log = (run_result.stdout or "") + "\n" + (run_result.stderr or "")
             if pipeline._enable_deterministic_runner_repair:
                 before_repair_code = code
                 plugin_repair = pipeline._case_plugin_registry.repair_code(
@@ -1239,16 +1812,14 @@ def run_execute_phase(
                     code=code,
                     run_log=run_log,
                 )
-                if (
-                    plugin_repair is not None
-                    and plugin_repair[0] != runner_repair_name
-                ):
+                if plugin_repair is not None and plugin_repair[0] != runner_repair_name:
                     runner_repair = plugin_repair
                 else:
                     runner_repair = _deterministic_runner_repair(
                         code=code,
                         run_log=run_log,
                         previous_repair=runner_repair_name,
+                        analysis_family=local_runtime_state.analysis_family,
                     )
             else:
                 runner_repair = None
@@ -1277,7 +1848,7 @@ def run_execute_phase(
                 _clear_output_dir(run_result.out_dir)
                 continue
 
-            if repair_attempts >= pipeline._max_code_repair_attempts:
+            if runtime_repair_attempts >= pipeline._max_code_repair_attempts:
                 fallback_code = _deterministic_fallback_code("execution_failure")
                 if fallback_code is not None:
                     code = fallback_code
@@ -1310,7 +1881,9 @@ def run_execute_phase(
                 return step_record
 
             repair_attempts += 1
+            runtime_repair_attempts += 1
             step_record["code_repair_attempts"] = repair_attempts
+            step_record["runtime_repair_attempts"] = runtime_repair_attempts
             emit_progress(
                 "coder",
                 f"Repairing failed script for {step.step_id}.",
@@ -1347,7 +1920,7 @@ def run_execute_phase(
                 )
                 if (
                     _is_transient
-                    and repair_attempts < pipeline._max_code_repair_attempts
+                    and runtime_repair_attempts < pipeline._max_code_repair_attempts
                 ):
                     emit_progress(
                         "coder",
@@ -1406,9 +1979,7 @@ def run_execute_phase(
         figure_role = (
             "publication_figure"
             if publication_step
-            else "analysis_figure"
-            if _step_expects_figure(step)
-            else None
+            else "analysis_figure" if _step_expects_figure(step) else None
         )
         if publication_step and not _has_figure_exports(run_result.out_dir):
             promoted = _promote_sibling_figure_exports(out_dir=run_result.out_dir)
@@ -1442,17 +2013,37 @@ def run_execute_phase(
                         current_step_id=step.step_id,
                         out_dir=run_result.out_dir,
                     )
+                    rescue_source = "prediction_publication_bundle_rescue"
+                    rescue_note = (
+                        "Rendered deterministic publication figure bundle "
+                        "from prior prediction outputs."
+                    )
+                    if rescued is None:
+                        # Association/regression figures: render an odds-ratio
+                        # forest plot from the parent coefficient table when the
+                        # figure-only child step failed (e.g. small model hard-
+                        # coded a wrong results filename).
+                        rescued = (
+                            _render_association_publication_bundle_from_prior_outputs(
+                                run_dir=run_dir,
+                                current_step_id=step.step_id,
+                                out_dir=run_result.out_dir,
+                            )
+                        )
+                        if rescued is not None:
+                            rescue_source = "association_publication_bundle_rescue"
+                            rescue_note = (
+                                "Rendered deterministic odds-ratio forest plot "
+                                "from prior association outputs."
+                            )
                     if rescued is not None:
                         runner_repair_name = rescued
                         step_record["runner_repair"] = rescued
                         _record_repair(
                             repair_id=rescued,
                             step_id=step.step_id,
-                            trigger={"source": "prediction_publication_bundle_rescue"},
-                            transformation=(
-                                "Rendered deterministic publication figure bundle "
-                                "from prior prediction outputs."
-                            ),
+                            trigger={"source": rescue_source},
+                            transformation=rescue_note,
                         )
 
         run_result.artefacts = sorted(
@@ -1592,7 +2183,8 @@ def run_execute_phase(
             except Exception as exc:
                 logger.warning(
                     "Failed to register numeric claims for step %s: %s",
-                    step.step_id, exc,
+                    step.step_id,
+                    exc,
                 )
             # Phase-1 derived-claim hook (Commit 2). After every leaf
             # is registered, evaluate any ``derived_claims`` the coder
@@ -1625,7 +2217,8 @@ def run_execute_phase(
             except Exception as exc:
                 logger.warning(
                     "Failed to register derived claims for step %s: %s",
-                    step.step_id, exc,
+                    step.step_id,
+                    exc,
                 )
         stat_findings = stat_validator.audit(
             context=context,
@@ -1660,13 +2253,9 @@ def run_execute_phase(
             findings.extend(guard_findings)
             findings.extend(contract_findings)
         step_record["stat_findings"] = [f.model_dump() for f in stat_findings]
-        step_record["clinical_findings"] = [
-            f.model_dump() for f in clinical_findings
-        ]
+        step_record["clinical_findings"] = [f.model_dump() for f in clinical_findings]
         step_record["guard_findings"] = [f.model_dump() for f in guard_findings]
-        step_record["contract_findings"] = [
-            f.model_dump() for f in contract_findings
-        ]
+        step_record["contract_findings"] = [f.model_dump() for f in contract_findings]
         step_record["generation_mode"] = _script_generation_mode(
             repair_attempts=repair_attempts,
             fallback_used=deterministic_fallback_used,
@@ -1762,8 +2351,10 @@ def run_execute_phase(
             prompt_pack_version=prompt_version,
         )
         step_record["interpretation_evidence_id"] = interp_record.evidence_id
+        evidence_ids_for_step.append(interp_record.evidence_id)
+        step_record["evidence_ids"] = list(dict.fromkeys(evidence_ids_for_step))
         _propagate_findings_to_evidence(
-            evidence_ids_for_step + [interp_record.evidence_id],
+            evidence_ids_for_step,
             usage_findings
             + stat_findings
             + clinical_findings
@@ -1825,14 +2416,94 @@ def run_execute_phase(
         or len(steps_to_run) <= 1
         or pipeline._enable_replanning
     ):
+
+        def _maybe_directed_model_replan(
+            *,
+            failed_step: AnalysisStep,
+            failed_record: Dict[str, Any],
+        ) -> Optional[AnalysisPlan]:
+            """Fire a forced, directive-carrying replan when a model/estimation
+            step self-blocks on a task-viable cohort, else return ``None``.
+
+            This is the active half of the self-inflicted-block fix: the
+            post-hoc scorecard only *labels* the self-paralysis, whereas here we
+            give the replanner a viability-conditioned override so a populated
+            cohort is not silently abandoned with a non-execution stub. Bounded
+            by ``_MAX_DIRECTED_MODEL_REPLANS``; conservative — silent on a hard
+            crash, an unreadable cohort, or genuinely non-viable data.
+            """
+            if not pipeline._enable_replanning:
+                return None
+            if failed_record.get("status") == "ok":
+                return None
+            if _replan_state["directed_model_replans"] >= _MAX_DIRECTED_MODEL_REPLANS:
+                return None
+            if not step_requires_model_performance(failed_step.expected_outputs):
+                return None
+            try:
+                import pandas as pd  # lazy: only on the rare self-block path
+
+                viability = assess_cohort_viability(
+                    pd.read_parquet(cohort_path), outcome=None
+                )
+            except Exception:
+                return None
+            directive = build_self_block_replan_directive(
+                failed_step=failed_step,
+                failed_record=failed_record,
+                completed_records=per_step_records,
+                viability=viability,
+            )
+            if directive is None:
+                return None
+            _replan_state["directed_model_replans"] += 1
+            findings.append(
+                ValidationFinding(
+                    validator="replanner",
+                    severity="warning",
+                    message=(
+                        "Directed replan: modeling step "
+                        f"{failed_step.step_id} self-blocked on a task-viable "
+                        f"cohort ({viability.note}); issued a viability-conditioned "
+                        "override to fit the model rather than register a block."
+                    ),
+                    detail={
+                        "step_id": failed_step.step_id,
+                        "directed_model_replans": _replan_state[
+                            "directed_model_replans"
+                        ],
+                    },
+                )
+            )
+            return _maybe_replan(
+                current_plan=plan,
+                reason=f"{failed_step.step_id}:self_inflicted_block_on_viable_cohort",
+                probe_summary_payload=probe_summary,
+                completed_records=per_step_records,
+                directive=directive,
+                force=True,
+            )
+
         executed_step_ids = set(resumed_step_ids)
-        remaining_steps = [
-            s for s in plan.steps if s.step_id not in executed_step_ids
-        ]
+        remaining_steps = [s for s in plan.steps if s.step_id not in executed_step_ids]
         while remaining_steps:
             step = remaining_steps.pop(0)
             record = _execute_one_step(step)
             executed_step_ids.add(step.step_id)
+            directed_plan = _maybe_directed_model_replan(
+                failed_step=step, failed_record=record
+            )
+            if directed_plan is not None:
+                plan = directed_plan
+                # Re-run the modeling step against the revised, de-gated plan.
+                executed_step_ids.discard(step.step_id)
+                step_order.clear()
+                step_order.update({s.step_id: i for i, s in enumerate(plan.steps)})
+                remaining_steps = [
+                    s for s in plan.steps if s.step_id not in executed_step_ids
+                ]
+                total_steps = len(plan.steps)
+                continue
             if (
                 pipeline._enable_replanning
                 and record.get("status") == "ok"
@@ -1864,9 +2535,9 @@ def run_execute_phase(
                             ValidationFinding(
                                 validator="step_executor",
                                 severity="error",
-                            message=f"Worker raised an unhandled exception: {exc!r}",
+                                message=f"Worker raised an unhandled exception: {exc!r}",
+                            )
                         )
-                    )
 
     try:
         robustness_specs = robustness_specs_for_execution(run_dir=run_dir, plan=plan)
@@ -1931,38 +2602,19 @@ def run_execute_phase(
             run_id=run_id,
         )
         fig_paths = [
-            run_dir / r.relative_path
-            for r in evidence.records()
-            if r.kind == "figure"
+            run_dir / r.relative_path for r in evidence.records() if r.kind == "figure"
         ]
         vlm_adapter = pipeline._visual_qa_adapter
         if vlm_adapter is None and pipeline._enable_vlm_visual_qa:
             client = pipeline._vlm_client or role_resolver("analyzer")
             if client is not None:
                 vlm_adapter = VLMVisualQAAdapter(client)
-        final_visual_findings = VisualQAAuditor(
-            vlm_adapter=vlm_adapter
-        ).audit(figure_paths=fig_paths)
-        # Mirror the per-step demotion policy here: layout-style
-        # visual_qa errors (overlapping text, panel-label spacing,
-        # etc.) are cosmetic and should not block scientifically
-        # valid analyses from being accepted at the run level. The
-        # per-step pipeline above attempts up to
-        # ``pipeline._max_code_repair_attempts`` repairs and falls back
-        # to a layout-aware deterministic helper before demoting;
-        # by the time the final whole-run audit runs we have
-        # exhausted those budgets, so any remaining figure-layout
-        # findings are demoted to warnings here too. The original
-        # message is preserved for reviewer inspection on the
-        # manifest.
-        demoted_final_findings = [
-            (
-                finding.model_copy(update={"severity": "warning"})
-                if finding.severity == "error"
-                else finding
-            )
-            for finding in final_visual_findings
-        ]
+        final_visual_findings = VisualQAAuditor(vlm_adapter=vlm_adapter).audit(
+            figure_paths=fig_paths
+        )
+        demoted_final_findings, _ = _demote_cosmetic_visual_findings(
+            final_visual_findings
+        )
         findings += demoted_final_findings
 
     plan_result.plan = plan

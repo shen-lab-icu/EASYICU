@@ -40,7 +40,10 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from .concept_availability import cross_database_concept_availability
+from .concept_availability import (
+    concept_database_availability_from_load_record,
+    cross_database_concept_availability,
+)
 from .context import build_research_context
 from .evidence import EvidenceStore
 from .pipeline import ResearchAgentPipeline
@@ -262,6 +265,8 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
         if key in args:
             kwargs[key] = args[key]
 
+    availability_sink: Dict[str, Any] = {}
+    kwargs["availability_sink"] = availability_sink
     result = easyicu_load_concepts(**kwargs)
     preview_rows = int(args.get("preview_rows") or 5)
     output_paths = _write_concept_result_if_requested(
@@ -280,6 +285,13 @@ def _tool_load_concepts(args: Dict[str, Any]) -> Dict[str, Any]:
         "database": args.get("database"),
         "data_path": args.get("data_path"),
         "summary": _summarise_concept_result(result, preview_rows=preview_rows),
+        "availability": {
+            str(concept): concept_database_availability_from_load_record(
+                record,
+                requested_concept=str(concept),
+            ).model_dump(mode="json")
+            for concept, record in availability_sink.items()
+        },
         "output_paths": [str(path) for path in output_paths],
         "evidence": evidence_records,
     }

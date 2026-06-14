@@ -652,9 +652,13 @@ def compute_sepsis3_onset(
     # 确保susp_inf列存在
     if 'susp_inf' in susp_inf_df.columns:
         susp_ready['susp_inf'] = susp_inf_df['susp_inf'].values
-        susp_ready['susp_inf'] = susp_ready['susp_inf'].fillna(True)
+        susp_ready['susp_inf'] = susp_ready['susp_inf'].fillna(False)
     else:
-        susp_ready['susp_inf'] = True
+        # Fail closed: this wrapper expects the suspected-infection concept
+        # table, not an arbitrary event table. Core sep3() still supports
+        # pre-filtered event rows without a susp_inf column when called
+        # directly.
+        susp_ready['susp_inf'] = False
 
     sofa_norm = sofa_ready.rename(columns={
         id_col: '_id',

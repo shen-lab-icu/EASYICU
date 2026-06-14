@@ -38,7 +38,7 @@ _GOLDEN = {
     "n_rows": (800, 800),
     "death_rate": (0.10, 0.15),
     "sofa2_low_component_frac": (0.08, 0.11),
-    "sofa2_mean": (6.0, 6.5),
+    "sofa2_mean": (6.5, 7.1),
     "sofa2_max": (12, 14),
     "age_mean": (62.0, 65.0),
     "vaso_rate": (0.40, 0.48),
@@ -56,16 +56,15 @@ def _compute_cohort_stats(df: pd.DataFrame) -> dict[str, float]:
     declared target lacks a computation here.
     """
 
-    nonzero = df.loc[df["sofa2"] > 0]
-    if not nonzero.empty:
-        q33 = nonzero["sofa2"].quantile(0.33)
-        q67 = nonzero["sofa2"].quantile(0.67)
-        low = nonzero[nonzero["sofa2"] <= q33]
-        high = nonzero[nonzero["sofa2"] >= q67]
-        death_low = float(low["death"].mean()) if not low.empty else float("nan")
-        death_high = float(high["death"].mean()) if not high.empty else float("nan")
-    else:
-        death_low = death_high = float("nan")
+    # Tertile-split over the full cohort (a SOFA-2 of 0 is a real low score,
+    # not excluded). Locks the stratified gradient; the delta guards against
+    # a model that erases stratification by averaging.
+    q33 = df["sofa2"].quantile(0.33)
+    q67 = df["sofa2"].quantile(0.67)
+    low = df[df["sofa2"] <= q33]
+    high = df[df["sofa2"] >= q67]
+    death_low = float(low["death"].mean()) if not low.empty else float("nan")
+    death_high = float(high["death"].mean()) if not high.empty else float("nan")
 
     return {
         # ---- component-completeness QC task ------------------------
@@ -87,8 +86,8 @@ def _compute_cohort_stats(df: pd.DataFrame) -> dict[str, float]:
         "lact_mean": float(df["lact"].mean()),
         "creat_mean": float(df["creat"].mean()),
         # ---- stratified-mortality task -----------------------------
-        "death_low_tertile_excl_zero": death_low,
-        "death_high_tertile_excl_zero": death_high,
+        "death_low_tertile": death_low,
+        "death_high_tertile": death_high,
         "death_delta_hi_minus_lo": death_high - death_low,
     }
 

@@ -215,6 +215,7 @@ class PublicationFigureSkill:
         plot_df = _normalise_association_frame(frame)
         if plot_df.empty:
             raise ValueError("primary association table has no plottable rows")
+        axis_meta = _association_axis_metadata(plot_df)
         plot_df = plot_df.reset_index(drop=True)
         plot_df["is_primary"] = False
         if not plot_df.empty:
@@ -236,7 +237,7 @@ class PublicationFigureSkill:
                 if not strata_df.empty:
                     source_records.append(strata_record)
                     strata_df.to_csv(
-                        out_dir / "publication_figure_source_stratified_mortality.csv",
+                        out_dir / "publication_figure_source_stratified_outcome.csv",
                         index=False,
                     )
             except Exception:
@@ -309,30 +310,46 @@ class PublicationFigureSkill:
                 markersize=4.3 if bool(row.get("is_primary")) else 3.8,
                 zorder=3,
             )
-        ax.axvline(1.0, color=palette.get("neutral", "#8F8F8F"), linestyle="--", linewidth=0.8)
+        null_value = axis_meta.get("null_value")
+        if null_value is not None:
+            ax.axvline(
+                float(null_value),
+                color=palette.get("neutral", "#8F8F8F"),
+                linestyle="--",
+                linewidth=0.8,
+            )
         ax.set_yticks(y, plot_df["label"].astype(str).tolist())
         ax.invert_yaxis()
-        ax.set_xlabel("Odds ratio")
+        ax.set_xlabel(str(axis_meta["xlabel"]))
         ax.set_ylabel("")
         use_log_scale = (
+            bool(axis_meta.get("ratio_scale"))
+            and
             float(lower.min()) > 0
             and float(upper.max()) / max(float(lower.min()), 1e-9) > 1.8
         )
         if use_log_scale:
             ax.set_xscale("log")
-        right_anchor = float(max(upper.max(), estimate.max(), 1.0))
-        right_pad = right_anchor * (0.6 if use_log_scale else 0.38)
+        anchors = [float(upper.max()), float(estimate.max())]
+        left_anchors = [float(lower.min()), float(estimate.min())]
+        if null_value is not None:
+            anchors.append(float(null_value))
+            left_anchors.append(float(null_value))
+        right_anchor = max(anchors)
         if use_log_scale:
+            right_pad = right_anchor * 0.6
             ax.set_xlim(max(float(lower.min()) * 0.8, 1e-3), right_anchor + right_pad)
         else:
-            left_bound = min(float(lower.min()), 1.0)
-            right_bound = right_anchor + right_pad
-            ax.set_xlim(max(0.0, left_bound - 0.08 * max(right_bound, 1.0)), right_bound)
+            left_anchor = min(left_anchors)
+            span = max(right_anchor - left_anchor, 1e-6)
+            right_pad = max(span * 0.38, 0.1)
+            left_pad = max(span * 0.12, 0.05)
+            ax.set_xlim(left_anchor - left_pad, right_anchor + right_pad)
         text_x = right_anchor + right_pad * 0.12
         ax.text(
             text_x,
             -0.55,
-            "OR (95% CI)",
+            str(axis_meta["header"]),
             ha="left",
             va="bottom",
             fontsize=6.8,
@@ -348,7 +365,8 @@ class PublicationFigureSkill:
                 fontsize=6.5,
                 color=palette.get("baseline", "#272727"),
             )
-        ax.set_title("Adjusted association with ICU mortality", loc="left", pad=4)
+        outcome_label = _prettify_label(context.target_outcome or "target outcome")
+        ax.set_title(f"Adjusted estimate for {outcome_label}", loc="left", pad=4)
         add_panel_label(ax, "A", x=-0.08)
         ax.margins(x=0.08)
         ax.grid(
@@ -391,12 +409,13 @@ class PublicationFigureSkill:
             }
         ]
         if not strata_df.empty and strata_record is not None:
+            score_label = _strata_score_label(strata_df)
             panels.append(
                 {
                     "panel_id": "B",
-                    "title": "Outcome by score",
+                    "title": f"Outcome by {score_label}",
                     "role": "audit",
-                    "claim": "Outcome rates by SOFA-2 stratum are shown directly from the registered stratum audit table.",
+                    "claim": f"Outcome rates by {score_label} are shown directly from the registered stratum audit table.",
                     "evidence_ids": [strata_record.evidence_id],
                     "review_risk": "Sparse high-score strata should be interpreted with their denominators.",
                 }
@@ -1080,9 +1099,68 @@ def _normalise_association_frame(frame: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["label", "estimate", "lower", "upper"])
     cols = {str(c).lower(): c for c in frame.columns}
     label_col = _first_col(cols, ["variable", "predictor", "term", "feature"])
-    estimate_col = _first_col(cols, ["odds_ratio", "or", "estimate", "effect"])
-    lower_col = _first_col(cols, ["or_lower", "ci_lower", "lower", "estimate_lower"])
-    upper_col = _first_col(cols, ["or_upper", "ci_upper", "upper", "estimate_upper"])
+    estimate_col = _first_col(
+        cols,
+        [
+            "odds_ratio",
+            "adjusted_or",
+            "or",
+            "hazard_ratio",
+            "adjusted_hr",
+            "hr",
+            "risk_ratio",
+            "relative_risk",
+            "rr",
+            "average_treatment_effect",
+            "ate",
+            "treatment_effect",
+            "risk_difference",
+            "mean_difference",
+            "coefficient",
+            "coef",
+            "beta",
+            "estimate",
+            "effect",
+        ],
+    )
+    lower_col = _first_col(
+        cols,
+        [
+            "or_lower",
+            "hr_lower",
+            "rr_lower",
+            "ate_lower",
+            "effect_lower",
+            "coefficient_lower",
+            "coef_lower",
+            "beta_lower",
+            "ci_low",
+            "ci_lower",
+            "lower_ci",
+            "lower",
+            "estimate_lower",
+            "estimate_ci_low",
+        ],
+    )
+    upper_col = _first_col(
+        cols,
+        [
+            "or_upper",
+            "hr_upper",
+            "rr_upper",
+            "ate_upper",
+            "effect_upper",
+            "coefficient_upper",
+            "coef_upper",
+            "beta_upper",
+            "ci_high",
+            "ci_upper",
+            "upper_ci",
+            "upper",
+            "estimate_upper",
+            "estimate_ci_high",
+        ],
+    )
     if estimate_col is None:
         numeric_cols = [
             c for c in frame.columns if pd.api.types.is_numeric_dtype(frame[c])
@@ -1112,14 +1190,120 @@ def _normalise_association_frame(frame: pd.DataFrame) -> pd.DataFrame:
     )
     out["lower"] = out["lower"].fillna(out["estimate"])
     out["upper"] = out["upper"].fillna(out["estimate"])
-    return out[["label", "estimate", "lower", "upper"]]
+    result = out[["label", "estimate", "lower", "upper"]]
+    result.attrs.update(_association_axis_from_token(_effect_measure_token(frame, cols, estimate_col)))
+    return result
+
+
+def _effect_measure_token(
+    frame: pd.DataFrame,
+    cols: Dict[str, str],
+    estimate_col: Any,
+) -> str:
+    for meta_name in ("effect_type", "estimate_type", "measure", "metric", "scale"):
+        meta_col = cols.get(meta_name)
+        if meta_col is None:
+            continue
+        values = frame[meta_col].dropna().astype(str).str.strip()
+        values = values[values.ne("")]
+        if not values.empty:
+            return values.iloc[0]
+    return str(estimate_col or "")
+
+
+def _association_axis_from_token(token: str) -> Dict[str, Any]:
+    normalized = str(token or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized in {"or", "odds_ratio", "adjusted_or"} or "odds_ratio" in normalized:
+        return {
+            "xlabel": "Odds ratio",
+            "header": "OR (95% CI)",
+            "null_value": 1.0,
+            "ratio_scale": True,
+        }
+    if (
+        normalized in {"hr", "hazard_ratio", "adjusted_hr"}
+        or "hazard_ratio" in normalized
+        or "hazard" in normalized
+    ):
+        return {
+            "xlabel": "Hazard ratio",
+            "header": "HR (95% CI)",
+            "null_value": 1.0,
+            "ratio_scale": True,
+        }
+    if normalized in {"rr", "risk_ratio", "relative_risk"} or "risk_ratio" in normalized:
+        return {
+            "xlabel": "Risk ratio",
+            "header": "RR (95% CI)",
+            "null_value": 1.0,
+            "ratio_scale": True,
+        }
+    if normalized in {"ate", "average_treatment_effect"} or "treatment_effect" in normalized:
+        return {
+            "xlabel": "Average treatment effect",
+            "header": "ATE (95% CI)",
+            "null_value": 0.0,
+            "ratio_scale": False,
+        }
+    if "risk_difference" in normalized:
+        return {
+            "xlabel": "Risk difference",
+            "header": "Risk difference (95% CI)",
+            "null_value": 0.0,
+            "ratio_scale": False,
+        }
+    if "mean_difference" in normalized:
+        return {
+            "xlabel": "Mean difference",
+            "header": "Mean difference (95% CI)",
+            "null_value": 0.0,
+            "ratio_scale": False,
+        }
+    if normalized in {"coef", "coefficient", "beta"} or any(
+        marker in normalized for marker in ("coefficient", "coef", "beta")
+    ):
+        return {
+            "xlabel": "Coefficient",
+            "header": "Coefficient (95% CI)",
+            "null_value": 0.0,
+            "ratio_scale": False,
+        }
+    return {
+        "xlabel": "Effect estimate",
+        "header": "Estimate (95% CI)",
+        "null_value": None,
+        "ratio_scale": False,
+    }
+
+
+def _association_axis_metadata(frame: pd.DataFrame) -> Dict[str, Any]:
+    if frame.attrs:
+        return {
+            **_association_axis_from_token(""),
+            **frame.attrs,
+        }
+    return _association_axis_from_token("")
 
 
 def _normalise_strata_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame(columns=["score", "rate"])
     cols = {str(c).lower(): c for c in frame.columns}
-    score_col = _first_col(cols, ["sofa2", "score", "stratum"])
+    score_col = _first_col(
+        cols,
+        [
+            "score",
+            "stratum",
+            "severity_score",
+            "risk_score",
+            "sofa2",
+            "sofa_2",
+            "gcs",
+            "gcs_score",
+            "kdigo",
+            "kdigo_stage",
+        ],
+    )
     rate_col = _first_col(cols, ["death_rate", "mortality_rate", "outcome_rate", "rate"])
     n_col = _first_col(cols, ["n", "count", "n_total"])
     if score_col is None or rate_col is None:
@@ -1134,7 +1318,9 @@ def _normalise_strata_frame(frame: pd.DataFrame) -> pd.DataFrame:
         out["n"] = pd.to_numeric(frame.loc[out.index, n_col], errors="coerce")
     if not out.empty and out["rate"].max() > 1.0:
         out["rate"] = out["rate"] / 100.0
-    return out.sort_values("score").reset_index(drop=True)
+    result = out.sort_values("score").reset_index(drop=True)
+    result.attrs["score_label"] = _score_axis_label(score_col)
+    return result
 
 
 def _normalise_missingness_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1170,6 +1356,7 @@ def _draw_strata_panel(ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str],
 
     x = frame["score"].astype(float)
     y = frame["rate"].astype(float)
+    score_label = _strata_score_label(frame)
     ax.plot(
         x,
         y,
@@ -1178,13 +1365,43 @@ def _draw_strata_panel(ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str],
         marker="o",
         markersize=3.4,
     )
-    ax.set_title("Observed outcome by score", loc="left", pad=3)
-    ax.set_xlabel("SOFA-2 score")
+    ax.set_title(f"Observed outcome by {score_label}", loc="left", pad=3)
+    ax.set_xlabel(score_label)
     ax.set_ylabel(f"{_prettify_label(outcome)} rate")
     ymax = max(0.05, min(1.0, float(y.max()) * 1.25 if len(y) else 0.05))
     ax.set_ylim(0, ymax)
     ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0, decimals=0))
     ax.grid(axis="y", color=palette.get("neutral_light", "#D8D8D8"), linewidth=0.5, alpha=0.7)
+
+
+def _strata_score_label(frame: pd.DataFrame) -> str:
+    label = frame.attrs.get("score_label")
+    if label:
+        return str(label)
+    return "Score"
+
+
+def _score_axis_label(column: Any) -> str:
+    raw = str(column or "").strip()
+    normalized = raw.lower().replace("-", "_").replace(" ", "_")
+    mapping = {
+        "score": "Score",
+        "stratum": "Stratum",
+        "severity_score": "Severity score",
+        "risk_score": "Risk score",
+        "sofa2": "SOFA-2 score",
+        "sofa_2": "SOFA-2 score",
+        "gcs": "GCS score",
+        "gcs_score": "GCS score",
+        "kdigo": "KDIGO stage",
+        "kdigo_stage": "KDIGO stage",
+    }
+    if normalized in mapping:
+        return mapping[normalized]
+    pretty = _prettify_label(raw)
+    if any(word in pretty.lower() for word in ("score", "stratum", "stage")):
+        return pretty
+    return f"{pretty} score"
 
 
 def _draw_missingness_panel(ax: Any, frame: pd.DataFrame, *, palette: Dict[str, str]) -> None:

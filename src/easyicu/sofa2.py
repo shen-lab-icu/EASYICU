@@ -7,7 +7,7 @@ callback style.
 Components implemented (0-4 each):
 - Respiratory (PaO2/FiO2 or SpO2/FiO2 + advanced support/ECMO)
   * SOFA-2 thresholds: ≤300/225/150/75 mmHg (vs SOFA-1: >400/300-400/200-299/100-199/<100)
-  * ECMO for respiratory indication → auto 4pt
+  * Any ECMO → respiratory auto 4pt
   * Advanced support includes: IMV, NIV, HFNC, CPAP, BiPAP, home ventilation
   
 - Hemostasis/Coagulation (platelets)
@@ -69,6 +69,14 @@ def _is_true(series: pd.Series) -> pd.Series:
     """Replicate R's is_true: non-NA and True."""
     return series.fillna(False).astype(bool)
 
+
+def _coalesce_series(*series_list: Optional[pd.Series]) -> Optional[pd.Series]:
+    """Return the first non-None series from a list of aliases."""
+    for series in series_list:
+        if series is not None:
+            return series
+    return None
+
 def sofa2_resp(
     pafi: Optional[pd.Series] = None,
     *,
@@ -92,7 +100,7 @@ def sofa2_resp(
     │   2    │ 200-299     │ ≤225          │ None                │
     │   3    │ 100-199+MV  │ ≤150          │ Advanced support^   │
     │   4    │ <100+MV     │ ≤75           │ Advanced support^   │
-    │        │             │ OR ECMO (respiratory indication)        │
+    │        │             │ OR ECMO                                 │
     └────────┴─────────────┴───────────────┴─────────────────────┘
 
     ^ Advanced support: HFNC, CPAP, BiPAP, NIV, IMV, long-term home ventilation
@@ -101,8 +109,8 @@ def sofa2_resp(
     - 0: >300  │ 1: ≤300  │ 2: ≤250  │ 3: ≤200+support  │ 4: ≤120+support or ECMO
     
     ECMO special rules:
-    - If ECMO for respiratory indication → auto 4pt (regardless of P/F)
-    - If ECMO for cardiovascular indication → score both respiratory AND cardiovascular
+    - Any ECMO → respiratory auto 4pt (regardless of P/F)
+    - ECMO for cardiovascular indication → additionally score cardiovascular
     
     Args:
         pafi: PaO2/FiO2 ratio (mmHg)
@@ -129,11 +137,6 @@ def sofa2_resp(
     support = _is_true(adv_resp) if adv_resp is not None else pd.Series(False, index=idx)
     on_ecmo = _is_true(ecmo) if ecmo is not None else pd.Series(False, index=idx)
     sup_or_ecmo = support | on_ecmo
-    
-    # Determine if ECMO is for respiratory indication
-    ecmo_resp = pd.Series(False, index=idx)
-    if ecmo_indication is not None and ecmo is not None:
-        ecmo_resp = _is_true(ecmo) & (ecmo_indication == 'respiratory')
     
     # Initialize score
     score = pd.Series(0, index=idx, dtype=int)
@@ -175,13 +178,22 @@ def sofa2_resp(
     score[sf_mask & (sf <= 200) & sup_or_ecmo] = 3
     score[sf_mask & (sf <= 120) & sup_or_ecmo] = 4
     
-    # ECMO for respiratory indication → auto 4pt
-    score[ecmo_resp] = 4
+    # SOFA-2 footnote (i): any patient on ECMO scores 4 on the respiratory
+    # component regardless of PaO2:FiO2. (ECMO for respiratory failure scores 4
+    # here only; ECMO for a cardiovascular indication is additionally scored on
+    # the cardiovascular component via mechanical circulatory support.) Gate on
+    # `on_ecmo` (any ECMO), not on respiratory indication alone. `ecmo_indication`
+    # is kept in the signature so the dictionary can still pass it for provenance.
+    score[on_ecmo] = 4
 
     return score
 
 
-def sofa2_coag(plt: pd.Series) -> pd.Series:
+def sofa2_coag(
+    plt: Optional[pd.Series] = None,
+    *,
+    platelets: Optional[pd.Series] = None,
+) -> pd.Series:
     """SOFA-2 hemostasis/coagulation component (platelets ×10³/μL).
 
     SOFA-2 simplified thresholds vs SOFA-1:
@@ -207,15 +219,22 @@ def sofa2_coag(plt: pd.Series) -> pd.Series:
     Returns:
         Series of hemostasis SOFA-2 scores (0-4)
     """
-    p = pd.to_numeric(plt, errors="coerce")
-    score = pd.Series(0, index=plt.index, dtype=int)
+    platelet_series = _coalesce_series(plt, platelets)
+    if platelet_series is None:
+        raise ValueError("sofa2_coag requires `plt` or `platelets`")
+    p = pd.to_numeric(platelet_series, errors="coerce")
+    score = pd.Series(0, index=platelet_series.index, dtype=int)
     score[p <= 150] = 1
     score[p <= 100] = 2
     score[p <= 80] = 3
     score[p <= 50] = 4
     return score
 
-def sofa2_liver(bili: pd.Series) -> pd.Series:
+def sofa2_liver(
+    bili: Optional[pd.Series] = None,
+    *,
+    bilirubin: Optional[pd.Series] = None,
+) -> pd.Series:
     """SOFA-2 liver component (bilirubin mg/dL).
 
     SOFA-2 thresholds based on consensus table:
@@ -246,8 +265,11 @@ def sofa2_liver(bili: pd.Series) -> pd.Series:
         ≤6.0 mg/dL = ≤102.6 μmol/L
         ≤12.0 mg/dL = ≤205 μmol/L
     """
-    b = pd.to_numeric(bili, errors="coerce")
-    score = pd.Series(0, index=bili.index, dtype=int)
+    bilirubin_series = _coalesce_series(bili, bilirubin)
+    if bilirubin_series is None:
+        raise ValueError("sofa2_liver requires `bili` or `bilirubin`")
+    b = pd.to_numeric(bilirubin_series, errors="coerce")
+    score = pd.Series(0, index=bilirubin_series.index, dtype=int)
 
     # Apply thresholds according to SOFA-2 table (using upper bounds)
     # 0pt: ≤1.20, 1pt: >1.20-3.0, 2pt: >3.0-6.0, 3pt: >6.0-12.0, 4pt: >12.0
@@ -260,12 +282,18 @@ def sofa2_liver(bili: pd.Series) -> pd.Series:
 def sofa2_cardio(
     map: pd.Series,
     *,
+    norepi: Optional[pd.Series] = None,
+    epi: Optional[pd.Series] = None,
     norepi60: Optional[pd.Series] = None,
     epi60: Optional[pd.Series] = None,
+    dopa60: Optional[pd.Series] = None,
+    dobu60: Optional[pd.Series] = None,
     dopamine60: Optional[pd.Series] = None,
     dobutamine60: Optional[pd.Series] = None,
     other_vaso: Optional[pd.Series] = None,
     mech_circ_support: Optional[pd.Series] = None,
+    ecmo: Optional[pd.Series] = None,
+    ecmo_indication: Optional[pd.Series] = None,
     vasopressors_unavailable: Optional[pd.Series] = None,
 ) -> pd.Series:
     """SOFA-2 cardiovascular component.
@@ -303,10 +331,14 @@ def sofa2_cardio(
     
     Args:
         map: Mean arterial pressure (mmHg)
-        norepi60: Norepinephrine dose (μg/kg/min) - use BASE dose
-        epi60: Epinephrine dose (μg/kg/min)
-        dopamine60: Dopamine dose (μg/kg/min) - backup only
-        dobutamine60: Dobutamine dose (μg/kg/min)
+        norepi: Norepinephrine dose (μg/kg/min) - readable alias
+        epi: Epinephrine dose (μg/kg/min) - readable alias
+        norepi60: Norepinephrine dose (μg/kg/min) - EasyICU runtime concept name
+        epi60: Epinephrine dose (μg/kg/min) - EasyICU runtime concept name
+        dopa60: Dopamine dose (μg/kg/min) - EasyICU runtime concept name
+        dobu60: Dobutamine dose (μg/kg/min) - EasyICU runtime concept name
+        dopamine60: Dopamine dose (μg/kg/min) - readable alias
+        dobutamine60: Dobutamine dose (μg/kg/min) - readable alias
         other_vaso: Boolean - other vasoactive drugs present
         mech_circ_support: Boolean - mechanical circulatory support active
         vasopressors_unavailable: Boolean - vasopressors unavailable/precluded
@@ -315,22 +347,33 @@ def sofa2_cardio(
         Series of cardiovascular SOFA-2 scores (0-4)
     """
     idx = map.index
-    ne = pd.to_numeric(norepi60, errors="coerce") if norepi60 is not None else pd.Series(0.0, index=idx)
-    ep = pd.to_numeric(epi60, errors="coerce") if epi60 is not None else pd.Series(0.0, index=idx)
-    da = pd.to_numeric(dopamine60, errors="coerce") if dopamine60 is not None else pd.Series(0.0, index=idx)
-    db = pd.to_numeric(dobutamine60, errors="coerce") if dobutamine60 is not None else pd.Series(0.0, index=idx)
+    dopamine = _coalesce_series(dopa60, dopamine60)
+    dobutamine = _coalesce_series(dobu60, dobutamine60)
+    norepi_series = _coalesce_series(norepi60, norepi)
+    epi_series = _coalesce_series(epi60, epi)
+    ne = pd.to_numeric(norepi_series, errors="coerce") if norepi_series is not None else pd.Series(0.0, index=idx)
+    ep = pd.to_numeric(epi_series, errors="coerce") if epi_series is not None else pd.Series(0.0, index=idx)
+    da = pd.to_numeric(dopamine, errors="coerce") if dopamine is not None else pd.Series(0.0, index=idx)
+    db = pd.to_numeric(dobutamine, errors="coerce") if dobutamine is not None else pd.Series(0.0, index=idx)
     others = _is_true(other_vaso) if other_vaso is not None else pd.Series(False, index=idx)
     mech = _is_true(mech_circ_support) if mech_circ_support is not None else pd.Series(False, index=idx)
     vaso_unavail = _is_true(vasopressors_unavailable) if vasopressors_unavailable is not None else pd.Series(False, index=idx)
+
+    # SOFA-2 footnote (i)+(n): ECMO used for a cardiovascular indication (VA-ECMO)
+    # is a form of mechanical circulatory support and is scored 4 on the
+    # cardiovascular component (in addition to the respiratory 4 handled in
+    # `sofa2_resp`). Respiratory-indication (VV) ECMO is NOT scored here. Where the
+    # indication is unknown, no cardiovascular point is added (conservative).
+    on_ecmo = _is_true(ecmo) if ecmo is not None else pd.Series(False, index=idx)
+    cardiac_ecmo = pd.Series(False, index=idx)
+    if ecmo is not None and ecmo_indication is not None:
+        cardiac_ecmo = on_ecmo & (ecmo_indication.astype("string") == "cardiovascular")
 
     # KEY SOFA-2 CHANGE: Combined norepinephrine + epinephrine
     total = ne.fillna(0) + ep.fillna(0)
     map_val = pd.to_numeric(map, errors="coerce")
 
     score = pd.Series(0, index=idx, dtype=int)
-
-    # Mechanical support overrides → auto 4pt
-    score[mech] = 4
 
     # Check if any vasopressors/inotropes are being used
     any_vaso = (total > 0) | (da > 0) | (db > 0) | others
@@ -367,6 +410,14 @@ def sofa2_cardio(
         score[vaso_unavail & (map_val >= 50) & (map_val < 60)] = 2
         score[vaso_unavail & (map_val >= 40) & (map_val < 50)] = 3
         score[vaso_unavail & (map_val < 40)] = 4
+
+    # Mechanical circulatory support (IABP / LVAD / Impella, SOFA-2 footnote n) and
+    # cardiovascular-indication ECMO (VA-ECMO, footnotes i+n) are an automatic
+    # cardiovascular 4. Apply LAST as a floor so that none of the MAP-, dose-, or
+    # ceiling-of-care (footnote m) rules above can downgrade these patients.
+    # Footnote (m) governs only the MAP cutoffs when vasoactive drugs are
+    # unavailable; it does not override mechanical support.
+    score[mech | cardiac_ecmo] = 4
 
     return score
 
@@ -466,13 +517,19 @@ def sofa2_cns(
     return score
 
 def sofa2_renal(
-    crea: pd.Series,
+    crea: Optional[pd.Series] = None,
     *,
+    creatinine: Optional[pd.Series] = None,
     rrt: Optional[pd.Series] = None,
+    rrt_criteria: Optional[pd.Series] = None,
+    uo_6h: Optional[pd.Series] = None,
+    uo_12h: Optional[pd.Series] = None,
+    uo_24h: Optional[pd.Series] = None,
     urine_mlkgph: Optional[pd.Series] = None,
     urine_duration_h: Optional[pd.Series] = None,
     potassium: Optional[pd.Series] = None,
     ph: Optional[pd.Series] = None,
+    bicarb: Optional[pd.Series] = None,
     bicarbonate: Optional[pd.Series] = None,
 ) -> pd.Series:
     """SOFA-2 renal component.
@@ -515,13 +572,19 @@ def sofa2_renal(
     └──────────────────┴────────────────────┴─────────────────────┘
     
     Args:
-        crea: Serum creatinine (mg/dL)
+        crea: Serum creatinine (mg/dL) - EasyICU/runtime-style name
+        creatinine: Serum creatinine (mg/dL) - readable alias
         rrt: Boolean - receiving RRT
-        urine_mlkgph: Urine output rate (mL/kg/h)
-        urine_duration_h: Duration of urine measurement period (hours)
+        rrt_criteria: Boolean - meets RRT criteria but not receiving it
+        uo_6h: 6-hour average urine output (mL/kg/h) - EasyICU runtime concept name
+        uo_12h: 12-hour average urine output (mL/kg/h) - EasyICU runtime concept name
+        uo_24h: 24-hour average urine output (mL/kg/h) - EasyICU runtime concept name
+        urine_mlkgph: Urine output rate (mL/kg/h) - readable fallback API
+        urine_duration_h: Duration of urine measurement period (hours) - readable fallback API
         potassium: Serum potassium (mmol/L) - for RRT criteria
         ph: Arterial pH - for RRT criteria
-        bicarbonate: Serum bicarbonate (mmol/L) - for RRT criteria
+        bicarb: Serum bicarbonate (mmol/L) - EasyICU runtime concept name
+        bicarbonate: Serum bicarbonate (mmol/L) - readable alias
 
     Returns:
         Series of renal SOFA-2 scores (0-4)
@@ -534,25 +597,59 @@ def sofa2_renal(
     - RRT criteria check: creatinine >1.2 + oliguria + (K≥6.0 OR pH≤7.20 + HCO3≤12)
     - Unit conversion: mg/dL × 88.4 = μmol/L
     """
-    c = pd.to_numeric(crea, errors="coerce")
+    creatinine_series = _coalesce_series(crea, creatinine)
+    if creatinine_series is None:
+        raise ValueError("sofa2_renal requires `crea` or `creatinine`")
+    c = pd.to_numeric(creatinine_series, errors="coerce")
     idx = c.index
     score = pd.Series(0, index=idx, dtype=int)
+    bicarbonate_series = _coalesce_series(bicarb, bicarbonate)
 
     # RRT = auto 4pt (SOFA-2 major addition)
     if rrt is not None:
         score[_is_true(rrt)] = 4
+    if rrt_criteria is not None:
+        score[_is_true(rrt_criteria)] = 4
+
+    # EasyICU runtime-aligned path: use windowed urine concepts when available.
+    if any(series is not None for series in (uo_6h, uo_12h, uo_24h)):
+        u6 = pd.to_numeric(uo_6h, errors="coerce") if uo_6h is not None else pd.Series(np.nan, index=idx)
+        u12 = pd.to_numeric(uo_12h, errors="coerce") if uo_12h is not None else pd.Series(np.nan, index=idx)
+        u24 = pd.to_numeric(uo_24h, errors="coerce") if uo_24h is not None else pd.Series(np.nan, index=idx)
+
+        score[(c > 1.20) | ((u6 < 0.5) & ~(u12 < 0.5))] = np.maximum(score[(c > 1.20) | ((u6 < 0.5) & ~(u12 < 0.5))], 1)
+        score[(c > 2.0) | (u12 < 0.5)] = np.maximum(score[(c > 2.0) | (u12 < 0.5)], 2)
+        score[(c > 3.50) | (u24 < 0.3) | (u12 == 0)] = np.maximum(score[(c > 3.50) | (u24 < 0.3) | (u12 == 0)], 3)
+
+        if (potassium is not None) and (ph is not None) and (bicarbonate_series is not None):
+            k = pd.to_numeric(potassium, errors="coerce")
+            ph_val = pd.to_numeric(ph, errors="coerce")
+            hco3 = pd.to_numeric(bicarbonate_series, errors="coerce")
+            base_injury = (c > 1.2) | (u6 < 0.3)
+            metabolic_crisis = (k >= 6.0) | ((ph_val <= 7.20) & (hco3 <= 12))
+            score[base_injury & metabolic_crisis] = 4
+
+        return score
 
     # Check if patient meets RRT criteria but not receiving RRT (e.g., ceiling of care)
-    if (potassium is not None) and (ph is not None) and (bicarbonate is not None) and (urine_mlkgph is not None):
+    if (potassium is not None) and (ph is not None) and (bicarbonate_series is not None) and (urine_mlkgph is not None):
         k = pd.to_numeric(potassium, errors="coerce")
         ph_val = pd.to_numeric(ph, errors="coerce")
-        hco3 = pd.to_numeric(bicarbonate, errors="coerce")
+        hco3 = pd.to_numeric(bicarbonate_series, errors="coerce")
         u = pd.to_numeric(urine_mlkgph, errors="coerce")
 
-        # RRT criteria: creatinine >1.2 AND oliguria + (K≥6.0 OR pH≤7.20 + HCO3≤12)
-        oliguria = u < 0.3  # <0.3 mL/kg/h
+        # SOFA-2 footnote (p): a patient NOT on RRT scores 4 if they meet RRT
+        # criteria, i.e. (creatinine >1.2 mg/dL OR oliguria <0.3 mL/kg/h for >6 h)
+        # AND (K ≥6.0 mmol/L OR (pH ≤7.20 AND HCO3 ≤12 mmol/L)).
+        # NOTE: in the EasyICU runtime this fallback is not reached — the dictionary
+        # wires the windowed urine concepts (uo_6h/uo_12h/uo_24h) and the windowed
+        # path above already implements footnote (p) with OR and the 6 h window via
+        # the u6 concept. This fallback is for direct API callers; aligned here for
+        # consistency.
+        dur = pd.to_numeric(urine_duration_h, errors="coerce") if urine_duration_h is not None else pd.Series(np.nan, index=idx)
+        oliguria = (u < 0.3) & (dur > 6)  # <0.3 mL/kg/h sustained for >6 h
         metabolic_crisis = (k >= 6.0) | ((ph_val <= 7.20) & (hco3 <= 12))
-        rrt_criteria = (c > 1.2) & oliguria & metabolic_crisis
+        rrt_criteria = ((c > 1.2) | oliguria) & metabolic_crisis
 
         # Score 4pt if meets RRT criteria but not receiving RRT
         score[rrt_criteria & (score < 4)] = 4
@@ -627,3 +724,7 @@ def sofa2_score(data_dict: Dict[str, pd.DataFrame], *, keep_components: bool = F
         result = result.drop(columns=required)
 
     return result
+
+
+# Alias matching the EasyICU concept name used in the subset dictionary.
+sofa2 = sofa2_score

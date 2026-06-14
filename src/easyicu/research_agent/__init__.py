@@ -110,6 +110,17 @@ __all__ = [
     # ICU rules
     "ICU_RULES",
     "VariableKind",
+    "detect_overadjustment",
+    "composite_constituents",
+    "is_derived_exposure",
+    "overadjustment_caution",
+    "detect_outcome_as_predictor",
+    "outcome_leakage_caution",
+    "treatment_mediator_caution",
+    "concept_methodology_profile",
+    "concept_methodology_tag",
+    "ConceptMethodologyProfile",
+    "COMPOSITE_EXPOSURE_CONSTITUENTS",
     # Architecture / temporal semantics / experiment specs
     "SystemLayer",
     "AgentRole",
@@ -122,10 +133,60 @@ __all__ = [
     "EpisodeResolution",
     "TimeWindowSemanticParser",
     "ConceptDatabaseAvailability",
+    "RealDataConceptFeasibility",
+    "CandidateAlreadyRegisteredError",
+    "CandidateNotExecutableError",
+    "CandidateNotRegisteredError",
+    "CandidateRegistryEntry",
+    "DiscoveryCandidateRecord",
+    "DiscoveryTriageResult",
+    "ExecutableHypothesisCandidate",
+    "IDEA_EXTRACTION_SYSTEM_PROMPT",
+    "IDEA_MINING_SNAPSHOT_SCHEMA_VERSION",
+    "IDEA_NOVELTY_SNAPSHOT_SCHEMA_VERSION",
+    "IdeaMiningCandidateTriageRecord",
+    "IdeaMiningDryRunResult",
+    "IdeaExtractionError",
+    "IdeaMiningError",
+    "IdeaMiningFeasibilityRecord",
+    "IdeaMiningYieldReport",
+    "IdeaCandidateRegistry",
+    "LiteratureIdeaCandidate",
+    "NoveltyLabel",
+    "NonExecutableCandidateError",
+    "OutcomeDeterminability",
+    "OutcomeDeterminabilityStatus",
+    "PriorArtAssessment",
+    "PriorArtQueryRecord",
+    "PriorArtSearchHit",
+    "IdeaRegistryError",
+    "SelectionStatus",
+    "SourceAdapterLevel",
+    "SourceMaterial",
+    "SourceSnapshotItem",
+    "SourceSnapshotManifest",
+    "assess_prior_art_for_candidates",
+    "assess_prior_art_for_idea",
+    "build_idea_extraction_messages",
+    "build_discovery_candidate_records",
+    "build_prior_art_queries",
     "cross_database_concept_availability",
     "default_public_databases",
     "explain_concept_availability",
+    "extract_literature_ideas",
+    "fetch_source_materials_from_scope",
+    "freeze_source_snapshot",
     "hypothesis_cross_database_feasibility",
+    "map_literature_idea_to_executable_candidate",
+    "real_data_concept_feasibility",
+    "render_discovery_report",
+    "run_idea_mining_dry_run",
+    # Idea-mining literature scope (discovery lever 1)
+    "JOURNAL_PRESETS",
+    "LiteratureScopeSpec",
+    "build_pubmed_query_from_scope",
+    "resolve_journals",
+    "resolve_year_range",
     "ExperimentSpec",
     "CohortInputSpec",
     "RuntimeSpec",
@@ -273,7 +334,9 @@ __all__ = [
     "ChecklistReport",
     "build_strobe_checklist",
     "build_tripod_ai_checklist",
+    "build_internal_phenotype_checklist",
     "choose_checklist",
+    "checklist_names_for_kind",
     # Reviewer round (O15)
     "ReviewerComment",
     "ReviewerCritique",
@@ -310,7 +373,9 @@ __all__ = [
     "run_subgroup_analysis",
     # Hypothesis generator (O17)
     "HypothesisCandidate",
+    "HypothesisFeasibilitySignal",
     "HypothesisGeneratorResult",
+    "LITERATURE_SATURATION_SIGNAL_STATEMENT",
     "generate_hypotheses",
     # Analysis-pattern auditor (generic ICU footguns)
     "AnalysisPatternAuditor",
@@ -330,6 +395,7 @@ __all__ = [
     "ResearchAgentPipeline",
     "SubmissionProfile",
     "NPJ_DM_2026_05",
+    "NPJ_DM_2026_06",
     "DEFAULT_SUBMISSION_PROFILE_REF",
     "SUBMISSION_PROFILE_REGISTRY",
     "get_submission_profile",
@@ -377,7 +443,21 @@ from .schema import (
     ProbeSummary,
     StepRecord,
 )
-from .icu_rules import ICU_RULES, VariableKind
+from .icu_rules import (
+    COMPOSITE_EXPOSURE_CONSTITUENTS,
+    ICU_RULES,
+    ConceptMethodologyProfile,
+    VariableKind,
+    composite_constituents,
+    concept_methodology_profile,
+    concept_methodology_tag,
+    detect_outcome_as_predictor,
+    detect_overadjustment,
+    is_derived_exposure,
+    outcome_leakage_caution,
+    overadjustment_caution,
+    treatment_mediator_caution,
+)
 
 
 def __getattr__(name: str):
@@ -409,14 +489,79 @@ def __getattr__(name: str):
         return getattr(_temporal, name)
     if name in {
         "ConceptDatabaseAvailability",
+        "RealDataConceptFeasibility",
         "cross_database_concept_availability",
         "default_public_databases",
         "explain_concept_availability",
         "hypothesis_cross_database_feasibility",
+        "real_data_concept_feasibility",
     }:
         from . import concept_availability as _availability
 
         return getattr(_availability, name)
+    if name in {
+        "CandidateAlreadyRegisteredError",
+        "CandidateNotExecutableError",
+        "CandidateNotRegisteredError",
+        "CandidateRegistryEntry",
+        "IdeaCandidateRegistry",
+        "IdeaRegistryError",
+        "SelectionStatus",
+    }:
+        from . import idea_registry as _idea_registry
+
+        return getattr(_idea_registry, name)
+    if name in {
+        "DISCOVERY_REPORT_SCHEMA_VERSION",
+        "DiscoveryCandidateRecord",
+        "DiscoveryTriageResult",
+        "ExecutableHypothesisCandidate",
+        "IDEA_EXTRACTION_SYSTEM_PROMPT",
+        "IDEA_MINING_SNAPSHOT_SCHEMA_VERSION",
+        "IDEA_NOVELTY_SNAPSHOT_SCHEMA_VERSION",
+        "IdeaMiningCandidateTriageRecord",
+        "IdeaMiningDryRunResult",
+        "IdeaExtractionError",
+        "IdeaMiningError",
+        "IdeaMiningFeasibilityRecord",
+        "IdeaMiningYieldReport",
+        "LiteratureIdeaCandidate",
+        "NoveltyLabel",
+        "NonExecutableCandidateError",
+        "OutcomeDeterminability",
+        "OutcomeDeterminabilityStatus",
+        "PriorArtAssessment",
+        "PriorArtQueryRecord",
+        "PriorArtSearchHit",
+        "SourceAdapterLevel",
+        "SourceMaterial",
+        "SourceSnapshotItem",
+        "SourceSnapshotManifest",
+        "assess_prior_art_for_candidates",
+        "assess_prior_art_for_idea",
+        "build_idea_extraction_messages",
+        "build_discovery_candidate_records",
+        "build_prior_art_queries",
+        "extract_literature_ideas",
+        "fetch_source_materials_from_scope",
+        "freeze_source_snapshot",
+        "map_literature_idea_to_executable_candidate",
+        "render_discovery_report",
+        "run_idea_mining_dry_run",
+    }:
+        from . import idea_mining as _idea_mining
+
+        return getattr(_idea_mining, name)
+    if name in {
+        "JOURNAL_PRESETS",
+        "LiteratureScopeSpec",
+        "build_pubmed_query_from_scope",
+        "resolve_journals",
+        "resolve_year_range",
+    }:
+        from . import idea_scope as _idea_scope
+
+        return getattr(_idea_scope, name)
     if name in {
         "ExperimentSpec",
         "CohortInputSpec",
@@ -667,7 +812,9 @@ def __getattr__(name: str):
         "ChecklistReport",
         "build_strobe_checklist",
         "build_tripod_ai_checklist",
+        "build_internal_phenotype_checklist",
         "choose_checklist",
+        "checklist_names_for_kind",
     }:
         from . import reporting_checklist as _rc
 
@@ -736,7 +883,9 @@ def __getattr__(name: str):
         return getattr(_fair, name)
     if name in {
         "HypothesisCandidate",
+        "HypothesisFeasibilitySignal",
         "HypothesisGeneratorResult",
+        "LITERATURE_SATURATION_SIGNAL_STATEMENT",
         "generate_hypotheses",
     }:
         from . import hypothesis_generator as _hg
@@ -770,6 +919,7 @@ def __getattr__(name: str):
     if name in {
         "SubmissionProfile",
         "NPJ_DM_2026_05",
+        "NPJ_DM_2026_06",
         "DEFAULT_SUBMISSION_PROFILE_REF",
         "SUBMISSION_PROFILE_REGISTRY",
         "get_submission_profile",

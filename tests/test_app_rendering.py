@@ -1,17 +1,24 @@
 from __future__ import annotations
 
+import base64
+import io
 import os
 import inspect
 import json
 import re
 import sys
+import time
 import types
+import zipfile
 from datetime import date
 from pathlib import Path
 
 import easyicu
+import easyicu.project_config as project_config
 from easyicu.concept import load_dictionary
+import easyicu.webapp.agent_workbench as agent_workbench
 import easyicu.webapp.app as app
+import easyicu.webapp.bootstrap as bootstrap
 import easyicu.webapp.concept_catalog as concept_catalog
 import easyicu.webapp.cohort_dashboard_page as cohort_dashboard_page
 import easyicu.webapp.cohort_filters as cohort_filters
@@ -55,6 +62,22 @@ def test_concept_catalog_helpers_remain_available_to_workflow_context() -> None:
     ]
     assert app._get_patient_id_table_files("hirid")[0] == "general.parquet"
     assert app._sample_patient_ids_random([3, 1, 2], 10) == [3, 1, 2]
+
+
+def test_ai_assistant_hosted_provider_does_not_auto_enable_opt_in() -> None:
+    render_source = inspect.getsource(llm_chat.render_ai_assistant_page)
+    stream_source = inspect.getsource(llm_chat._stream_response)
+    bg_source = inspect.getsource(llm_chat._start_bg_response)
+
+    assert 'st.session_state["llm_enabled"] = True' not in render_source
+    assert 'st.session_state["_llm_toggle"] = True' not in render_source
+    assert "_needs_api_key" not in render_source
+    assert stream_source.index("enforce_external_llm_opt_in") < stream_source.index(
+        "client = _get_client()"
+    )
+    assert bg_source.index("enforce_external_llm_opt_in") < bg_source.index(
+        "threading.Thread"
+    )
 
 
 def test_quick_preview_prefers_lightweight_concepts_when_all_features_selected() -> None:
@@ -157,15 +180,70 @@ def test_concept_selection_design_exposes_all_action() -> None:
 
     assert 'key="concept_select_all_top"' in source
     assert 'key="concept_clear_all_top"' in source
-    assert 'key="concept_recommended_design"' in source
+    assert 'key="concept_reset_core_design"' in source
     assert 'key="concept_previous_step"' in source
     assert 'key="concept_clear_design"' not in source
     assert '"Select all" if lang == "en" else "全选"' in source
     assert '"Clear" if lang == "en" else "清空"' in source
-    assert '"Recommended" if lang == "en" else "推荐"' in source
+    assert '"Reset to core" if lang == "en" else "恢复核心"' in source
+    assert "_core_concept_groups_for_design(concept_groups)" in source
+    assert 'selection_mode = "core" if lang == "en" else "核心"' in source
     assert '"Previous step" if lang == "en" else "上一步"' in source
     assert "_sidebar_set_extract_step_state(st.session_state, 2)" in source
     assert "_all_concept_groups(concept_groups)" in source
+
+
+def test_concept_selection_reset_to_core_matches_polish_module_set() -> None:
+    concept_groups = {
+        "Demographics": ["age", "sex"],
+        "Vital signs": ["hr", "map"],
+        "Labs": ["lact"],
+        "SOFA / SOFA-2": ["sofa", "sofa2"],
+        "Sepsis-3": ["sep3_sofa2"],
+        "AKI": ["aki"],
+        "Interventions": ["norepi_rate"],
+        "Fluids": ["fluid_balance"],
+        "Ventilation": ["vent_start"],
+        "Outcomes": ["death", "los_icu"],
+    }
+
+    assert sidebar._core_concept_groups_for_design(concept_groups) == [
+        "Demographics",
+        "Vital signs",
+        "Labs",
+        "SOFA / SOFA-2",
+        "Sepsis-3",
+        "Fluids",
+        "Outcomes",
+    ]
+
+    catalog_core = sidebar._core_concept_groups_for_design(
+        {
+            "demographics": ["age"],
+            "vitals": ["hr"],
+            "blood_gas": ["lact"],
+            "chemistry": ["crea"],
+            "hematology": ["plt"],
+            "sofa2_score": ["sofa2"],
+            "sepsis3_sofa2": ["sep3_sofa2"],
+            "respiratory": ["pafi"],
+            "ventilator": ["peep"],
+            "renal": ["aki", "fluid_balance"],
+            "vasopressors": ["norepi_rate"],
+            "outcome": ["death"],
+        }
+    )
+
+    assert catalog_core == [
+        "demographics",
+        "vitals",
+        "blood_gas",
+        "chemistry",
+        "hematology",
+        "sofa2_score",
+        "sepsis3_sofa2",
+        "outcome",
+    ]
 
 
 def test_step1_source_banner_uses_noninteractive_status_note() -> None:
@@ -208,8 +286,12 @@ def test_step1_demo_reset_defers_slider_key_updates_until_next_render() -> None:
     assert source.index('st.session_state.pop("_eu_demo_source_reset_pending", False)') < source.index(
         'key="demo_mode_patients"'
     )
+    assert source.index('st.session_state.pop("_eu_demo_widget_params_pending", None)') < source.index(
+        'key="demo_mode_patients"'
+    )
     assert "st.session_state.demo_mode_patients = demo_patients_default" in pending_block
     assert "st.session_state.demo_mode_hours = demo_hours_default" in pending_block
+    assert 'st.session_state.pop("_eu_demo_widget_params_pending", None)' in pending_block
     assert 'st.session_state["_eu_demo_source_reset_pending"] = True' in reset_block
     assert "st.session_state.demo_mode_patients = demo_patients_default" not in reset_block
     assert "st.session_state.demo_mode_hours = demo_hours_default" not in reset_block
@@ -222,7 +304,8 @@ def test_step2_confirm_seeds_all_concepts_before_rerun() -> None:
         source.index("with right:\n        _render_cohort_live_preview")
     ]
 
-    assert "_reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))" in confirm_block
+    # Redesign seeds the core concept groups (not every group) on confirm.
+    assert "_reset_concepts_to_groups(concept_groups, _core_concept_groups_for_design(concept_groups))" in confirm_block
     assert confirm_block.index("_reset_concepts_to_groups") < confirm_block.index("st.rerun()")
 
 
@@ -359,6 +442,16 @@ def test_concept_checkbox_and_selection_states_do_not_use_black_token_fills() ->
     assert "-webkit-text-fill-color: #0F1A23 !important" in final_guard_css
     assert "text-shadow: none !important" in final_guard_css
     assert "def _render_concept_checkbox_row" in sidebar_text
+    checkbox_helper = sidebar_text[
+        sidebar_text.index("def _render_concept_checkbox_row"):
+        sidebar_text.index("def _render_step3_concept_selection_design")
+    ]
+    step3_detail_block = sidebar_text[
+        sidebar_text.index('"Feature detail configuration"'):
+        sidebar_text.index('selected_concepts = _collect_selected_concepts(concept_groups)', sidebar_text.index('"Feature detail configuration"'))
+    ]
+    assert "st.columns" not in checkbox_helper
+    assert "st.columns(3)" not in step3_detail_block
     assert 'label_visibility="collapsed"' in sidebar_text
     assert 'f\'<div class="eu-concept-checkbox-text">{html.escape(concept)}</div>\'' in sidebar_text
     assert 'checked = st.checkbox(concept, value=default_val, key=f"cb_{key_hash}_{concept}")' not in sidebar_text
@@ -1052,6 +1145,12 @@ def test_export_manifest_keeps_installed_context_when_generating_suffix(tmp_path
             "entry_mode": "real",
             "selected_concepts": ["hr"],
             "selected_groups": ["vitals"],
+            "export_merge_mode": "merged",
+            "export_filter_patient_enabled": True,
+            "patient_limit": 100,
+            "_export_effective_patient_limit": 100,
+            "export_include_index": True,
+            "export_add_timestamp": True,
         }
     )
     monkeypatch.setattr(export_reports, "st", streamlit_stub)
@@ -1071,6 +1170,12 @@ def test_export_manifest_keeps_installed_context_when_generating_suffix(tmp_path
 
     manifest = json.loads((tmp_path / "easyicu_export_manifest.json").read_text())
     assert manifest["cohort_suffix"] == "icdInA41_icdExI50"
+    assert manifest["merge_mode"] == "merged"
+    assert manifest["filter_by_patient"] is True
+    assert manifest["patient_limit_requested"] == 100
+    assert manifest["patient_limit_effective"] == 100
+    assert manifest["include_row_index"] is True
+    assert manifest["add_timestamp_to_filename"] is True
 
 
 def test_special_concept_worker_failure_writes_error_manifest(tmp_path, monkeypatch) -> None:
@@ -1795,6 +1900,10 @@ def test_streamlit_theme_is_fixed_to_light_mode() -> None:
 
     assert '[theme]' in theme_config
     assert 'base = "light"' in theme_config
+    assert project_config.DEFAULT_WEB_UI_DISPLAY_TARGET == "desktop"
+    assert project_config.normalize_web_ui_display_target(None) == "desktop"
+    assert project_config.normalize_web_ui_display_target("mobile") == "desktop"
+    assert project_config.normalize_web_ui_display_target("responsive") == "responsive"
     assert "color-scheme: light !important" in shell_css
     assert 'div[data-baseweb="popover"]' in shell_css
     assert 'div[data-baseweb="menu"]' in shell_css
@@ -1924,51 +2033,119 @@ def test_quality_panel_switcher_renders_one_lazy_panel(monkeypatch) -> None:
 
 
 def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
-    entry_source = pages_redesign.render_entry_redesign_page.__code__.co_consts
-    source_text = "\n".join(str(value) for value in entry_source if isinstance(value, str))
+    source_text = "\n".join(
+        inspect.getsource(func)
+        for func in (
+            pages_redesign._entry_home_layout,
+            pages_redesign._render_entry_home_footer,
+            pages_redesign._render_entry_copilot_layout,
+            pages_redesign._render_entry_cards_layout,
+            pages_redesign.render_entry_redesign_page,
+        )
+    )
     css_text = shell_styles._load_shell_overrides_css()
 
     assert "All 19 modules / 167 features available" not in source_text
     assert "Lightweight review dataset opens immediately" not in source_text
-    assert "Start at data extraction, then open review panels when ready" in source_text
-    assert "Research Agent static gallery viewable" in source_text
+    assert "_entry_home_layout" in source_text
+    assert "_eu_entry_home_layout" in source_text
+    assert "What would you like to study?" in source_text
+    assert "Local-first ICU research workspace" in source_text
+    assert "How would you like to work?" in source_text
+    assert "Pick a way in. Your data choice applies to either." in source_text
+    assert "Research Copilot walks you through question, data, cohort, modules" in source_text
+    assert "Research Copilot" in source_text
+    assert "Classic Workspace" in source_text
+    assert "Polish plan" in source_text
+    assert "Study question" in source_text
+    assert "Compare databases" in source_text
+    assert "Audit quality" in source_text
+    assert "Data Extraction" in source_text
+    assert "Data Visualization" in source_text
+    assert "Auditable run → gated manuscript draft" in source_text
+    assert "Start demo extraction" not in source_text
+    assert "Research Agent static gallery viewable" not in source_text
     assert "Research Agent setup and local-run handoff preview" not in source_text
-    assert "Use local data folder" in source_text
+    assert "Use local data folder" not in source_text
     assert "Generate code only" in source_text
-    assert "Let the Research Agent generate a reusable code skeleton" in source_text
     assert "Let the Research Agent prepare extraction settings" not in source_text
-    assert "try first" in source_text
     assert "_eu_entry_lang_toggle" in source_text
-    assert "Choose how data enters the workspace" in source_text
+    assert "_eu_entry_copilot_start" in source_text
+    assert "_eu_entry_copilot_starter_" in source_text
+    assert "_eu_entry_cards_copilot" in source_text
+    assert "_eu_entry_cards_classic" in source_text
+    assert "_eu_entry_footer_classic" in source_text
+    assert "_eu_entry_classic_visualization" in source_text
+    assert "_eu_entry_classic_agent" in source_text
+    assert "_eu_entry_how_it_works" in source_text
+    assert "_eu_entry_floating_copilot_button" in source_text
+    assert "Choose how data enters the workspace" not in source_text
     assert "EASYICU — ENTRY · MODE CHOICE" not in source_text
-    assert "eu-entry-mode-card demo" in source_text
-    assert "eu-entry-mode-card real" in source_text
-    assert "eu_entry_modes_grid" in source_text
-    assert "eu_entry_demo_mode_card" in source_text
-    assert "eu_entry_real_mode_card" in source_text
-    assert "eu_entry_code_row" in source_text
+    assert "eu-entry-mode-card demo" not in source_text
+    assert "eu-entry-mode-card real" not in source_text
+    assert "eu_entry_parallel_home" not in source_text
+    assert "eu_entry_copilot_card" not in source_text
+    assert "eu_entry_classic_card" not in source_text
+    assert "eu_entry_two_way_home" in source_text
+    assert "eu_entry_copilot_split_card" in source_text
+    assert "eu_entry_classic_split_card" in source_text
+    assert "eu_entry_col_prompt" in source_text
+    assert "eu_entry_col_chips" in source_text
+    assert "eu_entry_chat_home" in source_text
+    assert "eu_entry_prompt_card" in source_text
+    assert "eu_entry_cards_home" in source_text
+    assert "eu_entry_cards_grid" in source_text
+    assert "eu_entry_cards_copilot_card" in source_text
+    assert "eu_entry_cards_classic_card" in source_text
+    assert "eu_entry_home_footer" in source_text
+    assert "eu-entry-footer-dot" in source_text
     assert "中 / EN" not in source_text
     assert "Concept catalog" not in source_text
     assert "Sample cohorts" not in source_text
-    assert "eu-entry-next" in source_text
-    assert "eu-entry-rail" in source_text
-    assert "eu-entry-step" in source_text
-    assert "Data gate" in source_text
-    assert "Cohort review" in source_text
-    assert "Quality checks" in source_text
-    assert "Export & handoff" in source_text
-    assert ".eu-entry-rail" in css_text
-    assert "st-key-eu_entry_modes_grid" in css_text
-    assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in css_text
+    assert "eu-entry-next" not in source_text
+    assert "eu-entry-rail" not in source_text
+    assert "_route_to_copilot_entry" in inspect.getsource(pages_redesign)
+    assert "st-key-eu_entry_two_way_home" in css_text
+    assert "st-key-eu_entry_copilot_split_card" in css_text
+    assert "st-key-eu_entry_classic_split_card" in css_text
+    assert "st-key-eu_entry_col_prompt" in css_text
+    assert "st-key-eu_entry_col_chips" in css_text
+    assert "st-key-eu_entry_chat_home" in css_text
+    assert "st-key-eu_entry_prompt_card" in css_text
+    assert "st-key-eu_entry_cards_home" in css_text
+    assert "st-key-eu_entry_cards_data_toggle" in css_text
+    assert "st-key-eu_entry_cards_copilot_card" in css_text
+    assert "st-key-eu_entry_cards_classic_card" in css_text
+    assert "st-key-eu_entry_home_footer" in css_text
+    assert "st-key-eu_entry_floating_copilot" in css_text
     assert "max-width: 1100px" in css_text
+    assert "max-width: 760px" in css_text
+    assert "min-height: 408px" in css_text
+    assert '> [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]' in css_text
+    assert 'min-height: 100% !important' in css_text
+    assert '[data-testid="stElementContainer"]:has(.eu-entry-classic-dataline)' in css_text
+    assert "margin-top: auto" in css_text
+    assert '.stApp [class*="st-key-eu_entry_two_way_home"] > [data-testid="stHorizontalBlock"]' in css_text
+    assert '.stApp [class*="st-key-eu_entry_two_way_home"] [data-testid="stHorizontalBlock"],' not in css_text
+    assert "min-height: 0 !important" in css_text
+    assert "overflow: visible !important" in css_text
+    assert "height=132" in inspect.getsource(pages_redesign.render_entry_redesign_page)
+    assert "width: 100vw !important" in css_text
+    assert "margin-left: calc(50% - 50vw) !important" in css_text
+    assert "background: var(--rail) !important" in css_text
+    assert "padding: clamp(40px, 5.8vh, 96px) 0 0" in css_text
+    assert "min-height: 132px" in css_text
+    assert "resize: none !important" in css_text
+    assert ".eu-entry-footer-dot" in css_text
     assert "st-key-eu_entry_topbar_shell" in css_text
+    assert "st-key-eu_entry_lang_segment" in css_text
     assert "st-key-_eu_entry_lang_toggle" in css_text
-    assert "st-key-eu_entry_code_row" in css_text
-    assert "margin-top: 40px" in css_text
-    assert ".eu-entry-step::before" in css_text
+    assert "st-key-_eu_entry_polish_plan" in css_text
     assert "st-key-_eu_entry_demo" in css_text
-    assert "st-key-_eu_entry_real" in css_text
+    assert "st-key-_eu_entry_classic_visualization" in css_text
+    assert "st-key-_eu_entry_classic_agent" in css_text
     assert "st-key-_eu_entry_nodata" in css_text
+    assert "st-key-_eu_settings_home_layout_" in css_text
     base_kicker_css = css_text[
         css_text.index(".stApp .eu-start-kicker {"):
         css_text.index(".stApp .eu-start-card.primary .eu-start-kicker")
@@ -1996,6 +2173,20 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "st-key-eu_tutorial_resources_card" in css_text
     assert "font-size: 13px" in css_text
     assert "margin-top: -49px" not in css_text
+
+
+def test_entry_home_layout_defaults_and_normalizes_invalid_values() -> None:
+    state: dict[str, object] = {}
+
+    assert pages_redesign._entry_home_layout(state) == "prompt"
+    assert state["_eu_entry_home_layout"] == "prompt"
+
+    state["_eu_entry_home_layout"] = "cards"
+    assert pages_redesign._entry_home_layout(state) == "cards"
+
+    state["_eu_entry_home_layout"] = "unknown"
+    assert pages_redesign._entry_home_layout(state) == "prompt"
+    assert state["_eu_entry_home_layout"] == "prompt"
 
 
 def test_get_started_page_matches_latest_print_reference_structure() -> None:
@@ -2084,8 +2275,10 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
     assert "Lightweight review data is ready immediately" in page_source
     assert "review concept set" in page_source
     assert "Demo set" in cohort_source
-    assert "if _active == 'tutorial':" in app_source
+    assert "if _active == 'assistant':" in app_source
+    assert "elif _active == 'tutorial':" in app_source
     assert "'tutorial':       ('Run'" not in app_source
+    assert "'assistant': ('Open Agent'" not in app_source
     assert 'key="_eu_topbar_history"' not in app_source
     assert 'key="_eu_topbar_agent"' not in app_source
 
@@ -2355,7 +2548,7 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
     assert (
         ".stApp .eu-entry-brand-sub,\n"
         ".stApp .eu-entry-version {\n"
-        "  font-size: 12px;"
+        "  font-size: 11px;"
     ) in css_text
     entry_next_head_css = css_text[
         css_text.index(".stApp .eu-entry-next-head span {"):
@@ -2553,10 +2746,11 @@ def test_get_started_buttons_route_to_real_destinations() -> None:
     assert 'state["_inline_ai_panel_open"] = False' in page_source
     render_source = inspect.getsource(pages_redesign.render_tutorial_redesign_page)
     assert 'st.session_state["_main_nav_widget"] = target' not in render_source
-    assert "_EXTRA_PAGES = {'extract', 'assistant', 'states', 'settings'}" in app_source
-    assert 'mobile_page_keys = ["extract"] + page_keys + ["assistant", "states", "settings"]' in app_source
+    assert "_EXTRA_PAGES = {'extract', 'tutorial', 'states', 'settings'}" in app_source
+    assert 'mobile_page_keys = ["extract", "quick_viz", "cohort", "cross_db", "research_agent", "assistant"]' in app_source
+    assert "_visible_active = _current_active if _current_active in mobile_page_keys else mobile_page_keys[0]" in app_source
     assert 'page_labels["extract"] = "Data Extraction" if lang == "en" else "数据提取"' in app_source
-    assert 'render_ai_assistant_page(lang)' in app_source
+    assert 'render_ai_assistant_page(lang, app_context=globals())' in app_source
     assert 'render_workspace_states_reference_page(lang)' in app_source
     assert 'render_settings_redesign_page(lang)' in app_source
     assert "'section.stMain'" in app_source
@@ -2688,7 +2882,7 @@ def test_get_started_buttons_route_to_real_destinations() -> None:
     assert extract_state["_scroll_to_top"] is True
 
 
-def test_workspace_states_page_is_operational_overview_not_reference_catalog() -> None:
+def test_workspace_states_page_keeps_overview_and_adds_reference_catalog() -> None:
     page_source = Path(pages_redesign.__file__).read_text(encoding="utf-8")
     css_text = shell_styles._load_shell_overrides_css()
 
@@ -2701,17 +2895,22 @@ def test_workspace_states_page_is_operational_overview_not_reference_catalog() -
     assert "This page is a control-room overview" in render_source
     assert "key=\"eu_workspace_status_actions\"" in render_source
     assert "_workspace_status_overview_html(state, lang)" in render_source
-    assert "_workspace_state_preview_html(current_context, current_mode, current_state, lang)" not in render_source
-    assert "key=\"eu_states_controls\"" not in render_source
-    assert "Status primitives" not in render_source
-    assert "Reusable building blocks" not in render_source
-    assert "eu-state-primitive-grid" not in render_source
+    assert "Design system · states library" in render_source
+    assert "key=\"eu_states_controls\"" in render_source
+    assert "_workspace_state_preview_html(current_context, current_mode, current_state, lang)" in render_source
+    assert "st.download_button(" in render_source
+    assert "_workspace_states_bundle_payload(" in render_source
+    assert 'key="_eu_states_export_bundle"' in render_source
+    assert "_workspace_state_primitives_html(lang)" in render_source
+    assert render_source.index("_workspace_status_overview_html(state, lang)") < render_source.index("key=\"eu_states_controls\"")
     assert ".stApp .eu-workspace-status-shell" in css_text
     assert ".stApp .eu-workspace-session-strip" in css_text
     assert ".stApp .eu-workspace-status-grid" in css_text
     assert ".stApp .eu-workspace-status-tile.accent" in css_text
     assert ".stApp .eu-workspace-flow-step.active" in css_text
+    assert ".stApp .eu-state-primitive-grid" in css_text
     assert '.stApp [class*="st-key-eu_workspace_status_actions"]' in css_text
+    assert '.stApp [class*="st-key-eu_states_controls"]' in css_text
 
 
 def test_workspace_status_overview_summarizes_current_session_without_fake_loading() -> None:
@@ -2754,6 +2953,31 @@ def test_workspace_status_overview_summarizes_current_session_without_fake_loadi
     assert "Reusable building blocks" not in html
 
 
+def test_workspace_state_primitives_match_reference_catalog() -> None:
+    html = pages_redesign._workspace_state_primitives_html("en")
+
+    assert "Status primitives" in html
+    assert "Reusable building blocks" in html
+    assert "eu-state-primitive-grid" in html
+    assert "Spinner · inline" in html
+    assert "Indeterminate bar" in html
+    assert "Skeleton rows" in html
+    assert "Status pills" in html
+
+
+def test_workspace_states_mobile_layout_stacks_status_tiles() -> None:
+    css_text = shell_styles._load_shell_overrides_css()
+
+    mobile_css = css_text[css_text.index("@media (max-width: 780px)"):]
+    assert ".stApp .eu-workspace-session-strip" in mobile_css
+    assert ".stApp .eu-workspace-status-grid," in mobile_css
+    assert ".stApp .eu-workspace-flow," in mobile_css
+    assert ".stApp .eu-workspace-handoff" in mobile_css
+    assert "grid-template-columns: 1fr;" in mobile_css
+    assert ".stApp .eu-workspace-flow-step:first-child" in mobile_css
+    assert ".stApp .eu-workspace-handoff > div:last-child" in mobile_css
+
+
 def test_workspace_state_preview_copy_tracks_selected_context() -> None:
     html = pages_redesign._workspace_state_preview_html("agent", "real", "error", "en")
 
@@ -2762,6 +2986,57 @@ def test_workspace_state_preview_copy_tracks_selected_context() -> None:
     assert "Run failed at analysis step" in html
     assert "LinAlgError: singular matrix" in html
     assert "Patient Review" not in html
+
+
+def test_workspace_states_export_bundle_omits_local_paths_and_patient_rows() -> None:
+    payload = json.loads(
+        pages_redesign._workspace_states_bundle_payload(
+            {
+                "entry_mode": "real",
+                "use_mock_data": False,
+                "database": "miiv",
+                "step1_confirmed": True,
+                "step2_confirmed": True,
+                "step3_confirmed": True,
+                "export_completed": True,
+                "selected_concepts": ["hr", "map"],
+                "loaded_concepts": {
+                    "hr": {"raw": ["patient_row_secret_hr"]},
+                    "map": {"raw": ["patient_row_secret_map"]},
+                },
+                "patient_ids": [1001, 1002],
+                "export_path": "/tmp/private/easyicu_exports/run_abc",
+                "research_agent_question": "Does MAP predict LOS?",
+                "research_agent_last_run_id": "run_abc",
+            },
+            context="agent",
+            mode="real",
+            state_key="success",
+            lang="en",
+        ).decode("utf-8")
+    )
+    serialized = json.dumps(payload)
+
+    assert payload["source"] == "easyicu_workspace_states_bundle"
+    assert payload["local_paths_included"] is False
+    assert payload["patient_rows_included"] is False
+    assert payload["patient_ids_included"] is False
+    assert payload["reference_preview"]["context"] == "agent"
+    assert payload["reference_preview"]["state"] == "success"
+    assert payload["current_session"]["data_mode"] == "real"
+    assert payload["current_session"]["database_label"] == "MIMIC-IV"
+    assert payload["current_session"]["extraction_completed_steps"] == 4
+    assert payload["current_session"]["selected_concepts"] == ["hr", "map"]
+    assert payload["current_session"]["loaded_concept_count"] == 2
+    assert payload["current_session"]["patient_count"] == 2
+    assert payload["current_session"]["export_folder_name"] == "run_abc"
+    assert payload["current_session"]["research_agent"]["question_present"] is True
+    assert payload["current_session"]["research_agent"]["last_run_id"] == "run_abc"
+    assert "/tmp/private" not in serialized
+    assert "1001" not in serialized
+    assert "1002" not in serialized
+    assert "patient_row_secret_hr" not in serialized
+    assert "patient_row_secret_map" not in serialized
 
 
 def test_workspace_state_primary_action_routes_selected_context() -> None:
@@ -2807,6 +3082,9 @@ def test_demo_entry_routes_to_data_extraction_before_visualization(tmp_path, mon
     at = streamlit_testing.AppTest.from_file(app.__file__)
     at.session_state["entry_lang_select"] = "EN"
     at.session_state["language"] = "en"
+    # New entry design: the Data Extraction CTA follows the demo/real data-mode
+    # toggle (default real). Select demo before clicking the extraction button.
+    at.session_state["_eu_entry_copilot_data_mode"] = "demo"
     at.run(timeout=60)
     at.button(key="_eu_entry_demo").click().run(timeout=60)
     assert at.session_state["_active_main_page"] == "extract"
@@ -2823,6 +3101,310 @@ def test_demo_entry_routes_to_data_extraction_before_visualization(tmp_path, mon
     warning_text = " ".join(getattr(warning, "value", "") for warning in at.warning)
     assert "Dashboard rendering failed" not in warning_text
     assert "time_candidates" not in warning_text
+
+
+def test_copilot_entry_starter_routes_to_chat_workspace(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.run(timeout=60)
+
+    page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "What would you like to study?" in page_text
+    assert "Research Copilot" in page_text
+    assert "Extract. Review. Analyze. Draft." not in page_text
+    assert "real-data first" in page_text
+    assert at.text_area(key="_eu_entry_copilot_question") is not None
+    assert at.button(key="_eu_entry_copilot_start") is not None
+    assert at.button(key="_eu_entry_copilot_starter_predict") is not None
+    button_keys = {button.key for button in at.button}
+    assert "_eu_entry_copilot_demo_mode" not in button_keys
+    assert "_eu_entry_copilot_real_mode" not in button_keys
+    assert at.button(key="_eu_entry_demo") is not None
+    assert at.button(key="_eu_entry_nodata") is not None
+
+    at.button(key="_eu_entry_copilot_starter_predict").click().run(timeout=60)
+
+    assert at.session_state["_active_main_page"] == "assistant"
+    assert at.session_state["entry_mode"] == "real"
+    assert at.session_state["use_mock_data"] is False
+    assert at.session_state["llm_enabled"] is True
+    assert at.session_state["_llm_toggle"] is True
+    assert at.session_state["_copilot_entry_branch_hint"] == "predict"
+    assert "_ai_pending_question" not in at.session_state
+    study = at.session_state["_copilot_guided_study"]
+    assert study["branch"] == "predict"
+    assert study["step"] == "question"
+    assert study["question"] == ""
+    page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "Do first 24h bedside features predict a prespecified ICU outcome" not in page_text
+
+
+def test_entry_copilot_home_layout_renders_chat_first_cover(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.session_state["_eu_entry_home_layout"] = "copilot"
+    at.run(timeout=60)
+
+    page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "What would you like to study?" in page_text
+    assert "Research Copilot walks you through question, data, cohort, modules" in page_text
+    assert "Two equal ways in" not in page_text
+    assert "real-data first" in page_text
+    assert at.button(key="_eu_entry_footer_classic") is not None
+    assert at.button(key="_eu_entry_copilot_starter_quality") is not None
+    button_keys = {button.key for button in at.button}
+    assert "_eu_entry_copilot_demo_mode" not in button_keys
+    assert "_eu_entry_copilot_real_mode" not in button_keys
+
+    at.button(key="_eu_entry_copilot_starter_quality").click().run(timeout=60)
+
+    assert at.session_state["_active_main_page"] == "assistant"
+    assert at.session_state["_copilot_entry_branch_hint"] == "quality"
+    assert at.session_state["entry_mode"] == "real"
+    assert at.session_state["use_mock_data"] is False
+
+
+def test_entry_cards_home_layout_routes_both_way_cards(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.session_state["_eu_entry_home_layout"] = "cards"
+    at.run(timeout=60)
+
+    page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "How would you like to work?" in page_text
+    assert "Pick a way in. Your data choice applies to either." in page_text
+    assert at.button(key="_eu_entry_cards_copilot") is not None
+    assert at.button(key="_eu_entry_cards_classic") is not None
+
+    at.button(key="_eu_entry_cards_real_data").click().run(timeout=60)
+    at.button(key="_eu_entry_cards_classic").click().run(timeout=60)
+
+    assert at.session_state["_active_main_page"] == "extract"
+    assert at.session_state["entry_mode"] == "real"
+    assert at.session_state["use_mock_data"] is False
+    assert at.session_state["database"] == "miiv"
+
+
+def test_entry_resume_open_helper_preserves_resume_payload() -> None:
+    state: dict[str, object] = {
+        "_eu_last_study_resume": {
+            "branch": "predict",
+            "data_mode": "demo",
+            "patient_n": 30,
+            "modules": ["Demographics", "Vital signs", "Labs"],
+            "selected_concepts": ["hr", "map", "lact", "sofa2", "death"],
+            "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+            "step": "draft",
+        }
+    }
+
+    pages_redesign._apply_entry_resume_open(state, "demo")
+
+    assert state["_active_main_page"] == "quick_viz"
+    assert state["mock_params"]["n_patients"] == 30
+    assert state["_eu_demo_widget_params_pending"] == {"n_patients": 30, "hours": 24}
+    assert state["_preview_n"] == 30
+    assert state["selected_concepts"] == ["hr", "map", "lact", "sofa2", "death"]
+    assert state["_copilot_guided_study"]["branch"] == "predict"
+    assert state["_copilot_guided_study"]["patient_n"] == 30
+
+
+def test_entry_resume_banner_opens_last_guided_study_workspace(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.session_state["_eu_last_study_resume"] = {
+        "branch": "predict",
+        "data_mode": "demo",
+        "patient_n": 10,
+        "modules": ["Demographics", "Vital signs", "Labs"],
+        "selected_concepts": ["hr", "map", "lact", "sofa2", "death"],
+        "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+        "step": "draft",
+        "updated_at": "2026-06-04T00:00:00+00:00",
+    }
+    at.run(timeout=60)
+
+    page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "Resume your last study" in page_text
+    assert "Sepsis mortality prediction" in page_text
+    assert "10 stays" in page_text
+    assert "3 modules" in page_text
+    assert at.button(key="_eu_entry_resume_open") is not None
+    assert at.button(key="_eu_entry_resume_dismiss") is not None
+
+    at.button(key="_eu_entry_resume_open").click().run(timeout=60)
+
+    assert at.session_state["_active_main_page"] == "quick_viz"
+    assert at.session_state["quick_viz_active_panel"] in {"data_tables", "Data Tables"}
+    assert at.session_state["entry_mode"] == "demo"
+    assert at.session_state["use_mock_data"] is True
+    assert at.session_state["database"] == "mock"
+    assert at.session_state["mock_params"]["n_patients"] == 10
+    assert at.session_state["_preview_n"] == 10
+    assert {"hr", "map", "lact", "sofa2", "death"} <= set(at.session_state["selected_concepts"])
+    assert at.session_state["_copilot_guided_study"]["branch"] == "predict"
+    assert at.session_state["_copilot_guided_study"]["patient_n"] == 10
+
+
+def test_entry_resume_banner_can_be_dismissed(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.session_state["_eu_last_study_resume"] = {
+        "branch": "quality",
+        "data_mode": "demo",
+        "patient_n": 12,
+        "modules": ["Labs"],
+        "updated_at": "2026-06-04T00:00:00+00:00",
+    }
+    at.session_state["easyicu_study"] = dict(at.session_state["_eu_last_study_resume"])
+    at.run(timeout=60)
+
+    assert "Resume your last study" in " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+
+    at.button(key="_eu_entry_resume_dismiss").click().run(timeout=60)
+
+    assert "_eu_last_study_resume" not in at.session_state
+    assert "easyicu_study" not in at.session_state
+    page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "Resume your last study" not in page_text
+
+
+def test_entry_how_it_works_opens_get_started_shell(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    # New entry design: "How it works" routes through the demo/real data-mode
+    # toggle (default real). Select demo to reach the demo tutorial shell.
+    at.session_state["_eu_entry_copilot_data_mode"] = "demo"
+    at.run(timeout=60)
+
+    assert at.button(key="_eu_entry_how_it_works") is not None
+
+    at.button(key="_eu_entry_how_it_works").click().run(timeout=60)
+
+    assert at.session_state["_active_main_page"] == "tutorial"
+    assert at.session_state["entry_mode"] == "demo"
+    assert at.session_state["use_mock_data"] is True
+    assert at.session_state["database"] == "mock"
+    page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "A quiet, reviewable path from data to draft" in page_text
+    assert at.button(key="_eu_getstarted_start_demo") is not None
+    assert at.button(key="_eu_getstarted_browse_states") is not None
+
+
+def test_copilot_entry_helper_can_start_with_real_data() -> None:
+    state: dict[str, object] = {
+        "database": "mock",
+        "loaded_concepts": {"stale": object()},
+        "patient_ids": [1, 2],
+        "_copilot_guided_study": {"question": "stale sepsis question", "branch": "predict"},
+        "_copilot_last_question": "stale sepsis question",
+        "llm_messages": [{"role": "assistant", "content": "stale"}],
+        "_ai_bg_responding": True,
+        "_ai_bg_response_ready": True,
+        "_ai_bg_unread_count": 2,
+    }
+
+    pages_redesign._route_to_copilot_entry(
+        state,
+        data_mode="real",
+        question="Audit data quality first",
+        branch_hint="quality",
+    )
+
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["database"] == "miiv"
+    assert state["_active_main_page"] == "assistant"
+    assert state["llm_enabled"] is True
+    assert state["_llm_toggle"] is True
+    assert state["_ai_pending_question"] == "Audit data quality first"
+    assert state["_copilot_entry_branch_hint"] == "quality"
+    assert "_copilot_guided_study" not in state
+    assert "_copilot_last_question" not in state
+    assert state["llm_messages"] == []
+    assert state["_ai_bg_responding"] is False
+    assert state["_ai_bg_response_ready"] is False
+    assert state["_ai_bg_unread_count"] == 0
+
+
+def test_copilot_entry_branch_hint_does_not_seed_default_question() -> None:
+    state: dict[str, object] = {
+        "database": "mock",
+        "_copilot_guided_study": {"question": "stale sepsis question", "branch": "predict"},
+        "_copilot_last_question": "stale sepsis question",
+        "llm_messages": [{"role": "assistant", "content": "stale"}],
+    }
+
+    pages_redesign._route_to_copilot_entry(
+        state,
+        data_mode="real",
+        branch_hint="predict",
+    )
+
+    assert state["_active_main_page"] == "assistant"
+    assert "_ai_pending_question" not in state
+    study = llm_chat._ensure_copilot_study_state(state)
+    assert study["branch"] == "predict"
+    assert study["step"] == "question"
+    assert study["question"] == ""
+    assert llm_chat._copilot_stage_status(study, "question") == "active"
+
+
+def test_tutorial_entry_helper_preserves_real_data_choice() -> None:
+    state: dict[str, object] = {
+        "database": "mock",
+        "path_validated": True,
+        "last_validated_path": "/tmp/mock",
+        "_floating_ai_open": True,
+        "_ai_pending_question": "stale",
+    }
+
+    pages_redesign._route_to_tutorial_entry(state, "real")
+
+    assert state["_active_main_page"] == "tutorial"
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["database"] == "miiv"
+    assert state["path_validated"] is False
+    assert "last_validated_path" not in state
+    assert state["_floating_ai_open"] is False
+    assert "_ai_pending_question" not in state
 
 
 def test_entry_no_data_cta_routes_to_real_agent_extraction_setup(tmp_path, monkeypatch) -> None:
@@ -2872,6 +3454,9 @@ def test_topbar_render_loads_quick_preview_from_demo_mode(tmp_path, monkeypatch)
     at = streamlit_testing.AppTest.from_file(app.__file__)
     at.session_state["entry_lang_select"] = "EN"
     at.session_state["language"] = "en"
+    # New entry design: the Data Extraction CTA follows the demo/real data-mode
+    # toggle (default real). Select demo to load the lightweight demo preview.
+    at.session_state["_eu_entry_copilot_data_mode"] = "demo"
     at.run(timeout=60)
     at.button(key="_eu_entry_demo").click().run(timeout=60)
     at.session_state["_active_main_page"] = "quick_viz"
@@ -2907,8 +3492,10 @@ def test_real_data_mode_requires_data_path_before_validation(tmp_path, monkeypat
     at.session_state["entry_lang_select"] = "EN"
     at.session_state["language"] = "en"
     at.run(timeout=60)
-    at.button(key="_eu_entry_real").click().run(timeout=60)
-    at.session_state["_active_main_page"] = "extract"
+    at.session_state["entry_mode"] = "real"
+    at.session_state["use_mock_data"] = False
+    at.session_state["database"] = "miiv"
+    at.button(key="_eu_entry_demo").click().run(timeout=60)
     at.run(timeout=60)
     at.button(key="validate_path").click().run(timeout=60)
 
@@ -2930,7 +3517,7 @@ def test_validate_data_path_is_accent_secondary_action() -> None:
     ]
 
     assert 'key="validate_path"' in validate_source
-    assert 'icon=":material/search:"' in validate_source
+    # Redesign dropped the inline search icon; it stays a plain accent secondary.
     assert 'type="primary"' not in validate_source
     assert "🔍 Validate Data Path" not in validate_source
     assert "validate_spacer, validate_action = st.columns([5, 1.8], gap=\"small\")" in validate_source
@@ -3076,6 +3663,8 @@ def test_quick_viz_data_table_overlap_guards_are_in_shell_css() -> None:
     css = shell_styles._load_shell_overrides_css()
 
     assert ".dt-page-head" in css
+    assert ".dt-detail-gate" in css
+    assert "st-key-data_table_open_details" in css
     assert "st-key-dt_preview_controls" in css
     assert "st-key-dt_preview_mode" in css
     assert "st-key-dt_preview_summary" in css
@@ -3130,6 +3719,12 @@ def test_quick_viz_loader_data_source_uses_reference_pill_radios() -> None:
 def test_data_table_preview_controls_are_compact_toolbar() -> None:
     source = Path(data_table_page.__file__).read_text()
 
+    assert "def _render_data_table_detail_gate(" in source
+    assert "data_table_open_details" in source
+    assert "data_table_hide_details" in source
+    assert '"data_table_details_open"' in source
+    assert "return details_open" in source
+    assert source.index("_render_data_table_detail_gate(") < source.index('key="dt_preview_controls"')
     assert 'key="dt_preview_controls"' in source
     assert 'key="dt_preview_mode"' in source
     assert 'key="merge_max_rows"' in source
@@ -3616,6 +4211,7 @@ def test_apply_quick_viz_screenshot_defaults_focuses_figure_friendly_views() -> 
     assert state["missing_chart_sort_order"] == "desc"
     assert state["quality_concept"] == "crea"
     assert state["data_table_view_mode"] == "Merge All (Wide Table)"
+    assert state["data_table_details_open"] is True
 
 
 def test_resolve_viz_data_source_mode_keeps_session_state_valid_without_widget_index() -> None:
@@ -3732,6 +4328,22 @@ def test_clear_assistant_surfaces_removes_stale_inline_panel_state() -> None:
     assert "_ai_pending_question" not in state
 
 
+def test_clear_assistant_surfaces_can_preserve_global_dock() -> None:
+    state = {
+        "_inline_ai_panel_open": True,
+        "_floating_ai_open": True,
+        "_sidebar_ai_open": True,
+        "_ai_pending_question": "stale prompt",
+    }
+
+    app._clear_assistant_surfaces(state, clear_pending=True, clear_floating=False)
+
+    assert state["_inline_ai_panel_open"] is False
+    assert state["_floating_ai_open"] is True
+    assert state["_sidebar_ai_open"] is False
+    assert "_ai_pending_question" not in state
+
+
 def test_open_embedded_ai_assistant_targets_standalone_page() -> None:
     state: dict[str, object] = {"llm_enabled": False, "_floating_ai_open": True}
 
@@ -3764,6 +4376,8 @@ def test_ai_assistant_handoff_seeds_research_agent_question_without_overwriting(
     assert state["_active_main_page"] == "research_agent"
     assert state["_ra_view"] == "setup"
     assert state["_scroll_to_top"] is True
+    assert state["_eu_ra_question_handoff_setup"] is True
+    assert app._research_agent_handoff_setup_ready(state) is True
     assert state["research_agent_question"] == (
         "Does first-24h lactate improve sepsis mortality prediction?"
     )
@@ -3787,7 +4401,4272 @@ def test_ai_assistant_handoff_seeds_research_agent_question_without_overwriting(
 
     assert seeded_existing is False
     assert existing_state["research_agent_question"] == "Keep this manually edited Agent question."
+    assert existing_state["_eu_ra_question_handoff_setup"] is True
     assert "_research_agent_question_handoff_notice" not in existing_state
+
+
+def test_research_copilot_study_agent_workflow_opens_real_setup_from_demo(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "entry_mode": "demo",
+            "_active_main_page": "assistant",
+            "research_agent_preflight_confirmed": True,
+            "research_agent_preflight_signature": "old",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "draft",
+                "data_mode": "demo",
+                "patient_n": 10,
+                "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("study_agent")
+
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
+    assert state["_eu_ra_question_handoff_setup"] is True
+    assert app._research_agent_handoff_setup_ready(state) is True
+    assert state["research_agent_question"] == (
+        "Among Sepsis-3 patients, does lactate improve mortality prediction?"
+    )
+    assert state["_research_agent_question_handoff_notice"] is True
+    assert state["selected_concepts"]
+    assert state["_preview_n"] == 10
+    assert "research_agent_preflight_confirmed" not in state
+    assert "research_agent_preflight_signature" not in state
+
+
+def test_research_copilot_real_agent_handoff_uses_loaded_concepts(tmp_path: Path) -> None:
+    state: dict[str, object] = {
+        "language": "en",
+        "entry_mode": "real",
+        "use_mock_data": False,
+        "database": "miiv",
+        "id_col": "stay_id",
+        "patient_ids": [11, 12],
+        "last_export_dir": str(tmp_path / "easyicu_export"),
+        "loaded_concepts": {
+            "age": pd.DataFrame(
+                {
+                    "stay_id": [10, 11, 11, 12],
+                    "charttime": [1, 1, 2, 1],
+                    "age": [40, 61, 62, 73],
+                }
+            ),
+            "death": pd.DataFrame({"stay_id": [10, 11, 12], "death": [0, 0, 1]}),
+        },
+        "_copilot_guided_study": {
+            "branch": "predict",
+            "step": "analysis",
+            "data_mode": "real",
+            "patient_n": 800,
+            "question": "Use the loaded Sepsis-3 export to test mortality prediction.",
+            "selected_concepts": ["age", "death", "sofa2"],
+        },
+        "research_agent_preflight_confirmed": True,
+        "research_agent_preflight_signature": "stale",
+    }
+
+    seeded = llm_chat._prepare_research_agent_handoff_from_ai(state)
+
+    assert seeded is True
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["research_agent_question"] == (
+        "Use the loaded Sepsis-3 export to test mortality prediction."
+    )
+    assert state["research_agent_cohort_source"] == "Use cohort prepared elsewhere in this session"
+    cohort = state["research_agent_inbound_cohort"]
+    assert isinstance(cohort, pd.DataFrame)
+    assert list(cohort["stay_id"]) == [11, 12]
+    assert list(cohort["age"]) == [62, 73]
+    assert list(cohort["death"]) == [0, 1]
+    assert state["research_agent_inbound_cohort_label"] == (
+        "Research Copilot loaded export · 2 stays · 2 concepts"
+    )
+    assert state["research_agent_module_dir_text"] == str(tmp_path / "easyicu_export")
+    assert state["_eu_ra_force_setup_from_handoff"] is True
+    assert state["_eu_ra_module_pick_force_manual"] is True
+    assert state["_eu_ra_apply_export_file_selection"] is True
+    assert "research_agent_preflight_confirmed" not in state
+    assert "research_agent_preflight_signature" not in state
+    assert app._research_agent_handoff_setup_ready(state) is True
+
+
+def test_research_copilot_real_agent_handoff_uses_export_folder_without_stale_demo(
+    tmp_path: Path,
+) -> None:
+    stale_demo = pd.DataFrame({"stay_id": [1, 2, 3], "death": [0, 1, 0]})
+    export_dir = tmp_path / "easyicu_export"
+    state: dict[str, object] = {
+        "language": "en",
+        "entry_mode": "real",
+        "use_mock_data": False,
+        "database": "miiv",
+        "last_export_dir": str(export_dir),
+        "loaded_concepts": {},
+        "research_agent_inbound_cohort": stale_demo,
+        "research_agent_inbound_cohort_label": "Research Copilot demo cohort · 3 stays",
+        "research_agent_inbound_signature": "stale-demo",
+        "_eu_ra_force_setup_from_handoff": True,
+        "_copilot_guided_study": {
+            "branch": "predict",
+            "step": "extract",
+            "data_mode": "real",
+            "question": "Use the latest local export for an Agent analysis.",
+        },
+    }
+
+    llm_chat._prepare_research_agent_handoff_from_ai(state)
+
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
+    assert state["research_agent_cohort_source"] == "Pick an EasyICU module export folder"
+    assert state["research_agent_module_dir_text"] == str(export_dir)
+    assert state["_eu_ra_focus_module_folder"] is True
+    assert state["_eu_ra_module_pick_force_manual"] is True
+    assert state["_eu_ra_apply_export_file_selection"] is True
+    assert "research_agent_inbound_cohort" not in state
+    assert "research_agent_inbound_cohort_label" not in state
+    assert "research_agent_inbound_signature" not in state
+    assert "_eu_ra_force_setup_from_handoff" not in state
+
+
+def test_research_copilot_agent_idea_workflow_opens_idea_exploration(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "_floating_ai_open": True,
+            "_ai_pending_question": "Explore a review-derived ICU idea about sparse bedside predictors.",
+            "research_agent_preflight_confirmed": True,
+            "research_agent_preflight_signature": "old",
+            "research_agent_last_idea_result": object(),
+            "research_agent_last_idea_summary": {"stale": True},
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("agent_idea_exploration")
+
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
+    assert state["research_agent_workflow_mode"] == "idea_exploration"
+    assert "research_agent_workflow_mode_pick" not in state
+    assert state["research_agent_example_key"] == "idea_exploration"
+    assert state["research_agent_template_current"] == "idea_exploration"
+    assert state["research_agent_preflight_confirmed"] is False
+    assert "research_agent_preflight_signature" not in state
+    assert "research_agent_last_idea_result" not in state
+    assert "research_agent_last_idea_summary" not in state
+    assert state["research_agent_question"].startswith("Explore a review-derived ICU idea")
+    assert state["_eu_ra_question_handoff_setup"] is True
+    assert state["_research_agent_question_handoff_notice"] is True
+    assert "idea-mining dry-run" in state["_assistant_notice"]
+    assert state["_floating_ai_open"] is False
+    assert "_ai_pending_question" not in state
+
+
+def test_research_copilot_agent_idea_workflow_preserves_manual_question(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "research_agent",
+            "research_agent_question": "保留我手动写好的正式分析问题。",
+            "llm_messages": [
+                {"role": "user", "content": "请探索一个综述 idea"},
+            ],
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("agent_idea_exploration")
+
+    assert state["research_agent_question"] == "保留我手动写好的正式分析问题。"
+    assert state["research_agent_workflow_mode"] == "idea_exploration"
+    assert "research_agent_workflow_mode_pick" not in state
+    assert state["_eu_ra_question_handoff_setup"] is True
+    assert "_research_agent_question_handoff_notice" not in state
+
+
+def test_research_copilot_suggests_executable_workflow_actions() -> None:
+    actions = llm_chat._suggest_ui_actions(
+        "Load a demo workspace and then run a guided Research Agent study",
+        "",
+        "en",
+    )
+
+    assert {
+        (action["id"], action["kind"]) for action in actions
+    } >= {
+        ("workflow_demo_review", "workflow"),
+        ("agent_handoff", "agent_handoff"),
+    }
+
+
+def test_research_copilot_keeps_idea_recommendations_in_chat() -> None:
+    actions = llm_chat._suggest_ui_actions(
+        "Explore a review-derived ICU idea and stop at the preregistration registry gate.",
+        "",
+        "en",
+    )
+
+    assert {
+        (action["id"], action["kind"], action.get("workflow"))
+        for action in actions
+    } == set()
+
+    state = {"language": "zh", "_active_main_page": "assistant"}
+    reply = llm_chat._handle_copilot_guided_prompt(
+        "我想做脓毒症相关的研究，有什么推荐吗？",
+        "zh",
+        state,
+    )
+    assert reply is not None
+    content, guided_actions = reply
+    assert "留在 Copilot" in content
+    assert "早期恶化风险建模" in content
+    assert "选 1 / 选 2 / 选 3" in content
+    assert guided_actions == []
+    assert state["_active_main_page"] == "assistant"
+    assert state["_copilot_suppress_next_snapshot"] is True
+    context = state["_copilot_idea_context"]
+    assert context["topic"] == "sepsis"
+    assert len(context["candidates"]) == 3
+    assert "research_agent_workflow_mode" not in state
+
+
+def test_research_copilot_idea_selection_writes_study_without_navigation() -> None:
+    state: dict[str, object] = {"language": "zh", "_active_main_page": "assistant"}
+
+    initial = llm_chat._handle_copilot_guided_prompt(
+        "我想做脓毒症相关的研究，有什么推荐吗？",
+        "zh",
+        state,
+    )
+    assert initial is not None
+
+    selected = llm_chat._handle_copilot_guided_prompt("选第 2 个", "zh", state)
+
+    assert selected is not None
+    content, actions = selected
+    study = state["_copilot_guided_study"]
+    assert "第 2 个方向" in content
+    assert "我还没有替你选择数据源" in content
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt", "已有 prepared 路径"),
+        ("choice_data_module_export", "copilot_prompt", "已有模块导出"),
+        ("choice_data_raw_files", "copilot_prompt", "只有 ICU 原始文件"),
+    }
+    assert state["_active_main_page"] == "assistant"
+    assert study["step"] == "data"
+    assert study["data_mode"] == "real"
+    assert study["branch"] == "predict"
+    assert study["cohort_configured"] is False
+    assert study["concepts_configured"] is False
+    assert "selected_concepts" not in study
+    assert study["suggested_concepts"] == ["age", "map", "vaso_ind", "crea", "urine", "rrt", "death"]
+
+    confirmed = llm_chat._handle_copilot_guided_prompt("用这些变量", "zh", state)
+
+    assert confirmed is not None
+    confirm_content, confirm_actions = confirmed
+    study = state["_copilot_guided_study"]
+    assert "已在聊天中确认模块" in confirm_content
+    assert study["concepts_configured"] is True
+    assert study["selected_concepts"] == ["age", "map", "vaso_ind", "crea", "urine", "rrt", "death"]
+    assert any(action["id"] == "workflow_real_data_chat_setup" for action in confirm_actions)
+
+
+def test_research_copilot_does_not_auto_start_demo_from_chat() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "demo_mode_patients": 10,
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "Run the whole demo for me, then stop at the evidence gate.",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert study["branch"] == "predict"
+    assert study["data_mode"] == "real"
+    assert study["step"] == "data"
+    assert study["draft_signed"] is False
+    assert "does not start a demo cohort" in reply
+    assert ("choice_data_prepared_path", "copilot_prompt") in {
+        (action["id"], action["kind"]) for action in actions
+    }
+    assert ("choice_data_module_export", "copilot_prompt") in {
+        (action["id"], action["kind"]) for action in actions
+    }
+    assert ("choice_data_raw_files", "copilot_prompt") in {
+        (action["id"], action["kind"]) for action in actions
+    }
+
+
+def test_research_copilot_embeds_workflow_snapshot_in_chat_reply() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "llm_provider": "openrouter",
+            "llm_api_key": "sk-test-not-rendered",
+            "llm_base_url": "https://openrouter.ai/api/v1",
+            "llm_model": "z-ai/glm-4.5-air:free",
+            "llm_enabled": False,
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "Predict sepsis mortality with lactate and use 30 patients.",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    snapshot = llm_chat._copilot_workflow_snapshot(state, "en")
+    html = llm_chat._copilot_workflow_snapshot_html(snapshot, "en")
+    assert "This step" in html
+    assert "Feature modules · 2" in html
+    assert "Feature set is mapped" in html
+    assert "configured" not in html
+    assert "flow-steps" not in html
+    assert "flow-facts" not in html
+    assert "demo" not in html.lower()
+    assert "sk-test-not-rendered" not in html
+    assert "Study workspace" not in html
+    assert "Open Classic Flow" not in html
+
+
+def test_research_copilot_api_setup_intent_routes_to_settings(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "llm_provider": "openrouter",
+            "llm_api_key": "sk-test-not-rendered",
+            "llm_base_url": "https://openrouter.ai/api/v1",
+            "llm_model": "z-ai/glm-4.5-air:free",
+            "llm_enabled": False,
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "Connect OpenRouter API and let me pick a free model.",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    assert "OpenRouter" in reply
+    assert "patient rows" in reply.lower()
+    assert "sk-test-not-rendered" not in reply
+    assert actions == [
+        {
+            "id": "workflow_api_settings",
+            "kind": "workflow",
+            "label": "Open API settings",
+            "workflow": "api_settings",
+        }
+    ]
+
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+    llm_chat._apply_chat_workflow_action("api_settings")
+    assert state["_active_main_page"] == "settings"
+    assert state["_scroll_to_top"] is True
+    assert "api key" in state["_assistant_notice"].lower()
+    assert "repository" in state["_assistant_notice"].lower()
+
+
+def test_research_copilot_chat_configures_cohort_and_agent_handoff(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "entry_mode": "demo",
+            "database": "mock",
+            "_active_main_page": "assistant",
+            "research_agent_preflight_confirmed": True,
+            "research_agent_preflight_signature": "stale",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "Use 30 patients with Sepsis-3, first 24h lactate, SOFA, MAP, creatinine, vasopressor and in-hospital mortality.",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert study["patient_n"] == 30
+    assert study["step"] == "concepts"
+    assert study["window"] == "first 24h"
+    assert study["outcome"] == "In-hospital mortality"
+    assert "sepsis-3" in study["cohort_filters"]
+    assert {"lact", "sofa2", "map", "crea", "vaso_ind", "death"} <= set(study["selected_concepts"])
+    assert "Lab - Chemistry" in study["modules"]
+    assert "Vasopressors" in study["modules"]
+    assert "Agent setup" in {str(action.get("label")) for action in actions}
+    assert "Classic workspace" in {str(action.get("label")) for action in actions}
+    assert "ready to open" in reply
+
+    llm_chat._apply_chat_workflow_action("study_agent")
+
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
+    assert state["research_agent_template_current"] == "prediction"
+    assert state["research_agent_example_key"] == "prediction"
+    assert state["research_agent_target_outcome"] == "death"
+    assert state["selected_concepts"] == study["selected_concepts"]
+    assert state["research_agent_copilot_context"]["patient_n"] == 30
+    assert state["research_agent_copilot_context"]["cohort_filters"] == ["sepsis-3"]
+    assert state["research_agent_copilot_context"]["template_key"] == "prediction"
+    assert state["research_agent_copilot_context"]["data_mode"] == "real"
+    assert "research_agent_inbound_cohort" not in state
+    assert "research_agent_inbound_cohort_label" not in state
+    assert "_eu_ra_force_setup_from_handoff" not in state
+    assert state["_eu_ra_focus_no_data"] is True
+    assert "research_agent_preflight_confirmed" not in state
+    assert "research_agent_preflight_signature" not in state
+
+
+def test_research_copilot_chat_configures_described_stays() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "entry_mode": "demo",
+            "database": "mock",
+            "_active_main_page": "assistant",
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "Use 30 Sepsis-3 stays with lactate, SOFA, MAP, creatinine and vasopressor features.",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert study["patient_n"] == 30
+    assert study["step"] == "concepts"
+    assert study["cohort_configured"] is True
+    assert study["concepts_configured"] is True
+    assert "sepsis-3" in study["cohort_filters"]
+    assert {"lact", "sofa2", "map", "crea", "vaso_ind"} <= set(study["selected_concepts"])
+    assert "Configured" in reply
+    assert "30 stays" in reply
+    assert "lactate" in reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } >= {
+        ("workflow_study_extract", "workflow", "Classic workspace"),
+        ("agent_handoff", "agent_handoff", "Agent setup"),
+    }
+
+
+def test_research_copilot_real_path_help_explains_prepared_directory(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "demo",
+            "database": "mock",
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "真实数据要用哪个路径？这个路径是啥？",
+        "zh",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert study["data_mode"] == "real"
+    assert study["step"] == "data"
+    assert study["data_source_choice"] == "prepared_path"
+    assert study["data_source_status"] == "awaiting_path"
+    assert "prepared/converted data path" in reply
+    assert "原始下载包" in reply
+    assert "对话下方打开路径输入框" in reply
+    assert "Validate Data Path -> Convert & Setup" in reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt", "已有 prepared 路径"),
+        ("choice_data_module_export", "copilot_prompt", "已有模块导出"),
+        ("choice_data_raw_files", "copilot_prompt", "只有 ICU 原始文件"),
+    }
+
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+    llm_chat._apply_chat_workflow_action("real_data_chat_setup")
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["database"] == "miiv"
+    assert state["_active_main_page"] == "assistant"
+    assert "路径输入框" in state["llm_messages"][-1]["content"]
+    assert "路径输入框已在对话下方打开" in state["_assistant_notice"]
+    assert state["_copilot_data_source_choice"] == "prepared_path"
+
+    typed = llm_chat._handle_copilot_guided_prompt(
+        "set data path `/Users/haibo/data/prepared_miiv`",
+        "zh",
+        state,
+    )
+    assert typed is not None
+    assert state["data_path"] == "/Users/haibo/data/prepared_miiv"
+    assert state["sidebar_data_path_input__pending_value"] == "/Users/haibo/data/prepared_miiv"
+    assert state["path_validated"] is False
+    assert state["_active_main_page"] == "assistant"
+
+
+def test_research_copilot_connect_data_starter_opens_data_source_choices() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "demo",
+            "use_mock_data": True,
+            "database": "mock",
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "Walk me through the real data source step and explain the prepared data path before choosing anything else.",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert study["data_mode"] == "real"
+    assert study["step"] == "data"
+    assert study["question"] == ""
+    assert "Data source step opened" in reply
+    assert "endpoint" in reply
+    assert "Step 1 · Research question" not in reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt", "Prepared data path"),
+        ("choice_data_module_export", "copilot_prompt", "Module export folder"),
+        ("choice_data_raw_files", "copilot_prompt", "Raw ICU files"),
+    }
+
+
+def test_research_copilot_real_next_step_help_stays_case_neutral_in_chat() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+                "question": "已有研究目标",
+                "data_mode": "real",
+            },
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt("我要做什么", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt", "已有 prepared 路径"),
+        ("choice_data_module_export", "copilot_prompt", "已有模块导出"),
+        ("choice_data_raw_files", "copilot_prompt", "只有 ICU 原始文件"),
+    }
+    assert "继续留在 Copilot" in reply
+    assert "不会替你选择疾病" in reply
+    assert "prepared/converted" in reply
+    assert "脓毒症" not in reply
+    assert "Sepsis" not in reply
+    assert study["data_mode"] == "real"
+    assert study["step"] == "data"
+    assert study["cohort_filters"] == []
+    assert study["cohort_configured"] is False
+    assert study["concepts_configured"] is False
+    assert "selected_concepts" not in study
+    assert state["_active_main_page"] == "assistant"
+    assert state["_copilot_suppress_next_snapshot"] is True
+
+
+def test_research_copilot_usage_help_surfaces_current_step_choices_not_tutorial() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+                "question": "已有研究目标",
+                "data_mode": "real",
+            },
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt("你好 我要怎么使用", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert "引导式对话" in reply
+    assert "当前步骤：**数据源**" in reply
+    assert "页面 / 步骤" not in reply
+    assert "进入 Data Source 页面" not in reply
+    assert study["step"] == "data"
+    assert state["_active_main_page"] == "assistant"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt", "已有 prepared 路径"),
+        ("choice_data_module_export", "copilot_prompt", "已有模块导出"),
+        ("choice_data_raw_files", "copilot_prompt", "只有 ICU 原始文件"),
+    }
+    suggested = llm_chat._suggest_ui_actions("你好 我要怎么使用", reply, "zh")
+    assert "tutorial" not in {str(action.get("id")) for action in suggested}
+
+
+def test_research_copilot_what_can_i_do_stays_guided_not_classic_steps() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "demo",
+            "use_mock_data": True,
+            "database": "mock",
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt("我现在可以干什么", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert "几个大层面" in reply
+    assert "当前步骤" not in reply
+    assert "研究类型" not in reply
+    assert "切换到 Real Data" not in reply
+    assert "Data Path" not in reply
+    assert "Validate Data Path" not in reply
+    assert "Cohort Selection" not in reply
+    assert "Feature Selection" not in reply
+    assert study["step"] == "question"
+    assert study["data_mode"] == "real"
+    assert state["_active_main_page"] == "assistant"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("capability_new_study", "copilot_prompt", "新建研究 / 工作目录"),
+        ("capability_describe_goal", "copilot_prompt", "描述研究目标"),
+        ("capability_explore_ideas", "copilot_prompt", "探索研究 idea"),
+        ("capability_connect_data", "copilot_prompt", "接入真实 ICU 数据"),
+        ("capability_full_flow", "copilot_prompt", "从完整流程开始"),
+    }
+    assert llm_chat._copilot_guided_choice_actions(study, "zh") == actions
+    suggested = llm_chat._suggest_ui_actions("我现在可以干什么", reply, "zh")
+    assert "tutorial" not in {str(action.get("id")) for action in suggested}
+
+
+def test_research_copilot_broad_capability_prompt_does_not_wait_for_model(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_copilot_allow_route_model": True,
+        }
+    )
+
+    def fail_route(*_args, **_kwargs):
+        raise AssertionError("broad capability overview should be instant and not call the route model")
+
+    monkeypatch.setattr(llm_chat, "_copilot_route_with_llm", fail_route)
+
+    result = llm_chat._handle_copilot_guided_prompt("我现在可以干什么", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert "几个大层面" in reply
+    assert "当前步骤" not in reply
+    assert study["step"] == "question"
+    assert study["data_mode"] == "real"
+    assert [str(action["label"]) for action in actions] == [
+        "新建研究 / 工作目录",
+        "描述研究目标",
+        "探索研究 idea",
+        "接入真实 ICU 数据",
+        "从完整流程开始",
+    ]
+    assert {str(action["kind"]) for action in actions} == {"copilot_prompt"}
+
+
+def test_research_copilot_model_controller_can_open_path_input(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_copilot_allow_route_model": True,
+        }
+    )
+
+    def fake_route(prompt, lang, state_arg, study):
+        assert "真实数据" in prompt
+        return {
+            "analysis_family": "unknown",
+            "analysis_label": "真实数据接入",
+            "study_frame": "",
+            "current_step": "data",
+            "assistant_text": "先在当前 Copilot 页面保存 prepared 数据路径。",
+            "next_question": "把本地 prepared/converted 文件夹路径填到下面的输入框。",
+            "input_request": {
+                "kind": "prepared_data_path",
+                "label": "Prepared data path",
+            },
+            "choices": [
+                {
+                    "id": "why_path",
+                    "label": "为什么要 prepared 路径？",
+                    "prompt": "为什么需要 prepared 数据路径？",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(llm_chat, "_copilot_route_with_llm", fake_route)
+
+    result = llm_chat._handle_copilot_guided_prompt("我想先接入真实数据", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert "prepared 数据路径" in reply
+    assert state["_copilot_data_source_choice"] == "prepared_path"
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert study["step"] == "data"
+    assert study["data_source_choice"] == "prepared_path"
+    assert study["data_source_status"] == "awaiting_path"
+    assert [str(action["label"]) for action in actions] == ["为什么要 prepared 路径？"]
+
+
+def test_research_copilot_first_pass_goal_bypasses_blocking_route(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_copilot_allow_route_model": True,
+        }
+    )
+
+    def fail_route(*_args, **_kwargs):
+        raise AssertionError("first-pass study goal should not block on route model")
+
+    monkeypatch.setattr(llm_chat, "_copilot_route_with_llm", fail_route)
+
+    result = llm_chat._handle_copilot_guided_prompt("我想做脓毒症患者AKI实时预警研究", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert "我已记录你的研究目标" in reply
+    assert "选择研究类型" not in reply
+    assert study["question"] == "我想做脓毒症患者AKI实时预警研究"
+    assert study["step"] == "data"
+    assert study["data_mode"] == "real"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt", "已有 prepared 路径"),
+        ("choice_data_module_export", "copilot_prompt", "已有模块导出"),
+        ("choice_data_raw_files", "copilot_prompt", "只有 ICU 原始文件"),
+    }
+
+
+def test_research_copilot_llm_route_narrows_sepsis_renal_warning_choices(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+                "question": "已有研究目标",
+                "data_mode": "real",
+            },
+        }
+    )
+
+    def fake_route(prompt, lang, state_arg, study):
+        assert "脓毒症" in prompt
+        assert lang == "zh"
+        return {
+            "analysis_family": "prediction",
+            "analysis_label": "肾损伤预警",
+            "study_frame": "脓毒症 ICU 患者中，早期信号能否预警后续 AKI/RRT？",
+            "current_step": "question",
+            "assistant_text": "我按模型 route 识别为肾损伤预警研究。",
+            "next_question": "先选择你要预警的肾脏 endpoint。",
+            "cohort": {"label": "脓毒症 ICU 患者", "filters": ["脓毒症"]},
+            "choices": [
+                {
+                    "id": "aki_onset",
+                    "label": "AKI 起病",
+                    "prompt": "我想把 endpoint 设为 AKI 起病。",
+                },
+                {
+                    "id": "kdigo23",
+                    "label": "KDIGO 2/3",
+                    "prompt": "我想把 endpoint 设为 KDIGO 2/3 AKI。",
+                },
+                {
+                    "id": "rrt_start",
+                    "label": "RRT 启动",
+                    "prompt": "我想把 endpoint 设为 RRT 启动。",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(llm_chat, "_copilot_route_with_llm", fake_route)
+    result = llm_chat._handle_copilot_guided_prompt(
+        "我想做一个脓毒症患者脓毒症后发生肾损伤的实时预警",
+        "zh",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert "模型 route" in reply
+    assert "肾脏 endpoint" in reply
+    assert "死亡" not in reply
+    assert "跨库" not in reply
+    assert "质量审计" not in reply
+    assert study["data_mode"] == "real"
+    assert study["step"] == "question"
+    assert study["analysis_family"] == "prediction"
+    assert study["analysis_label"] == "肾损伤预警"
+    assert study["question"] == "脓毒症 ICU 患者中，早期信号能否预警后续 AKI/RRT？"
+    assert study["cohort_hint"] == "脓毒症 ICU 患者"
+    assert study["route_cohort_filters"] == ["脓毒症"]
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("route_choice_aki_onset", "copilot_prompt", "AKI 起病"),
+        ("route_choice_kdigo23", "copilot_prompt", "KDIGO 2/3"),
+        ("route_choice_rrt_start", "copilot_prompt", "RRT 启动"),
+    }
+    assert llm_chat._copilot_guided_choice_actions(study, "zh") == actions
+
+
+def test_research_copilot_specific_llm_route_rejects_generic_research_type_choices(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+                "question": "已有研究目标",
+                "data_mode": "real",
+            },
+        }
+    )
+
+    def fake_route(prompt, lang, state_arg, study):
+        assert "脓毒症" in prompt
+        return {
+            "analysis_family": "prediction",
+            "analysis_label": "脓毒症实时预警",
+            "study_frame": "构建模型实时预测脓毒症患者后续临床事件。",
+            "current_step": "question",
+            "assistant_text": "请选择研究类型。",
+            "next_question": "请选择研究类型。",
+            "choices": [
+                {"id": "outcome_model", "label": "建模 ICU 结局", "prompt": "研究类型：结局预测"},
+                {"id": "treatment", "label": "治疗暴露研究", "prompt": "研究类型：治疗暴露"},
+                {"id": "crossdb", "label": "跨库比较", "prompt": "研究类型：跨库比较"},
+                {"id": "quality", "label": "数据质量审计", "prompt": "研究类型：数据质量审计"},
+            ],
+        }
+
+    monkeypatch.setattr(llm_chat, "_copilot_route_with_llm", fake_route)
+
+    result = llm_chat._handle_copilot_guided_prompt("我想要做脓毒症实时预警", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert "选择研究类型" not in reply
+    assert "预警的事件或 endpoint" in reply
+    assert study["analysis_label"] == "脓毒症实时预警"
+    assert study["question_substep"] == "endpoint"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_endpoint_hospital_mortality", "copilot_prompt", "院内死亡"),
+        ("choice_endpoint_icu_mortality", "copilot_prompt", "ICU 死亡"),
+        ("choice_endpoint_aki_rrt", "copilot_prompt", "AKI / RRT"),
+        ("choice_endpoint_custom", "copilot_prompt", "我自己输入 endpoint"),
+    }
+
+
+def test_research_copilot_specific_llm_route_rejects_single_generic_choice(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "_copilot_allow_route_model": True,
+            "llm_provider": "openrouter",
+            "llm_model": "openai/gpt-oss-120b:free",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+                "question": "已有研究目标",
+                "data_mode": "real",
+            },
+        }
+    )
+
+    class _Message:
+        content = json.dumps(
+            {
+                "analysis_family": "prediction",
+                "analysis_label": "脓毒症实时预警",
+                "study_frame": "构建脓毒症的实时预警模型",
+                "current_step": "question",
+                "assistant_text": "好的，我们将进行结局预测研究。请选择具体的研究类型。",
+                "next_question": "请选择研究类型",
+                "choices": [
+                    {
+                        "id": "outcome_model",
+                        "label": "建模 ICU 结局",
+                        "prompt": "研究类型：结局预测",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+    class _Choice:
+        message = _Message()
+
+    class _Response:
+        choices = [_Choice()]
+
+    class _Completions:
+        def create(self, **_kwargs):
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+        def with_options(self, **_kwargs):
+            return self
+
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+    monkeypatch.setattr(llm_chat, "_external_llm_ready", lambda _lang: True)
+    monkeypatch.setattr(llm_chat, "_get_client", lambda: _Client())
+
+    result = llm_chat._handle_copilot_guided_prompt("我想要做脓毒症实时预警", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    assert "研究类型" not in reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_endpoint_hospital_mortality", "copilot_prompt", "院内死亡"),
+        ("choice_endpoint_icu_mortality", "copilot_prompt", "ICU 死亡"),
+        ("choice_endpoint_aki_rrt", "copilot_prompt", "AKI / RRT"),
+        ("choice_endpoint_custom", "copilot_prompt", "我自己输入 endpoint"),
+    }
+
+
+def test_research_copilot_llm_route_uses_fast_no_retry_client(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "_copilot_allow_route_model": True,
+            "llm_provider": "openrouter",
+            "llm_model": "openai/gpt-oss-120b:free",
+        }
+    )
+    captured: dict[str, object] = {}
+
+    class _Message:
+        content = '{"analysis_family":"prediction","current_step":"question","choices":[]}'
+
+    class _Choice:
+        message = _Message()
+
+    class _Response:
+        choices = [_Choice()]
+
+    class _Completions:
+        def create(self, **kwargs):
+            captured["create_kwargs"] = kwargs
+            return _Response()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+        def with_options(self, **kwargs):
+            captured["with_options"] = kwargs
+            return self
+
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+    monkeypatch.setattr(llm_chat, "_external_llm_ready", lambda _lang: True)
+    monkeypatch.setattr(llm_chat, "_get_client", lambda: _Client())
+
+    route = llm_chat._copilot_route_with_llm("我想要做脓毒症实时预警", "zh", state, {})
+
+    assert route is not None
+    assert captured["with_options"] == {
+        "timeout": llm_chat.COPILOT_ROUTE_TIMEOUT_SECONDS,
+        "max_retries": 0,
+    }
+    create_kwargs = captured["create_kwargs"]
+    assert create_kwargs["max_tokens"] == llm_chat.COPILOT_ROUTE_MAX_TOKENS
+    assert create_kwargs["stream"] is False
+
+
+def test_research_copilot_llm_route_has_hard_wall_clock_timeout(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "_copilot_allow_route_model": True,
+            "llm_provider": "openrouter",
+            "llm_model": "openai/gpt-oss-120b:free",
+        }
+    )
+
+    class _Completions:
+        def create(self, **_kwargs):
+            time.sleep(0.2)
+            raise AssertionError("slow route should time out before returning")
+
+    class _Chat:
+        completions = _Completions()
+
+    class _Client:
+        chat = _Chat()
+
+        def with_options(self, **_kwargs):
+            return self
+
+    monkeypatch.setattr(llm_chat, "COPILOT_ROUTE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+    monkeypatch.setattr(llm_chat, "_external_llm_ready", lambda _lang: True)
+    monkeypatch.setattr(llm_chat, "_get_client", lambda: _Client())
+
+    start = time.monotonic()
+    route = llm_chat._copilot_route_with_llm("我想要做脓毒症实时预警", "zh", state, {})
+    elapsed = time.monotonic() - start
+
+    assert route is None
+    assert elapsed < 0.15
+
+
+def test_research_copilot_llm_route_timeout_falls_back_to_current_controls() -> None:
+    study = {
+        "branch": "predict",
+        "step": "question",
+        "question_substep": "endpoint",
+        "data_mode": "real",
+    }
+
+    reply, actions = llm_chat._copilot_llm_route_unavailable_reply(study, "zh")
+
+    assert "没有及时返回路线" in reply
+    assert "API 设置" not in reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_endpoint_hospital_mortality", "copilot_prompt", "院内死亡"),
+        ("choice_endpoint_icu_mortality", "copilot_prompt", "ICU 死亡"),
+        ("choice_endpoint_aki_rrt", "copilot_prompt", "AKI / RRT"),
+        ("choice_endpoint_custom", "copilot_prompt", "我自己输入 endpoint"),
+    }
+
+
+def test_research_copilot_llm_route_timeout_for_specific_goal_stays_interactive() -> None:
+    study = {
+        "data_mode": "real",
+        "step": "question",
+    }
+
+    reply, actions = llm_chat._copilot_llm_route_unavailable_reply(
+        study,
+        "zh",
+        prompt="我想要做脓毒症实时预警",
+    )
+
+    assert "交互预算" in reply
+    assert "泛化的研究类型菜单" in reply
+    assert "我想要做脓毒症实时预警" == study["question"]
+    assert "选择研究类型" not in reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("route_fallback_data_path", "copilot_prompt", "设置真实路径"),
+        ("route_fallback_cohort", "copilot_prompt", "选择队列"),
+        ("route_fallback_modules", "copilot_prompt", "选择特征模块"),
+    }
+    assert [
+        action["id"]
+        for action in llm_chat._copilot_guided_choice_actions(study, "zh")
+    ] == [
+        "route_fallback_data_path",
+        "route_fallback_cohort",
+        "route_fallback_modules",
+    ]
+
+
+def test_research_copilot_llm_route_preserves_clustering_goal(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+                "question": "已有研究目标",
+                "data_mode": "real",
+            },
+        }
+    )
+
+    def fake_route(prompt, lang, state_arg, study):
+        assert "聚类" in prompt
+        return {
+            "analysis_family": "clustering",
+            "analysis_label": "患者聚类",
+            "study_frame": "脓毒性 AKI 患者聚类分析",
+            "current_step": "data",
+            "assistant_text": "我按模型 route 识别为患者聚类。",
+            "next_question": "先确认数据来源，再选择用于聚类的特征空间。",
+            "cohort": {"label": "脓毒性 AKI 患者", "filters": ["用户描述的人群"]},
+            "suggested_concepts": ["age", "crea", "urine", "sofa2", "lact", "rrt"],
+            "choices": [
+                {
+                    "id": "prepared_path",
+                    "label": "已有 prepared 路径",
+                    "prompt": "我有 prepared 数据路径。",
+                },
+                {
+                    "id": "feature_space",
+                    "label": "选择聚类特征",
+                    "prompt": "下一步帮我选择聚类特征空间。",
+                },
+                {
+                    "id": "cohort_scope",
+                    "label": "先定义队列",
+                    "prompt": "先带我定义脓毒性 AKI 队列。",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(llm_chat, "_copilot_route_with_llm", fake_route)
+    result = llm_chat._handle_copilot_guided_prompt("我想做脓毒性aki的患者聚类分析", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert "患者聚类" in reply
+    assert "结局预测" not in reply
+    assert "first 24h" not in reply
+    assert "prespecified ICU outcome" not in reply
+    assert study["data_mode"] == "real"
+    assert study["step"] == "data"
+    assert study["analysis_family"] == "clustering"
+    assert study["analysis_label"] == "患者聚类"
+    assert study["question"] == "脓毒性 AKI 患者聚类分析"
+    assert study["suggested_concepts"] == ["age", "crea", "urine", "sofa2", "lact", "rrt"]
+    snapshot = llm_chat._copilot_workflow_snapshot(state, "zh")
+    assert snapshot["branch"] == "患者聚类"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("route_choice_prepared_path", "copilot_prompt", "已有 prepared 路径"),
+        ("route_choice_feature_space", "copilot_prompt", "选择聚类特征"),
+        ("route_choice_cohort_scope", "copilot_prompt", "先定义队列"),
+    }
+
+
+def test_research_copilot_step_by_step_starter_returns_question_type_choices() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "Start a guided ICU outcome study. Ask me to choose outcome, data source, cohort, and modules step by step.",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    assert "Step 1" in reply
+    assert state["_copilot_guided_study"]["step"] == "question"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_question_outcome_model", "copilot_prompt", "Model an ICU outcome"),
+        ("choice_question_treatment_exposure", "copilot_prompt", "Treatment exposure"),
+        ("choice_question_crossdb", "copilot_prompt", "Compare databases"),
+        ("choice_question_quality", "copilot_prompt", "Audit data quality"),
+        ("choice_question_custom", "copilot_prompt", "Type my question"),
+    }
+
+
+def test_research_copilot_outcome_type_then_endpoint_choices() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+            },
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt("question type: outcome prediction", "en", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert "ICU outcome model" in reply
+    assert study["question_kind"] == "outcome_model"
+    assert study["question_substep"] == "endpoint"
+    assert study["step"] == "question"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_endpoint_hospital_mortality", "copilot_prompt", "In-hospital mortality"),
+        ("choice_endpoint_icu_mortality", "copilot_prompt", "ICU mortality"),
+        ("choice_endpoint_aki_rrt", "copilot_prompt", "AKI / RRT"),
+        ("choice_endpoint_custom", "copilot_prompt", "Type my endpoint"),
+    }
+
+
+def test_research_copilot_treatment_exposure_path_asks_exposure_then_endpoint() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+            },
+        }
+    )
+
+    exposure_type = llm_chat._handle_copilot_guided_prompt("question type: treatment exposure", "en", state)
+    assert exposure_type is not None
+    _reply, exposure_actions = exposure_type
+    assert state["_copilot_guided_study"]["question_substep"] == "exposure"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in exposure_actions
+    } == {
+        ("choice_exposure_vasopressor", "copilot_prompt", "Vasopressors"),
+        ("choice_exposure_ventilation", "copilot_prompt", "Ventilation"),
+        ("choice_exposure_renal", "copilot_prompt", "RRT / renal support"),
+        ("choice_exposure_custom", "copilot_prompt", "Type exposure"),
+    }
+
+    endpoint_step = llm_chat._handle_copilot_guided_prompt("exposure: vasopressor support", "en", state)
+    assert endpoint_step is not None
+    reply, endpoint_actions = endpoint_step
+    study = state["_copilot_guided_study"]
+    assert "vasopressor support" in reply
+    assert study["exposure"] == "vasopressor support"
+    assert study["question_substep"] == "endpoint"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in endpoint_actions
+    } == {
+        ("choice_endpoint_hospital_mortality", "copilot_prompt", "In-hospital mortality"),
+        ("choice_endpoint_icu_mortality", "copilot_prompt", "ICU mortality"),
+        ("choice_endpoint_aki_rrt", "copilot_prompt", "AKI / RRT"),
+        ("choice_endpoint_custom", "copilot_prompt", "Type my endpoint"),
+    }
+
+    framed = llm_chat._handle_copilot_guided_prompt("endpoint: ICU mortality", "en", state)
+    assert framed is not None
+    framed_reply, data_actions = framed
+    assert state["_copilot_guided_study"]["step"] == "data"
+    assert "vasopressor support" in framed_reply
+    assert "associated with ICU mortality" in framed_reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in data_actions
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt", "Prepared data path"),
+        ("choice_data_module_export", "copilot_prompt", "Module export folder"),
+        ("choice_data_raw_files", "copilot_prompt", "Raw ICU files"),
+    }
+
+
+def test_research_copilot_crossdb_and_quality_question_types_diverge() -> None:
+    crossdb_state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+            },
+        }
+    )
+    quality_state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+            },
+        }
+    )
+
+    crossdb_start = llm_chat._handle_copilot_guided_prompt("question type: cross-database comparison", "en", crossdb_state)
+    assert crossdb_start is not None
+    _reply, crossdb_actions = crossdb_start
+    assert crossdb_state["_copilot_guided_study"]["branch"] == "crossdb"
+    assert crossdb_state["_copilot_guided_study"]["question_substep"] == "crossdb_signal"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in crossdb_actions
+    } == {
+        ("choice_crossdb_outcome", "copilot_prompt", "Outcome signal"),
+        ("choice_crossdb_treatment", "copilot_prompt", "Treatment pattern"),
+        ("choice_crossdb_availability", "copilot_prompt", "Concept availability"),
+        ("choice_crossdb_custom", "copilot_prompt", "Type signal"),
+    }
+
+    crossdb_signal = llm_chat._handle_copilot_guided_prompt("cross-database signal: treatment pattern", "en", crossdb_state)
+    assert crossdb_signal is not None
+    reply, data_actions = crossdb_signal
+    assert "treatment patterns" in reply
+    assert crossdb_state["_copilot_guided_study"]["step"] == "data"
+    assert crossdb_state["_copilot_guided_study"]["branch"] == "crossdb"
+    assert "question_substep" not in crossdb_state["_copilot_guided_study"]
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in data_actions
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt", "Prepared data path"),
+        ("choice_data_module_export", "copilot_prompt", "Module export folder"),
+        ("choice_data_raw_files", "copilot_prompt", "Raw ICU files"),
+    }
+
+    quality_start = llm_chat._handle_copilot_guided_prompt("question type: data quality audit", "en", quality_state)
+    assert quality_start is not None
+    _reply, quality_actions = quality_start
+    assert quality_state["_copilot_guided_study"]["branch"] == "quality"
+    assert quality_state["_copilot_guided_study"]["question_substep"] == "quality_target"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in quality_actions
+    } == {
+        ("choice_quality_coverage", "copilot_prompt", "Coverage audit"),
+        ("choice_quality_mapping", "copilot_prompt", "Mapping / units"),
+        ("choice_quality_cohort", "copilot_prompt", "Cohort attrition"),
+        ("choice_quality_custom", "copilot_prompt", "Type audit target"),
+    }
+
+
+def test_research_copilot_custom_question_keeps_user_sentence() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+            },
+        }
+    )
+
+    custom_start = llm_chat._handle_copilot_guided_prompt(
+        "I want to describe my own research question.",
+        "en",
+        state,
+    )
+    assert custom_start is not None
+    assert state["_copilot_guided_study"]["question_substep"] == "custom"
+
+    user_question = "Do early vasopressor patterns explain ventilation-free days across the ICU cohort?"
+    custom_saved = llm_chat._handle_copilot_guided_prompt(user_question, "en", state)
+
+    assert custom_saved is not None
+    reply, actions = custom_saved
+    study = state["_copilot_guided_study"]
+    assert study["question"] == user_question
+    assert study["step"] == "data"
+    assert "question_substep" not in study
+    assert user_question in reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt", "Prepared data path"),
+        ("choice_data_module_export", "copilot_prompt", "Module export folder"),
+        ("choice_data_raw_files", "copilot_prompt", "Raw ICU files"),
+    }
+
+
+def test_research_copilot_choose_cohort_opens_cohort_step_without_endpoint() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "逐步带我完成队列步骤；先解释选项，不要直接替我选择。",
+        "zh",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert study["step"] == "cohort"
+    assert study.get("question", "") == ""
+    assert study["cohort_configured"] is False
+    assert "队列步骤" in reply
+    assert "数据源 -> 队列 -> 特征模块 -> 导出/审阅" in reply
+    assert "endpoint" not in reply
+    assert "第 1 步 · 研究问题" not in reply
+    assert "前 24 小时床旁特征" not in reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_cohort_eligible", "copilot_prompt", "全部合格队列"),
+        ("choice_cohort_disease", "copilot_prompt", "按疾病/诊断"),
+        ("choice_cohort_age_los", "copilot_prompt", "按年龄/ICU LOS"),
+        ("choice_cohort_current", "copilot_prompt", "使用当前审阅队列"),
+    }
+    snapshot = llm_chat._copilot_workflow_snapshot(state, "zh")
+    assert snapshot["active_step"] == "cohort"
+    assert snapshot["branch"] == "建模 ICU 结局"
+    assert snapshot["question"] == "尚未设置研究问题；当前按你的要求先配置队列。"
+    assert snapshot["step_title"] == "队列"
+    assert "未选择状态" in snapshot["step_detail"]
+    assert snapshot["facts"][1]["value"] == "未选择"
+
+
+def test_research_copilot_choose_cohort_bypasses_llm_route(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "_copilot_allow_route_model": True,
+        }
+    )
+
+    def fail_route(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("explicit cohort-step controls must not call the LLM router")
+
+    monkeypatch.setattr(llm_chat, "_copilot_route_with_llm", fail_route)
+
+    result = llm_chat._handle_copilot_guided_prompt("选择队列", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    assert "队列步骤" in reply
+    assert state["_copilot_guided_study"]["step"] == "cohort"
+    assert [str(action["label"]) for action in actions] == [
+        "全部合格队列",
+        "按疾病/诊断",
+        "按年龄/ICU LOS",
+        "使用当前审阅队列",
+    ]
+
+
+def test_research_copilot_composer_actions_change_with_guided_progress() -> None:
+    fresh_state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "demo",
+        }
+    )
+
+    fresh_labels = [
+        str(action["label"])
+        for action in llm_chat._copilot_primary_actions_for_state(fresh_state, "zh")
+    ]
+    assert fresh_labels == [
+        "新建研究 / 工作目录",
+        "描述研究目标",
+        "探索研究 idea",
+        "接入真实 ICU 数据",
+        "从完整流程开始",
+    ]
+    assert "建模 ICU 结局" not in fresh_labels
+    assert "选择队列" not in fresh_labels
+
+    cohort_state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "cohort",
+                "data_mode": "real",
+                "question": "",
+                "cohort_configured": False,
+                "concepts_configured": False,
+            },
+        }
+    )
+
+    cohort_labels = [
+        str(action["label"])
+        for action in llm_chat._copilot_primary_actions_for_state(cohort_state, "zh")
+    ]
+    assert cohort_labels == ["全部合格队列", "按疾病/诊断", "按年龄/ICU LOS", "使用当前审阅队列"]
+    assert "建模 ICU 结局" not in cohort_labels
+    assert llm_chat._copilot_hint_prompts_for_state(cohort_state, "zh") == [
+        ("为什么队列？", "为什么这一步？"),
+        ("返回数据源", "返回上一步"),
+        ("先保持宽松", "不加疾病过滤。"),
+        ("设置真实路径", "真实数据路径应该填什么？"),
+    ]
+
+    disease_result = llm_chat._handle_copilot_guided_prompt(
+        "配置疾病或诊断队列过滤。",
+        "zh",
+        cohort_state,
+    )
+
+    assert disease_result is not None
+    _reply, disease_actions = disease_result
+    assert cohort_state["_copilot_guided_study"]["cohort_substep"] == "disease"
+    disease_labels = [str(action["label"]) for action in disease_actions]
+    assert disease_labels == ["Sepsis-3", "AKI / RRT", "不加疾病过滤", "我自己描述"]
+    assert [
+        str(action["label"])
+        for action in llm_chat._copilot_primary_actions_for_state(cohort_state, "zh")
+    ] == disease_labels
+
+    aki_result = llm_chat._handle_copilot_guided_prompt(
+        "队列过滤为 AKI 或 RRT。",
+        "zh",
+        cohort_state,
+    )
+
+    assert aki_result is not None
+    study = cohort_state["_copilot_guided_study"]
+    assert study["step"] == "concepts"
+    assert study["cohort_filters"] == ["aki/rrt"]
+    assert "cohort_substep" not in study
+    assert [
+        str(action["label"])
+        for action in llm_chat._copilot_primary_actions_for_state(cohort_state, "zh")
+    ] == [str(action["label"]) for action in llm_chat._copilot_feature_module_actions("zh")]
+
+
+def test_research_copilot_endpoint_choice_does_not_prechoose_cohort_or_modules() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+                "question": "",
+                "cohort_configured": False,
+                "concepts_configured": False,
+            },
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "endpoint: in-hospital mortality",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert study["step"] == "data"
+    assert "selected ICU cohort" in reply
+    assert "eligible ICU cohort" not in reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt", "Prepared data path"),
+        ("choice_data_module_export", "copilot_prompt", "Module export folder"),
+        ("choice_data_raw_files", "copilot_prompt", "Raw ICU files"),
+    }
+    snapshot = llm_chat._copilot_workflow_snapshot(state, "en")
+    assert snapshot["facts"][1]["value"] == "not chosen"
+    assert snapshot["facts"][2]["value"] == "not chosen"
+
+
+def test_research_copilot_prompt_action_advances_chat_without_navigation(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "llm_messages": [],
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._append_copilot_prompt_action("我有 prepared 数据路径。", "zh")
+
+    assert state["_active_main_page"] == "assistant"
+    assert [msg["role"] for msg in state["llm_messages"]] == ["user", "assistant"]
+    assert state["llm_messages"][0]["content"] == "我有 prepared 数据路径。"
+    assert "输入框" in state["llm_messages"][1]["content"]
+    assert state["_copilot_data_source_choice"] == "prepared_path"
+    assert state["_copilot_guided_study"]["data_source_status"] == "awaiting_path"
+    assert {
+        (action["id"], action["kind"])
+        for action in state["llm_messages"][1]["actions"]
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt"),
+        ("choice_data_module_export", "copilot_prompt"),
+        ("choice_data_raw_files", "copilot_prompt"),
+    }
+    assert "workflow_real_extraction" not in {
+        str(action.get("id")) for action in state["llm_messages"][1]["actions"]
+    }
+    assert state["_copilot_scroll_to_latest"] is True
+
+
+def test_research_copilot_prompt_action_uses_visible_label_when_prompt_is_empty(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "llm_messages": [],
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._append_copilot_prompt_action("", "en", display_prompt="Prepared data path")
+
+    assert [msg["role"] for msg in state["llm_messages"]] == ["user", "assistant"]
+    assert state["llm_messages"][0]["content"] == "Prepared data path"
+    assert "route_prompt" not in state["llm_messages"][0]
+    assert state["_copilot_data_source_choice"] == "prepared_path"
+    assert state["_copilot_scroll_to_latest"] is True
+
+
+def test_research_copilot_prompt_action_separates_button_label_from_route_prompt(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "llm_messages": [],
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._append_copilot_prompt_action(
+        "Walk me through the real data source step and explain the prepared data path before choosing anything else.",
+        "en",
+        display_prompt="Connect real ICU data",
+    )
+
+    user_message = state["llm_messages"][0]
+    assert user_message["content"] == "Connect real ICU data"
+    assert str(user_message["route_prompt"]).startswith("Walk me through the real data source step")
+    assert state["llm_messages"][1]["role"] == "assistant"
+    assert state["_copilot_scroll_to_latest"] is True
+
+
+def test_research_copilot_inline_prepared_path_form_saves_without_navigation(tmp_path: Path) -> None:
+    prepared_dir = tmp_path / "prepared_miiv"
+    prepared_dir.mkdir()
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "data",
+                "data_mode": "real",
+                "data_source_choice": "prepared_path",
+                "data_source_status": "awaiting_path",
+            },
+        }
+    )
+
+    result = llm_chat._copilot_submit_data_source_path(
+        state,
+        path=str(prepared_dir),
+        kind="prepared_path",
+        lang="en",
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert state["_active_main_page"] == "assistant"
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["data_path"] == str(prepared_dir)
+    assert state["path_validated"] is False
+    assert "_copilot_data_source_choice" not in state
+    assert study["step"] == "data"
+    assert study["data_source_status"] == "conversion_needed"
+    assert "couldn't validate this folder as a converted EasyICU dataset" in reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("workflow_study_extract", "workflow", "Open classic extraction"),
+        ("choice_data_prepared_path", "copilot_prompt", "Prepared data path"),
+        ("choice_data_module_export", "copilot_prompt", "Module export folder"),
+        ("choice_data_raw_files", "copilot_prompt", "Raw ICU files"),
+    }
+
+
+def test_research_copilot_latest_reply_injects_current_step_buttons() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+            },
+        }
+    )
+
+    actions = llm_chat._copilot_message_actions_for_current_step(
+        [],
+        "zh",
+        state,
+        is_latest=True,
+    )
+
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_question_outcome_model", "copilot_prompt", "建模 ICU 结局"),
+        ("choice_question_treatment_exposure", "copilot_prompt", "治疗暴露研究"),
+        ("choice_question_crossdb", "copilot_prompt", "跨库比较"),
+        ("choice_question_quality", "copilot_prompt", "数据质量审计"),
+        ("choice_question_custom", "copilot_prompt", "我自己描述问题"),
+    }
+
+
+def test_research_copilot_message_actions_filter_to_current_step() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "concepts",
+            },
+        }
+    )
+    stale_actions = [
+        {
+            "id": "choice_endpoint_hospital_mortality",
+            "kind": "copilot_prompt",
+            "label": "In-hospital mortality",
+            "prompt": "endpoint: in-hospital mortality",
+        },
+        {
+            "id": "choice_modules_sofa2_score",
+            "kind": "copilot_prompt",
+            "label": "SOFA-2 Scores",
+            "prompt": "Add feature module: SOFA-2 Scores.",
+        },
+        {
+            "id": "workflow_study_extract",
+            "kind": "workflow",
+            "label": "Classic workspace",
+            "workflow": "study_extract",
+        },
+    ]
+
+    actions = llm_chat._copilot_message_actions_for_current_step(
+        stale_actions,
+        "en",
+        state,
+        is_latest=False,
+    )
+
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_modules_sofa2_score", "copilot_prompt", "SOFA-2 Scores"),
+    }
+
+
+def test_research_copilot_workflow_card_step_click_updates_current_step(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "llm_messages": [],
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+                "data_mode": "real",
+                "question": "评估 ICU 结局",
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._append_copilot_workflow_step_action("data", "zh")
+
+    study = state["_copilot_guided_study"]
+    assert state["_active_main_page"] == "assistant"
+    assert study["step"] == "data"
+    assert len(state["llm_messages"]) == 2
+    assert state["llm_messages"][0]["content"] == "工作流步骤：数据源"
+    assistant_message = state["llm_messages"][1]
+    assert "已把 workflow 卡切到 **数据源**" in assistant_message["content"]
+    assert assistant_message["workflow_snapshot"]["active_step"] == "data"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in assistant_message["actions"]
+    } == {
+        ("choice_data_prepared_path", "copilot_prompt", "已有 prepared 路径"),
+        ("choice_data_module_export", "copilot_prompt", "已有模块导出"),
+        ("choice_data_raw_files", "copilot_prompt", "只有 ICU 原始文件"),
+        }
+
+
+def test_research_copilot_right_rail_steps_unlock_sequentially() -> None:
+    initial_study = {
+        "branch": "predict",
+        "step": "question",
+        "data_mode": "real",
+        "question": "",
+    }
+    initial_items = llm_chat._copilot_rail_step_items(initial_study, "zh")
+
+    assert [(item["id"], item["status"], item["unlocked"]) for item in initial_items[:4]] == [
+        ("question", "active", True),
+        ("data", "locked", False),
+        ("cohort", "locked", False),
+        ("concepts", "locked", False),
+    ]
+
+    configured_study = {
+        "branch": "predict",
+        "step": "cohort",
+        "data_mode": "real",
+        "question": "评估真实 ICU 队列中的 AKI 风险。",
+        "data_source_status": "pending_validation",
+        "cohort_configured": False,
+    }
+    configured_items = llm_chat._copilot_rail_step_items(configured_study, "zh")
+
+    assert [(item["id"], item["status"], item["unlocked"]) for item in configured_items[:5]] == [
+        ("question", "done", True),
+        ("data", "done", True),
+        ("cohort", "active", True),
+        ("concepts", "locked", False),
+        ("extract", "locked", False),
+    ]
+
+    ready_study = {
+        **configured_study,
+        "step": "extract",
+        "cohort_configured": True,
+        "concepts_configured": True,
+        "selected_concepts": ["hr", "map", "crea"],
+    }
+    ready_items = llm_chat._copilot_rail_step_items(ready_study, "zh")
+
+    assert [(item["id"], item["status"], item["unlocked"]) for item in ready_items[:6]] == [
+        ("question", "done", True),
+        ("data", "done", True),
+        ("cohort", "done", True),
+        ("concepts", "done", True),
+        ("extract", "active", True),
+        ("review", "locked", False),
+    ]
+
+
+def test_research_copilot_right_rail_blocks_locked_step_jump(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "llm_messages": [],
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "question",
+                "data_mode": "real",
+                "question": "",
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    assert llm_chat._append_copilot_rail_step_action("data", "zh") is False
+
+    assert state["_copilot_guided_study"]["step"] == "question"
+    assert state["llm_messages"] == []
+    assert state["_assistant_notice"] == "请先完成上一步，再打开数据源。"
+
+
+def test_research_copilot_workflow_controls_only_show_nearby_steps() -> None:
+    snapshot = {
+        "active_step": "cohort",
+        "steps": [
+            {"id": "question", "label": "Research question", "status": "done"},
+            {"id": "data", "label": "Data source", "status": "done"},
+            {"id": "cohort", "label": "Cohort", "status": "active"},
+            {"id": "concepts", "label": "Feature modules", "status": "pending"},
+            {"id": "extract", "label": "Extraction", "status": "pending"},
+            {"id": "review", "label": "Review", "status": "pending"},
+            {"id": "analysis", "label": "Analysis run", "status": "pending"},
+            {"id": "draft", "label": "Draft gate", "status": "pending"},
+        ],
+        "facts": [
+            {"id": "data", "label": "Data source", "value": "not connected"},
+            {"id": "cohort", "label": "Cohort", "value": "not chosen"},
+            {"id": "concepts", "label": "Modules", "value": "not chosen"},
+            {"id": "api", "label": "API", "value": "connected"},
+        ],
+    }
+
+    items = llm_chat._copilot_visible_workflow_step_items(snapshot, "en")
+
+    assert [item["id"] for item in items] == ["data", "cohort", "concepts"]
+    assert all("not " not in str(item.get("label") or "") for item in items)
+
+
+def test_research_copilot_workflow_controls_boundaries_are_compact() -> None:
+    question_snapshot = {
+        "active_step": "question",
+        "steps": [
+            {"id": "question", "label": "Research question", "status": "active"},
+            {"id": "data", "label": "Data source", "status": "pending"},
+            {"id": "cohort", "label": "Cohort", "status": "pending"},
+        ],
+    }
+    draft_snapshot = {
+        "active_step": "draft",
+        "steps": [
+            {"id": "review", "label": "Review", "status": "done"},
+            {"id": "analysis", "label": "Analysis run", "status": "done"},
+            {"id": "draft", "label": "Draft gate", "status": "active"},
+        ],
+    }
+
+    assert [item["id"] for item in llm_chat._copilot_visible_workflow_step_items(question_snapshot, "en")] == [
+        "question",
+        "data",
+    ]
+    assert [item["id"] for item in llm_chat._copilot_visible_workflow_step_items(draft_snapshot, "en")] == [
+        "analysis",
+        "draft",
+    ]
+
+
+def test_research_copilot_inline_source_choices_use_distinct_handoff_state(tmp_path: Path) -> None:
+    module_dir = tmp_path / "module_export"
+    raw_dir = tmp_path / "raw_eicu"
+    module_dir.mkdir()
+    raw_dir.mkdir()
+    module_state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "database": "miiv",
+        }
+    )
+    raw_state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "database": "miiv",
+        }
+    )
+
+    module_result = llm_chat._copilot_submit_data_source_path(
+        module_state,
+        path=str(module_dir),
+        kind="module_export",
+        lang="en",
+    )
+    raw_result = llm_chat._copilot_submit_data_source_path(
+        raw_state,
+        path=str(raw_dir),
+        kind="raw_files",
+        lang="en",
+        database="eicu",
+    )
+
+    assert module_result is not None
+    assert module_state["last_export_dir"] == str(module_dir)
+    assert module_state["export_path"] == str(module_dir)
+    assert module_state["_copilot_guided_study"]["data_source_status"] == "module_export_recorded"
+    assert raw_result is not None
+    assert raw_state["raw_data_path"] == str(raw_dir)
+    assert raw_state["database"] == "eicu"
+    assert raw_state["path_validated"] is False
+    assert raw_state["_copilot_guided_study"]["data_source_status"] == "conversion_needed"
+
+
+def test_research_copilot_inline_prepared_path_saves_selected_database(tmp_path: Path) -> None:
+    prepared_dir = tmp_path / "prepared_local"
+    prepared_dir.mkdir()
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "database": "miiv",
+        }
+    )
+
+    result = llm_chat._copilot_submit_data_source_path(
+        state,
+        path=str(prepared_dir),
+        kind="prepared_path",
+        lang="en",
+        database="eicu",
+    )
+
+    assert result is not None
+    assert state["database"] == "eicu"
+    assert state["data_path"] == str(prepared_dir)
+    study = state["_copilot_guided_study"]
+    assert study["database"] == "eicu"
+    assert study["data_source_status"] == "conversion_needed"
+
+
+def test_research_copilot_inline_cohort_filter_syncs_classic_step2_state() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "database": "miiv",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "data_mode": "real",
+                "step": "cohort",
+            },
+        }
+    )
+
+    reply, actions = llm_chat._copilot_submit_cohort_filter(
+        state,
+        disease="sepsis",
+        age_min="18",
+        los_min="24",
+        first_icu="yes",
+        gender="F",
+        survival="any",
+        lang="en",
+    )
+
+    cohort_filter = state["cohort_filter"]
+    study = state["_copilot_guided_study"]
+    assert "Cohort filters saved" in reply
+    assert state["cohort_enabled"] is True
+    assert state["step2_confirmed"] is True
+    assert state["step3_confirmed"] is False
+    assert cohort_filter["disease_cohort"] == "sepsis"
+    assert cohort_filter["has_sepsis"] is True
+    assert cohort_filter["age_min"] == 18
+    assert cohort_filter["los_min"] == 24
+    assert cohort_filter["first_icu_stay"] is True
+    assert cohort_filter["gender"] == "F"
+    assert study["step"] == "concepts"
+    assert study["cohort_configured"] is True
+    assert {"age >= 18", "ICU LOS >= 24h", "Sepsis-3 cohort"} <= set(study["cohort_filters"])
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        (action["id"], action["kind"], action.get("label"))
+        for action in llm_chat._copilot_feature_module_actions("en")
+    }
+
+
+def test_research_copilot_inline_feature_modules_sync_classic_step3_state() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "database": "miiv",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "data_mode": "real",
+                "step": "concepts",
+                "cohort_configured": True,
+            },
+        }
+    )
+
+    result = llm_chat._copilot_submit_feature_modules(
+        state,
+        module_keys=["vitals", "sofa2_score", "chemistry", "blood_gas", "renal", "respiratory", "vasopressors", "outcome"],
+        lang="en",
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert "Feature modules saved" in reply
+    assert state["step3_confirmed"] is True
+    assert {"hr", "map", "sofa2", "lact", "crea", "urine", "rrt", "vent_ind", "norepi_rate", "death"} <= set(state["selected_concepts"])
+    assert state["selected_concepts"] == study["selected_concepts"]
+    assert study["step"] == "extract"
+    assert study["concepts_configured"] is True
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_prepare_extraction", "copilot_prompt", "Prepare extraction plan"),
+        ("choice_explain_gate", "copilot_prompt", "Explain the gate"),
+    }
+
+
+def test_research_copilot_feature_modules_use_classic_step3_catalog() -> None:
+    assert list(llm_chat.COPILOT_FEATURE_MODULE_PACKS) == list(concept_catalog.CONCEPT_GROUPS_INTERNAL)
+    assert len(llm_chat.COPILOT_FEATURE_MODULE_PACKS) == 19
+
+    zh_labels = [str(action["label"]) for action in llm_chat._copilot_feature_module_actions("zh")]
+    assert zh_labels == ["生命体征", "实验室-生化", "血气分析", "肾脏与尿量", "呼吸系统", "SOFA-2 评分", "使用模型推荐模块"]
+    assert "核心床旁变量" not in zh_labels
+    assert "化验 + 治疗" not in zh_labels
+
+    vitals_concepts = llm_chat._copilot_module_pack_from_prompt("选择特征模块：生命体征。")
+    assert vitals_concepts == concept_catalog.CONCEPT_GROUPS_INTERNAL["vitals"]
+
+
+def test_research_copilot_choose_feature_step_does_not_preselect_modules() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "cohort",
+                "cohort_configured": True,
+                "selected_concepts": [],
+            },
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt("选择特征模块", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert "特征模块步骤" in reply
+    assert study["step"] == "concepts"
+    assert study["concepts_configured"] is False
+    assert study["selected_concepts"] == []
+    assert [str(action["label"]) for action in actions] == [
+        str(action["label"]) for action in llm_chat._copilot_feature_module_actions("zh")
+    ]
+
+
+def test_research_copilot_feature_inline_module_toggle_state_persists() -> None:
+    state = _AttrSessionState({})
+    selected = llm_chat._copilot_feature_inline_selected_keys(
+        state,
+        panel_key="_llm_ai_page_workspace_0",
+        default_keys=[],
+    )
+
+    assert selected == []
+
+    selected = llm_chat._copilot_toggle_feature_inline_module(
+        state,
+        panel_key="_llm_ai_page_workspace_0",
+        module_key="sofa2_score",
+        default_keys=[],
+    )
+
+    assert selected == ["sofa2_score"]
+    assert state["_llm_ai_page_workspace_0_feature_module_selection"] == ["sofa2_score"]
+
+    selected = llm_chat._copilot_toggle_feature_inline_module(
+        state,
+        panel_key="_llm_ai_page_workspace_0",
+        module_key="sofa2_score",
+        default_keys=[],
+    )
+
+    assert selected == []
+    assert state["_llm_ai_page_workspace_0_feature_module_selection"] == []
+
+
+def test_research_copilot_feature_inline_uses_button_toggles_not_checkboxes() -> None:
+    source = inspect.getsource(llm_chat._render_copilot_feature_inline_form)
+    assert "st.checkbox(" not in source
+    assert "_feature_module_button_" in source
+    assert '_feature_module_toggle_{row_state}_{key}' in source
+    assert 'row_state = "on" if selected else "off"' in source
+    assert "_copilot_toggle_feature_inline_module(" in source
+
+
+def test_research_copilot_feature_inline_selected_button_state_is_not_black() -> None:
+    css = shell_styles._load_shell_overrides_css()
+    selector = '[class*="_feature_module_toggle_on_"] button'
+    assert selector in css
+    color_selector = selector + " {\n  border-color: var(--accent-border)"
+    assert color_selector in css
+    block = css[css.index(color_selector): css.index("}", css.index(color_selector))]
+    assert "#DDF5F8" in block
+    assert "background-color: var(--ink)" not in block
+    assert "background: var(--ink)" not in block
+
+
+def test_research_copilot_prepare_extraction_stays_in_chat_after_modules() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "database": "eicu",
+            "selected_concepts": ["age", "hr", "death"],
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "data_mode": "real",
+                "database": "eicu",
+                "step": "extract",
+                "cohort_configured": True,
+                "concepts_configured": True,
+                "selected_concepts": ["age", "hr", "death"],
+                "cohort_filters": ["first ICU stay"],
+                "cohort_strategy": "filtered",
+            },
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt("Prepare the extraction plan in chat.", "en", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert state["_active_main_page"] == "assistant"
+    assert "I don't have a real data source bound yet" in reply
+    assert "set data path /path/to/prepared_data" in reply
+    assert study["step"] == "extract"
+    assert study.get("extraction_configured") is not True
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_set_data_path", "copilot_prompt", "Set data path"),
+    }
+
+
+def test_research_copilot_cohort_choice_surfaces_in_chat_options() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "data_mode": "real",
+                "step": "cohort",
+                "question": "评估 ICU 结局",
+            },
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt("配置疾病或诊断队列过滤。", "zh", state)
+
+    assert result is not None
+    reply, actions = result
+    assert "这里只配置队列" in reply
+    assert state["_copilot_guided_study"]["cohort_substep"] == "disease"
+    assert state["_active_main_page"] == "assistant"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_filter_sepsis", "copilot_prompt", "Sepsis-3"),
+        ("choice_filter_aki", "copilot_prompt", "AKI / RRT"),
+        ("choice_filter_none", "copilot_prompt", "不加疾病过滤"),
+        ("choice_filter_custom", "copilot_prompt", "我自己描述"),
+    }
+
+
+def test_research_copilot_does_not_create_sepsis_preset_from_answer_examples() -> None:
+    answer = (
+        "**先进入 “Real Data” 模式的 Data Source 页面**，选择 ICU 数据库（如 MIMIC-IV `miiv`）。"
+        "之后进入 Cohort Selection，可选择疾病标签（如 Sepsis-3、AKI 等），"
+        "再进入 Select Features 页面并 Export Data。"
+    )
+
+    actions = llm_chat._suggest_ui_actions("我要做什么", answer, "zh")
+
+    assert "preset_miiv_sepsis" not in {str(action.get("id")) for action in actions}
+    assert all("Sepsis" not in str(action.get("label")) for action in actions)
+    assert all("脓毒症" not in str(action.get("label")) for action in actions)
+
+
+def test_research_copilot_eligible_real_cohort_avoids_demo_sample_size(tmp_path: Path) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "data_path": str(tmp_path / "prepared_miiv"),
+            "path_validated": True,
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "Use the full eligible real-data cohort with lactate, SOFA, MAP, creatinine, vasopressor, and in-hospital mortality.",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert study["data_mode"] == "real"
+    assert study["cohort_strategy"] == "eligible"
+    assert study["cohort_configured"] is True
+    assert study["concepts_configured"] is True
+    assert study["step"] == "concepts"
+    assert study["patient_n"] == 10
+    assert "eligible real-data cohort" in reply
+    assert "30 stays" not in reply
+    snapshot = llm_chat._copilot_workflow_snapshot(state, "en")
+    assert snapshot["facts"][1]["value"] == "eligible real-data cohort"
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        (action["id"], action["kind"], action.get("label"))
+        for action in llm_chat._copilot_feature_module_actions("en")
+    }
+
+
+def test_research_copilot_eligible_cohort_waits_for_real_source_and_sanitizes_legacy_question() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "cohort",
+                "data_mode": "real",
+                "question": "Among Sepsis-3 patients, do first-24h bedside features predict in-hospital mortality, and does adding lactate improve the model?",
+                "outcome": "In-hospital mortality",
+                "exposure": "lactate",
+                "modules": ["Demographics", "Vital signs", "Labs"],
+            },
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt("use eligible cohort", "en", state)
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert study["data_mode"] == "real"
+    assert study["cohort_strategy"] == "eligible"
+    assert study["step"] == "concepts"
+    assert "eligible real-data cohort" in reply
+    assert "choose feature modules" in reply
+    assert "Among Sepsis-3 patients" not in study["question"]
+    assert "lactate" not in study["question"].lower()
+    assert "Restrict: Sepsis-3" not in {str(action.get("label")) for action in actions}
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        (action["id"], action["kind"], action.get("label"))
+        for action in llm_chat._copilot_feature_module_actions("en")
+    }
+
+    legacy_html = llm_chat._copilot_workflow_snapshot_html(
+        {
+            "title": "Workflow",
+            "branch": "Predict sepsis mortality",
+            "question": "Among Sepsis-3 patients, do first-24h bedside features predict in-hospital mortality, and does adding lactate improve the model?",
+            "step_title": "Cohort · all eligible stays",
+            "step_detail": "This cohort definition drives review, analysis, and Agent setup.",
+            "steps": [],
+            "facts": [{"label": "Cohort", "value": "all eligible stays"}],
+            "api": {"status": "connected", "detail": "OpenRouter"},
+            "gate": "Evidence-bound",
+        },
+        "en",
+    )
+    assert "Predict sepsis mortality" not in legacy_html
+    assert "Among Sepsis-3 patients" not in legacy_html
+    assert "all eligible stays" not in legacy_html
+    assert "Cohort · needs confirmation" in legacy_html
+    assert "Confirm the data source and cohort" in legacy_html
+    assert "needs confirmation" in legacy_html
+
+    normalized_content = llm_chat._normalized_copilot_message_content(
+        "Configured cohort scope **all eligible stays**. The chat state is now ready to open **Classic workspace** for extraction/review, or **Agent setup** for an auditable run.",
+        "en",
+    )
+    assert "ready to open" not in normalized_content
+    assert "paused here" in normalized_content
+    assert "eligible real-data cohort" in normalized_content
+
+    normalized_actions = llm_chat._normalized_copilot_message_actions(
+        [
+            {
+                "id": "workflow_study_strict_filters",
+                "kind": "workflow",
+                "label": "Restrict: Sepsis-3 + age ≥ 80",
+                "workflow": "study_strict_filters",
+            },
+            {
+                "id": "workflow_study_extract",
+                "kind": "workflow",
+                "label": "Classic workspace",
+                "workflow": "study_extract",
+            },
+            {
+                "id": "workflow_real_extraction",
+                "kind": "workflow",
+                "label": "Open Real Data Setup",
+                "workflow": "real_extraction",
+            },
+            {
+                "id": "preset_miiv_sepsis",
+                "kind": "preset",
+                "label": "Prepare MIMIC-IV Sepsis Feature Set",
+                "payload": {"kind": "feature_preset"},
+            },
+        ],
+        "en",
+    )
+    assert {
+        (action["id"], action["kind"], action.get("label"), action.get("workflow"))
+        for action in normalized_actions
+    } == {
+        ("workflow_study_extract", "workflow", "Classic workspace", "study_extract"),
+        ("workflow_real_data_chat_setup", "workflow", "Set data path in chat", "real_data_chat_setup"),
+    }
+
+
+def test_research_copilot_page_consumes_guided_prompt_before_columns() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "entry_mode": "demo",
+            "database": "mock",
+            "_active_main_page": "assistant",
+            "llm_provider": "openrouter",
+            "llm_api_key": "",
+            "_ai_pending_question": "Use 30 Sepsis-3 stays with lactate, SOFA, MAP, creatinine and vasopressor features.",
+            "llm_messages": [],
+        }
+    )
+
+    consumed = llm_chat._consume_standalone_guided_pending_prompt("en", state)
+
+    assert consumed is True
+    assert "_ai_pending_question" not in state
+    assert state["_copilot_guided_study"]["patient_n"] == 30
+    assert len(state["llm_messages"]) == 2
+    assert state["llm_messages"][0]["role"] == "user"
+    assert "30 stays" in state["llm_messages"][1]["content"]
+    assert state["llm_messages"][1]["workflow_snapshot"]["facts"][1]["value"] == "30 stays"
+    assert state["llm_messages"][1]["workflow_snapshot"]["active_step"] == "concepts"
+    assert state["llm_messages"][1]["workflow_snapshot"]["step_title"].startswith("Feature modules")
+    assert state["llm_messages"][1]["workflow_snapshot"]["api"]["status"] == "local"
+    assert state["llm_last_verification"]["status"] == "pass"
+
+
+def test_research_copilot_guided_prompt_consumes_visible_button_label() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_active_main_page": "assistant",
+            "_ai_pending_question": (
+                "Walk me through the real data source step and explain the prepared "
+                "data path before choosing anything else."
+            ),
+            "_ai_pending_question_display": "Connect real ICU data",
+            "llm_messages": [],
+        }
+    )
+
+    consumed = llm_chat._consume_standalone_guided_pending_prompt("en", state)
+
+    assert consumed is True
+    assert "_ai_pending_question" not in state
+    assert "_ai_pending_question_display" not in state
+    assert len(state["llm_messages"]) == 2
+    user_message = state["llm_messages"][0]
+    assert user_message["role"] == "user"
+    assert user_message["content"] == "Connect real ICU data"
+    assert str(user_message["route_prompt"]).startswith("Walk me through the real data source step")
+    assert state["llm_messages"][1]["role"] == "assistant"
+    assert state["_copilot_scroll_to_latest"] is True
+
+
+def test_research_copilot_pending_idea_prompt_stays_chat_only_without_snapshot() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "zh",
+            "_active_main_page": "assistant",
+            "_ai_pending_question": "我想做脓毒症相关的研究，有什么推荐吗？",
+            "llm_messages": [],
+        }
+    )
+
+    consumed = llm_chat._consume_standalone_guided_pending_prompt("zh", state)
+
+    assert consumed is True
+    assert "_ai_pending_question" not in state
+    assert len(state["llm_messages"]) == 2
+    assistant_msg = state["llm_messages"][1]
+    assert "留在 Copilot" in assistant_msg["content"]
+    assert "早期恶化风险建模" in assistant_msg["content"]
+    assert "跳转按钮" in assistant_msg["content"]
+    assert "workflow_snapshot" not in assistant_msg
+    assert assistant_msg["actions"] == []
+    assert "research_agent_workflow_mode" not in state
+
+
+def test_research_copilot_starter_walkthrough_does_not_decide_for_user() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "entry_mode": "real",
+            "use_mock_data": False,
+            "database": "miiv",
+            "_active_main_page": "assistant",
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "Start a guided ICU outcome study. Ask me to choose outcome, data source, cohort, and modules step by step.",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    reply, actions = result
+    study = state["_copilot_guided_study"]
+    assert study["branch"] == "predict"
+    assert study["step"] == "question"
+    assert study["question"] == ""
+    assert study["cohort_configured"] is False
+    assert study["concepts_configured"] is False
+    assert "cohort_strategy" not in study
+    assert "selected_concepts" not in study
+    assert "avoid choosing for you" in reply
+    assert "Step 1" in reply
+    assert {
+        (action["id"], action["kind"], action.get("label"))
+        for action in actions
+    } == {
+        ("choice_question_outcome_model", "copilot_prompt", "Model an ICU outcome"),
+        ("choice_question_treatment_exposure", "copilot_prompt", "Treatment exposure"),
+        ("choice_question_crossdb", "copilot_prompt", "Compare databases"),
+        ("choice_question_quality", "copilot_prompt", "Audit data quality"),
+        ("choice_question_custom", "copilot_prompt", "Type my question"),
+    }
+
+    snapshot = llm_chat._copilot_workflow_snapshot(state, "en")
+    assert snapshot["active_step"] == "question"
+    assert snapshot["question"] == "Not framed yet. Choose the research question first."
+    assert snapshot["facts"][1]["value"] == "not chosen"
+    assert snapshot["facts"][2]["value"] == "not chosen"
+
+
+def test_research_copilot_starter_prompt_keeps_sepsis3_out_of_denominator() -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "demo_mode_patients": 10,
+        }
+    )
+
+    result = llm_chat._handle_copilot_guided_prompt(
+        "Among Sepsis-3 patients, do first-24h bedside features predict in-hospital mortality, and does adding lactate improve the model?",
+        "en",
+        state,
+    )
+
+    assert result is not None
+    reply, _actions = result
+    study = state["_copilot_guided_study"]
+    assert study["patient_n"] == 10
+    assert study["window"] == "first 24h"
+    assert "Set the demo cohort" not in reply
+    assert llm_chat._copilot_stage_detail(study, "cohort", "en") == (
+        "10 stays · first ICU stay · first 24h"
+    )
+
+    update = llm_chat._handle_copilot_guided_prompt("use 30 patients", "en", state)
+
+    assert update is not None
+    update_reply, update_actions = update
+    assert state["_copilot_guided_study"]["patient_n"] == 30
+    assert state["_copilot_guided_study"]["step"] == "cohort"
+    assert "Configured cohort denominator **30 stays**" in update_reply
+    assert "feature set" not in update_reply
+    assert {str(action.get("label")) for action in update_actions} == {
+        "Classic workspace",
+        "Set data path in chat",
+    }
+
+
+def test_research_copilot_guided_study_drives_review_workspace(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "database": "mock",
+            "demo_mode_patients": 30,
+            "_copilot_guided_study": {
+                "branch": "quality",
+                "step": "review",
+                "data_mode": "demo",
+                "patient_n": 30,
+                "question": "Which ICU concepts are trustworthy enough to analyze?",
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("study_review")
+
+    assert state["entry_mode"] == "demo"
+    assert state["use_mock_data"] is True
+    assert state["mock_params"]["n_patients"] == 30
+    assert state["_preview_requested"] is True
+    assert state["_preview_n"] == 30
+    assert state["_active_main_page"] == "cohort"
+    assert "crea" in state["selected_concepts"]
+    assert "_main_nav_widget" not in state
+
+
+def test_research_copilot_crossdb_study_seeds_classic_benchmark(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "database": "mock",
+            "entry_mode": "demo",
+            "demo_mode_patients": 30,
+            "_eu_crossdb_distribution_open": True,
+            "_copilot_guided_study": {
+                "branch": "crossdb",
+                "step": "review",
+                "data_mode": "demo",
+                "patient_n": 30,
+                "question": "Does the sepsis mortality signal replicate across ICU databases?",
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("study_review")
+
+    expected_concepts = llm_chat.COPILOT_BRANCH_CONFIG["crossdb"]["selected_concepts"]
+    assert state["_active_main_page"] == "cross_db"
+    assert state["entry_mode"] == "demo"
+    assert state["use_mock_data"] is True
+    assert state["multidb_is_demo"] is True
+    assert state["multidb_concepts"] == expected_concepts
+    assert set(state["multidb_data"]) == set(demo_data.COHORT_DEMO_MULTIDB_DATABASES)
+    assert state["_eu_crossdb_distribution_open"] is False
+    assert all(isinstance(frame, pd.DataFrame) for frame in state["multidb_data"].values())
+    observed_concepts = set().union(
+        *[
+            set(frame["concept"].dropna().astype(str))
+            for frame in state["multidb_data"].values()
+            if "concept" in frame.columns
+        ]
+    )
+    assert {"hr", "map", "lact", "sofa2"} <= observed_concepts
+    assert "sbp" not in state["multidb_concepts"]
+    assert "temp" not in state["multidb_concepts"]
+    assert "_main_nav_widget" not in state
+
+
+def test_research_copilot_draft_signoff_unlocks_guided_gate(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "_floating_ai_open": True,
+            "_ai_pending_question": "stale",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "draft",
+                "data_mode": "demo",
+                "patient_n": 10,
+                "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+                "draft_signed": False,
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("study_signoff")
+
+    study = state["_copilot_guided_study"]
+    assert study["draft_signed"] is True
+    assert study["step"] == "draft"
+    assert "draft_signed_at" in study
+    assert state["_copilot_draft_unlocked"] is True
+    assert state["_copilot_draft_signed_at"] == study["draft_signed_at"]
+    assert state["_eu_last_study_resume"]["branch"] == "predict"
+    assert state["_eu_last_study_resume"]["patient_n"] == 10
+    assert state["_eu_last_study_resume"]["step"] == "draft"
+    assert "hr" in state["_eu_last_study_resume"]["selected_concepts"]
+    assert state["easyicu_study"] == state["_eu_last_study_resume"]
+    assert state["_active_main_page"] == "assistant"
+    assert state["_floating_ai_open"] is False
+    assert "_ai_pending_question" not in state
+    assert state["llm_messages"][-2] == {"role": "user", "content": "Review & sign off"}
+    assert "draft gate is now unlocked" in state["llm_messages"][-1]["content"]
+    assert ("workflow_study_draft", "workflow") in {
+        (action["id"], action["kind"]) for action in state["llm_messages"][-1]["actions"]
+    }
+    assert ("agent_handoff", "agent_handoff") in {
+        (action["id"], action["kind"]) for action in state["llm_messages"][-1]["actions"]
+    }
+    assert ("workflow_study_signoff", "workflow") not in {
+        (action["id"], action["kind"]) for action in state["llm_messages"][-1]["actions"]
+    }
+    assert llm_chat._copilot_stage_detail(study, "draft", "en") == "unlocked after local sign-off"
+    assert "_main_nav_widget" not in state
+
+
+def test_research_copilot_open_draft_routes_signed_guided_study_to_summary(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "_floating_ai_open": True,
+            "_ai_pending_question": "stale",
+            "research_agent_resume_run_id": "old_run",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "draft",
+                "data_mode": "demo",
+                "patient_n": 12,
+                "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+                "draft_signed": True,
+                "draft_signed_at": "2026-06-04T12:00:00",
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+    monkeypatch.setattr(agent_workbench, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("study_draft")
+
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "summary"
+    assert state["_floating_ai_open"] is False
+    assert "_ai_pending_question" not in state
+    assert "research_agent_resume_run_id" not in state
+    assert state["selected_concepts"]
+    assert state["_preview_n"] == 12
+
+    workbench = state["_agent_workbench"]
+    assert workbench["allow_summary_demo"] is True
+    assert workbench["summary_demo_source"] == "guided_copilot_signed_draft"
+    assert workbench["source_label"] == "Guided Copilot draft preview"
+    assert workbench["audit"]["review_decision"]["decision"] == "guided_signoff"
+    assert "does lactate improve" in workbench["research_question"]
+
+    resolved = agent_workbench._resolve_workbench_state("en")
+    assert resolved["run_id"] == "guided_copilot_predict_draft"
+    checks = agent_workbench._summary_review_checks(resolved, "en")
+    assert all(check["ok"] is True for check in checks)
+    summary_html = agent_workbench._output_summary_html(resolved, "en")
+    assert "Guided Copilot sign-off unlocked this draft preview" in summary_html
+    assert "Draft methods + results" in summary_html
+    assert "Real run required" in summary_html
+
+
+def test_research_copilot_open_draft_requires_signed_guided_study(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "draft",
+                "data_mode": "demo",
+                "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+                "draft_signed": False,
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("study_draft")
+
+    assert state["_active_main_page"] == "assistant"
+    assert "_agent_workbench" not in state
+    assert "sign off" in state["_assistant_notice"]
+
+
+def test_research_agent_summary_only_allows_explicit_guided_demo_preview(monkeypatch) -> None:
+    state = _AttrSessionState({"_agent_workbench": agent_workbench._demo_state("en")})
+    monkeypatch.setattr(agent_workbench, "st", _SessionStateStreamlit(state))
+
+    assert agent_workbench._resolve_workbench_state("en") == {}
+
+    state["_agent_workbench"]["allow_summary_demo"] = True
+    state["_agent_workbench"]["summary_demo_source"] = "guided_copilot_signed_draft"
+
+    assert agent_workbench._resolve_workbench_state("en")["summary_demo_source"] == (
+        "guided_copilot_signed_draft"
+    )
+
+
+def test_research_copilot_dock_completed_run_opens_safe_preview_without_manifest(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "research_agent",
+            "_floating_ai_open": True,
+            "_ai_pending_question": "stale",
+            "research_agent_workdir": str(tmp_path),
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+    monkeypatch.setattr(agent_workbench, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("agent_completed_run")
+
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "summary"
+    assert state["_floating_ai_open"] is False
+    assert "_ai_pending_question" not in state
+    assert "_agent_workbench_source_run_dir" not in state
+    assert "preview shell" in state["_assistant_notice"]
+
+    workbench = state["_agent_workbench"]
+    assert workbench["allow_summary_demo"] is True
+    assert workbench["summary_demo_source"] == "dock_completed_run_preview"
+    assert state["_agent_workbench_is_active_selection"] is False
+    assert "without fabricating cohort metrics" in workbench["demo_notice"]
+
+    resolved = agent_workbench._resolve_workbench_state("en")
+    assert resolved["run_id"] == "dock_completed_run_preview"
+    checks = agent_workbench._summary_review_checks(resolved, "en")
+    assert all(check["ok"] is True for check in checks)
+    summary_html = agent_workbench._output_summary_html(resolved, "en")
+    assert "completed-run preview mirrors" in summary_html
+    assert "Completed-run shell opened" in summary_html
+    assert "without fabricating cohort metrics" in summary_html
+    assert "Real run required" in summary_html
+
+
+def test_research_copilot_dock_completed_run_prefers_real_manifest(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    run_dir = tmp_path / "run_20260604_real"
+    run_dir.mkdir()
+    manifest = {
+        "run_id": "run_20260604_real",
+        "research_question": "Does the demo cohort have evidence-bound artifacts?",
+        "per_step_records": [
+            {
+                "step_id": "cohort_summary",
+                "status": "ok",
+                "evidence_ids": ["table_one"],
+                "step_summary": {"message": "cohort summary completed"},
+            }
+        ],
+        "evidence": [
+            {
+                "evidence_id": "table_one",
+                "kind": "table",
+                "label": "Table 1",
+                "relative_path": "tables/table_one.csv",
+                "produced_by_step": "cohort_summary",
+            }
+        ],
+        "findings": [],
+        "audit": {"counts": {"errors": 0, "warnings": 0, "info": 0}},
+    }
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "research_agent",
+            "_floating_ai_open": True,
+            "research_agent_workdir": str(tmp_path),
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("agent_completed_run")
+
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "summary"
+    assert state["_agent_workbench_source_run_dir"] == str(run_dir)
+    assert state["_agent_workbench_is_active_selection"] is True
+    assert state["research_agent_last_run_id"] == "run_20260604_real"
+    assert "latest completed Research Agent run" in state["_assistant_notice"]
+
+    workbench = state["_agent_workbench"]
+    assert workbench["run_id"] == "run_20260604_real"
+    assert workbench.get("is_demo") is not True
+    assert workbench["evidence_total"] == 1
+    assert "evidence-bound artifacts" in workbench["research_question"]
+
+
+def test_research_copilot_draft_signoff_requires_evidence_gate(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "assistant",
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "review",
+                "data_mode": "demo",
+                "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("study_signoff")
+
+    study = state["_copilot_guided_study"]
+    assert study.get("draft_signed") is not True
+    assert "_copilot_draft_unlocked" not in state
+    assert "must be assembled" in state["_assistant_notice"]
+    assert state["_active_main_page"] == "assistant"
+
+
+def test_research_copilot_dock_context_chips_match_current_workspace() -> None:
+    entry_intro = llm_chat._floating_copilot_context_intro(
+        "en",
+        {"_active_main_page": "entry"},
+    )
+    assert entry_intro == {
+        "route": "entry",
+        "label": "Home",
+        "hi": (
+            "I am your EasyICU companion. I can explain any screen, drive it for you, "
+            "or run a whole study by chat."
+        ),
+    }
+
+    patient_intro = llm_chat._floating_copilot_context_intro(
+        "en",
+        {"_active_main_page": "quick_viz"},
+    )
+    assert patient_intro["label"] == "Patient Review"
+    assert "time series" in patient_intro["hi"]
+
+    settings_intro = llm_chat._floating_copilot_context_intro(
+        "en",
+        {"_active_main_page": "settings"},
+    )
+    assert settings_intro["label"] == "Settings"
+    assert "local-first and reversible" in settings_intro["hi"]
+
+    agent_intro_zh = llm_chat._floating_copilot_context_intro(
+        "zh",
+        {"_active_main_page": "research_agent"},
+    )
+    assert agent_intro_zh["label"] == "Research Agent"
+    assert "闸门锁定" in agent_intro_zh["hi"]
+
+    crossdb_chips = llm_chat._floating_copilot_context_chips(
+        "en",
+        {"_active_main_page": "cross_db"},
+    )
+
+    assert crossdb_chips == [
+        {
+            "id": "load_crossdb",
+            "kind": "workflow",
+            "label": "Load the benchmark",
+            "workflow": "crossdb_demo",
+        },
+        {
+            "id": "explain_overlap",
+            "kind": "answer",
+            "label": "Which databases overlap?",
+            "answer_id": "overlap",
+        },
+        {
+            "id": "guided_crossdb",
+            "kind": "workflow",
+            "label": "Run a guided comparison",
+            "workflow": "guided_crossdb_demo",
+        },
+    ]
+
+    agent_chips = llm_chat._floating_copilot_context_chips(
+        "en",
+        {"_active_main_page": "research_agent"},
+    )
+    assert agent_chips == [
+        {
+            "id": "explain_gate",
+            "kind": "answer",
+            "label": "Why is the draft locked?",
+            "answer_id": "gate",
+        },
+        {
+            "id": "explore_idea",
+            "kind": "answer",
+            "label": "Explore ideas in chat",
+            "answer_id": "idea",
+        },
+        {
+            "id": "show_completed_run",
+            "kind": "workflow",
+            "label": "Show a completed run",
+            "workflow": "agent_completed_run",
+        },
+    ]
+
+    extract_chips = llm_chat._floating_copilot_context_chips(
+        "en",
+        {"_active_main_page": "extract"},
+    )
+    assert [chip["label"] for chip in extract_chips] == [
+        "Explain the 4 steps",
+        "What gets exported?",
+        "Run a guided study",
+    ]
+
+    patient_chips = llm_chat._floating_copilot_context_chips(
+        "en",
+        {"_active_main_page": "quick_viz"},
+    )
+    assert patient_chips == [
+        {
+            "id": "demo_review",
+            "kind": "workflow",
+            "label": "Load demo workspace",
+            "workflow": "demo_review",
+        },
+        {
+            "id": "explain_tabs",
+            "kind": "answer",
+            "label": "What's in each tab?",
+            "answer_id": "tabs",
+        },
+        {
+            "id": "explain_quality",
+            "kind": "answer",
+            "label": "Explain data-quality flags",
+            "answer_id": "quality",
+        },
+    ]
+
+    cohort_chips = llm_chat._floating_copilot_context_chips(
+        "en",
+        {"_active_main_page": "cohort"},
+    )
+    assert cohort_chips == [
+        {
+            "id": "cohort_run",
+            "kind": "workflow",
+            "label": "Re-run statistics",
+            "workflow": "cohort_run",
+        },
+        {
+            "id": "explain_sofa",
+            "kind": "answer",
+            "label": "Explain SOFA reclassification",
+            "answer_id": "sofa",
+        },
+        {
+            "id": "explain_contrast",
+            "kind": "answer",
+            "label": "What's the comparison?",
+            "answer_id": "contrast",
+        },
+    ]
+
+    settings_chips = llm_chat._floating_copilot_context_chips(
+        "en",
+        {"_active_main_page": "settings"},
+    )
+    assert settings_chips == [
+        {
+            "id": "explain_privacy",
+            "kind": "answer",
+            "label": "Is my data uploaded?",
+            "answer_id": "privacy",
+        },
+        {
+            "id": "explain_gate",
+            "kind": "answer",
+            "label": "Explain the evidence gate",
+            "answer_id": "gate",
+        },
+    ]
+
+    assert "extract -> review -> analyze -> draft" in llm_chat._floating_copilot_answer_text(
+        "how",
+        "en",
+    )
+    assert "患者行数据留在本机" in llm_chat._floating_copilot_answer_text("how", "zh")
+    assert "sensitivity and consistency check" in llm_chat._floating_copilot_answer_text(
+        "sofa",
+        "en",
+    )
+    assert "Survived vs Deceased" in llm_chat._floating_copilot_answer_text(
+        "contrast",
+        "en",
+    )
+    assert "Data Tables" in llm_chat._floating_copilot_answer_text("tabs", "en")
+    assert "分母检查" in llm_chat._floating_copilot_answer_text("quality", "zh")
+
+    render_source = inspect.getsource(llm_chat._render_floating_copilot_context_actions)
+    assert "_floating_copilot_context_intro(lang)" in render_source
+    assert '("on " if is_en else "当前页面: ") + intro["label"]' in render_source
+
+
+def test_research_copilot_dock_crossdb_demo_loads_classic_benchmark(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "cross_db",
+            "_floating_ai_open": True,
+            "entry_mode": "real",
+            "database": "miiv",
+            "_eu_crossdb_distribution_open": True,
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("crossdb_demo")
+
+    assert state["_active_main_page"] == "cross_db"
+    assert state["entry_mode"] == "demo"
+    assert state["use_mock_data"] is True
+    assert state["database"] == "mock"
+    assert state["multidb_is_demo"] is True
+    assert state["multidb_concepts"] == list(demo_data.COHORT_DEMO_MULTIDB_CONCEPTS)
+    assert set(state["multidb_data"]) == set(demo_data.COHORT_DEMO_MULTIDB_DATABASES)
+    assert state["_eu_crossdb_distribution_open"] is False
+    assert "summary and availability matrix first" in state["_assistant_notice"]
+    assert state["_floating_ai_open"] is False
+    assert "_main_nav_widget" not in state
+
+
+def test_research_copilot_dock_local_answer_writes_shared_chat_history() -> None:
+    state: dict[str, object] = {
+        "_active_main_page": "research_agent",
+        "_floating_ai_open": False,
+        "_ai_pending_question": "stale",
+    }
+
+    llm_chat._append_floating_copilot_local_answer(
+        state,
+        label="Why is the draft locked?",
+        answer_id="gate",
+        lang="en",
+    )
+
+    assert state["_floating_ai_open"] is True
+    assert "_ai_pending_question" not in state
+    assert state["llm_messages"] == [
+        {"role": "user", "content": "Why is the draft locked?"},
+        {
+            "role": "assistant",
+            "content": llm_chat._floating_copilot_answer_text("gate", "en"),
+            "actions": [],
+        },
+    ]
+    assert "evidence ledger" in state["llm_messages"][1]["content"]
+
+
+def test_research_copilot_dock_text_intent_load_demo_drives_workspace(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "extract",
+            "_floating_ai_open": True,
+            "_ai_pending_question": "load demo workspace",
+            "database": "mock",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    handled = llm_chat._apply_floating_copilot_text_intent("load demo workspace", "en")
+
+    assert handled is True
+    assert state["llm_messages"][:2] == [
+        {"role": "user", "content": "load demo workspace"},
+        {
+            "role": "assistant",
+            "content": "Loaded a demo workspace — Patient Review is populated.",
+            "actions": [],
+        },
+    ]
+    assert state["entry_mode"] == "demo"
+    assert state["use_mock_data"] is True
+    assert state["_preview_requested"] is True
+    assert state["_active_main_page"] == "quick_viz"
+    assert state["_floating_ai_open"] is False
+    assert "_ai_pending_question" not in state
+
+
+def test_research_copilot_dock_text_intent_cohort_run_queues_refresh(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "cohort",
+            "_floating_ai_open": True,
+            "_ai_pending_question": "re-run statistics",
+            "entry_mode": "demo",
+            "database": "mock",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    handled = llm_chat._apply_floating_copilot_text_intent("re-run statistics", "en")
+
+    assert handled is True
+    assert state["llm_messages"][:2] == [
+        {"role": "user", "content": "re-run statistics"},
+        {
+            "role": "assistant",
+            "content": "Re-running cohort statistics — the Cohort page will refresh all panels.",
+            "actions": [],
+        },
+    ]
+    assert state["_active_main_page"] == "cohort"
+    assert state["_eu_topbar_run_request"] == {
+        "page": "cohort",
+        "requested_at": "copilot_dock",
+    }
+    assert "shared workspace refresh" in state["_assistant_notice"]
+    assert state["_floating_ai_open"] is False
+    assert "_ai_pending_question" not in state
+
+
+def test_research_copilot_dock_text_intent_cohort_answers_do_not_navigate() -> None:
+    sofa_intent = llm_chat._floating_copilot_text_intent(
+        "Explain SOFA reclassification",
+        "en",
+        {"_active_main_page": "cohort"},
+    )
+    contrast_intent = llm_chat._floating_copilot_text_intent(
+        "What's the comparison?",
+        "en",
+        {"_active_main_page": "cohort"},
+    )
+
+    assert sofa_intent is not None
+    assert sofa_intent["kind"] == "answer"
+    assert sofa_intent["answer_id"] == "sofa"
+    assert "sensitivity and consistency check" in sofa_intent["content"]
+    assert contrast_intent is not None
+    assert contrast_intent["kind"] == "answer"
+    assert contrast_intent["answer_id"] == "contrast"
+    assert "Survived vs Deceased" in contrast_intent["content"]
+
+
+def test_research_copilot_dock_text_intent_patient_answers_do_not_navigate() -> None:
+    tabs_intent = llm_chat._floating_copilot_text_intent(
+        "What's in each tab?",
+        "en",
+        {"_active_main_page": "quick_viz"},
+    )
+    quality_intent = llm_chat._floating_copilot_text_intent(
+        "Explain data-quality flags",
+        "en",
+        {"_active_main_page": "quick_viz"},
+    )
+
+    assert tabs_intent is not None
+    assert tabs_intent["kind"] == "answer"
+    assert tabs_intent["answer_id"] == "tabs"
+    assert "Data Tables" in tabs_intent["content"]
+    assert quality_intent is not None
+    assert quality_intent["kind"] == "answer"
+    assert quality_intent["answer_id"] == "quality"
+    assert "denominator check" in quality_intent["content"]
+
+
+def test_research_copilot_dock_text_intent_design_answers_do_not_misroute(
+    monkeypatch,
+) -> None:
+    extract_intent = llm_chat._floating_copilot_text_intent(
+        "Explain the 4 steps",
+        "en",
+        {"_active_main_page": "extract"},
+    )
+    export_intent = llm_chat._floating_copilot_text_intent(
+        "What gets exported?",
+        "en",
+        {"_active_main_page": "extract"},
+    )
+    overlap_intent = llm_chat._floating_copilot_text_intent(
+        "Which databases overlap?",
+        "en",
+        {"_active_main_page": "cross_db"},
+    )
+    states_intent = llm_chat._floating_copilot_text_intent(
+        "When do states show?",
+        "en",
+        {"_active_main_page": "states"},
+    )
+
+    assert extract_intent is not None
+    assert extract_intent["kind"] == "answer"
+    assert extract_intent["answer_id"] == "extract"
+    assert "four-step gate" in extract_intent["content"]
+    assert export_intent is not None
+    assert export_intent["kind"] == "answer"
+    assert export_intent["answer_id"] == "export"
+    assert "manifest" in export_intent["content"]
+    assert overlap_intent is not None
+    assert overlap_intent["kind"] == "answer"
+    assert overlap_intent["answer_id"] == "overlap"
+    assert "availability matrix" in overlap_intent["content"]
+    assert states_intent is not None
+    assert states_intent["kind"] == "answer"
+    assert states_intent["answer_id"] == "states"
+    assert "loading, empty, no-data, error, blocked, and success" in states_intent["content"]
+
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "cross_db",
+            "_floating_ai_open": True,
+            "_ai_pending_question": "Which databases overlap?",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    handled = llm_chat._apply_floating_copilot_text_intent("Which databases overlap?", "en")
+
+    assert handled is True
+    assert state["_active_main_page"] == "cross_db"
+    assert state["_floating_ai_open"] is True
+    assert "_ai_pending_question" not in state
+    assert "multidb_data" not in state
+    assert state["llm_messages"][0] == {"role": "user", "content": "Which databases overlap?"}
+    assert state["llm_messages"][1]["content"] == llm_chat._floating_copilot_answer_text(
+        "overlap",
+        "en",
+    )
+
+
+def test_research_copilot_dock_text_intent_answers_privacy_without_navigation(
+    monkeypatch,
+) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "settings",
+            "_floating_ai_open": True,
+            "_ai_pending_question": "privacy?",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    handled = llm_chat._apply_floating_copilot_text_intent("what leaves my machine?", "en")
+
+    assert handled is True
+    assert state["_active_main_page"] == "settings"
+    assert state["_floating_ai_open"] is True
+    assert "_ai_pending_question" not in state
+    assert state["llm_messages"][0] == {"role": "user", "content": "what leaves my machine?"}
+    assert "local-first" in state["llm_messages"][1]["content"]
+    assert "Patient rows are not sent" in state["llm_messages"][1]["content"]
+
+
+def test_research_copilot_dock_text_intent_settings_gate_without_navigation(
+    monkeypatch,
+) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "settings",
+            "_floating_ai_open": True,
+            "_ai_pending_question": "evidence gate",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    handled = llm_chat._apply_floating_copilot_text_intent("Explain the evidence gate", "en")
+
+    assert handled is True
+    assert state["_active_main_page"] == "settings"
+    assert state["_floating_ai_open"] is True
+    assert "_ai_pending_question" not in state
+    assert state["llm_messages"][0] == {"role": "user", "content": "Explain the evidence gate"}
+    assert "evidence ledger" in state["llm_messages"][1]["content"]
+
+
+def test_research_copilot_dock_text_intent_completed_run_matches_agent_route(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "research_agent",
+            "_floating_ai_open": True,
+            "research_agent_workdir": str(tmp_path),
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+    monkeypatch.setattr(agent_workbench, "st", _SessionStateStreamlit(state))
+
+    handled = llm_chat._apply_floating_copilot_text_intent("show a completed run", "en")
+
+    assert handled is True
+    assert state["llm_messages"][0] == {"role": "user", "content": "show a completed run"}
+    assert "completed Research Agent run" in state["llm_messages"][1]["content"]
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "summary"
+    assert state["_agent_workbench"]["summary_demo_source"] == "dock_completed_run_preview"
+    assert state["_floating_ai_open"] is False
+
+
+def test_research_copilot_dock_text_intent_idea_recommendation_stays_in_chat(
+    monkeypatch,
+) -> None:
+    state: dict[str, object] = {"_active_main_page": "entry"}
+    intent = llm_chat._floating_copilot_text_intent(
+        "I want to study sepsis, any recommended research directions?",
+        "en",
+        state,
+    )
+    assert intent is not None
+    assert intent["kind"] == "answer"
+    assert intent["answer_id"] == "idea"
+    assert "keep this inside Copilot" in intent["content"]
+    assert "Early deterioration model" in intent["content"]
+    assert state["_copilot_idea_context"]["topic"] == "sepsis"
+
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "entry",
+            "_floating_ai_open": True,
+            "_ai_pending_question": "I want to study sepsis, any recommended research directions?",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    handled = llm_chat._apply_floating_copilot_text_intent(
+        "I want to study sepsis, any recommended research directions?",
+        "en",
+    )
+
+    assert handled is True
+    assert state["llm_messages"][0] == {
+        "role": "user",
+        "content": "I want to study sepsis, any recommended research directions?",
+    }
+    assert "keep this inside Copilot" in state["llm_messages"][1]["content"]
+    assert state["_active_main_page"] == "entry"
+    assert "research_agent_workflow_mode" not in state
+    assert state["_floating_ai_open"] is True
+
+
+def test_research_copilot_dock_text_intent_ignores_open_ended_prompt(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "_active_main_page": "quick_viz",
+            "_floating_ai_open": True,
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    handled = llm_chat._apply_floating_copilot_text_intent(
+        "Can you compare several modelling approaches for this cohort?",
+        "en",
+    )
+
+    assert handled is False
+    assert "llm_messages" not in state
+    assert state["_active_main_page"] == "quick_viz"
+
+
+def test_research_copilot_dock_actions_defer_demo_widget_key_updates(monkeypatch) -> None:
+    class _WidgetLockedSessionState(_AttrSessionState):
+        _locked_keys = {"demo_mode_patients", "demo_mode_hours"}
+
+        def __setitem__(self, key, value) -> None:
+            if key in self._locked_keys:
+                raise AssertionError(f"attempted to mutate widget key after render: {key}")
+            super().__setitem__(key, value)
+
+    state = _WidgetLockedSessionState(
+        {
+            "language": "en",
+            "database": "mock",
+            "demo_mode_patients": 10,
+            "demo_mode_hours": 24,
+            "_floating_ai_open": True,
+            "_copilot_guided_study": {
+                "branch": "quality",
+                "step": "review",
+                "data_mode": "demo",
+                "patient_n": 30,
+                "question": "Which ICU concepts are trustworthy enough to analyze?",
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("study_review")
+
+    assert state["mock_params"]["n_patients"] == 30
+    assert state["_preview_n"] == 30
+    assert state["_eu_demo_widget_params_pending"] == {"n_patients": 30, "hours": 24}
+    assert state["_active_main_page"] == "cohort"
+    assert state["_floating_ai_open"] is False
+
+
+def test_research_copilot_guided_workspace_renders_stage_cards() -> None:
+    study: dict[str, object] = {
+        "branch": "predict",
+        "step": "draft",
+        "data_mode": "demo",
+        "patient_n": 30,
+        "modules": ["Demographics", "Vital signs", "Labs"],
+        "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+        "draft_signed": False,
+    }
+
+    question_html = llm_chat._copilot_stage_card_html(study, "question", "en", compact=True)
+    cohort_html = llm_chat._copilot_stage_card_html(study, "cohort", "en", compact=True)
+    draft_html = llm_chat._copilot_stage_card_html(study, "draft", "en")
+
+    assert "eu-copilot-stage collapsed done" in question_html
+    assert "Among Sepsis-3 patients" in question_html
+    assert "eu-copilot-stage collapsed done" in cohort_html
+    assert "WHY THIS STEP" not in cohort_html
+    assert "eu-copilot-stage active" in draft_html
+    assert "WHY THIS STEP" in draft_html
+    assert "Drafting stays locked" in draft_html
+    source = Path(llm_chat.__file__).read_text(encoding="utf-8")
+    assert "_copilot_stage_signoff" not in source
+    assert "_copilot_stage_open_draft" not in source
+    assert "eu-copilot-study-rail" in source
+    assert "eu_study_step_list" in source
+    assert "_copilot_study_rail_step_" in source
+    assert "_append_copilot_rail_step_action" in source
+    assert llm_chat._copilot_stage_detail(study, "cohort", "en") == (
+        "30 stays · first ICU stay · first 24h"
+    )
+    study["draft_signed"] = True
+    assert llm_chat._copilot_stage_detail(study, "draft", "en") == "unlocked after local sign-off"
+    assert [action["id"] for action in llm_chat._copilot_study_actions(study, "en")[:2]] == [
+        "workflow_study_draft",
+        "workflow_study_review",
+    ]
+
+
+def test_research_copilot_page_omits_guided_workbench_artifacts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.session_state["entry_mode"] = "demo"
+    at.session_state["use_mock_data"] = True
+    at.session_state["database"] = "mock"
+    at.session_state["_active_main_page"] = "assistant"
+    at.session_state["_copilot_guided_study"] = {
+        "branch": "predict",
+        "step": "analysis",
+        "data_mode": "demo",
+        "patient_n": 10,
+        "modules": ["Demographics", "Vital signs", "Labs"],
+        "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+    }
+    at.run(timeout=60)
+
+    page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    button_keys = {button.key for button in at.button}
+    assert "Generated 6 files" not in page_text
+    assert "Show 2 more files" not in page_text
+    assert "demo · local · evidence-ledgered" not in page_text
+    assert "Study plan" not in page_text
+    assert "Evidence gate" not in page_text
+    assert "Study workspace" in page_text
+    assert "Building your study" in page_text
+    assert "Evidence-bound" in page_text
+    assert "Open Classic Flow" not in page_text
+    assert "_copilot_diff_show_more" not in button_keys
+    assert "_copilot_review_artifacts" not in button_keys
+    assert "_copilot_diff_open_agent" not in button_keys
+    assert "_copilot_artifact_preview_close" not in button_keys
+    assert "_copilot_new_study" in button_keys
+    assert "_copilot_rail_classic_workspace" in button_keys
+    assert "_llm_ai_page_workspace_guided_hint_0" in button_keys
+    assert "_llm_ai_page_workspace_starter_0" not in button_keys
+
+
+def test_research_copilot_page_uses_minimal_chat_workspace(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.session_state["entry_mode"] = "demo"
+    at.session_state["use_mock_data"] = True
+    at.session_state["database"] = "mock"
+    at.session_state["_active_main_page"] = "assistant"
+    at.session_state["copilot_study_root"] = str(tmp_path / "copilot_studies")
+    at.session_state["_copilot_guided_study"] = {
+        "branch": "predict",
+        "step": "concepts",
+        "data_mode": "demo",
+        "patient_n": 24,
+        "modules": ["Demographics", "Vital signs", "Labs"],
+        "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+        "selected_concepts": ["age", "hr", "map", "lact", "sofa2", "death"],
+    }
+    at.run(timeout=60)
+
+    button_keys = {button.key for button in at.button}
+    assert "_copilot_top_exit" in button_keys
+    assert "_copilot_top_classic_workspace" in button_keys
+    assert "_copilot_new_study" in button_keys
+    assert "_copilot_rail_classic_workspace" in button_keys
+    assert "_copilot_guided_demo" not in button_keys
+    assert "_copilot_rail_guided_demo" not in button_keys
+    assert "_copilot_demo_review" not in button_keys
+    assert "_copilot_agent_setup" not in button_keys
+    assert "_llm_ai_page_workspace_guided_hint_0" in button_keys
+    assert "_llm_ai_page_workspace_starter_0" not in button_keys
+    assert "_eu_topbar_run" not in button_keys
+    assert not any(getattr(button, "label", "") == "Open Agent" for button in at.button)
+    page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "Research Copilot" in page_text
+    assert "What would you like to study?" in page_text
+    assert "Recent" in page_text
+    assert "No studies yet" in page_text
+    assert "Study workspace" in page_text
+    assert "Building your study" in page_text
+    assert "Evidence-bound" in page_text
+    assert "Study plan" not in page_text
+    assert "Evidence gate" not in page_text
+    assert "Open Classic Flow" not in page_text
+    assert "Generated 6 files" not in page_text
+    assert "Show 2 more files" not in page_text
+    assert "EasyICU · chat-first research workspace" not in page_text
+    assert "A parallel chat-first interface" not in page_text
+    assert "EasyICU hosted · evidence-bound" not in page_text
+    assert "EVIDENCE-BOUND NOTE" not in page_text
+    assert "does lactate matter for sepsis mortality" not in page_text
+    assert "Predict sepsis mortality" not in page_text
+    assert "Workspace state" not in page_text
+    assert "Lactate trajectory" not in page_text
+    assert "AKI onset across MIMIC-IV" not in page_text
+    assert "Vasopressor exposure audit" not in page_text
+    llm_source = Path(llm_chat.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+    assert 'brand_icon = icon("flask")' in llm_source
+    assert '<span class="brand-mark">✦</span>' not in llm_source
+    assert "Lactate trajectory · 48h" not in llm_source
+    assert "Current ICU study" not in llm_source
+    assert "_copilot_list_study_sessions" in llm_source
+    assert "COPILOT_SESSION_MESSAGE_SAVE_LIMIT = 80" in llm_source
+    assert "COPILOT_RENDER_MESSAGE_LIMIT = 5" in llm_source
+    assert "COPILOT_RECENT_SESSION_RENDER_LIMIT = 6" in llm_source
+    copilot_sessions_source = (
+        Path(llm_chat.__file__).with_name("copilot") / "sessions.py"
+    ).read_text(encoding="utf-8")
+    assert '_repo_root() / "research_output" / "copilot_studies"' in copilot_sessions_source
+    session_rail_source = inspect.getsource(llm_chat._render_copilot_session_rail)
+    assert "_touch_current_copilot_study_session" not in session_rail_source
+    assert "sessions[:COPILOT_RECENT_SESSION_RENDER_LIMIT]" in session_rail_source
+    compact_chat_source = inspect.getsource(llm_chat._render_compact_chat_panel)
+    assert "llm_messages[-COPILOT_RENDER_MESSAGE_LIMIT:]" in compact_chat_source
+    assert ".eu-copilot-topbrand .brand-mark svg" in css_text
+    assert "_copilot_session_open_" in css_text
+
+
+def test_research_copilot_new_study_creates_real_local_session(tmp_path) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "entry_mode": "real",
+            "copilot_study_root": str(tmp_path / "studies"),
+            "llm_messages": [{"role": "assistant", "content": "old fake rail"}],
+        }
+    )
+
+    session = llm_chat._start_new_copilot_study_session(state, "en")
+
+    workdir = Path(str(session["workdir"]))
+    manifest_path = workdir / "copilot_session.json"
+    assert workdir.exists()
+    assert (workdir / "agent_runs").exists()
+    assert manifest_path.exists()
+    assert state["llm_messages"] == []
+    assert state["_copilot_current_session_id"] == workdir.name
+    assert state["research_agent_workdir"] == str((workdir / "agent_runs").resolve())
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["title"] == "Untitled study"
+    assert manifest["workdir"] == str(workdir.resolve())
+    assert manifest["agent_runs_dir"] == str((workdir / "agent_runs").resolve())
+    assert manifest["messages"] == []
+    assert manifest["study"]["data_mode"] == "real"
+
+    state["llm_messages"] = [{"role": "user", "content": "Study vasopressors"}]
+    state["_copilot_guided_study"]["question"] = "Does vasopressor exposure predict ICU mortality?"
+    llm_chat._touch_current_copilot_study_session(state, "en")
+    sessions = llm_chat._copilot_list_study_sessions(state)
+    assert state["_copilot_sessions_cache"]["root"] == str(tmp_path / "studies")
+    assert [item["id"] for item in sessions] == [workdir.name]
+    assert sessions[0]["title"] == "Does vasopressor exposure predict ICU mortality?"
+
+    cached_sessions = llm_chat._copilot_list_study_sessions(state)
+    assert cached_sessions == sessions
+
+    reopened = _AttrSessionState({"language": "en", "copilot_study_root": str(tmp_path / "studies")})
+    assert llm_chat._open_copilot_study_session(reopened, workdir.name, "en") is True
+    assert reopened["llm_messages"] == [{"role": "user", "content": "Study vasopressors"}]
+    assert reopened["_copilot_guided_study"]["question"] == (
+        "Does vasopressor exposure predict ICU mortality?"
+    )
+    assert reopened["research_agent_workdir"] == str((workdir / "agent_runs").resolve())
+
+
+def test_research_copilot_page_keeps_guided_hint_chips(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.session_state["entry_mode"] = "demo"
+    at.session_state["use_mock_data"] = True
+    at.session_state["database"] = "mock"
+    at.session_state["_active_main_page"] = "assistant"
+    at.session_state["_copilot_guided_study"] = {
+        "branch": "predict",
+        "step": "cohort",
+        "data_mode": "demo",
+        "patient_n": 10,
+        "modules": ["Demographics", "Vital signs", "Labs"],
+        "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+    }
+    at.run(timeout=60)
+
+    button_keys = {button.key for button in at.button}
+    assert "_llm_ai_page_workspace_guided_hint_0" in button_keys
+    assert "_llm_ai_page_workspace_guided_hint_1" in button_keys
+    assert "_llm_ai_page_workspace_guided_hint_2" in button_keys
+    assert "_llm_ai_page_workspace_guided_hint_3" in button_keys
+
+    state = {
+        "language": "en",
+        "_copilot_guided_study": {
+            "branch": "predict",
+            "step": "cohort",
+            "data_mode": "demo",
+            "patient_n": 10,
+            "modules": ["Demographics", "Vital signs", "Labs"],
+            "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+        },
+    }
+    reply, _actions = llm_chat._handle_copilot_guided_prompt("use 30 patients", "en", state)
+    assert state["_copilot_guided_study"]["patient_n"] == 30
+    assert "30 stays" in reply
+    assert "Study workspace" not in reply
+    assert "[x] Research question" not in reply
+
+    css = shell_styles._load_shell_overrides_css()
+    assert ".eu-copilot-hint-row" in css
+    assert '[class*="guided_intents"]' in css
+    assert "justify-content: flex-start" in css
+    assert "--copilot-content-max: 768px;" in css
+    assert "--copilot-user-message-max: 560px;" in css
+    assert "width: min(calc(100% - 52px), var(--copilot-content-max))" in css
+    assert "max-width: var(--copilot-content-max)" in css
+    assert "max-width: 1280px" not in css
+    assert "grid-template-columns: 232px minmax(0, 1fr) 322px" in css
+    assert "eu-copilot-study-rail" in css
+    assert "st-key-eu_copilot_left_rail" in css
+    assert "eu-copilot-datasource-card" in css
+    assert "st-key-_llm_ai_page_workspace_data_source_inline" in css
+    assert "st-key-_llm_ai_page_workspace_cohort_inline" in css
+    assert "st-key-_llm_ai_page_workspace_feature_inline" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
+    assert "grid-template-columns: minmax(0, 1fr) 44px" in css
+    assert "grid-template-columns: minmax(0, 1fr) auto" in css
+    assert "eu-copilot-composer-foot" in css
+    assert "eu-copilot-flow-card" in css
+    assert ".eu-copilot-flow-card .flow-steps" in css
+    assert ".eu-copilot-flow-card .flow-facts" in css
+    assert "_workflow_step_controls" in css
+    assert "_workflow_inline_edits" in css
+    assert "_question_panel_editor" in css
+    assert "_api_panel_editor" in css
+    assert "eu-copilot-flow-controls-label" in css
+    assert "eu-copilot-inline-editor-title" in css
+    llm_text = Path("src/easyicu/webapp/llm_chat.py").read_text(encoding="utf-8")
+    assert "Current workflow step" in llm_text
+    assert "_copilot_visible_workflow_step_items" in llm_text
+    assert "_render_copilot_workflow_inline_edit_controls" in llm_text
+    assert "_save_copilot_question_from_inline_editor" in llm_text
+    assert "_save_copilot_api_from_inline_editor" in llm_text
+    assert "_workflow_edit_question" in llm_text
+    assert "_workflow_edit_api" in llm_text
+    assert "API keys are not written to disk" in llm_text
+    assert "_workflow_fact_" not in llm_text
+    assert "disabled=step_id == active_step" not in llm_text
+    assert 'f"{prefix}{label}"' not in llm_text
+    assert '[class*="guided_hint_"] button' in css
+    assert "height: calc(100vh - 214px) !important;" not in css
+    assert "height: calc(100vh - 86px) !important;" in css
+    assert '[class*="st-key-eu_copilot_guided_shell"] > [data-testid="stVerticalBlockBorderWrapper"]' in css
+    assert "height: 100% !important;" in css
+    assert "flex: 1 1 auto !important;" in css
+    assert ':has([class*="st-key-_llm_ai_page_workspace_history"])' in css
+    assert ':has([class*="st-key-_llm_ai_page_workspace_composer_wrap"])' in css
+    assert "overflow-y: auto !important;" in css
+    composer_css = css[
+        css.index('[class*="st-key-_llm_ai_page_workspace_composer_wrap"] {'):
+        css.index('[class*="st-key-_llm_ai_page_workspace_composer_wrap"] > [data-testid="stVerticalBlock"]')
+    ]
+    assert "position: fixed" not in composer_css
+    assert "position: relative !important;" in composer_css
+    assert "height: calc(100vh - 190px) !important;" not in css
+    assert "max-width: min(var(--copilot-user-message-max), 74%)" in css
+
+
+def test_research_copilot_workflow_card_opens_question_editor(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    state = {
+        "language": "en",
+        "_active_main_page": "assistant",
+        "entry_mode": "real",
+        "use_mock_data": False,
+        "database": "miiv",
+        "llm_provider": "openrouter",
+        "llm_api_key": "",
+        "llm_base_url": "https://openrouter.ai/api/v1",
+        "llm_model": "openai/gpt-oss-120b:free",
+        "llm_enabled": False,
+        "_copilot_guided_study": {
+            "branch": "predict",
+            "step": "question",
+            "data_mode": "real",
+            "question": "",
+        },
+    }
+    snapshot = llm_chat._copilot_workflow_snapshot(state, "en")
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    for key, value in state.items():
+        at.session_state[key] = value
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["llm_messages"] = [
+        {
+            "role": "assistant",
+            "content": "Choose or edit the study question in this chat.",
+            "workflow_snapshot": snapshot,
+        }
+    ]
+    at.run(timeout=60)
+
+    at.button(key="_llm_ai_page_workspace_0_workflow_edit_question").click().run(timeout=60)
+    assert at.text_area(key="_llm_ai_page_workspace_0_question_editor_text") is not None
+
+    edited_question = "Does AKI risk rise after sepsis onset in ICU patients?"
+    at.text_area(key="_llm_ai_page_workspace_0_question_editor_text").set_value(edited_question)
+    next(button for button in at.button if button.label == "Save question").click().run(timeout=60)
+
+    study = at.session_state["_copilot_guided_study"]
+    assert study["question"] == edited_question
+    assert study["step"] == "data"
+    assert at.session_state["_copilot_last_question"] == edited_question
+    assert at.session_state["_copilot_inline_question_editor_open"] is False
+    assert at.session_state["_active_main_page"] == "assistant"
+    assert at.session_state["llm_messages"][-2]["content"] == f"Set research question: {edited_question}"
+    assert "choose the data source in this same chat" in at.session_state["llm_messages"][-1]["content"]
+    assert at.session_state["llm_messages"][-1]["workflow_snapshot"]["active_step"] == "data"
+
+
+def test_research_copilot_workflow_card_opens_api_editor_session_only(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    state = {
+        "language": "en",
+        "_active_main_page": "assistant",
+        "entry_mode": "real",
+        "use_mock_data": False,
+        "database": "miiv",
+        "llm_provider": "openrouter",
+        "llm_api_key": "",
+        "llm_base_url": "https://openrouter.ai/api/v1",
+        "llm_model": "openai/gpt-oss-120b:free",
+        "llm_enabled": False,
+        "_copilot_guided_study": {
+            "branch": "predict",
+            "step": "question",
+            "data_mode": "real",
+            "question": "Does AKI risk rise after sepsis onset in ICU patients?",
+        },
+    }
+    snapshot = llm_chat._copilot_workflow_snapshot(state, "en")
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    for key, value in state.items():
+        at.session_state[key] = value
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["llm_messages"] = [
+        {
+            "role": "assistant",
+            "content": "Configure API from the workflow card.",
+            "workflow_snapshot": snapshot,
+        }
+    ]
+    at.run(timeout=60)
+
+    at.button(key="_llm_ai_page_workspace_0_workflow_edit_api").click().run(timeout=60)
+    assert at.selectbox(key="_llm_ai_page_workspace_0_api_editor_provider") is not None
+    assert at.text_input(key="_llm_ai_page_workspace_0_api_editor_key") is not None
+    assert at.text_input(key="_llm_ai_page_workspace_0_api_editor_model") is not None
+    assert at.checkbox(key="_llm_ai_page_workspace_0_api_editor_enabled") is not None
+
+    at.text_input(key="_llm_ai_page_workspace_0_api_editor_key").set_value("sk-test-inline")
+    at.text_input(key="_llm_ai_page_workspace_0_api_editor_model").set_value("openai/gpt-oss-20b:free")
+    at.checkbox(key="_llm_ai_page_workspace_0_api_editor_enabled").set_value(True)
+    next(button for button in at.button if button.label == "Save API settings").click().run(timeout=60)
+
+    assert at.session_state["llm_provider"] == "openrouter"
+    assert at.session_state["llm_api_key"] == "sk-test-inline"
+    assert at.session_state["_llm_api_key_inp"] == "sk-test-inline"
+    assert at.session_state["llm_model"] == "openai/gpt-oss-20b:free"
+    assert at.session_state["llm_enabled"] is True
+    assert at.session_state["_eu_settings_allow_outbound_model_calls"] is True
+    assert at.session_state["_copilot_inline_api_editor_open"] is False
+    message_text = "\n".join(str(message.get("content", "")) for message in at.session_state["llm_messages"])
+    assert "sk-test-inline" not in message_text
+    assert "API keys are not written to disk" in message_text
+
+
+def test_research_copilot_guided_no_data_recovery_blocks_review(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "database": "mock",
+            "demo_mode_patients": 10,
+            "demo_mode_hours": 24,
+            "_floating_ai_open": True,
+            "_copilot_guided_study": {
+                "branch": "predict",
+                "step": "cohort",
+                "data_mode": "demo",
+                "patient_n": 10,
+                "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+            },
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("study_strict_filters")
+
+    study = state["_copilot_guided_study"]
+    assert study["step"] == "cohort"
+    assert study["cohort_phase"] == "empty"
+    assert study["cohort_filters"] == ["sepsis-3", "age >= 80", "first 24h"]
+    assert state["_active_main_page"] == "assistant"
+
+    llm_chat._apply_chat_workflow_action("study_review")
+
+    assert state["_active_main_page"] == "assistant"
+    assert state["_preview_requested"] is False
+    assert "Loosen filters" in state["_assistant_notice"]
+
+    llm_chat._apply_chat_workflow_action("study_loosen_filters")
+
+    assert study["step"] == "cohort"
+    assert study["cohort_phase"] == "ready"
+    assert study["cohort_filters"] == []
+    assert state["_active_main_page"] == "assistant"
+
+
+def test_research_copilot_guided_no_data_card_matches_polish_design() -> None:
+    study: dict[str, object] = {
+        "branch": "predict",
+        "step": "cohort",
+        "data_mode": "demo",
+        "patient_n": 10,
+        "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+        "cohort_phase": "empty",
+        "cohort_filters": ["sepsis-3", "age >= 80", "first 24h"],
+    }
+
+    html = llm_chat._copilot_stage_card_html(study, "cohort", "en")
+
+    assert "No patients match those filters" in html
+    assert "eu-copilot-nodata" in html
+    assert "sepsis-3" in html
+    assert "age &gt;= 80" in html
+    assert llm_chat._copilot_stage_detail(study, "cohort", "en") == "0 stays · strict filters"
+    assert [action["workflow"] for action in llm_chat._copilot_study_actions(study, "en")] == [
+        "study_loosen_filters",
+        "study_loosen_filters",
+    ]
+    source = Path(llm_chat.__file__).read_text(encoding="utf-8")
+    css = shell_styles._load_shell_overrides_css()
+    assert "_copilot_stage_strict_filters" not in source
+    assert "_copilot_stage_loosen_filters" not in source
+    assert "_copilot_stage_back_defaults" not in source
+    assert ".eu-copilot-stage .eu-copilot-nodata" in css
+    assert ".eu-study-step-list" in css
+
+
+def test_research_copilot_guided_no_data_surface_stays_out_of_chat_page(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.session_state["entry_mode"] = "demo"
+    at.session_state["use_mock_data"] = True
+    at.session_state["database"] = "mock"
+    at.session_state["_active_main_page"] = "assistant"
+    at.session_state["_copilot_guided_study"] = {
+        "branch": "predict",
+        "step": "cohort",
+        "data_mode": "demo",
+        "patient_n": 10,
+        "modules": ["Demographics", "Vital signs", "Labs"],
+        "question": "Among Sepsis-3 patients, does lactate improve mortality prediction?",
+        "cohort_phase": "empty",
+        "cohort_filters": ["sepsis-3", "age >= 80", "first 24h"],
+    }
+    at.run(timeout=60)
+
+    page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    button_keys = {button.key for button in at.button}
+    assert "No patients match those filters" not in page_text
+    assert "age &gt;= 80" not in page_text
+    assert "_copilot_stage_loosen_filters" not in button_keys
+    assert "_copilot_stage_back_defaults" not in button_keys
+    assert "_llm_ai_page_workspace_guided_hint_0" in button_keys
+
+
+def test_research_copilot_handoff_prefers_framed_guided_question() -> None:
+    state: dict[str, object] = {
+        "llm_messages": [{"role": "user", "content": "raw vague question"}],
+        "_copilot_guided_study": {
+            "branch": "predict",
+            "step": "draft",
+            "question": "Among Sepsis-3 patients, does lactate improve in-hospital mortality prediction?",
+        },
+    }
+
+    seeded = llm_chat._prepare_research_agent_handoff_from_ai(state)
+
+    assert seeded is True
+    assert state["research_agent_question"] == (
+        "Among Sepsis-3 patients, does lactate improve in-hospital mortality prediction?"
+    )
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
+
+
+def test_research_copilot_workflow_action_drives_classic_workspace(monkeypatch) -> None:
+    state = _AttrSessionState(
+        {
+            "language": "en",
+            "database": "mock",
+            "_floating_ai_open": True,
+            "_inline_ai_panel_open": True,
+            "_ai_pending_question": "load demo",
+        }
+    )
+    monkeypatch.setattr(llm_chat, "st", _SessionStateStreamlit(state))
+
+    llm_chat._apply_chat_workflow_action("demo_review")
+
+    assert state["entry_mode"] == "demo"
+    assert state["use_mock_data"] is True
+    assert state["database"] == "mock"
+    assert state["_preview_requested"] is True
+    assert state["_active_main_page"] == "quick_viz"
+    assert "_main_nav_widget" not in state
+    assert state["_scroll_to_top"] is True
+    assert state["_inline_ai_panel_open"] is False
+    assert state["_floating_ai_open"] is False
+    assert "_ai_pending_question" not in state
+
+    llm_chat._apply_chat_workflow_action("real_extraction")
+
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["database"] == "miiv"
+    assert state["_active_main_page"] == "extract"
+    assert "_main_nav_widget" not in state
 
 
 def test_topbar_assistant_open_agent_reuses_ai_handoff_seed() -> None:
@@ -4006,14 +8885,18 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
     assert "_ra_view == 'history'" in app_branch
     assert "_render_research_agent_reference_header(lang, view=_ra_view)" in app_branch
     assert app_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)") < app_branch.index('st.container(key="_eu_ra_tabs")')
+    assert 'st.container(key="_eu_ra_header_actions")' not in app_branch
+    assert "with _seg_tail:" in app_branch
     assert "_research_agent_active_run_context(st.session_state)" in app_branch
     assert "_eu_ra_header_rerun" in app_branch
+    assert app_branch.index("with _seg_tail:") < app_branch.index("_eu_ra_header_rerun")
     assert "_prime_research_agent_header_rerun(st.session_state, _ra_run_context)" in app_branch
-    assert 'icon=":material/tune:"' in app_branch
-    assert 'icon=":material/grid_view:"' in app_branch
-    assert 'icon=":material/history:"' in app_branch
-    assert 'icon=":material/shield:"' in app_branch
-    assert 'icon=":material/replay:"' in app_branch
+    assert 'key="_eu_ra_view_setup"' in app_branch
+    assert '"Workbench" if lang == \'en\' else "工作台"' in app_branch
+    assert 'key="_eu_ra_view_workbench"' in app_branch
+    assert 'key="_eu_ra_view_history"' in app_branch
+    assert 'key="_eu_ra_view_summary"' in app_branch
+    assert 'key="_eu_ra_header_rerun"' in app_branch
     assert "render_research_agent_history_page(lang, show_header=False)" in app_branch
     assert 'view: str = "setup"' in app_source
     assert 'view == "history"' in app_source
@@ -4037,6 +8920,9 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
     assert "Export ledger" in history_source
     assert "research_agent_history_export_ledger" in history_source
     assert "research_agent_history_page_pick" in history_source
+    assert "Advanced local details" in history_source
+    assert "research_agent_history_page_show_advanced_" in history_source
+    assert "def _render_history_workdir_controls" in history_source
     assert "_format_history_findings(" in history_source
     assert "_history_selected_summary_html(" in history_source
     assert 'data-label="{html.escape(headers[0])}"' in ra_source
@@ -4048,7 +8934,10 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
     assert 'finding_errors", 0)}E / {selected_run.get("finding_warnings", 0)}W' not in history_source
     assert "Show resume controls" not in history_source
     assert "Show detailed report and artefacts" not in history_source
+    assert "Change local workdir" not in history_source
     assert 'with st.expander("Detailed report and artefacts"' not in history_source
+    assert "if not show_advanced:" in history_source
+    assert history_source.index("if not show_advanced:") < history_source.index('with st.expander(_ra_text("replication_title")')
     assert "_section_request_picker" not in history_source
     assert "_section_llm_picker" not in history_source
     assert "_render_replication_section(default_workdir=workdir)" in history_source
@@ -4056,6 +8945,10 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
     assert ".ra-setup-overview" in css_source
     assert ".ra-setup-stage-list" in css_source
     assert ".ra-setup-operating" in css_source
+    assert ".ra-history-advanced-note" in css_source
+    assert ".eu-design-page-header.eu-ra-reference-header" in css_source
+    assert "background: transparent !important" in css_source
+    assert 'st-key-_eu_ra_header_actions' in css_source
     assert ".ra-setup-split" in css_source
     assert ".eu-ref-setup-split .eu-ref-context-grid" in css_source
     assert "grid-template-columns: 1fr" in css_source
@@ -4074,6 +8967,309 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
     i18n_source = Path(i18n.__file__).read_text(encoding="utf-8")
     assert "🧪 Reproduce published findings" not in i18n_source
     assert "🧪 复现已发表" not in i18n_source
+
+
+def test_research_agent_history_export_omits_absolute_local_paths() -> None:
+    payload_text = research_agent._history_export_payload(
+        [
+            {
+                "run_id": "run_private_001",
+                "run_dir": Path("/Users/haibo/private/research_output/run_private_001"),
+                "status": "complete",
+                "started_at": "2026-06-04T08:00:00Z",
+                "finished_at": "2026-06-04T08:02:00Z",
+                "question": "Can first-24h features predict ICU outcome?",
+                "step_ok": 5,
+                "step_total": 5,
+                "step_failed": 0,
+                "figure_count": 2,
+                "table_count": 3,
+                "evidence_count": 9,
+                "finding_errors": 0,
+                "finding_warnings": 1,
+                "review_decision": "approved",
+                "manifest_partial": False,
+            }
+        ],
+        workdir=Path("/Users/haibo/private/research_output"),
+    )
+    payload = json.loads(payload_text)
+
+    assert payload["local_paths_included"] is False
+    assert payload["workdir_name"] == "research_output"
+    assert "workdir" not in payload
+    assert "/Users/haibo" not in payload_text
+    assert "private/research_output" not in payload_text
+
+    run = payload["runs"][0]
+    assert run["run_id"] == "run_private_001"
+    assert run["run_name"] == "run_private_001"
+    assert "run_dir" not in run
+    assert run["steps"] == {"ok": 5, "total": 5, "failed": 0}
+    assert run["evidence"] == {"figures": 2, "tables": 3, "records": 9}
+    assert run["findings"] == {"errors": 0, "warnings": 1}
+
+
+def test_research_agent_summary_bundle_index_omits_absolute_local_paths() -> None:
+    href, filename = agent_workbench._summary_bundle_index_download(
+        {
+            "run_id": "run_private_002",
+            "run_dir": "/Users/haibo/private/research_output/run_private_002",
+            "source_label": "Real manifest",
+            "status": "done",
+            "steps": [
+                {"label": "Cohort summary", "status": "complete"},
+            ],
+            "evidence": [
+                {
+                    "kind": "figure",
+                    "label": "ROC curve",
+                    "relative_path": "figures/roc.svg",
+                    "sha256": "sha-figure",
+                },
+                {
+                    "kind": "table",
+                    "label": "Table 1",
+                    "relative_path": "tables/table1.csv",
+                    "sha": "sha-table",
+                },
+                {
+                    "kind": "code",
+                    "label": "Analysis script",
+                    "relative_path": "scripts/analysis.py",
+                    "sha256": "sha-code",
+                },
+            ],
+            "audit": {"counts": {"errors": 0, "warnings": 0}},
+        },
+        "en",
+    )
+    assert filename == "run_private_002_bundle_index.json"
+
+    encoded = href.split(",", 1)[1]
+    payload_text = base64.b64decode(encoded.encode("ascii")).decode("utf-8")
+    payload = json.loads(payload_text)
+
+    assert payload["local_paths_included"] is False
+    assert payload["run_id"] == "run_private_002"
+    assert payload["run_name"] == "run_private_002"
+    assert payload["workdir_name"] == "research_output"
+    assert "run_dir" not in payload
+    assert "/Users/haibo" not in payload_text
+    assert "private/research_output" not in payload_text
+    assert payload["output_bundle"] == {"figures": 1, "tables": 1, "code": 1, "evidence": 3}
+    assert payload["evidence"][0] == {
+        "kind": "figure",
+        "label": "ROC curve",
+        "relative_path": "figures/roc.svg",
+        "sha": "sha-figure",
+    }
+
+
+def test_research_agent_summary_exports_real_bundle_zip_without_local_paths(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_private_003"
+    figure_path = run_dir / "figures" / "roc.svg"
+    table_path = run_dir / "tables" / "table1.csv"
+    figure_path.parent.mkdir(parents=True)
+    table_path.parent.mkdir(parents=True)
+    figure_path.write_text("<svg><path d='M0 0L1 1'/></svg>", encoding="utf-8")
+    table_path.write_text("feature,value\nhr,90\n", encoding="utf-8")
+
+    state = {
+        "run_id": "run_private_003",
+        "run_dir": str(run_dir),
+        "source_label": "Real manifest",
+        "status": "done",
+        "steps": [{"label": "Cohort summary", "status": "complete"}],
+        "evidence": [
+            {
+                "kind": "figure",
+                "label": "ROC curve",
+                "relative_path": "figures/roc.svg",
+                "sha256": "sha-figure",
+            },
+            {
+                "kind": "table",
+                "label": "Table 1",
+                "relative_path": "tables/table1.csv",
+                "sha": "sha-table",
+            },
+            {
+                "kind": "figure",
+                "label": "Unsafe absolute",
+                "relative_path": "/Users/haibo/private/leak.svg",
+                "sha": "sha-abs",
+            },
+            {
+                "kind": "code",
+                "label": "Unsafe traversal",
+                "relative_path": "../outside.py",
+                "sha": "sha-traversal",
+            },
+        ],
+        "audit": {"counts": {"errors": 0, "warnings": 0}},
+    }
+
+    href, filename = agent_workbench._summary_bundle_zip_download(state, "en")
+
+    assert filename == "run_private_003_output_bundle.zip"
+    assert href.startswith("data:application/zip;base64,")
+    zip_bytes = base64.b64decode(href.split(",", 1)[1].encode("ascii"))
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        names = set(zf.namelist())
+        assert "bundle_index.json" in names
+        assert "review_checks.json" in names
+        assert "bundle_manifest.json" in names
+        assert "artifacts/figures/roc.svg" in names
+        assert "artifacts/tables/table1.csv" in names
+        assert zf.read("artifacts/figures/roc.svg").decode("utf-8").startswith("<svg>")
+        bundle_index = zf.read("bundle_index.json").decode("utf-8")
+        bundle_manifest = json.loads(zf.read("bundle_manifest.json").decode("utf-8"))
+
+    assert bundle_manifest["local_paths_included"] is False
+    assert {item["bundle_path"] for item in bundle_manifest["included_artifacts"]} == {
+        "artifacts/figures/roc.svg",
+        "artifacts/tables/table1.csv",
+    }
+    assert len(bundle_manifest["skipped_artifacts"]) == 2
+    assert str(tmp_path) not in bundle_index
+    assert str(tmp_path) not in json.dumps(bundle_manifest)
+    assert "/Users/haibo" not in bundle_index
+    assert "../outside.py" not in names
+
+    summary_html = agent_workbench._output_summary_html(state, "en")
+    assert "eu-summary-bundle-details" in summary_html
+    assert "eu-summary-bundle-summary" in summary_html
+    assert "Export package is ready" in summary_html
+    assert "Export bundle" in summary_html
+    assert "Export bundle index" not in summary_html
+    assert "_output_bundle.zip" in summary_html
+
+
+def test_research_agent_summary_decline_matches_polish_gate_semantics(tmp_path: Path) -> None:
+    source = inspect.getsource(agent_workbench._render_summary_review_controls)
+
+    assert '_T(lang, "Decline", "退回")' in source
+    assert 'decision="declined"' in source
+    assert '_T(lang, "Add reviewer note", "添加审核备注")' in source
+    assert "_eu_summary_review_note_visible_" in source
+    assert "note_visible = st.toggle(" in source
+    assert source.index("approve_col, lock_col, draft_col") < source.index("note_visible = st.toggle(")
+    assert 'type="primary" if reviewer_ready else "secondary"' in source
+    assert "Keep locked" not in source
+
+    run_dir = tmp_path / "run_decline_001"
+    run_dir.mkdir()
+    state = {
+        "run_id": "run_decline_001",
+        "run_dir": str(run_dir),
+        "status": "done",
+        "steps": [{"label": "Cohort summary", "status": "complete"}],
+        "evidence": [
+            {
+                "kind": "table",
+                "label": "Table one",
+                "relative_path": "tables/table_one.csv",
+                "sha": "sha-table",
+            },
+        ],
+        "audit": {"counts": {"errors": 0, "warnings": 0}, "review_decision": {}},
+    }
+
+    payload = agent_workbench._write_summary_review_decision(
+        run_dir,
+        decision="declined",
+        note="Needs a methods clarification before drafting.",
+        run_id=state["run_id"],
+        finding_review_state=agent_workbench._finding_review_state_summary(state),
+    )
+    state["audit"]["review_decision"] = payload
+    checks = agent_workbench._summary_review_checks(state, "en")
+    decisions = agent_workbench._review_decisions_from_audit(state["audit"], lang="en")
+
+    assert json.loads((run_dir / "review_decision.json").read_text(encoding="utf-8"))["decision"] == "declined"
+    assert all(check["ok"] is True for check in checks[:-1])
+    assert checks[-1] == {"label": "Reviewer sign-off", "ok": False, "status": "pending"}
+    assert decisions[0]["label"] == "Saved: declined"
+    assert decisions[0]["state"] == "warning"
+
+
+def test_research_agent_workbench_done_actions_match_polish_design(tmp_path: Path) -> None:
+    source = inspect.getsource(agent_workbench.render_agent_workbench)
+    action_block = inspect.getsource(agent_workbench._render_workbench_primary_actions)
+
+    assert "See evidence" in action_block
+    assert "Review & sign off" in action_block
+    assert "Request re-run" in action_block
+    assert "_eu_wb_see_evidence" in action_block
+    assert "_eu_wb_review_signoff" in action_block
+    assert "_eu_wb_request_rerun" in action_block
+    assert "_prime_workbench_request_rerun_setup(st.session_state, state)" in action_block
+    assert 'st.session_state["_eu_wb_action_panel"] = "evidence"' in action_block
+    assert "Evidence snapshot" in inspect.getsource(agent_workbench._workbench_action_panel_html)
+    assert "full audit trail" in inspect.getsource(agent_workbench._workbench_action_panel_html)
+    assert "eu-wb-snapshot-list" in inspect.getsource(agent_workbench._workbench_action_panel_html)
+    assert "_step_contract_html(state, lang)" not in inspect.getsource(agent_workbench._workbench_action_panel_html).split('if panel == "plan"')[0]
+    assert "_eu_wb_summary" not in action_block
+    assert "_eu_wb_run_controls" not in action_block
+    assert "_eu_wb_adjust" not in action_block
+    assert "_render_workbench_primary_actions(state, active_state, lang)" in source
+    assert source.index("_agent_reference_workbench_html(state, lang)") < source.index("_render_workbench_primary_actions(state, active_state, lang)")
+    assert "_render_workbench_technical_details_gate(lang)" in source
+    assert source.index("_render_workbench_primary_actions(state, active_state, lang)") < source.index("_render_workbench_technical_details_gate(lang)")
+    assert 'if not details_expanded:' in source
+    assert 'return' in source[source.index('if not details_expanded:'):source.index('with st.expander(_T(lang, "Full audit trail"')]
+
+    session_state = {
+        "research_agent_force_manuscript": True,
+        "research_agent_resume_mode": "force_manuscript",
+        "research_agent_preflight_confirmed": True,
+        "research_agent_preflight_signature": "stale",
+    }
+    run_dir = tmp_path / "run_wb_001"
+    run_dir.mkdir()
+    agent_workbench._prime_workbench_request_rerun_setup(
+        session_state,
+        {
+            "run_id": "run_wb_001",
+            "run_dir": str(run_dir),
+            "research_question": "Can early ICU variables predict outcome?",
+        },
+    )
+
+    assert session_state["research_agent_resume_run_id"] == "run_wb_001"
+    assert session_state["research_agent_resume_run_dir"] == str(run_dir)
+    assert session_state["research_agent_workdir"] == str(tmp_path)
+    assert session_state["research_agent_question"] == "Can early ICU variables predict outcome?"
+    assert session_state["research_agent_force_manuscript"] is False
+    assert session_state["research_agent_resume_mode"] == "continue"
+    assert session_state["research_agent_resume_notes"] == ""
+    assert session_state["research_agent_resume_relax_probe"] is False
+    assert session_state["research_agent_preflight_confirmed"] is False
+    assert "research_agent_preflight_signature" not in session_state
+    assert session_state["_active_main_page"] == "research_agent"
+    assert session_state["_ra_view"] == "setup"
+    assert session_state["_research_agent_expand_history"] is False
+
+
+def test_research_agent_empty_workbench_uses_locked_reference_shell() -> None:
+    css_source = Path(agent_workbench.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
+    html = agent_workbench._workbench_empty_html("en")
+
+    assert "eu-ref-workbench" not in html
+    assert "eu-ref-run-strip" not in html
+    assert "Task map" not in html
+    assert "Evidence ledger" not in html
+    assert "Analysis outputs" not in html
+    assert "Start with one research question" in html
+    assert "Setup" in html
+    assert "Run" in html
+    assert "Review" in html
+    assert "No active run" in html
+    assert "eu-agent-empty-compact" in html
+    assert "eu-agent-empty-simple" in html
+    assert ".eu-agent-empty.eu-agent-empty-compact" in css_source
+    assert ".eu-ref-more-details:not([open]) > :not(summary)" in css_source
 
 
 def test_research_agent_header_rerun_routes_to_checkpoint_setup() -> None:
@@ -4137,17 +9333,28 @@ def test_research_agent_demo_setup_uses_claude_reference_overview() -> None:
         ra_source.index("def _render_replication_section")
     ]
 
-    assert "Operating model" in demo_source
-    assert "Context pack" in demo_source
-    assert "Plan preview · 6 steps" in demo_source
-    assert "Preflight gate" in demo_source
+    assert "Demo preview" in demo_source
+    assert "Research Agent in one path" in demo_source
+    assert "Show demo plan details" in demo_source
+    assert "Question + cohort -> plan -> evidence gate -> reviewed draft" in demo_source
     assert "ra-setup-stage-list" in demo_source
+    assert "ra-core-overview demo" in demo_source
+    assert "ra-setup-flow-strip" in demo_source
+    assert "Plan\" if is_en else \"规划\"" in demo_source
+    assert "Build\" if is_en else \"组装\"" in demo_source
+    assert "Analyze\" if is_en else \"分析\"" in demo_source
+    assert "Gate\" if is_en else \"关口\"" in demo_source
+    assert "Review\" if is_en else \"复核\"" in demo_source
+    assert "ra-core-grid" in demo_source
+    assert "ra-core-next" in demo_source
+    assert "ra-core-details" in demo_source
     assert "pl-step" not in demo_source
-    assert "eu-ref-setup-split" in demo_source
-    assert "eu-ref-setup-stack" in demo_source
-    assert "ra-context-pack-card" in demo_source
-    assert "ra-question-card" in demo_source
-    assert "One sentence. The agent drafts a plan first" in demo_source
+    assert '<a class="ra-context-pack-action"' in demo_source
+    assert "_RA_QUERY_ACTION_KEY" in demo_source
+    assert "_RA_SWITCH_COHORT_ACTION" in demo_source
+    assert '<div class="ra-context-pack-action">' not in demo_source
+    assert "ra-question-card" not in demo_source
+    assert "One sentence. The agent drafts a plan first" not in demo_source
     assert "Claude reference structure adapted" not in demo_source
     assert "No LLM call, no token use, no fabricated analysis pack." in demo_page_source
     assert "render_design_page_header" in demo_page_source
@@ -4155,18 +9362,107 @@ def test_research_agent_demo_setup_uses_claude_reference_overview() -> None:
     assert "Demo guide" not in demo_source
     assert "ra-demo-hero" not in demo_source
     assert ".eu-ref-agent-setup" in css_source
+    assert ".ra-core-overview" in css_source
+    assert ".ra-setup-flow-strip" in css_source
+    assert ".ra-core-grid" in css_source
+    assert ".ra-core-next" in css_source
+    assert ".ra-core-details" in css_source
     assert ".ra-setup-stage-list" in css_source
     assert ".pipeline" in css_source
-    assert ".eu-ref-setup-split" in css_source
-    assert ".eu-ref-setup-stack" in css_source
-    assert ".ra-context-pack-card" in css_source
-    assert ".ra-question-helper" in css_source
-    assert ".eu-ref-question-box" in css_source
+
+
+def test_research_agent_switch_cohort_action_enters_real_setup(monkeypatch) -> None:
+    clear_calls: list[str] = []
+    cleared_params: list[str] = []
+    monkeypatch.setattr(research_agent, "_query_param_value", lambda name: "switch_cohort")
+    monkeypatch.setattr(research_agent, "_clear_query_param", lambda name: cleared_params.append(name))
+    monkeypatch.setattr(research_agent, "clear_run_state", lambda scope="all": clear_calls.append(scope))
+    state = {
+        "entry_mode": "demo",
+        "use_mock_data": True,
+        "database": "mock",
+        "path_validated": True,
+        "last_validated_path": "/tmp/stale",
+        "step1_confirmed": True,
+        "step2_confirmed": True,
+        "step3_confirmed": True,
+        "export_completed": True,
+        "trigger_export": True,
+        "_exporting_in_progress": True,
+        "loaded_concepts": {"hr": object()},
+        "loaded_data_origin": "mock",
+        "patient_ids": [1, 2],
+        "all_patient_count": 2,
+        "selected_patient": 1,
+        "selected_concepts": ["hr"],
+        "_active_main_page": "research_agent",
+        "_ra_view": "setup",
+    }
+
+    assert research_agent._consume_research_agent_query_action(state) is True
+
+    assert clear_calls == ["all"]
+    assert cleared_params == ["eu_ra_action"]
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["database"] == "miiv"
+    assert state["path_validated"] is False
+    assert "last_validated_path" not in state
+    assert state["step1_confirmed"] is False
+    assert state["step2_confirmed"] is False
+    assert state["step3_confirmed"] is False
+    assert state["export_completed"] is False
+    assert state["trigger_export"] is False
+    assert state["_exporting_in_progress"] is False
+    assert state["loaded_concepts"] == {}
+    assert state["loaded_data_origin"] == "none"
+    assert state["patient_ids"] == []
+    assert state["all_patient_count"] == 0
+    assert state["selected_patient"] is None
+    assert state["selected_concepts"] == []
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
+    assert state["_research_agent_switch_cohort_notice"] is True
+
+
+def test_research_agent_switch_cohort_query_is_consumed_before_entry_shell(monkeypatch) -> None:
+    clear_calls: list[str] = []
+    cleared_params: list[str] = []
+    monkeypatch.setattr(app, "query_param_value", lambda _st, key, default="": "switch_cohort")
+    monkeypatch.setattr(app, "_clear_query_param", lambda key: cleared_params.append(key))
+    monkeypatch.setattr(app, "clear_run_state", lambda scope="all": clear_calls.append(scope))
+    state = {
+        "entry_mode": "none",
+        "use_mock_data": True,
+        "database": "mock",
+        "path_validated": True,
+        "last_validated_path": "/tmp/stale",
+        "_active_main_page": "entry",
+    }
+
+    assert app._consume_research_agent_route_action(state) is True
+
+    assert clear_calls == ["all"]
+    assert cleared_params == ["eu_ra_action"]
+    assert state["entry_mode"] == "real"
+    assert state["use_mock_data"] is False
+    assert state["database"] == "miiv"
+    assert state["path_validated"] is False
+    assert "last_validated_path" not in state
+    assert state["_active_main_page"] == "research_agent"
+    assert state["_ra_view"] == "setup"
+    assert state["_research_agent_switch_cohort_notice"] is True
+
+    app_source = Path(app.__file__).read_text(encoding="utf-8")
+    main_source = app_source[app_source.index("def main():"): app_source.index("# 获取入口模式")]
+    assert "if _consume_research_agent_route_action(st.session_state):" in main_source
+    assert "st.rerun()" in main_source
 
 
 def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> None:
     ra_source = Path(research_agent.__file__).read_text(encoding="utf-8")
     css_source = Path(research_agent.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
+    bootstrap_source = Path(bootstrap.__file__).read_text(encoding="utf-8")
     page_source = ra_source[
         ra_source.index("def render_research_agent_page"):
         ra_source.index("external_llm_selected =", ra_source.index("def render_research_agent_page"))
@@ -4182,14 +9478,32 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
 
     assert 'st.container(key="eu_ra_setup_controls")' in page_source
     assert 'st.container(key="eu_ra_preflight_panel")' in ra_source
-    assert "Operating model" in overview_source
-    assert "Context pack" in overview_source
-    assert "context_badge" in overview_source
-    assert '"awaiting cohort" if is_en else "等待队列"' in overview_source
+    assert "Research Agent setup" in overview_source
+    assert "Three decisions before a run" in overview_source
+    assert "Pick the task, bind the cohort, then review the evidence gate" in overview_source
+    assert "Current request" in overview_source
+    assert "Next action" in overview_source
+    assert "ra-setup-flow-strip" in ra_source
+    assert "Plan\" if is_en else \"规划\"" in ra_source
+    assert "Build\" if is_en else \"组装\"" in ra_source
+    assert "Analyze\" if is_en else \"分析\"" in ra_source
+    assert "Gate\" if is_en else \"关口\"" in ra_source
+    assert "Review\" if is_en else \"复核\"" in ra_source
+    assert "core_ready_count = int(question_ready) + int(cohort_ready) + int(preflight_confirmed)" in overview_source
+    assert 'gate_state_label = f"{core_ready_count} / 3 ready"' in overview_source
+    assert 'gate_state_label = f"{preflight_count} / 4 ready"' not in overview_source
+    assert "Write one sentence" in overview_source
+    assert "Show detailed plan and evidence gates" in overview_source
+    assert "context_badge" not in overview_source
+    assert '"awaiting cohort" if is_en else "等待队列"' not in overview_source
     assert '<span>{"handed off" if is_en else "已交接"}</span>' not in overview_source
-    assert "Plan preview · 6 steps" in overview_source
-    assert "Preflight gate" in overview_source
+    assert "Planned outputs" in overview_source
+    assert "Evidence gate" in overview_source
     assert "Ready to run" in overview_source
+    assert "ra-core-overview" in overview_source
+    assert "ra-core-grid" in overview_source
+    assert "ra-core-next" in overview_source
+    assert "ra-core-details" in overview_source
     assert "ra-setup-stage-list" in overview_source
     assert "pl-step" not in overview_source
     assert "ra-setup-split" in overview_source
@@ -4199,23 +9513,52 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
     assert "_render_setup_controls_intro(is_en=_is_en)" in page_source
     assert "_render_preflight_controls_intro(is_en=_is_en)" in ra_source
     assert "expanded=bool(question_hint)" in page_source
+    assert 'data_recipe_title = "2. Data recipe" if _is_en else "2. 数据配方"' in page_source
     assert 'with st.expander(_step_titles[2], expanded=True)' not in page_source
-    assert "Complete the missing fields" in ra_source
-    assert "local setup" in ra_source
+    assert "_default_research_agent_llm_settings()" in page_source
+    assert "_default_research_agent_run_options()" in page_source
+    assert "research_agent_show_advanced_setup" in page_source
+    assert "Advanced setup" in page_source
+    assert page_source.index("with st.expander(data_recipe_title") < page_source.index("advanced_setup_open = st.toggle")
+    assert "if advanced_setup_open:" in page_source
+    assert page_source.index("if advanced_setup_open:") < page_source.index("_section_method_preferences(")
+    assert page_source.index("if advanced_setup_open:") < page_source.index("_section_llm_picker(handles)")
+    assert page_source.index("if advanced_setup_open:") < page_source.index("_section_options()")
+    assert "Edit only what is needed" in ra_source
+    assert "progressive setup" in ra_source
+    assert "Core idea triage" in ra_source
+    assert "Advanced source and mapping" in ra_source
+    assert "Review triage details" in ra_source
     assert "backend logic unchanged" not in ra_source
     assert "human-controlled run" in ra_source
     assert "Confirm inputs, files, and evidence gates" in ra_source
     assert "Launch review" in ra_source
     assert "Review the current run contract" in ra_source
     assert "ra-preflight-steps" in ra_source
+    assert 'if contract["external_llm"] or not llm_ready:' in preflight_source
+    assert "ra-preflight-details" in preflight_source
+    assert "Show launch details" in preflight_source
+    assert 'if bool(st.session_state.get("research_agent_show_advanced_setup", False)):' in preflight_source
     assert "Confirm launch review" in ra_source
     assert "ra-context-policy" in ra_source
     assert "disable_icu_context = False" in ra_source
     assert "research_agent_disable_icu" not in ra_source
     assert "Disable ICU-aware context" not in ra_source
     assert ".ra-context-policy" in css_source
-    assert 'st.session_state["research_agent_preflight_signature"] = signature\n            st.rerun()' in preflight_source
-    assert 'st.session_state["research_agent_preflight_confirmed"] = False\n            st.rerun()' in preflight_source
+    assert ".ra-preflight-details" in css_source
+    assert "grid-template-columns: repeat(auto-fit, minmax(150px, 1fr))" in css_source
+    assert 'st.session_state["research_agent_preflight_signature"] = signature' in preflight_source
+    assert 'st.session_state["research_agent_preflight_confirmed"] = False' in preflight_source
+    confirm_idx = preflight_source.index("if confirm_clicked:")
+    reset_idx = preflight_source.index("if reset_clicked:")
+    assert confirm_idx < preflight_source.index(
+        'st.session_state["research_agent_preflight_signature"] = signature',
+        confirm_idx,
+    ) < preflight_source.index("st.rerun()", confirm_idx)
+    assert reset_idx < preflight_source.index(
+        'st.session_state["research_agent_preflight_confirmed"] = False',
+        reset_idx,
+    ) < preflight_source.index("st.rerun()", reset_idx)
     assert "llm_ready, llm_issue = _llm_run_readiness" in page_source
     assert "preview_signature = _preflight_signature(preview_contract)" in page_source
     assert 'st.session_state["research_agent_preflight_confirmed"] = False' in page_source
@@ -4228,7 +9571,15 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
     assert "height=112" in ra_source
     assert "st-key-eu_ra_setup_controls" in css_source
     assert "st-key-eu_ra_preflight_panel" in css_source
+    assert "st-key-research_agent_show_advanced_setup" in css_source
+    assert 'details[data-testid="stExpander"]:not([open]) > [data-testid="stExpanderDetails"]' in bootstrap_source
+    assert (
+        'div[data-testid="stExpander"] > details:not([open]) > [data-testid="stExpanderDetails"]'
+        in bootstrap_source
+    )
     assert ".ra-setup-controls-intro" in css_source
+    assert ".ra-idea-compact-head" in css_source
+    assert ".ra-idea-result-card" in css_source
     assert ".ra-preflight-step" in css_source
     assert ".ra-request-brief" in css_source
     assert "st-key-research_agent_question" in css_source
@@ -4542,6 +9893,12 @@ def test_cohort_group_table_reports_numeric_smd_without_inline_labels() -> None:
     assert "SMD is reported as a numeric effect-size distance" in source
     assert "stronger imbalance" in source
     assert "often treated as large" not in source
+    assert "cohort_group_show_methods_note" in source
+    assert "Methods and interpretation" in source
+    assert "st.toggle(" in source
+    assert 'label="📥 " +' not in source
+    assert 'label="Download table" if lang == \'en\' else "下载表格"' in source
+    assert 'icon=":material/download:"' not in source
     assert 'return f"{value:.2f}"' in format_smd_source
     assert "_smd_severity_tag" not in format_smd_source
     assert "_smd_min_group_n" not in source
@@ -4962,6 +10319,95 @@ def test_topbar_render_action_loads_quick_viz_demo_workspace() -> None:
     assert state["selected_concepts"] == ["age", "hr"]
     assert "_eu_topbar_run_request" not in state
     assert state["_eu_action_log"]
+
+
+def test_quick_viz_loaded_workspace_summary_exports_without_patient_rows() -> None:
+    state = {
+        "loaded_concepts": {
+            "hr": pd.DataFrame({"stay_id": [1, 2], "hr": [90, 88]}),
+            "map": pd.DataFrame({"stay_id": [1, 2], "map": [72, 69]}),
+        },
+        "loaded_data_origin": "demo_viz",
+        "patient_ids": [1, 2],
+        "all_patient_count": 2,
+        "quick_viz_active_panel": "Time Series",
+    }
+
+    summary = quick_visualization_page._quick_viz_workspace_summary(state, "en")
+    payload = json.loads(
+        quick_visualization_page._quick_viz_export_summary_payload(state, "en").decode("utf-8")
+    )
+
+    assert summary["source_label"] == "Demo review workspace"
+    assert summary["loaded_patient_count"] == 2
+    assert summary["concept_count"] == 2
+    assert summary["concepts"] == ["hr", "map"]
+    assert payload["workspace"]["active_panel"] == "Time Series"
+    assert payload["workspace"]["concepts"] == ["hr", "map"]
+    assert "90" not in json.dumps(payload)
+
+    state["loaded_data_origin"] = "preview"
+    state["entry_mode"] = "demo"
+    state["use_mock_data"] = True
+    assert quick_visualization_page._quick_viz_workspace_summary(state, "en")["source_label"] == (
+        "Demo review workspace"
+    )
+
+
+def test_quick_viz_loaded_module_count_uses_concept_catalog_groups(monkeypatch) -> None:
+    monkeypatch.setattr(
+        quick_visualization_page,
+        "CONCEPT_GROUPS_INTERNAL",
+        {
+            "vitals": ["hr", "map"],
+            "chemistry": ["crea"],
+            "outcomes": ["death"],
+        },
+        raising=False,
+    )
+
+    assert quick_visualization_page._quick_viz_loaded_module_count(["hr", "map", "crea"]) == 2
+
+
+def test_quick_viz_edit_setup_reset_clears_loaded_review_workspace() -> None:
+    state = {
+        "loaded_concepts": {"hr": object()},
+        "loaded_data_origin": "demo_viz",
+        "patient_ids": [10001],
+        "available_patient_ids": [10001],
+        "all_patient_count": 1,
+        "selected_patient": 10001,
+        "patient_view_id": 10001,
+        "selected_concepts": ["hr"],
+        "quick_viz_active_panel": "Time Series",
+    }
+
+    quick_visualization_page._quick_viz_reset_review_workspace(state)
+
+    assert state["loaded_concepts"] == {}
+    assert state["loaded_data_origin"] == "none"
+    assert state["patient_ids"] == []
+    assert state["all_patient_count"] == 0
+    assert state["selected_patient"] is None
+    assert state["selected_concepts"] == []
+    assert "available_patient_ids" not in state
+    assert "patient_view_id" not in state
+    assert "quick_viz_active_panel" not in state
+    assert state["_scroll_to_top"] is True
+
+
+def test_quick_viz_loaded_bar_markup_and_actions_are_present() -> None:
+    source = Path(quick_visualization_page.__file__).read_text(encoding="utf-8")
+    css = Path(shell_styles.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
+    loaded_branch = source[source.index("if data_loaded:"): source.index("else:", source.index("if data_loaded:"))]
+
+    assert "_render_quick_viz_loaded_bar(lang)" in loaded_branch
+    assert "key=\"eu_qv_loaded_bar\"" in source
+    assert "quick_viz_edit_setup" in source
+    assert "quick_viz_export_summary" in source
+    assert "application/json" in source
+    assert "eu-qv-loaded-bar" in css
+    assert "st-key-eu_qv_loaded_bar" in css
 
 
 def test_topbar_cohort_action_refreshes_demo_workspace() -> None:
@@ -5479,6 +10925,47 @@ def test_sidebar_pipeline_steps_are_sequential_click_targets() -> None:
     assert "white-space: pre-line !important" not in pipeline_css
 
 
+def test_sidebar_short_height_layout_keeps_dock_above_footer() -> None:
+    css_text = shell_styles._load_shell_overrides_css()
+
+    sidebar_surface_css = css_text[
+        css_text.index("/* 3. Sidebar surface. */"):
+        css_text.index("/* 4. Re-skin native widgets")
+    ]
+    height_guard_css = css_text[
+        css_text.index("/* Sidebar height guard."):
+        css_text.index("/* 4. Re-skin native widgets")
+    ]
+    dock_css = css_text[
+        css_text.index('[class*="st-key-eu_sidebar_nav_area"]'):
+        css_text.index(".eu-workspace-field")
+    ]
+    footer_css = css_text[
+        css_text.index('.stApp [class*="st-key-eu_sidebar_footer"]'):
+        css_text.index(".eu-settings-panel")
+    ]
+
+    assert "height: 100vh !important" in sidebar_surface_css
+    assert "max-height: 100vh !important" in sidebar_surface_css
+    assert "overflow: hidden !important" in sidebar_surface_css
+    assert "--eu-sidebar-footer-reserve: 64px" in css_text
+    assert "padding-bottom: var(--eu-sidebar-footer-reserve) !important" in height_guard_css
+    assert "box-sizing: border-box !important" in height_guard_css
+    assert "display: flex !important" in height_guard_css
+    assert "flex-direction: column !important" in height_guard_css
+    assert '[data-testid="stVerticalBlockBorderWrapper"]:has(> [class*="st-key-eu_sidebar_dock"])' in dock_css
+    assert '[data-testid="stVerticalBlockBorderWrapper"]:has(> [class*="st-key-eu_sidebar_nav_area"])' in dock_css
+    assert "flex: 1 1 auto !important" in dock_css
+    assert "height: 100% !important" in dock_css
+    assert "max-height: 100% !important" in dock_css
+    assert "min-height: 0 !important" in dock_css
+    assert "overflow-y: auto !important" in dock_css
+    assert "padding-bottom: 84px !important" in dock_css
+    assert "position: fixed !important" in footer_css
+    assert "@media (max-height: 720px) and (min-width: 1101px)" in footer_css
+    assert "-webkit-line-clamp: 1 !important" in footer_css
+
+
 def test_sidebar_cohort_meta_ignores_default_internal_filter_values(monkeypatch) -> None:
     streamlit_stub = _SessionStateStreamlit(
         _AttrSessionState(
@@ -5592,7 +11079,7 @@ def test_sidebar_pipeline_concept_meta_uses_fresh_group_selection(monkeypatch) -
     steps = sidebar._compute_pipeline_steps()
 
     assert steps[2].key == "concepts"
-    assert steps[2].meta == "4 features"
+    assert steps[2].meta == "4 export concepts"
 
 
 def test_concept_module_toggle_callback_updates_summary_before_render(monkeypatch) -> None:
@@ -5941,6 +11428,109 @@ def test_crossdb_demo_workspace_keeps_six_database_story(monkeypatch) -> None:
     assert rows[0][1:-1] == ["144", "144", "144", "144", "144", "144"]
 
 
+def test_crossdb_benchmark_summary_exports_without_database_rows(monkeypatch) -> None:
+    state = {
+        "entry_mode": "real",
+        "multidb_is_demo": False,
+        "multidb_data": {
+            "miiv": pd.DataFrame({"stay_id": [1001, 1002], "hr": [80, 90]}),
+            "eicu": pd.DataFrame({"patientunitstayid": [2001, 2002], "hr": [82, 92]}),
+        },
+        "multidb_concepts": ["hr"],
+    }
+    monkeypatch.setattr(cohort_redesign, "st", _SessionStateStreamlit(state))
+
+    summary = cohort_redesign._crossdb_workspace_summary("en")
+    payload = json.loads(cohort_redesign._crossdb_export_summary_payload("en").decode("utf-8"))
+    serialized = json.dumps(payload)
+
+    assert summary["loaded"] is True
+    assert summary["database_count"] == 2
+    assert summary["row_count"] == 4
+    assert summary["concept_count"] == 1
+    assert summary["active_databases"][0]["label"] == "MIMIC-IV"
+    assert payload["workspace"]["availability_rows"][0]["concept"] == "hr"
+    assert "database frames and patient-level rows are not included" in payload["notes"]
+    assert "1001" not in serialized
+    assert "1002" not in serialized
+    assert "2001" not in serialized
+    assert "2002" not in serialized
+
+
+def test_crossdb_loaded_bar_markup_and_actions_are_present(monkeypatch) -> None:
+    class _CrossDbBarStreamlit:
+        def __init__(self, session_state) -> None:
+            self.session_state = session_state
+            self.markdown_calls: list[str] = []
+            self.container_key: str | None = None
+            self.buttons: list[dict[str, object]] = []
+            self.downloads: list[dict[str, object]] = []
+
+        def container(self, *, key):
+            self.container_key = key
+            return _FakeColumn()
+
+        def markdown(self, body, *_args, **_kwargs) -> None:
+            self.markdown_calls.append(str(body))
+
+        def columns(self, spec):
+            return [_FakeColumn() for _ in spec]
+
+        def button(self, label, **kwargs) -> bool:
+            self.buttons.append({"label": label, "kwargs": kwargs})
+            return False
+
+        def download_button(self, label, **kwargs) -> None:
+            self.downloads.append({"label": label, **kwargs})
+
+    state = {
+        "entry_mode": "demo",
+        "multidb_is_demo": True,
+        "multidb_data": {
+            "miiv": pd.DataFrame({"hr": [80, 90]}),
+            "eicu": pd.DataFrame({"hr": [82, 92]}),
+        },
+        "multidb_concepts": ["hr"],
+    }
+    streamlit_stub = _CrossDbBarStreamlit(state)
+    monkeypatch.setattr(cohort_redesign, "st", streamlit_stub)
+
+    cohort_redesign._render_crossdb_loaded_bar("en")
+
+    page_source = "\n".join(streamlit_stub.markdown_calls)
+    assert streamlit_stub.container_key == "eu_crossdb_loaded_bar"
+    assert "Benchmark assembled" in page_source
+    assert "2 databases · 4 feature rows · 1 concepts" in page_source
+    assert streamlit_stub.buttons[0]["label"] == "Change selection"
+    assert streamlit_stub.downloads[0]["label"] == "Export"
+    assert streamlit_stub.downloads[0]["mime"] == "application/json"
+    assert streamlit_stub.downloads[0]["file_name"] == "easyicu_crossdb_benchmark_summary.json"
+
+    button_kwargs = streamlit_stub.buttons[0]["kwargs"]
+    button_kwargs["on_click"](*button_kwargs["args"])
+    assert state["_eu_crossdb_distribution_open"] is True
+    assert state["_scroll_to_top"] is True
+
+    css = Path(shell_styles.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
+    assert "eu-crossdb-loaded-bar" in css
+    assert "st-key-eu_crossdb_loaded_bar" in css
+
+
+def test_crossdb_availability_matrix_uses_soft_status_cells() -> None:
+    html = cohort_charts.render_availability_matrix(
+        [("heart rate", [1.0, 0.72, 0.0, float("nan")])],
+        columns=("MIMIC-IV", "eICU-CRD", "HiRID", "SICdb"),
+    )
+
+    assert "✓" in html
+    assert "72%" in html
+    assert "0%" in html
+    assert "background:color-mix(in srgb, var(--ok)" in html
+    assert "color:var(--ok)" in html
+    assert "background:var(--ink)" not in html
+    assert "color:#fff" not in html
+
+
 def test_crossdb_page_labels_demo_source_before_summary(monkeypatch) -> None:
     class _FakeStreamlit:
         def __init__(self, session_state) -> None:
@@ -5966,6 +11556,7 @@ def test_crossdb_page_labels_demo_source_before_summary(monkeypatch) -> None:
     cohort_redesign.render_cross_db_redesign_page("en", multidb_fn=lambda _lang: None)
 
     page_source = "\n".join(streamlit_stub.markdown_calls)
+    assert "Benchmark assembled" in page_source
     assert "Demo simulated data" in page_source
     assert "independent seeded feature frames for each database" in page_source
     assert "not the 10-patient review demo or a user database" in page_source
@@ -6010,24 +11601,24 @@ def test_cohort_redesign_defaults_to_real_panel_body(monkeypatch) -> None:
         "SOFA reclassification",
     ]
     page_source = "\n".join(streamlit_stub.markdown_calls)
-    assert "Cohort readiness" in page_source
-    assert "Review state" in page_source
-    assert "10 stays · demo concept set" in page_source
-    assert "ready for cohort review" in page_source
+    assert "Agent preflight" in page_source
+    assert "Draft gate" in page_source
+    assert "10 ICU stays · demo review feature set" in page_source
+    assert "agent drafts only after review" in page_source
     assert "current session" in page_source
-    assert "Agent preflight" not in page_source
-    assert "Draft gate" not in page_source
-    assert "agent drafts only after review" not in page_source
     assert "cohort_statistics:250:0" not in page_source
     assert "250 stays" not in page_source
     cohort_source = Path(cohort_redesign.__file__).read_text(encoding="utf-8")
     assert "_render_cohort_readiness_strip(lang)" in cohort_source
-    assert "_render_agent_gate_strip" not in cohort_source
+    assert "eu-cohort-agent-preflight" in cohort_source
 
     css_text = shell_styles._load_shell_overrides_css()
     assert "st-key-cohort_active_panel" in css_text
     assert "eu-readiness-strip" in css_text
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in css_text
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in css_text
+    assert ".eu-readiness-strip .eu-gate-card .k::before" in css_text
+    assert "@media (max-width: 760px)" in css_text
     cohort_panel_css = css_text[
         css_text.index('[class*="st-key-cohort_active_panel"] div[role="radiogroup"]'):
         css_text.index("@media (max-width: 900px)", css_text.index('[class*="st-key-cohort_active_panel"]'))
@@ -6068,12 +11659,11 @@ def test_cohort_redesign_real_unconfigured_does_not_show_demo_denominators(monke
     assert rendered == ["groups"]
     page_source = "\n".join(streamlit_stub.markdown_calls)
     assert "Cohort statistics" in page_source
-    assert "Cohort readiness" in page_source
+    assert "Agent preflight" in page_source
+    assert "Draft gate" in page_source
     assert "waiting for local cohort" in page_source
     assert "load data for denominators" in page_source
-    assert "review unlocks after data load" in page_source
-    assert "Agent preflight" not in page_source
-    assert "Draft gate" not in page_source
+    assert "draft gate blocked until data load" in page_source
     assert "agent drafts only after review" not in page_source
     assert "demo concept set" not in page_source
     assert "250 stays" not in page_source
@@ -6115,9 +11705,10 @@ def test_cohort_redesign_real_loaded_export_uses_patient_ids_for_readiness(monke
 
     page_source = "\n".join(streamlit_stub.markdown_calls)
     assert rendered == ["coverage"]
-    assert "3 stays · 2 concepts" in page_source
+    assert "3 ICU stays · 2 review features" in page_source
     assert "coverage + denominators ready" in page_source
-    assert "ready for cohort review" in page_source
+    assert "Draft gate" in page_source
+    assert "agent drafts only after review" in page_source
     assert "0 stays" not in page_source
 
 
@@ -6246,6 +11837,10 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert 'background: white !important;' in css_text
     assert "Reduce motion" in page_source
     assert "Disable shimmer and progress animations." in page_source
+    assert "Display target" in page_source
+    assert "Project default is the desktop app-like layout" in page_source
+    assert "DEFAULT_WEB_UI_DISPLAY_TARGET" in page_source
+    assert "normalize_web_ui_display_target" in page_source
     assert "st-key-_eu_settings_module_folder_mode" in css_text
     assert 'key="_eu_settings_density_compact"' in page_source
     assert 'key="_eu_settings_reduce_motion"' in page_source
@@ -6266,7 +11861,11 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert "def _settings_reduce_motion_changed" in page_source
     assert 'if bool(state.get("_eu_settings_allow_outbound_model_calls", False)) != outbound_enabled:' in page_source
     assert "_settings_outbound_model_calls_changed()\n                st.rerun()" in page_source
+    assert "Home layout" in page_source
+    assert 'key=f"_eu_settings_home_layout_{layout_key}"' in page_source
+    assert 'state["_eu_entry_home_layout"] = layout_key' in page_source
     assert "st-key-_eu_settings_density_" in css_text
+    assert "st-key-_eu_settings_home_layout_" in css_text
     assert "st-key-_eu_settings_reduce_motion" in css_text
     assert "_route_to_research_agent_setup(\n                st.session_state," in page_source
     assert "_route_to_research_agent_setup(state, force_real=True)" in page_source
@@ -6294,6 +11893,7 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
         "entry_mode": "real",
         "use_mock_data": False,
         "database": "miiv",
+        "_eu_entry_home_layout": "cards",
         "demo_mode_patients": 50,
         "demo_mode_hours": 168,
         "mock_params": {"n_patients": 50, "hours": 168, "demo_profile": "full"},
@@ -6306,6 +11906,7 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
         "_eu_settings_allow_outbound_model_calls": True,
         "_eu_settings_reduce_motion": True,
         "ui_density": "compact",
+        "ui_display_target": "responsive",
         "reduce_motion": True,
         "_llm_provider_sel": "openrouter",
         "_llm_api_key_inp": "sk-test",
@@ -6335,8 +11936,15 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
         "_eu_wb_findings_acked": {"finding-a"},
         "_eu_wb_findings_acked_run_dir": "/tmp/run_old",
         "_eu_wb_review_details_expanded": True,
+        "_eu_wb_detail_advanced": True,
         "_eu_wb_action_panel": "plan",
+        "research_agent_show_advanced_setup": True,
+        "research_agent_idea_show_advanced_mapping": True,
+        "research_agent_idea_show_triage_details": True,
+        "cohort_group_show_methods_note": True,
+        "data_table_details_open": True,
         "_eu_summary_review_note_run_20260531T121512_3a91c8": "stale note",
+        "_eu_summary_review_note_visible_run_20260531T121512_3a91c8": True,
         "_eu_wb_ev_sha_show_step_key": True,
         "_eu_wb_ev_id_show_step_key": True,
         "_eu_wb_evidence_pick_step_key": "01",
@@ -6355,6 +11963,7 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert state["entry_mode"] == "demo"
     assert state["use_mock_data"] is True
     assert state["database"] == "mock"
+    assert state["_eu_entry_home_layout"] == "prompt"
     assert state["demo_mode_patients"] == app.LIGHTWEIGHT_DEMO_PATIENTS
     assert state["demo_mode_hours"] == app.LIGHTWEIGHT_DEMO_HOURS
     assert state["mock_params"] == {
@@ -6373,6 +11982,7 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert state["_eu_settings_allow_outbound_model_calls"] is False
     assert state["_eu_settings_reduce_motion"] is False
     assert state["ui_density"] == "comfortable"
+    assert state["ui_display_target"] == "desktop"
     assert state["reduce_motion"] is False
     assert state["_llm_provider_sel"] == state["llm_provider"]
     assert state["_llm_api_key_inp"] == ""
@@ -6409,8 +12019,15 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
         "_eu_wb_findings_acked",
         "_eu_wb_findings_acked_run_dir",
         "_eu_wb_review_details_expanded",
+        "_eu_wb_detail_advanced",
         "_eu_wb_action_panel",
+        "research_agent_show_advanced_setup",
+        "research_agent_idea_show_advanced_mapping",
+        "research_agent_idea_show_triage_details",
+        "cohort_group_show_methods_note",
+        "data_table_details_open",
         "_eu_summary_review_note_run_20260531T121512_3a91c8",
+        "_eu_summary_review_note_visible_run_20260531T121512_3a91c8",
         "_eu_wb_ev_sha_show_step_key",
         "_eu_wb_ev_id_show_step_key",
         "_eu_wb_evidence_pick_step_key",
@@ -6418,6 +12035,29 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     ):
         assert key not in state
     assert "_eu_topbar_run_request" not in state
+
+
+def test_settings_home_layout_buttons_switch_entry_cover(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.session_state["entry_mode"] = "demo"
+    at.session_state["use_mock_data"] = True
+    at.session_state["_active_main_page"] = "settings"
+    at.run(timeout=60)
+
+    assert at.button(key="_eu_settings_home_layout_prompt") is not None
+    assert at.button(key="_eu_settings_home_layout_copilot") is not None
+    assert at.button(key="_eu_settings_home_layout_cards") is not None
+
+    at.button(key="_eu_settings_home_layout_cards").click().run(timeout=60)
+
+    assert at.session_state["_eu_entry_home_layout"] == "cards"
 
 
 def test_settings_diagnostics_payload_omits_secrets_and_patient_rows() -> None:
@@ -6673,7 +12313,7 @@ def test_sidebar_context_summary_uses_plain_setup_language(monkeypatch) -> None:
 
     assert "Current setup" in html
     assert "Dataset" in html
-    assert "Demo · 64 patients" in html
+    assert "Demo · 64 ICU stays" in html
     assert "demo defaults" in html
     assert "Data context" not in html
     assert "not a project" not in html
@@ -6732,7 +12372,9 @@ def test_sidebar_agent_page_uses_reference_agent_state_rail(monkeypatch) -> None
     assert "Demo" not in html
     assert "sepsis · 10" not in html
     assert "Last run" in html
-    assert "Guarantees" in html
+    assert "Local-first run" in html
+    assert "evidence-gated" in html
+    assert "Guarantees" not in html
     assert "Local-first · no upload" in html
     assert "Draft gated on evidence" in html
     assert "Human confirms each run" in html
@@ -6740,6 +12382,7 @@ def test_sidebar_agent_page_uses_reference_agent_state_rail(monkeypatch) -> None
     assert "eu_context_edit_setup" not in html
     assert ".eu-agent-state-pill" in css_text
     assert ".eu-agent-guarantee-row" in css_text
+    assert ".eu-agent-guarantees:not([open]) > :not(summary)" in css_text
 
 
 def test_sidebar_agent_setup_view_describes_new_setup_not_previous_run(monkeypatch) -> None:
@@ -6764,13 +12407,20 @@ def test_sidebar_agent_setup_view_describes_new_setup_not_previous_run(monkeypat
     assert "Mode" in html
     assert "Real" in html
     assert "Cohort" in html
-    assert "800 rows" in html
+    assert "800 synthetic stays" in html
     assert "Last run" in html
     assert "run_202…c7b109" in html
     assert "Local run" not in html
     assert "Evidence" not in html
     assert "48 evidence" not in html
     assert "Review" not in html
+
+    streamlit_stub.session_state.pop("_agent_workbench", None)
+    fresh_html = sidebar._agent_state_summary_html("real", "en")
+
+    assert "Next" in fresh_html
+    assert "Request -&gt; Data -&gt; Gate" in fresh_html
+    assert "Last run" not in fresh_html
 
 
 def test_sidebar_agent_page_keeps_demo_context_when_no_manifest(monkeypatch) -> None:
@@ -6827,7 +12477,7 @@ def test_sidebar_agent_rail_reports_agent_cohort_not_extraction_step(monkeypatch
 
     built_html = sidebar._agent_state_summary_html("real", "en")
 
-    assert "3 rows" in built_html
+    assert "3 ICU stays" in built_html
     assert "not selected" not in built_html
 
     streamlit_stub.session_state.pop("research_agent_module_built", None)
@@ -6836,7 +12486,7 @@ def test_sidebar_agent_rail_reports_agent_cohort_not_extraction_step(monkeypatch
 
     synthetic_html = sidebar._agent_state_summary_html("real", "en")
 
-    assert "800 rows" in synthetic_html
+    assert "800 synthetic stays" in synthetic_html
     assert "not selected" not in synthetic_html
 
 
@@ -6983,7 +12633,7 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert "assistant" in sidebar_text
     assert "tutorial" in sidebar_text
     assert "states" in sidebar_text
-    assert '"AI Assistant" if lang == "en" else "AI 助手"' in sidebar_text
+    assert '"Research Copilot" if lang == "en" else "研究 Copilot"' in sidebar_text
     assert '"Get Started" if lang == "en" else "开始使用"' in sidebar_text
     assert '"Workspace States" if lang == "en" else "工作区状态"' in sidebar_text
     assert 'st.session_state["_active_main_page"] = "assistant"' in sidebar_text
@@ -7004,17 +12654,102 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     app_text = Path(app.__file__).read_text(encoding="utf-8")
     llm_text = Path(app.__file__).with_name("llm_chat.py").read_text(encoding="utf-8")
     ai_optin_text = Path(app.__file__).with_name("ai_optin.py").read_text(encoding="utf-8")
-    assert "render_floating_chat_dock()" not in app_text
+    assert "render_floating_chat_dock(app_context=globals())" in app_text
     assert "render_inline_ai_panel()" not in app_text
-    assert "render_ai_assistant_page(lang)" in app_text
+    assert "render_ai_assistant_page(lang, app_context=globals())" in app_text
     assert "_open_embedded_ai_assistant" in app_text
     assert "_inline_ai_panel_open" in app_text
     assert 'if active_page != "assistant":' in app_text
-    assert '_clear_assistant_surfaces(st.session_state, clear_pending=True)' in app_text
+    assert '_clear_assistant_surfaces(st.session_state, clear_pending=True, clear_floating=False)' in app_text
+    assert 'if active_page != "assistant" and not _is_screenshot_mode():' in app_text
     assert "Show floating AI assistant" not in llm_text
     assert "Show floating AI assistant" not in ai_optin_text
     assert "per-run external LLM opt-in" in ai_optin_text
-    assert "Use the bottom-right chat button" not in llm_text
+    assert "Open Research Copilot dock" in llm_text
+    assert "Local Copilot is available" in llm_text
+    assert "_render_floating_copilot_context_actions" in llm_text
+    assert "_floating_ai_full_copilot" in llm_text
+    assert "_floating_ai_demo_review" in llm_text
+    assert "_floating_ai_agent_setup" in llm_text
+    copilot_page_source = llm_text[
+        llm_text.index("def _render_ai_assistant_workspace_page"):
+        llm_text.index("def _render_copilot_quick_actions")
+    ]
+    assert 'st.container(key="eu_copilot_guided_top")' in copilot_page_source
+    assert "st.columns([1, 0.16, 0.28]" in copilot_page_source
+    assert "_copilot_top_exit" in copilot_page_source
+    assert "_copilot_top_classic_workspace" in copilot_page_source
+    assert 'st.container(key="eu_copilot_guided_shell")' in copilot_page_source
+    assert "chat_col, study_col = st.columns([1.88, 0.92]" not in copilot_page_source
+    assert "rail_col, chat_col, study_col = st.columns([232, 1040, 322]" in copilot_page_source
+    assert 'st.container(key="eu_copilot_left_rail")' in copilot_page_source
+    assert "_render_copilot_session_rail(lang)" in copilot_page_source
+    assert 'st.container(key="eu_copilot_conversation_shell")' in copilot_page_source
+    assert 'st.container(key="eu_copilot_right_rail")' in copilot_page_source
+    assert "_render_copilot_stage_workspace(lang)" in copilot_page_source
+    assert "history_height=520" in copilot_page_source
+    assert "show_starters=False" in copilot_page_source
+    assert "show_hint_chips=True" in copilot_page_source
+    assert 'welcome_variant="codex"' in copilot_page_source
+    assert "_render_compact_chat_panel(" in copilot_page_source
+    assert "_render_copilot_primary_chips" in llm_text
+    assert "_copilot_primary_prompts" in llm_text
+    compact_chat_source = inspect.getsource(llm_chat._render_compact_chat_panel)
+    pre_composer_source = compact_chat_source[:compact_chat_source.index("composer_host =")]
+    composer_source = compact_chat_source[
+        compact_chat_source.index("with composer_host:"):
+        compact_chat_source.index("with st.form")
+    ]
+    history_render_source = compact_chat_source[
+        compact_chat_source.index("for msg_idx, msg in enumerate(recent_messages):"):
+        compact_chat_source.index("if queued_prompt:")
+    ]
+    assert "_render_copilot_primary_chips" not in pre_composer_source
+    assert "_render_copilot_primary_chips" in composer_source
+    assert "_render_copilot_data_source_inline_form(lang, panel_key)" not in composer_source
+    assert "_render_copilot_inline_step_controls(lang, panel_key)" in history_render_source
+    assert 'st.container(key=f"{panel_key}_cohort_inline")' in llm_text
+    assert 'st.container(key=f"{panel_key}_feature_inline")' in llm_text
+    assert "st.columns([0.42, 0.22, 0.22, 0.16]" not in llm_text
+    assert "st.columns([0.22, 0.28, 1, 0.22]" not in llm_text
+    assert history_render_source.index("_render_nav_actions(actions") < history_render_source.index(
+        "_render_copilot_inline_step_controls"
+    ) < history_render_source.index(
+        "_render_copilot_workflow_snapshot"
+    )
+    submit_source = inspect.getsource(llm_chat._submit_prompt)
+    assert submit_source.index("_render_nav_actions(guided_actions") < submit_source.index(
+        "_render_copilot_inline_step_controls(lang, key_prefix)"
+    ) < submit_source.index(
+        "_render_copilot_workflow_snapshot"
+    )
+    assert "Predict sepsis mortality" not in llm_text
+    assert "Model ICU outcomes" in llm_text
+    assert "_append_copilot_workflow_step_action" in llm_text
+    assert "_render_copilot_workflow_step_controls" in llm_text
+    assert 'key_prefix=f"{panel_key}_{msg_idx}"' in llm_text
+    assert 'message["workflow_snapshot"] = workflow_snapshot' in llm_text
+    assert "_copilot_suppress_next_snapshot" in llm_text
+    assert 'Reply, ask “why?”, choose cohort, or ask about the data path...' in llm_text
+    assert "eu-copilot-composer-foot" in llm_text
+    assert "_ai_panel_header_html" not in copilot_page_source
+    assert "_render_copilot_quick_actions" not in copilot_page_source
+    assert "_render_copilot_state_panel" not in copilot_page_source
+    assert "_render_inline_ai_context_and_handoff" not in copilot_page_source
+    assert "st.columns([1.58, 0.7, 0.92]" not in copilot_page_source
+    assert "Study workspace" in llm_text
+    assert "Building your study" in llm_text
+    assert 'button_label = f"{button_label} · {status_label}"' not in llm_text
+    assert 'display_detail = detail if status != "locked" else ""' in llm_text
+    assert "Study plan" not in copilot_page_source
+    assert "Generated 6 files" not in copilot_page_source
+    assert "Open Classic Flow" not in llm_text
+    assert "Classic workspace" in llm_text
+    assert "eu_study_step_list" in llm_text
+    assert "_copilot_study_rail_step_" in llm_text
+    assert "_copilot_step_unlocked_for_navigation" in llm_text
+    assert "_append_copilot_rail_step_action" in llm_text
+    assert "eu-copilot-study-rail" in llm_text
     assert "render_inline_ai_panel" in llm_text
     assert "def render_ai_assistant_page" in llm_text
     assert "force_open: bool = False" in llm_text
@@ -7023,16 +12758,66 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert 'if active_page != "assistant":' in llm_text
     assert ".eu-ai-page-head" in shell_styles._load_shell_overrides_css()
     assert "st-key-ai_assistant_page_panel" in shell_styles._load_shell_overrides_css()
+    assert "Research Copilot: guided Codex/Claude-like workspace" in shell_styles._load_shell_overrides_css()
+    assert "st-key-eu_copilot_guided_top" in shell_styles._load_shell_overrides_css()
+    assert "st-key-eu_copilot_guided_shell" in shell_styles._load_shell_overrides_css()
+    assert "height: calc(100vh - 86px) !important;" in shell_styles._load_shell_overrides_css()
+    assert '[class*="st-key-eu_copilot_guided_shell"] > [data-testid="stVerticalBlockBorderWrapper"]' in shell_styles._load_shell_overrides_css()
+    assert "grid-template-columns: 232px minmax(0, 1fr) 322px !important;" in shell_styles._load_shell_overrides_css()
+    assert "grid-template-columns: 232px minmax(620px, 1fr) 322px" not in shell_styles._load_shell_overrides_css()
+    assert "st-key-_llm_ai_page_workspace_history" in shell_styles._load_shell_overrides_css()
+    assert "height: calc(100vh - 214px) !important;" not in shell_styles._load_shell_overrides_css()
+    assert "flex: 1 1 auto !important;" in shell_styles._load_shell_overrides_css()
+    assert ':has([class*="st-key-_llm_ai_page_workspace_history"])' in shell_styles._load_shell_overrides_css()
+    assert ':has([class*="st-key-_llm_ai_page_workspace_composer_wrap"])' in shell_styles._load_shell_overrides_css()
+    assert "overflow-y: auto !important;" in shell_styles._load_shell_overrides_css()
+    assert "height: calc(100vh - 190px) !important;" not in shell_styles._load_shell_overrides_css()
+    assert "height: min(520px, calc(100vh - 190px))" not in shell_styles._load_shell_overrides_css()
+    assert "--copilot-content-max: 768px;" in shell_styles._load_shell_overrides_css()
+    assert "max-width: var(--copilot-content-max) !important;" in shell_styles._load_shell_overrides_css()
+    assert "max-width: 1280px !important;" not in shell_styles._load_shell_overrides_css()
+    assert "max-width: min(var(--copilot-user-message-max), 74%)" in shell_styles._load_shell_overrides_css()
+    assert "eu-copilot-welcome-thread" in shell_styles._load_shell_overrides_css()
+    assert "eu-copilot-study-rail" in shell_styles._load_shell_overrides_css()
+    assert '[class*="st-key-eu_study_step_row_"] button:hover:not(:disabled)' in shell_styles._load_shell_overrides_css()
+    assert "st-key-_copilot_study_rail_step_" in shell_styles._load_shell_overrides_css()
+    assert '[class*="st-key-eu_study_step_row_"][class*="_active_"]' in shell_styles._load_shell_overrides_css()
+    assert '[class*="st-key-eu_study_step_row_"][class*="_locked_"]' in shell_styles._load_shell_overrides_css()
+    assert "border: 1px solid transparent !important;" in shell_styles._load_shell_overrides_css()
+    assert "text-underline-offset: 3px;" in shell_styles._load_shell_overrides_css()
+    assert "max-width: 212px;" in shell_styles._load_shell_overrides_css()
+    assert "Research Copilot study rail baseline lock" in shell_styles._load_shell_overrides_css()
+    assert "grid-template-columns: 32px minmax(0, 1fr) !important;" in shell_styles._load_shell_overrides_css()
+    assert '[data-testid="stElementContainer"]:has(.eu-study-step-detail)' in shell_styles._load_shell_overrides_css()
+    assert "st-key-eu_copilot_left_rail" in shell_styles._load_shell_overrides_css()
+    assert "eu-copilot-datasource-card" in shell_styles._load_shell_overrides_css()
+    assert "st-key-_llm_ai_page_workspace_data_source_inline" in shell_styles._load_shell_overrides_css()
+    assert "st-key-_llm_ai_page_workspace_cohort_inline" in shell_styles._load_shell_overrides_css()
+    assert "st-key-_llm_ai_page_workspace_feature_inline" in shell_styles._load_shell_overrides_css()
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr)) !important;" in shell_styles._load_shell_overrides_css()
+    assert "[data-testid=\"stSidebar\"]" in shell_styles._load_shell_overrides_css()
+    assert "--copilot-content-max: 1280px;" not in shell_styles._load_shell_overrides_css()
+    assert "grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)) !important;" not in shell_styles._load_shell_overrides_css()
+    assert '[aria-label="Chat message from user"]' in shell_styles._load_shell_overrides_css()
+    assert '[data-testid="stChatMessageAvatarCustom"]' in shell_styles._load_shell_overrides_css()
+    assert '[data-testid="stChatMessageContent"][aria-label="Chat message from user"] [data-testid="stVerticalBlockBorderWrapper"]' in shell_styles._load_shell_overrides_css()
+    assert "bottom: calc(96px + env(safe-area-inset-bottom, 0px))" in shell_styles._load_shell_overrides_css()
+    assert 'max-height: calc(100vh - 184px)' in shell_styles._load_shell_overrides_css()
+    assert ':has([class*="st-key-_floating_ai_size_s_btn"])' in shell_styles._load_shell_overrides_css()
+    assert '[class*="st-key-_floating_ai_close_btn"] button' in shell_styles._load_shell_overrides_css()
+    assert ".floating-ai-title .eu-pill" in shell_styles._load_shell_overrides_css()
+    assert "max-width: 172px" in shell_styles._load_shell_overrides_css()
+    assert "flex: 0 0 28px" in shell_styles._load_shell_overrides_css()
     assert "st-key-inline_ai_assistant_panel" in llm_text
-    assert "EasyICU Assistant" in llm_text
+    assert "Research Copilot" in llm_text
     assert "evidence-bound" in llm_text
     assert "EasyICU hosted · evidence-bound" in llm_text
-    assert "EasyICU · research helper" in llm_text
+    assert "EasyICU · chat-first research workspace" not in llm_text
     assert "GPT-OSS · 研究助手" not in llm_text
     assert "gpt-oss · local · evidence-bound" not in llm_text
     assert "_render_ai_assistant_workspace_page" in llm_text
     assert "def _submit_prompt_background" in llm_text
-    assert "background_pending_prompts=True" in llm_text
+    assert "background_pending_prompts=False" in llm_text
     assert "You can switch pages while I work" in llm_text
     assert "render_inline_ai_panel(force_open=True" not in llm_text
     assert '[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"])' in llm_text
@@ -7045,9 +12830,11 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert '[data-testid="stChatMessageAvatarUser"]::after' in llm_text
     assert 'content: "YOU";' in llm_text
     assert 'content: "AI";' in llm_text
-    assert 'st.form_submit_button(\n                "→"' in llm_text
+    assert "st.form_submit_button(" in llm_text
+    assert '"Send" if lang == "en" else "发送"' in llm_text
+    assert "st.session_state.llm_messages and not is_codex_workspace" in llm_text
     assert '"Export Chat" if lang == "en" else "导出对话"' in llm_text
-    assert 'icon=":material/download:"' in llm_text
+    assert 'icon=":material/download:"' not in llm_text
     assert '"Clear Chat" if lang == "en" else "清空对话"' in llm_text
     assert 'icon=":material/delete:"' in llm_text
     assert "📄 Export Chat" not in llm_text
@@ -7056,7 +12843,7 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert "✍️ Generating response..." not in llm_text
     for legacy_emoji in ("🤖", "💬", "💡", "🛠️", "📦", "🔑", "⚙️", "✅", "⚠️", "❌", "⏳"):
         assert legacy_emoji not in llm_text
-    assert 'icon=":material/smart_toy:"' in llm_text
+    assert 'avatar = ":material/person:" if role == "user" else ":material/smart_toy:"' in llm_text
     assert "_render_inline_ai_context_and_handoff" in llm_text
 
 
@@ -7146,8 +12933,12 @@ def test_sidebar_settings_gear_opens_full_settings_page() -> None:
     assert "Hosted relay is reserved for assistant/internal use" in pages_text
     assert "Shared external ready" in pages_text
     assert "ui_density" in pages_text
+    assert "ui_display_target" in pages_text
     assert "reduce_motion" in pages_text
     assert "eu-display-preferences" in app_text
+    assert 'data-display-target="{_eu_display_target}"' in app_text
+    assert 'st.session_state["ui_display_target"] = _eu_display_target' in app_text
+    assert "state['ui_display_target'] = DEFAULT_WEB_UI_DISPLAY_TARGET" in app_text
     assert "data-reduce-motion" in app_text
     assert 'state["_llm_provider_sel"] = "easyicu_hosted"' in pages_text
     assert 'state["_llm_provider_sel"] = external_provider' in settings_external_model_source
@@ -7188,8 +12979,8 @@ def test_step1_source_mode_tabs_only_show_actionable_modes() -> None:
         sidebar_text.index("def _render_data_source_page_header")
     ]
 
-    assert '("demo", "Demo", "模拟数据", ":material/science:")' in mode_tabs_source
-    assert '("real", "Real Data", "真实数据", ":material/database:")' in mode_tabs_source
+    assert '("demo", "Demo", "模拟数据")' in mode_tabs_source
+    assert '("real", "Real Data", "真实数据")' in mode_tabs_source
     assert "st.columns(2, gap=\"small\")" in mode_tabs_source
     assert "_eu_source_mode_none" not in mode_tabs_source
     assert "No Data" not in mode_tabs_source
@@ -7207,7 +12998,7 @@ def test_extract_footer_action_buttons_keep_confirm_label_on_one_line() -> None:
     assert '<svg viewBox="0 0 24 24"' in sidebar_text
     assert '<div class="banner-icon">⚗</div>' not in sidebar_text
     assert '"🤖 Ask AI about Sepsis settings"' not in app_text
-    assert 'icon=":material/smart_toy:"' in app_text
+    assert 'icon=":material/smart_toy:"' not in app_text
     assert sidebar_text.count("st.columns([5, 1.45, 2.25], gap=\"small\")") == 2
     assert "prev_col, reset_col, preset_col, restore_col, confirm_col = st.columns(" in sidebar_text
     assert "[1.05, 1.15, 1.15, 1.3, 1.75]" in sidebar_text
@@ -7336,28 +13127,50 @@ def test_step2_defaults_scrub_icd_placeholder_values(monkeypatch) -> None:
 
 def test_step4_export_footer_actions_have_overlap_guard() -> None:
     sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
+    export_text = Path(export_workflow.__file__).read_text(encoding="utf-8")
+    worker_text = Path(subprocess_workers.__file__).read_text(encoding="utf-8")
     i18n_text = Path(i18n.__file__).read_text(encoding="utf-8")
     data_paths_text = Path(data_paths.__file__).read_text(encoding="utf-8")
     css_text = shell_styles._load_shell_overrides_css()
 
     assert 'key="eu_export_footer_actions"' in sidebar_text
     assert "Package & export" in sidebar_text
+    assert "Concepts to export" in sidebar_text
     assert "Export contents" in sidebar_text
+    assert "Merge mode" in sidebar_text
+    assert 'key="export_filter_patient_enabled"' in sidebar_text
+    assert 'key="export_include_index"' in sidebar_text
+    assert 'key="export_add_timestamp"' in sidebar_text
+    assert "Bundle preview" in sidebar_text
+    assert "This bundle reproduces" in sidebar_text
     assert "Agent code, figures, evidence ledger" in sidebar_text
-    assert 'icon=":material/arrow_back:"' in sidebar_text
-    assert 'icon=":material/check:"' in sidebar_text
+    assert 'icon=":material/arrow_back:"' not in sidebar_text
+    assert 'icon=":material/check:"' not in sidebar_text
     assert "'sanity_back': 'Previous step'" in i18n_text
     assert "'sanity_back': '上一步'" in i18n_text
     assert "_sidebar_set_extract_step_state(st.session_state, 3)" in sidebar_text
     assert "✅ Confirm & Export" not in i18n_text
     assert "↩️ Go Back & Modify" not in i18n_text
-    assert 'browse_label = ""' in data_paths_text
-    assert 'icon=":material/folder_open:"' in data_paths_text
+    assert 'browse_label = "Browse" if lang == "en" else "浏览"' in data_paths_text
+    assert 'icon=":material/folder_open:"' not in data_paths_text
     assert 'browse_label = "📂"' not in data_paths_text
     assert "_module_display_name(group, lang)" in sidebar_text
     assert "sofa2 score" not in sidebar._module_display_name("sofa2_score", "en")
+    assert "export_merge_mode == 'merged'" in export_text
+    assert "selected_modules = {'all_selected': list(concepts_to_export)}" in export_text
+    assert "module_concept_map = {'all_selected': list(valid_concepts)}" in export_text
+    assert "patient_limit = requested_patient_limit if export_filter_patient_enabled else 0" in export_text
+    assert "st.session_state['_export_effective_patient_limit'] = patient_limit" in export_text
+    assert "export_filename_timestamp = timestamp if add_timestamp else \"\"" in export_text
+    assert "index=include_index" in export_text
+    assert "include_index=False" in worker_text
+    assert "filename_timestamp=''" in worker_text
+    assert "preserve_index=include_index" in worker_text
     assert 'class*="st-key-eu_export_footer_actions"' in css_text
+    assert ".eu-export-concepts-card" in css_text
     assert ".eu-export-contents-card" in css_text
+    assert 'class*="st-key-eu_export_merge_"' in css_text
+    assert ".eu-export-manifest-preview" in css_text
     export_footer_css = css_text[
         css_text.index('.stApp [class*="st-key-eu_export_footer_actions"] {'):
         css_text.index(".eu-performance-strip {")
@@ -7511,9 +13324,9 @@ def test_low_memory_export_continue_button_sets_resume_flags(monkeypatch, tmp_pa
 def test_export_patient_limit_hint_tracks_selected_limit() -> None:
     assert sidebar._export_patient_limit_label(0, "en") == "All"
     assert sidebar._export_patient_limit_label(1000, "en") == "1k"
-    assert sidebar._export_patient_limit_hint(0, "en") == "All patients for final runs"
-    assert sidebar._export_patient_limit_hint(100, "en") == "Export first 100 patients"
-    assert sidebar._export_patient_limit_hint(5000, "en") == "Export first 5k patients"
+    assert sidebar._export_patient_limit_hint(0, "en") == "All ICU stays for final runs"
+    assert sidebar._export_patient_limit_hint(100, "en") == "Export first 100 ICU stays"
+    assert sidebar._export_patient_limit_hint(5000, "en") == "Export first 5k ICU stays"
 
 
 def test_export_conflicts_are_scoped_to_selected_format() -> None:
@@ -7726,7 +13539,7 @@ def test_demo_step2_preview_does_not_render_negative_zero_drop(monkeypatch) -> N
     sidebar._render_cohort_live_preview("en")
     preview_html = "\n".join(rendered)
 
-    assert "of 10 stays · 0.0%" in preview_html
+    assert "of 10 stays · no exclusions" in preview_html
     assert "Clear all" not in preview_html
     assert "-0.0%" not in preview_html
 
@@ -7764,8 +13577,8 @@ def test_demo_step2_live_preview_applies_icd_exclude_estimate(monkeypatch) -> No
     sidebar._render_cohort_live_preview("en")
     preview_html = "\n".join(rendered)
 
-    assert "of 10 stays · -90.0%" in preview_html
-    assert "after filters: 1" in preview_html
+    assert "of 10 stays · 90.0% excluded" in preview_html
+    assert "included stays: 1" in preview_html
     assert "ICD + A41" in preview_html
     assert "ICD - I50,C34" in preview_html
 
@@ -7893,16 +13706,27 @@ def test_large_desktop_density_keeps_sidebar_readable() -> None:
 
 
 def test_mobile_bottom_nav_labels_clip_with_ellipsis() -> None:
+    app_source = Path(app.__file__).read_text(encoding="utf-8")
     css_text = shell_styles._load_shell_overrides_css()
 
+    assert 'mobile_page_keys = ["extract", "quick_viz", "cohort", "cross_db", "research_agent", "assistant"]' in app_source
+    assert 'mobile_page_keys + ["assistant"' not in app_source
+    assert 'mobile_page_keys + ["states"' not in app_source
+    assert 'mobile_page_keys + ["settings"' not in app_source
+    assert '"extract": "Extract" if lang == "en" else "提取"' in app_source
+    assert '"quick_viz": "Patient" if lang == "en" else "患者"' in app_source
+    assert '"cross_db": "Cross-DB" if lang == "en" else "跨库"' in app_source
+    assert '"assistant": "Copilot" if lang == "en" else "助手"' in app_source
+    assert "mobile_page_labels.get(key, page_labels.get(key, key))" in app_source
     assert 'st-key-main_nav_bar"] div[role="radiogroup"] > label p' in css_text
     assert 'label:has(input:checked) *' in css_text
     assert "-webkit-text-fill-color: var(--ink) !important" in css_text
     assert "flex: 1 1 0% !important" in css_text
     assert "min-width: 0 !important" in css_text
     assert "width: 100% !important" in css_text
-    assert "width: 72px !important" in css_text
-    assert "max-width: 72px !important" in css_text
+    assert "grid-template-columns: repeat(6, minmax(0, 1fr)) !important" in css_text
+    assert "overflow-x: hidden !important" in css_text
+    assert "max-width: 100% !important" in css_text
     assert "text-overflow: ellipsis !important" in css_text
     assert "overflow: hidden !important" in css_text
 
@@ -7926,9 +13750,10 @@ def test_narrow_view_notice_is_scoped_to_dense_visualization_pages(monkeypatch) 
 
     app._render_narrow_view_notice("research_agent", "en")
     app._render_narrow_view_notice("extract", "en")
+    app._render_narrow_view_notice("quick_viz", "en")
     assert fake_st.markdown_calls == []
 
-    app._render_narrow_view_notice("quick_viz", "en")
+    app._render_narrow_view_notice("cross_db", "en")
     app._render_narrow_view_notice("cohort", "zh")
 
     assert len(fake_st.markdown_calls) == 2

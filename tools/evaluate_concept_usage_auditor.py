@@ -51,9 +51,15 @@ def make_cases() -> List[Dict[str, object]]:
     ]
     for col in ["sofa2", "gcs"]:
         for template, severity in agg_templates:
+            name_prefix = (
+                template.split("(")[0]
+                .replace("[", "_")
+                .replace('"', "")
+                .replace(".", "_")
+            )
             unsafe.append(
                 {
-                    "name": f"{col}_{template.split('(')[0].replace('[', '_').replace('\"', '').replace('.', '_')}",
+                    "name": f"{col}_{name_prefix}",
                     "code": "import numpy as np\nx = " + template.format(col=col),
                     "expected": severity,
                 }

@@ -23,6 +23,7 @@ Drug Levels:
 - Level 3: norepinephrine or epinephrine ≥ 0.1 μg/kg/min, or any vasopressin
 """
 
+import numpy as np
 import pandas as pd
 from typing import Optional, List, Dict, Any
 
@@ -235,6 +236,15 @@ def calculate_circ_failure_status(
     if vaso_rate_col and vaso_rate_col in df.columns:
         df['level3_drugs'] = df['level3_drugs'] | (df[vaso_rate_col] > 0)
     
+    # Normalise the boolean flags before scoring. The comparisons above (e.g.
+    # `df[map_col] <= MAP_THRESHOLD`, `df[col] > 0`) yield pd.NA on nullable
+    # dtypes when the source value is missing, which makes `if row.get(flag)`
+    # raise "boolean value of NA is ambiguous" in get_event_level. An unmeasured
+    # signal means the criterion is not met, matching the default-False init.
+    for _flag in ('lactate_elevated', 'map_low', 'level1_drugs',
+                  'level2_drugs', 'level3_drugs'):
+        df[_flag] = df[_flag].fillna(False).astype(bool)
+
     # Calculate event levels
     def get_event_level(row):
         if not row.get('lactate_elevated', False):
@@ -248,51 +258,45 @@ def calculate_circ_failure_status(
         return 0
     
     if use_rolling_window:
-        # Apply rolling window per patient
+        # Apply rolling window per patient.
         window_steps = window_size_minutes // grid_size_minutes
-        
+
+        # Resolve the point-in-time event level first (lactate AND MAP/drugs at
+        # the SAME timepoint, per get_event_level), then label each center as
+        # Event k when the centered window sustains level >= k for >= 2/3 of its
+        # timepoints. This keeps the rolling label consistent with the documented
+        # Event 1/2/3 definition and the point-in-time path, instead of
+        # decoupling sustained lactate (>= 2/3) from single-point drug presence
+        # (the previous logic used `.any()` for drug level, which could promote a
+        # window to Event 2/3 from a single drugged timepoint).
+        df['_point_event'] = df.apply(get_event_level, axis=1).astype(int)
+
         def apply_rolling_window(group):
-            if len(group) < window_steps:
-                # Not enough data for rolling window, use point assessment
-                group['circ_event'] = group.apply(get_event_level, axis=1)
-            else:
-                # Use rolling window
-                # For each position, check if ≥ 2/3 of window meets criteria
-                for i in range(len(group)):
-                    half_window = window_steps // 2
-                    start_idx = max(0, i - half_window)
-                    end_idx = min(len(group), i + half_window + 1)
-                    
-                    window_df = group.iloc[start_idx:end_idx]
-                    
-                    # Check if MAP or drugs present in ≥ 2/3 of window
-                    map_or_drugs = (
-                        window_df['map_low'] | 
-                        window_df['level1_drugs'] | 
-                        window_df['level2_drugs'] | 
-                        window_df['level3_drugs']
-                    )
-                    
-                    if map_or_drugs.mean() >= WINDOW_FRACTION_THRESHOLD:
-                        # Determine highest drug level in window
-                        if window_df['level3_drugs'].any() and window_df['lactate_elevated'].mean() >= WINDOW_FRACTION_THRESHOLD:
-                            group.iloc[i, group.columns.get_loc('circ_event')] = 3
-                        elif window_df['level2_drugs'].any() and window_df['lactate_elevated'].mean() >= WINDOW_FRACTION_THRESHOLD:
-                            group.iloc[i, group.columns.get_loc('circ_event')] = 2
-                        elif window_df['lactate_elevated'].mean() >= WINDOW_FRACTION_THRESHOLD:
-                            group.iloc[i, group.columns.get_loc('circ_event')] = 1
-                        else:
-                            group.iloc[i, group.columns.get_loc('circ_event')] = 0
-                    else:
-                        group.iloc[i, group.columns.get_loc('circ_event')] = 0
-                        
+            point = group['_point_event'].to_numpy()
+            n = len(point)
+            if n < window_steps:
+                # Not enough data for a full window: use point assessment.
+                group['circ_event'] = point
+                return group
+            half_window = window_steps // 2
+            events = np.zeros(n, dtype=int)
+            for i in range(n):
+                start_idx = max(0, i - half_window)
+                end_idx = min(n, i + half_window + 1)
+                win = point[start_idx:end_idx]
+                for k in (3, 2, 1):
+                    if (win >= k).mean() >= WINDOW_FRACTION_THRESHOLD:
+                        events[i] = k
+                        break
+            group['circ_event'] = events
             return group
-        
+
         # 🔧 FIX pandas 3.0: groupby().apply() drops group columns
         _id_backup = df[[id_col]].copy()
         df = df.groupby(id_col, group_keys=False).apply(apply_rolling_window)
         if id_col not in df.columns:
             df[id_col] = _id_backup[id_col].values
+        df = df.drop(columns=['_point_event'], errors='ignore')
     else:
         # Simple point-in-time assessment
         df['circ_event'] = df.apply(get_event_level, axis=1)
@@ -356,7 +360,15 @@ def load_circ_failure(
     
     # Concepts to load
     core_concepts = ['lact', 'map']
-    optional_concepts = ['norepi_rate', 'epi_rate', 'dobu_rate', 'dopa_rate']
+    optional_concepts = [
+        'norepi_rate',
+        'epi_rate',
+        'adh_rate',
+        'dobu_rate',
+        'dopa_rate',
+        'phn_rate',
+        'milrinone',
+    ]
     all_needed = core_concepts + optional_concepts
     
     if verbose:
@@ -463,8 +475,11 @@ def load_circ_failure(
     # Find drug columns (based on what was loaded)
     norepi_col = 'norepi_rate' if 'norepi_rate' in df.columns else None
     epi_col = 'epi_rate' if 'epi_rate' in df.columns else None
-    vaso_col = None  # Not commonly available
-    level1_cols = [c for c in ['dobu_rate', 'dopa_rate'] if c in df.columns]
+    vaso_col = 'adh_rate' if 'adh_rate' in df.columns else None
+    level1_cols = [
+        c for c in ['dobu_rate', 'dopa_rate', 'phn_rate', 'milrinone']
+        if c in df.columns
+    ]
     
     # Calculate circulatory failure status
     result = calculate_circ_failure_status(

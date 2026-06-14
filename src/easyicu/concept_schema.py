@@ -202,12 +202,21 @@ class ConceptDefinition:
         )
 
     def for_data_source(self, config: DataSourceConfig) -> List[ConceptSource]:
-        candidates: List[ConceptSource] = []
-        keys = [config.name, *config.class_prefix]
-        for key in keys:
+        # ricu 语义: 源按 class 继承链 "most-specific match" 解析 —— 取继承链中
+        # 第一个有定义的 class 的源, 而非把所有 class 的源做并集 (union)。
+        # 旧实现 union 会在 demo 配置(class_prefix 非空)上把父类源叠加到子类源:
+        #   - 重复计数 (如 mimic_demo + mimic 都定义 vaso 的 cv/mv -> 同一源被加多次);
+        #   - 引入错误的父类表 (mimic_demo class_prefix 误含 miiv -> 单数 inputevents,
+        #     而 MIMIC-III demo 只有 inputevents_cv/_mv)。
+        # 非 demo 配置 class_prefix 为空, keys=[name], 行为与旧实现完全一致 (零影响)。
+        seen: set = set()
+        for key in [config.name, *config.class_prefix]:
+            if key in seen:
+                continue
+            seen.add(key)
             if key in self.sources:
-                candidates.extend(self.sources[key])
-        return candidates
+                return list(self.sources[key])
+        return []
 
 
 class ConceptDictionary:

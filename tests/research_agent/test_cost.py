@@ -88,6 +88,30 @@ def test_estimated_cost_uses_price_table(ra):
     assert rec.estimated_cost_usd == pytest.approx(2.0)
 
 
+def test_deepseek_models_are_in_default_price_table(ra):
+    # The evaluation-protocol reliability-baseline / discovery models must
+    # estimate a cost out of the box (token counts are exact regardless).
+    meter = ra.CostMeter()
+    for model in ("deepseek-chat", "deepseek-reasoner"):
+        rec = meter.record(
+            role="coder", model=model,
+            prompt_tokens=1_000_000, completion_tokens=0,
+        )
+        assert rec.estimated_cost_usd is not None
+        assert rec.estimated_cost_usd > 0
+
+
+def test_free_models_record_zero_cost_not_none(ra):
+    # Free OpenRouter rows are kept at (0,0) so the meter still records a
+    # row (cost == 0.0) rather than dropping to ``None``.
+    meter = ra.CostMeter()
+    rec = meter.record(
+        role="analyzer", model="openai/gpt-oss-120b:free",
+        prompt_tokens=200_000, completion_tokens=20_000,
+    )
+    assert rec.estimated_cost_usd == pytest.approx(0.0)
+
+
 def test_estimated_cost_none_for_unknown_model(ra):
     meter = ra.CostMeter()
     rec = meter.record(
@@ -187,6 +211,17 @@ def test_pipeline_with_cost_tracking_records_per_role_calls(ra, synthetic_cohort
     run_dir = Path(result.workdir)
     assert (run_dir / "cost_summary.md").exists()
     assert (run_dir / "cost_records.json").exists()
+
+    # Machine-readable aggregate consumed by the bench scorer / Fig.3 builder.
+    assert (run_dir / "cost_summary.json").exists()
+    summary = json.loads((run_dir / "cost_summary.json").read_text(encoding="utf-8"))
+    for key in (
+        "total_prompt_tokens",
+        "total_completion_tokens",
+        "total_tokens",
+        "total_cost_usd",
+    ):
+        assert key in summary
 
     records = json.loads((run_dir / "cost_records.json").read_text(encoding="utf-8"))
     assert isinstance(records, list)

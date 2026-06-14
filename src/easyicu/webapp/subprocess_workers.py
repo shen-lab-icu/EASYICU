@@ -63,6 +63,7 @@ def _streaming_load_and_export(concepts, database, data_path, id_key, all_pids,
                                batch_size, export_dir, export_format, group_name,
                                cohort_exclude_ids, overwrite, cohort_suffix,
                                dep_concepts_to_cache, deps_cache_dir, _lc, np, pd,
+                               include_index=False, filename_timestamp='',
                                sepsis_options=None):
     """流式分批导出: 逐批加载 → 合并宽表 → 追加写入 parquet/csv。
 
@@ -101,6 +102,8 @@ def _streaming_load_and_export(concepts, database, data_path, id_key, all_pids,
     safe_fn = f"{group_name}_{cn_sfx}"
     if cohort_suffix:
         safe_fn = f"{safe_fn}_{cohort_suffix}"
+    if filename_timestamp:
+        safe_fn = f"{safe_fn}_{filename_timestamp}"
     safe_fn = safe_fn.replace('/', '_').replace('\\', '_')[:150]
     if export_format == 'csv':
         out_path = os.path.join(export_dir, f"{safe_fn}.csv")
@@ -332,7 +335,7 @@ def _streaming_load_and_export(concepts, database, data_path, id_key, all_pids,
         if export_format == 'csv':
             header = (bi == 0)
             mode = 'w' if bi == 0 else 'a'
-            merged_df.to_csv(out_path, index=False, encoding='utf-8-sig',
+            merged_df.to_csv(out_path, index=include_index, encoding='utf-8-sig',
                              mode=mode, header=header)
         elif export_format == 'excel':
             excel_frames.append(merged_df.copy())
@@ -342,7 +345,7 @@ def _streaming_load_and_export(concepts, database, data_path, id_key, all_pids,
                 col_order = list(merged_df.columns)
             else:
                 merged_df = merged_df.reindex(columns=col_order)
-            table = pa.Table.from_pandas(merged_df, preserve_index=False)
+            table = pa.Table.from_pandas(merged_df, preserve_index=include_index)
             if writer is None:
                 writer = pq.ParquetWriter(out_path, table.schema)
             else:
@@ -372,7 +375,7 @@ def _streaming_load_and_export(concepts, database, data_path, id_key, all_pids,
     # Excel 格式: 写累积的全部帧
     if export_format == 'excel' and excel_frames:
         full = pd.concat(excel_frames, ignore_index=True)
-        full.to_excel(out_path, index=False)
+        full.to_excel(out_path, index=include_index)
         del full, excel_frames
 
     # ── 合并 dep 批文件 → 单文件 ──
@@ -430,7 +433,9 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
                                        export_dir, export_format, group_name,
                                        cohort_exclude_ids, overwrite,
                                        cohort_suffix, dep_concepts_to_cache,
-                                       deps_cache_dir, sepsis_options=None):
+                                       deps_cache_dir, include_index=False,
+                                       filename_timestamp='',
+                                       sepsis_options=None):
     """在子进程中完成 load + merge + export 全部工作。
 
     主进程不接触任何 DataFrame，彻底消除 pymalloc arena 碎片在主进程中的累积。
@@ -467,6 +472,7 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
             concepts, database, data_path, _id_key_s, list(_pids_s), batch_size,
             export_dir, export_format, group_name, cohort_exclude_ids, overwrite,
             cohort_suffix, dep_concepts_to_cache, deps_cache_dir, _lc, np, pd,
+            include_index=include_index, filename_timestamp=filename_timestamp,
             sepsis_options=sepsis_options)
 
     # ── 1. 加载概念 (非流式 — 小数据集原有逻辑) ──
@@ -763,6 +769,8 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
         safe_filename = f"{group_name}_{concepts_suffix}_{cohort_suffix}".replace('/', '_').replace('\\', '_')
     else:
         safe_filename = f"{group_name}_{concepts_suffix}".replace('/', '_').replace('\\', '_')
+    if filename_timestamp:
+        safe_filename = f"{safe_filename}_{filename_timestamp}"
     if len(safe_filename) > 150:
         safe_filename = safe_filename[:150]
 
@@ -795,7 +803,7 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
 
     # 写入文件
     if export_format == 'csv':
-        merged_df.to_csv(file_path, index=False, encoding='utf-8-sig')
+        merged_df.to_csv(file_path, index=include_index, encoding='utf-8-sig')
     elif export_format == 'parquet':
         for col in merged_df.columns:
             if merged_df[col].dtype == object:
@@ -805,9 +813,9 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
                     merged_df[col] = numeric_vals
                 else:
                     merged_df[col] = merged_df[col].astype(str)
-        merged_df.to_parquet(file_path, index=False)
+        merged_df.to_parquet(file_path, index=include_index)
     elif export_format == 'excel':
-        merged_df.to_excel(file_path, index=False)
+        merged_df.to_excel(file_path, index=include_index)
     else:
         for col in merged_df.columns:
             if merged_df[col].dtype == object:
@@ -817,7 +825,7 @@ def _subprocess_load_and_export_module(concepts, database, data_path,
                     merged_df[col] = numeric_vals
                 else:
                     merged_df[col] = merged_df[col].astype(str)
-        merged_df.to_parquet(file_path, index=False)
+        merged_df.to_parquet(file_path, index=include_index)
 
     n_rows = len(merged_df)
 
@@ -837,7 +845,8 @@ def _subprocess_load_special_impl(concepts, database, data_path, patient_ids_fil
                                   max_patients, output_dir, preloaded_parquet_dir=None,
                                   export_dir=None, export_format='parquet',
                                   cohort_exclude_ids=None, concept_to_group=None,
-                                  cohort_suffix='', sepsis_options=None):
+                                  cohort_suffix='', include_index=False,
+                                  filename_timestamp='', sepsis_options=None):
     """在子进程中加载特殊概念（AKI, CircFailure 等），结果写入 parquet。
 
     当 export_dir 不为 None 时，在子进程内直接完成合并+导出，
@@ -1399,7 +1408,18 @@ def _subprocess_load_special_impl(concepts, database, data_path, patient_ids_fil
             # 写文件
             concepts_sorted = sorted(normalized.keys())
             concepts_str = '_'.join(concepts_sorted)
-            fname = f"{grp_name}_{concepts_str}{cohort_suffix}.{export_format}"
+            fname_parts = [grp_name, concepts_str]
+            if cohort_suffix:
+                fname_parts.append(str(cohort_suffix))
+            if filename_timestamp:
+                fname_parts.append(str(filename_timestamp))
+            fname_base = "_".join(part for part in fname_parts if part).replace('/', '_').replace('\\', '_')[:150]
+            if export_format == 'csv':
+                fname = f"{fname_base}.csv"
+            elif export_format == 'excel':
+                fname = f"{fname_base}.xlsx"
+            else:
+                fname = f"{fname_base}.parquet"
             file_path = os.path.join(export_dir, fname)
 
             for col in merged_df.columns:
@@ -1412,9 +1432,11 @@ def _subprocess_load_special_impl(concepts, database, data_path, patient_ids_fil
                         merged_df[col] = merged_df[col].astype(str)
 
             if export_format == 'csv':
-                merged_df.to_csv(file_path, index=False)
+                merged_df.to_csv(file_path, index=include_index)
+            elif export_format == 'excel':
+                merged_df.to_excel(file_path, index=include_index)
             else:
-                merged_df.to_parquet(file_path, index=False)
+                merged_df.to_parquet(file_path, index=include_index)
 
             exported_manifest[grp_name] = {
                 'exported_file': file_path,
@@ -1437,14 +1459,16 @@ def _subprocess_load_special(concepts, database, data_path, patient_ids_filter,
                              max_patients, output_dir, preloaded_parquet_dir=None,
                              export_dir=None, export_format='parquet',
                              cohort_exclude_ids=None, concept_to_group=None,
-                             cohort_suffix='', sepsis_options=None):
+                             cohort_suffix='', include_index=False,
+                             filename_timestamp='', sepsis_options=None):
     """Run special concept loading without letting optional derivations kill export."""
     try:
         return _subprocess_load_special_impl(
             concepts, database, data_path, patient_ids_filter,
             max_patients, output_dir, preloaded_parquet_dir,
             export_dir, export_format, cohort_exclude_ids,
-            concept_to_group, cohort_suffix, sepsis_options,
+            concept_to_group, cohort_suffix, include_index,
+            filename_timestamp, sepsis_options,
         )
     except Exception as exc:
         import json

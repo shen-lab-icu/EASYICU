@@ -1,7 +1,32 @@
+import numpy as np
 import pandas as pd
 
 from easyicu.api import _get_auto_chunk_strategy
-from easyicu.ts_utils import slide
+from easyicu.ts_utils import locb, locf, slide
+
+
+def test_locf_sorts_by_time_before_fill_when_unsorted_and_no_max_gap():
+    # Rows out of chronological order, max_gap omitted. LOCF must still carry the
+    # earliest observation forward in time, not in (wrong) row order.
+    df = pd.DataFrame({
+        "stay_id": [1, 1, 1],
+        "charttime": [10, 0, 5],          # deliberately unsorted
+        "value": [np.nan, 7.0, np.nan],   # only the t=0 row is observed
+    })
+    out = locf(df, id_cols=["stay_id"], index_col="charttime").sort_values("charttime")
+    # t=0 -> 7 (observed), t=5 and t=10 -> carried forward 7
+    assert out["value"].tolist() == [7.0, 7.0, 7.0]
+
+
+def test_locb_sorts_by_time_before_fill_when_unsorted_and_no_max_gap():
+    df = pd.DataFrame({
+        "stay_id": [1, 1, 1],
+        "charttime": [10, 0, 5],
+        "value": [9.0, np.nan, np.nan],   # only the t=10 row is observed
+    })
+    out = locb(df, id_cols=["stay_id"], index_col="charttime").sort_values("charttime")
+    # t=10 -> 9 (observed), t=0 and t=5 -> carried backward 9
+    assert out["value"].tolist() == [9.0, 9.0, 9.0]
 
 
 def test_numeric_charttime_slide_uses_hours_for_long_cohorts():

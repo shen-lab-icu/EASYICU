@@ -38,7 +38,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .analysis_types import infer_analysis_type, planner_analysis_type_guide
 from .cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
-from .icu_rules import VariableKind, default_time_windows
+from .icu_rules import (
+    GENERAL_ICU_ANALYSIS_PRINCIPLES,
+    VariableKind,
+    default_time_windows,
+)
 from .llm import LLMClient, LLMMessage
 from .prompts import PROMPT_PACK_VERSION, load_prompt_pack
 from .schema import (
@@ -159,11 +163,42 @@ def _format_variable(v: ConceptDescriptor) -> str:
     pit = f" pitfalls={v.pitfalls!r}" if v.pitfalls else ""
     rng = f" range={v.valid_range}" if v.valid_range else ""
     unit = f" unit={v.unit}" if v.unit else ""
+    obs = _format_observed_domain(v.observed_domain)
     return (
-        f"- {v.name} | role={v.role.value} dtype={v.dtype}{unit}{rng}"
+        f"- {v.name} | role={v.role.value} dtype={v.dtype}{unit}{rng}{obs}"
         f" agg_default={_ctas_aggregation_hint(v.aggregation_default)}"
         f"{miss}{pit}"
     )
+
+
+def _format_observed_domain(domain: Optional[Dict[str, Any]]) -> str:
+    """Render the cohort-observed value domain as a compact, fact-only hint.
+
+    Surfaces ``is_binary`` / ``is_constant`` and the observed [min, max] so the
+    planner interprets a column by its real values, not its name (a
+    ``<score>_max`` column observed binary {0,1} must not be thresholded as a
+    0-24 scale). States facts only — never prescribes a derivation.
+    """
+    if not domain:
+        return ""
+    if domain.get("is_constant"):
+        return " observed=CONSTANT(single value; no variation to model)"
+    if domain.get("is_binary"):
+        return (
+            " observed={0,1} BINARY(already 2-level; a numeric cutoff >1 is degenerate)"
+        )
+    levels = domain.get("levels")
+    if levels:
+        shown = ",".join(levels[:6])
+        more = "…" if len(levels) > 6 else ""
+        return f" observed_levels={{{shown}{more}}}(categorical; encode as-is)"
+    lo, hi = domain.get("min"), domain.get("max")
+    n_unique = domain.get("n_unique")
+    if lo is not None and hi is not None:
+        return f" observed=[{lo:g},{hi:g}] n_unique={n_unique}"
+    if n_unique is not None:
+        return f" observed_n_unique={n_unique}"
+    return ""
 
 
 def _format_context(ctx: ResearchContext) -> str:
@@ -248,11 +283,11 @@ def _format_concept_id_allowlist() -> str:
     lines = [
         "ALLOWED concept_ids — the ONLY values acceptable in any "
         "CohortDefinition or RobustnessSpec.cohort_override.concept_id field. "
-        "Synthesizing new names (e.g. \"sofa2_admission\", "
-        "\"kdigo_aki_max\", \"sepsis_onset_window\") is forbidden — these "
+        'Synthesizing new names (e.g. "sofa2_admission", '
+        '"kdigo_aki_max", "sepsis_onset_window") is forbidden — these '
         "are operationalizations, not concepts. To operationalize a concept "
         "over a time window, use the 5-tuple form: "
-        "concept_id=\"<one from the list below>\" + time_window + aggregation.",
+        'concept_id="<one from the list below>" + time_window + aggregation.',
         "",
     ]
     lines.extend(f"- `{concept_id}`" for concept_id in concept_ids)
@@ -277,14 +312,14 @@ def _format_ctas_schema_constraints() -> str:
         "time_window.start_offset_hours. Zero-width windows (end == start) "
         "are invalid. If you want a single instant, use a small window like "
         "[0h, 1h] instead.\n\n"
-        "3. aggregation \"any\" / \"all\" can only be paired with op in "
-        "{\"==\", \"!=\", \"missing\", \"not_missing\"}; they yield "
+        '3. aggregation "any" / "all" can only be paired with op in '
+        '{"==", "!=", "missing", "not_missing"}; they yield '
         "booleans, not numeric thresholds.\n\n"
         "4. If the ResearchContext shows an ICU rule label in an "
         "`agg_default=... (icu_rule=...)` annotation, translate it before "
-        "writing CTAS JSON: first_value -> \"first\"; max_or_last -> "
+        'writing CTAS JSON: first_value -> "first"; max_or_last -> '
         '"max" or "last" (prefer "max" for acuity scores); '
-        "mean_or_median / mean_median -> \"mean\" or \"median\" (prefer "
+        'mean_or_median / mean_median -> "mean" or "median" (prefer '
         '"median" for robustness checks); median_only -> "median".'
     )
 
@@ -298,7 +333,16 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "then choose only the steps justified by that family and "
         "the available context. The plan must not assume that "
         "every task needs Table 1, outcome incidence, missingness, "
-        "or a primary association model. If cross-database "
+        "or a primary association model. That said, a baseline "
+        "characteristics table (Table 1) IS a reporting standard for "
+        "observational/association and prediction-model families "
+        "(STROBE item 14 / TRIPOD): for those families include a "
+        "baseline characteristics step (e.g. expected_outputs "
+        "['table:table_one']) describing the analytic cohort before "
+        "the primary analysis. Omit it only when the family genuinely "
+        "does not call for one (e.g. a pure feasibility/protocol task, "
+        "or a clustering task whose per-cluster characteristics table "
+        "already carries the descriptive reporting). If cross-database "
         "replication is requested, include a cross-database step, "
         "but mark it as a feasibility / protocol step unless the "
         "ResearchContext explicitly provides external cohort files. "
@@ -326,10 +370,15 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "Every cohort/exposure/outcome concept used to define the "
         "analysis population must be represented as a typed cohort "
         "definition: concept_id, time_window, aggregation, operator, "
-        "and value. You may write `cohort: {\"from_named\": \"...\"}` "
+        'and value. You may write `cohort: {"from_named": "..."}` '
         "only when the caller has explicitly registered that named "
         "pattern for this case; otherwise supply the full five-tuple "
-        "predicate. Free-text cohort strings are invalid.\n\n"
+        "predicate. Free-text cohort strings are invalid.\n"
+        "If your plan includes any cohort-definition, eligibility, or "
+        "attrition step, `cohort.inclusion` MUST contain at least one "
+        "structured predicate (plus any `exclusion`). An empty cohort there is "
+        "rejected: 纳排 expressed only in step prose cannot be enforced or "
+        "audited, and the analysis would silently run on the full universe.\n\n"
         "Pre-specify robustness variants before execution. Add a "
         "`robustness_specs` array with at least 3 cohort-axis, "
         "2 missingness-axis, and 2 outcome-axis alternatives. "
@@ -407,6 +456,36 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
     )
 
 
+def _render_methodological_principles() -> str:
+    """Render the cross-cutting ICU principles for injection into a prompt.
+
+    Faithful to the impartiality contract on :class:`MethodologicalPrinciple`:
+    ``error`` principles are objective mistakes the plan must avoid, while
+    ``caution`` principles are defensible analytical choices the planner must
+    surface and justify but never have imposed on it. Case-neutral by
+    construction — the principle layer hard-codes no benchmark task, variable,
+    score or database.
+    """
+    errors = [p for p in GENERAL_ICU_ANALYSIS_PRINCIPLES if p.kind == "error"]
+    cautions = [p for p in GENERAL_ICU_ANALYSIS_PRINCIPLES if p.kind == "caution"]
+    lines = [
+        "\n\nCROSS-CUTTING ICU METHODOLOGY (case-neutral; apply when planning):",
+        "Objective errors to avoid — wrong under any study design:",
+    ]
+    lines.extend(f"- [{p.phase}] {p.principle}" for p in errors)
+    lines.append(
+        "Defensible choices — state and justify in the plan; do not let them "
+        "pass silently, but the analyst, not these rules, decides:"
+    )
+    lines.extend(f"- [{p.phase}] {p.principle}" for p in cautions)
+    return "\n".join(lines)
+
+
+# Rendered once: the principle layer is static. Injected into the planner
+# system message so the (previously unused) principles actually steer the plan.
+_PRINCIPLES_GUIDE = _render_methodological_principles()
+
+
 class PlannerAgent:
     """Produces an :class:`AnalysisPlan` from the research context.
 
@@ -424,7 +503,7 @@ class PlannerAgent:
 
     def run(self, context: ResearchContext) -> AnalysisPlan:
         messages = [
-            LLMMessage(role="system", content=_SYSTEM_GUIDE),
+            LLMMessage(role="system", content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE),
             LLMMessage(role="user", content=_build_planner_user_prompt(context)),
         ]
         from .structured_retry import call_llm_with_structured_retry
@@ -491,16 +570,27 @@ class ReplannerAgent(PlannerAgent):
         current_plan: AnalysisPlan,
         probe_summary: Optional[Dict[str, Any]] = None,
         completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
+        directive: Optional[str] = None,
     ) -> AnalysisPlan:
         completed = list(completed_step_records or [])
+        # A ``directive`` is a high-priority, runtime-issued instruction (e.g. a
+        # self-inflicted-block override on a task-viable cohort). It is surfaced
+        # first so the replanner cannot bury it under the routine revise prose.
+        directive_block = (
+            f"PRIORITY RUNTIME DIRECTIVE (override prior plan revisions):\n{directive}\n\n"
+            if directive
+            else ""
+        )
         messages = [
             LLMMessage(
-                role="system", content=_SYSTEM_GUIDE + "\n\n" + _REPLANNER_GUIDE
+                role="system",
+                content=_SYSTEM_GUIDE + _PRINCIPLES_GUIDE + "\n\n" + _REPLANNER_GUIDE,
             ),
             LLMMessage(
                 role="user",
                 content=(
-                    "Revise the ICU-AWARE RESEARCH PLAN as JSON matching the "
+                    directive_block
+                    + "Revise the ICU-AWARE RESEARCH PLAN as JSON matching the "
                     "AnalysisPlan schema. Keep completed steps unchanged and "
                     "revise only the remaining steps when the probe summary or "
                     "completed step outputs justify it.\n\n"
@@ -1036,6 +1126,16 @@ class RuntimeSupervisor:
 _MAX_PRE_EXEC_COMPATIBILITY_REPAIRS = 2
 
 
+# Output-token budget for analysis-script generation and repair. A full
+# robustness step (multiple model fits + an aic/ci summary block) easily runs
+# past 4096 output tokens with a verbose model; the E1 20260611 v4-flash run
+# truncated analysis.py mid-expression ("models.append(res", "float(aic_linear
+# - a") -> SyntaxError "'(' was never closed". 8192 is the DeepSeek v4 output
+# ceiling and roughly doubles the headroom. If truncation recurs at this cap,
+# add a finish_reason=="length" continuation rather than raising it blindly.
+_CODER_MAX_TOKENS = 8192
+
+
 class CoderAgent:
     """Generates a self-contained Python analysis script for one step.
 
@@ -1083,7 +1183,7 @@ class CoderAgent:
                 ),
             ),
         ]
-        raw = self.llm.complete(messages, max_tokens=4096, temperature=0.1)
+        raw = self.llm.complete(messages, max_tokens=_CODER_MAX_TOKENS, temperature=0.1)
         code = _strip_code_fence(raw.strip())
 
         # Patch C: post-codegen pre-execution compatibility enforcement.
@@ -1201,7 +1301,9 @@ class CoderAgent:
                 ),
             ),
         ]
-        raw = self.llm.complete(messages, max_tokens=4096, temperature=0.05)
+        raw = self.llm.complete(
+            messages, max_tokens=_CODER_MAX_TOKENS, temperature=0.05
+        )
         return _strip_code_fence(raw.strip())
 
 
@@ -1281,7 +1383,9 @@ class WriterAgent:
         max_tokens: int = 2048,
     ) -> str:
         lang_inst = _writer_language_instruction(self.language)
-        evidence_list = ", ".join(str(eid) for eid in evidence_ids) if evidence_ids else "(none)"
+        evidence_list = (
+            ", ".join(str(eid) for eid in evidence_ids) if evidence_ids else "(none)"
+        )
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _WRITER_GUIDE),
             LLMMessage(
@@ -1297,6 +1401,14 @@ class WriterAgent:
                     "`mortality was 12% {{evidence:outcome_rate}}`.\n"
                     "- NEVER use a placeholder as a noun. If a number is unavailable, omit the sentence.\n"
                     f"- Only use ids from this list: {evidence_list}\n\n"
+                    "OUTPUT DISCIPLINE:\n"
+                    "- Output ONLY finished, publishable manuscript prose. Do NOT include "
+                    "your reasoning, planning, working notes, or meta-commentary about the "
+                    "evidence digest — e.g. no lines such as 'First, extract ...', 'Let me "
+                    "...', 'Actually, X says ...', a trailing 'no number?', or bullet lists "
+                    "that restate the digest.\n"
+                    "- If you cannot support a sentence from the listed evidence, omit it "
+                    "silently; do not narrate the gap.\n\n"
                     "LANGUAGE POLICY:\n"
                     "- Use ONLY associational phrasing. Forbidden: 'caused by', 'causal', "
                     "'attributable to', 'effect of', 'due to', 'leads to', 'drives'.\n"
@@ -1311,7 +1423,9 @@ class WriterAgent:
                 ),
             ),
         ]
-        raw = self.llm.complete(messages, max_tokens=max_tokens, temperature=0.3).strip()
+        raw = self.llm.complete(
+            messages, max_tokens=max_tokens, temperature=0.3
+        ).strip()
         return _strip_code_fence(raw)
 
     def run(
@@ -1472,7 +1586,16 @@ class WriterAgent:
         )
 
         # Concatenate all sections.
-        parts = [title, abstract, introduction, methods, results, discussion, limitations, conclusion]
+        parts = [
+            title,
+            abstract,
+            introduction,
+            methods,
+            results,
+            discussion,
+            limitations,
+            conclusion,
+        ]
         manuscript = "\n\n".join(p.strip() for p in parts if p.strip())
         return manuscript
 
@@ -1730,6 +1853,17 @@ def _sentences_missing_evidence_tokens(scaffold: str) -> List[str]:
             continue
         if re.match(r"^#{1,6}\s+", stripped):
             continue
+        # Skip footnote/provenance DEFINITION lines (``[^claim_1]: value=...;
+        # step=...; evidence=<name>``). These are auto-appended by the numeric
+        # binder as machine provenance, not author-written result sentences:
+        # they carry numbers + claimy words (auroc/brier/death) but reference
+        # evidence via a plaintext ``evidence=<step>`` token (no ``](evidence/)``
+        # link) when a claim binds to a step-level virtual evidence, so the
+        # support check mis-flagged the whole footnote block as one unsupported
+        # result sentence and falsely tripped manuscript_ready=False (E2). The
+        # block proves the claims ARE bound; it must not be scanned as prose.
+        if re.match(r"^\[\^[^\]]+\]:", stripped):
+            continue
         match = section_label_re.match(stripped)
         if match:
             stripped = stripped[match.end() :].strip()
@@ -1741,9 +1875,8 @@ def _sentences_missing_evidence_tokens(scaffold: str) -> List[str]:
         sentence = raw_sentence.strip()
         if not sentence:
             continue
-        if (
-            "{evidence:" in sentence
-            or re.search(r"\]\(\s*evidence/[^)]+\)", sentence, flags=re.I)
+        if "{evidence:" in sentence or re.search(
+            r"\]\(\s*evidence/[^)]+\)", sentence, flags=re.I
         ):
             continue
         if re.search(

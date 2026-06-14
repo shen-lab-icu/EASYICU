@@ -79,6 +79,10 @@ from easyicu.webapp.session_state import clear_agent_continuation_state, clear_r
 from easyicu.webapp.ui_helpers import icon as _shell_icon
 
 
+_RA_QUERY_ACTION_KEY = "eu_ra_action"
+_RA_SWITCH_COHORT_ACTION = "switch_cohort"
+
+
 def _ra_text(key: str, **kwargs: Any) -> str:
     """Return localized Research Agent copy."""
     text = get_text(f"ra_{key}")
@@ -99,6 +103,60 @@ DEFAULT_RESEARCH_AGENT_QUESTION_ZH = (
     "使用 SOFA 测试队列，评估更高的 SOFA-2 评分是否与 ICU 死亡率相关，"
     "并生成可复现的表格、图和简洁的 Methods/Results 草稿。"
 )
+
+_RA_WORKFLOW_ANALYSIS = "analysis_run"
+_RA_WORKFLOW_IDEA = "idea_exploration"
+
+
+def _normalise_research_agent_workflow_mode(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if text in {
+        _RA_WORKFLOW_IDEA,
+        "idea",
+        "idea mining",
+        "idea-mining",
+        "idea exploration",
+        "discovery",
+        "discovery triage",
+        "literature discovery",
+        "文献探索",
+        "发现探索",
+        "idea 探索",
+    }:
+        return _RA_WORKFLOW_IDEA
+    return _RA_WORKFLOW_ANALYSIS
+
+
+def _research_agent_workflow_labels(*, is_en: bool) -> Dict[str, str]:
+    if is_en:
+        return {
+            _RA_WORKFLOW_ANALYSIS: "Analysis run",
+            _RA_WORKFLOW_IDEA: "Idea exploration",
+        }
+    return {
+        _RA_WORKFLOW_ANALYSIS: "正式分析运行",
+        _RA_WORKFLOW_IDEA: "Idea 探索",
+    }
+
+
+def _research_agent_workflow_mode_from_state(
+    state: Mapping[str, object],
+) -> str:
+    raw = state.get("research_agent_workflow_mode")
+    if raw is None:
+        raw = state.get("research_agent_workflow_mode_pick")
+    return _normalise_research_agent_workflow_mode(raw)
+
+
+def _set_research_agent_workflow_mode(
+    state: MutableMapping[str, object],
+    mode: str,
+    *,
+    is_en: bool,
+) -> None:
+    normalised = _normalise_research_agent_workflow_mode(mode)
+    state["research_agent_workflow_mode"] = normalised
+    state.pop("research_agent_workflow_mode_pick", None)
 
 
 def _default_research_agent_question(*, is_en: bool = True) -> str:
@@ -1446,12 +1504,14 @@ def _run_pipeline(
 ):
     """Invoke the pipeline; return the :class:`PipelineResult`.
 
-    ``audit_relax_probe`` is a per-run override of
-    ``EASYICU_AUDIT_RELAX_PROBE`` — when True, the probe-stage of the
-    concept-usage auditor downgrades reporting-practice violations from
-    block to warning. Used by the webapp resume editor as a documented
-    ablation; the strict default is preserved across the process by
-    restoring the prior env var value after the run.
+    ``audit_relax_probe`` sets the legacy ``EASYICU_AUDIT_RELAX_PROBE``
+    env var for the duration of the run. As of 2026-06-13 the concept-usage
+    auditor treats reporting-practice aggregation preferences (mean/SD of an
+    ordinal/composite score) as advisory warnings by DEFAULT — never a block
+    — so this toggle is effectively a no-op kept for backward compatibility.
+    The historical strict fail-closed benchmark is now opt-in via
+    ``EASYICU_AUDIT_ORDINAL_STRICT=1`` instead. The prior env var value is
+    restored across the process after the run regardless.
     """
     prior_relax = os.environ.get("EASYICU_AUDIT_RELAX_PROBE")
     if audit_relax_probe:
@@ -1490,6 +1550,483 @@ def _run_pipeline(
                 os.environ.pop("EASYICU_AUDIT_RELAX_PROBE", None)
             else:
                 os.environ["EASYICU_AUDIT_RELAX_PROBE"] = prior_relax
+
+
+# ---------------------------------------------------------------------------
+# Idea exploration dry-run helpers
+# ---------------------------------------------------------------------------
+
+
+_IDEA_ALIAS_MAP: Dict[str, List[str]] = {
+    "lact": ["lactate", "serum lactate"],
+    "lactate": ["lact", "serum lactate"],
+    "creat": ["creatinine", "serum creatinine"],
+    "creatinine": ["creat", "serum creatinine"],
+    "map": ["mean arterial pressure", "arterial pressure"],
+    "hr": ["heart rate"],
+    "resp": ["respiratory rate"],
+    "spo2": ["oxygen saturation"],
+    "sofa2": ["SOFA-2", "SOFA score", "sequential organ failure assessment"],
+    "sofa": ["SOFA score", "sequential organ failure assessment"],
+    "death": ["mortality", "ICU mortality", "hospital mortality", "in-hospital mortality"],
+    "los_icu": ["ICU length of stay", "length of stay"],
+    "los_hosp": ["hospital length of stay", "length of stay"],
+}
+
+
+class _StructuredIdeaExtractionLLM:
+    """LLM-compatible adapter for explicit web-form idea candidates.
+
+    The backend S4 API intentionally accepts an ``LLMClient`` so real
+    extraction can use a model. The web UI also needs a token-free path for a
+    user-typed candidate, so this shim returns a single JSON candidate while
+    still exercising the real idea-mining dry-run pipeline.
+    """
+
+    name = "easyicu-web-structured-idea-extractor"
+
+    def __init__(self, candidate: Mapping[str, Any]) -> None:
+        self.candidate = dict(candidate)
+        self.messages: Sequence[Any] = ()
+
+    def complete(
+        self,
+        messages: Sequence[Any],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.0,
+    ) -> str:
+        self.messages = messages
+        return json.dumps([self.candidate], ensure_ascii=False)
+
+
+class _NoopPriorArtSearchClient:
+    """Local prior-art adapter that freezes queries without internet access."""
+
+    def __init__(self) -> None:
+        self.queries: List[str] = []
+
+    def search_prior_art(
+        self,
+        query: str,
+        *,
+        max_results: int = 20,
+        idea: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        _ = max_results, idea
+        self.queries.append(str(query))
+        return {"hit_count": 0, "top_hits": []}
+
+
+def _normalised_column_lookup(cohort: Optional[pd.DataFrame]) -> Dict[str, str]:
+    if cohort is None:
+        return {}
+    try:
+        columns = [str(col) for col in cohort.columns]
+    except Exception:
+        return {}
+    return {_normalise_simple_concept(col): col for col in columns}
+
+
+def _normalise_simple_concept(value: object) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return text.strip("_")
+
+
+def _concept_aliases_for_cohort(cohort: Optional[pd.DataFrame]) -> Dict[str, List[str]]:
+    aliases: Dict[str, List[str]] = {}
+    if cohort is None:
+        return aliases
+    for col in [str(c) for c in cohort.columns]:
+        norm = _normalise_simple_concept(col)
+        values = [col.replace("_", " ")]
+        values.extend(_IDEA_ALIAS_MAP.get(norm, []))
+        aliases[col] = list(dict.fromkeys(v for v in values if str(v).strip()))
+    return aliases
+
+
+def _role_for_idea_column(col: str, series: Optional[pd.Series] = None):
+    from easyicu.research_agent.schema import VariableRole
+
+    norm = _normalise_simple_concept(col)
+    if any(token in norm for token in ("death", "mort", "outcome")) or norm.startswith("los"):
+        return VariableRole.OUTCOME
+    if any(token in norm for token in ("sofa", "score", "saps", "apache")):
+        return VariableRole.COMPOSITE_SCORE
+    if any(token in norm for token in ("vaso", "vent", "rrt", "drug", "med")):
+        return VariableRole.INTERVENTION
+    if any(token in norm for token in ("hr", "map", "sbp", "dbp", "temp", "spo2", "resp")):
+        return VariableRole.VITAL
+    if series is not None and pd.api.types.is_bool_dtype(series):
+        return VariableRole.COVARIATE
+    return VariableRole.LAB
+
+
+def _concept_descriptors_from_cohort(cohort: Optional[pd.DataFrame]) -> List[Any]:
+    from easyicu.research_agent.schema import ConceptDescriptor
+
+    if cohort is None:
+        return []
+    descriptors: List[Any] = []
+    for col in [str(c) for c in cohort.columns]:
+        try:
+            series = cohort[col]
+            dtype = str(series.dtype)
+        except Exception:
+            series = None
+            dtype = "object"
+        aliases = _concept_aliases_for_cohort(cohort).get(col, [])
+        descriptors.append(
+            ConceptDescriptor(
+                name=col,
+                description=f"Web-selected cohort column: {col}",
+                role=_role_for_idea_column(col, series),
+                dtype=dtype,
+                source_concept=col,
+                derived_from_concepts=aliases,
+            )
+        )
+    return descriptors
+
+
+def _pick_idea_default_column(
+    cohort: Optional[pd.DataFrame],
+    candidates: Sequence[str],
+    *,
+    exclude: Sequence[str] = (),
+) -> str:
+    lookup = _normalised_column_lookup(cohort)
+    excluded = {_normalise_simple_concept(item) for item in exclude}
+    for candidate in candidates:
+        norm = _normalise_simple_concept(candidate)
+        if norm in lookup and norm not in excluded:
+            return lookup[norm]
+    if cohort is not None:
+        for col in [str(c) for c in cohort.columns]:
+            norm = _normalise_simple_concept(col)
+            if norm not in excluded and norm not in {"stay_id", "patient_id", "subject_id", "hadm_id"}:
+                return col
+    return ""
+
+
+def _default_idea_exploration_form(
+    cohort: Optional[pd.DataFrame],
+    *,
+    is_en: bool,
+) -> Dict[str, str]:
+    predictor = _pick_idea_default_column(
+        cohort,
+        ["lactate", "lact", "creatinine", "creat", "map", "sofa2", "sofa"],
+    ) or ("lactate" if is_en else "乳酸")
+    outcome = _pick_idea_default_column(
+        cohort,
+        ["death", "mortality", "los_icu", "los_hosp"],
+        exclude=[predictor],
+    ) or ("death" if is_en else "死亡")
+    quote = f"{predictor} and {outcome}"
+    if is_en:
+        source_text = (
+            f"The review highlights {quote} as an unresolved ICU research "
+            "direction that needs auditable cohort-level feasibility checks."
+        )
+        return {
+            "citation_key": "user_review_excerpt",
+            "title": "User-supplied ICU review excerpt",
+            "year": "2026",
+            "venue": "User supplied source",
+            "source_text": source_text,
+            "population": "adult ICU patients",
+            "predictor": predictor,
+            "outcome": outcome,
+            "rationale": "The source frames this as an unresolved ICU research direction.",
+            "source_quote": quote,
+            "analysis_family": "association",
+            "time_window_hint": "early ICU stay",
+            "aggregation_hint": "stay-level summary",
+        }
+    source_text = f"综述提示 {quote} 仍是 ICU 队列中需要可审计可行性检查的未解决研究方向。"
+    return {
+        "citation_key": "user_review_excerpt",
+        "title": "用户提供的 ICU 综述摘录",
+        "year": "2026",
+        "venue": "用户提供来源",
+        "source_text": source_text,
+        "population": "成人 ICU 患者",
+        "predictor": predictor,
+        "outcome": outcome,
+        "rationale": "来源材料将该方向表述为仍需探索的 ICU 研究问题。",
+        "source_quote": quote,
+        "analysis_family": "association",
+        "time_window_hint": "ICU 早期",
+        "aggregation_hint": "住院级汇总",
+    }
+
+
+def _binary_outcome_determinability_from_cohort(
+    cohort: Optional[pd.DataFrame],
+) -> Dict[str, str]:
+    if cohort is None:
+        return {}
+    specs: Dict[str, str] = {}
+    for col in [str(c) for c in cohort.columns]:
+        norm = _normalise_simple_concept(col)
+        try:
+            values = cohort[col].dropna()
+        except Exception:
+            values = pd.Series(dtype="object")
+        unique_values = set(values.astype(str).str.strip().str.lower().unique()[:4])
+        numeric = pd.to_numeric(values, errors="coerce")
+        numeric_unique = set(numeric.dropna().unique()[:4])
+        is_binary = (
+            unique_values <= {"0", "1", "false", "true", "no", "yes"}
+            or numeric_unique <= {0, 1}
+        )
+        if is_binary or any(token in norm for token in ("death", "mort", "outcome")):
+            specs[col] = "known_0_1"
+            specs[norm] = "known_0_1"
+            for alias in _IDEA_ALIAS_MAP.get(norm, []):
+                specs[alias] = "known_0_1"
+    return specs
+
+
+def _cohort_pairwise_feasibility_probe(cohort: pd.DataFrame):
+    lookup = _normalised_column_lookup(cohort)
+
+    def _resolve(term: object) -> Optional[str]:
+        norm = _normalise_simple_concept(term)
+        if norm in lookup:
+            return lookup[norm]
+        for col_norm, col in lookup.items():
+            aliases = {_normalise_simple_concept(alias) for alias in _IDEA_ALIAS_MAP.get(col_norm, [])}
+            if norm in aliases:
+                return col
+        return None
+
+    def _probe(**kwargs: Any) -> Dict[str, Dict[str, Any]]:
+        concepts = [str(c) for c in kwargs.get("concepts") or []]
+        resolved = [_resolve(concept) for concept in concepts]
+        denominator = int(len(cohort))
+        if denominator <= 0 or any(col is None for col in resolved):
+            joint_n = 0
+        else:
+            mask = pd.Series(True, index=cohort.index)
+            for col in resolved:
+                mask = mask & cohort[str(col)].notna()
+            joint_n = int(mask.sum())
+        fraction = float(joint_n / denominator) if denominator else 0.0
+        return {
+            concept: {
+                "joint_fraction_complete": fraction,
+                "n_joint_complete": joint_n,
+                "denominator_n": denominator,
+                "source": "webapp_active_cohort_pairwise_probe",
+                "note": "Outcome-blind pairwise completeness over the current web cohort.",
+            }
+            for concept in concepts
+        }
+
+    return _probe
+
+
+def _idea_output_dir(workdir_text: str) -> Path:
+    root = Path(workdir_text or _default_research_agent_workdir()).expanduser().resolve()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    return root / f"idea_{stamp}"
+
+
+def _run_idea_exploration_dry_run(
+    *,
+    form: Mapping[str, Any],
+    cohort: pd.DataFrame,
+    cohort_label: str,
+    workdir_text: str,
+    database: str = "webapp",
+) -> Any:
+    from easyicu.research_agent.idea_mining import SourceMaterial, run_idea_mining_dry_run
+    from easyicu.research_agent.literature import CitationRecord
+
+    source_text = str(form.get("source_text") or "").strip()
+    source_quote = str(form.get("source_quote") or "").strip()
+    if not source_text:
+        raise ValueError("source_text is required for idea exploration")
+    if not source_quote:
+        raise ValueError("source_quote is required for idea exploration")
+    if source_quote.lower() not in " ".join(source_text.split()).lower():
+        raise ValueError("source_quote must be traceable inside source_text")
+    out_dir = _idea_output_dir(workdir_text)
+    citation = CitationRecord(
+        key=str(form.get("citation_key") or "user_review_excerpt").strip(),
+        title=str(form.get("title") or "User-supplied ICU review excerpt").strip(),
+        year=str(form.get("year") or "2026").strip(),
+        venue=str(form.get("venue") or "User supplied source").strip() or None,
+        relevance="User-selected source for EasyICU idea exploration.",
+    )
+    material = SourceMaterial(
+        citation=citation,
+        source_adapter_level="user_supplied_excerpt",
+        source_text=source_text,
+    )
+    candidate_payload = {
+        "citation_key": citation.key,
+        "population": str(form.get("population") or "adult ICU patients").strip(),
+        "exposure_or_predictor": str(form.get("predictor") or "").strip(),
+        "outcome": str(form.get("outcome") or "").strip(),
+        "rationale": str(form.get("rationale") or "User-staged candidate.").strip(),
+        "source_quote": source_quote,
+        "analysis_family": str(form.get("analysis_family") or "association").strip(),
+        "time_window_hint": str(form.get("time_window_hint") or "").strip() or None,
+        "aggregation_hint": str(form.get("aggregation_hint") or "").strip() or None,
+    }
+    llm = _StructuredIdeaExtractionLLM(candidate_payload)
+    result = run_idea_mining_dry_run(
+        materials=[material],
+        llm=llm,
+        available_concepts=_concept_descriptors_from_cohort(cohort),
+        concept_aliases=_concept_aliases_for_cohort(cohort),
+        outcome_determinability=_binary_outcome_determinability_from_cohort(cohort),
+        output_dir=out_dir,
+        database=database,
+        cohort={"label": str(cohort_label or "web cohort"), "n_rows": int(len(cohort))},
+        feasibility_probe=_cohort_pairwise_feasibility_probe(cohort),
+        prior_art_search_client=_NoopPriorArtSearchClient(),
+        prior_art_top_n=20,
+    )
+    return result
+
+
+def _stage_idea_candidate_as_research_question(
+    state: MutableMapping[str, object],
+    result: Any,
+    *,
+    is_en: bool,
+) -> bool:
+    payload = _idea_candidate_handoff_payload(result)
+    if payload is None:
+        return False
+    _apply_idea_candidate_handoff_payload(state, payload, is_en=is_en)
+    return True
+
+
+def _queue_idea_candidate_as_research_question(
+    state: MutableMapping[str, object],
+    result: Any,
+) -> bool:
+    payload = _idea_candidate_handoff_payload(result)
+    if payload is None:
+        return False
+    state["_research_agent_pending_idea_handoff"] = payload
+    return True
+
+
+def _apply_pending_idea_candidate_handoff(
+    state: MutableMapping[str, object],
+    *,
+    is_en: bool,
+) -> bool:
+    payload = state.pop("_research_agent_pending_idea_handoff", None)
+    if not isinstance(payload, Mapping):
+        return False
+    _apply_idea_candidate_handoff_payload(state, payload, is_en=is_en)
+    return True
+
+
+def _idea_candidate_handoff_payload(result: Any) -> Optional[Dict[str, str]]:
+    candidates = [
+        candidate
+        for candidate in getattr(result, "executable_candidates", []) or []
+        if getattr(candidate, "executable", False)
+    ]
+    if not candidates:
+        return None
+    candidate = candidates[0]
+    return {
+        "question": str(candidate.research_question),
+        "target_outcome": str(
+            candidate.resolved_outcome_concept or candidate.outcome_label or ""
+        ),
+        "candidate_id": str(candidate.executable_candidate_id),
+    }
+
+
+def _apply_idea_candidate_handoff_payload(
+    state: MutableMapping[str, object],
+    payload: Mapping[str, object],
+    *,
+    is_en: bool,
+) -> None:
+    state["research_agent_question"] = str(payload.get("question") or "")
+    state["research_agent_target_outcome"] = str(payload.get("target_outcome") or "")
+    state["research_agent_example_active"] = "Idea exploration candidate"
+    state["research_agent_example_key"] = "idea_exploration"
+    state["research_agent_preflight_confirmed"] = False
+    state.pop("research_agent_preflight_signature", None)
+    state["_research_agent_question_handoff_notice"] = True
+    state["_research_agent_idea_handoff_candidate_id"] = str(payload.get("candidate_id") or "")
+    _set_research_agent_workflow_mode(state, _RA_WORKFLOW_ANALYSIS, is_en=is_en)
+
+
+def _idea_result_summary(result: Any) -> Dict[str, Any]:
+    report = getattr(result, "yield_report", None)
+    prior_art = _idea_prior_art_summary(result)
+    return {
+        "literature_ideas": int(getattr(report, "n_literature_ideas", 0) or 0),
+        "executable": int(getattr(report, "n_executable", 0) or 0),
+        "non_executable": int(getattr(report, "n_non_executable", 0) or 0),
+        "feasibility_signals": len(getattr(result, "feasibility_signals", []) or []),
+        "ranked_candidates": len(getattr(result, "ranked_candidates", []) or []),
+        "registry_path": str(getattr(result, "registry_path", "") or ""),
+        "triage_report_path": str(getattr(result, "triage_report_path", "") or ""),
+        "discovery_report_path": str(getattr(result, "discovery_report_path", "") or ""),
+        **prior_art,
+    }
+
+
+def _idea_prior_art_summary(result: Any) -> Dict[str, Any]:
+    assessments = list(getattr(result, "prior_art_assessments", []) or [])
+    if not assessments:
+        return {
+            "prior_art_assessments": 0,
+            "prior_art_label": "not run",
+            "prior_art_broad_hits": "n/a",
+            "prior_art_exact_hits": "n/a",
+            "prior_art_direct_pmids": 0,
+            "prior_art_screen_status": "not run",
+        }
+    first = assessments[0]
+    return {
+        "prior_art_assessments": len(assessments),
+        "prior_art_label": str(getattr(first, "novelty_label", "unknown") or "unknown"),
+        "prior_art_broad_hits": _idea_prior_art_query_count(first, "broad"),
+        "prior_art_exact_hits": _idea_prior_art_query_count(first, "exact"),
+        "prior_art_direct_pmids": len(getattr(first, "direct_same_topic_pmids", []) or []),
+        "prior_art_screen_status": str(getattr(first, "same_topic_screen_status", "") or "unknown"),
+    }
+
+
+def _idea_prior_art_query_count(assessment: Any, query_type: str) -> int | str:
+    for record in list(getattr(assessment, "query_records", []) or []):
+        if str(getattr(record, "query_type", "") or "") == query_type:
+            return int(getattr(record, "hit_count", 0) or 0)
+    return "n/a"
+
+
+def _idea_prior_art_rows(result: Any) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for assessment in list(getattr(result, "prior_art_assessments", []) or []):
+        label = str(getattr(assessment, "novelty_label", "") or "")
+        screen = str(getattr(assessment, "same_topic_screen_status", "") or "")
+        direct = ", ".join(getattr(assessment, "direct_same_topic_pmids", []) or []) or "none"
+        for record in list(getattr(assessment, "query_records", []) or []):
+            rows.append({
+                "label": label,
+                "query_type": str(getattr(record, "query_type", "") or ""),
+                "hit_count": int(getattr(record, "hit_count", 0) or 0),
+                "direct_pmids": direct,
+                "screen_status": screen,
+                "query": str(getattr(record, "query", "") or ""),
+            })
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -2768,6 +3305,7 @@ def _render_cohort_source_quick_actions(
                         st.session_state,
                         source_handoff=source_handoff,
                         is_en=is_en,
+                        seed_question=False,
                     )
                 else:
                     _activate_research_agent_cohort_source(
@@ -2822,6 +3360,7 @@ def _activate_research_agent_test_cohort(
     is_en: bool = True,
     n: int = 800,
     seed: int = 7,
+    seed_question: bool = True,
 ) -> None:
     """Prepare the built-in test cohort in one click.
 
@@ -2841,7 +3380,8 @@ def _activate_research_agent_test_cohort(
     state["research_agent_preflight_confirmed"] = False
     state["research_agent_preflight_ack"] = False
     state.pop("research_agent_preflight_signature", None)
-    _seed_default_research_agent_question(state, is_en=is_en)
+    if seed_question:
+        _seed_default_research_agent_question(state, is_en=is_en)
 
 
 def _infer_db_tag_from_folder(folder: Path) -> str:
@@ -3649,6 +4189,17 @@ def _request_examples() -> List[Dict[str, str]]:
     if lang == "zh":
         return [
             {
+                "key": "idea_exploration",
+                "label": "Idea 探索 / 文献发现",
+                "summary": "从综述摘录到候选假设、可行性、registry 和 discovery report",
+                "outcome": "death",
+                "prompt": (
+                    "请把一段 editorial/review 摘录转成 EasyICU idea 探索任务：先冻结来源，"
+                    "提取候选研究方向，映射到当前 cohort 概念，做 outcome-blind 可行性检查，"
+                    "写入 preregistration registry，并停在人工选择关口。"
+                ),
+            },
+            {
                 "key": "prediction",
                 "label": "预测模型",
                 "summary": "风险预测、早期预警、死亡/并发症/LOS 预测",
@@ -3761,6 +4312,18 @@ def _request_examples() -> List[Dict[str, str]]:
             },
         ]
     return [
+        {
+            "key": "idea_exploration",
+            "label": "Idea exploration / discovery",
+            "summary": "Literature-derived candidate triage, feasibility, registry, and report",
+            "outcome": "death",
+            "prompt": (
+                "Turn a review/editorial excerpt into an EasyICU idea-exploration task: "
+                "freeze the source, extract candidate directions, map them to the current "
+                "cohort concepts, run outcome-blind feasibility checks, write the "
+                "preregistration registry, and stop at the human selection gate."
+            ),
+        },
         {
             "key": "prediction",
             "label": "Prediction model",
@@ -3884,20 +4447,52 @@ def _request_examples() -> List[Dict[str, str]]:
     ]
 
 
+def _on_research_agent_question_change() -> None:
+    """Auto-apply the research request when the text box commits.
+
+    Streamlit commits ``st.text_area`` to session_state on blur / Ctrl+Enter and
+    reruns automatically when an ``on_change`` callback is attached, so the setup
+    overview and preflight gate recompute on the same rerun. This removes the old
+    manual "Apply question" button, which made users think nothing had registered
+    until they found and clicked a second control.
+    """
+    _preserve_module_file_selection_for_next_rerun(st.session_state)
+    if str(st.session_state.get("research_agent_question", "")).strip():
+        st.session_state["_research_agent_question_applied_notice"] = True
+
+
 def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
     """Render one unified request box with detailed example prompts."""
     examples = _request_examples()
     is_en = st.session_state.get("language", "en") == "en"
+    labels_by_mode = _research_agent_workflow_labels(is_en=is_en)
+    current_mode = _research_agent_workflow_mode_from_state(st.session_state)
+    workflow_labels = [labels_by_mode[_RA_WORKFLOW_ANALYSIS], labels_by_mode[_RA_WORKFLOW_IDEA]]
+    current_label = labels_by_mode[current_mode]
+    selected_workflow_label = st.radio(
+        "Agent workflow" if is_en else "Agent 工作流",
+        workflow_labels,
+        index=workflow_labels.index(current_label),
+        horizontal=True,
+        key="research_agent_workflow_mode_pick",
+        help=(
+            "Analysis run executes the research pipeline. Idea exploration runs the literature-derived dry-run and stops at the registry gate."
+            if is_en else
+            "正式分析会执行 research pipeline；Idea 探索只运行文献候选 dry-run，并停在 registry 人工关口。"
+        ),
+    )
+    selected_mode = (
+        _RA_WORKFLOW_IDEA
+        if selected_workflow_label == labels_by_mode[_RA_WORKFLOW_IDEA]
+        else _RA_WORKFLOW_ANALYSIS
+    )
+    st.session_state["research_agent_workflow_mode"] = selected_mode
     st.markdown(
         textwrap.dedent(f"""
         <div class="ra-request-brief">
           <div>
-            <b>{"Question first" if is_en else "先写问题"}</b>
-            <span>{html.escape(_ra_text("request_intro"))}</span>
-          </div>
-          <div>
-            <b>{"Templates optional" if is_en else "模板可选"}</b>
-            <span>{html.escape(_ra_text("request_capabilities"))}</span>
+            <b>{"Start simple" if is_en else "从简单开始"}</b>
+            <span>{html.escape("Choose a workflow, write one request, then move to Data recipe. Templates are optional." if is_en else "选择工作流，写一句请求，然后进入 Data recipe。模板只是可选加速。")}</span>
           </div>
         </div>
         """).strip(),
@@ -3926,6 +4521,12 @@ def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
                 st.session_state["research_agent_target_outcome"] = selected_example.get("outcome", "")
                 st.session_state["research_agent_example_active"] = selected_example["label"]
                 st.session_state["research_agent_example_key"] = selected_example["key"]
+                if selected_example["key"] == "idea_exploration":
+                    _set_research_agent_workflow_mode(
+                        st.session_state,
+                        _RA_WORKFLOW_IDEA,
+                        is_en=is_en,
+                    )
                 st.rerun()
     else:
         st.session_state["research_agent_template_current"] = None
@@ -3937,24 +4538,9 @@ def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
         help=_ra_text("question_help"),
         key="research_agent_question",
         height=112,
+        on_change=_on_research_agent_question_change,
     )
-    apply_cols = st.columns([1.15, 3.85])
-    with apply_cols[0]:
-        apply_question = st.button(
-            _ra_text("apply_question"),
-            key="research_agent_apply_question",
-            help=_ra_text("apply_question_help"),
-            use_container_width=True,
-        )
-    with apply_cols[1]:
-        st.caption(_ra_text("apply_question_help"))
-    if apply_question:
-        _preserve_module_file_selection_for_next_rerun(st.session_state)
-        if str(st.session_state.get("research_agent_question", "")).strip():
-            st.session_state["_research_agent_question_applied_notice"] = True
-        else:
-            st.session_state["_research_agent_question_empty_notice"] = True
-        st.rerun()
+    st.caption(_ra_text("apply_question_help"))
     if st.session_state.pop("_research_agent_question_applied_notice", False):
         st.success(_ra_text("question_applied"))
     if st.session_state.pop("_research_agent_question_handoff_notice", False):
@@ -3990,6 +4576,7 @@ def _infer_request_family(question: Optional[str]) -> str:
         return re.search(pattern, text) is not None
 
     keyword_map = [
+        ("idea_exploration", ["idea exploration", "idea mining", "discovery", "literature-derived", "editorial", "review excerpt", "gap", "prior art", "registry", "发现", "探索", "文献", "综述", "查新", "候选假设"]),
         ("reinforcement_learning", ["reinforcement learning", "rl", "policy", "state", "action", "reward", "强化学习", "策略学习"]),
         ("causal_inference", ["target trial", "causal", "ate", "cate", "iptw", "propensity", "因果", "目标试验", "倾向评分"]),
         ("trajectory_clustering", ["cluster", "clustering", "phenotype", "subphenotype", "latent class", "亚型", "分群", "聚类", "表型"]),
@@ -4013,6 +4600,7 @@ def _template_family_hint() -> Optional[str]:
     if not key:
         return None
     mapping = {
+        "idea_exploration": "idea_exploration",
         "prediction": "prediction_model",
         "clustering": "trajectory_clustering",
         "association": "association",
@@ -4407,8 +4995,22 @@ def _llm_readiness_message(issue: str, *, is_en: bool) -> str:
     return str(issue or "")
 
 
+def _default_research_agent_llm_settings() -> Tuple[str, str, str, Optional[str], Optional[Dict[str, str]]]:
+    """Use the local deterministic agent path when model settings stay hidden."""
+    return "MockLLMClient (offline, deterministic)", "", "", None, None
+
+
 def _default_research_agent_workdir() -> str:
     return str((Path.cwd() / "research_output" / "webapp").resolve())
+
+
+def _default_research_agent_run_options() -> Tuple[bool, str, bool]:
+    """Return the non-advanced run defaults without rendering more controls."""
+    default_workdir = _default_research_agent_workdir()
+    workdir_text = str(st.session_state.get("research_agent_workdir") or default_workdir)
+    stop_choice = str(st.session_state.get("research_agent_stop_after") or _ra_text("stop_analysis"))
+    stop_after_analysis = stop_choice != _ra_text("stop_manuscript")
+    return False, workdir_text, stop_after_analysis
 
 
 def _section_options() -> Tuple[bool, str, bool]:
@@ -4551,13 +5153,23 @@ def _history_rows_table_html(
 
 
 def _history_export_payload(rows: Sequence[Dict[str, Any]], *, workdir: Path) -> str:
+    def _run_name(row: Dict[str, Any]) -> str:
+        run_dir = row.get("run_dir")
+        if run_dir:
+            name = Path(str(run_dir)).name.strip()
+            if name:
+                return name
+        return str(row.get("run_id") or "").strip()
+
     payload = {
         "source": "easyicu_web_research_agent_history",
-        "workdir": str(workdir),
+        "workdir_name": Path(workdir).name,
+        "local_paths_included": False,
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "runs": [
             {
                 "run_id": row.get("run_id"),
+                "run_name": _run_name(row),
                 "status": row.get("status"),
                 "started_at": row.get("started_at"),
                 "finished_at": row.get("finished_at"),
@@ -4578,7 +5190,6 @@ def _history_export_payload(rows: Sequence[Dict[str, Any]], *, workdir: Path) ->
                 },
                 "review_decision": row.get("review_decision"),
                 "manifest_partial": row.get("manifest_partial"),
-                "run_dir": str(row.get("run_dir") or ""),
             }
             for row in rows
         ],
@@ -4706,7 +5317,7 @@ def _render_run_history(workdir: Path) -> None:
             cols[2].metric(_ra_text("history_figures"), selected_run["figure_count"])
             safe_run_id = re.sub(r"[^A-Za-z0-9_]+", "_", str(selected_run["run_id"]))
             if cols[3].button(
-                "Open in Workbench" if st.session_state.get("language", "en") == "en" else "在工作台打开",
+                "Open Workbench" if st.session_state.get("language", "en") == "en" else "打开工作台",
                 key=f"research_agent_history_open_wb_{safe_run_id}",
                 type="primary",
                 use_container_width=True,
@@ -4761,6 +5372,26 @@ def render_research_agent_history_page(lang: Optional[str] = None, *, show_heade
     workdir = Path(workdir_text or default_workdir).expanduser().resolve()
     rows = _scan_research_agent_runs(workdir)
 
+    def _render_history_workdir_controls() -> None:
+        st.markdown(
+            f'<div class="ra-history-workdir"><span>{"Workdir" if is_en else "工作目录"}</span><b>{html.escape(str(workdir))}</b></div>',
+            unsafe_allow_html=True,
+        )
+        _hide_prefilled_directory_text("research_agent_workdir", default_workdir)
+        _directory_input(
+            "Local run workdir" if is_en else "本机 run 工作目录",
+            value=default_workdir,
+            input_key="research_agent_workdir",
+            button_key="research_agent_history_workdir_browse",
+            placeholder=_placeholder_path("research_output/webapp"),
+            show_value=False,
+        )
+        st.caption(
+            "History is scanned from this folder only; changing it refreshes the table on the next render."
+            if is_en else
+            "历史记录只从这个目录读取；切换目录后下次渲染会刷新表格。"
+        )
+
     labels = [_format_history_label(row) for row in rows]
     selected_run: Dict[str, Any] | None = None
     selected_label = ""
@@ -4808,27 +5439,17 @@ def render_research_agent_history_page(lang: Optional[str] = None, *, show_heade
                 st.session_state["_active_main_page"] = "research_agent"
                 st.session_state["_ra_view"] = "setup"
                 st.rerun()
+            if st.toggle(
+                "Advanced local details" if is_en else "高级本机细节",
+                key="research_agent_history_empty_advanced",
+                help=(
+                    "Change the scanned folder or inspect local-only utilities."
+                    if is_en else
+                    "切换扫描目录或查看仅本机工具。"
+                ),
+            ):
+                _render_history_workdir_controls()
             return
-
-        st.markdown(
-            f'<div class="ra-history-workdir"><span>{"Workdir" if is_en else "工作目录"}</span><b>{html.escape(str(workdir))}</b></div>',
-            unsafe_allow_html=True,
-        )
-        with st.expander("Change local workdir" if is_en else "切换本机工作目录", expanded=False):
-            _hide_prefilled_directory_text("research_agent_workdir", default_workdir)
-            _directory_input(
-                "Local run workdir" if is_en else "本机 run 工作目录",
-                value=default_workdir,
-                input_key="research_agent_workdir",
-                button_key="research_agent_history_workdir_browse",
-                placeholder=_placeholder_path("research_output/webapp"),
-                show_value=False,
-            )
-            st.caption(
-                "History is scanned from this folder only; changing it refreshes the table on the next render."
-                if is_en else
-                "历史记录只从这个目录读取；切换目录后下次渲染会刷新表格。"
-            )
         picker_cols = st.columns([4.8, 1.25, 1.05], vertical_alignment="bottom")
         with picker_cols[0]:
             selected_label = st.selectbox(
@@ -4855,7 +5476,7 @@ def render_research_agent_history_page(lang: Optional[str] = None, *, show_heade
 
         with picker_cols[1]:
             if st.button(
-                "Open in Workbench" if is_en else "在工作台打开",
+                "Open Workbench" if is_en else "打开工作台",
                 key=f"research_agent_history_page_open_{safe_run_id}",
                 type="primary",
                 use_container_width=True,
@@ -4894,7 +5515,19 @@ def render_research_agent_history_page(lang: Optional[str] = None, *, show_heade
                 unsafe_allow_html=True,
             )
 
-    if manifest:
+    show_advanced = st.toggle(
+        "Advanced local details" if is_en else "高级本机细节",
+        key=f"research_agent_history_page_show_advanced_{safe_run_id}",
+        help=(
+            "Show workdir, resume controls, raw manifest details, and deterministic replication utilities."
+            if is_en else
+            "显示工作目录、续跑控制、原始 manifest 细节和确定性复现实用工具。"
+        ),
+    )
+    if show_advanced:
+        _render_history_workdir_controls()
+
+    if show_advanced and manifest:
         with st.container(key=f"ra_history_utilities_{safe_run_id}"):
             st.markdown(
                 f"""
@@ -4934,6 +5567,15 @@ def render_research_agent_history_page(lang: Optional[str] = None, *, show_heade
                 key_prefix=f"research_agent_history_page_{safe_run_id}",
             )
 
+    if not show_advanced:
+        return
+    st.markdown(
+        '<div class="ra-history-advanced-note">'
+        f'<b>{"Advanced details stay local" if is_en else "高级细节仅本机可见"}</b>'
+        f'<p>{"Workdir scanning, resume controls, manifest inspection, and deterministic replication are hidden until you ask for them." if is_en else "工作目录扫描、续跑控制、manifest 检查和确定性复现只在你主动展开后显示。"}</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
     with st.expander(_ra_text("replication_title"), expanded=False):
         st.caption(
             "Deterministic replication is kept here as a local utility so Setup stays focused on launching one agent run."
@@ -4957,9 +5599,10 @@ def _render_resume_panel(
         what will be reused vs replanned);
       * a free-form notes field that is appended to ``notes`` for the
         planner / coder agents on the re-run;
-      * a toggle for ``EASYICU_AUDIT_RELAX_PROBE`` so the user can opt
-        into the documented ablation (probe-stage block → warning) when
-        the prior run was halted by ``blocked_by_concept_audit``;
+      * a legacy ``EASYICU_AUDIT_RELAX_PROBE`` toggle (now a no-op: the
+        ordinal/composite reporting-aggregation auditor is advisory by
+        default, so it no longer halts a run with
+        ``blocked_by_concept_audit``; kept for backward compatibility);
       * a "Force manuscript" shortcut (reuses the existing
         ``force_manuscript`` flag) — useful when analysis is complete but
         the writer step needs to re-run after a manual evidence fix.
@@ -5113,9 +5756,38 @@ def _render_resume_panel(
 
 def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
     """Render the Claude-reference setup overview without launching a run."""
+    loaded_concepts = st.session_state.get("loaded_concepts")
+    loaded_concepts = loaded_concepts if isinstance(loaded_concepts, dict) else {}
+    review_feature_count = len(loaded_concepts)
+    try:
+        selected_export_count = int(st.session_state.get("_review_source_concept_count") or review_feature_count)
+    except (TypeError, ValueError):
+        selected_export_count = review_feature_count
+    patient_ids = list(st.session_state.get("patient_ids") or [])
+    try:
+        demo_stays = int((st.session_state.get("mock_params") or {}).get("n_patients") or 10)
+    except (TypeError, ValueError):
+        demo_stays = 10
+    stay_count = len(patient_ids) or demo_stays
+    if review_feature_count:
+        dataset_value = (
+            f"review workspace · {stay_count} ICU stays · {review_feature_count} review features"
+            if is_en else
+            f"审阅工作区 · {stay_count} 个 ICU stay · {review_feature_count} 个审阅特征"
+        )
+        module_value = (
+            f"selected export concepts · {selected_export_count}"
+            if is_en else
+            f"已选导出概念 · {selected_export_count}"
+        )
+        data_card_value = dataset_value
+    else:
+        dataset_value = "demo preview · no bound cohort" if is_en else "演示预览 · 尚未绑定队列"
+        module_value = "module catalog preview" if is_en else "模块目录预览"
+        data_card_value = "demo preview · no bound cohort" if is_en else "演示预览 · 尚未绑定队列"
     stages = [
         ("01", "play", "Plan" if is_en else "规划", "question -> recipe" if is_en else "问题 -> 配方"),
-        ("02", "layers", "Build" if is_en else "组装", "exports -> one row / stay" if is_en else "导出 -> 每次住院一行"),
+        ("02", "layers", "Build" if is_en else "组装", "exports -> stay-level table" if is_en else "导出 -> stay 级表"),
         ("03", "bars", "Analyze" if is_en else "分析", "tables, figures, checks" if is_en else "表格、图、检查"),
         ("04", "agent", "Gate" if is_en else "关口", "evidence before drafting" if is_en else "写作前证据检查"),
         ("05", "check", "Review" if is_en else "复核", "approve, rerun, export" if is_en else "批准、重跑、导出"),
@@ -5129,9 +5801,9 @@ def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
         for idx, icon_name, title, body in stages
     )
     context_items = [
-        ("Dataset" if is_en else "数据集", "Demo · 10 stays"),
+        ("Dataset" if is_en else "数据集", dataset_value),
         ("Mode" if is_en else "模式", "static preview" if is_en else "静态预览"),
-        ("Modules" if is_en else "模块", "19 feature groups" if is_en else "19 个特征组"),
+        ("Review features" if is_en else "审阅变量", module_value),
         ("Privacy" if is_en else "隐私", "local only" if is_en else "仅本机"),
     ]
     context_html = "".join(
@@ -5175,63 +5847,49 @@ def _render_research_agent_demo_visuals(*, is_en: bool) -> None:
     st.markdown(
         textwrap.dedent(f"""
         <div class="eu-ref-workbench eu-ref-agent-setup">
-          <div class="ra-setup-overview eu-ref-setup-operating ra-pipeline-overview">
-            <div class="ra-setup-head">
+          <div class="ra-core-overview demo">
+            <div class="ra-core-head">
               <div>
-                <div class="ra-setup-kicker">{"Operating model" if is_en else "运行模型"}</div>
-                <h3>{"An auditable workflow, not a black-box chat" if is_en else "可审计工作流，而不是黑箱聊天"}</h3>
-                <p>{"Each stage produces a reviewable artifact. Drafting stays locked until evidence checks pass and you confirm." if is_en else "每个阶段都会生成可复核产物；证据检查和人工确认前不会进入写作。"}</p>
+                <div class="ra-setup-kicker">{"Demo preview" if is_en else "演示预览"}</div>
+                <h3>{"Research Agent in one path" if is_en else "Research Agent 的一条核心路径"}</h3>
+                <p>{"Question + cohort -> plan -> evidence gate -> reviewed draft. Demo mode is read-only; real data unlocks execution." if is_en else "问题 + 队列 -> 计划 -> 证据关口 -> 复核后草稿。演示模式只读；真实数据才会解锁执行。"}</p>
               </div>
+              <span>{"Demo · no LLM call" if is_en else "演示 · 不调用模型"}</span>
             </div>
-            <div class="ra-setup-stage-list">{stage_html}</div>
-          </div>
-          <div class="eu-ref-split eu-ref-setup-split">
-          <div class="eu-ref-card eu-ref-pad ra-context-pack-card">
-              <div class="eu-ref-card-head">
-                <div class="eu-ref-eyebrow">{"Context pack" if is_en else "上下文包"}</div>
-                <span>{"handed off" if is_en else "已交接"}</span>
-              </div>
-              <div class="ra-context-pack-title">sepsis_mortality_demo</div>
-              <div class="ra-context-pack-sub">{"demo · 10 stays · 19 modules" if is_en else "演示 · 10 次住院 · 19 个模块"}</div>
-              <div class="ra-context-pack-list">{context_html}</div>
-              <div class="eu-ref-eyebrow eu-ref-chip-title">{"Concept tray · 8 selected" if is_en else "概念托盘 · 8 个已选"}</div>
-              <div class="eu-ref-chip-row">{concepts_html}</div>
-              <div class="ra-context-pack-action">{"Switch cohort" if is_en else "切换队列"}</div>
-          </div>
-          <div class="eu-ref-setup-stack">
-          <div class="eu-ref-card eu-ref-pad ra-question-card">
-                <div class="eu-ref-card-head">
-                  <div>
-                    <div class="eu-ref-eyebrow">{"Research question" if is_en else "研究问题"}</div>
-                    <span class="ra-question-helper">{"One sentence. The agent drafts a plan first; you confirm before any model call." if is_en else "一句话问题。智能体先草拟计划，确认后才调用模型。"}</span>
-                  </div>
-                  <span class="eu-ref-pill">{"Demo · no LLM call" if is_en else "Demo · 不调用模型"}</span>
-                </div>
-                <div class="eu-ref-question-box">{"Which bedside features within the first 24 hours best predict in-hospital mortality among Sepsis-3 patients, and how does adding lactate change calibration?" if is_en else "入 ICU 后 24 小时内哪些床旁特征最能预测 Sepsis-3 患者院内死亡？加入乳酸后校准表现如何变化？"}</div>
-                <div class="eu-ref-chip-row">
-                  <span class="eu-ref-chip">@sepsis_demo</span>
-                  <span class="eu-ref-chip">@first_24h</span>
-                  <span class="eu-ref-chip">@lactate</span>
-                </div>
-          </div>
-          <div class="eu-ref-card eu-ref-pad ra-plan-preview-card">
-                <div class="eu-ref-card-head">
-                  <div class="eu-ref-eyebrow">{"Plan preview · 6 steps" if is_en else "计划预览 · 6 步"}</div>
-                  <span>{"5 ready · 1 gated" if is_en else "5 就绪 · 1 受控"}</span>
-                </div>
-                <div class="eu-ref-planlist">{plan_html}</div>
-          </div>
-          <div class="eu-ref-note warn">
-            <div class="eu-ref-note-ico">!</div>
-            <div class="eu-ref-note-body">
-              <div class="eu-ref-note-head">
-                <b>{"Preflight gate" if is_en else "执行前关口"}</b>
-                <span class="eu-ref-pill queued">{"real data required" if is_en else "需要真实数据"}</span>
-              </div>
-              <p>{"Demo Mode explains the workflow only. Switch to Real Data Mode to bind a cohort, confirm the plan, and launch the real backend pipeline." if is_en else "演示模式只解释工作流；切换到真实数据模式后，才会绑定队列、确认计划并启动真实后端 pipeline。"}</p>
+            <div class="ra-setup-flow-strip">{stage_html}</div>
+            <div class="ra-core-grid">
+              <div class="ra-core-card ok"><span>1</span><div><b>{"Task" if is_en else "任务"}</b><p>{"Analysis run with a locked manuscript gate." if is_en else "正式分析运行，手稿关口保持锁定。"}</p></div><em>{"demo" if is_en else "演示"}</em></div>
+              <div class="ra-core-card ok"><span>2</span><div><b>{"Data" if is_en else "数据"}</b><p>{html.escape(data_card_value)}</p></div><em>{"ready" if is_en else "就绪"}</em></div>
+              <div class="ra-core-card todo"><span>3</span><div><b>{"Run" if is_en else "运行"}</b><p>{"Switch to Real Data Mode to bind a cohort and launch the backend pipeline." if is_en else "切到真实数据模式后绑定队列并启动后端 pipeline。"}</p></div><em>{"locked" if is_en else "锁定"}</em></div>
             </div>
-          </div>
-          </div>
+            <div class="ra-core-question">
+              <span>{html.escape("Example request" if is_en else "示例请求")}</span>
+              <b>{html.escape("Which first-24h bedside features best predict in-hospital mortality among Sepsis-3 patients, and how does adding lactate change calibration?" if is_en else "入 ICU 后 24 小时内哪些床旁特征最能预测 Sepsis-3 患者院内死亡？加入乳酸后校准表现如何变化？")}</b>
+            </div>
+            <div class="ra-core-next">
+              <span>{_shell_icon("arrow_forward") or html.escape("->")}</span>
+              <div>
+                <b>{html.escape("Next action" if is_en else "下一步")}</b>
+                <p>{html.escape("Use Switch to Real Data Mode when you are ready to connect a cohort." if is_en else "准备连接队列时，点击切换到真实数据模式。")}</p>
+              </div>
+              <a class="ra-context-pack-action" href="?{_RA_QUERY_ACTION_KEY}={_RA_SWITCH_COHORT_ACTION}" target="_self">{"Switch cohort" if is_en else "切换队列"}</a>
+            </div>
+            <details class="ra-core-details">
+              <summary>{html.escape("Show demo plan details" if is_en else "展开演示计划详情")}</summary>
+              <div class="ra-setup-stage-list">{stage_html}</div>
+              <div class="ra-setup-split compact">
+                <div class="ra-setup-card context">
+                  <div class="ra-setup-card-title">{"Demo context" if is_en else "演示上下文"}</div>
+                  <div class="ra-context-pack-list">{context_html}</div>
+                  <div class="ra-setup-card-title tray">{"Concept tray" if is_en else "概念托盘"}</div>
+                  <div class="eu-ref-chip-row">{concepts_html}</div>
+                </div>
+                <div class="ra-setup-card plan">
+                  <div class="ra-setup-card-title">{"Planned outputs" if is_en else "计划产物"}</div>
+                  <div class="eu-ref-planlist">{plan_html}</div>
+                </div>
+              </div>
+            </details>
           </div>
         </div>
         """).strip(),
@@ -5260,6 +5918,45 @@ def _activate_real_data_mode_from_agent(state: MutableMapping[str, Any]) -> None
     state["selected_concepts"] = []
     state["_active_main_page"] = "research_agent"
     state["_ra_view"] = "setup"
+
+
+def _query_param_value(name: str) -> str:
+    params = getattr(st, "query_params", None)
+    if params is None:
+        return ""
+    try:
+        value = params.get(name, "")
+    except Exception:
+        return ""
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else ""
+    return str(value or "").strip()
+
+
+def _clear_query_param(name: str) -> None:
+    params = getattr(st, "query_params", None)
+    if params is None:
+        return
+    try:
+        if name in params:
+            del params[name]
+    except Exception:
+        try:
+            params.clear()
+        except Exception:
+            return
+
+
+def _consume_research_agent_query_action(state: MutableMapping[str, Any]) -> bool:
+    """Handle design-surface links that need to mutate Streamlit state."""
+    action = _query_param_value(_RA_QUERY_ACTION_KEY)
+    if action != _RA_SWITCH_COHORT_ACTION:
+        return False
+    _clear_query_param(_RA_QUERY_ACTION_KEY)
+    clear_run_state("all")
+    _activate_real_data_mode_from_agent(state)
+    state["_research_agent_switch_cohort_notice"] = True
+    return True
 
 
 def _queue_raw_extract_handoff(
@@ -5332,6 +6029,8 @@ def render_research_agent_demo_page(*, show_header: bool = True) -> None:
     """
     lang = st.session_state.get("language", "en")
     is_en = lang == "en"
+    if _consume_research_agent_query_action(st.session_state):
+        st.rerun()
 
     caption = (
         "Demo Mode is a lightweight preview. It shows what the agent can produce. "
@@ -5393,6 +6092,8 @@ def render_research_agent_demo_page(*, show_header: bool = True) -> None:
         clear_run_state("all")
         _activate_real_data_mode_from_agent(st.session_state)
         st.rerun()
+
+    _render_copilot_signpost(is_en=is_en)
 
 
 def _render_replication_section(*, default_workdir: Path) -> None:
@@ -5492,6 +6193,20 @@ def _template_contract(template_key: Optional[str], *, language: str = "en") -> 
         ],
     }
     templates: Dict[str, Dict[str, List[str] | str]] = {
+        "idea_exploration": {
+            "label": "Idea exploration dry-run" if is_en else "Idea 探索 dry-run",
+            "expected_outputs": [
+                "source snapshot manifest",
+                "candidate triage report",
+                "preregistration registry",
+                "discovery report",
+            ] if is_en else ["来源快照 manifest", "候选 triage 报告", "预注册 registry", "discovery report"],
+            "checkpoints": [
+                "source text is hashed but not stored",
+                "candidate remains proposed until human selection",
+                "pair feasibility is outcome-blind",
+            ] if is_en else ["来源正文只哈希不存储", "候选保持 proposed 直到人工选择", "成对可行性保持 outcome-blind"],
+        },
         "prediction": {
             "label": "Prediction model" if is_en else "预测模型",
             "expected_outputs": [
@@ -5569,7 +6284,9 @@ def _build_execution_preflight_contract(
     language: str = "en",
     llm_ready: bool = True,
     llm_issue: str = "",
+    workflow_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
+    workflow = _normalise_research_agent_workflow_mode(workflow_mode)
     question = (free_question or target_outcome or "").strip()
     try:
         cohort_rows = len(cohort) if cohort is not None else 0
@@ -5585,9 +6302,17 @@ def _build_execution_preflight_contract(
         str(Path(output_dir) / "run_<timestamp>" / "manifest.json"),
         str(Path(output_dir) / "run_<timestamp>" / "results_report.md"),
     ]
-    if force_manuscript or not stop_after_analysis:
+    if workflow == _RA_WORKFLOW_IDEA:
+        write_targets = [
+            str(Path(output_dir) / "idea_<timestamp>" / "source_snapshot_manifest.json"),
+            str(Path(output_dir) / "idea_<timestamp>" / "candidate_triage_report.json"),
+            str(Path(output_dir) / "idea_<timestamp>" / "idea_registry.json"),
+            str(Path(output_dir) / "idea_<timestamp>" / "discovery_report.md"),
+        ]
+    if workflow != _RA_WORKFLOW_IDEA and (force_manuscript or not stop_after_analysis):
         write_targets.append(str(Path(output_dir) / "run_<timestamp>" / "manuscript_scaffold_bound.md"))
     return {
+        "workflow_mode": workflow,
         "question": question,
         "target_outcome": target_outcome or "",
         "cohort_label": cohort_label or "",
@@ -5600,7 +6325,7 @@ def _build_execution_preflight_contract(
         "llm_issue": str(llm_issue or ""),
         "workdir": output_dir,
         "write_targets": write_targets,
-        "mode": "draft_continuation" if force_manuscript else ("analysis_only" if stop_after_analysis else "analysis_plus_manuscript_gate"),
+        "mode": "idea_exploration_dry_run" if workflow == _RA_WORKFLOW_IDEA else ("draft_continuation" if force_manuscript else ("analysis_only" if stop_after_analysis else "analysis_plus_manuscript_gate")),
         "template_key": template_key or "",
         "template_contract": _template_contract(template_key, language=language),
     }
@@ -5632,6 +6357,9 @@ def _render_research_agent_setup_overview(
     lang = st.session_state.get("language", "en")
     is_en = lang == "en"
     template_key = st.session_state.get("research_agent_template_current") or st.session_state.get("research_agent_example_key")
+    workflow_mode = _research_agent_workflow_mode_from_state(st.session_state)
+    if workflow_mode == _RA_WORKFLOW_IDEA and not template_key:
+        template_key = "idea_exploration"
     contract = _build_execution_preflight_contract(
         free_question=free_question or "",
         target_outcome=target_outcome or "",
@@ -5646,6 +6374,7 @@ def _render_research_agent_setup_overview(
         language=lang,
         llm_ready=llm_ready,
         llm_issue=llm_issue,
+        workflow_mode=workflow_mode,
     )
     template_contract = contract["template_contract"]
     rows = int(contract.get("cohort_rows") or 0)
@@ -5657,17 +6386,27 @@ def _render_research_agent_setup_overview(
     llm_ready = bool(contract.get("llm_ready", True))
     llm_issue_msg = _llm_readiness_message(str(contract.get("llm_issue") or ""), is_en=is_en)
     mode_label = {
+        "idea_exploration_dry_run": "Idea exploration dry-run" if is_en else "Idea 探索 dry-run",
         "draft_continuation": "Draft continuation" if is_en else "续写草稿",
         "analysis_only": "Analysis only" if is_en else "仅分析",
         "analysis_plus_manuscript_gate": "Analysis + manuscript gate" if is_en else "分析 + 手稿关口",
     }.get(str(contract.get("mode")), str(contract.get("mode") or ""))
-    stages = [
-        ("01", "play", "Plan" if is_en else "规划", "question -> recipe" if is_en else "问题 -> 配方", question_ready),
-        ("02", "layers", "Build" if is_en else "组装", "cohort -> one row / stay" if is_en else "队列 -> 每次住院一行", cohort_ready),
-        ("03", "bars", "Analyze" if is_en else "分析", "tables, figures, checks" if is_en else "表格、图、检查", cohort_ready and question_ready and llm_ready),
-        ("04", "agent", "Gate" if is_en else "关口", "evidence before drafting" if is_en else "写作前证据检查", preflight_confirmed),
-        ("05", "check", "Review" if is_en else "复核", "approve, rerun, export" if is_en else "批准、重跑、导出", preflight_confirmed),
-    ]
+    if workflow_mode == _RA_WORKFLOW_IDEA:
+        stages = [
+            ("01", "file", "Freeze" if is_en else "冻结", "source hash + manifest" if is_en else "来源哈希 + manifest", question_ready),
+            ("02", "agent", "Extract" if is_en else "提取", "literature idea candidate" if is_en else "文献候选 idea", question_ready),
+            ("03", "layers", "Map" if is_en else "映射", "candidate -> concepts" if is_en else "候选 -> 概念", cohort_ready),
+            ("04", "bars", "Probe" if is_en else "探查", "outcome-blind feasibility" if is_en else "outcome-blind 可行性", cohort_ready),
+            ("05", "check", "Registry" if is_en else "Registry", "proposed until human gate" if is_en else "人工选择前保持 proposed", False),
+        ]
+    else:
+        stages = [
+            ("01", "play", "Plan" if is_en else "规划", "question -> recipe" if is_en else "问题 -> 配方", question_ready),
+            ("02", "layers", "Build" if is_en else "组装", "cohort -> stay-level table" if is_en else "队列 -> stay 级表", cohort_ready),
+            ("03", "bars", "Analyze" if is_en else "分析", "tables, figures, checks" if is_en else "表格、图、检查", cohort_ready and question_ready and llm_ready),
+            ("04", "agent", "Gate" if is_en else "关口", "evidence before drafting" if is_en else "写作前证据检查", preflight_confirmed),
+            ("05", "check", "Review" if is_en else "复核", "approve, rerun, export" if is_en else "批准、重跑、导出", preflight_confirmed),
+        ]
     stage_html = "".join(
         f'<div class="ra-setup-stage {"done" if ok else ""}">'
         f'<span title="{html.escape(idx)}">{_shell_icon(icon_name) or html.escape(idx)}</span>'
@@ -5698,38 +6437,72 @@ def _render_research_agent_setup_overview(
 
     expected_outputs = [str(item) for item in list(template_contract.get("expected_outputs", []))[:3]]
     checkpoints = [str(item) for item in list(template_contract.get("checkpoints", []))[:3]]
-    plan_items = [
-        (
-            "Research request" if is_en else "研究请求",
-            "question captured" if question_ready and is_en else ("问题已填写" if question_ready else ("enter a one-sentence request" if is_en else "填写一句研究问题")),
-            "ready" if question_ready else "missing",
-        ),
-        (
-            "Cohort context" if is_en else "队列上下文",
-            f"{rows:,} stay-level rows" if cohort_ready else ("select or upload a cohort" if is_en else "选择或上传队列"),
-            "ready" if cohort_ready else "missing",
-        ),
-        (
-            "Analysis contract" if is_en else "分析契约",
-            str(template_contract.get("label") or ("free-form template" if is_en else "自由模板")),
-            "planned",
-        ),
-        (
-            "Expected outputs" if is_en else "预期产物",
-            ", ".join(expected_outputs) if expected_outputs else ("results report" if is_en else "结果报告"),
-            "planned",
-        ),
-        (
-            "Evidence checkpoints" if is_en else "证据检查点",
-            ", ".join(checkpoints) if checkpoints else ("numeric claims gated" if is_en else "数值主张受控"),
-            "planned",
-        ),
-        (
-            "Human preflight" if is_en else "人工预检查",
-            "confirmed below" if preflight_confirmed and is_en else ("已在下方确认" if preflight_confirmed else ("confirm below before launch" if is_en else "启动前在下方确认")),
-            "ready" if preflight_confirmed else "gated",
-        ),
-    ]
+    if workflow_mode == _RA_WORKFLOW_IDEA:
+        plan_items = [
+            (
+                "Literature source" if is_en else "文献来源",
+                "excerpt staged below" if question_ready and is_en else ("摘录将在下方填写" if not question_ready else "摘录已准备"),
+                "ready" if question_ready else "missing",
+            ),
+            (
+                "Cohort concept map" if is_en else "队列概念映射",
+                f"{rows:,} ICU stays available" if cohort_ready else ("select a cohort for feasibility" if is_en else "选择队列后做可行性"),
+                "ready" if cohort_ready else "missing",
+            ),
+            (
+                "Source freeze" if is_en else "来源冻结",
+                "hash only; source body not stored" if is_en else "只存哈希，不存正文",
+                "planned",
+            ),
+            (
+                "Candidate triage" if is_en else "候选 triage",
+                ", ".join(expected_outputs[:2]) if expected_outputs else "candidate_triage_report.json",
+                "planned",
+            ),
+            (
+                "Registry gate" if is_en else "Registry 关口",
+                "proposed, not executable" if is_en else "保持 proposed，不直接执行",
+                "gated",
+            ),
+            (
+                "Analysis handoff" if is_en else "分析串联",
+                "manual handoff to Research Agent after review" if is_en else "人工复核后再交给正式分析 Agent",
+                "gated",
+            ),
+        ]
+    else:
+        plan_items = [
+            (
+                "Research request" if is_en else "研究请求",
+                "question captured" if question_ready and is_en else ("问题已填写" if question_ready else ("enter a one-sentence request" if is_en else "填写一句研究问题")),
+                "ready" if question_ready else "missing",
+            ),
+            (
+                "Cohort context" if is_en else "队列上下文",
+                f"{rows:,} ICU stays" if cohort_ready else ("select or upload a cohort" if is_en else "选择或上传队列"),
+                "ready" if cohort_ready else "missing",
+            ),
+            (
+                "Analysis contract" if is_en else "分析契约",
+                str(template_contract.get("label") or ("free-form template" if is_en else "自由模板")),
+                "planned",
+            ),
+            (
+                "Expected outputs" if is_en else "预期产物",
+                ", ".join(expected_outputs) if expected_outputs else ("results report" if is_en else "结果报告"),
+                "planned",
+            ),
+            (
+                "Evidence checkpoints" if is_en else "证据检查点",
+                ", ".join(checkpoints) if checkpoints else ("numeric claims gated" if is_en else "数值主张受控"),
+                "planned",
+            ),
+            (
+                "Human preflight" if is_en else "人工预检查",
+                "confirmed below" if preflight_confirmed and is_en else ("已在下方确认" if preflight_confirmed else ("confirm below before launch" if is_en else "启动前在下方确认")),
+                "ready" if preflight_confirmed else "gated",
+            ),
+        ]
     plan_html = "".join(
         _plan_item(i + 1, title, detail, state)
         for i, (title, detail, state) in enumerate(plan_items)
@@ -5752,7 +6525,7 @@ def _render_research_agent_setup_overview(
         ),
         _gate_row(
             "Cohort" if is_en else "队列",
-            f"{rows:,} rows" if cohort_ready else ("not selected" if is_en else "未选择"),
+            f"{rows:,} ICU stays" if cohort_ready else ("not selected" if is_en else "未选择"),
             cohort_ready,
         ),
         _gate_row(
@@ -5772,7 +6545,7 @@ def _render_research_agent_setup_overview(
     ])
     context_values = [
         (("Cohort" if is_en else "队列"), contract.get("cohort_label") or ("not selected" if is_en else "未选择")),
-        (("Rows" if is_en else "行数"), f"{rows:,}" if rows else "0"),
+        (("ICU stays" if is_en else "ICU stay"), f"{rows:,}" if rows else "0"),
         (("Model" if is_en else "模型"), f"{llm_label} · {model_label}"),
         (("Mode" if is_en else "模式"), mode_label),
     ]
@@ -5783,12 +6556,19 @@ def _render_research_agent_setup_overview(
         '</div>'
         for label, value in context_values
     )
-    concept_tray = [
-        "stay-level cohort" if is_en else "住院级队列",
-        "local manifest" if is_en else "本机 manifest",
-        "evidence gate" if is_en else "证据关口",
-        "human review" if is_en else "人工复核",
-    ]
+    concept_tray = (
+        (
+            ["source snapshot", "idea registry", "feasibility probe", "human gate"]
+            if is_en else
+            ["来源快照", "idea registry", "可行性探查", "人工关口"]
+        )
+        if workflow_mode == _RA_WORKFLOW_IDEA else
+        (
+            ["stay-level cohort", "local manifest", "evidence gate", "human review"]
+            if is_en else
+            ["住院级队列", "本机 manifest", "证据关口", "人工复核"]
+        )
+    )
     tray_html = "".join(
         f'<span>{html.escape(item)}</span>'
         for item in concept_tray
@@ -5799,8 +6579,8 @@ def _render_research_agent_setup_overview(
         "No request yet. Start with step 1 below." if is_en else "还没有研究请求，请从下方第 1 步开始。",
         limit=230,
     )
-    preflight_count = int(question_ready) + int(cohort_ready) + int(llm_ready) + int(preflight_confirmed)
-    gate_state_label = f"{preflight_count} / 4 ready" if is_en else f"{preflight_count} / 4 就绪"
+    core_ready_count = int(question_ready) + int(cohort_ready) + int(preflight_confirmed)
+    gate_state_label = f"{core_ready_count} / 3 ready" if is_en else f"{core_ready_count} / 3 就绪"
     gate_message = (
         "No model call happens until this page confirms the plan, context disclosure, and file impact."
         if is_en else
@@ -5811,53 +6591,119 @@ def _render_research_agent_setup_overview(
         if preflight_confirmed else
         ("Confirm below before launch" if is_en else "启动前在下方确认")
     )
-    context_badge = (
-        ("ready" if is_en else "已就绪")
+
+    def _core_card(
+        idx: str,
+        title: str,
+        body: str,
+        status: str,
+        *,
+        ok: bool,
+    ) -> str:
+        return (
+            f'<div class="ra-core-card {"ok" if ok else "todo"}">'
+            f'<span>{html.escape(idx)}</span>'
+            '<div>'
+            f'<b>{html.escape(title)}</b>'
+            f'<p>{html.escape(body)}</p>'
+            '</div>'
+            f'<em>{html.escape(status)}</em>'
+            '</div>'
+        )
+
+    workflow_name = (
+        ("Idea exploration" if is_en else "Idea 探索")
+        if workflow_mode == _RA_WORKFLOW_IDEA else
+        ("Analysis run" if is_en else "正式分析")
+    )
+    request_body = (
+        (
+            f"Captured · {workflow_name}" if is_en else f"已填写 · {workflow_name}"
+        )
+        if question_ready else
+        (
+            f"Write one sentence · {workflow_name}" if is_en else f"写一句请求 · {workflow_name}"
+        )
+    )
+    data_body = (
+        f"{contract.get('cohort_label') or ('selected cohort' if is_en else '已选队列')} · {rows:,} ICU stays"
         if cohort_ready else
-        ("awaiting cohort" if is_en else "等待队列")
+        ("Choose demo, upload, module export, or cross-DB data below." if is_en else "在下方选择演示、上传、模块导出或跨库数据。")
+    )
+    gate_body = (
+        ("Ready: the run contract is confirmed." if is_en else "已就绪：运行契约已确认。")
+        if preflight_confirmed else
+        ("Review the run contract below before any execution or model call." if is_en else "执行或模型调用前，先在下方复核运行契约。")
+    )
+    if not question_ready:
+        next_action = "Write the research request below." if is_en else "先在下方填写研究请求。"
+    elif not cohort_ready:
+        next_action = "Pick or build a cohort in Data recipe." if is_en else "在 Data recipe 中选择或构建队列。"
+    elif not llm_ready:
+        next_action = llm_issue_msg
+    elif workflow_mode == _RA_WORKFLOW_IDEA:
+        next_action = "Use the Idea exploration form below, then run the dry-run." if is_en else "使用下方 Idea 探索表单，然后运行 dry-run。"
+    elif not preflight_confirmed:
+        next_action = "Confirm the preflight gate, then run analysis." if is_en else "确认 preflight gate，然后运行分析。"
+    else:
+        next_action = "Run analysis is unlocked below." if is_en else "下方已解锁运行分析。"
+
+    detail_intro = (
+        "Details: pipeline stages, planned outputs, evidence checks, and local write target."
+        if is_en else
+        "详情：pipeline 阶段、计划产物、证据检查和本地写入位置。"
     )
     st.markdown(
         f"""
-        <div class="ra-setup-overview ra-pipeline-overview">
-          <div class="ra-setup-operating">
+        <div class="ra-core-overview">
+          <div class="ra-core-head">
             <div>
-              <div class="ra-setup-kicker">{"Operating model" if is_en else "运行模型"}</div>
-              <h3>{"An auditable workflow, not a black-box chat" if is_en else "可审计流程，而不是黑箱聊天"}</h3>
-              <p>{"Each stage produces a reviewable artifact. Drafting stays locked until evidence checks pass and you confirm." if is_en else "每个阶段都会产生可复核产物；证据检查通过并由你确认前，手稿起草保持锁定。"}</p>
+              <div class="ra-setup-kicker">{"Research Agent setup" if is_en else "Research Agent 配置"}</div>
+              <h3>{"Three decisions before a run" if is_en else "运行前只看三件事"}</h3>
+              <p>{html.escape("Pick the task, bind the cohort, then review the evidence gate. Everything else is detail." if is_en else "先选任务、绑定队列、复核证据关口。其它信息都收进详情。")}</p>
+            </div>
+            <span>{html.escape(gate_state_label)}</span>
+          </div>
+          <div class="ra-core-grid">
+            {_core_card("1", "Request" if is_en else "请求", request_body, "ready" if question_ready and is_en else ("已就绪" if question_ready else ("needed" if is_en else "需要")), ok=question_ready)}
+            {_core_card("2", "Data" if is_en else "数据", data_body, "ready" if cohort_ready and is_en else ("已就绪" if cohort_ready else ("needed" if is_en else "需要")), ok=cohort_ready)}
+            {_core_card("3", "Gate" if is_en else "关口", gate_body, "confirmed" if preflight_confirmed and is_en else ("已确认" if preflight_confirmed else ("locked" if is_en else "锁定")), ok=preflight_confirmed)}
+          </div>
+          <div class="ra-core-question">
+            <span>{html.escape("Current request" if is_en else "当前请求")}</span>
+            <b>{html.escape(question_copy)}</b>
+          </div>
+          <div class="ra-core-next">
+            <span>{_shell_icon("arrow_forward") or html.escape("->")}</span>
+            <div>
+              <b>{html.escape("Next action" if is_en else "下一步")}</b>
+              <p>{html.escape(next_action)}</p>
             </div>
           </div>
-          <div class="ra-setup-stage-list">{stage_html}</div>
-          <div class="ra-setup-split">
-            <div class="ra-setup-card context">
-              <div class="ra-setup-card-title">{"Context pack" if is_en else "上下文包"} <span>{html.escape(context_badge)}</span></div>
-              <div class="ra-setup-context-grid">{context_html}</div>
-              <div class="ra-setup-card-title tray">{"Concept tray" if is_en else "概念托盘"}</div>
-              <div class="ra-setup-tray">{tray_html}</div>
-              <div class="ra-setup-workdir"><span>{"Output" if is_en else "输出"}</span><b>{workdir_html}</b></div>
-            </div>
-            <div class="ra-setup-main">
-              <div class="ra-setup-card question">
-                <div class="ra-setup-question-head">
-                  <div>
-                    <b>{"Research question" if is_en else "研究问题"}</b>
-                    <span>{"One sentence. The agent drafts a plan first; you confirm before any model call." if is_en else "一句话描述。智能体先生成计划，任何模型调用前都需要你确认。"}</span>
-                  </div>
-                  <em>{html.escape("ready" if question_ready and is_en else ("已就绪" if question_ready else ("missing" if is_en else "未填写")))}</em>
-                </div>
-                <div class="ra-setup-qbox">{html.escape(question_copy)}</div>
+          <details class="ra-core-details">
+            <summary>{html.escape("Show detailed plan and evidence gates" if is_en else "展开详细计划与证据关口")}</summary>
+            <p>{html.escape(detail_intro)}</p>
+            <div class="ra-setup-stage-list">{stage_html}</div>
+            <div class="ra-setup-split compact">
+              <div class="ra-setup-card context">
+                <div class="ra-setup-card-title">{"Run context" if is_en else "运行上下文"}</div>
+                <div class="ra-setup-context-grid">{context_html}</div>
+                <div class="ra-setup-card-title tray">{"Evidence tray" if is_en else "证据托盘"}</div>
+                <div class="ra-setup-tray">{tray_html}</div>
+                <div class="ra-setup-workdir"><span>{"Output" if is_en else "输出"}</span><b>{workdir_html}</b></div>
               </div>
               <div class="ra-setup-card plan">
-                <div class="ra-setup-card-title">{"Plan preview · 6 steps" if is_en else "计划预览 · 6 步"}</div>
+                <div class="ra-setup-card-title">{"Planned outputs" if is_en else "计划产物"}</div>
                 <div class="ra-setup-plan-list">{plan_html}</div>
               </div>
-              <div class="ra-setup-gate-strip">
-                <span>{html.escape(gate_state_label)}</span>
-                <div><b>{"Preflight gate" if is_en else "执行前关口"}</b><p>{html.escape(gate_message)}</p></div>
-                <em>{html.escape(gate_action)}</em>
-              </div>
             </div>
-          </div>
-          <div class="ra-setup-gates compact">{gate_rows}</div>
+            <div class="ra-setup-gate-strip">
+              <span>{html.escape(gate_state_label)}</span>
+              <div><b>{"Evidence gate" if is_en else "证据关口"}</b><p>{html.escape(gate_message)}</p></div>
+              <em>{html.escape(gate_action)}</em>
+            </div>
+            <div class="ra-setup-gates compact">{gate_rows}</div>
+          </details>
         </div>
         """,
         unsafe_allow_html=True,
@@ -5868,6 +6714,7 @@ def _preflight_signature(contract: Dict[str, Any]) -> str:
     payload = {
         key: contract.get(key)
         for key in (
+            "workflow_mode",
             "question",
             "target_outcome",
             "cohort_label",
@@ -5960,24 +6807,39 @@ def _render_execution_preflight(
             "02",
             "Cohort" if is_en else "队列",
             ready_label if cohort_ready else missing_cohort_label,
-            "rows + schema" if is_en else "行数和 schema",
+            "stay-level table" if is_en else "stay 级表",
             "ok" if cohort_ready else "warn",
         ),
+    ]
+    if contract["external_llm"] or not llm_ready:
+        state_steps.append(
+            (
+                f"{len(state_steps) + 1:02d}",
+                "Model" if is_en else "模型",
+                model_state if is_en else (
+                    llm_issue_msg
+                    if contract["external_llm"] and not llm_ready else
+                    ("外部模型" if contract["external_llm"] else "离线")
+                ),
+                "key/model required"
+                if (is_en and contract["external_llm"] and not llm_ready) else
+                (
+                    "密钥/模型必填"
+                    if contract["external_llm"] and not llm_ready else
+                    ("context disclosure" if is_en else "上下文披露")
+                ),
+                "warn" if contract["external_llm"] and not llm_ready else ("warn" if contract["external_llm"] else "ok"),
+            )
+        )
+    state_steps.append(
         (
-            "03",
-            "Model" if is_en else "模型",
-            model_state if is_en else (llm_issue_msg if contract["external_llm"] and not llm_ready else ("外部模型" if contract["external_llm"] else "离线")),
-            "key/model required" if (is_en and contract["external_llm"] and not llm_ready) else ("密钥/模型必填" if contract["external_llm"] and not llm_ready else ("context disclosure" if is_en else "上下文披露")),
-            "warn" if contract["external_llm"] and not llm_ready else ("warn" if contract["external_llm"] else "ok"),
-        ),
-        (
-            "04",
+            f"{len(state_steps) + 1:02d}",
             "Gate" if is_en else "关口",
             gate_state if is_en else ("已确认" if confirmed else "锁定"),
             "human confirmation" if is_en else "人工确认",
             "ok" if confirmed else "locked",
-        ),
-    ]
+        )
+    )
     state_html = "".join(
         f'<div class="ra-preflight-step {state_class}">'
         f'<span>{html.escape(index)}</span>'
@@ -5989,7 +6851,11 @@ def _render_execution_preflight(
     )
     cohort_value = (
         f"{contract['cohort_label'] or ('not selected' if is_en else '未选择')} · "
-        f"{contract['cohort_rows']:,} rows"
+        + (
+            f"{contract['cohort_rows']:,} ICU stays"
+            if is_en else
+            f"{contract['cohort_rows']:,} 个 ICU stay"
+        )
     )
     llm_value = f"{contract['llm_choice']} · {contract['model']}"
     if not llm_ready and llm_issue_msg:
@@ -6049,23 +6915,27 @@ def _render_execution_preflight(
             <span>{"confirmed" if confirmed and is_en else ("已确认" if confirmed else ("locked until confirmed" if is_en else "确认前锁定"))}</span>
           </div>
           <div class="ra-preflight-steps">{state_html}</div>
-          <div class="ra-preflight-grid">{row_html}</div>
-          <div class="ra-preflight-checks">{check_html}</div>
+          <details class="ra-preflight-details">
+            <summary>{html.escape("Show launch details" if is_en else "展开启动细节")}</summary>
+            <div class="ra-preflight-grid">{row_html}</div>
+            <div class="ra-preflight-checks">{check_html}</div>
+          </details>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    with st.expander(
-        "Step contract preview" if is_en else "步骤契约预览",
-        expanded=False,
-    ):
-        st.markdown("**Expected outputs**" if is_en else "**预期产物**")
-        st.write(", ".join(map(str, template_contract["expected_outputs"])))
-        st.markdown("**Checkpoints**" if is_en else "**复核点**")
-        st.write(", ".join(map(str, template_contract["checkpoints"])))
-        st.markdown("**File impact**" if is_en else "**文件影响**")
-        for target in contract["write_targets"]:
-            st.caption(f"WRITE `{target}`")
+    if bool(st.session_state.get("research_agent_show_advanced_setup", False)):
+        with st.expander(
+            "Step contract preview" if is_en else "步骤契约预览",
+            expanded=False,
+        ):
+            st.markdown("**Expected outputs**" if is_en else "**预期产物**")
+            st.write(", ".join(map(str, template_contract["expected_outputs"])))
+            st.markdown("**Checkpoints**" if is_en else "**复核点**")
+            st.write(", ".join(map(str, template_contract["checkpoints"])))
+            st.markdown("**File impact**" if is_en else "**文件影响**")
+            for target in contract["write_targets"]:
+                st.caption(f"WRITE `{target}`")
 
     ack = st.checkbox(
         (
@@ -6077,26 +6947,41 @@ def _render_execution_preflight(
         key="research_agent_preflight_ack",
     )
     can_confirm = request_ready and cohort_ready and llm_ready
-    c1, c2 = st.columns([1.2, 1.0])
-    with c1:
-        if st.button(
+    # Only show "Reset review" once there is a confirmation to undo. Before
+    # confirming, a Reset button is a no-op that just adds a greyed control the
+    # user cannot reason about, so the Confirm button takes the full width.
+    if confirmed:
+        c1, c2 = st.columns([1.2, 1.0])
+        with c1:
+            confirm_clicked = st.button(
+                "Confirm launch review" if is_en else "确认启动复核",
+                type="primary",
+                disabled=not ack or not can_confirm,
+                use_container_width=True,
+                key="research_agent_preflight_confirm",
+            )
+        with c2:
+            reset_clicked = st.button(
+                "Reset review" if is_en else "重置复核",
+                use_container_width=True,
+                key="research_agent_preflight_reset",
+            )
+    else:
+        confirm_clicked = st.button(
             "Confirm launch review" if is_en else "确认启动复核",
             type="primary",
             disabled=not ack or not can_confirm,
             use_container_width=True,
             key="research_agent_preflight_confirm",
-        ):
-            st.session_state["research_agent_preflight_confirmed"] = True
-            st.session_state["research_agent_preflight_signature"] = signature
-            st.rerun()
-    with c2:
-        if st.button(
-            "Reset review" if is_en else "重置复核",
-            use_container_width=True,
-            key="research_agent_preflight_reset",
-        ):
-            st.session_state["research_agent_preflight_confirmed"] = False
-            st.rerun()
+        )
+        reset_clicked = False
+    if confirm_clicked:
+        st.session_state["research_agent_preflight_confirmed"] = True
+        st.session_state["research_agent_preflight_signature"] = signature
+        st.rerun()
+    if reset_clicked:
+        st.session_state["research_agent_preflight_confirmed"] = False
+        st.rerun()
     external_consent_needed = bool(contract["external_llm"] and not st.session_state.get("llm_enabled", False))
     if confirmed and external_consent_needed:
         st.info(
@@ -6117,20 +7002,378 @@ def _render_execution_preflight(
     return confirmed
 
 
+def _render_idea_exploration_panel(
+    *,
+    cohort: Optional[pd.DataFrame],
+    cohort_label: str,
+    workdir_text: str,
+) -> None:
+    lang = st.session_state.get("language", "en")
+    is_en = lang == "en"
+    defaults = _default_idea_exploration_form(cohort, is_en=is_en)
+    for key, value in defaults.items():
+        st.session_state.setdefault(f"research_agent_idea_{key}", value)
+
+    st.markdown(
+        textwrap.dedent(f"""
+        <div class="ra-preflight-controls-intro">
+          <div>
+            <div class="ra-setup-kicker">{"Discovery / idea exploration" if is_en else "发现 / Idea 探索"}</div>
+            <h3>{"Idea triage before execution" if is_en else "执行前的 idea triage"}</h3>
+            <p>{"Paste the source, name the exposure and outcome, then run the backend dry-run. It freezes the source, maps concepts, probes outcome-blind feasibility, and stops at a human registry gate." if is_en else "粘贴来源、填写暴露与结局，然后运行后端 dry-run。它会冻结来源、映射概念、做 outcome-blind 可行性探查，并停在人工 registry 关口。"}</p>
+          </div>
+          <span>{"stops at human gate" if is_en else "停在人工关口"}</span>
+        </div>
+        """).strip(),
+        unsafe_allow_html=True,
+    )
+
+    with st.container(border=True):
+        st.markdown(
+            textwrap.dedent(f"""
+            <div class="ra-idea-compact-head">
+              <div>
+                <b>{"Core idea triage" if is_en else "核心 idea triage"}</b>
+                <p>{"Most users only need a traceable source plus an exposure/outcome pair. Optional source metadata and mapping hints stay in Advanced." if is_en else "大多数用户只需要可追踪来源和暴露/结局组合；来源 metadata 与映射提示放在高级区。"}</p>
+              </div>
+              <span>{"backend dry-run" if is_en else "后端 dry-run"}</span>
+            </div>
+            """).strip(),
+            unsafe_allow_html=True,
+        )
+        st.text_area(
+            "Review/editorial excerpt" if is_en else "综述/editorial 摘录",
+            key="research_agent_idea_source_text",
+            height=122,
+            help=(
+                "The source body is used for traceability but the output manifest stores only hash and character count."
+                if is_en else
+                "正文只用于追踪引用；输出 manifest 只保存哈希和字符数，不保存正文。"
+            ),
+        )
+        st.text_input(
+            "Traceable source quote" if is_en else "可追踪原文短句",
+            key="research_agent_idea_source_quote",
+            help=(
+                "Must appear verbatim inside the excerpt."
+                if is_en else
+                "必须能在上方摘录中逐字找到。"
+            ),
+        )
+        map_cols = st.columns([1, 1], gap="small")
+        with map_cols[0]:
+            st.text_input(
+                "Exposure / predictor" if is_en else "暴露 / 预测因子",
+                key="research_agent_idea_predictor",
+                help=(
+                    "Use a phrase that can map to a current cohort column or EasyICU concept alias."
+                    if is_en else
+                    "建议使用能映射到当前队列列名或 EasyICU 概念别名的短语。"
+                ),
+            )
+        with map_cols[1]:
+            st.text_input(
+                "Outcome" if is_en else "结局",
+                key="research_agent_idea_outcome",
+            )
+
+    show_advanced_mapping = st.toggle(
+        "Advanced source and mapping" if is_en else "高级来源与映射",
+        key="research_agent_idea_show_advanced_mapping",
+        help=(
+            "Show citation metadata, population, analysis-family, time-window, aggregation, and rationale hints."
+            if is_en else
+            "显示引用 metadata、人群、分析族、时间窗、汇总方式和候选理由提示。"
+        ),
+    )
+    if show_advanced_mapping:
+        source_cols = st.columns([1.1, 2.3, 0.65, 1.1])
+        with source_cols[0]:
+            st.text_input(
+                "Citation key" if is_en else "引用 key",
+                key="research_agent_idea_citation_key",
+            )
+        with source_cols[1]:
+            st.text_input(
+                "Source title" if is_en else "来源标题",
+                key="research_agent_idea_title",
+            )
+        with source_cols[2]:
+            st.text_input(
+                "Year" if is_en else "年份",
+                key="research_agent_idea_year",
+            )
+        with source_cols[3]:
+            st.text_input(
+                "Venue" if is_en else "期刊/来源",
+                key="research_agent_idea_venue",
+            )
+        st.text_input(
+            "Population" if is_en else "人群",
+            key="research_agent_idea_population",
+        )
+        detail_cols = st.columns([1.1, 1.1, 1.2])
+        with detail_cols[0]:
+            st.text_input(
+                "Analysis family" if is_en else "分析族",
+                key="research_agent_idea_analysis_family",
+            )
+        with detail_cols[1]:
+            st.text_input(
+                "Time window" if is_en else "时间窗",
+                key="research_agent_idea_time_window_hint",
+            )
+        with detail_cols[2]:
+            st.text_input(
+                "Aggregation" if is_en else "汇总方式",
+                key="research_agent_idea_aggregation_hint",
+            )
+        st.text_area(
+            "Rationale" if is_en else "候选理由",
+            key="research_agent_idea_rationale",
+            height=80,
+        )
+
+    rows = int(len(cohort)) if cohort is not None else 0
+    cohort_ready = cohort is not None and rows > 0
+    st.caption(
+        (
+            f"Feasibility will use the current web cohort: {cohort_label or 'selected cohort'} · {rows:,} ICU stays."
+            if cohort_ready else
+            "Select or build a cohort above before running outcome-blind feasibility."
+        )
+        if is_en else
+        (
+            f"可行性将使用当前 web 队列：{cohort_label or '已选队列'} · {rows:,} 个 ICU stay。"
+            if cohort_ready else
+            "请先在上方选择或构建队列，再运行 outcome-blind 可行性检查。"
+        )
+    )
+
+    run_clicked = st.button(
+        "Run idea triage dry-run" if is_en else "运行 idea triage dry-run",
+        key="research_agent_idea_run",
+        type="primary",
+        disabled=not cohort_ready,
+        use_container_width=True,
+    )
+    if run_clicked and cohort is not None:
+        form = {
+            key: st.session_state.get(f"research_agent_idea_{key}", "")
+            for key in defaults
+        }
+        try:
+            result = _run_idea_exploration_dry_run(
+                form=form,
+                cohort=cohort,
+                cohort_label=cohort_label,
+                workdir_text=workdir_text,
+            )
+        except Exception as exc:
+            st.error(str(exc))
+        else:
+            st.session_state["research_agent_last_idea_result"] = result
+            st.session_state["research_agent_last_idea_summary"] = _idea_result_summary(result)
+            st.success(
+                "Idea triage finished and stopped at the proposed-candidate gate."
+                if is_en else
+                "Idea triage 已完成，并停在 proposed 候选关口。"
+            )
+
+    result = st.session_state.get("research_agent_last_idea_result")
+    if not result:
+        return
+
+    summary = _idea_result_summary(result)
+    can_stage = any(
+        getattr(candidate, "executable", False)
+        for candidate in getattr(result, "executable_candidates", []) or []
+    )
+    triage_state = (
+        "ready for handoff" if can_stage and is_en else
+        "可转入正式分析" if can_stage else
+        "review before handoff" if is_en else
+        "转入前需复核"
+    )
+    triage_pill = "ok" if can_stage else "warn"
+    st.markdown(
+        textwrap.dedent(f"""
+        <div class="ra-idea-result-card {triage_pill}">
+          <div>
+            <div class="ra-setup-kicker">{"Latest idea triage" if is_en else "最近一次 idea triage"}</div>
+            <h3>{html.escape(triage_state)}</h3>
+            <p>{html.escape("The candidate remains proposed until you review the registry gate. Prior-art labels are query-bounded triage signals, not novelty claims." if is_en else "候选在复核 registry 关口前保持 proposed；prior-art 标签只是受查询范围约束的 triage 信号，不是新颖性声明。")}</p>
+          </div>
+          <span>{html.escape(str(summary["executable"]))} / {html.escape(str(summary["literature_ideas"]))} {"executable" if is_en else "可执行"}</span>
+          <div class="ra-idea-result-metrics">
+            <b>{"Held" if is_en else "暂缓"} · {html.escape(str(summary["non_executable"]))}</b>
+            <b>{"Feasibility" if is_en else "可行性"} · {html.escape(str(summary["feasibility_signals"]))}</b>
+            <b>{"Ranked" if is_en else "排序"} · {html.escape(str(summary["ranked_candidates"]))}</b>
+            <b>{"Prior art" if is_en else "查新"} · {html.escape(str(summary["prior_art_label"]))}</b>
+            <b>{"Broad/exact" if is_en else "宽/精"} · {html.escape(str(summary["prior_art_broad_hits"]))}/{html.escape(str(summary["prior_art_exact_hits"]))}</b>
+          </div>
+        </div>
+        """).strip(),
+        unsafe_allow_html=True,
+    )
+
+    candidate_rows = []
+    for record in getattr(result, "candidate_records", []) or []:
+        try:
+            payload = record.model_dump(mode="json")
+        except Exception:
+            payload = dict(record)
+        candidate_rows.append({
+            "candidate": payload.get("registry_candidate_id"),
+            "status": payload.get("registry_selection_status"),
+            "predictor": payload.get("predictor_label"),
+            "outcome": payload.get("outcome_label"),
+            "executable": payload.get("executable"),
+            "joint_n": payload.get("n_joint_complete"),
+            "denominator": payload.get("denominator_n"),
+            "reason": "; ".join(payload.get("non_executable_reasons") or [])[:180],
+        })
+
+    prior_art_rows = _idea_prior_art_rows(result)
+    report_path = Path(str(summary.get("discovery_report_path") or ""))
+    report_text = ""
+    if report_path.exists():
+        report_text = report_path.read_text(encoding="utf-8")
+    triage_path = Path(str(summary.get("triage_report_path") or ""))
+
+    action_cols = st.columns([1.35, 1, 1], gap="small")
+    with action_cols[0]:
+        if st.button(
+            "Stage top candidate as analysis question" if is_en else "将 top 候选转入正式分析问题",
+            key="research_agent_idea_stage_candidate",
+            disabled=not can_stage,
+            use_container_width=True,
+            type="primary",
+        ):
+            if _queue_idea_candidate_as_research_question(st.session_state, result):
+                st.success(
+                    "Candidate staged in Analysis run setup."
+                    if is_en else
+                    "候选已带入正式分析配置。"
+                )
+                st.rerun()
+            else:
+                st.warning(
+                    "No executable candidate is available for handoff."
+                    if is_en else
+                    "当前没有可转入正式分析的候选。"
+                )
+    with action_cols[1]:
+        if report_path.exists():
+            st.download_button(
+                "Download report" if is_en else "下载报告",
+                data=report_text,
+                file_name="discovery_report.md",
+                mime="text/markdown",
+                key="research_agent_idea_download_report",
+                use_container_width=True,
+            )
+        else:
+            st.button("Report unavailable" if is_en else "报告不可用", disabled=True, use_container_width=True)
+    with action_cols[2]:
+        if triage_path.exists():
+            st.download_button(
+                "Download triage JSON" if is_en else "下载 triage JSON",
+                data=triage_path.read_bytes(),
+                file_name="candidate_triage_report.json",
+                mime="application/json",
+                key="research_agent_idea_download_triage",
+                use_container_width=True,
+            )
+        else:
+            st.button("Triage JSON unavailable" if is_en else "Triage JSON 不可用", disabled=True, use_container_width=True)
+
+    show_triage_details = st.toggle(
+        "Review triage details" if is_en else "复核 triage 详情",
+        key="research_agent_idea_show_triage_details",
+        help=(
+            "Show the candidate table, prior-art query records, discovery report body, and registry path."
+            if is_en else
+            "显示候选表、prior-art 查询记录、discovery report 正文和 registry 路径。"
+        ),
+    )
+    if show_triage_details:
+        if candidate_rows:
+            st.dataframe(pd.DataFrame(candidate_rows), use_container_width=True, hide_index=True)
+        if prior_art_rows:
+            st.markdown("**Prior-art query records**" if is_en else "**Prior-art 查询记录**")
+            st.dataframe(pd.DataFrame(prior_art_rows), use_container_width=True, hide_index=True)
+        if report_text:
+            st.markdown("**Discovery report**" if is_en else "**Discovery report**")
+            st.markdown(report_text)
+        st.caption(
+            (
+                f"Registry: {summary.get('registry_path')}"
+                if is_en else
+                f"Registry：{summary.get('registry_path')}"
+            )
+        )
+
+
 def _render_setup_controls_intro(*, is_en: bool) -> None:
     st.markdown(
         textwrap.dedent(f"""
         <div class="ra-setup-controls-intro">
           <div>
-            <div class="ra-setup-kicker">{"Run setup" if is_en else "运行配置"}</div>
-            <h3>{"Complete the missing fields" if is_en else "补齐缺失字段"}</h3>
-            <p>{"The first open panel is the required input. Method, data, model, and output details stay collapsed until needed." if is_en else "第一个展开面板是必填输入；方法、数据、模型和输出细节在需要时再展开。"}</p>
+            <div class="ra-setup-kicker">{"Setup details" if is_en else "配置详情"}</div>
+            <h3>{"Edit only what is needed" if is_en else "只改必须项"}</h3>
+            <p>{"Most runs need only Request and Data recipe. Keep model and output defaults unless you are preparing a real run." if is_en else "多数运行只需要改 Request 和 Data recipe；准备真实运行时再调整模型和输出默认值。"}</p>
           </div>
-          <span>{"local setup" if is_en else "本机配置"}</span>
+          <span>{"progressive setup" if is_en else "渐进配置"}</span>
         </div>
         """).strip(),
         unsafe_allow_html=True,
     )
+
+
+def _render_copilot_signpost(*, is_en: bool) -> None:
+    """Tell users landing on the Research Agent page that the Research
+    Copilot is the conversational front door for the same workflow.
+
+    Without this the relationship is asymmetric: the Copilot says it
+    "hands a gated question to Research Agent", but this page never names
+    the Copilot, so a user who lands here directly cannot discover the
+    chat path or understand how the two surfaces relate.
+    """
+    note = (
+        "Prefer chat? **Research Copilot** walks this same workflow conversationally — "
+        "it frames the question and cohort with you, then hands the gated request back to this page."
+        if is_en else
+        "想用对话？**Research Copilot** 用聊天走同一套流程——先和你一起框定问题与队列，再把带闸门的请求交回到这里。"
+    )
+    col_text, col_btn = st.columns([4, 1])
+    with col_text:
+        st.caption(note)
+    with col_btn:
+        if st.button(
+            "Open Copilot" if is_en else "打开 Copilot",
+            key="ra_open_copilot_signpost",
+            use_container_width=True,
+            help=(
+                "Switch to the chat-first Research Copilot."
+                if is_en else
+                "切换到聊天优先的 Research Copilot。"
+            ),
+        ):
+            # NOTE: do NOT write `_main_nav_widget` here. This button renders
+            # on the Research Agent page — i.e. AFTER app.py has instantiated
+            # st.radio(key="_main_nav_widget"), so assigning that key raises
+            # StreamlitAPIException ("cannot be modified after the widget ...
+            # is instantiated"). Setting `_active_main_page` alone is enough:
+            # it is the routing source of truth, and app.py reconciles
+            # `_main_nav_widget` from it on the next run (see `_visible_active`
+            # ~app.py:4367). The sidebar may set the widget key only because it
+            # renders before that widget.
+            st.session_state["_active_main_page"] = "assistant"
+            st.session_state["_inline_ai_panel_open"] = False
+            st.session_state["_floating_ai_open"] = False
+            st.session_state["_scroll_to_top"] = True
+            st.rerun()
 
 
 def _render_preflight_controls_intro(*, is_en: bool) -> None:
@@ -6175,6 +7418,18 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
 
     _lang = st.session_state.get("language", "en")
     _is_en = _lang == "en"
+    if _apply_pending_idea_candidate_handoff(st.session_state, is_en=_is_en):
+        st.success(
+            "Idea candidate staged in Analysis run setup."
+            if _is_en else
+            "Idea 候选已带入正式分析配置。"
+        )
+    if st.session_state.pop("_research_agent_switch_cohort_notice", False):
+        st.success(
+            "Switched to Real Data setup. Pick or revise the cohort source before launching the agent."
+            if _is_en else
+            "已切换到真实数据设置。启动 Agent 前请先选择或修改队列来源。"
+        )
     resume_run_id = st.session_state.get("research_agent_resume_run_id")
     resume_mode = str(st.session_state.get("research_agent_resume_mode") or "")
     if resume_run_id and resume_mode in {"continue", "force_manuscript"}:
@@ -6196,15 +7451,15 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
 
     with st.container(key="eu_ra_setup_controls"):
         _render_setup_controls_intro(is_en=_is_en)
+        _render_copilot_signpost(is_en=_is_en)
         with st.expander(_step_titles[0], expanded=True):
             free_question, target_outcome = _section_request_picker()
             skill_key = None
-        with st.expander(f"{_step_titles[1]} ({_optional_label})", expanded=False):
-            method_notes, user_preferences = _section_method_preferences(free_question, target_outcome)
         question_hint = free_question
         focus_module_folder = bool(st.session_state.get("_eu_ra_focus_module_folder", False))
         focus_no_data = bool(st.session_state.get("_eu_ra_focus_no_data", False))
-        with st.expander(_step_titles[2], expanded=bool(question_hint) or focus_module_folder or focus_no_data):
+        data_recipe_title = "2. Data recipe" if _is_en else "2. 数据配方"
+        with st.expander(data_recipe_title, expanded=bool(question_hint) or focus_module_folder or focus_no_data):
             cohort, cohort_label = _section_cohort_picker(research_question=question_hint)
         if cohort is not None and not _multi_db_label_is_distinct(cohort_label):
             tags = _multi_db_label_tags(cohort_label)
@@ -6216,11 +7471,30 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
             _clear_research_agent_preflight_confirmation()
             cohort = None
             cohort_label = ""
-        with st.expander(_step_titles[3], expanded=False):
-            llm_choice, api_key, model, base_url, extra_headers = _section_llm_picker(handles)
+        method_notes = ""
+        user_preferences: Dict[str, Any] = {}
+        llm_choice, api_key, model, base_url, extra_headers = _default_research_agent_llm_settings()
+        disable_icu_context, workdir_text, stop_after_analysis = _default_research_agent_run_options()
         focus_options = bool(st.session_state.pop("_eu_ra_focus_options", False))
-        with st.expander(f"{_step_titles[4]} ({_optional_label})", expanded=focus_options):
-            disable_icu_context, workdir_text, stop_after_analysis = _section_options()
+        if focus_options:
+            st.session_state["research_agent_show_advanced_setup"] = True
+        st.session_state.setdefault("research_agent_show_advanced_setup", False)
+        advanced_setup_open = st.toggle(
+            "Advanced setup" if _is_en else "高级设置",
+            key="research_agent_show_advanced_setup",
+            help=(
+                "Show method preferences, model provider, output path, and stop point."
+                if _is_en else
+                "显示方法偏好、模型服务、输出目录和停止点。"
+            ),
+        )
+        if advanced_setup_open:
+            with st.expander(f"{_step_titles[1]} ({_optional_label})", expanded=False):
+                method_notes, user_preferences = _section_method_preferences(free_question, target_outcome)
+            with st.expander(_step_titles[3], expanded=False):
+                llm_choice, api_key, model, base_url, extra_headers = _section_llm_picker(handles)
+            with st.expander(f"{_step_titles[4]} ({_optional_label})", expanded=focus_options):
+                disable_icu_context, workdir_text, stop_after_analysis = _section_options()
     llm_ready, llm_issue = _llm_run_readiness(llm_choice, api_key, model)
     force_manuscript = bool(st.session_state.get("research_agent_force_manuscript"))
     resume_notes = str(st.session_state.get("research_agent_resume_notes") or "")
@@ -6228,7 +7502,9 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
     if force_manuscript:
         stop_after_analysis = False
 
+    workflow_mode = _research_agent_workflow_mode_from_state(st.session_state)
     template_key = st.session_state.get("research_agent_template_current") or st.session_state.get("research_agent_example_key")
+    contract_template_key = "idea_exploration" if workflow_mode == _RA_WORKFLOW_IDEA and not template_key else str(template_key or "")
     preview_contract = _build_execution_preflight_contract(
         free_question=free_question or "",
         target_outcome=target_outcome or "",
@@ -6239,10 +7515,11 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
         workdir_text=workdir_text or _default_research_agent_workdir(),
         stop_after_analysis=stop_after_analysis,
         force_manuscript=force_manuscript,
-        template_key=str(template_key or ""),
+        template_key=contract_template_key,
         language=_lang,
         llm_ready=llm_ready,
         llm_issue=llm_issue,
+        workflow_mode=workflow_mode,
     )
     preview_signature = _preflight_signature(preview_contract)
     if st.session_state.get("research_agent_preflight_signature") != preview_signature:
@@ -6263,6 +7540,14 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
             llm_ready=llm_ready,
             llm_issue=llm_issue,
         )
+
+    if workflow_mode == _RA_WORKFLOW_IDEA:
+        _render_idea_exploration_panel(
+            cohort=cohort,
+            cohort_label=cohort_label,
+            workdir_text=workdir_text,
+        )
+        return
 
     # Surface a banner so the user knows the next "Run" click is a
     # resume, not a fresh run, and remembers the toggles they picked
@@ -6338,7 +7623,7 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
         request_ready = bool(str(free_question or "").strip()) or force_manuscript
         consent_ready = not external_llm_selected or bool(st.session_state.get("llm_enabled", False))
         run_button_clicked = st.button(
-            "▶  " + (_ra_text("draft_button") if force_manuscript else _ra_text("run_button")),
+            _ra_text("draft_button") if force_manuscript else _ra_text("run_button"),
             type="primary",
             disabled=cohort is None or not request_ready or not preflight_confirmed or not llm_ready or not consent_ready,
             use_container_width=True,
@@ -6409,9 +7694,9 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
     progress.info(
         _ra_text("running")
         + (
-            " Live Workbench is updating below."
+            " Live Review is updating below."
             if _is_en else
-            " 下方实时工作台正在更新。"
+            " 下方实时复核页正在更新。"
         )
     )
     progress_bar = st.progress(0)

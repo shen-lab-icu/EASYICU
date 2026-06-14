@@ -336,7 +336,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             if grp_src == "demo":
                 # ===== 模拟数据模式 =====
                 n_patients = st.slider(
-                    "👥 " + ("Number of Patients" if lang == 'en' else "患者数量"),
+                    "👥 " + ("Number of ICU stays" if lang == 'en' else "ICU stay 数量"),
                     min_value=50, max_value=500, value=st.session_state.mock_params.get('n_patients', 100),
                     key="grp_demo_patients_inline"
                 )
@@ -382,7 +382,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 
                 with col3:
                     max_patients = st.number_input(
-                        "👥 " + ("Max Patients" if lang == 'en' else "最大患者数"),
+                        "👥 " + ("Max ICU stays" if lang == 'en' else "最大 ICU stay 数"),
                         min_value=100,
                         max_value=10000,
                         value=1000,
@@ -425,7 +425,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                             st.session_state['grp_loaded_path'] = full_data_path
                             st.session_state['grp_is_demo'] = False
 
-                        st.success(f"✅ Loaded {len(demographics_df):,} patients" if lang == 'en' else f"✅ 已加载 {len(demographics_df):,} 名患者")
+                        st.success(f"✅ Loaded {len(demographics_df):,} ICU stays" if lang == 'en' else f"✅ 已加载 {len(demographics_df):,} 个 ICU stay")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
@@ -482,7 +482,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                                 st.session_state['grp_loaded_path'] = selected_path
                                 st.session_state['grp_is_demo'] = False
 
-                            st.success(f"✅ Loaded {len(demographics_df):,} patients from exported result files" if lang == 'en' else f"✅ 已从这批导出结果文件中加载 {len(demographics_df):,} 名患者")
+                            st.success(f"✅ Loaded {len(demographics_df):,} ICU stays from exported result files" if lang == 'en' else f"✅ 已从这批导出结果文件中加载 {len(demographics_df):,} 个 ICU stay")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Error: {e}")
@@ -503,7 +503,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
         # 显示数据概览
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total Patients" if lang == 'en' else "患者总数", f"{len(demographics_df):,}")
+            st.metric("Total ICU stays" if lang == 'en' else "ICU stay 总数", f"{len(demographics_df):,}")
         with col2:
             avg_age = demographics_df['age'].mean() if 'age' in demographics_df.columns else 0
             st.metric("Mean Age" if lang == 'en' else "平均年龄", f"{avg_age:.1f}")
@@ -653,13 +653,13 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 
         # ========== 特征模块选择 ==========
         _render_section_heading(
-            "Select Feature Modules" if lang == 'en' else "选择特征模块",
-            "Features" if lang == 'en' else "变量",
+            "Select Review Feature Modules" if lang == 'en' else "选择审阅特征模块",
+            "Review features" if lang == 'en' else "审阅变量",
         )
 
         # 模块多选
         selected_modules = st.multiselect(
-            "Select feature modules" if lang == 'en' else "选择特征模块",
+            "Select review feature modules" if lang == 'en' else "选择审阅特征模块",
             options=list(FEATURE_MODULES.keys()),
             default=default_modules,
             format_func=lambda x: FEATURE_MODULES[x]['name_en'] if lang == 'en' else FEATURE_MODULES[x]['name_zh'],
@@ -674,7 +674,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
         concepts_to_load = _cohort_feature_load_concepts(selected_modules, FEATURE_MODULES)
 
         if concepts_to_load and not screenshot_mode:
-            with st.expander("🔬 " + (f"Features to load: {len(concepts_to_load)}" if lang == 'en' else f"待加载特征: {len(concepts_to_load)}个"), expanded=False):
+            with st.expander(f"Review features to load: {len(concepts_to_load)}" if lang == 'en' else f"待加载审阅变量: {len(concepts_to_load)} 个", expanded=False):
                 st.caption(", ".join(concepts_to_load))
 
     custom_variable_options: dict[str, str] = {}
@@ -765,17 +765,17 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                             feature_data = {**feature_data, **generated}
                             st.session_state['grp_feature_data'] = feature_data
                 else:
-                    st.info(f"🔬 " + (f"{len(missing_concepts)} features need to be loaded: " if lang == 'en' else f"需要加载 {len(missing_concepts)} 个特征: ") + ", ".join(missing_concepts[:5]) + ("..." if len(missing_concepts) > 5 else ""))
+                    st.info((f"{len(missing_concepts)} review features need to be loaded: " if lang == 'en' else f"需要加载 {len(missing_concepts)} 个审阅变量: ") + ", ".join(missing_concepts[:5]) + ("..." if len(missing_concepts) > 5 else ""))
                     load_features_btn = st.button(
-                        "🚀 " + (f"Load {len(missing_concepts)} Features" if lang == 'en' else f"加载 {len(missing_concepts)} 个特征"),
+                        f"Load {len(missing_concepts)} review features" if lang == 'en' else f"加载 {len(missing_concepts)} 个审阅变量",
                         type="primary",
-                        key="grp_load_features"
+                        key="grp_load_features",
                     )
                     if load_features_btn:
                         try:
                             from easyicu import load_concepts
 
-                            with st.spinner(f"Loading {len(missing_concepts)} features for {len(all_patient_ids)} patients..." if lang == 'en' else f"正在加载 {len(missing_concepts)} 个特征..."):
+                            with st.spinner(f"Loading {len(missing_concepts)} review features for {len(all_patient_ids)} ICU stays..." if lang == 'en' else f"正在为 {len(all_patient_ids)} 个 ICU stay 加载 {len(missing_concepts)} 个审阅特征..."):
                                 progress_bar = st.progress(0)
                                 loaded_count = 0
 
@@ -813,7 +813,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 
                                 progress_bar.empty()
                                 st.session_state['grp_feature_data'] = feature_data
-                                st.success(f"✅ " + (f"Loaded {loaded_count}/{len(missing_concepts)} features" if lang == 'en' else f"已加载 {loaded_count}/{len(missing_concepts)} 个特征"))
+                                st.success(f"✅ " + (f"Loaded {loaded_count}/{len(missing_concepts)} review features" if lang == 'en' else f"已加载 {loaded_count}/{len(missing_concepts)} 个审阅特征"))
                                 st.rerun()
                         except Exception as e:
                             st.error(f"Error loading features: {e}")
@@ -906,7 +906,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             default_threshold = float(valid_values.median())
             if np.isclose(min_value, max_value):
                 threshold = min_value
-                st.info("All patients share the same threshold value; the split may be degenerate." if lang == 'en' else "所有患者的阈值变量相同，分组可能退化。")
+                st.info("All ICU stays share the same threshold value; the split may be degenerate." if lang == 'en' else "所有 ICU stay 的阈值变量相同，分组可能退化。")
             elif pd.api.types.is_integer_dtype(valid_values) or np.allclose(valid_values, np.round(valid_values)):
                 slider_default = int(round(st.session_state.get('group_comp_custom_threshold', default_threshold)))
                 slider_default = min(max(slider_default, int(np.floor(min_value))), int(np.ceil(max_value)))
@@ -959,11 +959,44 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             return
 
         _render_compact_divider()
+        min_group_n = min(len(group1_ids), len(group2_ids))
+        demo_or_preview = bool(
+            entry_mode == "demo"
+            or str(database).lower() == "demo"
+            or st.session_state.get("grp_is_demo")
+        )
+        preview_only = demo_or_preview or min_group_n < 10
+        if preview_only and not screenshot_mode:
+            preview_notice = (
+                "Demo / small-sample preview only. This table is for workflow review and balance screening; do not interpret p-values as inferential evidence."
+                if lang == "en" else
+                "仅作演示 / 小样本预览。该表用于检查工作流和组间平衡；不要把 p 值解释为推断证据。"
+            )
+            st.markdown(
+                f'<div class="compact-inline-notice warn">{html.escape(preview_notice)}</div>',
+                unsafe_allow_html=True,
+            )
 
         # ========== 基线特征对比表 (Table One) ==========
         _render_section_heading(
-            "Baseline Characteristics Comparison" if lang == 'en' else "基线特征对比表",
-            "Table one" if lang == 'en' else "表一",
+            (
+                "Baseline characteristics preview"
+                if preview_only and lang == 'en'
+                else "Baseline Characteristics Comparison"
+                if lang == 'en'
+                else "基线特征预览"
+                if preview_only
+                else "基线特征对比表"
+            ),
+            (
+                "Demo table"
+                if preview_only and lang == 'en'
+                else "Table one"
+                if lang == 'en'
+                else "演示表"
+                if preview_only
+                else "表一"
+            ),
         )
 
         from scipy import stats
@@ -1197,20 +1230,33 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                 }
             )
 
-            # 统计方法说明
-            st.markdown("---")
-            stats_note = """**Statistical Methods:**
+            if preview_only:
+                stats_note = """**Preview methods:**
+- Continuous variables: Mean ± SD (Median [IQR]); p-values are shown only as software checks.
+- Categorical variables: n (%); chi-square cells can be unstable in this preview.
+- SMD is an effect-size distance, but small groups make it unstable.
+- Demo and min-group n < 10 tables are not inferential and should not be cited as significant findings.""" if lang == 'en' else """**预览方法说明：**
+- 连续变量：Mean ± SD (Median [IQR])；p 值仅作软件流程检查。
+- 分类变量：n (%)；小样本下卡方单元格不稳定。
+- SMD 是效应量距离，但小样本下不稳定。
+- 演示数据或任一组 n < 10 的表格不属于推断分析，不能作为显著性结论引用。"""
+            else:
+                stats_note = """**Statistical Methods:**
 - Continuous variables: Mean ± SD (Median [IQR]), Mann-Whitney U test, SMD with pooled SD
 - Categorical variables: n (%), Chi-square test, binary SMD with pooled proportion
 - SMD is reported as a numeric effect-size distance; |SMD| > 0.10 suggests imbalance and |SMD| > 0.25 suggests stronger imbalance
 - Small groups (min n < 10) make SMD unstable, so interpret the numeric values cautiously
-- p < 0.05 considered statistically significant""" if lang == 'en' else """**统计方法说明：**
+- Significance thresholds should be prespecified in the analysis plan, not inferred from the demo UI.""" if lang == 'en' else """**统计方法说明：**
 - 连续变量：Mean ± SD (Median [IQR])，Mann-Whitney U 检验，SMD 使用合并标准差
 - 分类变量：n (%)，卡方检验，二分类 SMD 使用合并比例
 - SMD 仅作为数值效应量距离展示；|SMD| > 0.10 提示不平衡，|SMD| > 0.25 常被视为较大不平衡
 - 小样本（任一组 n < 10）会让 SMD 不稳定，应谨慎解释数值
-- p < 0.05 认为具有统计学显著性"""
-            st.caption(stats_note)
+- 显著性阈值应在分析计划中预先指定，不应从演示 UI 中推断。"""
+            if st.toggle(
+                "Methods and interpretation" if lang == 'en' else "方法与解释说明",
+                key="cohort_group_show_methods_note",
+            ):
+                st.caption(stats_note)
 
             # 🔧 FIX (2026-02-04): 简化导出逻辑，使用 UTF-8 BOM 编码确保 Excel 正确显示
             # 无需手动替换特殊字符，utf-8-sig 编码可以正确处理
@@ -1228,10 +1274,10 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             csv_bytes = buffer.getvalue()
 
             st.download_button(
-                label="📥 " + ("Download Table (CSV)" if lang == 'en' else "下载表格 (CSV)"),
+                label="Download table" if lang == 'en' else "下载表格",
                 data=csv_bytes,
                 file_name=f"baseline_comparison_{group1_name}_vs_{group2_name}.csv",
-                mime="text/csv"
+                mime="text/csv",
             )
 
     except Exception as e:

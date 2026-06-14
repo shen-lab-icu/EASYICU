@@ -13,6 +13,10 @@ expanders or explanatory chrome.
 
 from __future__ import annotations
 
+import html
+import json
+from contextlib import nullcontext
+from datetime import datetime
 from typing import Any
 
 import numpy as np
@@ -84,9 +88,7 @@ def _patient_count_from_state() -> int:
 
 
 def _cohort_page_title(lang: str) -> tuple[str, str]:
-    if st.session_state.get("entry_mode") != "demo" and not _has_bound_cohort_context():
-        return _T(lang, "Cohort statistics", "队列统计"), _T(lang, "队列统计", "队列统计")
-    return _T(lang, "Sepsis vs Non-sepsis", "脓毒症对照"), _T(lang, "脓毒症对照", "脓毒症对照")
+    return _T(lang, "Cohort statistics", "队列统计"), _T(lang, "队列统计", "队列统计")
 
 
 def _render_page_header(
@@ -132,7 +134,7 @@ def _render_page_header(
 
 
 def _render_cohort_readiness_strip(lang: str) -> None:
-    """Compact cohort readiness strip for the statistics page."""
+    """Agent-aware preflight strip for the statistics page."""
     loaded_concepts = st.session_state.get("loaded_concepts") or {}
     input_tone = "ok"
     evidence_tone = "ok"
@@ -150,19 +152,19 @@ def _render_cohort_readiness_strip(lang: str) -> None:
     if st.session_state.get("entry_mode") != "demo" and (patient_count == 0 or concept_count == 0):
         input_body = _T(lang, "waiting for local cohort", "等待本地队列")
         evidence_body = _T(lang, "load data for denominators", "加载数据后确认分母")
-        review_body = _T(lang, "review unlocks after data load", "加载数据后进入复核")
+        review_body = _T(lang, "draft gate blocked until data load", "加载数据前草稿闸门保持锁定")
         input_tone = "warn"
         evidence_tone = "warn"
         review_tone = "warn"
     else:
         input_body = (
-            _T(lang, f"{patient_count:,} stays · {concept_count} concepts", f"{patient_count:,} 例 · {concept_count} 概念")
+            _T(lang, f"{patient_count:,} ICU stays · {concept_count} review features", f"{patient_count:,} 个 ICU stay · {concept_count} 个审阅特征")
             if concept_count else
-            _T(lang, f"{patient_count:,} stays · demo concept set", f"{patient_count:,} 例 · 演示概念集")
+            _T(lang, f"{patient_count:,} ICU stays · demo review feature set", f"{patient_count:,} 个 ICU stay · 演示审阅特征集")
         )
         evidence_body = _T(lang, "coverage + denominators ready", "覆盖率 + 分母已就绪")
-        review_body = _T(lang, "ready for cohort review", "可进入队列复核")
-        review_tone = "ok"
+        review_body = _T(lang, "agent drafts only after review", "复核后智能体才会起草")
+        review_tone = "warn"
     signature = _T(lang, "current session", "当前会话")
     rows = [
         (
@@ -176,7 +178,7 @@ def _render_cohort_readiness_strip(lang: str) -> None:
             evidence_tone,
         ),
         (
-            _T(lang, "Review state", "复核状态"),
+            _T(lang, "Draft gate", "草稿闸门"),
             review_body,
             review_tone,
         ),
@@ -190,9 +192,9 @@ def _render_cohort_readiness_strip(lang: str) -> None:
             '</div>'
         )
     st.markdown(
-        '<div class="eu-readiness-strip">'
+        '<div class="eu-readiness-strip eu-cohort-agent-preflight">'
         '<div class="eu-readiness-strip-head">'
-        f'<span class="mono">{_T(lang, "Cohort readiness", "队列就绪状态")}</span>'
+        f'<span class="mono">{_T(lang, "Agent preflight", "智能体预检")}</span>'
         f'<span class="mono muted">{signature}</span>'
         '</div>'
         f'<div class="eu-readiness-strip-grid">{"".join(cards)}</div>'
@@ -697,6 +699,58 @@ def _crossdb_loaded_database_count() -> int:
     return sum(1 for frame in data.values() if isinstance(frame, pd.DataFrame) and not frame.empty)
 
 
+def _crossdb_workspace_summary(lang: str) -> dict[str, Any]:
+    """Build a JSON-safe summary for the assembled Cross-DB benchmark."""
+    data = st.session_state.get("multidb_data") or {}
+    loaded = isinstance(data, dict) and _crossdb_loaded_database_count() >= 2
+    db_count, row_count, concept_count = _crossdb_loaded_counts()
+    kpi_columns, kpi_rows = _crossdb_kpi_rows(lang)
+    availability_columns, availability_rows = _crossdb_availability_rows(lang)
+    return {
+        "loaded": loaded,
+        "database_count": _crossdb_loaded_database_count() if loaded else db_count,
+        "row_count": row_count if loaded else 0,
+        "concept_count": concept_count if loaded else 0,
+        "is_demo": bool(st.session_state.get("multidb_is_demo") or st.session_state.get("entry_mode") == "demo"),
+        "active_databases": [
+            {
+                "label": label,
+                "detail": detail,
+                "loaded": is_loaded,
+                "primary": is_primary,
+            }
+            for label, detail, is_loaded, is_primary in _crossdb_active_databases(lang)
+        ],
+        "summary_columns": list(kpi_columns),
+        "summary_rows": kpi_rows if loaded else [],
+        "availability_columns": list(availability_columns),
+        "availability_rows": [
+            {"concept": concept, "availability": [round(float(v), 4) for v in values]}
+            for concept, values in availability_rows
+        ] if loaded else [],
+    }
+
+
+def _crossdb_export_summary_payload(lang: str) -> bytes:
+    """Return a Cross-DB benchmark summary export without raw database frames."""
+    payload = {
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "workspace": _crossdb_workspace_summary(lang),
+        "notes": (
+            "Summary only; database frames and patient-level rows are not included."
+            if lang == "en" else
+            "仅包含摘要；不包含数据库原始数据帧或患者级数据行。"
+        ),
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def _crossdb_open_selection_panel(state: Any) -> None:
+    """Open the detailed loader so the user can revise database selection."""
+    state["_eu_crossdb_distribution_open"] = True
+    state["_scroll_to_top"] = True
+
+
 def _clear_demo_crossdb_state_for_real_mode(state: Any) -> bool:
     """Remove seeded demo Cross-DB frames before rendering a real-data page."""
     if state.get("entry_mode") == "demo" or not state.get("multidb_is_demo"):
@@ -912,6 +966,66 @@ def _render_crossdb_distribution_launcher(
     )
 
 
+def _render_crossdb_loaded_bar(lang: str) -> None:
+    """Render the assembled benchmark status bar and concrete actions."""
+    summary = _crossdb_workspace_summary(lang)
+    if not summary["loaded"]:
+        return
+
+    is_en = lang == "en"
+    status_text = (
+        f"{summary['database_count']} databases · {summary['row_count']:,} feature rows · "
+        f"{summary['concept_count']} concepts"
+        if is_en else
+        f"{summary['database_count']} 个数据库 · {summary['row_count']:,} 行特征数据 · "
+        f"{summary['concept_count']} 个概念"
+    )
+    title = _T(lang, "Benchmark assembled", "Benchmark 已组装")
+    pill = _T(lang, "Loaded", "已加载")
+    container = (
+        st.container(key="eu_crossdb_loaded_bar")
+        if callable(getattr(st, "container", None)) else
+        nullcontext()
+    )
+    with container:
+        st.markdown(
+            '<div class="eu-crossdb-loaded-bar">'
+            '<div class="eu-crossdb-loaded-copy">'
+            f'<span class="eu-crossdb-loaded-pill">{html.escape(pill)}</span>'
+            f'<b>{html.escape(title)}</b>'
+            f'<p>{html.escape(status_text)}</p>'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        can_render_actions = (
+            not st.session_state.get("_eu_shell_only")
+            and callable(getattr(st, "columns", None))
+            and callable(getattr(st, "button", None))
+            and callable(getattr(st, "download_button", None))
+        )
+        if not can_render_actions:
+            return
+        action_cols = st.columns([1.25, 1, 4])
+        with action_cols[0]:
+            st.button(
+                _T(lang, "Change selection", "更改选择"),
+                key="eu_crossdb_change_selection",
+                use_container_width=True,
+                on_click=_crossdb_open_selection_panel,
+                args=(st.session_state,),
+            )
+        with action_cols[1]:
+            st.download_button(
+                _T(lang, "Export", "导出"),
+                data=_crossdb_export_summary_payload(lang),
+                file_name="easyicu_crossdb_benchmark_summary.json",
+                mime="application/json",
+                key="eu_crossdb_export_summary",
+                use_container_width=True,
+            )
+
+
 def _toggle_crossdb_distribution_panel(state, key: str) -> None:
     state[key] = not bool(state.get(key))
 
@@ -947,6 +1061,10 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
         except Exception:
             pass
 
+    has_comparison_data = _crossdb_loaded_database_count() >= 2
+    if has_comparison_data:
+        _render_crossdb_loaded_bar(lang)
+
     st.markdown(_crossdb_source_notice(lang), unsafe_allow_html=True)
 
     active_databases = _crossdb_active_databases(lang)
@@ -964,7 +1082,6 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
         )
 
     kpi_columns, kpi_rows = _crossdb_kpi_rows(lang)
-    has_comparison_data = _crossdb_loaded_database_count() >= 2
     summary_title = (
         _T(lang, "Loaded cross-database distribution summary",
            "已加载的跨数据库分布摘要")

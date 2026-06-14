@@ -29,13 +29,19 @@ from .callbacks import (
     sofa_coag,
     sofa_liver,
     sofa_renal,
+    sofa_resp,
+)
+# SOFA-2 components: import the canonical, footnote-correct implementations from
+# sofa2.py (rewritten in 82fea9e to score ECMO and accept ecmo/ecmo_indication).
+# The legacy copies in callbacks.py predate that fix and lack the ecmo params,
+# so the dict-driven dispatcher (which passes ecmo by keyword) would TypeError.
+from .sofa2 import (
     sofa2_renal,
     sofa2_resp,
     sofa2_coag,
     sofa2_liver,
     sofa2_cardio,
     sofa2_cns,
-    sofa_resp,
 )
 from .sepsis import sep3 as sep3_detector, susp_inf as susp_inf_detector
 from .sepsis_sofa2 import sep3_sofa2 as sep3_sofa2_detector
@@ -1126,7 +1132,13 @@ def _merge_tables(
                             try:
                                 frame[k] = frame[k].astype(v)
                             except Exception:
-                                pass
+                                logger.debug(
+                                    "Failed to cast merge key %s to %s for concept %s",
+                                    k,
+                                    v,
+                                    name,
+                                    exc_info=True,
+                                )
             indexed = frame.set_index(key_cols, drop=True)
             # Only keep the value column (concept name)
             if name in indexed.columns:
@@ -2044,7 +2056,10 @@ def _callback_mimic_kg_rate(
         return _empty_icutbl(ctx)
     
     input_table = list(tables.values())[0]
-    data = input_table.df.copy()
+    source_data = getattr(input_table, "data", getattr(input_table, "df", None))
+    if source_data is None:
+        return _empty_icutbl(ctx)
+    data = source_data.copy()
     
     if data.empty:
         return _empty_icutbl(ctx)
@@ -2057,37 +2072,56 @@ def _callback_mimic_kg_rate(
     # Determine the primary ID column for MIMIC-III
     id_col = 'icustay_id' if 'icustay_id' in id_columns else (id_columns[0] if id_columns else 'stay_id')
     
-    # Try to load weight data and join
+    if value_column not in data.columns:
+        return _empty_icutbl(ctx)
+
+    data[value_column] = pd.to_numeric(data[value_column], errors='coerce')
+    normalized = False
+
+    # Try to load weight data and join. Missing/invalid weight must propagate
+    # to NA rather than leaking raw mcg/min values into a mcg/kg/min concept.
     try:
         weight_df = _load_concept_for_callback(ctx, 'weight')
-        if weight_df is not None and not weight_df.empty:
+        if weight_df is not None and not weight_df.empty and "weight" in weight_df.columns:
             # Get weight ID column
             weight_id_col = 'icustay_id' if 'icustay_id' in weight_df.columns else (
                 'stay_id' if 'stay_id' in weight_df.columns else id_col
             )
-            
-            # Get first (or median) weight per patient
-            weight_agg = weight_df.groupby(weight_id_col)['weight'].first().reset_index()
-            
-            # Merge weight into data
-            if id_col in data.columns:
+
+            if weight_id_col in weight_df.columns and id_col in data.columns:
+                weight_work = weight_df[[weight_id_col, "weight"]].rename(
+                    columns={"weight": "__weight_kg"}
+                )
+                weight_work["__weight_kg"] = pd.to_numeric(
+                    weight_work["__weight_kg"],
+                    errors='coerce',
+                )
+                weight_work.loc[weight_work["__weight_kg"] <= 0, "__weight_kg"] = np.nan
+
+                # Get first usable weight per patient.
+                weight_agg = (
+                    weight_work.dropna(subset=["__weight_kg"])
+                    .groupby(weight_id_col, as_index=False)["__weight_kg"]
+                    .first()
+                )
+
+                # Merge weight into data
                 data = data.merge(weight_agg, left_on=id_col, right_on=weight_id_col, how='left')
-                
-                # Divide rate by weight
-                if 'weight' in data.columns and value_column in data.columns:
-                    data[value_column] = pd.to_numeric(data[value_column], errors='coerce')
-                    data['weight'] = pd.to_numeric(data['weight'], errors='coerce')
-                    data[value_column] = data[value_column] / data['weight']
-                    
-                    # Update unit if present
-                    if unit_column and unit_column in data.columns:
-                        data[unit_column] = data[unit_column].str.replace('mcgmin', 'mcg/kg/min', regex=False)
-                    
-                    # Drop weight column
-                    data = data.drop(columns=['weight'], errors='ignore')
-    except Exception:
-        # If weight loading fails, return data without weight normalization
-        pass
+
+                if "__weight_kg" in data.columns:
+                    data["__weight_kg"] = pd.to_numeric(data["__weight_kg"], errors='coerce')
+                    data[value_column] = data[value_column] / data["__weight_kg"]
+                    normalized = True
+                    data = data.drop(columns=["__weight_kg"], errors='ignore')
+    except Exception as exc:
+        logger.debug("Failed to load weight for mimic_kg_rate callback: %s", exc)
+
+    if not normalized:
+        data[value_column] = np.nan
+
+    # Update unit if present
+    if unit_column and unit_column in data.columns:
+        data[unit_column] = data[unit_column].astype(str).str.replace('mcgmin', 'mcg/kg/min', regex=False)
     
     # Build output columns
     output_cols = list(id_columns) + ([index_column] if index_column and index_column in data.columns else []) + [value_column]
@@ -2484,7 +2518,7 @@ def _callback_sofa_component(
                 if ctx.concept_name == 'sofa_cardio' and name in ['dopa60', 'norepi60', 'dobu60', 'epi60']:
                     # Optional vasopressor parameters - pass None
                     kwargs[name] = None
-                elif ctx.concept_name == 'sofa2_cardio' and name in ['dopa60', 'norepi60', 'dobu60', 'epi60', 'other_vaso', 'mech_circ_support']:
+                elif ctx.concept_name == 'sofa2_cardio' and name in ['dopa60', 'norepi60', 'dobu60', 'epi60', 'other_vaso', 'mech_circ_support', 'ecmo', 'ecmo_indication']:
                     # SOFA-2 optional vasopressor/support parameters - pass None
                     kwargs[name] = None
                 elif ctx.concept_name == 'sofa_renal' and name == 'urine24':
@@ -3402,6 +3436,7 @@ def _match_fio2_fallback_loop_original(
             effective_tolerance = match_win.total_seconds() / 3600.0
     
     unique_ids = left_df[id_columns[0]].unique()
+    failed_ids = []
     for id_val in unique_ids:
         left_mask = left_df[id_columns[0]] == id_val
         right_mask = right_df[id_columns[0]] == id_val
@@ -3425,8 +3460,20 @@ def _match_fio2_fallback_loop_original(
             for col in id_columns:
                 merged[col] = id_val
             result_list.append(merged)
-        except Exception:
+        except Exception as exc:
+            failed_ids.append((id_val, str(exc)))
             continue
+
+    if failed_ids:
+        logger.warning(
+            "merge_asof fallback skipped %d/%d patient groups for %s/%s; "
+            "first failures=%s",
+            len(failed_ids),
+            len(unique_ids),
+            left_col,
+            right_col,
+            failed_ids[:5],
+        )
     
     if result_list:
         return pd.concat(result_list, ignore_index=True)
@@ -3671,7 +3718,11 @@ def _match_fio2(
                     pd.to_datetime(merged[unified_time_col], errors='coerce') - base_time
                 ) / pd.Timedelta(hours=1)
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to restore merged FiO2 time column %s",
+                    unified_time_col,
+                    exc_info=True,
+                )
             
     else:
         # mode = "extreme_vals" or "fill_gaps"
@@ -4083,7 +4134,11 @@ def _callback_vent_ind(
             if td_series.notna().any():
                 return td_series
         except Exception:  # fallback to numeric parsing
-            pass
+            logger.debug(
+                "Failed to parse ventilation duration as timedelta; "
+                "falling back to numeric hours",
+                exc_info=True,
+            )
         numeric = pd.to_numeric(series, errors="coerce")
         return pd.to_timedelta(numeric, unit="h")
 
@@ -5779,7 +5834,11 @@ def _callback_vaso60(
         try:
             result[output_index_col] = (pd.to_datetime(result[output_index_col], errors='coerce') - base_time) / pd.Timedelta(hours=1)
         except Exception:
-            pass
+            logger.debug(
+                "Failed to restore callback time column %s",
+                output_index_col,
+                exc_info=True,
+            )
     return _as_icutbl(
         result,
         id_columns=id_columns,

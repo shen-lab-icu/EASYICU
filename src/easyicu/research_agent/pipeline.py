@@ -119,7 +119,11 @@ from .concept_dict_audit import (
     assert_dict_matches as assert_concept_dict_matches,
     write_concept_dict_fingerprint,
 )
-from .cohort_schema import ensure_cohort_definition, write_locked_cohort_definition
+from .cohort_schema import (
+    ensure_cohort_definition,
+    materialize_locked_analysis_cohort,
+    write_locked_cohort_definition,
+)
 from .robustness_panel import ensure_robustness_specs, write_locked_robustness_specs
 from .pipeline_report import (
     execution_gate_status,
@@ -211,8 +215,13 @@ from .pipeline_writer_aux import (
     _summarise_table_one_rows,
 )
 from .plan_utils import (
+    _cap_plan_preserving_figure_steps,
+    _cohort_definition_contract_findings,
+    _cohort_definition_is_empty,
+    _ensure_audit_panel_step_in_plan,
     _ensure_publication_figure_step_in_plan,
     _enforce_advanced_plan_contract,
+    _plan_expects_analysis_cohort,
     _infer_primary_predictor_from_context,
     _parent_step_id_for_figure_step,
     _predictor_tokens,
@@ -331,7 +340,7 @@ class ResearchAgentPipeline:
         evidence_enforcement_mode: str = "soft",
         disable_icu_context: bool = False,
         context_top_k: Optional[int] = None,
-        max_code_repair_attempts: int = 1,
+        max_code_repair_attempts: int = 3,
         enable_deterministic_code_fallback: bool = False,
         enable_deterministic_planner_fallback: bool = False,
         enable_deterministic_runner_repair: bool = True,
@@ -360,6 +369,7 @@ class ResearchAgentPipeline:
         enable_causal_audit: bool = True,
         enable_reporting_checklist: bool = True,
         reporting_checklist_names: Optional[Sequence[str]] = None,
+        task_kind: Optional[str] = None,
         enable_reviewer_round: bool = True,
         enable_fairness_subgroups: bool = True,
         enable_hypothesis_generator: bool = False,
@@ -369,6 +379,8 @@ class ResearchAgentPipeline:
         enable_probe_step: bool = True,
         enable_replanning: bool = True,
         max_total_steps: int = 12,
+        max_consecutive_noop_replans: int = 2,
+        max_replans: int = 0,
         max_numeric_claims_per_step: int = 100,
         writer_digest_widened: bool = False,
         writer_digest_secondary_cap_per_step: int = 20,
@@ -522,6 +534,10 @@ class ResearchAgentPipeline:
         self._reporting_checklist_names = (
             tuple(reporting_checklist_names) if reporting_checklist_names else None
         )
+        # Authoritative benchmark task kind (e.g. "subphenotype_clustering"),
+        # used to decide kind-specific reporting-checklist applicability rather
+        # than relying on fragile manuscript wording. Optional outside the bench.
+        self._benchmark_task_kind = task_kind
         # O15 — Three-role reviewer round (statistician / clinician /
         # methodologist) driven off already-computed evidence and
         # findings. Deterministic; no extra LLM calls. Default ON.
@@ -553,6 +569,16 @@ class ResearchAgentPipeline:
         # the replanner overflow guard (see pipeline_execute.py).
         self._max_total_steps = (
             int(max_total_steps) if max_total_steps and max_total_steps > 0 else 0
+        )
+        # Replan convergence guards (see pipeline_config / pipeline_execute).
+        # 0 disables the guard.
+        self._max_consecutive_noop_replans = (
+            int(max_consecutive_noop_replans)
+            if max_consecutive_noop_replans and max_consecutive_noop_replans > 0
+            else 0
+        )
+        self._max_replans = (
+            int(max_replans) if max_replans and max_replans > 0 else 0
         )
         self._max_numeric_claims_per_step = (
             int(max_numeric_claims_per_step)
@@ -612,17 +638,25 @@ class ResearchAgentPipeline:
         run_dir: Path,
         cohort_path: Path,
         target_outcome: Optional[str] = None,
+        universe_path: Optional[Path] = None,
     ):
         """Return the configured runner backend for a single ``run()``.
 
         Kept as a method (not a closure) so subclasses or tests can
         stub it cleanly. Returns any object that exposes
         ``run(step_id=..., code=...) -> RunResult``.
+
+        ``cohort_path`` is the canonical analysis cohort the steps read as
+        ``COHORT_PARQUET``. ``universe_path`` (when given) is exposed as
+        ``EASYICU_UNIVERSE_PARQUET`` so explicit robustness steps can reach the
+        pre-纳排 universe without re-running extraction.
         """
         runner_kwargs = dict(self._runner_kwargs)
         extra_env = dict(runner_kwargs.pop("extra_env", {}) or {})
         if target_outcome:
             extra_env.setdefault("OUTCOME_COL", target_outcome)
+        if universe_path is not None:
+            extra_env.setdefault("EASYICU_UNIVERSE_PARQUET", str(universe_path))
         if self._runner_factory is not None:
             # A user-supplied factory (OpenHands, firecracker, ...) also needs
             # the run's outcome column so deterministic repairs resolve it from
@@ -661,6 +695,7 @@ class ResearchAgentPipeline:
         cohort_name: str,
         database: str,
         target_outcome: Optional[str],
+        primary_exposure: Optional[str],
         cross_database_validation: Optional[Sequence[str]],
         inclusion_criteria: Optional[Sequence[str]],
         exclusion_criteria: Optional[Sequence[str]],
@@ -692,6 +727,7 @@ class ResearchAgentPipeline:
             cohort_name=cohort_name,
             database=database,
             target_outcome=target_outcome,
+            primary_exposure=primary_exposure,
             cross_database_validation=cross_database_validation,
             inclusion_criteria=inclusion_criteria,
             exclusion_criteria=exclusion_criteria,
@@ -997,7 +1033,7 @@ class ResearchAgentPipeline:
                                 description=(
                                     "Ranked front-door hypothesis candidates "
                                     "(predictor × outcome) with coverage, "
-                                    "novelty and ICU-gate scores (O17)."
+                                    "literature-saturation and ICU-gate scores (O17)."
                                 ),
                                 source_path=hg_json,
                                 evidence_id="hypothesis_candidates",
@@ -1198,7 +1234,45 @@ class ResearchAgentPipeline:
             def role_resolver(role: str):
                 return resolve_role_client(llm, role)
 
-        if skill_obj is not None:
+        # Resume: reuse the locked plan from the prior run instead of
+        # re-planning. A non-deterministic planner would otherwise emit a
+        # *different* plan on resume, whose step_ids no longer match the
+        # completed-step skip set — so the "resume" would silently re-run the
+        # whole analysis under new names. Reusing the saved plan keeps the
+        # already-completed step_ids aligned and continues from the failed step.
+        reused_prior_plan = False
+        if resume_state is not None:
+            _prior_plan_path = run_dir / "analysis_plan.json"
+            if _prior_plan_path.exists():
+                try:
+                    plan = AnalysisPlan.model_validate(
+                        json.loads(_prior_plan_path.read_text(encoding="utf-8"))
+                    )
+                except Exception:
+                    plan = None
+                if plan is not None and plan.steps:
+                    reused_prior_plan = True
+                    plan_generation_mode = "resumed"
+                    findings.append(
+                        ValidationFinding(
+                            validator="planner",
+                            severity="warning",
+                            message=(
+                                "Resuming prior run: reused the locked analysis "
+                                "plan (skipped re-planning) so completed step_ids "
+                                "stay aligned and execution continues from the "
+                                "failed step."
+                            ),
+                            detail={
+                                "generation_mode": "resumed",
+                                "n_steps": len(plan.steps),
+                            },
+                        )
+                    )
+
+        if reused_prior_plan:
+            pass
+        elif skill_obj is not None:
             plan_generation_mode = "deterministic_skill"
             issues = skill_obj.validate_against(pd.read_parquet(cohort_path))
             for msg in issues:
@@ -1250,42 +1324,118 @@ class ResearchAgentPipeline:
                         detail={"dropped_keys": dropped_keys},
                     )
                 )
-        plan, plan_contract_findings = _enforce_advanced_plan_contract(
-            plan=plan,
-            context=context,
-        )
-        findings.extend(plan_contract_findings)
-        plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
-        findings.extend(split_findings)
-        plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
-            plan=plan,
-            context=context,
-        )
-        findings.extend(figure_guard_findings)
-
-        # C1 (pilot 20260515 fix): cap initial plan size for the same
-        # reason the replanner is capped (see pipeline_execute.py).
-        # Truncation happens AFTER figure-step guard so a publication
-        # figure step is not accidentally dropped.
-        cap = self._max_total_steps
-        if cap > 0 and len(plan.steps) > cap:
-            dropped = [s.step_id for s in plan.steps[cap:]]
-            plan = plan.model_copy(update={"steps": list(plan.steps[:cap])})
-            findings.append(
-                ValidationFinding(
-                    validator="planner",
-                    severity="warning",
-                    message=(
-                        f"Initial plan had {len(dropped) + cap} steps; "
-                        f"truncated to max_total_steps={cap}. Dropped: "
-                        f"{', '.join(dropped[:6])}"
-                        + (" ..." if len(dropped) > 6 else "")
-                    ),
-                    detail={"dropped_step_ids": dropped, "cap": cap},
-                )
+            # A hosted model occasionally emits structurally-broken plan JSON
+            # (e.g. a stray time-window at the top level and no usable steps
+            # array) that normalises to 0 steps. An empty plan must never run:
+            # retry the real planner once, then fall back to the deterministic
+            # plan so the pipeline always executes a real analysis.
+            if not plan.steps and self._enable_deterministic_planner_fallback:
+                retry_plan = None
+                try:
+                    retry_plan = planner.run(agent_context)
+                except Exception:
+                    retry_plan = None
+                if retry_plan is not None and retry_plan.steps:
+                    plan = retry_plan
+                    findings.append(
+                        ValidationFinding(
+                            validator="planner",
+                            severity="warning",
+                            message="Planner returned an empty plan; recovered on retry.",
+                            detail={"generation_mode": "retry"},
+                        )
+                    )
+                else:
+                    findings.append(
+                        ValidationFinding(
+                            validator="planner",
+                            severity="warning",
+                            message=(
+                                "Planner returned an empty plan (0 steps after schema "
+                                "validation) twice; using deterministic fallback plan."
+                            ),
+                            detail={"generation_mode": "fallback"},
+                        )
+                    )
+                    plan = PlannerAgent(MockLLMClient(context=agent_context)).run(
+                        agent_context
+                    )
+                    used_mock_llm = True
+                    plan_generation_mode = "fallback"
+            # Structured-纳排 retry: if the plan implies an analysis cohort (a
+            # cohort / eligibility / attrition step) but left plan.cohort
+            # unstructured, the 纳排 is unenforceable free text. Give the planner
+            # one focused retry; adopt it only if it actually structures the
+            # cohort, so a good plan is never discarded when the retry doesn't.
+            if (
+                not used_mock_llm
+                and _plan_expects_analysis_cohort(plan)
+                and _cohort_definition_is_empty(plan)
+            ):
+                cohort_retry = None
+                try:
+                    cohort_retry = planner.run(agent_context)
+                except Exception:
+                    cohort_retry = None
+                if (
+                    cohort_retry is not None
+                    and cohort_retry.steps
+                    and not _cohort_definition_is_empty(cohort_retry)
+                ):
+                    plan = cohort_retry
+                    findings.append(
+                        ValidationFinding(
+                            validator="cohort_contract",
+                            severity="warning",
+                            message=(
+                                "Planner initially left the analysis cohort "
+                                "unstructured; recovered structured inclusion/"
+                                "exclusion on retry."
+                            ),
+                            detail={"generation_mode": "cohort_retry"},
+                        )
+                    )
+        # Skip the plan-shaping transforms when resuming: the saved plan is
+        # already in its final, transformed form, and re-running split/cap/
+        # ensure_* could rename or reorder step_ids and break the resume skip
+        # set. A freshly generated plan still gets the full treatment.
+        if not reused_prior_plan:
+            plan, plan_contract_findings = _enforce_advanced_plan_contract(
+                plan=plan,
+                context=context,
             )
-        plan = ensure_cohort_definition(plan)
-        plan = ensure_robustness_specs(plan)
+            findings.extend(plan_contract_findings)
+            plan, split_findings = _split_table_and_figure_outputs_in_plan(plan=plan)
+            findings.extend(split_findings)
+            # Force a declared figure step whenever the publication-figure skill
+            # will produce one regardless of the plan: the scorer reads
+            # analysis_plan.json, and the question-only heuristic misses tasks
+            # (e.g. E1) that never say "figure" yet still ship one. Likewise
+            # ensure a declared audit/robustness panel, since that evidence is
+            # produced (locked robustness specs, data-quality summaries) but the
+            # plan often never presents it.
+            plan, figure_guard_findings = _ensure_publication_figure_step_in_plan(
+                plan=plan,
+                context=context,
+                force=self._enable_publication_figure_skill,
+            )
+            findings.extend(figure_guard_findings)
+            plan, audit_panel_findings = _ensure_audit_panel_step_in_plan(
+                plan=plan,
+                context=context,
+            )
+            findings.extend(audit_panel_findings)
+
+            cap = self._max_total_steps
+            plan, cap_findings = _cap_plan_preserving_figure_steps(plan=plan, cap=cap)
+            findings.extend(cap_findings)
+            plan = ensure_cohort_definition(plan)
+            plan = ensure_robustness_specs(plan)
+            # Final gate: if the plan implies a cohort but still has no
+            # structured inclusion/exclusion (the retry above didn't recover
+            # it), record a loud, auditable contract error instead of silently
+            # running the analysis on the full universe.
+            findings.extend(_cohort_definition_contract_findings(plan))
         plan_path = run_dir / "analysis_plan.json"
         plan_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
         if evidence.get("analysis_plan") is None:
@@ -1320,6 +1470,47 @@ class ResearchAgentPipeline:
             prompt_pack_version=prompt_version,
             llm_signature=llm_signature,
         )
+        # Materialize the locked cohort definition into the canonical analysis
+        # cohort so the declared inclusion/exclusion is enforced once, on the
+        # data every downstream step reads — instead of relying on each
+        # LLM-generated step to re-apply 纳排 (which run10/run11 showed it does
+        # not, so the primary model ran on the full universe). The full universe
+        # stays reachable via EASYICU_UNIVERSE_PARQUET for robustness steps.
+        if not reused_prior_plan:
+            analysis_cohort = materialize_locked_analysis_cohort(
+                run_dir=run_dir, plan=plan, universe_path=cohort_path,
+            )
+            if analysis_cohort["status"] == "applied":
+                findings.append(
+                    ValidationFinding(
+                        validator="cohort_materializer",
+                        severity="info",
+                        message=(
+                            "Applied the locked cohort definition: analysis cohort "
+                            f"n={analysis_cohort['n_cohort']} of universe "
+                            f"n={analysis_cohort['n_universe']}. Downstream steps read "
+                            "the filtered cohort (COHORT_PARQUET); the full universe "
+                            "stays available as EASYICU_UNIVERSE_PARQUET."
+                        ),
+                        detail={
+                            "n_universe": analysis_cohort["n_universe"],
+                            "n_analysis_cohort": analysis_cohort["n_cohort"],
+                        },
+                    )
+                )
+            elif analysis_cohort["status"] == "error":
+                findings.append(
+                    ValidationFinding(
+                        validator="cohort_materializer",
+                        severity="warning",
+                        message=(
+                            "Could not auto-apply the locked cohort definition to the "
+                            "universe; downstream steps read the unfiltered universe "
+                            "and must apply inclusion/exclusion themselves. Reason: "
+                            f"{analysis_cohort['error']}"
+                        ),
+                    )
+                )
         emit_progress(
             "plan",
             f"Analysis plan ready with {len(plan.steps)} step(s).",
@@ -1571,6 +1762,7 @@ class ResearchAgentPipeline:
         cohort_name: str = "cohort",
         database: str = "miiv",
         target_outcome: Optional[str] = None,
+        primary_exposure: Optional[str] = None,
         cross_database_validation: Optional[Sequence[str]] = None,
         inclusion_criteria: Optional[Sequence[str]] = None,
         exclusion_criteria: Optional[Sequence[str]] = None,
@@ -1736,6 +1928,7 @@ class ResearchAgentPipeline:
                 cohort_name=cohort_name,
                 database=database,
                 target_outcome=target_outcome,
+                primary_exposure=primary_exposure,
                 cross_database_validation=cross_database_validation,
                 inclusion_criteria=inclusion_criteria,
                 exclusion_criteria=exclusion_criteria,
@@ -1806,18 +1999,50 @@ class ResearchAgentPipeline:
             )
 
         def _write_invoker(plan_result, execute_result):
-            return self._run_write_phase(
-                plan_result=plan_result,
-                execute_result=execute_result,
-                run_dir=run_dir,
-                run_id=run_id,
-                stop_after_analysis=stop_after_analysis,
-                manuscript_title=manuscript_title,
-                manuscript_authors=manuscript_authors,
-                run_language=run_language,
-                emit_progress=_emit_progress,
-                force_writer_probe=force_writer_probe,
-            )
+            try:
+                return self._run_write_phase(
+                    plan_result=plan_result,
+                    execute_result=execute_result,
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    stop_after_analysis=stop_after_analysis,
+                    manuscript_title=manuscript_title,
+                    manuscript_authors=manuscript_authors,
+                    run_language=run_language,
+                    emit_progress=_emit_progress,
+                    force_writer_probe=force_writer_probe,
+                )
+            except EvidenceEnforcementError as exc:
+                validator = (
+                    "manuscript_numeric_auditor"
+                    if "untraced" in getattr(exc, "detail", {})
+                    else "evidence_bound_writer"
+                )
+                plan_result.findings.append(
+                    ValidationFinding(
+                        validator=validator,
+                        severity="error",
+                        message=(
+                            "STRICT evidence enforcement blocked manuscript "
+                            f"generation: {exc}"
+                        ),
+                        detail=getattr(exc, "detail", {}) or None,
+                    )
+                )
+                bound_path = run_dir / "manuscript_scaffold_bound.md"
+                bound_path.write_text(
+                    "# Manuscript scaffold not generated\n\n"
+                    "STRICT evidence enforcement failed before final binding.\n\n"
+                    f"Error: {exc}\n",
+                    encoding="utf-8",
+                )
+                _emit_progress(
+                    "writer",
+                    "STRICT evidence enforcement blocked manuscript generation.",
+                    status="error",
+                    run_id=run_id,
+                )
+                return _WritePhaseResult(literature=None, bound_path=bound_path)
 
         def _finalise_invoker(plan_result, execute_result, write_result):
             return self._finalise_success(
@@ -2703,6 +2928,169 @@ def _render_prediction_publication_bundle_from_prior_outputs(
         encoding="utf-8",
     )
     return "prediction_publication_bundle_from_parent_outputs_v1"
+
+
+def _render_association_publication_bundle_from_prior_outputs(
+    *,
+    run_dir: Path,
+    current_step_id: str,
+    out_dir: Path,
+) -> Optional[str]:
+    """Deterministically build a forest-plot figure from a prior association step.
+
+    Mirror of the prediction rescue for adjusted-association analyses. Small
+    models sometimes write a coefficient table (``odds_ratio`` + ``or_ci_low`` /
+    ``or_ci_high`` columns) in the regression step but fail the follow-up
+    figure-only step (e.g. hard-coding a wrong results filename). Rather than
+    failing the whole run, render an odds-ratio forest plot from the registered
+    parent table.
+    """
+    steps_dir = run_dir / "steps"
+    if not steps_dir.exists():
+        return None
+
+    # Resolve the odds-ratio + CI columns by common name variants, so the
+    # rescue works whether the parent step wrote ``or_ci_low/or_ci_high`` (our
+    # deterministic fallback) or ``ci_lower/ci_upper`` etc. (free-model code).
+    # Without this the rescue silently skips a perfectly good coefficient table
+    # and the figure-only step fails the whole run.
+    _OR_ALIASES = ("odds_ratio", "oddsratio", "adjusted_or", "aor", "or")
+    _CI_LOW_ALIASES = (
+        "or_ci_low", "or_ci_lower", "ci_lower", "ci_low", "or_lower",
+        "conf_low", "ci95_low", "ci_low_95", "lower",
+    )
+    _CI_HIGH_ALIASES = (
+        "or_ci_high", "or_ci_upper", "ci_upper", "ci_high", "or_upper",
+        "conf_high", "ci95_high", "ci_high_95", "upper",
+    )
+
+    def _resolve_or_ci_columns(frame: pd.DataFrame):
+        lower_to_orig = {str(c).lower(): c for c in frame.columns}
+        or_c = next((lower_to_orig[a] for a in _OR_ALIASES if a in lower_to_orig), None)
+        lo_c = next((lower_to_orig[a] for a in _CI_LOW_ALIASES if a in lower_to_orig), None)
+        hi_c = next((lower_to_orig[a] for a in _CI_HIGH_ALIASES if a in lower_to_orig), None)
+        if or_c and lo_c and hi_c:
+            return or_c, lo_c, hi_c
+        return None
+
+    parent: Optional[tuple[Path, pd.DataFrame, tuple[str, str, str]]] = None
+    for step_dir in sorted(steps_dir.iterdir()):
+        if not step_dir.is_dir() or step_dir.name == current_step_id:
+            continue
+        outputs_dir = step_dir / "outputs"
+        if not outputs_dir.exists():
+            continue
+        for csv_path in sorted(outputs_dir.glob("*.csv")):
+            try:
+                frame = pd.read_csv(csv_path)
+            except Exception:
+                continue
+            resolved = _resolve_or_ci_columns(frame)
+            if resolved is not None:
+                parent = (csv_path, frame, resolved)
+                break
+        if parent is not None:
+            break
+    if parent is None:
+        return None
+
+    table_path, frame, (or_col, lo_col, hi_col) = parent
+    var_col = "variable" if "variable" in frame.columns else frame.columns[0]
+    # Drop the intercept term; it is not an interpretable effect estimate.
+    plot_df = frame[~frame[var_col].astype(str).str.lower().isin({"const", "intercept"})]
+    for _c in (or_col, lo_col, hi_col):
+        plot_df = plot_df.assign(**{_c: pd.to_numeric(plot_df[_c], errors="coerce")})
+    plot_df = plot_df.dropna(subset=[or_col, lo_col, hi_col])
+    if plot_df.empty:
+        return None
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from easyicu.research_agent.publication_figures import (
+        add_panel_label,
+        apply_publication_style,
+        make_figure_contract,
+        save_publication_figure,
+    )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    labels = plot_df[var_col].astype(str).tolist()
+    or_vals = plot_df[or_col].astype(float).to_numpy()
+    lo = plot_df[lo_col].astype(float).to_numpy()
+    hi = plot_df[hi_col].astype(float).to_numpy()
+    y = list(range(len(labels)))
+
+    fig, ax = plt.subplots(figsize=(120 / 25.4, max(60, 18 * len(labels)) / 25.4),
+                           constrained_layout=True)
+    apply_publication_style(fig)
+    ax.errorbar(
+        or_vals, y,
+        xerr=[or_vals - lo, hi - or_vals],
+        fmt="o", color="#1b4965", ecolor="#5fa8d3",
+        elinewidth=1.4, capsize=3, markersize=4,
+    )
+    ax.axvline(1.0, color="#999999", linewidth=1.0, linestyle="--")
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels)
+    ax.set_xlabel("Adjusted odds ratio (95% CI)")
+    ax.set_title("Adjusted association with the outcome", loc="left", pad=4)
+    ax.invert_yaxis()
+    add_panel_label(ax, "A", x=-0.1)
+
+    contract = make_figure_contract(
+        figure_id="publication_figure",
+        core_claim=(
+            "Adjusted odds ratios are summarised from the registered association "
+            "coefficient table."
+        ),
+        panels=[
+            {
+                "panel_id": "A",
+                "title": "Odds-ratio forest plot",
+                "role": "association",
+                "claim": "Per-covariate adjusted odds ratios and 95% CIs are read from the parent association table.",
+                "evidence_ids": ["table_association_results"],
+            },
+        ],
+        source_data=["table_association_results"],
+        statistics_note=(
+            "Deterministic rescue figure generated from parent-step association "
+            "outputs when the figure-only child step did not emit exports."
+        ),
+    )
+    outputs = save_publication_figure(
+        fig, out_dir / "publication_figure", contract=contract, dpi=300
+    )
+    plt.close(fig)
+
+    existing_summary: Dict[str, Any] = {}
+    step_summary_path = out_dir / "step_summary.json"
+    if step_summary_path.exists():
+        try:
+            loaded = json.loads(step_summary_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing_summary = loaded
+        except Exception:
+            existing_summary = {}
+    existing_summary.setdefault("publication_figure_rescue", {})
+    existing_summary["publication_figure_rescue"].update(
+        {
+            "mode": "association_forest_from_parent_outputs",
+            "source_association_table": str(table_path),
+        }
+    )
+    figure_files = [path.name for key, path in outputs.items() if key != "contract"]
+    existing_summary["figure_files"] = figure_files
+    if figure_files:
+        existing_summary["figure_path"] = figure_files[0]
+    step_summary_path.write_text(
+        json.dumps(existing_summary, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    return "association_publication_bundle_from_parent_outputs_v1"
 
 
 

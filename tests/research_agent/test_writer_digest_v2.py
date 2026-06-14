@@ -48,9 +48,11 @@ def test_v2_without_evidence_falls_back_to_summary_walk() -> None:
                 # In primary block:
                 "sample_size": 785,
                 "primary_or": 1.42,
-                # Outside primary keys — should appear in secondary block:
+                # Generic outcome summaries now belong in the primary block:
                 "median_los_icu": 3.2,
                 "median_los_hospital": 6.1,
+                # Outside primary keys — should appear in secondary block:
+                "cohort_male_fraction": 0.56,
             },
         )
     ]
@@ -58,10 +60,11 @@ def test_v2_without_evidence_falls_back_to_summary_walk() -> None:
     # primary block intact
     assert '"sample_size": 785' in out
     assert '"primary_or": 1.42' in out
+    assert '"median_los_icu": 3.2' in out
+    assert '"median_los_hospital": 6.1' in out
     # secondary header + entries
     assert "## secondary numbers" in out
-    assert "median_los_icu=3.2" in out
-    assert "median_los_hospital=6.1" in out
+    assert "cohort_male_fraction=0.56" in out
 
 
 def test_v2_without_evidence_skips_when_nothing_outside_primary() -> None:
@@ -97,13 +100,6 @@ def test_v2_with_evidence_reads_claim_registry(tmp_path: Path) -> None:
         source_field="primary_or",  # in primary keys
     )
     evidence.register_numeric_claim(
-        value="3.2",
-        canonical=3.2,
-        evidence_id="03_primary_summary",
-        step_id="03_primary",
-        source_field="median_los_icu",  # not in primary keys
-    )
-    evidence.register_numeric_claim(
         value="0.86",
         canonical=0.86,
         evidence_id="03_primary_summary",
@@ -113,11 +109,11 @@ def test_v2_with_evidence_reads_claim_registry(tmp_path: Path) -> None:
     records = [_record("03_primary", "ok", {"sample_size": 785, "primary_or": 1.42})]
     out = _render_writer_evidence_digest_v2(records, evidence=evidence)
     assert "## secondary numbers" in out
-    assert "median_los_icu=3.2" in out
     assert "cohort_male_fraction=0.86" in out
     # The primary-keys field MUST NOT appear in the secondary block.
     secondary = out.split("## secondary numbers", 1)[1]
     assert "primary_or=" not in secondary
+    assert "median_los_icu=" not in secondary
 
 
 def test_v2_secondary_cap_truncates_with_marker(tmp_path: Path) -> None:
@@ -260,12 +256,12 @@ def test_v2_skips_overflow_sentinel(tmp_path: Path) -> None:
         canonical=3.2,
         evidence_id="03_step",
         step_id="03_step",
-        source_field="median_los_icu",
+        source_field="cohort_male_fraction",
     )
     records = [_record("03_step", "ok", {})]
     out = _render_writer_evidence_digest_v2(records, evidence=evidence)
     assert "__easyicu_numeric_claim_overflow__" not in out
-    assert "median_los_icu=3.2" in out
+    assert "cohort_male_fraction=3.2" in out
 
 
 def test_v2_output_strictly_contains_v1_output() -> None:
@@ -295,4 +291,7 @@ def test_writer_digest_preferred_keys_is_tuple_and_nonempty() -> None:
     assert isinstance(WRITER_DIGEST_PREFERRED_KEYS, tuple)
     assert len(WRITER_DIGEST_PREFERRED_KEYS) > 0
     assert "primary_or" in WRITER_DIGEST_PREFERRED_KEYS
+    assert "hazard_ratio" in WRITER_DIGEST_PREFERRED_KEYS
+    assert "average_treatment_effect" in WRITER_DIGEST_PREFERRED_KEYS
+    assert "median_los_icu" in WRITER_DIGEST_PREFERRED_KEYS
     assert "auroc" in WRITER_DIGEST_PREFERRED_KEYS

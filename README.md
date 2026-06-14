@@ -195,9 +195,9 @@ for the full design.
 
 **Why it is more than orchestration.** Generic analysis agents are
 strong at planning and code generation but weak on ICU semantics — they
-average ordinal SOFA components, silently impute missing PaO₂, fall for
-the `SOFA==0` high-mortality artefact, and confuse ICU with hospital
-mortality. EasyICU closes that gap with four layers:
+average ordinal SOFA components, silently impute missing PaO₂, skip
+component-completeness checks on composite scores, and confuse ICU with
+hospital mortality. EasyICU closes that gap with four layers:
 
 1. **ICU Data Foundation** — the concept dictionary above, reused as the
    agent's only view of the data (it never sees raw rows through the

@@ -8,6 +8,10 @@ from types import SimpleNamespace
 import pandas as pd
 
 
+def _is_python_executable(command: str) -> bool:
+    return Path(command).name.startswith("python")
+
+
 def test_runner_records_real_duration(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "death": [0]}).to_parquet(cohort_path, index=False)
@@ -127,9 +131,12 @@ def test_runner_retries_without_unshare_when_linux_namespace_is_unavailable(
     assert result.succeeded
     assert len(calls) == 2
     assert calls[0][0] == "unshare"
-    assert calls[1][0].endswith("python")
+    assert _is_python_executable(calls[1][0])
     assert any(p.name == "ok.txt" for p in result.artefacts)
     assert "retrying without Linux network namespace isolation" in result.stderr
+    assert result.isolation_degraded is True
+    assert result.effective_isolation == "host_subprocess"
+    assert "unshare" in (result.isolation_degradation_reason or "")
 
 
 def test_runner_forces_single_thread_env_for_sandboxed_numeric_stacks(
@@ -215,9 +222,12 @@ def test_runner_retries_without_macos_sandbox_when_openmp_shm_is_blocked(
     assert result.succeeded
     assert len(calls) == 2
     assert calls[0][0] == "sandbox-exec"
-    assert calls[1][0].endswith("python")
+    assert _is_python_executable(calls[1][0])
     assert any(p.name == "ok.txt" for p in result.artefacts)
     assert "retrying without sandbox-exec" in result.stderr
+    assert result.isolation_degraded is True
+    assert result.effective_isolation == "host_subprocess"
+    assert "shared memory" in (result.isolation_degradation_reason or "")
 
 
 def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(
@@ -271,6 +281,9 @@ def test_runner_retries_without_macos_sandbox_when_stdio_is_blocked(
     assert result.succeeded
     assert len(calls) == 2
     assert calls[0][0] == "sandbox-exec"
-    assert calls[1][0].endswith("python")
+    assert _is_python_executable(calls[1][0])
     assert any(p.name == "ok.txt" for p in result.artefacts)
     assert "prevented Python stdio initialisation" in result.stderr
+    assert result.isolation_degraded is True
+    assert result.effective_isolation == "host_subprocess"
+    assert "stdio" in (result.isolation_degradation_reason or "")

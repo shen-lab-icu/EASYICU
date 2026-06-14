@@ -24,6 +24,30 @@ ENV_PROD_DATA_EICU = os.getenv('EASYICU_PROD_DATA_EICU')
 ENV_PROD_DATA_AUMC = os.getenv('EASYICU_PROD_DATA_AUMC')
 ENV_PROD_DATA_HIRID = os.getenv('EASYICU_PROD_DATA_HIRID')
 ENV_PROJECT_ROOT = os.getenv('EASYICU_PROJECT_ROOT')
+ENV_WEB_UI_DISPLAY_TARGET = os.getenv('EASYICU_WEB_UI_DISPLAY_TARGET')
+
+# ============================================================================
+# Web UI Display Configuration
+# ============================================================================
+
+SUPPORTED_WEB_UI_DISPLAY_TARGETS = ("desktop", "responsive")
+
+
+def normalize_web_ui_display_target(value: Optional[object] = None) -> str:
+    """Return the supported Web UI display target.
+
+    EasyICU is designed and QA'd desktop-first by default. ``responsive`` is
+    retained for mobile/tablet fallbacks, but the product target remains the
+    desktop app-like presentation unless explicitly overridden.
+    """
+
+    raw = str(value or "").strip().lower()
+    if raw in SUPPORTED_WEB_UI_DISPLAY_TARGETS:
+        return raw
+    return "desktop"
+
+
+DEFAULT_WEB_UI_DISPLAY_TARGET = normalize_web_ui_display_target(ENV_WEB_UI_DISPLAY_TARGET)
 
 # ============================================================================
 # Path Configuration

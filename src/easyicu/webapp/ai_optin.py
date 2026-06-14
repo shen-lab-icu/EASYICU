@@ -88,7 +88,7 @@ def enforce_external_llm_opt_in(
             "run. You can also pick the offline MockLLMClient option."
         )
     raise AIOptInError(
-        "AI 功能当前处于关闭状态。请先在侧边栏的 AI 助手设置中启用, "
+        "AI 功能当前处于关闭状态。请先在侧边栏的 Copilot 设置中启用, "
         "或勾选本次运行的外部 LLM 调用授权后再启动。也可以选择离线的 "
         "MockLLMClient。"
     )

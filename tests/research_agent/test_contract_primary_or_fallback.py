@@ -111,6 +111,83 @@ def test_prior_successful_primary_effect_satisfies_later_primary_requirement(ra)
     )
 
 
+def _prediction_figure_step(ra, step_id: str = "01_model_training_figure"):
+    return ra.AnalysisStep(
+        step_id=step_id,
+        intent="Render discrimination and calibration panels for the mortality model.",
+        expected_outputs=[
+            "figure:discrimination_calibration",
+            "statistic:auroc",
+            "statistic:brier_score",
+        ],
+    )
+
+
+def test_prediction_auroc_satisfied_by_sibling_training_step(ra):
+    """A figure step that renders an upstream training step's metrics must not
+    fail when its own summary lacks the metric under a recognised key but the
+    training step genuinely produced and bound it (M2 regression)."""
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    findings = _step_contract_findings(
+        step=_prediction_figure_step(ra),
+        step_summary={
+            # the figure step's own renderer found nothing under its key list
+            "auroc": None,
+            "cv_auroc_mean": None,
+            "brier_score": None,
+            "registered_evidence_step": "01_model_training",
+        },
+        completed_step_records=[
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {
+                    "auroc_test": 0.8267455907381426,
+                    "statistic:auroc": 0.8267455907381426,
+                    "brier_test": 0.1716274488483539,
+                    "statistic:brier_score": 0.1716274488483539,
+                    "model_status": "fit_success",
+                },
+            }
+        ],
+    )
+
+    assert _errors(findings) == []
+    assert any(
+        finding.severity == "warning"
+        and finding.detail.get("fallback_step_id") == "01_model_training"
+        and "AUROC" in finding.message
+        for finding in findings
+    )
+    assert any(
+        finding.severity == "warning"
+        and finding.detail.get("fallback_step_id") == "01_model_training"
+        and "Brier" in finding.message
+        for finding in findings
+    )
+
+
+def test_prediction_auroc_missing_everywhere_still_errors(ra):
+    """The fallback only credits a genuinely-bound sibling metric — when no step
+    produced an AUROC, the requirement must still fail (no silent pass)."""
+    from easyicu.research_agent.pipeline import _step_contract_findings
+
+    findings = _step_contract_findings(
+        step=_prediction_figure_step(ra),
+        step_summary={"auroc": None, "brier_score": None},
+        completed_step_records=[
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {"model_status": "fit_failed"},
+            }
+        ],
+    )
+
+    assert _errors(findings)
+
+
 def test_rejects_nonfinite_primary_effect_values(ra):
     from easyicu.research_agent.pipeline import _step_contract_findings
 

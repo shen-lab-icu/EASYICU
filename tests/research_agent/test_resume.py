@@ -123,6 +123,81 @@ def test_resume_reruns_missing_step(ra, synthetic_cohort, tmp_path: Path):
     )
 
 
+def test_resume_reuses_locked_plan_instead_of_replanning(
+    ra, synthetic_cohort, tmp_path: Path
+):
+    """Resume must reuse the prior run's ``analysis_plan.json`` rather than
+    re-running the planner.
+
+    A non-deterministic hosted planner returns a *different* plan on resume,
+    whose step_ids no longer match the completed-step skip set — so the
+    "resume" would silently re-run the whole analysis under new names. Pin
+    that the locked plan is reused: the resumed planner output is ignored and
+    the saved step_ids are unchanged.
+    """
+    first = _run_full(ra, synthetic_cohort, tmp_path)
+    run_dir = Path(first.workdir)
+    plan_path = run_dir / "analysis_plan.json"
+    step_ids_before = [s["step_id"] for s in json.loads(
+        plan_path.read_text(encoding="utf-8"))["steps"]]
+    assert step_ids_before, "first run produced no plan steps"
+
+    class DifferentPlanLLM:
+        """Planner here returns a plan with a step_id that must never appear
+        if the locked plan is reused."""
+
+        name = "different-plan-llm"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            user = next(
+                (m.content for m in reversed(messages) if m.role == "user"), ""
+            )
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps({
+                    "research_question": "Is admission SOFA-2 associated with ICU mortality?",
+                    "steps": [{
+                        "step_id": "88_resume_should_ignore_this",
+                        "intent": "This plan must be ignored on resume.",
+                        "inputs": ["sofa2", "death"],
+                        "expected_outputs": ["table:ignored"],
+                        "method": "descriptive",
+                        "icu_rule_refs": ["aggregation_rule_for"],
+                    }],
+                    "rationale": "resume must not use this plan",
+                })
+            if "INTERPRET THE RESULTS" in upper:
+                return "Reused-plan interpretation {evidence:primary_association}."
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return "# Title\n\n## Results\n\nReused {evidence:primary_association}."
+            return "{}"
+
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=DifferentPlanLLM())
+    second = pipeline.run(
+        question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=synthetic_cohort,
+        cohort_name="resume_test",
+        database="synthetic",
+        target_outcome="death",
+        resume_run_id=first.run_id,
+    )
+    assert second.run_id == first.run_id
+
+    step_ids_after = [s["step_id"] for s in json.loads(
+        plan_path.read_text(encoding="utf-8"))["steps"]]
+    assert step_ids_after == step_ids_before, (
+        "resume re-planned instead of reusing the locked plan: "
+        f"{step_ids_before} -> {step_ids_after}"
+    )
+    assert "88_resume_should_ignore_this" not in step_ids_after
+
+    manifest = json.loads(Path(second.manifest_path).read_text(encoding="utf-8"))
+    assert any(
+        (f.get("detail") or {}).get("generation_mode") == "resumed"
+        for f in manifest["findings"]
+    ), "no 'resumed' planner finding recorded"
+
+
 def test_resume_to_nonexistent_run_id_starts_fresh_directory(ra, synthetic_cohort,
                                                              tmp_path: Path):
     """Passing a resume_run_id that has no prior run_dir should still

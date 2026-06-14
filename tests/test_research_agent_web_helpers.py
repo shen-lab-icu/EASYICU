@@ -560,6 +560,31 @@ def test_quick_test_cohort_seeds_starter_question_when_empty() -> None:
     assert "research_agent_preflight_signature" not in state
 
 
+def test_quick_test_cohort_ui_shortcut_can_skip_question_widget_mutation() -> None:
+    state: dict[str, object] = {
+        "research_agent_question": "",
+        "research_agent_preflight_confirmed": True,
+        "research_agent_preflight_ack": True,
+        "research_agent_preflight_signature": "stale",
+    }
+
+    ra_page._activate_research_agent_test_cohort(
+        state,
+        source_handoff="Use cohort prepared elsewhere in this session",
+        is_en=True,
+        seed_question=False,
+    )
+    quick_actions_source = inspect.getsource(ra_page._render_cohort_source_quick_actions)
+
+    assert state["research_agent_question"] == ""
+    assert "_research_agent_default_question_notice" not in state
+    assert isinstance(state["research_agent_inbound_cohort"], pd.DataFrame)
+    assert "seed_question=False" in quick_actions_source
+    assert state["research_agent_preflight_confirmed"] is False
+    assert state["research_agent_preflight_ack"] is False
+    assert "research_agent_preflight_signature" not in state
+
+
 def test_detected_module_folder_defaults_to_most_complete_export(tmp_path: Path) -> None:
     sparse = tmp_path / "miiv_20260427"
     complete = tmp_path / "mock_20260424"
@@ -1276,7 +1301,8 @@ def test_workbench_finding_queue_uses_design_queue_surface() -> None:
     assert 'st.session_state["_ra_view"] = "workbench"' in render_source
     assert "_finding_queue_stats(rows)" in render_source
     assert "_REVIEW_DETAILS_EXPANDED_KEY" in source
-    assert "expanded=details_expanded" in source
+    assert "_render_workbench_technical_details_gate(lang)" in source
+    assert "expanded=True" in source
     assert "eu-finding-card" in render_source
     assert "eu-finding-target" in render_source
     assert "eu-finding-queue-head" in css
@@ -1407,7 +1433,10 @@ def test_workbench_uses_reference_empty_state_for_demo_preview(monkeypatch) -> N
     assert state == {}
     assert "No active run" in empty_html
     assert "eu-agent-empty-glyph" in empty_html
-    assert "real evidence-bound artifacts" in empty_html
+    assert "Start with one research question" in empty_html
+    assert "Setup" in empty_html
+    assert "Run" in empty_html
+    assert "Review" in empty_html
     assert "Local run history stays on this machine" in empty_html
     assert "Static preview" not in empty_html
     assert "Task map" not in empty_html
@@ -1492,6 +1521,7 @@ def test_empty_workbench_actions_use_responsive_nowrap_buttons() -> None:
     assert "st.columns(2)" in source
     assert "st.columns([1.4, 1.75, 6.15])" not in source
     assert "eu-agent-empty-glyph" in source
+    assert "eu-agent-empty-path" in source
     assert "st-key-eu_wb_empty_actions" in css
     assert "st-key-eu_wb_empty_panel" in css
     assert 'class*="st-key-_eu_wb_empty_"' in css
@@ -1505,6 +1535,8 @@ def test_empty_workbench_actions_use_responsive_nowrap_buttons() -> None:
     assert "border: 1px dashed var(--hair-2)" in css
     assert ".eu-agent-empty-glyph" in css
     assert ".eu-agent-empty small" in css
+    assert ".eu-agent-empty-path" in css
+    assert "st-key-_eu_wb_open_step_details" in css
     assert "margin: 16px auto 0" in css
     assert "@media (max-width: 560px)" in css
 
@@ -1519,6 +1551,8 @@ def test_workbench_default_tab_is_step_review_not_code() -> None:
 
     assert "def _step_review_html" in source
     assert "_step_review_html(active_state, full_state, lang)" in tabs_source
+    assert "include_review: bool = True" in tabs_source
+    assert "if include_review:" in tabs_source
     assert tabs_source.index("Review") < tabs_source.index("Script")
     assert "Activity" in tabs_source
     assert "Issues" in tabs_source
@@ -1544,10 +1578,17 @@ def test_summary_review_gate_uses_checklist_and_locked_draft_card() -> None:
     assert "eu-summary-checklist" in summary_source
     assert "eu-summary-check-row" in summary_source
     assert "Draft methods + results" in summary_source
-    assert "Output bundle" in summary_source
-    assert "Export bundle index" in summary_source
+    assert "Output bundle" not in summary_source
+    assert "Export package" in summary_source
+    assert "eu-summary-bundle-details" in summary_source
+    assert "eu-summary-bundle-summary" in summary_source
+    assert "Export package is demo-only" in summary_source
+    assert "Export bundle" in summary_source
     assert "One reviewer sign-off outstanding" in summary_source
     assert "eu-summary-review-control-head" in summary_source
+    assert "Add reviewer note" in summary_source
+    assert "_eu_summary_review_note_visible_" in summary_source
+    assert "note_visible = st.toggle(" in summary_source
     assert "review_decision.json and unlocks the draft gate" in summary_source
     assert "height=68" in summary_source
     assert "height=58" not in summary_source
@@ -1557,8 +1598,8 @@ def test_summary_review_gate_uses_checklist_and_locked_draft_card() -> None:
     assert "force_manuscript" in source
     assert "Draft methods + results" in source[source.index("def _render_summary_review_controls"):source.index("def render_agent_output_summary")]
     assert "def _summary_empty_html" in source
-    assert "No draft until evidence is bound" in source
-    assert "Bundle index unavailable" in source
+    assert "locked until review" in source
+    assert "Results and export appear here after a run" in source
     assert "_render_summary_empty_state(lang, show_header=show_header)" in render_source
     assert "_render_workbench_empty_state(lang, summary=True)" not in render_source
     assert "eu-summary-reference-grid" in summary_source
@@ -1576,6 +1617,8 @@ def test_summary_review_gate_uses_checklist_and_locked_draft_card() -> None:
     assert ".eu-summary-action-token" in css
     assert ".eu-summary-action-token.ready" in css
     assert ".eu-summary-reference-grid" in css
+    assert ".eu-summary-bundle-details:not([open]) > :not(summary)" in css
+    assert ".eu-summary-bundle-summary" in css
     assert ".eu-summary-bundle-row" in css
     assert ".eu-summary-bundle-button" in css
     assert ".eu-summary-review-control-head" in css
@@ -1742,7 +1785,7 @@ def test_research_agent_question_widget_uses_session_state_without_duplicate_def
 
     assert 'st.session_state.setdefault("research_agent_question", "")' in request_source
     assert 'key="research_agent_question"' in request_source
-    assert 'key="research_agent_apply_question"' in request_source
+    assert "on_change=_on_research_agent_question_change" in request_source
     assert '_research_agent_question_applied_notice' in request_source
     assert '_research_agent_question_empty_notice' in request_source
     assert 'value=st.session_state.get("research_agent_question", "")' not in request_source
@@ -2036,19 +2079,43 @@ def test_workbench_uses_claude_reference_overview_before_detail_inspector() -> N
         source.index("def _agent_reference_workbench_html"):
         source.index("def _review_gate_actions_from_audit")
     ]
+    primary_actions_source = source[
+        source.index("def _render_workbench_primary_actions"):
+        source.index("# ---------------------------------------------------------------------", source.index("def _render_workbench_primary_actions"))
+    ]
 
     assert "_agent_reference_workbench_html(state, lang)" in workbench_source
     assert 'state["reviewed_finding_ids"] = sorted(_sync_reviewed_findings_to_session(state))' in workbench_source
-    assert 'st.session_state["_active_main_page"] = "research_agent"' in workbench_source
+    assert 'st.session_state["_active_main_page"] = "research_agent"' in primary_actions_source
     assert "EasyICU Research Agent" in workbench_source
     assert "An auditable, evidence-bound workflow" in workbench_source
-    assert "Review details" in workbench_source
+    assert "Full audit trail" in workbench_source
     assert "details_expanded = bool(st.session_state.get(_REVIEW_DETAILS_EXPANDED_KEY))" in workbench_source
-    assert "expanded=details_expanded" in workbench_source
+    assert "_render_workbench_technical_details_gate(lang)" in workbench_source
+    assert "if not details_expanded:" in workbench_source
+    assert "expanded=True" in workbench_source
+    assert "_render_workbench_primary_actions(state, active_state, lang)" in workbench_source
+    assert workbench_source.index("_render_workbench_primary_actions(state, active_state, lang)") < workbench_source.index("_render_workbench_technical_details_gate(lang)")
+    assert workbench_source.index("_render_workbench_technical_details_gate(lang)") < workbench_source.index("_step_review_html(active_state, state, lang)")
+    assert "_step_review_html(active_state, state, lang)" in workbench_source
+    assert "Advanced step inspector" in workbench_source
+    assert "key=_DETAIL_ADVANCED_KEY" in workbench_source
+    assert "_render_code_panel_tabs(active_state, state, lang, include_review=False)" in workbench_source
+    assert workbench_source.index("_step_review_html(active_state, state, lang)") < workbench_source.index("Advanced step inspector")
+    assert workbench_source.index("Advanced step inspector") < workbench_source.index("_render_code_panel_tabs(active_state, state, lang, include_review=False)")
     assert "Task map" in source
-    assert "Evidence ledger" in source
-    assert "Analysis outputs" in source
+    assert "Evidence checks" in source
+    assert "Analysis outputs" not in overview_source
+    assert "Run map" in source
+    assert "steps ·" in source
+    assert "Task map, evidence ledger, and generated outputs" not in source
     assert "Findings · review before drafting" in source
+    assert 'st.session_state["_eu_wb_action_panel"] = "evidence"' in primary_actions_source
+    assert "Evidence snapshot" in source
+    assert "eu-wb-snapshot-list" in source
+    assert ".eu-wb-snapshot-list" in css
+    assert "grid-template-columns: repeat(4, minmax(0, 1fr));" in css
+    assert ".eu-wb-snapshot-list {\n    grid-template-columns: 1fr;" in css
     assert "No findings have been generated in this static preview" in source
     assert "checks clear" in source
     assert "error(s)" in source
@@ -2057,6 +2124,8 @@ def test_workbench_uses_claude_reference_overview_before_detail_inspector() -> N
     assert ".eu-ref-run-strip" in css
     assert ".eu-ref-split" in css
     assert ".eu-ref-out-grid" in css
+    assert ".eu-ref-more-details" in css
+    assert 'st-key-_eu_wb_primary_actions' in css
     assert ".eu-ref-note-meta" in css
     assert ".eu-ref-ledger-ico svg" in css
     assert ".stApp .stElementContainer[class*=\"st-key-_eu_ra_view_\"] .stButton > button" in css
@@ -2070,6 +2139,7 @@ def test_workbench_uses_claude_reference_overview_before_detail_inspector() -> N
 def test_research_agent_shell_identity_card_precedes_view_tabs() -> None:
     app_source = Path(ra_page.__file__).with_name("app.py").read_text(encoding="utf-8")
     css = Path(wb_page.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
+    header_source = Path(wb_page.__file__).with_name("cohort_charts.py").read_text(encoding="utf-8")
     agent_branch = app_source[
         app_source.index('elif active_page == "research_agent"'):
         app_source.index("    _handle_sidebar_export_trigger", app_source.index('elif active_page == "research_agent"'))
@@ -2085,11 +2155,13 @@ def test_research_agent_shell_identity_card_precedes_view_tabs() -> None:
     assert agent_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)") < agent_branch.index('st.container(key="_eu_ra_tabs")')
     assert "_research_agent_active_run_context(st.session_state)" in agent_branch
     assert "_prime_research_agent_header_rerun(st.session_state, _ra_run_context)" in agent_branch
-    assert 'icon=":material/tune:"' in agent_branch
-    assert 'icon=":material/grid_view:"' in agent_branch
-    assert 'icon=":material/history:"' in agent_branch
-    assert 'icon=":material/shield:"' in agent_branch
-    assert 'icon=":material/replay:"' in agent_branch
+    # View tabs are now a plain text segmented control (Setup / Workbench /
+    # History / Summary), not inline material-icon buttons.
+    assert 'key="_eu_ra_view_setup"' in agent_branch
+    assert '"Workbench" if lang == \'en\' else "工作台"' in agent_branch
+    assert 'key="_eu_ra_view_workbench"' in agent_branch
+    assert 'key="_eu_ra_view_history"' in agent_branch
+    assert 'key="_eu_ra_view_summary"' in agent_branch
     assert "render_agent_workbench(lang, show_header=False)" in agent_branch
     assert "render_agent_output_summary(lang, show_header=False)" in agent_branch
     assert "render_research_agent_history_page(lang, show_header=False)" in agent_branch
@@ -2103,10 +2175,17 @@ def test_research_agent_shell_identity_card_precedes_view_tabs() -> None:
     assert "render_research_agent_demo_page(show_header=False)" in agent_branch
     assert "st-key-_eu_ra_tabs" in css
     assert ".eu-design-page-header.eu-ra-reference-header" in css
+    assert 'class="eu-design-page-header-row"' in header_source
+    assert 'class="eu-design-page-header-actions"' in header_source
+    assert ".eu-design-page-header-actions" in css
+    assert ".eu-design-page-header.eu-ra-reference-header .eu-design-page-header-actions" in css
+    assert 'st.container(key="_eu_ra_header_actions")' not in agent_branch
+    assert "with _seg_tail:" in agent_branch
     assert "margin: -2px 0 18px !important" in css
     assert "border-bottom: 1px solid var(--hair) !important" in css
     assert "border-bottom-color: var(--ink) !important" in css
     assert "flex: 0 0 auto !important;" in css
+    assert "justify-content: flex-end !important;" in css
     assert "nth-child(-n + 4)" in css
     assert "nth-child(5)" in css
     assert "st-key-_eu_ra_header_rerun" in css
@@ -2147,6 +2226,8 @@ def test_workbench_reference_overview_uses_manifest_evidence_total() -> None:
     assert "Review needed" in html
     assert 'eu-ref-note warn' in html
     assert "Findings · review before drafting" in html
+    assert '<details class="eu-ref-more-details">' in html
+    assert html.index("Findings · review before drafting") < html.index("Run map")
     assert "Ready for review" not in html
     assert "0E/15W" not in html
 
@@ -2296,7 +2377,12 @@ def test_demo_agent_copy_matches_backend_scope() -> None:
         source.index("def render_research_agent_demo_page")
     ]
 
-    assert "demo · 10 stays · 19 modules" in demo_source
+    # Demo copy now reports backend scope dynamically (stays + review features)
+    # instead of a hard-coded "demo · N stays · M modules" string.
+    assert "review workspace · " in demo_source
+    assert "ICU stays · " in demo_source
+    assert "review features" in demo_source
+    assert "selected export concepts · " in demo_source
     assert "Demo · no LLM call" in demo_source
     assert "demo · 10 stays · 8 modules" not in demo_source
     assert "gpt-oss · sidebar AI" not in demo_source
@@ -2616,3 +2702,252 @@ def test_loaded_concepts_handoff_respects_current_patient_ids() -> None:
     assert cohort is not None
     assert set(cohort["stay_id"]) == {1, 3}
     assert cohort.loc[cohort["stay_id"] == 1, "hr"].iloc[0] == 75
+
+
+def test_research_agent_idea_workflow_contract_targets_dry_run_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_st = _FakeStreamlit()
+    fake_st.session_state = {"language": "en"}
+    monkeypatch.setattr(ra_page, "st", fake_st)
+
+    examples = ra_page._request_examples()
+    contract = ra_page._build_execution_preflight_contract(
+        free_question="Explore review-derived ICU ideas.",
+        target_outcome="",
+        cohort=pd.DataFrame({"stay_id": [1], "lact": [1.2], "death": [0]}),
+        cohort_label="synthetic web cohort",
+        llm_choice="MockLLMClient (offline, deterministic)",
+        model="",
+        workdir_text=str(tmp_path),
+        stop_after_analysis=True,
+        force_manuscript=False,
+        template_key="idea_exploration",
+        workflow_mode="Idea exploration",
+    )
+
+    assert examples[0]["key"] == "idea_exploration"
+    assert contract["workflow_mode"] == "idea_exploration"
+    assert contract["mode"] == "idea_exploration_dry_run"
+    assert any(
+        "source_snapshot_manifest.json" in target
+        for target in contract["write_targets"]
+    )
+    assert any(
+        "candidate_triage_report.json" in target
+        for target in contract["write_targets"]
+    )
+    assert any("idea_registry.json" in target for target in contract["write_targets"])
+    assert any("discovery_report.md" in target for target in contract["write_targets"])
+    assert not any(
+        "manuscript_scaffold" in target for target in contract["write_targets"]
+    )
+
+
+def test_idea_exploration_panel_keeps_core_triage_first() -> None:
+    source = inspect.getsource(ra_page._render_idea_exploration_panel)
+
+    core_idx = source.index("Core idea triage")
+    advanced_idx = source.index("Advanced source and mapping")
+    result_idx = source.index("Latest idea triage")
+    details_idx = source.index("Review triage details")
+    prior_art_idx = source.index("Prior art")
+    broad_exact_idx = source.index("Broad/exact")
+
+    assert source.index("Review/editorial excerpt") > core_idx
+    assert source.index("Traceable source quote") > core_idx
+    assert source.index("Exposure / predictor") > core_idx
+    assert source.index("Outcome") > core_idx
+    assert source.index("Exposure / predictor") < advanced_idx
+    assert source.index("Outcome") < advanced_idx
+    assert source.index("Citation key") > advanced_idx
+    assert source.index("Analysis family") > advanced_idx
+    assert source.index("Aggregation") > advanced_idx
+    assert 'key="research_agent_idea_show_advanced_mapping"' in source
+    assert "result = _run_idea_exploration_dry_run(" in source
+    assert "Stage top candidate as analysis question" in source
+    assert source.index("Stage top candidate as analysis question") < details_idx
+    assert result_idx < details_idx
+    assert prior_art_idx > result_idx
+    assert prior_art_idx < details_idx
+    assert broad_exact_idx < details_idx
+    assert "Prior-art query records" in source
+    assert "_idea_prior_art_rows(result)" in source
+    assert 'key="research_agent_idea_show_triage_details"' in source
+    assert "st.dataframe(pd.DataFrame(candidate_rows)" in source
+    assert "st.dataframe(pd.DataFrame(prior_art_rows)" in source
+    assert source.index("st.dataframe(pd.DataFrame(candidate_rows)") > details_idx
+    assert source.index("st.dataframe(pd.DataFrame(prior_art_rows)") > details_idx
+    assert "show_triage_details = st.toggle(" in source
+    assert "if show_triage_details:" in source
+
+
+def test_web_idea_exploration_dry_run_uses_backend_registry_without_pipeline(
+    tmp_path: Path,
+) -> None:
+    cohort = pd.DataFrame({
+        "stay_id": [1, 2, 3],
+        "lact": [1.2, None, 2.4],
+        "death": [0, 1, 0],
+    })
+    form = {
+        "citation_key": "neutral_review_2026",
+        "title": "Review of ICU research directions",
+        "year": "2026",
+        "venue": "Critical Care Review",
+        "source_text": (
+            "The review highlights lactate and mortality as an unresolved ICU "
+            "research direction."
+        ),
+        "population": "adult ICU patients",
+        "predictor": "lactate",
+        "outcome": "mortality",
+        "rationale": "The source describes this candidate as open.",
+        "source_quote": "lactate and mortality",
+        "analysis_family": "association",
+        "time_window_hint": "early ICU stay",
+        "aggregation_hint": "stay-level summary",
+    }
+
+    result = ra_page._run_idea_exploration_dry_run(
+        form=form,
+        cohort=cohort,
+        cohort_label="web test cohort",
+        workdir_text=str(tmp_path),
+    )
+
+    out_dir = Path(result.triage_report_path).parent
+    triage = json.loads(Path(result.triage_report_path).read_text(encoding="utf-8"))
+    manifest_text = Path(result.manifest_path).read_text(encoding="utf-8")
+    manifest = json.loads(manifest_text)
+    registry = json.loads(Path(result.registry_path).read_text(encoding="utf-8"))
+    discovery_report = Path(str(result.discovery_report_path))
+
+    assert result.yield_report.n_literature_ideas == 1
+    assert result.yield_report.n_executable == 1
+    assert result.candidate_records[0].registry_selection_status == "proposed"
+    assert result.feasibility_signals[0].source == "webapp_active_cohort_pairwise_probe"
+    assert result.feasibility_signals[0].n_joint_complete == 2
+    summary = ra_page._idea_result_summary(result)
+    assert summary["prior_art_assessments"] == 1
+    assert summary["prior_art_label"] == "apparently_gap"
+    assert summary["prior_art_broad_hits"] == 0
+    assert summary["prior_art_exact_hits"] == 0
+    assert summary["prior_art_screen_status"] == "no_hits_to_screen"
+    prior_rows = ra_page._idea_prior_art_rows(result)
+    assert [row["query_type"] for row in prior_rows] == ["broad", "exact"]
+    assert "lactate[Title/Abstract]" in prior_rows[0]["query"]
+    assert "mortality[Title/Abstract]" in prior_rows[0]["query"]
+    assert triage["schema_version"] == "easyicu.idea_mining_dry_run/1"
+    assert triage["candidate_records"][0]["registry_selection_status"] == "proposed"
+    assert registry["entries"][0]["selection_status"] == "proposed"
+    assert manifest["items"][0]["source_text_stored"] is False
+    assert "lactate and mortality as an unresolved" not in manifest_text
+    assert discovery_report.exists()
+    assert not (out_dir / "manifest.json").exists()
+    assert not (out_dir / "manuscript_scaffold_bound.md").exists()
+
+
+def test_idea_candidate_handoff_sets_analysis_question_and_resets_gate(
+    tmp_path: Path,
+) -> None:
+    cohort = pd.DataFrame({
+        "stay_id": [1, 2, 3],
+        "lact": [1.2, None, 2.4],
+        "death": [0, 1, 0],
+    })
+    result = ra_page._run_idea_exploration_dry_run(
+        form={
+            "citation_key": "neutral_review_2026",
+            "title": "Review of ICU research directions",
+            "year": "2026",
+            "venue": "Critical Care Review",
+            "source_text": (
+                "The review highlights lactate and mortality as an unresolved ICU "
+                "research direction."
+            ),
+            "population": "adult ICU patients",
+            "predictor": "lactate",
+            "outcome": "mortality",
+            "rationale": "The source describes this candidate as open.",
+            "source_quote": "lactate and mortality",
+            "analysis_family": "association",
+            "time_window_hint": "early ICU stay",
+            "aggregation_hint": "stay-level summary",
+        },
+        cohort=cohort,
+        cohort_label="web test cohort",
+        workdir_text=str(tmp_path),
+    )
+    state: dict[str, object] = {
+        "research_agent_workflow_mode": "Idea exploration",
+        "research_agent_preflight_confirmed": True,
+        "research_agent_preflight_signature": "stale",
+    }
+
+    assert ra_page._stage_idea_candidate_as_research_question(
+        state,
+        result,
+        is_en=True,
+    )
+
+    assert "lactate" in str(state["research_agent_question"])
+    assert "mortality" in str(state["research_agent_question"])
+    assert state["research_agent_target_outcome"] == "death"
+    assert state["research_agent_workflow_mode"] == "analysis_run"
+    assert "research_agent_workflow_mode_pick" not in state
+    assert state["research_agent_preflight_confirmed"] is False
+    assert "research_agent_preflight_signature" not in state
+    assert state["_research_agent_idea_handoff_candidate_id"]
+
+
+def test_idea_candidate_ui_handoff_queues_until_before_question_widget(
+    tmp_path: Path,
+) -> None:
+    cohort = pd.DataFrame({
+        "stay_id": [1, 2, 3],
+        "lact": [1.2, None, 2.4],
+        "death": [0, 1, 0],
+    })
+    result = ra_page._run_idea_exploration_dry_run(
+        form={
+            "citation_key": "neutral_review_2026",
+            "title": "Review of ICU research directions",
+            "year": "2026",
+            "venue": "Critical Care Review",
+            "source_text": (
+                "The review highlights lactate and mortality as an unresolved ICU "
+                "research direction."
+            ),
+            "population": "adult ICU patients",
+            "predictor": "lactate",
+            "outcome": "mortality",
+            "rationale": "The source describes this candidate as open.",
+            "source_quote": "lactate and mortality",
+            "analysis_family": "association",
+            "time_window_hint": "early ICU stay",
+            "aggregation_hint": "stay-level summary",
+        },
+        cohort=cohort,
+        cohort_label="web test cohort",
+        workdir_text=str(tmp_path),
+    )
+    state: dict[str, object] = {
+        "research_agent_question": "",
+        "research_agent_workflow_mode": "Idea exploration",
+        "research_agent_preflight_confirmed": True,
+        "research_agent_preflight_signature": "stale",
+    }
+
+    assert ra_page._queue_idea_candidate_as_research_question(state, result)
+    assert state["research_agent_question"] == ""
+    assert "_research_agent_pending_idea_handoff" in state
+
+    assert ra_page._apply_pending_idea_candidate_handoff(state, is_en=True)
+
+    assert "lactate" in str(state["research_agent_question"])
+    assert state["research_agent_target_outcome"] == "death"
+    assert state["research_agent_workflow_mode"] == "analysis_run"
+    assert "research_agent_preflight_signature" not in state
+    assert "_research_agent_pending_idea_handoff" not in state

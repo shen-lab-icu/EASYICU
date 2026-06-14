@@ -33,6 +33,30 @@ def test_planner_emits_minimum_axes() -> None:
         )
 
 
+def test_default_outcome_specs_are_case_neutral_placeholders() -> None:
+    from easyicu.research_agent.robustness_panel import default_robustness_specs
+
+    outcome_specs = [
+        spec for spec in default_robustness_specs() if spec.axis == "outcome"
+    ]
+
+    assert [spec.spec_id for spec in outcome_specs] == [
+        "alt_outcome_author_defined_1",
+        "alt_outcome_author_defined_2",
+    ]
+    assert [spec.outcome_override for spec in outcome_specs] == [
+        {"target": "author_defined_outcome_1"},
+        {"target": "author_defined_outcome_2"},
+    ]
+    joined = " ".join(
+        " ".join([spec.spec_id, spec.description, str(spec.outcome_override)])
+        for spec in outcome_specs
+    ).lower()
+    assert "mortality" not in joined
+    assert "death" not in joined
+    assert "28_day" not in joined
+
+
 def test_panel_freezes_after_plan(ra, tmp_path: Path) -> None:
     from easyicu.research_agent.robustness_panel import (
         assert_robustness_specs_locked,

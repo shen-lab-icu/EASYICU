@@ -51,7 +51,18 @@ def audit_manuscript_numeric_claims(
 
     findings: List[ValidationFinding] = []
 
-    auroc = _first_summary_scalar(
+    # A run legitimately registers MORE THAN ONE AUROC: the primary model
+    # step and any sensitivity / feature-eligibility / audit step each report
+    # their own discrimination. The writer may cite any of them (primary model
+    # AUROC in Results, an audit-step AUROC in a robustness sentence). So a
+    # manuscript AUROC is a hallucination ONLY when it matches NO registered
+    # per-step value within rounding tolerance — not when it differs from the
+    # first one we happened to read. Collapsing to a single "the" AUROC made
+    # the auditor flag a correctly-cited primary AUROC (0.868) against an
+    # arbitrarily-picked audit-step AUROC (0.812). Match-any preserves the
+    # hallucination catch (0.766 rounded to 0.7 still matches nothing) while
+    # killing that false positive.
+    registered_aurocs = _all_summary_scalars(
         summaries,
         (
             "auroc",
@@ -68,24 +79,27 @@ def audit_manuscript_numeric_claims(
             "auroc_mean",
         ),
     )
-    if auroc is not None:
+    if registered_aurocs:
         claimed_aurocs = _extract_metric_claims(bound_manuscript, r"\b(?:AUROC|AUC)\b")
         for claimed in claimed_aurocs:
             # Allow ordinary two-decimal rounding (0.7769 -> 0.78), but not
-            # manuscript-friendly drift such as 0.82.
-            if abs(claimed - auroc) > 0.015:
+            # manuscript-friendly drift such as 0.82. Compare against the
+            # NEAREST registered value across every step.
+            nearest = min(registered_aurocs, key=lambda r: abs(claimed - r))
+            if abs(claimed - nearest) > 0.015:
                 findings.append(
                     ValidationFinding(
                         validator="manuscript_numeric_auditor",
                         severity="error",
                         message=(
                             f"Manuscript AUROC claim {claimed:.3g} does not match "
-                            f"registered AUROC {auroc:.3g}."
+                            f"any registered AUROC (nearest {nearest:.3g})."
                         ),
                         detail={
                             "metric": "auroc",
                             "claimed": claimed,
-                            "registered": auroc,
+                            "registered": nearest,
+                            "registered_all": sorted(set(registered_aurocs)),
                         },
                     )
                 )
@@ -114,7 +128,7 @@ def audit_manuscript_numeric_claims(
                 )
             )
 
-    brier = _first_summary_scalar(
+    registered_briers = _all_summary_scalars(
         summaries,
         (
             "brier_score",
@@ -126,26 +140,28 @@ def audit_manuscript_numeric_claims(
             "brier_mean",
         ),
     )
-    if brier is not None:
+    if registered_briers:
         for claimed in _extract_metric_claims(bound_manuscript, r"\bBrier(?: score)?\b"):
-            if abs(claimed - brier) > 0.015:
+            nearest = min(registered_briers, key=lambda r: abs(claimed - r))
+            if abs(claimed - nearest) > 0.015:
                 findings.append(
                     ValidationFinding(
                         validator="manuscript_numeric_auditor",
                         severity="error",
                         message=(
                             f"Manuscript Brier claim {claimed:.3g} does not match "
-                            f"registered Brier score {brier:.3g}."
+                            f"any registered Brier score (nearest {nearest:.3g})."
                         ),
                         detail={
                             "metric": "brier_score",
                             "claimed": claimed,
-                            "registered": brier,
+                            "registered": nearest,
+                            "registered_all": sorted(set(registered_briers)),
                         },
                     )
                 )
 
-    baseline = _first_summary_scalar(
+    registered_baselines = _all_summary_scalars(
         summaries,
         (
             "baseline_prevalence",
@@ -156,25 +172,27 @@ def audit_manuscript_numeric_claims(
             "statistic:event_rate",
         ),
     )
-    if baseline is not None:
+    if registered_baselines:
         for claimed in _extract_percent_claims_near(
             bound_manuscript,
             r"\b(?:baseline prevalence|mortality|death|outcome incidence)\b",
             skip_stratified_context=True,
         ):
-            if abs(claimed - baseline) > 0.015:
+            nearest = min(registered_baselines, key=lambda r: abs(claimed - r))
+            if abs(claimed - nearest) > 0.015:
                 findings.append(
                     ValidationFinding(
                         validator="manuscript_numeric_auditor",
                         severity="error",
                         message=(
                             f"Manuscript prevalence claim {claimed:.3g} does not match "
-                            f"registered baseline prevalence {baseline:.3g}."
+                            f"any registered baseline prevalence (nearest {nearest:.3g})."
                         ),
                         detail={
                             "metric": "baseline_prevalence",
                             "claimed": claimed,
-                            "registered": baseline,
+                            "registered": nearest,
+                            "registered_all": sorted(set(registered_baselines)),
                         },
                     )
                 )
@@ -200,17 +218,93 @@ def _first_summary_scalar(
     return None
 
 
+def _all_summary_scalars(
+    summaries: Sequence[Dict[str, Any]], keys: Sequence[str]
+) -> List[float]:
+    """Every per-step value present under ``keys``, one per summary.
+
+    Unlike :func:`_first_summary_scalar` (which stops at the first step that
+    carries the metric), this returns the value from *each* step so the
+    auditor can accept a manuscript number that matches any registered step,
+    not only the first. ``_first_present_scalar`` resolves the canonical key
+    within a step, so a step that registers both ``auroc`` and ``test_auroc``
+    contributes its primary value once.
+    """
+    from ..pipeline import _first_present_scalar
+
+    values: List[float] = []
+    for summary in summaries:
+        value = _first_present_scalar(summary, keys)
+        if value is None:
+            continue
+        try:
+            values.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return values
+
+
+# A number that sits between the metric keyword and the value behind a
+# difference/tolerance cue is a *delta between two estimates*, not a reported
+# point estimate — e.g. "AUROC estimates differing by less than 0.001". Binding
+# such a delta to the registered AUROC produces a spurious mismatch (the same
+# false-positive class the CI guard in ``_extract_percent_claims_near`` handles).
+_METRIC_DELTA_CUE = re.compile(
+    r"differ|difference|less than|no more than|at most|within|"
+    r"by\s+(?:less|under|up to)|±|\+/-|apart|gap|margin|tolerance",
+    flags=re.IGNORECASE,
+)
+
+
+def _strip_manuscript_noise(text: str) -> str:
+    """Remove markdown links, HTML comments, and binder footnote-definition
+    lines before metric extraction.
+
+    Footnote-definition lines (``[^claim_2]: value=...; field=metrics.auroc;
+    evidence=statistic_step_summary_1c8c8ff2; display=0.831``) are auto-appended
+    machine provenance, not author prose. They contain metric field NAMES
+    ("metrics.auroc") followed by content-addressed step IDs whose leading digit
+    can be parsed as a spurious bare ``0``/``1`` AUROC/Brier claim — an
+    intermittent false positive that fires only when the sha happens to start
+    with a digit. The critic already skips these lines (see agents.py); the
+    numeric auditor must too.
+    """
+    clean = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")
+    clean = re.sub(r"<!--.*?-->", "", clean, flags=re.DOTALL)
+    clean = re.sub(r"(?m)^\s*\[\^[^\]]+\]:.*$", "", clean)
+    return clean
+
+
 def _extract_metric_claims(text: str, metric_pattern: str) -> List[float]:
     claims: List[float] = []
-    clean_text = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")
-    clean_text = re.sub(r"<!--.*?-->", "", clean_text, flags=re.DOTALL)
+    clean_text = _strip_manuscript_noise(text)
+    # Require a DECIMAL point: a real AUROC/Brier point estimate is always
+    # reported with decimals (0.83, not 1). A bare integer near the metric word
+    # is a figure/table number, an enumeration, or a step-id digit, never a
+    # reported metric — excluding it removes that whole false-positive class
+    # while still catching an implausible "1.0"/"0.0" claim written with decimals.
     pattern = re.compile(
-        metric_pattern + r"[^0-9]{0,40}([01](?:\.\d+)?)",
+        metric_pattern + r"([^0-9]{0,40})([01]\.\d+)",
         flags=re.IGNORECASE,
     )
     for match in pattern.finditer(clean_text):
+        # A difference/tolerance cue marks the number as a delta between two
+        # estimates, not a reported point estimate. The cue may sit in the gap
+        # ("AUROC differing by less than 0.001") or earlier in the same clause
+        # ("the absolute difference was 0.0013 for AUROC and 0.0004 ..."), so
+        # scan from the previous sentence boundary up to the number. Bounding to
+        # the current clause keeps a normal claim in a later sentence checkable
+        # even when an earlier sentence mentioned a difference.
+        clause_start = max(
+            clean_text.rfind(". ", 0, match.start()),
+            clean_text.rfind("\n", 0, match.start()),
+            clean_text.rfind("; ", 0, match.start()),
+        )
+        clause = clean_text[clause_start + 1 : match.end()]
+        if _METRIC_DELTA_CUE.search(clause):
+            continue
         try:
-            value = float(match.group(1))
+            value = float(match.group(2))
         except (TypeError, ValueError):
             continue
         if 0.0 <= value <= 1.0:
@@ -225,8 +319,7 @@ def _extract_percent_claims_near(
     skip_stratified_context: bool = False,
 ) -> List[float]:
     claims: List[float] = []
-    clean_text = re.sub(r"\[[^\]]+\]\([^)]*\)", "", text or "")
-    clean_text = re.sub(r"<!--.*?-->", "", clean_text, flags=re.DOTALL)
+    clean_text = _strip_manuscript_noise(text)
     pattern = re.compile(
         phrase_pattern + r".{0,80}?([0-9]+(?:\.[0-9]+)?)\s*%",
         flags=re.IGNORECASE | re.DOTALL,

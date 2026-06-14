@@ -4,7 +4,7 @@ Three properties to pin:
 
 1. **Correctness** — running with ``max_concurrent_steps > 1`` produces
    the same set of evidence aliases and the same critical findings
-   (sofa==0 anomaly, fillna(0) warning) as a sequential run, just in
+   (e.g. the fillna(0) warning) as a sequential run, just in
    completion order on disk.
 2. **Determinism of paper output** — even though workers finish in
    non-deterministic order, ``per_step_records`` in the manifest is
@@ -76,10 +76,10 @@ def _critical_findings(manifest_path: Path) -> set:
     out = set()
     for f in data.get("findings", []):
         msg = f.get("message", "")
-        # The two ICU rules whose firing is the whole point of the
-        # validator layer; if these don't survive a concurrent run,
-        # the layer is broken.
-        if "sofa2==0 outcome rate" in msg or "fillna(0)" in msg:
+        # ICU rules whose firing is the whole point of the validator
+        # layer; if these don't survive a concurrent run, the layer is
+        # broken.
+        if "fillna(0)" in msg or "component completeness" in msg:
             out.add(f["validator"] + "::" + msg.split(".")[0])
     return out
 
@@ -131,7 +131,7 @@ def test_concurrent_pipeline_records_sorted_by_plan_order(ra, synthetic_cohort, 
     result = pipeline.run(skill="association_analysis",
                           cohort=synthetic_cohort, database="synthetic")
 
-    # The skill plan begins with table_one and ends with the SOFA-zero audit.
+    # The skill plan begins with table_one and ends with the QC/audit step.
     partial = json.loads(
         (Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
     )

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -154,7 +155,7 @@ def test_hypothesis_generator_ranks_candidates(ra):
 
     cohort = CohortDescriptor(
         cohort_name="tiny",
-        database="miiv",
+        database="synthetic",
         n_stays=500,
         n_patients=500,
     )
@@ -163,15 +164,15 @@ def test_hypothesis_generator_ranks_candidates(ra):
         cohort=cohort,
         variables=[
             ConceptDescriptor(
-                name="sofa2",
-                role=VariableRole.COMPOSITE_SCORE,
+                name="marker_a",
+                role=VariableRole.LAB,
                 dtype="int64",
                 missingness=MissingnessProfile(
                     fraction_missing=0.05, n_missing=25, n_total=500,
                 ),
             ),
             ConceptDescriptor(
-                name="lact",
+                name="marker_b",
                 role=VariableRole.LAB,
                 dtype="float64",
                 missingness=MissingnessProfile(
@@ -179,21 +180,285 @@ def test_hypothesis_generator_ranks_candidates(ra):
                 ),
             ),
             ConceptDescriptor(
-                name="death",
+                name="endpoint_a",
                 role=VariableRole.OUTCOME,
                 dtype="int8",
             ),
         ],
-        target_outcome="death",
+        target_outcome="endpoint_a",
     )
-    result = ra.generate_hypotheses(context=ctx, citations=[], top_k=3)
+    result = ra.generate_hypotheses(
+        context=ctx,
+        citations=[],
+        top_k=3,
+        hypothesis_family_id="family:test",
+    )
     assert len(result.candidates) >= 2
     # Candidates sorted by priority score, descending.
     scores = [c.priority_score for c in result.candidates]
     assert scores == sorted(scores, reverse=True)
     # Both predictors present.
     preds = {c.predictor for c in result.candidates}
-    assert {"sofa2", "lact"}.issubset(preds)
+    assert {"marker_a", "marker_b"}.issubset(preds)
+    payload = result.to_json()
+    assert "ranking signal only, not a novelty claim" in payload["signal_statement"]
+    assert payload["hypothesis_family_id"] == "family:test"
+    top = payload["candidates"][0]
+    assert "candidate_id" in top
+    assert "literature_saturation_signal" in top
+    legacy_key = "literature_" + "novelty"
+    assert legacy_key not in top
+    assert "Literature saturation" in result.to_markdown()
+
+
+def test_hypothesis_generator_uses_joint_feasibility_without_dropping(ra):
+    from easyicu.research_agent.schema import (
+        CohortDescriptor,
+        ConceptDescriptor,
+        MissingnessProfile,
+        ResearchContext,
+        VariableRole,
+    )
+
+    ctx = ResearchContext(
+        research_question="placeholder",
+        cohort=CohortDescriptor(
+            cohort_name="tiny",
+            database="synthetic",
+            n_stays=500,
+            n_patients=500,
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="marker_high_single",
+                role=VariableRole.LAB,
+                dtype="float64",
+                missingness=MissingnessProfile(
+                    fraction_missing=0.05,
+                    n_missing=25,
+                    n_total=500,
+                ),
+            ),
+            ConceptDescriptor(
+                name="marker_joint_ready",
+                role=VariableRole.LAB,
+                dtype="float64",
+                missingness=MissingnessProfile(
+                    fraction_missing=0.20,
+                    n_missing=100,
+                    n_total=500,
+                ),
+            ),
+            ConceptDescriptor(
+                name="endpoint_a",
+                role=VariableRole.OUTCOME,
+                dtype="int8",
+            ),
+        ],
+        target_outcome="endpoint_a",
+    )
+
+    result = ra.generate_hypotheses(
+        context=ctx,
+        citations=[],
+        top_k=5,
+        hypothesis_family_id="family:feasibility",
+        feasibility_by_pair={
+            ("marker_high_single", "endpoint_a"): {
+                "joint_fraction_complete": 0.10,
+                "n_joint_complete": 50,
+                "denominator_n": 500,
+            },
+            ("marker_joint_ready", "endpoint_a"): {
+                "joint_fraction_complete": 0.80,
+                "n_joint_complete": 400,
+                "denominator_n": 500,
+            },
+        },
+    )
+
+    by_predictor = {c.predictor: c for c in result.candidates}
+    assert by_predictor["marker_joint_ready"].priority_score > by_predictor[
+        "marker_high_single"
+    ].priority_score
+    assert by_predictor["marker_high_single"].variable_coverage == pytest.approx(0.10)
+    assert by_predictor["marker_high_single"].coverage_source == "pair_joint_feasibility"
+    assert by_predictor["marker_high_single"].feasibility_note is not None
+    assert "joint completeness below" in by_predictor[
+        "marker_high_single"
+    ].feasibility_note
+    assert {"marker_high_single", "marker_joint_ready"}.issubset(by_predictor)
+
+
+def test_hypothesis_generator_ranks_vital_predictors_with_joint_feasibility(ra):
+    from easyicu.research_agent.schema import (
+        CohortDescriptor,
+        ConceptDescriptor,
+        ResearchContext,
+        VariableRole,
+    )
+
+    ctx = ResearchContext(
+        research_question="placeholder",
+        cohort=CohortDescriptor(
+            cohort_name="tiny",
+            database="synthetic",
+            n_stays=100,
+            n_patients=100,
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="mean_pressure",
+                role=VariableRole.VITAL,
+                dtype="float64",
+            ),
+            ConceptDescriptor(
+                name="endpoint_a",
+                role=VariableRole.OUTCOME,
+                dtype="int8",
+            ),
+        ],
+        target_outcome="endpoint_a",
+    )
+
+    result = ra.generate_hypotheses(
+        context=ctx,
+        citations=[],
+        top_k=3,
+        hypothesis_family_id="family:vital",
+        feasibility_by_pair={
+            ("mean_pressure", "endpoint_a"): {
+                "joint_fraction_complete": 0.90,
+                "n_joint_complete": 90,
+                "denominator_n": 100,
+            },
+        },
+    )
+
+    assert len(result.candidates) == 1
+    candidate = result.candidates[0]
+    assert candidate.predictor == "mean_pressure"
+    assert candidate.coverage_source == "pair_joint_feasibility"
+    assert candidate.variable_coverage == pytest.approx(0.90)
+
+
+def test_hypothesis_generator_saturation_is_density_signal(ra):
+    from easyicu.research_agent.schema import (
+        CohortDescriptor,
+        ConceptDescriptor,
+        MissingnessProfile,
+        ResearchContext,
+        VariableRole,
+    )
+
+    ctx = ResearchContext(
+        research_question="placeholder",
+        cohort=CohortDescriptor(
+            cohort_name="tiny",
+            database="synthetic",
+            n_stays=100,
+            n_patients=100,
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="marker_a",
+                role=VariableRole.LAB,
+                dtype="float64",
+                missingness=MissingnessProfile(
+                    fraction_missing=0.0,
+                    n_missing=0,
+                    n_total=100,
+                ),
+            ),
+            ConceptDescriptor(
+                name="endpoint_a",
+                role=VariableRole.OUTCOME,
+                dtype="int8",
+            ),
+        ],
+        target_outcome="endpoint_a",
+    )
+    citations = [
+        SimpleNamespace(
+            title="Marker A and endpoint A",
+            relevance="marker_a endpoint_a cohort analysis",
+        )
+        for _ in range(5)
+    ]
+
+    result = ra.generate_hypotheses(
+        context=ctx,
+        citations=citations,
+        top_k=1,
+        hypothesis_family_id="family:saturation",
+    )
+
+    candidate = result.candidates[0]
+    assert candidate.literature_saturation_signal == pytest.approx(0.5)
+    assert "literature_gap=0.50" in candidate.rationale
+    assert candidate.candidate_id == ra.generate_hypotheses(
+        context=ctx,
+        citations=citations,
+        top_k=1,
+        hypothesis_family_id="family:saturation",
+    ).candidates[0].candidate_id
+
+
+def test_hypothesis_generator_uses_caller_supplied_prior_art_saturation(ra):
+    from easyicu.research_agent.schema import (
+        CohortDescriptor,
+        ConceptDescriptor,
+        MissingnessProfile,
+        ResearchContext,
+        VariableRole,
+    )
+
+    ctx = ResearchContext(
+        research_question="placeholder",
+        cohort=CohortDescriptor(
+            cohort_name="tiny",
+            database="synthetic",
+            n_stays=100,
+            n_patients=100,
+        ),
+        variables=[
+            ConceptDescriptor(
+                name="marker_a",
+                role=VariableRole.LAB,
+                dtype="float64",
+                missingness=MissingnessProfile(
+                    fraction_missing=0.0,
+                    n_missing=0,
+                    n_total=100,
+                ),
+            ),
+            ConceptDescriptor(
+                name="endpoint_a",
+                role=VariableRole.OUTCOME,
+                dtype="int8",
+            ),
+        ],
+        target_outcome="endpoint_a",
+    )
+    citations = [
+        SimpleNamespace(
+            title="Marker A and endpoint A",
+            relevance="marker_a endpoint_a crowded title bundle",
+        )
+        for _ in range(20)
+    ]
+
+    result = ra.generate_hypotheses(
+        context=ctx,
+        citations=citations,
+        top_k=1,
+        saturation_by_pair={("marker_a", "endpoint_a"): 0.05},
+        hypothesis_family_id="family:prior-art",
+    )
+
+    candidate = result.candidates[0]
+    assert candidate.literature_saturation_signal == pytest.approx(0.05)
+    assert "literature_gap=0.95" in candidate.rationale
 
 
 # ---------------------------------------------------------------------------

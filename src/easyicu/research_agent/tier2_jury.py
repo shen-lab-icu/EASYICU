@@ -311,6 +311,36 @@ REAL_JUDGE_SPECS: Dict[str, Dict[str, str]] = {
         "api_key_env": "EASYICU_JUDGE_GEMINI_2_5_PRO_API_KEY",
         "base_url_env": "EASYICU_JUDGE_GEMINI_2_5_PRO_BASE_URL",
     },
+    # OpenRouter-backed judges: three disjoint open-weight families served
+    # through a single OPENROUTER_API_KEY. This makes the Tier-2 jury runnable
+    # without three separate frontier-provider accounts; the disjoint-family
+    # invariant still holds (meta / qwen / openai). Free-tier snapshots are
+    # rate-limited and lower-capability than the frontier specs above — use
+    # them for jury smoke runs and reproducibility demos, not as the canonical
+    # submission jury. NOTE: OpenRouter rotates which slugs are free; if a run
+    # 404s with "unavailable for free", refresh these slugs against
+    # GET /models (filter id endswith ":free").
+    "or_llama_70b": {
+        "provider": "openrouter",
+        "family": "meta",
+        "snapshot": "meta-llama/llama-3.3-70b-instruct:free",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "base_url_env": "OPENROUTER_BASE_URL",
+    },
+    "or_qwen3_next": {
+        "provider": "openrouter",
+        "family": "qwen",
+        "snapshot": "qwen/qwen3-next-80b-a3b-instruct:free",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "base_url_env": "OPENROUTER_BASE_URL",
+    },
+    "or_gpt_oss_120b": {
+        "provider": "openrouter",
+        "family": "openai",
+        "snapshot": "openai/gpt-oss-120b:free",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "base_url_env": "OPENROUTER_BASE_URL",
+    },
 }
 
 
@@ -524,13 +554,55 @@ def _mock_override_score(
     return score
 
 
+def _extract_json_payload(text: str) -> Any:
+    """Parse a judge response that may be wrapped in code fences or preceded
+    by reasoning/preamble. Tries a direct parse first, then falls back to the
+    first balanced ``{...}`` or ``[...]`` block. Reasoning/thinking models
+    (e.g. nemotron-style judges) routinely emit prose before the JSON, so a
+    strict whole-string ``json.loads`` would reject otherwise-valid scores."""
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped.strip("`")
+        if stripped.lower().startswith("json"):
+            stripped = stripped[4:].strip()
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+    # Fall back: scan for the first balanced JSON object/array.
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start = stripped.find(opener)
+        if start == -1:
+            continue
+        depth = 0
+        in_str = False
+        escape = False
+        for idx in range(start, len(stripped)):
+            ch = stripped[idx]
+            if in_str:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == opener:
+                depth += 1
+            elif ch == closer:
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(stripped[start : idx + 1])
+                    except json.JSONDecodeError:
+                        break
+    raise ValueError("real judge response did not contain parseable JSON")
+
+
 def _parse_real_judge_response(response: str) -> List[Dict[str, Any]]:
-    text = response.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:].strip()
-    parsed = json.loads(text)
+    parsed = _extract_json_payload(response)
     if isinstance(parsed, dict):
         scores = parsed.get("scores")
     else:

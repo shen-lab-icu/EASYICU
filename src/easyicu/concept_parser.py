@@ -179,7 +179,7 @@ def default_aggregator_for_dtype(series: pd.Series) -> str:
     """Determine default aggregator based on dtype."""
     dtype = series.dtype
     if pd.api.types.is_bool_dtype(dtype):
-        return "sum"
+        return "any"
     if pd.api.types.is_numeric_dtype(dtype):
         return "median"
     return "first"

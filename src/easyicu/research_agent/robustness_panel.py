@@ -205,16 +205,24 @@ def default_robustness_specs() -> List[RobustnessSpec]:
             missing_override={"strategy": "median_imputation"},
         ),
         RobustnessSpec(
-            spec_id="alt_outcome_database_mortality",
+            spec_id="alt_outcome_author_defined_1",
             axis="outcome",
-            description="Use the database-specific mortality outcome.",
-            outcome_override={"target": "database_specific_mortality"},
+            description=(
+                "Caller-defined alternative outcome 1. Register the concrete "
+                "endpoint or estimand in the case protocol before paper-facing "
+                "runs; the fallback carries no built-in clinical outcome."
+            ),
+            outcome_override={"target": "author_defined_outcome_1"},
         ),
         RobustnessSpec(
-            spec_id="alt_outcome_fixed_28_day",
+            spec_id="alt_outcome_author_defined_2",
             axis="outcome",
-            description="Use a fixed 28-day mortality definition when available.",
-            outcome_override={"target": "28_day_mortality_if_available"},
+            description=(
+                "Caller-defined alternative outcome 2. This placeholder keeps "
+                "the robustness contract active without substituting a built-in "
+                "endpoint, time horizon, or event definition."
+            ),
+            outcome_override={"target": "author_defined_outcome_2"},
         ),
     ]
 

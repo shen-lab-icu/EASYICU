@@ -22,8 +22,11 @@ finally:
 from easyicu.research_agent.pipeline_profiles import (
     DEFAULT_SUBMISSION_PROFILE_REF,
     NPJ_DM_2026_05,
+    NPJ_DM_2026_06,
     get_submission_profile,
 )
+
+CANONICAL_PROFILE = NPJ_DM_2026_06
 
 
 def test_submission_profile_forces_canonical_pipeline_options() -> None:
@@ -32,25 +35,25 @@ def test_submission_profile_forces_canonical_pipeline_options() -> None:
         disable_replanning=False,
         max_code_repair_attempts=None,
         enable_repro_envelope=False,
-        submission_profile=NPJ_DM_2026_05,
+        submission_profile=CANONICAL_PROFILE,
     )
     assert options["evidence_enforcement_mode"] == "strict"
     assert options["enable_reproducibility_envelope"] is True
     assert options["writer_digest_widened"] is True
     assert options["submission_profile_name"] == "npj_dm"
-    assert options["submission_profile_version"] == "20260527"
-    assert options["submission_profile_locked_at"] == "2026-05-27T00:00:00Z"
+    assert options["submission_profile_version"] == "20260611"
+    assert options["submission_profile_locked_at"] == "2026-06-11T00:00:00Z"
 
 
 def test_submission_profile_requires_aware_only_arm() -> None:
     assert _enforce_submission_profile_arms(
         ["aware"],
-        profile=NPJ_DM_2026_05,
+        profile=CANONICAL_PROFILE,
     ) == ["aware"]
     with pytest.raises(SystemExit, match="--arms aware"):
         _enforce_submission_profile_arms(
             ["naive", "aware"],
-            profile=NPJ_DM_2026_05,
+            profile=CANONICAL_PROFILE,
         )
 
 
@@ -59,17 +62,17 @@ def test_submission_profile_requires_docker_runner() -> None:
     assert _enforce_submission_profile_runner(None, profile=None) == "subprocess"
     # Profile + no explicit runner defaults to the required docker runner.
     assert _enforce_submission_profile_runner(
-        None, profile=NPJ_DM_2026_05
+        None, profile=CANONICAL_PROFILE
     ) == "docker"
     assert _enforce_submission_profile_runner(
-        "docker", profile=NPJ_DM_2026_05
+        "docker", profile=CANONICAL_PROFILE
     ) == "docker"
     # Profile + host runner with no escape hatch is rejected.
     with pytest.raises(SystemExit, match="--runner docker"):
-        _enforce_submission_profile_runner("subprocess", profile=NPJ_DM_2026_05)
+        _enforce_submission_profile_runner("subprocess", profile=CANONICAL_PROFILE)
     # The development escape hatch is honoured but yields a non-canonical run.
     assert _enforce_submission_profile_runner(
-        "subprocess", profile=NPJ_DM_2026_05, allow_host_runner=True
+        "subprocess", profile=CANONICAL_PROFILE, allow_host_runner=True
     ) == "subprocess"
 
 
@@ -79,12 +82,12 @@ def test_benchmark_options_record_runner_kind() -> None:
         disable_replanning=False,
         max_code_repair_attempts=None,
         enable_repro_envelope=False,
-        submission_profile=NPJ_DM_2026_05,
+        submission_profile=CANONICAL_PROFILE,
         runner_kind="docker",
     )
     assert options["runner_kind"] == "docker"
     # runner_kind stays out of the profile's own option bundle.
-    assert "runner_kind" not in NPJ_DM_2026_05.as_pipeline_options()
+    assert "runner_kind" not in CANONICAL_PROFILE.as_pipeline_options()
 
 
 def test_mock_provider_aware_arm_requires_explicit_smoke_opt_in() -> None:
@@ -98,16 +101,17 @@ def test_mock_provider_aware_arm_requires_explicit_smoke_opt_in() -> None:
 
 
 def test_submission_profile_registry_is_versioned() -> None:
-    profile = get_submission_profile("npj_dm/20260527")
-    assert profile is NPJ_DM_2026_05
-    assert profile.ref == "npj_dm/20260527"
+    old_profile = get_submission_profile("npj_dm/20260527")
+    assert old_profile is NPJ_DM_2026_05
+    profile = get_submission_profile("npj_dm/20260611")
+    assert profile is CANONICAL_PROFILE
     assert DEFAULT_SUBMISSION_PROFILE_REF == profile.ref
     with pytest.raises(ValueError, match="Unknown submission profile"):
         get_submission_profile("npj_dm/main")
 
 
 def test_submission_profile_as_pipeline_options_matches_canonical() -> None:
-    opts = NPJ_DM_2026_05.as_pipeline_options()
+    opts = CANONICAL_PROFILE.as_pipeline_options()
     assert opts == {
         "evidence_enforcement_mode": "strict",
         "writer_digest_widened": True,
@@ -121,7 +125,7 @@ def test_benchmark_options_merges_profile_overrides() -> None:
         disable_replanning=False,
         max_code_repair_attempts=None,
         enable_repro_envelope=False,
-        submission_profile=NPJ_DM_2026_05,
+        submission_profile=CANONICAL_PROFILE,
     )
-    for key, value in NPJ_DM_2026_05.as_pipeline_options().items():
+    for key, value in CANONICAL_PROFILE.as_pipeline_options().items():
         assert options[key] == value

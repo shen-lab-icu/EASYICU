@@ -661,7 +661,7 @@ def generate_mock_data(n_patients=10, hours=72, cohort_filter=None):
                     # 我们需要插值或对齐。为简化 mock，我们在生成 sofa2 时只生成了部分点
                     # 但 export 要求对齐。这里我们简单处理：若无法查到准确sofa，则沿用上一个
                     pass
-                except:
+                except Exception:
                     pass
 
             sep3_sofa2_records.append({
