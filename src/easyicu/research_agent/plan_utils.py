@@ -1213,6 +1213,111 @@ def _primary_effect_from_completed_records(
     return None
 
 
+_AUROC_SCALAR_KEYS = (
+    "auroc",
+    "statistic:auroc",
+    "auroc_test",
+    "statistic:auroc_test",
+    "auc",
+    "statistic:auc",
+    "held_out_auroc",
+    "statistic:held_out_auroc",
+    "cv_auroc",
+    "statistic:cv_auroc",
+    "cv_auroc_mean",
+    "statistic:cv_auroc_mean",
+    "mean_auroc",
+    "auroc_mean",
+    "auroc_median",
+)
+
+
+def _prediction_auroc_from_completed_records(
+    completed_step_records: Optional[Sequence[Dict[str, Any]]],
+    *,
+    current_step_id: str,
+) -> Optional[Tuple[str, float]]:
+    """Find an auditable AUROC in a *sibling* completed step's summary.
+
+    Mirrors :func:`_primary_effect_from_completed_records` for the prediction
+    requirement: a figure/rendering step (e.g. ``*_model_training_figure``)
+    often does not re-register the metric under a key its own renderer
+    recognises, but the discrimination estimate is genuinely produced and bound
+    (``statistic:auroc``) by the upstream training step it renders. When that is
+    so, the requirement is satisfied by the sibling step, not missing.
+    """
+    if not completed_step_records:
+        return None
+    for record in completed_step_records:
+        if not isinstance(record, dict):
+            continue
+        source_step_id = str(record.get("step_id") or "")
+        if not source_step_id or source_step_id == current_step_id:
+            continue
+        if record.get("status") != "ok":
+            continue
+        step_summary = record.get("step_summary")
+        if not isinstance(step_summary, dict):
+            continue
+        value = _first_present_scalar(step_summary, _AUROC_SCALAR_KEYS)
+        if value is None:
+            value = _first_numeric_scalar_with_key_fragment(
+                step_summary, ("auroc", "auc")
+            )
+        if value is not None:
+            return source_step_id, value
+    return None
+
+
+_CALIBRATION_SCALAR_KEYS = (
+    "brier_score",
+    "statistic:brier_score",
+    "brier_test",
+    "statistic:brier_test",
+    "cv_brier_mean",
+    "statistic:cv_brier_mean",
+    "brier_mean",
+    "held_out_brier",
+    "statistic:held_out_brier",
+    "brier_median",
+    "calibration_slope",
+    "statistic:calibration_slope",
+    "calibration_slope_median",
+    "calibration_intercept",
+    "statistic:calibration_intercept",
+    "calibration_intercept_median",
+)
+
+
+def _prediction_calibration_from_completed_records(
+    completed_step_records: Optional[Sequence[Dict[str, Any]]],
+    *,
+    current_step_id: str,
+) -> Optional[Tuple[str, float]]:
+    """Calibration/Brier analogue of :func:`_prediction_auroc_from_completed_records`."""
+    if not completed_step_records:
+        return None
+    for record in completed_step_records:
+        if not isinstance(record, dict):
+            continue
+        source_step_id = str(record.get("step_id") or "")
+        if not source_step_id or source_step_id == current_step_id:
+            continue
+        if record.get("status") != "ok":
+            continue
+        step_summary = record.get("step_summary")
+        if not isinstance(step_summary, dict):
+            continue
+        value = _first_present_scalar(step_summary, _CALIBRATION_SCALAR_KEYS)
+        if value is None:
+            value = _first_numeric_scalar_with_key_fragment(
+                step_summary, ("brier", "calibration_slope", "calibration_intercept")
+            )
+        if value is not None:
+            return source_step_id, value
+    return None
+
+
 _EXPOSURE_PREDICTOR_KEYS = (
     "primary_predictor",
     "predictor",
@@ -1844,6 +1949,36 @@ def _step_contract_findings(
                 ("auroc", "auc"),
             )
         if auroc_value is None:
+            # The discrimination estimate may have been produced and bound by an
+            # upstream training step that this (figure/rendering) step renders;
+            # mirror the primary-association cross-step fallback so a key-naming
+            # mismatch between two steps does not fail the run when the metric is
+            # genuinely auditable elsewhere.
+            auroc_fallback = _prediction_auroc_from_completed_records(
+                completed_step_records,
+                current_step_id=str(step.step_id or ""),
+            )
+            if auroc_fallback is not None:
+                source_step_id, _source_auroc = auroc_fallback
+                auroc_value = _source_auroc
+                findings.append(
+                    ValidationFinding(
+                        validator="step_contract",
+                        severity="warning",
+                        message=(
+                            f"Step {step.step_id} did not record its own AUROC-style "
+                            f"discrimination metric, but the requirement was satisfied "
+                            f"by successful step {source_step_id}."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "fallback_step_id": source_step_id,
+                            "expected_outputs": list(step.expected_outputs or []),
+                            "summary_keys": sorted(step_summary.keys()),
+                        },
+                    )
+                )
+        if auroc_value is None:
             problematic = _problematic_metric_keys(step_summary, ("auroc", "auc"))
             if problematic:
                 keys = ", ".join(str(item["key"]) for item in problematic)
@@ -1886,6 +2021,31 @@ def _step_contract_findings(
                 step_summary,
                 ("brier", "calibration_slope", "calibration_intercept"),
             )
+        if calibration_value is None:
+            calibration_fallback = _prediction_calibration_from_completed_records(
+                completed_step_records,
+                current_step_id=str(step.step_id or ""),
+            )
+            if calibration_fallback is not None:
+                source_step_id, _source_cal = calibration_fallback
+                calibration_value = _source_cal
+                findings.append(
+                    ValidationFinding(
+                        validator="step_contract",
+                        severity="warning",
+                        message=(
+                            f"Step {step.step_id} did not record its own calibration/"
+                            f"Brier-style metric, but the requirement was satisfied by "
+                            f"successful step {source_step_id}."
+                        ),
+                        detail={
+                            "step_id": step.step_id,
+                            "fallback_step_id": source_step_id,
+                            "expected_outputs": list(step.expected_outputs or []),
+                            "summary_keys": sorted(step_summary.keys()),
+                        },
+                    )
+                )
         if calibration_value is None:
             problematic = _problematic_metric_keys(
                 step_summary,

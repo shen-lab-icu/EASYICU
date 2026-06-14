@@ -215,8 +215,9 @@ def build_self_block_replan_directive(
         "non-execution model stub is NOT an acceptable outcome for this task. "
         "Revise the remaining plan so the primary modeling step actually fits a "
         "model on the available predictors and emits the required performance "
-        "statistics. Do NOT re-insert artifact-viability-gate or "
-        "modeling-block-registration steps. (Blocking would be legitimate only if "
+        "statistics. Do NOT re-insert any step whose purpose is to gate, block, "
+        "or declare the modeling unexecutable on this cohort. (Blocking would be "
+        "legitimate only if "
         "the data were genuinely non-viable — too few rows, no outcome variation, "
         "or no usable predictors — which is not the case here.)"
     )

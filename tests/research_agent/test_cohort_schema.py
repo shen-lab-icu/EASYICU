@@ -413,3 +413,76 @@ def test_materialize_missing_column_falls_back_without_breaking(tmp_path: Path) 
     assert result["status"] == "error"
     assert result["error"]
     assert not (tmp_path / "cohort_analysis.parquet").exists()
+
+
+def _kdigo_predicate():
+    """A predicate referencing the dictionary concept_id `kdigo_aki` — whose
+    EasyICU output column is `aki_stage`, so it appears in a wide universe as
+    `aki_stage_<agg>`, never as `kdigo_aki`."""
+    from easyicu.research_agent.cohort_schema import ConceptPredicate, TimeWindow
+
+    return ConceptPredicate(
+        concept_id="kdigo_aki",
+        time_window=TimeWindow(
+            anchor="icu_admit", start_offset_hours=0.0, end_offset_hours=24.0
+        ),
+        aggregation="max",
+        op=">=",
+        value=0,
+    )
+
+
+def test_resolve_predicate_column_bare_and_aggregated_and_alias() -> None:
+    from easyicu.research_agent.cohort_schema import _resolve_predicate_column
+
+    cols = ["age", "aki_stage_max", "aki_stage_first", "los_icu", "death"]
+    # bare id-level column
+    assert _resolve_predicate_column(cols, "age", "first") == "age"
+    # dictionary concept_id resolves to its output-column alias + aggregation
+    assert _resolve_predicate_column(cols, "kdigo_aki", "max") == "aki_stage_max"
+    # wide <concept_id>_<agg> form when the output stem equals the concept id
+    assert (
+        _resolve_predicate_column(["sofa_resp_max"], "sofa_resp", "max")
+        == "sofa_resp_max"
+    )
+    # genuinely-absent column is not invented (honest failure, not silent skip)
+    assert _resolve_predicate_column(cols, "lactate", "max") is None
+    # the requested aggregation must exist: only `_first` present, asked `_max`
+    assert _resolve_predicate_column(["aki_stage_first"], "kdigo_aki", "max") is None
+
+
+def test_materialize_resolves_kdigo_alias_to_aki_stage_column(tmp_path: Path) -> None:
+    """E3 regression: the locked cohort references concept_id `kdigo_aki`, but the
+    universe materialised the concept as `aki_stage_*`. The materializer must
+    bridge the concept-id -> output-column gap so the 纳排 is enforced centrally
+    (cohort_analysis.parquet written) instead of silently running on the universe."""
+    from easyicu.research_agent.cohort_schema import (
+        CohortDefinition,
+        materialize_locked_analysis_cohort,
+    )
+
+    universe = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3, 4],
+            "age": [20, 65, 40, 17],  # last is a minor -> excluded
+            "aki_stage_max": [0, 2, None, 1],  # NaN -> unmeasured, excluded by >=0
+        }
+    )
+    universe_path = tmp_path / "cohort.parquet"
+    universe.to_parquet(universe_path, index=False)
+
+    result = materialize_locked_analysis_cohort(
+        run_dir=tmp_path,
+        plan=_plan_with_cohort(
+            CohortDefinition(
+                name="primary",
+                inclusion=(_age_predicate(0, 24), _kdigo_predicate()),
+            )
+        ),
+        universe_path=universe_path,
+    )
+
+    assert result["status"] == "applied"
+    assert (tmp_path / "cohort_analysis.parquet").exists()
+    # adults (age>=18) with a measured KDIGO stage (aki_stage_max>=0, NaN dropped)
+    assert result["n_cohort"] == 2
