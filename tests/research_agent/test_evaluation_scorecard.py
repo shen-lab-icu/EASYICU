@@ -135,6 +135,46 @@ def test_plan_fail_when_illegal():
     assert dim.level == "Fail"
 
 
+def test_plan_clustering_kind_not_penalized_for_omitting_table_one():
+    # H3/M3 regression: a phenotype-discovery kind (internal guideline) does not
+    # need a STROBE/TRIPOD baseline "Table 1". A plan with figure + audit panel
+    # but no Table 1 must still be Full (was wrongly capped at 0.8).
+    task = ICUAgentBenchTask(
+        task_id="H3",
+        kind="longitudinal_trajectory_analysis",
+        title="t",
+        objective="t",
+        expected_outputs=["trajectory plot figure", "stability audit panel"],
+    )
+    dim = sc.score_plan(task, plan_steps=[{"intent": "x"}], gates=_gates())
+    assert dim.signals["table_one_expected"] is False
+    assert dim.level == "Full"
+
+
+def test_plan_credits_produced_publication_figure_when_not_declared():
+    # E1/E3 regression: the publication-figure skill produces the result figure
+    # outside declared plan steps (and the replanner can drop a declared figure
+    # step). A plan with Table 1 + audit but no declared figure must still be
+    # Full when the run delivered a publication-figure bundle.
+    task = _task(outputs=["table one", "component completeness audit"])  # no figure
+    gates = _gates()
+    gates["publication_figure_bundle_ready"] = True
+    dim = sc.score_plan(task, plan_steps=[{"intent": "x"}], gates=gates)
+    assert dim.signals["result_figure_count"] == 0
+    assert dim.signals["produced_publication_figure"] is True
+    assert dim.level == "Full"
+
+
+def test_plan_still_flags_missing_figure_when_none_declared_or_produced():
+    # Impartiality: do not blanket-pass the figure component — a plan with no
+    # declared figure AND no produced publication bundle still loses the figure.
+    task = _task(outputs=["table one", "component completeness audit"])
+    dim = sc.score_plan(task, plan_steps=[{"intent": "x"}], gates=_gates())
+    assert dim.signals["produced_publication_figure"] is False
+    assert any("figure" in n for n in dim.notes)
+    assert dim.level != "Full"
+
+
 def test_plan_hard_task_needs_two_figures():
     # advanced task with only one figure hint -> figure requirement unmet
     task = _task(
@@ -940,10 +980,39 @@ def test_phenotype_validity_reads_agent_emitted_artifacts(tmp_path):
         "cluster,n,percentage\n0,38584,99.48\n1,203,0.52\n", encoding="utf-8"
     )
     card = sc.score_run_from_dir(_kind_task("subphenotype_clustering"), tmp_path)
-    # 0.52% group -> objective near-empty degeneracy regardless of the high
-    # silhouette (which is a one-blob-plus-outlier artifact).
+    # GENUINE degeneracy: one cluster holds 99.48% and the other is a 0.52%
+    # outlier pocket. This is the "one dominant cluster" the guard is named for,
+    # so the sub-1% group is an objective Fail regardless of the high silhouette
+    # (which is a one-blob-plus-outlier artifact).
     assert card.result_validity.level == "Fail"
     assert any("near-empty" in n for n in card.result_validity.notes)
+
+
+def test_small_cluster_in_balanced_partition_is_caution_not_fail(tmp_path):
+    # M3-shaped real result: KMeans with k chosen by bootstrap-ARI stability gave
+    # five substantial clusters (32/21/21/16/9 %) plus one rare 0.52% group. A
+    # sub-1% cluster is NOT a degeneracy here — there is no dominant cluster
+    # (largest is 32%), so it must not fail result_validity. It is a defensible
+    # analytical outcome surfaced as a caution; the dimension stays honestly NA.
+    (tmp_path / "clustering_algorithm_details.json").write_text(
+        json.dumps(
+            {"algorithm": "KMeans", "selected_k": 6, "selected_silhouette_score": 0.107}
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "cluster_sizes.csv").write_text(
+        "cluster,count,percentage\n"
+        "1,12586,32.45\n2,8170,21.06\n3,8065,20.79\n"
+        "4,6271,16.17\n5,3492,9.00\n6,203,0.52\n",
+        encoding="utf-8",
+    )
+    card = sc.score_run_from_dir(_kind_task("subphenotype_clustering"), tmp_path)
+    # No objective error -> honestly unscored (no locked reference), NOT a Fail.
+    assert card.result_validity.level is None
+    assert card.result_validity.subscore is None
+    assert not any("near-empty" in n for n in card.result_validity.notes)
+    # The rare group is still surfaced for human review as a caution.
+    assert any("small cluster" in n for n in card.result_validity.notes)
 
 
 def test_phenotype_model_based_negative_silhouette_is_caution_not_fail(tmp_path):

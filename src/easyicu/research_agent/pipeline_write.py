@@ -880,6 +880,7 @@ def run_write_phase(
                     build_strobe_checklist(
                         evidence_records=evidence.records(),
                         bound_manuscript=bound_text,
+                        task_kind=getattr(pipeline, "_benchmark_task_kind", None),
                     ),
                 )
             )
@@ -900,6 +901,7 @@ def run_write_phase(
                     build_internal_phenotype_checklist(
                         evidence_records=evidence.records(),
                         bound_manuscript=bound_text,
+                        task_kind=getattr(pipeline, "_benchmark_task_kind", None),
                     ),
                 )
             )

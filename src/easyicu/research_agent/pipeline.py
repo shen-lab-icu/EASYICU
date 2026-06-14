@@ -369,6 +369,7 @@ class ResearchAgentPipeline:
         enable_causal_audit: bool = True,
         enable_reporting_checklist: bool = True,
         reporting_checklist_names: Optional[Sequence[str]] = None,
+        task_kind: Optional[str] = None,
         enable_reviewer_round: bool = True,
         enable_fairness_subgroups: bool = True,
         enable_hypothesis_generator: bool = False,
@@ -533,6 +534,10 @@ class ResearchAgentPipeline:
         self._reporting_checklist_names = (
             tuple(reporting_checklist_names) if reporting_checklist_names else None
         )
+        # Authoritative benchmark task kind (e.g. "subphenotype_clustering"),
+        # used to decide kind-specific reporting-checklist applicability rather
+        # than relying on fragile manuscript wording. Optional outside the bench.
+        self._benchmark_task_kind = task_kind
         # O15 — Three-role reviewer round (statistician / clinician /
         # methodologist) driven off already-computed evidence and
         # findings. Deterministic; no extra LLM calls. Default ON.

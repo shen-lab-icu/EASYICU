@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
@@ -132,7 +133,44 @@ def _floats(rows: Sequence[Mapping[str, str]], *col_aliases: str) -> List[float]
 # test → leakage.
 _PATIENT_UNIT_TOKENS = ("patient", "subject", "uniquepid")
 _STAY_UNIT_TOKENS = ("stay", "icustay", "hadm", "admission", "encounter")
-_ROW_UNIT_TOKENS = ("row", "observation", "record-level", "row-level", "row level")
+# Tokens for an explicit row/observation-level (leaky) split. NOTE: bare "row"
+# is deliberately NOT here — it false-matches granularity attestations like
+# "one row per stay" / "the file is one row per patient" (which describe table
+# shape, not a row-level split unit) and wrongly failed M2's stay-level split.
+_ROW_UNIT_TOKENS = ("observation", "record", "row-level", "row level", "row_level")
+
+# The split unit is most reliably read from the phrase describing what the split
+# was performed ON ("split on stay_id", "grouped by subject_id") or the
+# "<unit>-level split" form — not from justification prose elsewhere in the
+# sentence ("interpreted as patient-separated", "one row per stay"), which
+# otherwise contaminates a simple token scan.
+_SPLIT_CONTEXT_RE = re.compile(
+    r"(?:split|splitting|partition\w*|hold[-\s]?out|grouped|group|stratif\w*)"
+    r"[^.;]*?\b(?:on|by|using|per|across|at)\s+"
+    r"(?:the\s+|each\s+|every\s+|unique\s+|distinct\s+|individual\s+|patient[-\s]?level\s+)*"
+    r"([a-z][a-z_]*)",
+    re.IGNORECASE,
+)
+_LEVEL_CONTEXT_RE = re.compile(r"\b([a-z][a-z_]*)[-\s](?:level|based)\b", re.IGNORECASE)
+# "one row per stay" / "per observation" granularity attestations must not be
+# read as a row-level split when scanning loose prose.
+_ROW_GRANULARITY_RE = re.compile(
+    r"\b(?:one\s+|single\s+)?rows?\s+per\b|\bper\s+rows?\b", re.IGNORECASE
+)
+
+
+def _token_to_unit(token: str) -> str:
+    """Map a single captured identifier (e.g. ``stay_id``, ``subject_id``,
+    ``observation``) to a split unit. For a captured identifier (not loose
+    prose) ``row``/``rows`` is an unambiguous row-level unit."""
+    t = (token or "").lower()
+    if "row" in t or any(tok in t for tok in _ROW_UNIT_TOKENS):
+        return "row"
+    if any(tok in t for tok in _PATIENT_UNIT_TOKENS):
+        return "patient"
+    if any(tok in t for tok in _STAY_UNIT_TOKENS):
+        return "stay"
+    return ""
 # Phrases by which the agent attests the stay-level split is patient-equivalent.
 _PATIENT_EQUIV_PHRASES = (
     "one stay per patient",
@@ -165,14 +203,29 @@ def _scan_split_evidence(
 
     def _note_unit(text: str) -> None:
         nonlocal unit
-        t = text.lower()
         if unit:
             return
-        if any(tok in t for tok in _ROW_UNIT_TOKENS):
+        t = text.lower()
+        # 1) Prefer the unit the split was explicitly performed ON / the
+        #    "<unit>-level" form — robust to justification prose in the sentence.
+        for rx in (_SPLIT_CONTEXT_RE, _LEVEL_CONTEXT_RE):
+            for m in rx.finditer(t):
+                u = _token_to_unit(m.group(1))
+                if u:
+                    unit = u
+                    return
+        # 2) Fall back to a loose scan, but neutralise "row per <x>" granularity
+        #    attestations first so they do not read as a row-level split unit. A
+        #    word-bounded bare "row"/"rows" still counts (structured split_unit
+        #    field, "split on rows"); "borrow"/"narrow" do not.
+        guarded = _ROW_GRANULARITY_RE.sub(" ", t)
+        if re.search(r"\brows?\b", guarded) or any(
+            tok in guarded for tok in _ROW_UNIT_TOKENS
+        ):
             unit = "row"
-        elif any(tok in t for tok in _PATIENT_UNIT_TOKENS):
+        elif any(tok in guarded for tok in _PATIENT_UNIT_TOKENS):
             unit = "patient"
-        elif any(tok in t for tok in _STAY_UNIT_TOKENS):
+        elif any(tok in guarded for tok in _STAY_UNIT_TOKENS):
             unit = "stay"
 
     def _note_overlap(val: object) -> None:
