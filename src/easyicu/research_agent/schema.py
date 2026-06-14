@@ -173,6 +173,17 @@ class ConceptDescriptor(BaseModel):
         default=None,
         description="[lower, upper] physiologically plausible range. None if not applicable.",
     )
+    observed_domain: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Value domain ACTUALLY OBSERVED in the provided cohort (not the "
+            "dictionary's plausible range): keys may include n_unique, min, max, "
+            "is_binary, is_constant. Lets the planner interpret a column by its "
+            "real values instead of guessing a scale from its name — e.g. a "
+            "column named '<score>_max' that is observed binary {0,1} must not be "
+            "thresholded as if it ran 0-24."
+        ),
+    )
     allowed_aggregations: List[AggregationRule] = Field(default_factory=lambda: [AggregationRule.ANY])
     aggregation_default: Optional[AggregationRule] = None
     is_ordinal: bool = False
@@ -296,6 +307,7 @@ RESEARCH_CONTEXT_FIELDS: tuple = (
     "time_windows",
     "temporal_constraints",
     "target_outcome",
+    "primary_exposure",
     "cross_database_validation",
     "cohort_parquet",
     "user_preferences",
@@ -331,6 +343,14 @@ class ResearchContext(BaseModel):
     target_outcome: Optional[str] = Field(
         default=None,
         description="Name of the primary outcome column.",
+    )
+    primary_exposure: Optional[str] = Field(
+        default=None,
+        description=(
+            "Name of the primary exposure/predictor the question requires the "
+            "association model to estimate (e.g. 'sepsis3'). When set, the "
+            "exposure-contract audit checks the primary model actually uses it."
+        ),
     )
     cross_database_validation: List[str] = Field(
         default_factory=list,
@@ -1006,6 +1026,10 @@ class StepRecord(BaseModel):
     # Runner observability.
     returncode: Optional[int] = None
     timed_out: Optional[bool] = None
+    requested_network_policy: Optional[str] = None
+    effective_isolation: Optional[str] = None
+    isolation_degraded: Optional[bool] = None
+    isolation_degradation_reason: Optional[str] = None
     code_repair_attempts: Optional[int] = None
     runner_repair: Optional[str] = None
     deterministic_code_fallback: Optional[str] = None

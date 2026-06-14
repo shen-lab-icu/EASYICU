@@ -79,6 +79,15 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
     )
     partial = json.loads((run_dir / "manifest_partial.json").read_text(encoding="utf-8"))
     assert partial["runtime_state"]["analysis_family"]
+    ok_step_records = [
+        record
+        for record in manifest["per_step_records"]
+        if record.get("step_id") != "00_probe" and record.get("status") == "ok"
+    ]
+    assert ok_step_records
+    for record in ok_step_records:
+        assert record.get("evidence_ids"), record
+        assert record["interpretation_evidence_id"] in record["evidence_ids"]
 
     # 4) The deterministic probe should expose score completeness without
     # peeking at outcome-stratum rates or auto-generating a SOFA-specific audit.
@@ -90,6 +99,49 @@ def test_pipeline_end_to_end_synthetic_cohort(ra, synthetic_cohort, tmp_path: Pa
     assert completeness
     sofa_report = next(item for item in completeness if item["variable"] == "sofa2")
     assert sofa_report["completeness"]["n_low_completeness"] > 0
+
+
+def test_strict_evidence_failure_writes_structured_diagnostic_package(
+    ra,
+    synthetic_cohort,
+    tmp_path: Path,
+    monkeypatch,
+):
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ra.MockLLMClient(),
+        enable_literature=False,
+        evidence_enforcement_mode="strict",
+    )
+
+    def _raise_strict_failure(**kwargs):
+        raise ra.EvidenceEnforcementError(
+            "Manuscript contains 1 numeric value not traceable.",
+            detail={"untraced": ["9.99"]},
+        )
+
+    monkeypatch.setattr(pipeline, "_run_write_phase", _raise_strict_failure)
+
+    result = pipeline.run(
+        question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=synthetic_cohort,
+        cohort_name="strict_failure_test",
+        database="synthetic",
+        target_outcome="death",
+    )
+    run_dir = Path(result.workdir)
+    run_status = json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    bound = Path(result.manuscript_path).read_text(encoding="utf-8")
+
+    assert "STRICT evidence enforcement failed" in bound
+    assert run_status["gates"]["numeric_error_count"] == 1
+    assert run_status["gates"]["manuscript_generated"] is False
+    assert any(
+        finding["validator"] == "manuscript_numeric_auditor"
+        and finding["severity"] == "error"
+        for finding in manifest["findings"]
+    )
 
 
 def test_pipeline_with_clinical_skill(ra, synthetic_cohort, tmp_path: Path):
@@ -217,6 +269,62 @@ def test_pipeline_falls_back_when_planner_returns_empty(ra, synthetic_cohort, tm
     assert Path(result.plan_path).exists()
 
 
+def test_pipeline_recovers_when_planner_parses_to_zero_steps(
+    ra, synthetic_cohort, tmp_path: Path
+):
+    """A planner that returns *valid JSON with 0 steps* (E1 20260611 v4-flash)
+    must not run an empty plan: retry the planner, recover on a non-empty reply.
+    """
+    valid_plan = json.dumps(
+        {
+            "research_question": "Is admission SOFA-2 associated with ICU mortality?",
+            "steps": [
+                {
+                    "step_id": "01_assoc",
+                    "intent": "Fit the adjusted association model.",
+                    "expected_outputs": ["or_table"],
+                    "method": "logit",
+                }
+            ],
+            "rationale": "single-step plan",
+        }
+    )
+
+    class FlakyPlanner:
+        name = "flaky-planner"
+
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            self.calls += 1
+            # First call parses to an empty plan; the retry returns a real one.
+            return '{"research_question": "q", "steps": []}' if self.calls == 1 else valid_plan
+
+    flaky = FlakyPlanner()
+    router = ra.LLMRouter(default=ra.MockLLMClient(), planner=flaky)
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=router,
+        enable_deterministic_planner_fallback=True,
+    )
+    result = pipeline.run(
+        question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=synthetic_cohort,
+        cohort_name="planner_zero_step_retry",
+        database="synthetic",
+        target_outcome="death",
+    )
+    assert flaky.calls >= 2  # the retry happened
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    assert any(
+        f["validator"] == "planner" and "retry" in (f.get("detail") or {}).get(
+            "generation_mode", ""
+        )
+        for f in manifest["findings"]
+    )
+
+
 def test_remove_tbd_sentences_strips_placeholder_results(ra):
     from easyicu.research_agent.pipeline import _remove_tbd_sentences
 
@@ -306,6 +414,127 @@ print(json.dumps(summary))
     ]
 
 
+def test_runtime_crash_after_contract_repair_gets_its_own_repair_budget(
+    ra, tmp_path: Path
+):
+    """A contract repair that *introduces* a crash must not strand the step.
+
+    Reproduces the E1 20260611 deepseek-v4-flash failure: the primary
+    association step ran (rc=0) but failed the effect-size contract; the
+    contract repair then produced code that computed the OR and wrote its
+    table but crashed on a trailing line (``AttributeError`` on a renamed
+    column). With ``max_code_repair_attempts=1`` the single *shared* budget
+    was consumed by the contract repair, so the runtime crash fail-closed
+    even though the analysis was otherwise valid. Runtime crashes now carry
+    their own repair budget, so the traceback gets a repair pass.
+    """
+
+    class ContractThenCrashLLM:
+        name = "contract-then-crash-llm"
+
+        def complete(self, messages, *, max_tokens=2048, temperature=0.2):
+            user = next(
+                (m.content for m in reversed(messages) if m.role == "user"), ""
+            )
+            upper = user.upper()
+            if "ICU-AWARE RESEARCH PLAN" in upper:
+                return json.dumps({
+                    "research_question": "Is the exposure associated with mortality?",
+                    "steps": [{
+                        "step_id": "05_primary_association",
+                        "intent": "Estimate the adjusted odds ratio for the exposure.",
+                        "inputs": ["age", "death"],
+                        "expected_outputs": ["statistic:primary_association"],
+                        "method": "logistic",
+                        "icu_rule_refs": ["aggregation_rule_for"],
+                    }],
+                    "rationale": "minimal contract-then-crash repair test",
+                })
+            if "REPAIR THE PYTHON CODE" in upper:
+                # First repair pass is the *contract* repair (run_log says so):
+                # it computes the OR and writes the table, then crashes on a
+                # trailing line — exactly the run10 trap.
+                if "STEP CONTRACT" in upper:
+                    return (
+                        "import os\n"
+                        "import pandas as pd\n"
+                        "out = os.environ['STEP_OUT_DIR']\n"
+                        "pd.DataFrame({'predictor': ['exposure'], 'odds_ratio': [1.47]})"
+                        ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
+                        "class _Row:\n    pass\n"
+                        "row = _Row()\n"
+                        "_ = row.log_odds  # AttributeError after the OR is written\n"
+                    )
+                # Second repair pass is the *runtime* repair (traceback in
+                # run_log): produce a clean script that records the effect.
+                return (
+                    "import json, os\n"
+                    "import pandas as pd\n"
+                    "out = os.environ['STEP_OUT_DIR']\n"
+                    "pd.DataFrame({'predictor': ['exposure'], 'odds_ratio': [1.47]})"
+                    ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
+                    "summary = {'primary_or': 1.47, 'odds_ratio': 1.47, "
+                    "'primary_predictor': 'exposure'}\n"
+                    "with open(os.path.join(out, 'step_summary.json'), 'w') as f:\n"
+                    "    json.dump(summary, f)\n"
+                    "print(json.dumps(summary))\n"
+                )
+            if "WRITE THE PYTHON CODE" in upper:
+                # Initial script runs fine (rc=0) but omits the effect size,
+                # so it fails the machine-readable effect contract.
+                return (
+                    "import json, os\n"
+                    "import pandas as pd\n"
+                    "out = os.environ['STEP_OUT_DIR']\n"
+                    "pd.DataFrame({'n': [3]})"
+                    ".to_csv(os.path.join(out, 'primary_association.csv'), index=False)\n"
+                    "summary = {'n': 3}\n"
+                    "with open(os.path.join(out, 'step_summary.json'), 'w') as f:\n"
+                    "    json.dump(summary, f)\n"
+                    "print(json.dumps(summary))\n"
+                )
+            if "INTERPRET THE RESULTS" in upper:
+                return "The adjusted odds ratio was estimated {evidence:primary_association}."
+            if "MANUSCRIPT SCAFFOLD" in upper:
+                return (
+                    "# Title\n\n## Results\n\nThe adjusted odds ratio was estimated "
+                    "{evidence:primary_association}.\n\n(left to the human author)"
+                )
+            return "{}"
+
+    cohort = pd.DataFrame({"age": [50, 60, 70], "death": [0, 1, 0]})
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path,
+        llm=ContractThenCrashLLM(),
+        enable_literature=False,
+        # Pin the tight single-attempt budget so the test exercises the exact
+        # starvation case: under the old shared counter the contract repair
+        # consumed the only attempt and the crash fail-closed. The runtime
+        # crash must get its own attempt.
+        max_code_repair_attempts=1,
+        # Force the LLM repair path so the runtime crash exercises the budget,
+        # not a deterministic pattern repair.
+        enable_deterministic_runner_repair=False,
+    )
+    result = pipeline.run(
+        question="Is the exposure associated with mortality?",
+        cohort=cohort,
+        cohort_name="contract_then_crash_test",
+        database="synthetic",
+        target_outcome="death",
+    )
+
+    partial = json.loads(
+        (Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8")
+    )
+    record = _step_record_by_id(partial["per_step_records"], "05_primary_association")
+    # The step recovered (no fail-closed) and used a contract repair *and* a
+    # separate runtime repair.
+    assert record["status"] == "ok"
+    assert record["code_repair_attempts"] == 2
+    assert record.get("runtime_repair_attempts") == 1
+
+
 def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: Path):
     from easyicu.research_agent.pipeline import _promote_prior_publication_bundle
 
@@ -347,8 +576,15 @@ def test_promote_prior_publication_bundle_copies_real_figure_exports(tmp_path: P
     ]
 
 
-def test_pipeline_repairs_concept_audit_violation(ra, tmp_path: Path):
-    """A generated mean-of-SOFA script should be repaired before execution."""
+def test_pipeline_does_not_block_or_repair_advisory_ordinal_mean(ra, tmp_path: Path):
+    """Impartiality: a script that computes ``.mean()`` of an ordinal SOFA
+    score (here inside a generic describe-style summary that ALSO reports the
+    level distribution) must NOT hard-block or trigger an auto-repair that
+    imposes median/max over the agent's choice. The caution is recorded as a
+    WARNING and the step completes. This is the regression guard for the M1
+    false-degradation, where a single helper-level ``.mean()`` dragged an
+    otherwise-correct ordinal analysis down to ``diagnostic_only``.
+    """
 
     class ConceptRepairLLM:
         name = "concept-repair-llm"
@@ -367,7 +603,7 @@ def test_pipeline_repairs_concept_audit_violation(ra, tmp_path: Path):
                         "method": "regression",
                         "icu_rule_refs": ["aggregation_rule_for"],
                     }],
-                    "rationale": "minimal concept repair test",
+                    "rationale": "minimal advisory-ordinal-mean test",
                 })
             if "REPAIR THE PYTHON CODE" in upper:
                 return """
@@ -391,12 +627,31 @@ with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
 print(json.dumps(summary))
 """
             if "WRITE THE PYTHON CODE" in upper:
+                # Generic describe-style summary: reports the ordinal LEVEL
+                # DISTRIBUTION (the clinically appropriate summary) AND a
+                # supplementary .mean() inside the same helper. The .mean()
+                # is advisory, must not block or trigger a repair.
                 return """
+import json
 import os
 import pandas as pd
 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
-bad = df["sofa2"].mean()
-pd.DataFrame({"bad": [bad]}).to_csv(os.path.join(os.environ["STEP_OUT_DIR"], "primary_association.csv"), index=False)
+out = os.environ["STEP_OUT_DIR"]
+
+levels = df["sofa2"].value_counts().sort_index()
+pd.DataFrame({
+    "sofa2_level": levels.index,
+    "n": levels.values,
+}).to_csv(os.path.join(out, "primary_association.csv"), index=False)
+summary = {
+    "predictor": "sofa2",
+    "sofa2_level_distribution": {int(k): int(v) for k, v in levels.items()},
+    "sofa2_supplementary_mean": float(df["sofa2"].mean()),
+    "primary_or": 1.0,
+}
+with open(os.path.join(out, "step_summary.json"), "w", encoding="utf-8") as f:
+    json.dump(summary, f)
+print(json.dumps(summary))
 """
             if "INTERPRET THE RESULTS" in upper:
                 return "The repaired table was produced {evidence:primary_association_table}."
@@ -421,12 +676,23 @@ pd.DataFrame({"bad": [bad]}).to_csv(os.path.join(os.environ["STEP_OUT_DIR"], "pr
     manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
     partial = json.loads((Path(result.workdir) / "manifest_partial.json").read_text(encoding="utf-8"))
     record = _step_record_by_id(partial["per_step_records"], "04_primary_association")
+    # The step completes without being blocked and without an auto-repair that
+    # would impose a different aggregation over the agent's choice.
     assert record["status"] == "ok"
-    assert record["concept_repair_attempts"] == 1
+    assert record.get("concept_repair_attempts", 0) == 0
+    assert record.get("status") != "blocked_by_concept_audit"
+    # No forbidden-aggregation finding is escalated to a blocking error...
     assert not [
         f for f in manifest["findings"]
         if f["severity"] == "error" and f["validator"] == "concept_usage_auditor"
     ]
+    # ...but the advisory caution is still surfaced for the reviewer.
+    assert any(
+        f["validator"] == "concept_usage_auditor"
+        and f["severity"] == "warning"
+        and ("ordinal" in f["message"].lower() or "sofa" in f["message"].lower())
+        for f in record.get("usage_findings", [])
+    ), record.get("usage_findings")
 
 
 def test_pipeline_falls_back_to_deterministic_code_after_repair_failure(
@@ -1645,7 +1911,7 @@ if len(cc_df) > 0:
         results['complete_case']['error'] = "exog contains inf or nans"
 if len(mi_df) > 0:
     y_mi = mi_df[outcome_var]
-    X_mi = mi_df[[predictor_var, 'lactate_missing_24h'] + covariates]
+    X_mi = mi_df[[predictor_var, 'creatinine_missing_24h'] + covariates]
     X_mi = X_mi.apply(pd.to_numeric, errors='coerce')
     y_mi = y_mi.astype(float)
 if len(rv_df) > 0:
@@ -1798,13 +2064,13 @@ def test_deterministic_runner_repair_restores_predictor_and_sex_in_robustness_sc
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
     code = """
-predictor_col = lactate_col
+predictor_col = creatinine_col
 covariates = ["age", "sex", "sofa2_max_24h"]
 def fit_logistic_model(X, y):
     return None
 model_df = df[all_vars].copy()
 cc_X = cc_df[covariates]
-mi_X = mi_df[covariates + ['lactate_missing']]
+mi_X = mi_df[covariates + ['creatinine_missing']]
 rv_X = rv_df[covariates]
 ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
 """
@@ -1818,7 +2084,7 @@ ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
     assert name == "robustness_predictor_design_and_plot_v1"
     assert "model_df['sex'] = model_df['sex'].astype(str).str.lower().isin(['m', 'male']).astype(float)" in patched
     assert "cc_X = cc_df[[predictor_col] + covariates]" in patched
-    assert "mi_X = mi_df[[predictor_col] + covariates + ['lactate_missing']]" in patched
+    assert "mi_X = mi_df[[predictor_col] + covariates + ['creatinine_missing']]" in patched
     assert "rv_X = rv_df[[predictor_col] + covariates]" in patched
     assert "plot_rows = [" in patched
 
@@ -1827,16 +2093,16 @@ def test_deterministic_runner_repair_stabilizes_predictor_col_robustness_templat
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
     code = """
-outcome_col = "death"
-predictor_col = lactate_col
+outcome_col = "readmission_30d"
+predictor_col = creatinine_col
 covariates = ["age", "sex", "los_icu", "sofa2_max_24h", "map_min_24h", "vaso_any_24h", "bili_max_24h", "bili_n_24h", "creat_max_24h"]
 model_df = df[[outcome_col, predictor_col] + covariates].copy()
-model_df["lactate_missing"] = model_df[predictor_col].isnull().astype(int)
+model_df["creatinine_missing"] = model_df[predictor_col].isnull().astype(int)
 complete_case_df = model_df.dropna(subset=[predictor_col])
 missing_indicator_df = model_df.copy()
 reduced_variable_df = model_df.drop(columns=[predictor_col]).copy()
 X_cc = sm.add_constant(complete_case_df[covariates], has_constant="add")
-X_mi = sm.add_constant(missing_indicator_df[covariates + ["lactate_missing"]], has_constant="add")
+X_mi = sm.add_constant(missing_indicator_df[covariates + ["creatinine_missing"]], has_constant="add")
 X_rv = sm.add_constant(reduced_variable_df[covariates], has_constant="add")
 X_rv = X_rv.drop(columns=[predictor_col])
 lci = [row_cc["or_lower"], row_mi["or_lower"], row_rv["or_lower"]]
@@ -1858,7 +2124,7 @@ ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
     assert "missing_indicator_df = missing_indicator_df.dropna(subset=[outcome_col] + covariates)" in patched
     assert "reduced_variable_df = model_df[[outcome_col, predictor_col] + reduced_covariates].dropna().copy()" in patched
     assert 'X_cc = sm.add_constant(complete_case_df[[predictor_col] + covariates], has_constant="add")' in patched
-    assert 'X_mi = sm.add_constant(missing_indicator_df[[predictor_col] + covariates + ["lactate_missing"]], has_constant="add")' in patched
+    assert 'X_mi = sm.add_constant(missing_indicator_df[[predictor_col] + covariates + ["creatinine_missing"]], has_constant="add")' in patched
     assert 'X_rv = sm.add_constant(reduced_variable_df[[predictor_col] + reduced_covariates], has_constant="add")' in patched
     assert "plot_rows = [" in patched
     assert "if len(x_pos):" in patched
@@ -1869,16 +2135,16 @@ def test_deterministic_runner_repair_preserves_indentation_for_robustness_patch(
 
     code = """
 def main():
-    outcome_col = "death"
-    predictor_col = lactate_col
+    outcome_col = "readmission_30d"
+    predictor_col = creatinine_col
     covariates = ["age", "sex"]
     model_df = df[[outcome_col, predictor_col] + covariates].copy()
-    model_df["lactate_missing"] = model_df[predictor_col].isnull().astype(int)
+    model_df["creatinine_missing"] = model_df[predictor_col].isnull().astype(int)
     complete_case_df = model_df.dropna(subset=[predictor_col])
     missing_indicator_df = model_df.copy()
     reduced_variable_df = model_df.drop(columns=[predictor_col]).copy()
     X_cc = sm.add_constant(complete_case_df[covariates], has_constant="add")
-    X_mi = sm.add_constant(missing_indicator_df[covariates + ["lactate_missing"]], has_constant="add")
+    X_mi = sm.add_constant(missing_indicator_df[covariates + ["creatinine_missing"]], has_constant="add")
     X_rv = sm.add_constant(reduced_variable_df[covariates], has_constant="add")
     X_rv = X_rv.drop(columns=[predictor_col])
     ax.errorbar(x_pos, ors, yerr=[yerr_lower, yerr_upper], fmt='o')
@@ -2192,31 +2458,31 @@ def test_deterministic_runner_repair_restores_primary_predictor_in_logit_design(
 import pandas as pd
 import statsmodels.api as sm
 df = pd.read_parquet(cohort_path)
-model_df = df[['lactate_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'death']].copy()
+model_df = df[['creatinine_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'readmission_30d']].copy()
 model_df = pd.get_dummies(model_df, columns=['sex'], drop_first=True)
-y = model_df['death'].astype(float)
+y = model_df['readmission_30d'].astype(float)
 X = model_df[['map_min_24h', 'vaso_any_24h', 'age'] + [col for col in model_df.columns if col.startswith('sex_')]].astype(float)
 X = sm.add_constant(X, has_constant='add')
 try:
     logit_model = sm.Logit(y, X)
     result = logit_model.fit(disp=0)
     coef_table = result.conf_int()
-    lactate_or = coef_table.loc['lactate_max_24h', 'or']
+    primary_or = coef_table.loc['creatinine_max_24h', 'or']
 except Exception as e:
     print(f"Error fitting logistic regression: {e}")
-step_summary = {"n_total_stays": int(n_total), "odds_ratio": lactate_or}
+step_summary = {"n_total_stays": int(n_total), "odds_ratio": primary_or}
 """
     repaired = _deterministic_runner_repair(
         code=code,
         run_log=(
-            "Error fitting logistic regression: 'lactate_max_24h'\n"
+            "Error fitting logistic regression: 'creatinine_max_24h'\n"
             "NameError: name 'n_total' is not defined"
         ),
     )
     assert repaired is not None
     name, patched = repaired
     assert name == "primary_predictor_omitted_from_design_v1"
-    assert "X = model_df[['lactate_max_24h'," in patched
+    assert "X = model_df[['creatinine_max_24h'," in patched
     assert "n_total = int(len(df))" in patched
 
 
@@ -2225,29 +2491,29 @@ def test_deterministic_runner_repair_restores_primary_predictor_with_indented_x_
 
     code = """
 def main():
-    model_df = df[['lactate_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'death']].copy()
-    y = model_df['death'].astype(float)
+    model_df = df[['creatinine_max_24h', 'map_min_24h', 'vaso_any_24h', 'age', 'sex', 'readmission_30d']].copy()
+    y = model_df['readmission_30d'].astype(float)
     X = model_df[['map_min_24h', 'vaso_any_24h', 'age', 'sex']].copy()
     X = sm.add_constant(X, has_constant='add')
     coef_table = result.conf_int()
-    lactate_or = coef_table.loc['lactate_max_24h', 'or']
+    primary_or = coef_table.loc['creatinine_max_24h', 'or']
 """
     repaired = _deterministic_runner_repair(
         code=code,
-        run_log="Error fitting logistic regression: 'lactate_max_24h'",
+        run_log="Error fitting logistic regression: 'creatinine_max_24h'",
     )
     assert repaired is not None
     name, patched = repaired
     assert name == "primary_predictor_omitted_from_design_v1"
-    assert "X = model_df[['lactate_max_24h'," in patched
+    assert "X = model_df[['creatinine_max_24h'," in patched
 
 
 def test_deterministic_runner_repair_fixes_stringified_binary_outcome_key(ra):
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
 
     code = """
-table_one_data.append({"variable": "In-hospital Mortality", "type": "binary", "count": summary["outcomes"]["death"]["counts"][1],
-                      "pct": summary["outcomes"]["death"]["pct"][1]})
+table_one_data.append({"variable": "30-day readmission", "type": "binary", "count": summary["outcomes"]["readmission_30d"]["counts"][1],
+                      "pct": summary["outcomes"]["readmission_30d"]["pct"][1]})
 """
     repaired = _deterministic_runner_repair(
         code=code,
@@ -2256,8 +2522,8 @@ table_one_data.append({"variable": "In-hospital Mortality", "type": "binary", "c
     assert repaired is not None
     name, patched = repaired
     assert name == "table_one_binary_key_string_v1"
-    assert '.get("1", summary["outcomes"]["death"]["counts"].get(1, 0))' in patched
-    assert '.get("1", summary["outcomes"]["death"]["pct"].get(1, 0.0))' in patched
+    assert '.get("1", summary["outcomes"]["readmission_30d"]["counts"].get(1, 0))' in patched
+    assert '.get("1", summary["outcomes"]["readmission_30d"]["pct"].get(1, 0.0))' in patched
 
 
 def test_step_contract_findings_flag_missing_primary_association_estimate(ra):
@@ -2409,7 +2675,7 @@ def test_step_contract_findings_accepts_predictor_named_or_key(ra):
 
     findings = _step_contract_findings(
         step=step,
-        step_summary={"lactate_max_24h_or": 1.21},
+        step_summary={"creatinine_max_24h_or": 1.21},
     )
 
     assert findings == []
@@ -2641,7 +2907,7 @@ def test_step_contract_findings_accepts_prefixed_clustering_metrics(ra):
     assert findings == []
 
 
-def test_step_contract_findings_accepts_complete_case_lactate_or_alias(ra):
+def test_step_contract_findings_accepts_complete_case_primary_or_alias(ra):
     from easyicu.research_agent.pipeline import _step_contract_findings
 
     step = ra.AnalysisStep(
@@ -2657,7 +2923,7 @@ def test_step_contract_findings_accepts_complete_case_lactate_or_alias(ra):
     findings = _step_contract_findings(
         step=step,
         step_summary={
-            "statistic:lactate_or_complete_case": 1.14,
+            "statistic:primary_or_complete_case": 1.14,
             "table:complete_case_robustness_summary": [
                 {"strategy": "Complete-case", "n": 450},
             ],
@@ -2958,6 +3224,40 @@ def test_ensure_publication_figure_step_no_op_when_question_does_not_request_fig
     assert findings == []
 
 
+def test_plan_cap_preserves_appended_publication_figure_step(ra):
+    from easyicu.research_agent.pipeline import (
+        _cap_plan_preserving_figure_steps,
+        _ensure_publication_figure_step_in_plan,
+    )
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    class _Ctx:
+        research_question = "Build tables and a concise publication-ready figure."
+
+    plan = AnalysisPlan(
+        research_question=_Ctx.research_question,
+        steps=[
+            AnalysisStep(
+                step_id=f"{idx:02d}_table",
+                intent=f"Compute table {idx}.",
+                expected_outputs=[f"table:t{idx}"],
+            )
+            for idx in range(1, 5)
+        ],
+    )
+    with_figure, _ = _ensure_publication_figure_step_in_plan(
+        plan=plan,
+        context=_Ctx(),
+    )
+
+    capped, findings = _cap_plan_preserving_figure_steps(plan=with_figure, cap=4)
+
+    assert len(capped.steps) == 4
+    assert any("publication_figure_fallback" in step.step_id for step in capped.steps)
+    assert findings
+    assert findings[0].detail["preserved_figure_step_ids"]
+
+
 def test_deterministic_runner_repair_injects_undefined_helper_stub(ra):
     """Regression: NameError for an undefined helper triggers stub injection."""
     from easyicu.research_agent.pipeline import _deterministic_runner_repair
@@ -3086,6 +3386,39 @@ def test_manuscript_numeric_auditor_allows_normal_rounding(ra):
     assert findings == []
 
 
+def test_manuscript_numeric_auditor_ignores_between_estimate_delta(ra):
+    """Regression (M2): a difference/tolerance number near the metric word
+    ('AUROC estimates differing by less than 0.001') is a delta between two
+    estimates, not a reported point estimate, and must not be bound to the
+    registered AUROC as a 0.001 claim. The genuine 0.827/0.83 claims in the
+    same manuscript must still be checked and pass."""
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "Discrimination was good, with an AUROC of 0.827 "
+        "[model_performance](evidence/model_performance.csv). The two registered "
+        "summaries agreed closely, with AUROC estimates differing by less than 0.001 "
+        "and Brier scores differing by less than 0.001 "
+        "[model_performance](evidence/model_performance.csv). A Brier score of 0.172 "
+        "was reported [model_performance](evidence/model_performance.csv).\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {
+                    "statistic:auroc": 0.8267455907381426,
+                    "statistic:brier_score": 0.1716274488483539,
+                },
+            }
+        ],
+    )
+
+    assert findings == []
+
+
 def test_manuscript_numeric_auditor_ignores_ci_percent_near_outcome_phrase(ra):
     """Regression: '95% confidence interval' must not be read as a 0.95
     prevalence claim when an outcome phrase ('death'/'mortality') appears
@@ -3167,6 +3500,116 @@ def test_manuscript_numeric_auditor_still_flags_overall_prevalence_mismatch(ra):
     assert any("prevalence claim 0.056" in finding.message for finding in findings)
 
 
+def test_manuscript_numeric_auditor_accepts_any_registered_step_auroc(ra):
+    """Regression (N3, 2026-06-14): a prediction run registers more than one
+    AUROC — the primary model step (0.868) and a feature-eligibility / audit
+    step (0.812). The writer correctly cites the primary model's 0.868 in the
+    Results headline and the audit step's 0.812 in a robustness sentence, each
+    against its own evidence id. The auditor previously collapsed to the FIRST
+    registered value (0.812, because that step's summary came first) and flagged
+    the correctly-cited 0.868 as 'does not match registered AUROC 0.812',
+    blocking an honest manuscript. Both values are registered, so neither is a
+    hallucination and the audit must stay silent."""
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "Discrimination in the development workflow reached an AUROC of 0.868 "
+        "and a Brier score of 0.141 "
+        "[01_model_training](evidence/model_training.json). In a feature-"
+        "eligibility audit, the AUROC was 0.812 with a Brier score of 0.164 "
+        "[01_feature_eligibility](evidence/feature_eligibility.json).\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "01_feature_eligibility_range_audit",
+                "status": "ok",
+                "step_summary": {
+                    "statistic:auroc": 0.8117303969867427,
+                    "statistic:brier_score": 0.1635597216840789,
+                },
+            },
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {
+                    "statistic:auroc": 0.8682892909365074,
+                    "statistic:brier_score": 0.14099160242679873,
+                    "statistic:baseline_prevalence": 0.10021385165893837,
+                },
+            },
+        ],
+    )
+
+    assert findings == [], [f.message for f in findings]
+
+
+def test_manuscript_numeric_auditor_ignores_footnote_provenance_stepid_digit(ra):
+    """Regression (M2, 2026-06-14): the binder auto-appends footnote-definition
+    lines like ``[^claim_2]: value=0.830918; field=metrics.auroc;
+    evidence=statistic_step_summary_1c8c8ff2; display=0.831``. The metric field
+    name ``metrics.auroc`` followed by the content-addressed step id's leading
+    digit (``_1c8c8ff2``) was parsed as a spurious AUROC claim of ``1``, which
+    then "did not match registered 0.831" and blocked the manuscript — an
+    intermittent false positive that fired only when the sha started with a
+    digit. The footnote line is machine provenance and must not be scanned; a
+    real AUROC is always a decimal anyway."""
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "On the held-out set the model achieved an AUROC of 0.83 "
+        "[01_model_training](evidence/m.json).\n\n"
+        "[^claim_2]: value=0.830918; step=01_model_training_figure; "
+        "field=metrics.auroc; evidence=statistic_step_summary_1c8c8ff2; "
+        "display=0.831\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {"statistic:auroc": 0.831, "statistic:brier_score": 0.169},
+            }
+        ],
+    )
+
+    assert findings == [], [f.message for f in findings]
+
+
+def test_manuscript_numeric_auditor_flags_value_matching_no_registered_step(ra):
+    """Guard for the match-any relaxation: a manuscript AUROC that matches
+    NONE of the registered per-step values (here 0.95 against {0.812, 0.868})
+    is still a hallucination and must be flagged. Match-any must not become
+    match-nothing."""
+    from easyicu.research_agent.pipeline import _audit_manuscript_numeric_claims
+
+    bound = (
+        "The model achieved an AUROC of 0.95 "
+        "[01_model_training](evidence/model_training.json).\n"
+    )
+    findings = _audit_manuscript_numeric_claims(
+        bound,
+        per_step_records=[
+            {
+                "step_id": "01_feature_eligibility_range_audit",
+                "status": "ok",
+                "step_summary": {"statistic:auroc": 0.8117303969867427},
+            },
+            {
+                "step_id": "01_model_training",
+                "status": "ok",
+                "step_summary": {"statistic:auroc": 0.8682892909365074},
+            },
+        ],
+    )
+
+    assert any("AUROC claim 0.95" in f.message for f in findings), [
+        f.message for f in findings
+    ]
+
+
 def test_repair_common_writer_placeholders_prediction_fallbacks(ra, tmp_path: Path):
     from easyicu.research_agent.evidence import EvidenceStore
     from easyicu.research_agent.pipeline import _repair_common_writer_placeholders
@@ -3211,6 +3654,71 @@ def test_repair_common_writer_placeholders_prediction_fallbacks(ra, tmp_path: Pa
     assert "{evidence:research_context}" in repaired
     assert "{evidence:01_model_training}" in repaired
     assert ("table_one", "research_context") in repairs
+
+
+def test_prediction_placeholder_repair_does_not_create_outcome_rate_for_continuous_target(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _repair_common_writer_placeholders
+
+    store = EvidenceStore(tmp_path)
+    context_path = tmp_path / "research_context.json"
+    context_path.write_text("{}", encoding="utf-8")
+    store.register_file(
+        kind="log",
+        description="ResearchContext",
+        source_path=context_path,
+        evidence_id="research_context",
+        producer="test",
+    )
+    summary_path = tmp_path / "step_summary.json"
+    summary_path.write_text("{}", encoding="utf-8")
+    store.register_file(
+        kind="statistic",
+        description="Model summary",
+        source_path=summary_path,
+        evidence_id="statistic_step_summary_model",
+        producer="test",
+        aliases=["01_model_training"],
+    )
+    context = ra.schema.ResearchContext(
+        research_question="Build an ICU length-of-stay prediction model.",
+        cohort=ra.schema.CohortDescriptor(
+            cohort_name="c",
+            database="synthetic",
+            n_patients=10,
+            n_stays=10,
+            outcome_columns=["los_icu"],
+        ),
+        variables=[
+            ra.schema.ConceptDescriptor(
+                name="los_icu",
+                role="outcome",
+                dtype="float64",
+                description="Continuous length-of-stay outcome.",
+                source_concept="length_of_stay",
+            )
+        ],
+        target_outcome="los_icu",
+    )
+    scaffold = (
+        "The cohort summary is {evidence:table_one}. "
+        "The endpoint rate was {evidence:outcome_rate}. "
+        "Performance was evaluated {evidence:primary_association}."
+    )
+
+    repaired, repairs = _repair_common_writer_placeholders(
+        scaffold,
+        context=context,
+        evidence=store,
+    )
+
+    assert "{evidence:table_one}" not in repaired
+    assert "{evidence:outcome_rate}" in repaired
+    assert "{evidence:primary_association}" not in repaired
+    assert ("outcome_rate", "01_model_training") not in repairs
 
 
 def test_execution_gate_and_parent_figure_dependency_helpers(ra):
@@ -3385,6 +3893,27 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
     from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
 
     evidence = EvidenceStore(tmp_path)
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text("{}", encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description="Publication figure contract.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={"source_evidence_id": "publication_figure_source_demo"},
+    )
+    source_path = tmp_path / "publication_figure_source.csv"
+    source_path.write_text("x,y\n1,2\n", encoding="utf-8")
+    evidence.register_file(
+        kind="table",
+        description="Publication figure source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_demo",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
     for suffix in ("svg", "png", "pdf", "tiff"):
         path = tmp_path / f"easyicu_publication_figure.{suffix}"
         path.write_text("x", encoding="utf-8")
@@ -3402,9 +3931,11 @@ def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
 
     assert readiness["publication_figure_bundle_ready"] is True
     assert readiness["publication_ready_stems"] == ["easyicu_publication_figure"]
+    assert readiness["publication_figure_contract_ready"] is True
+    assert readiness["publication_figure_source_data_ready"] is True
 
 
-def test_publication_bundle_ready_accepts_registered_forest_plot_png_svg(
+def test_publication_bundle_ready_rejects_uncontracted_forest_plot_png_svg(
     ra,
     tmp_path: Path,
 ):
@@ -3426,8 +3957,68 @@ def test_publication_bundle_ready_accepts_registered_forest_plot_png_svg(
 
     readiness = _publication_figure_bundle_ready(evidence=evidence, run_dir=tmp_path)
 
-    assert readiness["publication_figure_bundle_ready"] is True
-    assert readiness["publication_ready_stems"] == ["forest_plot"]
+    assert readiness["publication_figure_bundle_ready"] is False
+    assert readiness["publication_ready_stems"] == []
+
+
+def test_publication_bundle_ready_blocks_visual_qa_errors(ra, tmp_path: Path):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _publication_figure_bundle_ready
+    from easyicu.research_agent.schema import ValidationFinding
+
+    evidence = EvidenceStore(tmp_path)
+    contract_path = tmp_path / "easyicu_publication_figure.figure_contract.json"
+    contract_path.write_text("{}", encoding="utf-8")
+    evidence.register_file(
+        kind="log",
+        description="Publication figure contract.",
+        source_path=contract_path,
+        evidence_id="publication_figure_contract",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+        metadata={"source_evidence_id": "publication_figure_source_demo"},
+    )
+    source_path = tmp_path / "publication_figure_source.csv"
+    source_path.write_text("x,y\n1,2\n", encoding="utf-8")
+    evidence.register_file(
+        kind="table",
+        description="Publication figure source data.",
+        source_path=source_path,
+        evidence_id="publication_figure_source_demo",
+        producer="publication_figure_skill",
+        generation_mode="deterministic_figure_skill",
+    )
+    for suffix in ("svg", "png"):
+        path = tmp_path / f"easyicu_publication_figure.{suffix}"
+        path.write_text("x", encoding="utf-8")
+        evidence.register_file(
+            kind="figure",
+            description="Publication figure export.",
+            source_path=path,
+            evidence_id=f"publication_figure_{suffix}",
+            producer="publication_figure_skill",
+            generation_mode="deterministic_figure_skill",
+            metadata={
+                "figure_role": "publication_figure",
+                "figure_contract": "publication_figure_contract",
+                "source_evidence_id": "publication_figure_source_demo",
+            },
+        )
+
+    readiness = _publication_figure_bundle_ready(
+        evidence=evidence,
+        run_dir=tmp_path,
+        findings=[
+            ValidationFinding(
+                validator="visual_qa",
+                severity="error",
+                message="Could not open figure 'easyicu_publication_figure.png'",
+            )
+        ],
+    )
+
+    assert readiness["publication_figure_bundle_ready"] is False
+    assert readiness["publication_figure_visual_qa_passed"] is False
 
 
 def test_salvage_minimal_contract_step_summary_from_table_one_csv(
@@ -3510,6 +4101,40 @@ def test_critic_accepts_bound_markdown_evidence_links_but_blocks_hidden_missing_
 
     assert blocked.status == "blocked"
     assert blocked.missing_evidence_refs == ["table_one"]
+
+
+def test_critic_does_not_flag_footnote_provenance_block(ra):
+    # Regression (E2): the numeric binder appends a machine-provenance footnote
+    # block (``[^claim_N]: value=...; step=...; evidence=<step>``). When a claim
+    # binds to a step-level virtual evidence the footnote uses a plaintext
+    # ``evidence=robustness_panel`` token (no ``](evidence/)`` link), carries
+    # numbers + claimy words (auroc/brier), and has no end punctuation, so the
+    # support check mis-read the whole block as one unsupported result sentence
+    # and falsely set manuscript_ready=False. Footnote definition lines must be
+    # excluded — the block PROVES the claims are bound.
+    critic = ra.CriticAgent()
+    scaffold = (
+        "## Results\n"
+        "Peak lactate was associated with death with a point estimate of 1.006[^claim_1] "
+        "[primary_association](evidence/step_summary.json \"sha256=abc\").\n\n"
+        "[^claim_1]: value=1.00643; step=robustness_panel; field=primary_point_estimate; evidence=robustness_panel "
+        "[^claim_5]: value=0.788645; step=03_complete_case_robustness; field=auroc; evidence=robustness_panel "
+        "[^claim_6]: value=0.0914; step=03_complete_case_robustness; field=brier_score; evidence=robustness_panel\n"
+    )
+    critique = critic.review_manuscript(
+        scaffold=scaffold, available_evidence_ids=["primary_association"]
+    )
+    assert critique.status == "pass"
+    assert critique.unsupported_claims == []
+
+    # A genuine unsupported result sentence in the BODY is still caught.
+    bad = (
+        "## Results\n"
+        "The model achieved an AUROC of 0.91 in the cohort and showed strong calibration.\n"
+    )
+    flagged = critic.review_manuscript(scaffold=bad, available_evidence_ids=[])
+    assert flagged.status == "needs_revision"
+    assert flagged.unsupported_claims
 
 
 def test_pipeline_removed_unsupported_sentences_do_not_block_final_manuscript(
@@ -4201,9 +4826,9 @@ model_df = model_df.replace([np.inf, -np.inf], np.nan)
     repaired = _deterministic_summary_repair(
         code=code,
         step_summary={
-            "primary_predictor": "lactate_max_24h",
+            "primary_predictor": "creatinine_max_24h",
             "complete_case_n": None,
-            "lactate_or": None,
+            "primary_or": None,
         },
         previous_repair="primary_predictor_omitted_from_design_v1",
     )
@@ -4786,8 +5411,8 @@ def test_deterministic_summary_repair_stabilizes_robustness_missingness_models(r
     from easyicu.research_agent.pipeline import _deterministic_summary_repair
 
     code = """
-outcome_col = 'death'
-primary_predictor = 'lactate_max_24h'
+outcome_col = 'readmission_30d'
+primary_predictor = 'creatinine_max_24h'
 covariates = ['age', 'sex', 'los_icu', 'sofa2_max_24h', 'map_min_24h', 'vaso_any_24h', 'bili_max_24h', 'bili_n_24h', 'creat_max_24h']
 model_df = df[[outcome_col, primary_predictor] + covariates].copy()
 if 'sex' in model_df.columns:
@@ -4798,10 +5423,10 @@ for col in model_df.columns:
 model_df = model_df.replace([np.inf, -np.inf], np.nan)
 cc_df = model_df.dropna(subset=[primary_predictor])
 mi_df = model_df.copy()
-mi_df['lactate_missing'] = mi_df[primary_predictor].isna().astype(int)
+mi_df['creatinine_missing'] = mi_df[primary_predictor].isna().astype(int)
 rv_df = model_df.dropna(subset=[primary_predictor])
 cc_X = sm.add_constant(cc_df[[primary_predictor] + covariates], has_constant="add")
-mi_X = sm.add_constant(mi_df[[primary_predictor, 'lactate_missing'] + covariates], has_constant="add")
+mi_X = sm.add_constant(mi_df[[primary_predictor, 'creatinine_missing'] + covariates], has_constant="add")
 rv_X = sm.add_constant(rv_df[covariates], has_constant="add")
 cc_result = sm.Logit(cc_df[outcome_col], cc_X).fit(disp=0)
 mi_result = sm.Logit(mi_df[outcome_col], mi_X).fit(disp=0)

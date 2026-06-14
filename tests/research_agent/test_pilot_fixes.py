@@ -136,6 +136,71 @@ def test_pipeline_max_total_steps_can_be_disabled(ra, tmp_path: Path):
     assert pipeline._max_total_steps == 0
 
 
+# ---------------- replan convergence guards (E1 20260611) ----------------
+
+def _two_step_plan(intent_a: str, *, method: str = "logit"):
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    return AnalysisPlan(
+        research_question="Does sepsis-3 predict in-hospital mortality?",
+        steps=[
+            AnalysisStep(
+                step_id="01_cohort",
+                intent=intent_a,
+                expected_outputs=["cohort_table"],
+                method="filter",
+            ),
+            AnalysisStep(
+                step_id="02_association",
+                intent="Fit the adjusted model.",
+                expected_outputs=["or_table"],
+                method=method,
+            ),
+        ],
+    )
+
+
+def test_plan_signature_ignores_intent_prose():
+    """A replanner that only reworded step intent is a no-op."""
+    from easyicu.research_agent.pipeline_execute import _plan_signature
+
+    base = _two_step_plan("Define the adult ICU cohort.")
+    reworded = _two_step_plan("Build the adult intensive-care cohort.")
+    # Different prose, identical step DAG -> same substantive signature.
+    assert base.model_dump() != reworded.model_dump()
+    assert _plan_signature(base) == _plan_signature(reworded)
+
+
+def test_plan_signature_detects_substantive_change():
+    """A changed method / outputs is a real revision."""
+    from easyicu.research_agent.pipeline_execute import _plan_signature
+
+    base = _two_step_plan("Define the cohort.", method="logit")
+    changed_method = _two_step_plan("Define the cohort.", method="cox")
+    assert _plan_signature(base) != _plan_signature(changed_method)
+
+
+def test_pipeline_replan_guards_defaults(ra, tmp_path: Path):
+    """No-op early-stop is on by default; the hard budget is off (legacy)."""
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "wd",
+        llm=ra.MockLLMClient(),
+    )
+    assert pipeline._max_consecutive_noop_replans == 2
+    assert pipeline._max_replans == 0
+
+
+def test_pipeline_replan_guards_can_be_disabled(ra, tmp_path: Path):
+    pipeline = ra.ResearchAgentPipeline(
+        workdir=tmp_path / "wd",
+        llm=ra.MockLLMClient(),
+        max_consecutive_noop_replans=0,
+        max_replans=0,
+    )
+    assert pipeline._max_consecutive_noop_replans == 0
+    assert pipeline._max_replans == 0
+
+
 def test_pipeline_max_numeric_claims_per_step_default(ra, tmp_path: Path):
     pipeline = ra.ResearchAgentPipeline(
         workdir=tmp_path / "wd",

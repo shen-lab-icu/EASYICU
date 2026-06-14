@@ -79,7 +79,14 @@ class PipelineConfig:
     context_top_k: Optional[int] = None
 
     # --- code-repair / determinism --------------------------------------
-    max_code_repair_attempts: int = 1
+    # 3, not 1: cheap/flaky hosted models (e.g. deepseek-v4-flash) repeatedly
+    # emit syntactically or semantically broken analysis code (SyntaxError,
+    # AttributeError on a renamed column). A single repair attempt routinely
+    # ran out before the model produced runnable code, fail-closing an
+    # otherwise valid analysis. This budget is per failure-class (success-path
+    # contract/visual repairs and runtime-crash repairs each get their own),
+    # so genuinely broken steps still terminate.
+    max_code_repair_attempts: int = 3
     enable_deterministic_code_fallback: bool = False
     enable_deterministic_planner_fallback: bool = False
     enable_deterministic_runner_repair: bool = True
@@ -134,6 +141,21 @@ class PipelineConfig:
     # the planner expand a simple SOFA-2 association to 30 steps with 13
     # revisions before being killed at step 20; this cap prevents that.
     max_total_steps: int = 12
+    # --- replanning convergence guards (2026-06-11) ---------------------
+    # The replanner runs after the probe and after every clean step. A
+    # verbose model can return cosmetically-different but substantively
+    # identical plans, each costing a full LLM call: the E1 20260611 real
+    # run produced revisions 4-6 carrying an identical step DAG, and the
+    # run was killed mid-step-7 before finishing. These two guards stop the
+    # churn without removing genuine adaptivity.
+    #   * ``max_consecutive_noop_replans`` — stop invoking the replanner
+    #     once it returns this many revisions in a row whose substantive
+    #     step DAG (step_id + method + expected_outputs) is unchanged.
+    #   * ``max_replans`` — hard backstop on the total number of
+    #     *substantive* revisions in a run.
+    # 0 disables either guard (legacy behaviour).
+    max_consecutive_noop_replans: int = 2
+    max_replans: int = 0
     # Hard cap on numeric-claim leaves registered per single step.
     # Prevents one step that dumps a full interaction matrix into
     # step_summary.json from creating hundreds of footnotes when its

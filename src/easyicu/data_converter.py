@@ -62,6 +62,23 @@ def _is_relative_to(path: Path, base: Path) -> bool:
         return False
 
 
+def _safe_extract_tar(tar: tarfile.TarFile, destination: Path) -> None:
+    """Extract a tar archive only if every member stays under destination."""
+    base = destination.resolve()
+    members = tar.getmembers()
+    for member in members:
+        target = (base / member.name).resolve()
+        if not _is_relative_to(target, base):
+            raise ValueError(
+                f"Unsafe tar member path outside extraction root: {member.name}"
+            )
+        if member.issym() or member.islnk():
+            raise ValueError(f"Unsafe tar link member: {member.name}")
+        if not (member.isfile() or member.isdir()):
+            raise ValueError(f"Unsupported tar member type: {member.name}")
+    tar.extractall(path=destination, members=members)
+
+
 # Partitioning configuration for large tables (matching ricu's data-sources.json)
 # Format: {database: {table_name: {"col": partition_column, "breaks": [breakpoints]}}}
 PARTITIONING_CONFIG = {
@@ -322,6 +339,46 @@ class DataConverter:
         except OSError:
             return False
 
+    def _valid_numbered_parquet_shard_count(self, shard_dir: Path) -> int:
+        """Return sequential valid shard count for ``N.parquet`` layouts."""
+        if not shard_dir.is_dir():
+            return 0
+        try:
+            shard_paths: Dict[int, Path] = {}
+            for p in shard_dir.iterdir():
+                if p.suffix == ".parquet" and p.stem.isdigit():
+                    shard_paths[int(p.stem)] = p
+        except OSError:
+            return 0
+        if not shard_paths:
+            return 0
+        shard_nums = sorted(shard_paths)
+        if shard_nums[0] != 1 or shard_nums != list(range(1, len(shard_nums) + 1)):
+            return 0
+        if not all(self._has_parquet_footer(shard_paths[n]) for n in shard_nums):
+            return 0
+        return len(shard_nums)
+
+    def _hirid_archive_parquet_part_count(self, archive_path: Path) -> Optional[int]:
+        """Count numbered ``part-N.parquet`` files inside a HiRID archive."""
+        try:
+            with tarfile.open(archive_path, 'r:gz') as tar:
+                count = 0
+                for member in tar.getmembers():
+                    if not member.isfile():
+                        continue
+                    name = Path(member.name).name
+                    if not (name.startswith('part-') and name.endswith('.parquet')):
+                        continue
+                    try:
+                        int(Path(name).stem.split('-', 1)[1])
+                    except (IndexError, ValueError):
+                        continue
+                    count += 1
+                return count
+        except Exception:
+            return None
+
     def _invalidate_dir_caches(self) -> None:
         """Drop bucket/shard dir caches. Call after writing new shards/buckets."""
         self._bucket_dir_cache = None
@@ -386,7 +443,11 @@ class DataConverter:
             # Check if Parquet shards already exist (skip extraction)
             if target_dir_name:
                 target_dir = self.data_path / target_dir_name
-                if target_dir.is_dir() and list(target_dir.glob('[0-9]*.parquet')):
+                existing_count = self._valid_numbered_parquet_shard_count(target_dir)
+                expected_count = self._hirid_archive_parquet_part_count(archive_path)
+                if existing_count > 0 and (
+                    expected_count is None or existing_count >= expected_count
+                ):
                     logger.info(f"Skipping {archive_path.name} - Parquet shards already exist in {target_dir_name}/")
                     continue
                 
@@ -418,7 +479,7 @@ class DataConverter:
                 logger.info(f"Extracting {archive_path.name}...")
                 try:
                     with tarfile.open(archive_path, 'r:gz') as tar:
-                        tar.extractall(path=self.data_path)
+                        _safe_extract_tar(tar, self.data_path)
                     extracted.append(archive_path.name)
                     logger.info(f"Extracted {archive_path.name}")
                 except Exception as e:
@@ -450,18 +511,25 @@ class DataConverter:
         if not source_parquet_dir.is_dir():
             logger.debug(f"No parquet directory found at {source_parquet_dir}")
             return
-        
-        # Check if Parquet shards already exist
-        if target_dir.is_dir() and list(target_dir.glob('[0-9]*.parquet')):
-            logger.info(f"Parquet shards already exist in {target_dir_name}/, skipping conversion")
-            return
-        
+
         # Find all part-N.parquet files
-        part_files = sorted(source_parquet_dir.glob('part-*.parquet'), 
-                           key=lambda f: int(f.stem.split('-')[1]))
+        part_files: List[Tuple[int, Path]] = []
+        for part_file in source_parquet_dir.glob('part-*.parquet'):
+            try:
+                part_num = int(part_file.stem.split('-', 1)[1])
+            except (IndexError, ValueError):
+                logger.debug(f"Skipping non-numbered HiRID shard {part_file.name}")
+                continue
+            part_files.append((part_num, part_file))
+        part_files.sort(key=lambda pair: pair[0])
         
         if not part_files:
             logger.debug(f"No part-*.parquet files found in {source_parquet_dir}")
+            return
+
+        existing_count = self._valid_numbered_parquet_shard_count(target_dir)
+        if existing_count >= len(part_files):
+            logger.info(f"Parquet shards already exist in {target_dir_name}/, skipping conversion")
             return
         
         logger.info(f"Converting {len(part_files)} HiRID parquet shards to {target_dir_name}/")
@@ -470,17 +538,16 @@ class DataConverter:
         target_dir.mkdir(parents=True, exist_ok=True)
         
         # Copy and rename files: part-0.parquet -> 1.parquet, part-1.parquet -> 2.parquet, etc.
-        for part_file in part_files:
-            # Extract part number (part-0 -> 0, part-1 -> 1, etc.)
-            part_num = int(part_file.stem.split('-')[1])
+        for part_num, part_file in part_files:
             # ricu uses 1-based numbering
             shard_num = part_num + 1
             target_file = target_dir / f"{shard_num}.parquet"
             
-            if not target_file.exists():
+            if not target_file.exists() or not self._has_parquet_footer(target_file):
                 shutil.copy2(part_file, target_file)
                 logger.debug(f"Copied {part_file.name} -> {target_file.name}")
         
+        self._invalidate_dir_caches()
         logger.info(f"✅ Converted {len(part_files)} shards to {target_dir_name}/")
     
     def _load_status(self) -> None:
@@ -634,11 +701,9 @@ class DataConverter:
                     if csv_dir in str(f.parent).lower():
                         # Check if ricu parquet shards exist
                         shard_dir = self.data_path / parquet_dir
-                        if shard_dir.is_dir():
-                            parquet_shards = list(shard_dir.glob('[0-9]*.parquet'))
-                            if parquet_shards:
-                                skip = True
-                                break
+                        if self._valid_numbered_parquet_shard_count(shard_dir) > 0:
+                            skip = True
+                            break
                 
                 # Also check if parent directory name matches a known shard dir with parquet
                 if not skip and parent_name in ['csv', 'data', 'numericitems_split', 'listitems_split']:
@@ -653,10 +718,11 @@ class DataConverter:
                     }
                     target_dir = mappings.get(table_dir_name, table_dir_name)
                     shard_dir = self.data_path / target_dir
-                    if shard_dir.is_dir() and shard_dir != grandparent:
-                        parquet_shards = list(shard_dir.glob('[0-9]*.parquet'))
-                        if parquet_shards:
-                            skip = True
+                    if (
+                        shard_dir != grandparent
+                        and self._valid_numbered_parquet_shard_count(shard_dir) > 0
+                    ):
+                        skip = True
             
             if not skip:
                 filtered_files.append(f)
@@ -798,16 +864,17 @@ class DataConverter:
         subdir_shard_dir = self._get_shard_dir_with_subdir(csv_path)
         if subdir_shard_dir.is_dir():
             try:
-                shard_nums: List[int] = []
+                shard_paths: Dict[int, Path] = {}
                 for p in subdir_shard_dir.iterdir():
                     if p.suffix == ".parquet" and p.stem.isdigit():
-                        shard_nums.append(int(p.stem))
+                        shard_paths[int(p.stem)] = p
             except OSError:
-                shard_nums = []
-            if shard_nums:
-                shard_nums.sort()
+                shard_paths = {}
+            if shard_paths:
+                shard_nums = sorted(shard_paths)
                 if shard_nums[0] == 1 and shard_nums == list(range(1, len(shard_nums) + 1)):
-                    return True, len(shard_nums)
+                    if all(self._has_parquet_footer(shard_paths[n]) for n in shard_nums):
+                        return True, len(shard_nums)
 
         return False, 0
     
@@ -852,6 +919,9 @@ class DataConverter:
         
         if existing_parquet is None:
             return True, "parquet file does not exist"
+
+        if not self._has_parquet_footer(existing_parquet):
+            return True, "parquet file corrupted"
         
         # Check if CSV is newer than parquet
         csv_mtime = csv_path.stat().st_mtime
@@ -1225,19 +1295,6 @@ class DataConverter:
                     df[col] = df[col].astype(str)
         
         return df
-    
-    def _get_table_name(self, csv_path: Path) -> str:
-        """Extract table name from CSV path (without extension)."""
-        name = csv_path.name
-        if name.endswith('.csv.gz'):
-            name = name[:-7]
-        elif name.endswith('.csv'):
-            name = name[:-4]
-        elif name.endswith('.CSV.GZ'):
-            name = name[:-7]
-        elif name.endswith('.CSV'):
-            name = name[:-4]
-        return name.lower()  # Normalize to lowercase like ricu
     
     def _should_shard(self, csv_path: Path) -> bool:
         """Determine if a file should be sharded.

@@ -41,8 +41,10 @@ import enum
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
+import tempfile
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -50,6 +52,37 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .schema import EvidenceRecord
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    """Write ``payload`` to ``path`` atomically (temp file + fsync + os.replace).
+
+    The evidence index and content-addressed blobs are the manuscript's
+    provenance backbone; a crash during a bare write would truncate them and
+    fail the SHA-256 verification / leave the index unreadable. os.replace is
+    atomic on POSIX, so a reader sees either the old or the new complete file.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    """Atomic text write; see :func:`_atomic_write_bytes`."""
+    _atomic_write_bytes(path, text.encode(encoding))
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +196,7 @@ _NUMERIC_LEAF_RE = re.compile(
 _NUMERIC_IN_PROSE_RE = re.compile(
     r"(?<![A-Za-z_\d.])"                         # avoid mid-identifier digits
     r"(?P<value>"
+    r"(?:"                                       # --- general numeric form ---
     r"[-+]?"
     r"(?:"
     r"\d{1,3}(?:,\d{3})+(?:\.\d+)?"              # comma-grouped (with optional fraction)
@@ -174,6 +208,15 @@ _NUMERIC_IN_PROSE_RE = re.compile(
     r"\d{3,}"                                    # ≥3-digit integer
     r")"
     r"%?"                                        # optional percent suffix
+    r")"
+    r"|"                                         # --- short percent form ---
+    # A bare 1-2 digit integer is normally rejected (it collides with
+    # SOFA-2, "Section 4", "n=42", ...), but a trailing percent sign
+    # disambiguates it as a data value (mortality 23%, 8% decline), so it
+    # is bound. The lookahead still excludes confidence / credible-interval
+    # *levels* ("95% CI", "90% confidence", "99% credible interval"), which
+    # are labels, not claims.
+    r"\d{1,2}%(?!\s*(?:CI\b|confidence|credible))"
     r")"
     r"(?![A-Za-z_\d]|\.\d)"                       # not followed by identifier / decimal continuation
 )
@@ -618,26 +661,26 @@ class EvidenceStore:
             return []
 
     def _save(self) -> None:
-        self.index_path.write_text(
+        _atomic_write_text(
+            self.index_path,
             json.dumps(
                 [r.model_dump(mode="json") for r in self._records],
                 indent=2,
                 ensure_ascii=False,
                 default=str,
             ),
-            encoding="utf-8",
         )
-        self.aliases_path.write_text(
+        _atomic_write_text(
+            self.aliases_path,
             json.dumps(self._aliases, indent=2, ensure_ascii=False, sort_keys=True),
-            encoding="utf-8",
         )
-        self.numeric_claims_path.write_text(
+        _atomic_write_text(
+            self.numeric_claims_path,
             json.dumps(
                 [c.to_dict() for c in self._numeric_claims],
                 indent=2,
                 ensure_ascii=False,
             ),
-            encoding="utf-8",
         )
 
     def _add_alias(self, alias: str, evidence_id: str) -> None:
@@ -855,7 +898,7 @@ class EvidenceStore:
             _id_prefix(kind, Path(filename).stem), digest
         )
         target = self.dir / f"{eid}__{filename}"
-        target.write_bytes(payload)
+        _atomic_write_bytes(target, payload)
         with self._lock:
             return self._register_target(
                 evidence_id=eid,

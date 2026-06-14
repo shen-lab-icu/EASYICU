@@ -5669,7 +5669,6 @@
   {
     "name": "mimic_demo",
     "class_prefix": [
-      "miiv",
       "mimic_demo",
       "mimic"
     ],
@@ -11019,6 +11018,7 @@
       "data_range": {
         "files": "data_range.parquet",
         "defaults": {
+          "id_var": "CaseID",
           "index_var": "Offset",
           "time_vars": [
             "Offset",

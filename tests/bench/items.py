@@ -17,7 +17,7 @@ into one will not luck into all six.
 
 | key                     | predictor → outcome     | pitfall the agent must respect |
 |-------------------------|-------------------------|--------------------------------|
-| sofa2_mortality         | sofa2 → death           | ordinal; sofa2==0 is missingness |
+| sofa2_mortality         | sofa2 → death           | ordinal severity; 0 is a real low score, not missing |
 | aki_kdigo_mortality     | kdigo_stage → death     | ordinal stage; right-skewed creat |
 | lactate_mortality       | lact → death            | log-skew; report median, not mean |
 | vasopressor_mortality   | vaso → death            | binary intervention windowing   |
@@ -79,7 +79,7 @@ def _common_demographics(rng, n: int):
 
 
 def _sofa2_cohort(seed: int):
-    """The canonical SOFA-2 mortality cohort with the missingness anomaly."""
+    """The canonical SOFA-2 → mortality cohort with a component-completeness signal."""
     import numpy as np
     import pandas as pd
 
@@ -89,13 +89,19 @@ def _sofa2_cohort(seed: int):
     base = rng.integers(1, 14, size=n, endpoint=False)
     miss = rng.random(n) < 0.10
     truly_low = rng.random(n) < 0.04
-    sofa2 = np.where(miss, 0, np.where(truly_low, 0, base))
+    # A SOFA-2 of 0 is only ever a real low score; under-measured patients
+    # keep their real ``base`` score and the completeness is carried
+    # separately in ``sofa2_n_components`` (we do NOT collapse missing
+    # components into a spurious 0). The death bump on ``miss`` is
+    # legitimate MNAR, not a zero artefact.
+    sofa2 = np.where(truly_low, 0, base)
     logit = -3.5 + 0.18 * sofa2 + 0.012 * (age - 65) + np.where(miss, 1.5, 0.0)
     death = (rng.random(n) < 1.0 / (1.0 + np.exp(-logit))).astype(int)
     los = rng.gamma(2.0, 1.5 + 0.15 * sofa2, size=n).clip(0.1, 60)
     return pd.DataFrame({
         "stay_id": np.arange(1, n + 1),
         "age": age, "sex": sex, "sofa2": sofa2,
+        "sofa2_n_components": np.where(miss, 0, 6),
         "los_icu": los, "death": death,
     })
 
@@ -218,7 +224,7 @@ BENCH_ITEMS: List[BenchItem] = [
         expected_or_direction=+1,
         cohort_factory=_sofa2_cohort,
         expected_finding_substrings=[
-            "non-monotonic", "sofa2", "missingness",
+            "sofa2", "completeness",
         ],
         inclusion_criteria=["First ICU admission", "Age ≥ 18 years",
                             "ICU LoS ≥ 6 hours"],

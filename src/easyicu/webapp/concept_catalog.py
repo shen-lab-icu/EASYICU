@@ -141,10 +141,6 @@ CONCEPT_DICTIONARY = {
     'total_input_ml': ('Total IV Fluid Input', '总输液量', 'mL/hr'),
     'fluid_balance': ('Hourly Fluid Balance', '每小时液体平衡', 'mL/hr'),
     'fluid_balance_cumulative': ('Cumulative Fluid Balance', '累计液体平衡', 'mL'),
-    'uo_6h': ('6h Avg Urine Output Rate', '6小时平均尿量速率', 'mL/kg/h'),
-    'uo_12h': ('12h Avg Urine Output Rate', '12小时平均尿量速率', 'mL/kg/h'),
-    'uo_24h': ('24h Avg Urine Output Rate', '24小时平均尿量速率', 'mL/kg/h'),
-
     # 神经系统
     'avpu': ('AVPU Scale', 'AVPU意识评分', ''),
     'egcs': ('Eye Component of GCS', 'GCS眼睛评分', ''),
@@ -306,7 +302,7 @@ CONCEPT_DESCRIPTIONS = {
     'safi': ('SpO2/FiO2 ratio - non-invasive alternative to PaFi (used when SpO2<98%)', '脉氧/吸氧比 - PaFi的非侵入性替代（当SpO2<98%时使用）'),
     'fio2': ('Fraction of inspired oxygen (21-100%)', '吸入氧浓度（21-100%）'),
     'vent_ind': ('Mechanical ventilation indicator (boolean)', '机械通气指示（布尔值）'),
-    'ecmo_indication': ("ECMO indication type: 'respiratory' (for lung failure, auto-scores 4 in SOFA-2 resp) or 'cardiovascular' (for heart failure, scores in SOFA-2 cardio as mech_circ_support)", "ECMO适应症类型：'respiratory'（肺衰竭，SOFA-2呼吸评分自动为4分）或'cardiovascular'（心衰，计入SOFA-2心血管的机械循环支持）"),
+    'ecmo_indication': ("ECMO indication type: 'respiratory' (lung failure) or 'cardiovascular' (heart failure). Any ECMO auto-scores 4 in SOFA-2 resp; cardiovascular indication also scores in SOFA-2 cardio as mech_circ_support", "ECMO适应症类型：'respiratory'（肺衰竭）或'cardiovascular'（心衰）。任何ECMO均使SOFA-2呼吸评分为4分；心血管适应症还计入SOFA-2心血管的机械循环支持"),
     'adv_resp': ('Advanced respiratory support indicator: IMV (invasive mechanical ventilation), NIV (non-invasive ventilation), HFNC (high-flow nasal cannula), CPAP, or BiPAP - required for SOFA-2 respiratory scores 3-4', '高级呼吸支持指示：IMV（有创机械通气）、NIV（无创通气）、HFNC（经鼻高流量）、CPAP或BiPAP - SOFA-2呼吸评分3-4分的必要条件'),
 
     # Blood gas

@@ -601,7 +601,7 @@ def sofa2_resp(
     """Calculate SOFA-2 respiratory component.
     
     SOFA-2 respiratory scoring (2025 version):
-    - Score 4: P/F ≤75 with advanced support OR ECMO (respiratory indication)
+    - Score 4: P/F ≤75 with advanced support OR any ECMO
     - Score 3: P/F ≤150 with advanced support
     - Score 2: P/F ≤225
     - Score 1: P/F ≤300
@@ -650,15 +650,10 @@ def sofa2_resp(
     # Check for advanced respiratory support
     on_adv_resp = _is_true_safe(adv_resp) if adv_resp is not None else pd.Series(False, index=idx)
     
-    # Check for ECMO (respiratory indication auto-scores 4)
-    on_ecmo_resp = pd.Series(False, index=idx)
-    if ecmo is not None and ecmo_indication is not None:
-        on_ecmo = _is_true_safe(ecmo)
-        is_resp_indication = (ecmo_indication == 'respiratory')
-        on_ecmo_resp = on_ecmo & is_resp_indication
-    elif ecmo is not None:
-        # Default ECMO to respiratory if indication unknown
-        on_ecmo_resp = _is_true_safe(ecmo)
+    # SOFA-2 footnote (i): any ECMO floors the respiratory component to 4.
+    # The indication is still accepted so component callback dispatch can pass
+    # the full concept set through unchanged.
+    on_ecmo = _is_true_safe(ecmo) if ecmo is not None else pd.Series(False, index=idx)
     
     # Score 1: P/F ≤300 (or SaFi ≤300)
     score[ratio <= 300] = 1
@@ -672,9 +667,9 @@ def sofa2_resp(
     mask3 = mask3_ratio & on_adv_resp
     score[mask3] = 3
     
-    # Score 4: P/F ≤75 (or SaFi ≤120) WITH advanced support OR ECMO (respiratory)
+    # Score 4: P/F ≤75 (or SaFi ≤120) WITH advanced support OR any ECMO
     mask4_ratio = (ratio <= 75) if safi is None else ((ratio <= 75) | ((use_safi) & (ratio <= 120)))
-    mask4 = (mask4_ratio & on_adv_resp) | on_ecmo_resp
+    mask4 = (mask4_ratio & on_adv_resp) | on_ecmo
     score[mask4] = 4
     
     return score

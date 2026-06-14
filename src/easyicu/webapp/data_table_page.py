@@ -72,6 +72,62 @@ def _render_preview_csv_download(
     )
 
 
+def _render_data_table_detail_gate(
+    *,
+    lang: str,
+    selected_module: str,
+    module_feature_count: int,
+    patient_count: int,
+) -> bool:
+    """Return True when the heavy table preview controls should render."""
+    details_open = bool(st.session_state.get("data_table_details_open"))
+    title = "Table details" if lang == "en" else "表格细节"
+    if details_open:
+        body = (
+            "Preview controls, merged rows, filters, and CSV export are visible below."
+            if lang == "en"
+            else "下方已显示预览控件、合并行、筛选与 CSV 导出。"
+        )
+        action = "Hide table details" if lang == "en" else "收起表格细节"
+        tone = "open"
+        button_key = "data_table_hide_details"
+    else:
+        body = (
+            "Keep the review workspace light by default. Open details only when you need source records, filters, or a CSV preview."
+            if lang == "en"
+            else "默认保持审阅工作区轻量；需要来源记录、筛选或 CSV 预览时再打开细节。"
+        )
+        action = "Open table details" if lang == "en" else "打开表格细节"
+        tone = "collapsed"
+        button_key = "data_table_open_details"
+
+    metric_html = "".join(
+        f'<span><b>{html.escape(str(value))}</b>{html.escape(str(label))}</span>'
+        for label, value in (
+            ("module" if lang == "en" else "模块", selected_module),
+            ("review features" if lang == "en" else "审阅特征", module_feature_count),
+            ("ICU stays" if lang == "en" else "ICU stay", patient_count),
+        )
+    )
+    st.markdown(
+        f'''
+        <div class="dt-detail-gate {tone}">
+            <div>
+                <div class="dt-detail-gate-kicker">{html.escape(title)}</div>
+                <div class="dt-detail-gate-title">{html.escape("Source records are optional" if lang == "en" else "来源记录按需查看")}</div>
+                <p>{html.escape(body)}</p>
+                <div class="dt-detail-gate-metrics">{metric_html}</div>
+            </div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+    if st.button(action, key=button_key, use_container_width=True):
+        st.session_state["data_table_details_open"] = not details_open
+        st.rerun()
+    return details_open
+
+
 def render_data_table_subtab(app_context: dict[str, Any] | None = None):
     """渲染数据大表子模块 - 让用户按模块查看已加载的数据。"""
     if app_context is not None:
@@ -131,10 +187,18 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
     unique_feature_count = len(st.session_state.loaded_concepts)
 
     patient_count = len(st.session_state.patient_ids) if st.session_state.patient_ids else 0
+    selected_source_count = int(st.session_state.get("_review_source_concept_count") or unique_feature_count)
+    selection_suffix = ""
+    if selected_source_count and selected_source_count != unique_feature_count:
+        selection_suffix = (
+            f" · from {selected_source_count} selected export concepts"
+            if lang == 'en'
+            else f" · 来自 {selected_source_count} 个已选导出概念"
+        )
     loaded_summary = (
-        f"{len(loaded_by_module)} modules loaded · {unique_feature_count} features · {patient_count} patients"
+        f"{patient_count} ICU stays · {unique_feature_count} review features{selection_suffix}"
         if lang == 'en'
-        else f"已加载 {len(loaded_by_module)} 个模块 · {unique_feature_count} 个特征 · {patient_count} 名患者"
+        else f"{patient_count} 个 ICU stay · {unique_feature_count} 个审阅特征{selection_suffix}"
     )
     st.markdown(
         f'''
@@ -177,7 +241,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
             )
         with picker_cols[2]:
             st.markdown(
-                f'<div class="tiny-stat-card"><div class="tiny-label">{"Features" if lang == "en" else "特征数"}</div><div class="tiny-value">{unique_feature_count}</div></div>',
+                f'<div class="tiny-stat-card"><div class="tiny-label">{"Review features" if lang == "en" else "审阅变量"}</div><div class="tiny-value">{unique_feature_count}</div></div>',
                 unsafe_allow_html=True,
             )
 
@@ -198,8 +262,8 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
             tags_html += f'<span class="module-feature-chip muted">+{preview_meta["overflow_count"]}</span>'
 
         selected_label = "Selected Module" if lang == 'en' else "当前模块"
-        features_label = "Features" if lang == 'en' else "特征数"
-        patients_label = "Patients" if lang == 'en' else "患者数"
+        features_label = "Review features" if lang == 'en' else "审阅变量"
+        patients_label = "ICU stays" if lang == 'en' else "ICU stay"
         glance_title = "Module at a glance" if lang == 'en' else "模块一览"
         glance_note = (
             "Workspace-wide context for the selected module before you switch to preview mode."
@@ -244,6 +308,13 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
             unsafe_allow_html=True,
         )
         st.markdown('<div class="dt-section-separator"></div>', unsafe_allow_html=True)
+        if not _render_data_table_detail_gate(
+            lang=lang,
+            selected_module=selected_module,
+            module_feature_count=len(module_concepts),
+            patient_count=patient_count,
+        ):
+            return
 
         view_mode_label = "Preview Mode" if lang == 'en' else "预览模式"
         view_modes = ["Merge All (Wide Table)", "Single Feature"] if lang == 'en' else ["合并全部（宽表）", "单个特征"]

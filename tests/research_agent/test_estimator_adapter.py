@@ -12,9 +12,9 @@ def _synthetic_binary_frame(n: int = 900, seed: int = 7) -> pd.DataFrame:
     logit = -0.3 + np.log(1.8) * x
     p = 1 / (1 + np.exp(-logit))
     y = rng.binomial(1, p)
-    y_db = rng.binomial(1, np.clip(p + 0.02, 0.01, 0.99))
-    y_28 = rng.binomial(1, np.clip(p - 0.02, 0.01, 0.99))
-    return pd.DataFrame({"x": x, "y": y, "y_db": y_db, "y_28": y_28})
+    y_alt_1 = rng.binomial(1, np.clip(p + 0.02, 0.01, 0.99))
+    y_alt_2 = rng.binomial(1, np.clip(p - 0.02, 0.01, 0.99))
+    return pd.DataFrame({"x": x, "y": y, "y_alt_1": y_alt_1, "y_alt_2": y_alt_2})
 
 
 def _adapter_records(df: pd.DataFrame):
@@ -30,8 +30,8 @@ def _adapter_records(df: pd.DataFrame):
                     "estimator_kind": "logistic",
                     "missing_strategy": "complete_case",
                     "outcome_columns": {
-                        "database_specific_mortality": "y_db",
-                        "28_day_mortality_if_available": "y_28",
+                        "author_defined_outcome_1": "y_alt_1",
+                        "author_defined_outcome_2": "y_alt_2",
                     },
                 }
             },
@@ -149,3 +149,62 @@ def test_adapter_rows_override_coder_rows_with_warning() -> None:
     assert any(specs[0].spec_id in warning for warning in warnings)
     adapter_row = next(row for row in rows if row.spec_id == specs[0].spec_id)
     assert adapter_row.point_estimate != 99.0
+
+
+# ---------------------------------------------------------------------------
+# Numerical robustness: a rank-deficient design (constant / collinear columns)
+# must not dead-end the fit with "Singular matrix". Mirrors the E1 run15 failure
+# where a missing-indicator was constant after imputation alongside its variable.
+# ---------------------------------------------------------------------------
+
+
+def test_fit_estimator_drops_collinear_and_converges():
+    from easyicu.research_agent.estimators import fit_estimator
+
+    rng = np.random.default_rng(0)
+    n = 1500
+    sepsis3 = rng.binomial(1, 0.4, n)
+    age = rng.normal(65, 15, n)
+    p = 1 / (1 + np.exp(-(-2.0 + 0.8 * sepsis3 + 0.01 * age)))
+    y = rng.binomial(1, p)
+    X = pd.DataFrame(
+        {
+            "sepsis3": sepsis3,
+            "age": age,
+            "lact_measured": np.ones(n),  # constant -> zero variance
+            "age_dup": age * 1.0,  # perfectly collinear with age
+        }
+    )
+
+    # Plain MLE on this design is singular.
+    import statsmodels.api as sm
+
+    try:
+        sm.Logit(y, sm.add_constant(X.astype(float))).fit(disp=0)
+        raised = False
+    except Exception:
+        raised = True
+    assert raised, "design should be singular for a plain fit"
+
+    result = fit_estimator(cohort=None, X=X, y=pd.Series(y), kind="logistic")
+    assert result.converged is True
+    assert result.point_estimate is not None and np.isfinite(result.point_estimate)
+    assert result.ci_low is not None and result.ci_high is not None
+    # The exposure coefficient survives; the degenerate columns are dropped.
+    assert "lact_measured" in result.notes and "age_dup" in result.notes
+
+
+def test_robust_design_keeps_exposure_and_const():
+    from easyicu.research_agent.estimators import _robust_design
+
+    x = pd.DataFrame(
+        {
+            "const": np.ones(50),
+            "sepsis3": np.r_[np.zeros(25), np.ones(25)],
+            "flag": np.ones(50),  # constant -> dropped
+            "sepsis3_copy": np.r_[np.zeros(25), np.ones(25)],  # collinear -> dropped
+        }
+    )
+    reduced, dropped = _robust_design(x, keep=["const", "sepsis3"])
+    assert list(reduced.columns) == ["const", "sepsis3"]
+    assert set(dropped) == {"flag", "sepsis3_copy"}

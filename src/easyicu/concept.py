@@ -26,6 +26,7 @@ from .datasource import (
 )
 from .table import ICUTable, WinTbl
 from .concept_callbacks import ConceptCallbackContext, execute_concept_callback
+from .concept_availability_signal import ConceptAvailabilityRecord
 from . import compat
 
 logger = logging.getLogger(__name__)
@@ -33,11 +34,82 @@ logger = logging.getLogger(__name__)
 # 全局调试开关 - 设置为 False 可以减少输出
 DEBUG_MODE = False
 
-# 避免在分批/分块加载时重复打印同一条“数据库未配置数据源”提示
-_MISSING_SOURCE_WARNED: set[tuple[str, str]] = set()
+# 避免在分批/分块加载时重复打印同一条 availability 提示
+_MISSING_SOURCE_WARNED: set[tuple[str, ...]] = set()
 
 # Concepts that require hourly maxima (vasoactive infusion rates)
 VASO_RATE_CONCEPTS = {"dopa_rate", "dobu_rate", "epi_rate", "norepi_rate", "adh_rate"}
+
+# 窗口/递归聚合方法的概念级覆盖 —— 单一声明式来源（REFACTOR 2026-06）。
+# 这些是 change_interval 在同一时间桶内聚合"最终概念值"时使用的标量方法，
+# 区别于概念字典里的 per-source `aggregate` 列表（后者是每个数据源各自的聚合）。
+# 历史上这两条规则以散落的 `if concept_name == 'gcs'` / `sofa_max_concepts`
+# 内联在 _apply_change_interval 流程里，难审计；现集中到此表。
+# 值为 (method, force):
+#   - force=True : 始终覆盖为 method（即使传入了别的显式聚合）—— 用于 gcs，
+#                  取窗口最小值（最差神经状态），与 R ricu recursive gcs 一致。
+#   - force=False: 仅当未另行确定聚合方法 (agg_method is None) 时套用 —— 用于
+#                  sofa_cardio / sofa2_cardio，取窗口最大值保留升压药尖峰严重度，
+#                  默认 median 会把尖峰稀释，ricu 取窗口最大。
+WINDOW_AGGREGATE_OVERRIDES: Dict[str, tuple] = {
+    "gcs": ("min", True),
+    "sofa_cardio": ("max", False),
+    "sofa2_cardio": ("max", False),
+}
+
+
+def resolve_window_aggregate(concept_name: str, agg_method):
+    """套用概念级窗口聚合覆盖，返回最终的 agg_method（纯函数，便于单测）。
+
+    语义与历史内联实现逐字等价：force=True 始终覆盖（除非已等于目标方法），
+    force=False 仅在 agg_method 为 None 时套用。未登记的概念原样返回。
+    """
+    override = WINDOW_AGGREGATE_OVERRIDES.get(concept_name)
+    if override is None:
+        return agg_method
+    method, force = override
+    if force:
+        if agg_method is None or (isinstance(agg_method, str) and agg_method != method):
+            return method
+        return agg_method
+    if agg_method is None:
+        return method
+    return agg_method
+
+
+class _AvailabilityLoadContext:
+    """Per-call mutable state for optional concept availability tracking."""
+
+    def __init__(self, database: str) -> None:
+        self.database = database
+        self.sources_defined: Dict[str, tuple[str, ...]] = {}
+        self.missing_tables: Dict[str, set[str]] = {}
+        self._lock = RLock()
+
+    def set_sources(self, concept_name: str, sources: Iterable[object]) -> None:
+        table_names = tuple(
+            dict.fromkeys(
+                str(getattr(source, "table"))
+                for source in sources
+                if getattr(source, "table", None)
+            )
+        )
+        with self._lock:
+            self.sources_defined[concept_name] = table_names
+
+    def record_source_unavailable(self, concept_name: str, table_name: object) -> None:
+        if not table_name:
+            return
+        with self._lock:
+            self.missing_tables.setdefault(concept_name, set()).add(str(table_name))
+
+    def missing_for(self, concept_name: str) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(sorted(self.missing_tables.get(concept_name, set())))
+
+    def sources_for(self, concept_name: str) -> tuple[str, ...]:
+        with self._lock:
+            return self.sources_defined.get(concept_name, ())
 
 def _debug(msg: str) -> None:
     if DEBUG_MODE:
@@ -68,17 +140,93 @@ def _default_id_columns_for_db(db_name: Optional[str]) -> List[str]:
         "hirid": ["patientid"],
         "sic": ["CaseID"],  # 🔧 FIX 2025-01-31: Use CaseID (uppercase) to match actual SICdb data
         "miiv": ["stay_id"],
-        "mimic_demo": ["stay_id"],
+        # 🔧 FIX 2026-06: mimic_demo 是 MIMIC-III demo (physionet mimiciii-demo/1.4),
+        # 与 mimic 一样用 icustay_id, 而非 miiv 的 stay_id。此前误置为 stay_id 会导致
+        # 空/默认结果的 id 列与真实数据(icustay_id)不一致, SOFA 合并报 ID 冲突。
+        "mimic_demo": ["icustay_id"],
         "mimic": ["icustay_id"],  # 🔧 FIX 2026-02-06: MIMIC-III uses icustay_id
     }
 
     # Check explicit mapping first (mimic → icustay_id, miiv → stay_id)
     if db in mapping:
         return mapping[db]
-    # Fallback for mimic variants (e.g. mimic_demo if not in mapping)
+    # Fallback for mimic variants (MIMIC-III family uses icustay_id; miiv 不以 'mimic' 开头)
     if db.startswith("mimic"):
-        return ["stay_id"]
+        return ["icustay_id"]
     return mapping.get(db, ["stay_id"])
+
+
+def _definition_has_runtime_dependencies(definition: object) -> bool:
+    return bool(
+        getattr(definition, "sub_concepts", None)
+        or getattr(definition, "depends_on", None)
+        or getattr(definition, "callback", None)
+    )
+
+
+def _availability_table_stats(
+    table: object,
+    concept_name: str,
+) -> tuple[Optional[int], bool]:
+    if hasattr(table, "data"):
+        frame = table.data
+        value_col = getattr(table, "value_column", None) or concept_name
+    elif isinstance(table, pd.DataFrame):
+        frame = table
+        value_col = concept_name
+    else:
+        return None, False
+
+    n_rows = len(frame)
+    if n_rows == 0:
+        return 0, False
+
+    if value_col in frame.columns:
+        return n_rows, bool(frame[value_col].notna().any())
+    if concept_name in frame.columns:
+        return n_rows, bool(frame[concept_name].notna().any())
+    return n_rows, False
+
+
+def _build_availability_record(
+    *,
+    concept_name: str,
+    definition: object,
+    database: str,
+    table: object,
+    availability_context: _AvailabilityLoadContext,
+) -> ConceptAvailabilityRecord:
+    sources_defined = availability_context.sources_for(concept_name)
+    missing_tables = availability_context.missing_for(concept_name)
+    n_rows, has_present_value = _availability_table_stats(table, concept_name)
+
+    if not sources_defined and not _definition_has_runtime_dependencies(definition):
+        reason = "unmapped"
+        note = "No source is defined for this concept/database pair."
+    elif (
+        sources_defined
+        and missing_tables
+        and set(missing_tables) >= set(sources_defined)
+        and not has_present_value
+    ):
+        reason = "source_unavailable"
+        note = "All defined source tables were unavailable at load time."
+    elif not has_present_value:
+        reason = "data_missing"
+        note = "Source mapping exists and loaded, but no usable values were present."
+    else:
+        reason = "mapped_present"
+        note = None
+
+    return ConceptAvailabilityRecord(
+        concept=concept_name,
+        database=database,
+        reason=reason,  # type: ignore[arg-type]
+        n_rows=n_rows,
+        sources_defined=sources_defined,
+        missing_tables=missing_tables,
+        note=note,
+    )
 
 
 def _normalize_patient_ids_for_cache(patient_ids: Optional[Iterable[object]]) -> Optional[object]:
@@ -641,12 +789,20 @@ class ConceptResolver:
         concept_workers: int = -1,  # 🔧 -1 表示自动检测
         _batch_loading: bool = False,  # 🔧 批量加载模式标志，减少诊断输出
         _skip_concept_cache: bool = False,  # 🔧 跳过概念缓存，用于回调内部加载
+        availability_sink: Optional[MutableMapping[str, ConceptAvailabilityRecord]] = None,
         **kwargs,  # Additional parameters for callbacks (e.g., win_length, worst_val_fun)
     ):
         names = [name for name in concept_names]
         required_names = self._expand_dependencies(names)  # Ensure dependencies are expanded
         tables: Dict[str, ICUTable] = {}
         aggregators = self._normalise_aggregators(aggregate, required_names)
+        config = data_source.config
+        db_name = config.name if hasattr(config, 'name') else 'unknown'
+        availability_context = (
+            _AvailabilityLoadContext(str(db_name))
+            if availability_sink is not None
+            else None
+        )
         
         # 🔧 嵌套调用深度跟踪：递归概念会嵌套调用 load_concepts
         # 只有顶层调用才应该清除缓存
@@ -693,6 +849,11 @@ class ConceptResolver:
         for name in names:
             if name not in self.dictionary:
                 raise KeyError(f"Concept '{name}' not present in dictionary")
+            if availability_context is not None:
+                availability_context.set_sources(
+                    name,
+                    self.dictionary[name].for_data_source(config),
+                )
 
         # 🚀 智能并行策略：根据系统资源自动配置并行度
         # -1 表示自动检测，0 表示禁用并行，>0 表示指定的并行数
@@ -1014,10 +1175,12 @@ class ConceptResolver:
                         # path and _align_time_to_admission expect hours. Convert to hours here
                         # to match single-concept behavior (avoid downstream time-unit mismatch
                         # when merging sub-concepts, e.g. in _callback_news/mews).
+                        # 转换因子统一走 time_units.minutes_to_hours_series（单一来源，禁止裸 /60.0）。
                         _db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
                         if _db_name == 'aumc' and _time_col_out == 'measuredat_minutes':
+                            from .time_units import minutes_to_hours_series
                             batch_df = batch_df.copy()
-                            batch_df['measuredat_minutes'] = batch_df['measuredat_minutes'] / 60.0
+                            batch_df['measuredat_minutes'] = minutes_to_hours_series(batch_df['measuredat_minutes'])
 
                         covered_names = set()
                         for concept_name in batch_itemids:
@@ -1135,6 +1298,7 @@ class ConceptResolver:
                 align_to_admission,
                 kwargs,
                 _skip_concept_cache=_skip_concept_cache,
+                availability_context=availability_context,
             )
             if verbose and logger.isEnabledFor(logging.INFO):
                 if isinstance(concept_table, ICUTable) or hasattr(concept_table, 'data'):
@@ -1166,6 +1330,38 @@ class ConceptResolver:
                 name: results[name]
                 for name in names
             }
+
+            if availability_sink is not None and availability_context is not None:
+                unavailable_by_table: Dict[str, List[str]] = {}
+                for name in names:
+                    record = _build_availability_record(
+                        concept_name=name,
+                        definition=self.dictionary[name],
+                        database=availability_context.database,
+                        table=tables[name],
+                        availability_context=availability_context,
+                    )
+                    availability_sink[name] = record
+                    if record.reason == "source_unavailable":
+                        for table_name in record.missing_tables:
+                            unavailable_by_table.setdefault(table_name, []).append(name)
+
+                for table_name, affected_concepts in sorted(unavailable_by_table.items()):
+                    warn_key = (
+                        "source_unavailable",
+                        str(availability_context.database),
+                        str(table_name),
+                    )
+                    if warn_key in _MISSING_SOURCE_WARNED:
+                        continue
+                    logger.warning(
+                        "source table '%s' not available for %s; concepts [%s] marked source_unavailable",
+                        table_name,
+                        availability_context.database,
+                        ", ".join(sorted(set(affected_concepts))),
+                    )
+                    _MISSING_SOURCE_WARNED.add(warn_key)
+                self._last_availability = dict(availability_sink)
 
             if not merge:
                 # 如果是r_compatible模式且只有一个概念，返回ricu.R格式的DataFrame
@@ -1306,6 +1502,7 @@ class ConceptResolver:
         verbose: bool = True,
         interval: Optional[pd.Timedelta] = None,
         align_to_admission: bool = True,
+        availability_context: Optional[_AvailabilityLoadContext] = None,
         **kwargs,  # Additional parameters for callbacks
     ) -> ICUTable:
         # 🔧 批量加载模式：减少诊断输出
@@ -1373,6 +1570,7 @@ class ConceptResolver:
                                 verbose=False,
                                 interval=interval,
                                 align_to_admission=align_to_admission,
+                                availability_context=availability_context,
                                 _bypass_callback=True,  # Prevent infinite recursion
                             )
                             if sub_result is not None:
@@ -1406,6 +1604,8 @@ class ConceptResolver:
         config = data_source.config
         
         sources = definition.for_data_source(config)
+        if availability_context is not None:
+            availability_context.set_sources(concept_name, sources)
         if not sources:
             # 🔧 FIX: 当数据源未配置时，返回空表而不是报错
             # 这样用户可以继续提取其他概念，并在结果中看到哪些概念没有数据
@@ -1439,48 +1639,17 @@ class ConceptResolver:
         # 🔧 提取数据库名称，用于后续的数据库特定处理
         db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
 
-        # 🚀 预检查：多源概念的 value_transform 回调计数
-        # 当 2+ 个源使用 value_transform（percent_as_numeric, set_val_na, fahr_to_cels）时，
-        # DuckDB 每源单独 MEDIAN 聚合会产生 median-of-medians（≠ median-of-all-raw-data）。
-        # 禁止 DuckDB 聚合以保持与 R ricu 一致的跨源池化 MEDIAN。
-        _n_value_transform_sources = 0
-        for _src in sources:
-            _cb = getattr(_src, 'callback', None)
-            if isinstance(_cb, str):
-                _cb_stripped = _cb.strip()
-                if (_cb_stripped == 'transform_fun(percent_as_numeric)' or
-                    (_cb_stripped.startswith('convert_unit(') and
-                     ('set_val(' in _cb_stripped or 'fahr_to_cels' in _cb_stripped))):
-                    _n_value_transform_sources += 1
-        _block_duckdb_value_transform = _n_value_transform_sources > 1
-
-        # 🔧 FIX 2026-05: 同表多源检测
-        # 当 2+ 个源指向同一个表时（如 AUMC o2sat 的 [6709, 8903] + [12311 *100]），
-        # 每个源单独在 DuckDB 中聚合会得到 median-of-medians 而不是池化 median。
-        # R ricu 的行为是把所有源的原始值一起 pool，再一次性 median。
-        # 为了匹配 ricu，禁止同表多源使用 DuckDB 预聚合，让 change_interval 做统一聚合。
-        _table_source_counts: Dict[str, int] = {}
-        for _src in sources:
-            _tbl = getattr(_src, 'table', None)
-            if _tbl:
-                _table_source_counts[_tbl] = _table_source_counts.get(_tbl, 0) + 1
-        _block_duckdb_same_table = any(cnt > 1 for cnt in _table_source_counts.values())
-
-        # 🔧 FIX 2026-05: 多源（不论是否同表）聚合一致性
-        # 即使源分布在不同表（如 MIMIC o2sat 的 chartevents + labevents），
-        # 每源独立 DuckDB MEDIAN 后 concat 再 mean，仍与 ricu 的池化 median 不一致。
-        # 对所有 num_cncpt 且至少有一个数值列的源 ≥ 2 情况，禁用 DuckDB 预聚合。
-        # rgx_itm 类源常量比较稀疏，保持原路径。
-        _n_plain_num_sources = 0
-        for _src in sources:
-            _cb = getattr(_src, 'callback', None)
-            _cls = getattr(_src, 'class_name', None)
-            if _cls == 'rgx_itm':
-                continue
-            # plain numeric source OR simple transform source
-            if _cb is None or isinstance(_cb, str):
-                _n_plain_num_sources += 1
-        _block_duckdb_multi_numeric = _n_plain_num_sources >= 2
+        # 🔧 REFACTOR 2026-06: 跨源池化决策收敛到单一策略函数（pooling.compute_pooling_decision）。
+        # 历史上这里有三段内联代码分别计算 _block_duckdb_value_transform /
+        # _block_duckdb_same_table / _block_duckdb_multi_numeric，散落难审计、易回归。
+        # 现统一由 pooling 模块计算（语义逐字等价，见 tests/test_ricu_alignment.py），
+        # 目的都是：当一个概念有多个数值源时，禁用 DuckDB 每源预聚合，避免
+        # median-of-medians，让 change_interval 做一次性跨源池化（匹配 R ricu）。
+        from .pooling import compute_pooling_decision
+        _pool_decision = compute_pooling_decision(sources)
+        _block_duckdb_value_transform = _pool_decision.block_value_transform
+        _block_duckdb_same_table = _pool_decision.block_same_table
+        _block_duckdb_multi_numeric = _pool_decision.block_multi_numeric
 
         for source in sources:
             _convert_unit_callback_for_duckdb = False  # 每个 source 重置
@@ -2739,6 +2908,8 @@ class ConceptResolver:
                         if verbose:
                             if DEBUG_MODE: print(f"   💾 缓存表 {source.table}: {len(patient_filter_in_filters.value)} 个患者")
                 except (KeyError, FileNotFoundError, ValueError) as e:
+                    if availability_context is not None:
+                        availability_context.record_source_unavailable(concept_name, source.table)
                     # 如果表不存在，跳过这个源
                     if DEBUG_MODE or logger.isEnabledFor(logging.DEBUG):
                         logger.debug(f"Table '{source.table}' not available: {type(e).__name__}: {str(e)[:100]}")
@@ -4764,12 +4935,13 @@ class ConceptResolver:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
             
-            # 转换所有时间列（从分钟到小时）
+            # 转换所有时间列（从分钟到小时）— 统一走 time_units（单一来源）
+            from .time_units import minutes_to_hours_series
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
-                    data[col] = data[col] / 60.0
+                    data[col] = minutes_to_hours_series(data[col])
             return data
-        
+
         if db_name == 'aumc':
             # AUMC时间列是绝对时间戳（毫秒，已在datasource.py中转换为分钟）
             # R ricu 的行为：使用绝对时间（小时），不减去 admittedat
@@ -4802,12 +4974,13 @@ class ConceptResolver:
             if not cols_to_convert:
                 return data
             
-            # 时间转换：只将分钟转换为小时（不减去 admittedat）
+            # 时间转换：只将分钟转换为小时（不减去 admittedat）— 统一走 time_units
+            from .time_units import minutes_to_hours_series
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
-                    # 分钟转小时
-                    data[col] = data[col] / 60.0
-            
+                    # 分钟转小时（单一来源转换因子）
+                    data[col] = minutes_to_hours_series(data[col])
+
             return data
         
         if db_name == 'sic':
@@ -4827,17 +5000,25 @@ class ConceptResolver:
                             cols_to_convert.add(col)
             
             for col in data.columns:
-                if col in ['start', 'stop']:
+                # Include 'dur_var' alongside start/stop. SIC interval tables
+                # (e.g. data_range for mech_vent: Offset/OffsetEnd in seconds)
+                # produce a 'dur_var' = OffsetEnd - Offset still in SECONDS, while
+                # the index column is converted to hours below. The aumc branch
+                # already converts 'dur_var'; omitting it for SIC left dur_var in
+                # seconds and an hours index, so win_tbl expansion (end = start +
+                # dur) blew up (e.g. vent_ind exploding to tens of millions of
+                # rows). Convert dur_var on the same seconds->hours basis.
+                if col in ['start', 'stop', 'dur_var']:
                     if pd.api.types.is_numeric_dtype(data[col]):
                         cols_to_convert.add(col)
-            
+
             for col in cols_to_convert:
                 if col in data.columns and pd.api.types.is_numeric_dtype(data[col]):
                     max_abs = data[col].abs().max()
                     if pd.notna(max_abs) and max_abs > 5000:
                         # Values > 5000 cannot be hours (= 208 days), must be seconds
                         data[col] = data[col] / 3600.0
-            
+
             return data
         
         # Early return checks (no verbose output for performance)
@@ -5584,20 +5765,15 @@ class ConceptResolver:
             agg_method = agg_value if agg_value not in (None, False, "auto") else None
             if agg_method in (None, "auto"):
                 agg_method = None
-            # GCS total score should use 'min' aggregation (for recursive concepts)
-            # But GCS sub-components should use default aggregation (median)
-            if concept_name == 'gcs':
-                if agg_method is None or (isinstance(agg_method, str) and agg_method != 'min'):
-                    agg_method = 'min'
-            # 🔧 FIX 2024-12-01: 删除 VASO_RATE_CONCEPTS 使用 max 聚合的特殊处理
-            # R ricu 对所有数值概念默认使用 median 聚合，VASO_RATE_CONCEPTS 也不例外
-            # 之前的 max 聚合导致 norepi_rate 等概念与 ricu 不一致
-            # SOFA cardiovascular components must retain the highest severity within the window.
-            # Using the default 'median' aggregation diluted vasopressor-driven spikes (e.g. 2 and 4
-            # becoming 3, or 1 and 2 becoming 1.5). ricu keeps the window maximum, so align here.
-            sofa_max_concepts = {'sofa_cardio', 'sofa2_cardio'}
-            if agg_method is None and concept_name in sofa_max_concepts:
-                agg_method = 'max'
+            # 🔧 REFACTOR 2026-06: 概念级窗口聚合覆盖统一查 WINDOW_AGGREGATE_OVERRIDES
+            # （单一声明式来源，见模块顶部）。语义逐字保留：
+            #   - gcs (force=True): 取窗口最小值，即使传入别的聚合也覆盖（recursive GCS 取最差）。
+            #     GCS 子分量不在表中，仍走默认 median。
+            #   - sofa_cardio / sofa2_cardio (force=False): 仅在未确定聚合时取 max，
+            #     保留升压药驱动的最高严重度（默认 median 会稀释尖峰，ricu 取窗口最大）。
+            # 注：VASO_RATE_CONCEPTS 不在表中——R ricu 对其也用默认 median，2024-12 已纠正
+            # 历史上误用的 max 聚合（曾导致 norepi_rate 等与 ricu 不一致）。
+            agg_method = resolve_window_aggregate(concept_name, agg_method)
             # 如果仍然没有指定，根据值列类型自动选择
             if agg_method is None:
                 # Get value column based on result type
@@ -5607,7 +5783,9 @@ class ConceptResolver:
                     value_col = getattr(result, 'value_column', None)
                 
                 if value_col and value_col in result.data.columns:
-                    if pd.api.types.is_numeric_dtype(result.data[value_col]):
+                    if pd.api.types.is_bool_dtype(result.data[value_col]):
+                        agg_method = 'any'
+                    elif pd.api.types.is_numeric_dtype(result.data[value_col]):
                         agg_method = 'median'  # Changed from 'mean' to 'median' to match R ricu default
                     else:
                         agg_method = 'first'
@@ -6752,6 +6930,7 @@ class ConceptResolver:
         align_to_admission: bool,
         kwargs: Dict[str, object],
         _skip_concept_cache: bool = False,  # 🔧 跳过概念缓存
+        availability_context: Optional[_AvailabilityLoadContext] = None,
     ) -> ICUTable:
         # 🚀 优化：增强概念数据缓存（避免重复加载相同概念，如urine、vaso_ind、pafi）
         # 🔧 使用统一的 hash 函数，确保 list 和 dict 形式得到相同的 hash
@@ -6872,6 +7051,7 @@ class ConceptResolver:
                 align_to_admission,
                 kwargs,
                 _skip_concept_cache=_skip_concept_cache,  # 传递跳过缓存标志
+                availability_context=availability_context,
             )
 
         cache_key = self._build_cache_key(
@@ -6906,6 +7086,7 @@ class ConceptResolver:
                 verbose=verbose,
                 interval=interval,
                 align_to_admission=align_to_admission,
+                availability_context=availability_context,
                 **kwargs,
             )
             
@@ -7704,4 +7885,3 @@ from .concept_expr_parser import (  # noqa: F401, E402
 # re-exported in the schema import block near the top of this file.
 # --------------------------------------------------------------------------
 from .concept_loader import load_dictionary  # noqa: F401, E402
-

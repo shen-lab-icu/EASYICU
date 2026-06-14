@@ -12,15 +12,17 @@ easyicu应该遵循相同模式：
 - 验证断言 → tests/test_ricu_alignment.py (pytest测试用例)
 - CLI工具 → multi_db_feature_alignment.py可保留作为便捷脚本
 
-迁移计划：
-1. ✅ 已创建 tests/helpers.py - 提供load_ricu_csv, assert_coverage_similar等函数
-2. ✅ 已创建 tests/test_ricu_alignment.py - pytest测试用例
-3. ⏳ 逐步将依赖feature_compare的脚本迁移到使用tests/helpers
-4. ⏳ 最终删除此文件
+迁移状态（2026-06 校正：此前 1/2 标 ✅ 但文件并不存在，属虚假声明，已修正）：
+1. ✅ tests/helpers.py 已真实创建 - 提供 load_ricu_csv / pooled_median /
+   median_of_medians / FakeSource / assert_series_close 等。
+2. ✅ tests/test_ricu_alignment.py 已真实创建 - 覆盖池化 median 决策与时间单位，
+   并预留 ricu CSV 黄金基准用例 (fixture 缺失时自动跳过)。
+3. ⏳ 逐步将依赖 feature_compare 的脚本迁移到使用 tests/helpers。
+4. ⏳ 最终删除此文件。
 
 临时保留原因：
-- multi_db_feature_alignment.py当前依赖此模块
-- 需要时间将所有验证逻辑迁移到pytest
+- multi_db_feature_alignment.py 当前仍依赖此模块。
+- 需要时间将所有验证逻辑迁移到 pytest。
 
 ---
 

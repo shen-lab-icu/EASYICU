@@ -32,7 +32,51 @@ class EstimatorResult:
     notes: str = ""
 
 
-def fit_estimator(*, cohort: Any, X: Any, y: Any, kind: EstimatorKind | str) -> EstimatorResult:
+def _robust_design(x_const: Any, *, keep: Sequence[str]) -> Tuple[Any, List[str]]:
+    """Drop degenerate predictors so the fit is not rank-deficient.
+
+    A logistic/linear fit raises "Singular matrix" when the design is
+    rank-deficient — most commonly a constant column or two perfectly collinear
+    columns (e.g. a missing-indicator that is constant once its variable has been
+    imputed). This greedily keeps an independent column set, always preserving
+    the columns in ``keep`` (the intercept and the coefficient of interest), and
+    drops the linearly dependent remainder. General and deterministic: it removes
+    only columns that carry no independent information, never an analytical
+    choice. Returns the reduced design and the list of dropped column names.
+    """
+    import numpy as np  # type: ignore
+
+    cols = list(x_const.columns)
+    keep_set = [c for c in keep if c in cols]
+    # 1) zero-variance columns (except the ones we must keep) carry no info.
+    variances = x_const.var(axis=0, ddof=0)
+    zero_var = [
+        c
+        for c in cols
+        if c not in keep_set and not (float(variances.get(c, 0.0)) > 0.0)
+    ]
+    working = x_const.drop(columns=zero_var)
+    # 2) greedily build a full-rank set, prioritising the must-keep columns so a
+    # dependent *other* column is dropped rather than the exposure/intercept.
+    ordered = keep_set + [c for c in working.columns if c not in keep_set]
+    kept: List[str] = []
+    matrix: Optional[Any] = None
+    rank = 0
+    for col in ordered:
+        vec = working[col].to_numpy(dtype=float).reshape(-1, 1)
+        trial = vec if matrix is None else np.hstack([matrix, vec])
+        trial_rank = int(np.linalg.matrix_rank(trial))
+        if trial_rank > rank:
+            kept.append(col)
+            matrix = trial
+            rank = trial_rank
+    dropped = [c for c in cols if c not in kept]
+    return x_const[kept], dropped
+
+
+def fit_estimator(
+    *, cohort: Any, X: Any, y: Any, kind: EstimatorKind | str
+) -> EstimatorResult:
     """Fit a supported estimator and capture failures as non-converged results."""
 
     cohort_note = _cohort_trace_note(cohort)
@@ -67,7 +111,9 @@ def fit_estimator(*, cohort: Any, X: Any, y: Any, kind: EstimatorKind | str) -> 
             False,
             _join_notes("X/y length mismatch", cohort_note),
         )
-    combined = pd.concat([x_df.reset_index(drop=True), y_series.rename("__y__")], axis=1)
+    combined = pd.concat(
+        [x_df.reset_index(drop=True), y_series.rename("__y__")], axis=1
+    )
     combined = combined.dropna()
     n = int(len(combined))
     if n == 0:
@@ -100,19 +146,30 @@ def fit_estimator(*, cohort: Any, X: Any, y: Any, kind: EstimatorKind | str) -> 
             None,
             n,
             False,
-            _join_notes("sample size too small for deterministic estimator", cohort_note),
+            _join_notes(
+                "sample size too small for deterministic estimator", cohort_note
+            ),
         )
 
     try:
         x_const = sm.add_constant(x_df.astype(float), has_constant="add")
         coefficient_name = next(col for col in x_const.columns if col != "const")
+        # Drop rank-deficient (constant / perfectly collinear) predictors so a
+        # degenerate design does not dead-end the fit with "Singular matrix".
+        x_const, dropped = _robust_design(x_const, keep=["const", coefficient_name])
+        drop_note = (
+            f"dropped collinear/constant predictors: {', '.join(dropped)}"
+            if dropped
+            else ""
+        )
+        fit_note = _join_notes(drop_note, cohort_note) if drop_note else cohort_note
         if kind == "linear":
             result = sm.OLS(y_series.astype(float), x_const).fit()
             coef = float(result.params[coefficient_name])
             ci_low, ci_high = _conf_interval_for(result, coefficient_name)
             se = _float_or_none(result.bse[coefficient_name])
             converged = bool(math.isfinite(coef))
-            return EstimatorResult(coef, ci_low, ci_high, se, n, converged, cohort_note)
+            return EstimatorResult(coef, ci_low, ci_high, se, n, converged, fit_note)
 
         if len(set(y_series.astype(int).tolist())) < 2:
             return EstimatorResult(
@@ -124,15 +181,43 @@ def fit_estimator(*, cohort: Any, X: Any, y: Any, kind: EstimatorKind | str) -> 
                 False,
                 _join_notes("binary outcome has fewer than two classes", cohort_note),
             )
-        result = sm.Logit(y_series.astype(float), x_const).fit(disp=False, maxiter=100)
-        coef = float(result.params[coefficient_name])
-        ci_low, ci_high = _conf_interval_for(result, coefficient_name)
-        se = _float_or_none(result.bse[coefficient_name])
-        point = float(np.exp(coef))
-        low = float(np.exp(ci_low)) if ci_low is not None else None
-        high = float(np.exp(ci_high)) if ci_high is not None else None
-        converged = bool(getattr(result, "mle_retvals", {}).get("converged", True))
-        return EstimatorResult(point, low, high, se, n, converged, cohort_note)
+        try:
+            result = sm.Logit(y_series.astype(float), x_const).fit(
+                disp=False, maxiter=100
+            )
+            coef = float(result.params[coefficient_name])
+            ci_low, ci_high = _conf_interval_for(result, coefficient_name)
+            se = _float_or_none(result.bse[coefficient_name])
+            point = float(np.exp(coef))
+            low = float(np.exp(ci_low)) if ci_low is not None else None
+            high = float(np.exp(ci_high)) if ci_high is not None else None
+            converged = bool(getattr(result, "mle_retvals", {}).get("converged", True))
+            if not math.isfinite(coef):
+                raise ValueError("non-finite logistic coefficient")
+            return EstimatorResult(point, low, high, se, n, converged, fit_note)
+        except Exception as mle_exc:
+            # Unpenalised MLE diverges under (quasi-)separation. A ridge-penalised
+            # fit is the standard robust fallback: it yields a finite point
+            # estimate (a Wald CI is not reliable under penalisation, so it is
+            # reported as None rather than fabricated).
+            reg = sm.Logit(y_series.astype(float), x_const).fit_regularized(
+                alpha=1.0, L1_wt=0.0, disp=False, maxiter=200
+            )
+            coef = float(reg.params[coefficient_name])
+            if not math.isfinite(coef):
+                raise mle_exc
+            return EstimatorResult(
+                float(np.exp(coef)),
+                None,
+                None,
+                None,
+                n,
+                False,
+                _join_notes(
+                    f"penalised (ridge) fallback after MLE failed: {mle_exc}",
+                    fit_note,
+                ),
+            )
     except Exception as exc:
         return EstimatorResult(
             None,
@@ -188,7 +273,9 @@ def fit_robustness_rows_from_records(
         try:
             data = _load_direct_dataframe(data=data, cohort_path=cohort_path)
         except Exception as exc:
-            return [], [f"deterministic estimator adapter could not load cohort data: {exc}"]
+            return [], [
+                f"deterministic estimator adapter could not load cohort data: {exc}"
+            ]
         exposure = _infer_exposure_column(
             data=data,
             context=context,
@@ -212,7 +299,9 @@ def fit_robustness_rows_from_records(
         )
 
     if not exposure or not outcome:
-        return [], warnings + ["estimator_adapter requires exposure and outcome columns"]
+        return [], warnings + [
+            "estimator_adapter requires exposure and outcome columns"
+        ]
 
     rows: List[RobustnessPanelRow] = []
     row_specs: List[Tuple[str, str, Optional[RobustnessSpec]]] = [
@@ -274,15 +363,20 @@ def _fit_one_row(
         )
         cohort_df = build_cohort(cohort_definition, data=data_for_filter)
         outcome_column = _outcome_column_for(spec, outcome, outcome_columns)
-        outcome_column = _resolve_column_alias(
-            outcome_column,
-            cohort_df.columns,
-            context=context,
-            excluded={exposure},
-        ) or outcome_column
+        outcome_column = (
+            _resolve_column_alias(
+                outcome_column,
+                cohort_df.columns,
+                context=context,
+                excluded={exposure},
+            )
+            or outcome_column
+        )
         missing_strategy = _missing_strategy_for(spec, default_missing)
         needed = [exposure, outcome_column]
-        missing_columns = [column for column in needed if column not in cohort_df.columns]
+        missing_columns = [
+            column for column in needed if column not in cohort_df.columns
+        ]
         if missing_columns:
             raise KeyError("missing estimator column(s): " + ", ".join(missing_columns))
         model_df = apply_missing_strategy(cohort_df[needed], missing_strategy)
@@ -419,11 +513,15 @@ def _infer_exposure_column(
         per_step_records,
         ("primary_predictor", "predictor", "exposure", "primary_exposure"),
     ):
-        resolved = _resolve_column_alias(candidate, columns, context=context, excluded=excluded)
+        resolved = _resolve_column_alias(
+            candidate, columns, context=context, excluded=excluded
+        )
         if resolved:
             return resolved
     if requested:
-        resolved = _resolve_column_alias(requested, columns, context=context, excluded=excluded)
+        resolved = _resolve_column_alias(
+            requested, columns, context=context, excluded=excluded
+        )
         if resolved:
             return resolved
 
@@ -432,9 +530,16 @@ def _infer_exposure_column(
     for variable in getattr(context, "variables", []) or []:
         name = str(getattr(variable, "name", "") or "")
         role = str(getattr(variable, "role", "") or "").lower()
-        if not name or role.endswith("outcome") or role.endswith("id") or role.endswith("time"):
+        if (
+            not name
+            or role.endswith("outcome")
+            or role.endswith("id")
+            or role.endswith("time")
+        ):
             continue
-        column = _resolve_column_alias(name, columns, context=context, excluded=excluded)
+        column = _resolve_column_alias(
+            name, columns, context=context, excluded=excluded
+        )
         if not column:
             continue
         score = _question_overlap_score(name, question)
@@ -465,7 +570,9 @@ def _infer_outcome_column(
     for candidate in (
         requested,
         getattr(context, "target_outcome", None),
-        *_candidate_values_from_records(per_step_records, ("outcome", "target_outcome")),
+        *_candidate_values_from_records(
+            per_step_records, ("outcome", "target_outcome")
+        ),
     ):
         if not candidate:
             continue
@@ -474,7 +581,9 @@ def _infer_outcome_column(
             return resolved
     for variable in getattr(context, "variables", []) or []:
         if str(getattr(variable, "role", "") or "").lower().endswith("outcome"):
-            resolved = _resolve_column_alias(str(getattr(variable, "name", "")), columns, context=context)
+            resolved = _resolve_column_alias(
+                str(getattr(variable, "name", "")), columns, context=context
+            )
             if resolved:
                 return resolved
     for fallback in ("death", "mortality", "outcome", "y"):
@@ -561,7 +670,10 @@ def _resolve_column_alias(
         if _name_matches_concept(preferred, requested):
             return preferred
 
-    context_names = [str(getattr(v, "name", "") or "") for v in getattr(context, "variables", []) or []]
+    context_names = [
+        str(getattr(v, "name", "") or "")
+        for v in getattr(context, "variables", []) or []
+    ]
     candidates = [name for name in context_names if name in string_columns]
     candidates.extend(column for column in string_columns if column not in candidates)
     scored: List[Tuple[int, str]] = []
@@ -615,7 +727,9 @@ def _alias_score(requested: str, column: str) -> int:
 
 def _name_tokens(value: str) -> List[str]:
     raw = re.split(r"[^a-zA-Z0-9]+", str(value).lower())
-    tokens = [token for token in raw if token and token not in {"admission", "adm", "window"}]
+    tokens = [
+        token for token in raw if token and token not in {"admission", "adm", "window"}
+    ]
     compact = _normalise_token(value)
     if compact and compact not in tokens:
         tokens.append(compact)
@@ -626,7 +740,9 @@ def _normalise_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
 
 
-def _conf_interval_for(result: Any, coefficient_name: str) -> Tuple[Optional[float], Optional[float]]:
+def _conf_interval_for(
+    result: Any, coefficient_name: str
+) -> Tuple[Optional[float], Optional[float]]:
     ci = result.conf_int()
     try:
         low, high = ci.loc[coefficient_name]

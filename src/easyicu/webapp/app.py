@@ -92,6 +92,10 @@ from easyicu.webapp.paper_figures import (
 )
 from easyicu.webapp.workflow_figure import _render_extraction_pipeline_figure as _render_extraction_pipeline_figure_impl
 from easyicu.webapp import cohort_charts as cc
+from easyicu.project_config import (
+    DEFAULT_WEB_UI_DISPLAY_TARGET,
+    normalize_web_ui_display_target,
+)
 from easyicu.webapp.styles import render_global_styles
 from easyicu.webapp.shell_styles import render_shell_styles
 from easyicu.webapp.i18n import get_text, strip_emoji
@@ -225,11 +229,16 @@ render_shell_styles(st)
 _eu_density_pref = str(st.session_state.get("ui_density") or "comfortable").lower()
 if _eu_density_pref not in {"comfortable", "compact"}:
     _eu_density_pref = "comfortable"
+_eu_display_target = normalize_web_ui_display_target(
+    st.session_state.get("ui_display_target") or DEFAULT_WEB_UI_DISPLAY_TARGET
+)
+st.session_state["ui_display_target"] = _eu_display_target
 _eu_reduce_motion = "true" if bool(st.session_state.get("reduce_motion", False)) else "false"
 st.markdown(
     f"""
     <div id="eu-display-preferences"
          data-density="{_eu_density_pref}"
+         data-display-target="{_eu_display_target}"
          data-reduce-motion="{_eu_reduce_motion}"
          style="display:none"></div>
     <style>
@@ -243,6 +252,9 @@ st.markdown(
     .stApp:has(#eu-display-preferences[data-density="compact"]) .eu-settings-card,
     .stApp:has(#eu-display-preferences[data-density="compact"]) .eu-agent-panel {{
       padding-block: 12px !important;
+    }}
+    .stApp:has(#eu-display-preferences[data-display-target="desktop"]) {{
+      --eu-shell-target: desktop;
     }}
     .stApp:has(#eu-display-preferences[data-reduce-motion="true"]) *,
     .stApp:has(#eu-display-preferences[data-reduce-motion="true"]) *::before,
@@ -511,10 +523,12 @@ def _clear_assistant_surfaces(
     state: MutableMapping[str, Any],
     *,
     clear_pending: bool = False,
+    clear_floating: bool = True,
 ) -> None:
     """Close assistant-only surfaces when navigation leaves the assistant page."""
     state['_inline_ai_panel_open'] = False
-    state['_floating_ai_open'] = False
+    if clear_floating:
+        state['_floating_ai_open'] = False
     state['_sidebar_ai_open'] = False
     if clear_pending:
         state.pop('_ai_pending_question', None)
@@ -524,14 +538,14 @@ def _open_embedded_ai_assistant(
     state: dict[str, Any],
     question: str | None = None,
 ) -> None:
-    """Route to the standalone AI Assistant page and optionally queue a prompt."""
+    """Route to the standalone Research Copilot page and optionally queue a prompt."""
     if question:
         state['_ai_pending_question'] = question
     state['llm_enabled'] = True
     state['_llm_toggle'] = True
     state['_active_main_page'] = 'assistant'
     state['_scroll_to_top'] = True
-    _clear_assistant_surfaces(state, clear_pending=False)
+    _clear_assistant_surfaces(state, clear_pending=False, clear_floating=True)
 
 
 def _resolve_viz_data_source_mode(
@@ -599,6 +613,7 @@ def _apply_quick_viz_screenshot_defaults(state: dict[str, Any], *, lang: str) ->
     if quality_concept:
         state['quality_concept'] = quality_concept
     state['data_table_view_mode'] = "Merge All (Wide Table)" if lang == 'en' else "合并全部（宽表）"
+    state['data_table_details_open'] = True
     state['_quick_viz_screenshot_preset_applied'] = True
 
 
@@ -723,6 +738,35 @@ def _switch_extract_entry_mode(state: dict[str, Any], target: str) -> None:
     state.pop('_export_failure_result', None)
     state.pop('_scroll_to_tab', None)
     state['_active_main_page'] = 'extract'
+
+
+def _clear_query_param(key: str) -> None:
+    params = getattr(st, "query_params", None)
+    if params is None:
+        return
+    try:
+        if key in params:
+            del params[key]
+    except Exception:
+        try:
+            params.clear()
+        except Exception:
+            return
+
+
+def _consume_research_agent_route_action(state: MutableMapping[str, Any]) -> bool:
+    """Consume Research Agent links before the entry shell can reset routing."""
+    key = "eu_ra_action"
+    action = query_param_value(st, key)
+    if action != "switch_cohort":
+        return False
+    _clear_query_param(key)
+    from easyicu.webapp.research_agent import _activate_real_data_mode_from_agent
+
+    clear_run_state("all")
+    _activate_real_data_mode_from_agent(state)
+    state["_research_agent_switch_cohort_notice"] = True
+    return True
 
 
 def _apply_topbar_breadcrumb_target(state: dict[str, Any], target: str) -> None:
@@ -905,7 +949,6 @@ def _render_post_export_guidance(
             review_label,
             key="_post_export_open_review",
             use_container_width=True,
-            icon=":material/table_view:",
         ):
             _apply_post_export_next_step(st.session_state, "review", lang=lang)
             st.rerun()
@@ -914,7 +957,6 @@ def _render_post_export_guidance(
             cohort_label,
             key="_post_export_open_cohort",
             use_container_width=True,
-            icon=":material/query_stats:",
         ):
             _apply_post_export_next_step(st.session_state, "cohort", lang=lang)
             st.rerun()
@@ -923,7 +965,6 @@ def _render_post_export_guidance(
             agent_label,
             key="_post_export_open_agent",
             use_container_width=True,
-            icon=":material/auto_awesome:",
         ):
             _apply_post_export_next_step(st.session_state, "agent", lang=lang)
             st.rerun()
@@ -955,6 +996,7 @@ def _prepare_quick_viz_demo_workspace(
     generate_data_func=generate_lightweight_demo_data,
 ) -> tuple[int, int]:
     """Load the compact demo review workspace from the topbar Render action."""
+    previous_selection = list(state.get('selected_concepts') or [])
     params = state.get('mock_params') if isinstance(state.get('mock_params'), dict) else {}
     params = dict(params)
     try:
@@ -982,6 +1024,12 @@ def _prepare_quick_viz_demo_workspace(
     state['patient_ids'] = sorted(patient_ids) if patient_ids else []
     state['id_col'] = 'stay_id'
     state['time_col'] = 'time'
+    if previous_selection and len(previous_selection) != len(mock_data):
+        state['_review_source_concept_count'] = len(previous_selection)
+        state['_review_subset_concept_count'] = len(mock_data)
+    else:
+        state.pop('_review_source_concept_count', None)
+        state['_review_subset_concept_count'] = len(mock_data)
     state['selected_concepts'] = list(mock_data.keys())
     state['trigger_export'] = False
     state['_exporting_in_progress'] = False
@@ -1001,6 +1049,7 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
     state['entry_mode'] = 'demo'
     state['use_mock_data'] = True
     state['database'] = 'mock'
+    state['_eu_entry_home_layout'] = 'prompt'
     state['demo_mode_patients'] = LIGHTWEIGHT_DEMO_PATIENTS
     state['demo_mode_hours'] = LIGHTWEIGHT_DEMO_HOURS
     state['mock_params'] = {
@@ -1036,7 +1085,15 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
         '_eu_wb_findings_acked',
         '_eu_wb_findings_acked_run_dir',
         '_eu_wb_review_details_expanded',
+        '_eu_wb_detail_advanced',
+        '_eu_wb_open_step_details',
+        '_eu_wb_hide_step_details',
         '_eu_wb_action_panel',
+        'research_agent_show_advanced_setup',
+        'research_agent_idea_show_advanced_mapping',
+        'research_agent_idea_show_triage_details',
+        'cohort_group_show_methods_note',
+        'data_table_details_open',
     ):
         state.pop(key, None)
     for key in list(state):
@@ -1061,6 +1118,7 @@ def _reset_settings_defaults(state: dict[str, Any]) -> None:
     state['_eu_settings_allow_outbound_model_calls'] = False
     state['_eu_settings_reduce_motion'] = False
     state['ui_density'] = 'comfortable'
+    state['ui_display_target'] = DEFAULT_WEB_UI_DISPLAY_TARGET
     state['reduce_motion'] = False
     state['_llm_provider_sel'] = default_provider
     state['_llm_api_key_inp'] = ''
@@ -1098,9 +1156,9 @@ def _consume_topbar_run_request(
         if state.get('loaded_concepts'):
             counts = cohort_feature_counts(state)
             message = (
-                f"Review workspace already loaded: {counts['features']} concepts, {counts['patients']} patients."
+                f"Review workspace already loaded: {counts['features']} review features, {counts['patients']} ICU stays."
                 if is_en else
-                f"审阅工作区已加载：{counts['features']} 个概念，{counts['patients']} 名患者。"
+                f"审阅工作区已加载：{counts['features']} 个审阅变量，{counts['patients']} 个 ICU stay。"
             )
         elif entry_mode == 'demo':
             n_concepts, n_patients = _prepare_quick_viz_demo_workspace(
@@ -1108,9 +1166,9 @@ def _consume_topbar_run_request(
                 generate_data_func=generate_data_func,
             )
             message = (
-                f"Loaded lightweight demo review workspace: {n_concepts} concepts, {n_patients} patients."
+                f"Loaded lightweight demo review workspace: {n_concepts} review features, {n_patients} ICU stays."
                 if is_en else
-                f"已加载轻量演示审阅工作区：{n_concepts} 个概念，{n_patients} 名患者。"
+                f"已加载轻量演示审阅工作区：{n_concepts} 个审阅特征，{n_patients} 个 ICU stay。"
             )
         else:
             state['viz_data_source_mode'] = 'exported'
@@ -1270,7 +1328,6 @@ def _topbar_primary_action_label(
     if active_page == 'research_agent':
         return ('Agent guide', 'Agent 导览')
     label_map = {
-        'assistant': ('Open Agent', '打开 Agent'),
         'states': ('Patient Review', '患者审阅'),
         'quick_viz': ('Prepare review', '准备审阅'),
         'cohort': ('Re-run', '重新运行'),
@@ -1284,8 +1341,6 @@ def _topbar_primary_action_icon(active_page: str) -> str | None:
     """Return an optional material icon for the global topbar action."""
     if active_page == 'settings':
         return ':material/refresh:'
-    if active_page == 'assistant':
-        return ':material/smart_toy:'
     if active_page == 'states':
         return ':material/table_chart:'
     return None
@@ -1293,7 +1348,7 @@ def _topbar_primary_action_icon(active_page: str) -> str | None:
 
 def _render_narrow_view_notice(active_page: str, lang: str) -> None:
     """Show the dense-chart mobile notice only where it applies."""
-    if active_page not in {'quick_viz', 'cohort', 'cross_db'}:
+    if active_page not in {'cohort', 'cross_db'}:
         return
     message = (
         "Narrow view: EasyICU keeps this page readable here. Use a ≥1024 px window for dense chart comparison."
@@ -1558,7 +1613,7 @@ def _apply_assistant_preset():
     else:
         st.session_state['_assistant_pending_feature_preset'] = payload
         notice_en = payload.get('notice_en') or "Prepared a sidebar preset from the AI assistant."
-        notice_zh = payload.get('notice_zh') or "已根据 AI 助手建议预设侧边栏。"
+        notice_zh = payload.get('notice_zh') or "已根据研究 Copilot 建议预设侧边栏。"
         st.session_state['_assistant_notice'] = notice_en if lang == 'en' else notice_zh
     st.session_state['_scroll_to_top'] = True
 
@@ -2016,7 +2071,6 @@ def _render_sepsis_ai_button(lang: str) -> None:
         button_label,
         key="ask_ai_about_sepsis_settings",
         use_container_width=True,
-        icon=":material/smart_toy:",
     ):
         si_mode = st.session_state.get('sepsis_si_mode', 'auto')
         abx_hours = st.session_state.get('sepsis_abx_win_hours', 24)
@@ -2212,9 +2266,9 @@ def _handle_sidebar_export_trigger(default_export_container) -> bool:
             # 没有可导出的数据
             lang = st.session_state.get('language', 'en')
             warning_msg = (
-                "⚠️ No features selected. Please select features in Step 3 before exporting."
+                "⚠️ No export concepts selected. Please select export concepts in Step 3 before exporting."
                 if lang == 'en'
-                else "⚠️ 未选择特征。请先在步骤 3 选择要导出的特征。"
+                else "⚠️ 未选择导出概念。请先在步骤 3 选择要导出的概念。"
             )
             st.warning(warning_msg)
             st.session_state['_exporting_in_progress'] = False
@@ -2326,6 +2380,7 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
     _counts = cohort_feature_counts(st.session_state)
     concept_count = _counts['features']
     patient_count = _counts['patients']
+    selected_count = int(st.session_state.get("_review_source_concept_count") or concept_count)
     signature = (
         tuple(sorted(str(k) for k in loaded_concepts.keys())),
         patient_count,
@@ -2337,7 +2392,7 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
     left, right = st.columns([6.0, 1.6])
     with left:
         st.markdown(
-            f'<div class="eu-handoff-note">{html.escape(get_text("ra_handoff_hint").format(concepts=concept_count, patients=patient_count))}</div>',
+            f'<div class="eu-handoff-note">{html.escape(get_text("ra_handoff_hint").format(concepts=concept_count, selected=selected_count, patients=patient_count))}</div>',
             unsafe_allow_html=True,
         )
     with right:
@@ -2364,7 +2419,7 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
             st.session_state["_ra_view"] = "setup"
             st.session_state["research_agent_preflight_confirmed"] = False
             st.session_state.pop("research_agent_preflight_signature", None)
-            message = get_text("ra_handoff_success").format(rows=len(df))
+            message = get_text("ra_handoff_success").format(stays=len(df))
             st.session_state["_eu_ra_handoff_success_message"] = message
             st.rerun()
 
@@ -2372,10 +2427,17 @@ def _render_research_agent_handoff(label: str, lang: str, *, key_suffix: str) ->
 def _research_agent_handoff_setup_ready(state: Dict[str, Any]) -> bool:
     """Return whether an in-session cohort should open the real setup surface."""
     inbound = state.get("research_agent_inbound_cohort")
+    question_handoff_ready = (
+        bool(state.get("_eu_ra_question_handoff_setup"))
+        and bool(str(state.get("research_agent_question") or "").strip())
+    )
     return (
-        bool(state.get("_eu_ra_force_setup_from_handoff"))
-        and isinstance(inbound, pd.DataFrame)
-        and not inbound.empty
+        question_handoff_ready
+        or (
+            bool(state.get("_eu_ra_force_setup_from_handoff"))
+            and isinstance(inbound, pd.DataFrame)
+            and not inbound.empty
+        )
     )
 
 
@@ -2570,7 +2632,7 @@ def render_data_table_subtab():
 
 
 def _render_ai_context_button(question_key: str, context: str = "", concept: str = ""):
-    """渲染上下文感知的 AI 助手小按钮。点击后将问题发送到全局 AI 助手。"""
+    """渲染上下文感知的 Copilot 小按钮。点击后将问题发送到全局研究 Copilot。"""
     label = get_text(question_key)
     btn_key = f"ai_ctx_{question_key}_{concept}_{hash(context) % 10000}"
     if st.button(label, key=btn_key, help=label):
@@ -2580,7 +2642,7 @@ def _render_ai_context_button(question_key: str, context: str = "", concept: str
         if context:
             full_q += f" Context: {context}"
         _open_embedded_ai_assistant(st.session_state, full_q)
-        st.toast("Question sent to AI Assistant" if st.session_state.get('language') == 'en' else "问题已发送到 AI 助手")
+        st.toast("Question sent to Research Copilot" if st.session_state.get('language') == 'en' else "问题已发送到研究 Copilot")
         st.rerun()
 
 
@@ -3913,8 +3975,8 @@ def _render_global_status_strip(lang: str, entry_mode: str) -> None:
         "db": "Database" if lang == "en" else "数据库",
         "path": "Path" if lang == "en" else "路径",
         "cohort": "Cohort" if lang == "en" else "队列",
-        "features": "Features" if lang == "en" else "特征",
-        "patients": "Patients" if lang == "en" else "患者",
+        "features": "Export concepts" if lang == "en" else "导出概念",
+        "patients": "ICU stays" if lang == "en" else "ICU stay",
         "export": "Export" if lang == "en" else "导出",
         "privacy": "Privacy" if lang == "en" else "隐私",
     }
@@ -3953,6 +4015,8 @@ def main():
     init_session_state()
     app_state = get_state()
     _apply_figure_query_preset(st.session_state, lang=st.session_state.get('language', 'en'))
+    if _consume_research_agent_route_action(st.session_state):
+        st.rerun()
 
     # 获取入口模式
     entry_mode = st.session_state.get('entry_mode', 'none')
@@ -4028,7 +4092,7 @@ def main():
     _page_labels_for_topbar = {
         'extract':        'Data Extraction' if lang == 'en' else '数据提取',
         'tutorial':       'Get Started' if lang == 'en' else '开始使用',
-        'assistant':      'AI Assistant' if lang == 'en' else 'AI 助手',
+        'assistant':      'Research Copilot' if lang == 'en' else '研究 Copilot',
         'states':         'Workspace States' if lang == 'en' else '工作区状态',
         'settings':       'Settings' if lang == 'en' else '设置',
         'quick_viz':      'Patient Review' if lang == 'en' else '患者审阅',
@@ -4162,10 +4226,13 @@ def main():
                 unsafe_allow_html=True,
             )
     else:
-        if _active == 'tutorial':
-            # Tutorial already has explicit entry CTAs in the page body, so
-            # the global action buttons are withheld here to avoid duplicate,
-            # ambiguous calls to action.
+        if _active == 'assistant':
+            # The polish Copilot design is a full-screen conversational shell
+            # with its own Exit / Classic workspace controls.
+            pass
+        elif _active == 'tutorial':
+            # Tutorial exposes its primary actions in the page body, so the
+            # global action button is withheld while the breadcrumb remains.
             _tb_left = st.container()
             with _tb_left:
                 _render_topbar_path_nav(
@@ -4240,12 +4307,20 @@ def main():
     page_registry = build_main_page_registry(get_text)
     page_keys = [page["key"] for page in page_registry]
     page_labels = {page["key"]: page["label"] for page in page_registry}
-    mobile_page_keys = ["extract"] + page_keys + ["assistant", "states", "settings"]
+    mobile_page_keys = ["extract", "quick_viz", "cohort", "cross_db", "research_agent", "assistant"]
     page_labels["extract"] = "Data Extraction" if lang == "en" else "数据提取"
     page_labels["tutorial"] = "Get Started" if lang == "en" else "开始使用"
-    page_labels["assistant"] = "AI Assistant" if lang == "en" else "AI 助手"
+    page_labels["assistant"] = "Research Copilot" if lang == "en" else "研究 Copilot"
     page_labels["states"] = "Workspace States" if lang == "en" else "工作区状态"
     page_labels["settings"] = "Settings" if lang == "en" else "设置"
+    mobile_page_labels = {
+        "extract": "Extract" if lang == "en" else "提取",
+        "quick_viz": "Patient" if lang == "en" else "患者",
+        "cohort": "Cohort" if lang == "en" else "队列",
+        "cross_db": "Cross-DB" if lang == "en" else "跨库",
+        "research_agent": "Agent" if lang == "en" else "Agent",
+        "assistant": "Copilot" if lang == "en" else "助手",
+    }
 
     # Resolve any pending navigation request (set by "Go to ..." buttons,
     # the sidebar, or the AI dock) into the active main page. This replaces
@@ -4255,6 +4330,8 @@ def main():
     _nav_page_map = {
         'viz': 'quick_viz',
         'tutorial': 'tutorial',
+        'extract': 'extract',
+        'data_extraction': 'extract',
         'cohort': 'cohort',
         'cross_db': 'cross_db',
         'crossdb': 'cross_db',
@@ -4270,15 +4347,16 @@ def main():
     elif _nav_request in _nav_page_map:
         st.session_state['_active_main_page'] = _nav_page_map[_nav_request]
 
-    # Tutorial is now the leftmost top tab again so it's discoverable from
-    # the main pane (also still reachable via the sidebar "📚 Workflow Help"
-    # button and ``_scroll_to_tab='tutorial'`` nav requests).
+    # The polish(2) mobile shell keeps the bottom bar focused on the primary
+    # workflow pages. Support/reference pages remain routable from
+    # the sidebar, topbar, and programmatic actions but do not occupy bottom
+    # navigation slots.
     # 'extract' is a special main page (the relocated data-extraction
     # workflow) reached via the sidebar pipeline; it is intentionally
     # NOT in the radio page_keys but is still a valid active page.
-    _EXTRA_PAGES = {'extract', 'assistant', 'states', 'settings'}
+    _EXTRA_PAGES = {'extract', 'tutorial', 'states', 'settings'}
     if st.session_state.get('_active_main_page') not in (set(mobile_page_keys) | _EXTRA_PAGES):
-        st.session_state['_active_main_page'] = page_keys[0]
+        st.session_state['_active_main_page'] = mobile_page_keys[0]
 
     # Do NOT bind ``st.radio`` directly to ``_active_main_page`` via
     # ``key=``. Streamlit serializes the widget state against the options
@@ -4287,7 +4365,7 @@ def main():
     # ``ValueError: <name> is not in iterable``. Using a separate widget
     # key + on_change-propagation keeps programmatic navigation safe.
     _current_active = st.session_state.get('_active_main_page', page_keys[0])
-    _visible_active = _current_active if _current_active in mobile_page_keys else page_keys[0]
+    _visible_active = _current_active if _current_active in mobile_page_keys else mobile_page_keys[0]
     # Force the widget to reflect the current (or fallback) visible page
     # each render — without this, Streamlit's widget-state persistence
     # would override programmatic navigation from sidebar buttons.
@@ -4316,7 +4394,7 @@ def main():
         st.radio(
             "Main navigation",
             options=mobile_page_keys,
-            format_func=lambda key: page_labels.get(key, key),
+            format_func=lambda key: mobile_page_labels.get(key, page_labels.get(key, key)),
             horizontal=True,
             label_visibility='collapsed',
             key='_main_nav_widget',
@@ -4324,7 +4402,7 @@ def main():
         )
     active_page = st.session_state.get('_active_main_page', page_keys[0])
     if active_page != "assistant":
-        _clear_assistant_surfaces(st.session_state, clear_pending=True)
+        _clear_assistant_surfaces(st.session_state, clear_pending=True, clear_floating=False)
 
     _topbar_result = _handle_topbar_run_request(active_page, lang)
     if _topbar_result and st.session_state.get('_active_main_page') != active_page:
@@ -4362,7 +4440,7 @@ def main():
 
     elif active_page == "assistant":
         from easyicu.webapp.llm_chat import render_ai_assistant_page
-        render_ai_assistant_page(lang)
+        render_ai_assistant_page(lang, app_context=globals())
 
     elif active_page == "settings":
         from easyicu.webapp.pages_redesign import render_settings_redesign_page
@@ -4545,6 +4623,7 @@ def main():
             _default_ra_view = 'setup'
             _ra_view = st.session_state.get('_ra_view', _default_ra_view)
             _ra_run_context = _research_agent_active_run_context(st.session_state)
+
             _render_research_agent_reference_header(lang, view=_ra_view)
 
             with st.container(key="_eu_ra_tabs"):
@@ -4552,7 +4631,6 @@ def main():
                 with _seg_l:
                     if st.button(
                         "Setup" if lang == 'en' else "配置",
-                        icon=":material/tune:",
                         key="_eu_ra_view_setup", use_container_width=True,
                         type="primary" if _ra_view == 'setup' else "secondary",
                     ):
@@ -4562,7 +4640,6 @@ def main():
                 with _seg_m:
                     if st.button(
                         "Workbench" if lang == 'en' else "工作台",
-                        icon=":material/grid_view:",
                         key="_eu_ra_view_workbench", use_container_width=True,
                         type="primary" if _ra_view == 'workbench' else "secondary",
                     ):
@@ -4572,7 +4649,6 @@ def main():
                 with _seg_h:
                     if st.button(
                         "History" if lang == 'en' else "历史",
-                        icon=":material/history:",
                         key="_eu_ra_view_history", use_container_width=True,
                         type="primary" if _ra_view == 'history' else "secondary",
                     ):
@@ -4582,7 +4658,6 @@ def main():
                 with _seg_r:
                     if st.button(
                         "Summary" if lang == 'en' else "总览",
-                        icon=":material/shield:",
                         key="_eu_ra_view_summary", use_container_width=True,
                         type="primary" if _ra_view == 'summary' else "secondary",
                     ):
@@ -4593,7 +4668,6 @@ def main():
                     if _ra_run_context:
                         if st.button(
                             "Re-run" if lang == 'en' else "重新运行",
-                            icon=":material/replay:",
                             key="_eu_ra_header_rerun",
                             type="primary",
                             use_container_width=False,
@@ -4621,7 +4695,7 @@ def main():
                 render_agent_output_summary(lang, show_header=False)
             else:
                 _render_research_agent_handoff(
-                    "Loaded concepts" if lang == "en" else "已加载概念",
+                    "Loaded review workspace" if lang == "en" else "已加载审阅工作区",
                     lang,
                     key_suffix="setup",
                 )
@@ -4657,6 +4731,10 @@ def main():
                     st.caption(get_text("ra_optional_deps_hint"))
 
     _handle_sidebar_export_trigger(default_export_container)
+
+    if active_page != "assistant" and not _is_screenshot_mode():
+        from easyicu.webapp.llm_chat import render_floating_chat_dock
+        render_floating_chat_dock(app_context=globals())
 
     # Page navigation now happens via the segmented_control above. Only the
     # scroll-to-top request still needs a small script — and this one does not
@@ -4705,10 +4783,10 @@ def main():
         with footer_cols[0]:
             if st.session_state.language == 'en':
                 data_status = "✅ Data Loaded" if len(st.session_state.loaded_concepts) > 0 else "⏳ No Data"
-                patients_label = "Patients"
+                patients_label = "ICU stays"
             else:
                 data_status = "✅ 数据已加载" if len(st.session_state.loaded_concepts) > 0 else "⏳ 未加载数据"
-                patients_label = "患者"
+                patients_label = "ICU stay"
             # 2026-05 unified counts: route through cohort_feature_counts
             # so footer / handoff / gate guide / launcher always agree
             # on the loaded-feature number. Also show "loaded / dictionary

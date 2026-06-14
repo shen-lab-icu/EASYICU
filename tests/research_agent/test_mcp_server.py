@@ -6,6 +6,8 @@ import json
 
 import pandas as pd
 
+from easyicu.concept_availability_signal import ConceptAvailabilityRecord
+
 
 def test_mcp_initialize_and_tools_list(ra):
     from easyicu.research_agent.mcp_server import handle_jsonrpc
@@ -122,7 +124,13 @@ def test_mcp_exposes_atomic_context_and_validator_tools(ra, tmp_path):
         "script_text": 'df["sofa2"].mean()',
     })
     assert audited["validator"] == "concept_usage_auditor"
-    assert any(f["severity"] == "error" for f in audited["findings"])
+    # Mean of an ordinal score is an advisory caution (impartiality contract),
+    # surfaced as a warning rather than a blocking error.
+    assert any(
+        f["severity"] == "warning"
+        and ("ordinal" in f["message"].lower() or "sofa" in f["message"].lower())
+        for f in audited["findings"]
+    )
 
     availability = dispatch("research_agent.cross_database_concept_availability", {
         "concepts": ["sofa2", "creatinine"],
@@ -173,6 +181,41 @@ def test_mcp_load_concepts_calls_standardized_easyicu_api(ra, tmp_path, monkeypa
     assert out_path.exists()
     assert result["evidence"][0]["evidence_id"] == "extracted_vitals"
     assert (workdir / result["evidence"][0]["relative_path"]).exists()
+
+
+def test_mcp_load_concepts_returns_runtime_availability(ra, tmp_path, monkeypatch):
+    import easyicu
+    from easyicu.research_agent.mcp_server import dispatch
+
+    def fake_load_concepts(**kwargs):
+        sink = kwargs["availability_sink"]
+        sink["norepi_rate"] = ConceptAvailabilityRecord(
+            concept="norepi_rate",
+            database="mimic",
+            reason="source_unavailable",
+            n_rows=0,
+            sources_defined=("inputevents",),
+            missing_tables=("inputevents",),
+        )
+        return pd.DataFrame(columns=["icustay_id", "charttime", "norepi_rate"])
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts, raising=False)
+
+    result = dispatch(
+        "research_agent.load_concepts",
+        {
+            "concepts": ["norepi_rate"],
+            "database": "mimic",
+            "data_path": str(tmp_path / "mimic"),
+        },
+    )
+
+    cell = result["availability"]["norepi_rate"]
+    assert cell["status"] == "blocked"
+    assert cell["available"] is False
+    assert cell["reason"] == "source_unavailable"
+    assert cell["source_missing_tables"] == ["inputevents"]
+    assert cell["structural_unavailable"] is True
 
 
 def test_mcp_extract_concept_registers_evidence_by_default(ra, tmp_path, monkeypatch):

@@ -80,7 +80,7 @@ def _bootstrap_imports():
 _REQUIRED_KINDS = {"code", "log", "table", "figure", "statistic"}
 _ARM_ORDER = ("naive", "aware")
 _ARM_LABELS = {"naive": "Naive", "aware": "ICU-aware"}
-_DEFAULT_SUBMISSION_PROFILE_REF = "npj_dm/20260527"
+_DEFAULT_SUBMISSION_PROFILE_REF = "npj_dm/20260611"
 
 
 def _local_openai_base_url(base_url: Optional[str]) -> bool:
@@ -126,12 +126,12 @@ def _register_case_patterns(case_name: Optional[str]) -> Optional[Dict[str, Any]
     try:
         module = importlib.import_module(module_name)
     except ModuleNotFoundError as exc:
-        raise SystemExit(f"Unknown case {case_name!r}: {module_name} not found") from exc
+        raise SystemExit(
+            f"Unknown case {case_name!r}: {module_name} not found"
+        ) from exc
     register = getattr(module, "register_patterns", None)
     if register is None:
-        raise SystemExit(
-            f"Case {case_name!r} must expose register_patterns()"
-        )
+        raise SystemExit(f"Case {case_name!r} must expose register_patterns()")
     register(default_pattern_registry())
     patterns_path = getattr(module, "COHORT_PATTERNS_PATH", None)
     config_path = getattr(module, "CASE_CONFIG_PATH", None)
@@ -173,11 +173,7 @@ def _arm_was_run(score: Optional[Dict[str, Any]]) -> bool:
 
 
 def _run_arms_in_scores(scores: List[Dict[str, Any]]) -> List[str]:
-    arms = [
-        arm
-        for arm in _ARM_ORDER
-        if any(_arm_was_run(s.get(arm)) for s in scores)
-    ]
+    arms = [arm for arm in _ARM_ORDER if any(_arm_was_run(s.get(arm)) for s in scores)]
     return arms or list(_ARM_ORDER)
 
 
@@ -303,30 +299,37 @@ def _primary_or_from_logistic_summary(
     allow_level_contrast = predictor in _BINARY_CONTRAST_PREDICTORS
     for data in records:
         primary_model = data.get("primary_model") or {}
-        method = str(
-            data.get("method")
-            or primary_model.get("model_type")
-            or data.get("model_type")
-            or ""
-        ).strip().lower()
+        method = (
+            str(
+                data.get("method")
+                or primary_model.get("model_type")
+                or data.get("model_type")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
         if method in _LOGISTIC_METHODS and data.get("primary_or") is not None:
             return _finite_float(data.get("primary_or"))
         term = data.get("primary_association_term") or data.get("primary_term")
         value = _finite_float(data.get("primary_association_estimate"))
         if value is not None and (
-            allow_level_contrast
-            or not _term_is_single_level_contrast(term, predictor)
+            allow_level_contrast or not _term_is_single_level_contrast(term, predictor)
         ):
             return value
         for node in _iter_dicts(data):
             node_primary_model = node.get("primary_model") or {}
-            method = str(
-                node.get("method")
-                or node.get("model_type")
-                or node.get("fit_method")
-                or node_primary_model.get("model_type")
-                or ""
-            ).strip().lower()
+            method = (
+                str(
+                    node.get("method")
+                    or node.get("model_type")
+                    or node.get("fit_method")
+                    or node_primary_model.get("model_type")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
             if method and method not in _LOGISTIC_METHODS and "logit" not in method:
                 continue
             term = (
@@ -417,10 +420,26 @@ def _artifact_substring_hits(
         return {}
     tokens: List[str] = []
     for evidence in manifest.get("evidence", []):
-        for key in ("artifact_id", "label", "kind", "path", "summary"):
+        for key in (
+            "evidence_id",
+            "kind",
+            "description",
+            "relative_path",
+            "artifact_id",
+            "label",
+            "path",
+            "summary",
+        ):
             value = evidence.get(key)
             if value:
                 tokens.append(str(value))
+        metadata = evidence.get("metadata")
+        if isinstance(metadata, dict):
+            for value in metadata.values():
+                if isinstance(value, (str, int, float, bool)):
+                    tokens.append(str(value))
+                elif isinstance(value, list):
+                    tokens.extend(str(item) for item in value if item)
     blob = " || ".join(tokens).lower()
     return {n: (n.lower() in blob) for n in needles}
 
@@ -432,6 +451,85 @@ def _kinds_complete(manifest: Dict[str, Any]) -> Dict[str, Any]:
         "kinds_missing": sorted(_REQUIRED_KINDS - kinds),
         "complete": _REQUIRED_KINDS <= kinds,
     }
+
+
+def _bench_item_to_task(item):
+    """Adapt a ``tests.bench`` BenchItem to a minimal ``ICUAgentBenchTask``.
+
+    This lets the §M1 five-dimension Tier-1 scorecard be computed from a run's
+    readiness artifacts for the legacy bench items too. Result-validity stays
+    *unscored* (no locked reference is frozen for these items); the item's
+    ``expected_finding_substrings`` are surfaced as the audit-hazard answer key
+    (required warnings). Kept deliberately thin — the scorecard is additive and
+    does not replace the legacy OR/substring scoring yet.
+    """
+    from easyicu.research_agent.icu_agent_bench import (  # type: ignore
+        ICUAgentBenchGoldAnswer,
+        ICUAgentBenchTask,
+    )
+
+    warns = [w for w in (getattr(item, "expected_finding_substrings", []) or []) if w]
+    gold = ICUAgentBenchGoldAnswer(required_warnings=warns) if warns else None
+    return ICUAgentBenchTask(
+        task_id=getattr(item, "key", "bench_item"),
+        kind=getattr(item, "kind", "descriptive_association")
+        or "descriptive_association",
+        title=getattr(item, "name", getattr(item, "key", "bench item")),
+        objective=getattr(item, "research_question", ""),
+        expected_outputs=list(getattr(item, "expected_artifact_substrings", []) or []),
+        semantic_guardrails=warns,
+        gold_answer=gold,
+        gold_answer_status="frozen" if gold else "planned",
+    )
+
+
+def _five_dim_scorecard(*, run_dir: Path, item, or_value, manifest) -> Dict[str, Any]:
+    """Compute the additive five-dimension Tier-1 scorecard for an arm run.
+
+    Wrapped so a scorecard failure can never break a (possibly expensive) real
+    bench run — it is reported as a diagnostic field, not raised.
+    """
+    try:
+        from easyicu.research_agent.evaluation_scorecard import (  # type: ignore
+            score_run_from_dir,
+        )
+
+        observed_warnings = [
+            str(f.get("message", "")) for f in manifest.get("findings", [])
+        ]
+        card = score_run_from_dir(
+            _bench_item_to_task(item),
+            run_dir,
+            observed_metrics=(
+                {"primary_or": or_value} if or_value is not None else None
+            ),
+            observed_warnings=observed_warnings,
+            # The bench item declares its primary predictor + outcome; pass them
+            # so the gold-free overadjustment / treatment-mediator / outcome-
+            # leakage checks run in the runner path too (declared, never inferred).
+            exposure_concept=(getattr(item, "primary_predictor", "") or None),
+            outcome_concept=(getattr(item, "target_outcome", "") or None),
+        )
+        return card.model_dump()
+    except Exception as exc:  # pragma: no cover - additive diagnostic only
+        return {"error": f"five_dim_scorecard failed: {exc}"}
+
+
+def _load_cost_summary(run_dir: Path) -> Dict[str, Any]:
+    """Read the machine-readable per-run cost aggregate, if present.
+
+    Returns the token totals + estimated USD (``cost_summary.json``, written
+    when cost tracking is enabled). Empty dict when the run predates cost
+    tracking or it was disabled — token counts are the durable truth; the
+    USD figure is ``None`` for models absent from the price table.
+    """
+    path = run_dir / "cost_summary.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
@@ -468,6 +566,14 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         "evidence_count": len(manifest.get("evidence", [])),
         "evidence_kinds": _kinds_complete(manifest),
         "evidence_missing_in_manuscript": _evidence_missing_count(run_dir),
+        # Additive §M1 Tier-1 five-dimension scorecard (does not yet replace the
+        # legacy OR/substring scoring above — see _bench_item_to_task).
+        "five_dim_scorecard": _five_dim_scorecard(
+            run_dir=run_dir, item=item, or_value=or_value, manifest=manifest
+        ),
+        # Per-run LLM token totals + estimated USD (cost_summary.json). Feeds
+        # the manuscript cost table; {} when cost tracking was off.
+        "cost_summary": _load_cost_summary(run_dir),
     }
 
 
@@ -490,8 +596,7 @@ def _find_resumable_run(workdir: Path) -> Optional[str]:
         rs = run_dir / "run_status.json"
         if rs.exists():
             try:
-                gates = json.loads(rs.read_text(encoding="utf-8")).get(
-                    "gates", {})
+                gates = json.loads(rs.read_text(encoding="utf-8")).get("gates", {})
                 if gates.get("execution_complete"):
                     continue  # already finished — nothing to resume
             except (json.JSONDecodeError, OSError):
@@ -513,18 +618,44 @@ def _run_one_arm(
     force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
+    from easyicu.research_agent.cohort_schema import register_cohort_concept_ids
+    from easyicu.research_agent.reporting_checklist import checklist_names_for_kind
+
+    # The provided cohort is already materialised; let the planner reference any
+    # of its columns in a CTAS predicate without tripping the static dictionary
+    # check ("unknown concept_id: <derived column>").
+    register_cohort_concept_ids(list(getattr(cohort, "columns", [])))
 
     workdir.mkdir(parents=True, exist_ok=True)
+    # Force the kind-matched reporting checklist(s) so the EMITTED file matches
+    # what the scorecard READS by task kind (single source of truth:
+    # ``checklist_names_for_kind``). Without this the pipeline falls back to
+    # free-text analysis-family inference, which emitted STROBE for the
+    # mortality_prediction task while the scorecard expected TRIPOD+AI — so
+    # reporting_completeness was silently NA on a run that did reach the write
+    # phase (detector/emitter contract mismatch, G-2). ``setdefault`` lets an
+    # explicit pipeline_options override win.
+    opts = dict(pipeline_options or {})
+    opts.setdefault(
+        "reporting_checklist_names",
+        list(checklist_names_for_kind(getattr(item, "kind", None))),
+    )
+    # The authoritative task kind lets the internal phenotype checklist decide
+    # trajectory-item applicability by kind (cross-sectional clustering vs
+    # longitudinal) instead of fragile manuscript wording (M3 false-open).
+    opts.setdefault("task_kind", getattr(item, "kind", None))
     pipeline = ResearchAgentPipeline(
         workdir=workdir,
         llm=llm,
         disable_icu_context=disable_icu_context,
-        **dict(pipeline_options or {}),
+        **opts,
     )
     resume_run_id = _find_resumable_run(workdir) if reuse_existing else None
     if resume_run_id:
-        print(f"[research_agent] resuming interrupted run {resume_run_id} "
-              f"(step-level checkpoint) for {item.key}/{label}")
+        print(
+            f"[research_agent] resuming interrupted run {resume_run_id} "
+            f"(step-level checkpoint) for {item.key}/{label}"
+        )
     started = time.monotonic()
     result = pipeline.run(
         question=item.research_question,
@@ -532,6 +663,7 @@ def _run_one_arm(
         cohort_name=f"bench_{item.key}",
         database="bench",
         target_outcome=item.target_outcome,
+        primary_exposure=(item.primary_predictor or None),
         inclusion_criteria=item.inclusion_criteria,
         resume_run_id=resume_run_id,
         force_writer_probe=bool(force_writer_probe),
@@ -702,15 +834,9 @@ def _aggregate(scores: List[Dict[str, Any]]) -> Dict[str, Any]:
     for arm in aggregate_arms:
         arm_scores = [s for s in scores if _arm_was_run(s.get(arm))]
         n_total = len(arm_scores)
-        n_dir_correct = sum(
-            1 for s in arm_scores if s[arm]["direction_match"] is True
-        )
-        n_dir_wrong = sum(
-            1 for s in arm_scores if s[arm]["direction_match"] is False
-        )
-        n_dir_missing = sum(
-            1 for s in arm_scores if s[arm]["direction_match"] is None
-        )
+        n_dir_correct = sum(1 for s in arm_scores if s[arm]["direction_match"] is True)
+        n_dir_wrong = sum(1 for s in arm_scores if s[arm]["direction_match"] is False)
+        n_dir_missing = sum(1 for s in arm_scores if s[arm]["direction_match"] is None)
         n_findings_full_hit = 0
         n_findings_partial = 0
         for s in arm_scores:
@@ -887,7 +1013,9 @@ def _render_markdown(
 
     lines.append("## Aggregate (across all items)")
     lines.append("")
-    lines.append("| Metric | " + " | ".join(_ARM_LABELS[arm] for arm in ran_arms) + " |")
+    lines.append(
+        "| Metric | " + " | ".join(_ARM_LABELS[arm] for arm in ran_arms) + " |"
+    )
     lines.append("|---" + "|---:" * len(ran_arms) + "|")
     rows = [
         ("Number of items", "n_items"),
@@ -901,7 +1029,10 @@ def _render_markdown(
         ("Items with all artifact expectations hit", "artifact_full_hit"),
         ("Items with partial artifact expectations", "artifact_partial_hit"),
         ("Items with all 5 evidence kinds", "evidence_kinds_complete"),
-        ("Total `[evidence missing]` lines (lower is better)", "evidence_missing_in_manuscripts"),
+        (
+            "Total `[evidence missing]` lines (lower is better)",
+            "evidence_missing_in_manuscripts",
+        ),
     ]
     for name, key in rows:
         values = [str(totals[arm][key]) for arm in ran_arms]
@@ -941,6 +1072,64 @@ def _render_markdown(
 def _slugify_model(model: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9._-]+", "_", model.strip())
     return slug.strip("._-") or "model"
+
+
+def _git_short_sha() -> str:
+    """Best-effort 7-char git SHA of the EasyICU checkout (``unknown`` if N/A)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short=7", "HEAD"],
+            cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        sha = out.stdout.strip()
+        return sha or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _render_run_registry(payload: Dict[str, Any]) -> str:
+    """Human-readable provenance index for a batch (one row per item/arm).
+
+    Records the model + git SHA the run was produced under and, per item,
+    the status / primary OR / token+USD cost / run directory — so a frozen
+    (定稿) batch is traceable at a glance without opening each run folder.
+    """
+    lines = [
+        "# Run registry",
+        "",
+        f"- generated: `{payload.get('generated_at')}`",
+        f"- provider/model: `{payload.get('provider')}` / `{payload.get('model')}`",
+        f"- git: `{payload.get('git_sha', 'unknown')}`",
+        f"- seed: `{payload.get('seed')}`  ·  arms: `{payload.get('arms')}`",
+        "",
+        "| item | arm | status | primary_OR | total_tokens | est_USD | run_dir |",
+        "|------|-----|--------|-----------|--------------|---------|---------|",
+    ]
+    for item_payload in payload.get("scores", []):
+        item_key = item_payload.get("item_key", "")
+        for arm in ("aware", "naive"):
+            arm_score = item_payload.get(arm)
+            if not isinstance(arm_score, dict):
+                continue
+            cost = arm_score.get("cost_summary") or {}
+            tokens = cost.get("total_tokens", "")
+            usd = cost.get("total_cost_usd", None)
+            usd_str = f"{usd:.4f}" if isinstance(usd, (int, float)) else ""
+            sc = arm_score.get("five_dim_scorecard") or {}
+            status = sc.get("tristate") or sc.get("overall_status") or ""
+            run_dir = arm_score.get("workdir", "")
+            lines.append(
+                f"| {item_key} | {arm} | {status} "
+                f"| {arm_score.get('primary_or', '')} | {tokens} | {usd_str} "
+                f"| `{run_dir}` |"
+            )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _make_llm(*, provider: str, model: str, request_timeout: float):
@@ -992,6 +1181,7 @@ def _benchmark_pipeline_options(
     disable_replanning: bool,
     max_code_repair_attempts: Optional[int],
     enable_repro_envelope: bool = True,
+    enable_cost_tracking: bool = True,
     llm_seed: Optional[int] = None,
     writer_digest_widened: bool = False,
     strict_evidence: bool = False,
@@ -1021,6 +1211,11 @@ def _benchmark_pipeline_options(
         # SHA256) lands as reproducibility_envelope.json next to each
         # arm's run_status.json.
         options["enable_reproducibility_envelope"] = True
+    if enable_cost_tracking:
+        # Default ON for bench runs so each arm writes cost_records.json /
+        # cost_summary.{md,json} and ``manifest.cost_records`` — the token
+        # totals + estimated USD that become Fig.3 / cost-table source data.
+        options["enable_cost_tracking"] = True
     if writer_digest_widened:
         options["writer_digest_widened"] = True
     if llm_seed is not None:
@@ -1146,6 +1341,7 @@ def _run_suite(
     totals = _aggregate(scores)
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "git_sha": _git_short_sha(),
         "seed": seed,
         "bench_kind": bench_kind,
         "provider": provider,
@@ -1182,6 +1378,9 @@ def _run_suite(
         icu_agent_bench_markdown(suite),
         encoding="utf-8",
     )
+    (out_root / "RUN_REGISTRY.md").write_text(
+        _render_run_registry(payload), encoding="utf-8"
+    )
     return payload
 
 
@@ -1200,7 +1399,11 @@ def _render_model_matrix(runs: List[Dict[str, Any]]) -> str:
                 (f"ICU findings full-hit ({suffix})", arm, "icu_findings_full_hit"),
                 (f"Workflow full-hit ({suffix})", arm, "workflow_full_hit"),
                 (f"Artifact full-hit ({suffix})", arm, "artifact_full_hit"),
-                (f"Evidence missing ({suffix})", arm, "evidence_missing_in_manuscripts"),
+                (
+                    f"Evidence missing ({suffix})",
+                    arm,
+                    "evidence_missing_in_manuscripts",
+                ),
             ]
         )
     lines = [
@@ -1271,7 +1474,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("EASYICU_HOSTED_DEFAULT_MODEL", "openai/gpt-oss-120b:free"),
+        default=os.environ.get(
+            "EASYICU_HOSTED_DEFAULT_MODEL", "openai/gpt-oss-120b:free"
+        ),
         help="Single model name for real-provider runs.",
     )
     parser.add_argument(
@@ -1328,6 +1533,18 @@ def main() -> int:
             "Disable the LLM reproducibility envelope (O20). The envelope "
             "is ON by default for bench runs because the manuscript cites "
             "per-call temperature / seed / top_p / model and SHA256 hashes."
+        ),
+    )
+    parser.add_argument(
+        "--no-cost-tracking",
+        action="store_true",
+        help=(
+            "Disable per-run LLM cost tracking (T3.2). Cost tracking is ON "
+            "by default for bench runs so each arm writes cost_records.json / "
+            "cost_summary.{md,json} and manifest.cost_records — the token "
+            "totals + estimated USD that feed the Fig.3 / cost-table source "
+            "data. Token counts are recorded exactly even when a model's "
+            "price is unknown."
         ),
     )
     parser.add_argument(
@@ -1449,6 +1666,7 @@ def main() -> int:
         disable_replanning=bool(args.disable_replanning),
         max_code_repair_attempts=args.max_code_repair_attempts,
         enable_repro_envelope=not bool(getattr(args, "no_repro_envelope", False)),
+        enable_cost_tracking=not bool(getattr(args, "no_cost_tracking", False)),
         llm_seed=getattr(args, "llm_seed", None),
         writer_digest_widened=bool(args.writer_digest_widened),
         strict_evidence=bool(args.strict_evidence),
@@ -1672,6 +1890,11 @@ def _run_ehrflowbench_jsonl(
                 row.get("expected_finding_substrings") or []
             ),
             inclusion_criteria=list(row.get("inclusion_criteria") or []),
+            # Optional task kind so the five-dim scorecard routes the right
+            # reporting checklist (prediction->TRIPOD, clustering/trajectory->
+            # internal phenotype core) instead of always assuming an
+            # association. Absent -> descriptive_association (back-compat).
+            kind=str(row.get("kind") or "descriptive_association"),
         )
         # Resume support: skip items that already finished cleanly so a quota
         # 502 mid-batch never forces a full redo. An item counts as "done" only
@@ -1698,13 +1921,27 @@ def _run_ehrflowbench_jsonl(
             )
             scores.append(score)
         except Exception as exc:  # noqa: BLE001 — keep batch alive on 502/etc.
-            print(f"[ehrflowbench] item {key} FAILED: {type(exc).__name__}: "
-                  f"{str(exc)[:200]}")
-            pending.append({
-                "key": key,
-                "status": "item_exception",
-                "error": f"{type(exc).__name__}: {str(exc)[:300]}",
-            })
+            import traceback as _tb
+
+            tb = _tb.format_exc()
+            print(
+                f"[ehrflowbench] item {key} FAILED: {type(exc).__name__}: "
+                f"{str(exc)[:200]}\n{tb}"
+            )
+            try:
+                (out_root / key).mkdir(parents=True, exist_ok=True)
+                (out_root / key / "item_exception_traceback.txt").write_text(
+                    tb, encoding="utf-8"
+                )
+            except Exception:
+                pass
+            pending.append(
+                {
+                    "key": key,
+                    "status": "item_exception",
+                    "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                }
+            )
             continue
 
     totals = _aggregate(scores) if scores else {"naive": {}, "aware": {}}
@@ -1760,9 +1997,7 @@ def _run_one_item_from_cohort(
     reuse_existing: bool = False,
     force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
-    llm = _make_llm(
-        provider=provider, model=model, request_timeout=request_timeout
-    )
+    llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
     item_root = out_root / item.key
     selected = set(_normalize_arms(arms))
     naive = _skipped_arm("naive")

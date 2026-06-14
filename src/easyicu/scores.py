@@ -35,16 +35,63 @@ def _map_vals(values: list, breaks: list) -> Callable:
     def mapper(x):
         if pd.isna(x):
             return np.nan
-        
+
         # Find appropriate bin
         for i, brk in enumerate(breaks):
             if x <= brk:
                 return values[i]
-        
+
         # If greater than all breaks
         return values[-1]
-    
+
     return mapper
+
+def _present_mask(data: pd.DataFrame, col: str) -> pd.Series:
+    """Boolean per-row mask of whether ``col`` holds a measured value.
+
+    Missing input columns are treated as fully unmeasured. Used to build the
+    outcome-blind ``*_n_components`` completeness signals below.
+    """
+    if col in data.columns:
+        return data[col].notna()
+    return pd.Series(False, index=data.index)
+
+def _count_present(data: pd.DataFrame, component_inputs: list) -> pd.Series:
+    """Count measured components per row (0..len(component_inputs)).
+
+    Each entry of ``component_inputs`` is the list of raw input columns that
+    feed one score component; the component counts as measured when *any* of
+    its inputs is present (e.g. SIRS respiration is informed by resp OR pco2).
+    """
+    masks = []
+    for inputs in component_inputs:
+        cols = [inputs] if isinstance(inputs, str) else list(inputs)
+        mask = pd.Series(False, index=data.index)
+        for col in cols:
+            mask = mask | _present_mask(data, col)
+        masks.append(mask.astype(int))
+    if not masks:
+        return pd.Series(0, index=data.index, dtype=int)
+    return pd.concat(masks, axis=1).sum(axis=1).astype(int)
+
+_AVPU_LEVELS = ['A', 'V', 'P', 'U']
+
+def _encode_avpu(series: pd.Series) -> pd.Series:
+    """Encode the categorical AVPU column to numeric codes for window LOCF.
+
+    The vectorized ``slide`` LOCF rolls numerically and raises on object
+    columns, so AVPU is round-tripped through integer codes (NaN preserved for
+    missing/unknown) before sliding and decoded back afterwards.
+    """
+    codes = pd.Categorical(series, categories=_AVPU_LEVELS).codes
+    out = pd.Series(codes, index=series.index, dtype='float')
+    return out.where(out >= 0, np.nan)
+
+def _decode_avpu(series: pd.Series) -> pd.Series:
+    """Inverse of :func:`_encode_avpu` (missing stays missing)."""
+    codes = pd.to_numeric(series, errors='coerce').round()
+    mapping = {float(i): lv for i, lv in enumerate(_AVPU_LEVELS)}
+    return codes.map(mapping)
 
 def sirs_score(
     temp: pd.DataFrame,
@@ -82,7 +129,8 @@ def sirs_score(
         keep_components: Whether to keep individual component scores
         
     Returns:
-        DataFrame with SIRS scores
+        DataFrame with 'sirs' scores and a 'sirs_n_components' (0-4)
+        outcome-blind completeness count.
     """
     from .ts_utils import slide
     
@@ -141,9 +189,18 @@ def sirs_score(
     # Calculate total SIRS score
     component_cols = ['temp_comp', 'hr_comp', 'resp_comp', 'wbc_comp']
     data['sirs'] = data[component_cols].sum(axis=1)
-    
+
+    # Outcome-blind completeness signal: how many of the 4 SIRS components had at
+    # least one measured input for this row (0-4). The score above coalesces an
+    # unmeasured component to 0, so a sirs==0 row may be a fully-measured patient
+    # with no SIRS criteria OR a row with unmeasured components; this column lets
+    # pre-analysis QC tell them apart WITHOUT changing the standard score.
+    data['sirs_n_components'] = _count_present(
+        data, ['temp', 'hr', ['resp', 'pco2'], ['wbc', 'bnd']]
+    )
+
     # Clean up
-    result_cols = id_cols + [index_col, 'sirs']
+    result_cols = id_cols + [index_col, 'sirs', 'sirs_n_components']
     if keep_components:
         result_cols.extend(component_cols)
     else:
@@ -183,7 +240,8 @@ def qsofa_score(
         keep_components: Whether to keep individual component scores
         
     Returns:
-        DataFrame with qSOFA scores
+        DataFrame with 'qsofa' scores and a 'qsofa_n_components' (0-3)
+        outcome-blind completeness count.
     """
     from .ts_utils import slide
     
@@ -211,9 +269,15 @@ def qsofa_score(
     # Calculate total qSOFA score
     component_cols = ['gcs_comp', 'sbp_comp', 'resp_comp']
     data['qsofa'] = data[component_cols].sum(axis=1)
-    
+
+    # Outcome-blind completeness signal (0-3): how many of GCS / SBP / resp were
+    # measured for this row. A qsofa==0 row with few measured components is not
+    # the same as a fully-measured negative; this column preserves that without
+    # changing the score (unmeasured components still coalesce to 0).
+    data['qsofa_n_components'] = _count_present(data, ['gcs', 'sbp', 'resp'])
+
     # Clean up
-    result_cols = id_cols + [index_col, 'qsofa']
+    result_cols = id_cols + [index_col, 'qsofa', 'qsofa_n_components']
     if keep_components:
         result_cols.extend(component_cols)
     
@@ -251,7 +315,8 @@ def news_score(
         keep_components: Whether to keep individual component scores
         
     Returns:
-        DataFrame with NEWS scores
+        DataFrame with 'news' scores and a 'news_n_components' (0-6)
+        outcome-blind completeness count (supp_o2 excluded).
     """
     from .ts_utils import slide
     
@@ -267,17 +332,29 @@ def news_score(
         data['supp_o2'] = data['supp_o2'].fillna(False)
     
     data = data.sort_values(id_cols + [index_col])
-    
+
+    # The vectorized slide LOCF rolls numerically; encode the non-numeric
+    # columns (categorical AVPU, boolean supp_o2) so they survive the window.
+    if 'avpu' in data.columns:
+        data['avpu'] = _encode_avpu(data['avpu'])
+    if 'supp_o2' in data.columns:
+        data['supp_o2'] = data['supp_o2'].astype(float)
+
     # Apply LOCF
     agg_dict = {}
     for col in ['hr', 'avpu', 'supp_o2', 'o2sat', 'temp', 'sbp', 'resp']:
         if col in data.columns:
             agg_dict[col] = _locf
-    
+
     if agg_dict:
         data = slide(data, id_cols, index_col, before=win_length,
                     after=pd.Timedelta(0), agg_func=agg_dict)
-    
+
+    if 'avpu' in data.columns:
+        data['avpu'] = _decode_avpu(data['avpu'])
+    if 'supp_o2' in data.columns:
+        data['supp_o2'] = data['supp_o2'].fillna(0) > 0
+
     # Define scoring functions (NEWS scoring rules)
     def resp_map(x):
         if pd.isna(x): return 0
@@ -337,12 +414,20 @@ def news_score(
     data['supp_o2_comp'] = data['supp_o2'].apply(supp_o2_map)
     
     # Calculate total NEWS score
-    component_cols = ['resp_comp', 'o2sat_comp', 'temp_comp', 'sbp_comp', 
+    component_cols = ['resp_comp', 'o2sat_comp', 'temp_comp', 'sbp_comp',
                      'hr_comp', 'avpu_comp', 'supp_o2_comp']
     data['news'] = data[component_cols].sum(axis=1)
-    
+
+    # Outcome-blind completeness signal (0-6): measured physiological components.
+    # supp_o2 is excluded because it is defaulted to False when unrecorded (see
+    # above), so it is never "missing" and would inflate the count. As elsewhere,
+    # this does not change the score; unmeasured components still coalesce to 0.
+    data['news_n_components'] = _count_present(
+        data, ['resp', 'o2sat', 'temp', 'sbp', 'hr', 'avpu']
+    )
+
     # Clean up
-    result_cols = id_cols + [index_col, 'news']
+    result_cols = id_cols + [index_col, 'news', 'news_n_components']
     if keep_components:
         result_cols.extend(component_cols)
     
@@ -376,7 +461,8 @@ def mews_score(
         keep_components: Whether to keep individual component scores
         
     Returns:
-        DataFrame with MEWS scores
+        DataFrame with 'mews' scores and a 'mews_n_components' (0-5)
+        outcome-blind completeness count.
     """
     from .ts_utils import slide
     
@@ -388,17 +474,25 @@ def mews_score(
         data = pd.merge(data, df, on=id_cols + [index_col], how='outer')
     
     data = data.sort_values(id_cols + [index_col])
-    
+
+    # The vectorized slide LOCF rolls numerically; encode categorical AVPU so it
+    # survives the window, then decode back to letters before scoring.
+    if 'avpu' in data.columns:
+        data['avpu'] = _encode_avpu(data['avpu'])
+
     # Apply LOCF
     agg_dict = {}
     for col in ['hr', 'avpu', 'temp', 'sbp', 'resp']:
         if col in data.columns:
             agg_dict[col] = _locf
-    
+
     if agg_dict:
         data = slide(data, id_cols, index_col, before=win_length,
                     after=pd.Timedelta(0), agg_func=agg_dict)
-    
+
+    if 'avpu' in data.columns:
+        data['avpu'] = _decode_avpu(data['avpu'])
+
     # Define MEWS scoring functions
     def sbp_map(x):
         if pd.isna(x): return 0
@@ -446,9 +540,17 @@ def mews_score(
     # Calculate total MEWS score
     component_cols = ['sbp_comp', 'hr_comp', 'resp_comp', 'temp_comp', 'avpu_comp']
     data['mews'] = data[component_cols].sum(axis=1)
-    
+
+    # Outcome-blind completeness signal (0-5): how many of SBP / HR / resp / temp
+    # / AVPU were measured for this row. Same rationale as the other scores — a
+    # mews==0 row may be fully measured or largely unmeasured; the score itself
+    # is unchanged (unmeasured components still coalesce to 0).
+    data['mews_n_components'] = _count_present(
+        data, ['sbp', 'hr', 'resp', 'temp', 'avpu']
+    )
+
     # Clean up
-    result_cols = id_cols + [index_col, 'mews']
+    result_cols = id_cols + [index_col, 'mews', 'mews_n_components']
     if keep_components:
         result_cols.extend(component_cols)
     

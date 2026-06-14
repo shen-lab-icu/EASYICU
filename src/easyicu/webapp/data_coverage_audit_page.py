@@ -527,8 +527,8 @@ def render_data_coverage_audit_subtab(lang: str, app_context: dict[str, Any] | N
             st.markdown(f'<div class="audit-flow">{step_html}</div>', unsafe_allow_html=True)
 
     note = (
-        "<b>Missingness denominators</b>: d=LOS uses patient-specific ICU stay; d=72h uses a fallback time window; "
-        "d=demo uses the simulated horizon; d=static means one observation per patient."
+        "<b>Missingness denominators</b>: d=LOS uses stay-specific ICU time; d=72h uses a fallback time window; "
+        "d=demo uses the simulated horizon; d=static means one observation per ICU stay."
         if lang == 'en' else
         "<b>缺失率分母</b>：d=LOS 表示按患者 ICU 住院时长估算；d=72h 表示兜底时间窗；"
         "d=demo 表示演示数据时间窗；d=static 表示每位患者单次观测。"

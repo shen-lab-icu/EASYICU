@@ -38,6 +38,7 @@ EXPECTED_FIELDS = (
     "time_windows",
     "temporal_constraints",
     "target_outcome",
+    "primary_exposure",
     "cross_database_validation",
     "cohort_parquet",
     "user_preferences",

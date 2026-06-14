@@ -169,3 +169,90 @@ def test_spaced_percent_display_binds_to_proportion_claim(ra, tmp_path: Path) ->
     assert untraced == []
     assert "<!-- UNTRACED:9.4 -->" not in bound
     assert binding_map["claim_1"].source_field == "baseline_prevalence"
+
+
+def test_hazard_ratio_prose_picks_hr_candidate(ra, tmp_path: Path) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="1.30",
+        canonical=1.30,
+        evidence_id="e_or",
+        step_id="03_assoc",
+        source_field="primary_or",
+    )
+    store.register_numeric_claim(
+        value="1.30",
+        canonical=1.30,
+        evidence_id="e_hr",
+        step_id="04_survival",
+        source_field="hazard_ratio",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The Cox model estimated an HR of 1.30 for the exposure.",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].source_field == "hazard_ratio"
+
+
+def test_average_treatment_effect_prose_picks_ate_candidate(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="0.08",
+        canonical=0.08,
+        evidence_id="e_rate",
+        step_id="02_descriptive",
+        source_field="outcome_rate",
+    )
+    store.register_numeric_claim(
+        value="0.08",
+        canonical=0.08,
+        evidence_id="e_ate",
+        step_id="05_causal",
+        source_field="average_treatment_effect",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The target-trial analysis estimated an average treatment effect of 0.08.",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].source_field == "average_treatment_effect"
+
+
+def test_length_of_stay_prose_picks_los_candidate(ra, tmp_path: Path) -> None:
+    from easyicu.research_agent.manuscript_post import bind_numeric_values
+
+    store = ra.EvidenceStore(tmp_path)
+    store.register_numeric_claim(
+        value="4.20",
+        canonical=4.2,
+        evidence_id="e_age",
+        step_id="01_table",
+        source_field="median_age",
+    )
+    store.register_numeric_claim(
+        value="4.20",
+        canonical=4.2,
+        evidence_id="e_los",
+        step_id="03_los",
+        source_field="median_los_icu",
+    )
+
+    _, binding_map, untraced = bind_numeric_values(
+        "The median ICU length of stay was 4.20 days.",
+        evidence=store,
+    )
+
+    assert untraced == []
+    assert binding_map["claim_1"].source_field == "median_los_icu"

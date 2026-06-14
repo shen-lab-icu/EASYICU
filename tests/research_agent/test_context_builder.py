@@ -138,6 +138,69 @@ def test_target_outcome_semantics_are_enriched_from_question(ra):
     assert any("explicitly treated as ICU mortality" in note for note in death.clinical_caveats)
 
 
+def test_non_mortality_target_outcomes_receive_explicit_semantics(ra):
+    df = pd.DataFrame({
+        "stay_id": [1, 2, 3, 4],
+        "age": [60.0, 70.0, 80.0, 55.0],
+        "los_icu": [2.5, 7.0, 4.5, 11.0],
+    })
+    ctx = ra.build_research_context(
+        research_question="Model ICU length of stay from admission age.",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="los_icu",
+    )
+    los = ctx.variable("los_icu")
+    assert los is not None
+    assert los.role.value == "outcome"
+    assert los.description is not None
+    assert "Length-of-stay" in los.description or "length-of-stay" in los.description
+    assert los.source_concept == "length_of_stay"
+    assert any("Do not convert length of stay" in note for note in los.cross_database_notes)
+
+
+def test_unknown_declared_target_outcome_is_not_left_semantically_blank(ra):
+    df = pd.DataFrame({
+        "stay_id": [1, 2, 3, 4],
+        "age": [60.0, 70.0, 80.0, 55.0],
+        "custom_endpoint": [0.2, 0.5, 0.4, 0.9],
+    })
+    ctx = ra.build_research_context(
+        research_question="Estimate the relation between age and the custom endpoint.",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="custom_endpoint",
+    )
+    endpoint = ctx.variable("custom_endpoint")
+    assert endpoint is not None
+    assert endpoint.role.value == "outcome"
+    assert endpoint.description is not None
+    assert "Primary outcome column declared by the caller" in endpoint.description
+    assert endpoint.source_concept == "declared_primary_outcome"
+    assert any("Do not replace this declared outcome" in note for note in endpoint.cross_database_notes)
+
+
+def test_survival_question_marks_target_as_time_to_event_endpoint(ra):
+    df = pd.DataFrame({
+        "stay_id": [1, 2, 3, 4],
+        "followup_days": [7, 14, 21, 28],
+        "death": [0, 1, 0, 1],
+    })
+    ctx = ra.build_research_context(
+        research_question="Evaluate 28-day survival after ICU admission with a Cox model.",
+        cohort=df,
+        cohort_name="c",
+        database="synthetic",
+        target_outcome="death",
+    )
+    death = ctx.variable("death")
+    assert death is not None
+    assert death.source_concept == "time_to_event_endpoint"
+    assert any("time-to-event endpoint" in note for note in death.clinical_caveats)
+
+
 def test_naive_context_strips_icu_metadata_and_preferences(ra):
     df = pd.DataFrame({
         "stay_id": [1, 2, 3, 4],

@@ -35,6 +35,8 @@ import pandas as pd
 import numpy as np
 import logging
 
+from easyicu.ts_utils import _infer_numeric_time_unit
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,7 +104,7 @@ def kdigo_creatinine(
     # Vectorized: use searchsorted for O(N log N) window boundaries per patient
     
     # Detect time unit and convert to hours for uniform processing
-    time_unit = _detect_time_unit(df[time_col])
+    time_unit = _detect_time_unit(df[time_col], time_col)
     logger.debug(f"Creatinine baseline calculation using time unit: {time_unit}")
     
     if time_unit == 'datetime':
@@ -110,6 +112,8 @@ def kdigo_creatinine(
         df['_hours'] = (df[time_col] - ref_time) / pd.Timedelta(hours=1)
     elif time_unit == 'seconds':
         df['_hours'] = df[time_col].astype(np.float64) / 3600.0
+    elif time_unit == 'hours':
+        df['_hours'] = df[time_col].astype(np.float64)
     else:  # minutes
         df['_hours'] = df[time_col].astype(np.float64) / 60.0
     
@@ -264,28 +268,31 @@ def kdigo_uo(
     return result
 
 
-def _detect_time_unit(time_series: pd.Series) -> str:
+def _detect_time_unit(time_series: pd.Series, time_col: str | None = None) -> str:
     """Detect the unit of a numeric time series.
     
     Returns:
         'seconds': Time values are in seconds (e.g., SICdb)
+        'hours': Time values are already in hours
         'minutes': Time values are in minutes (e.g., MIIV, AUMC, eICU)
         'datetime': Time values are datetime objects
     """
     if pd.api.types.is_datetime64_any_dtype(time_series):
         return 'datetime'
-    
-    # For numeric time, check the magnitude
-    # If max value > 50000, likely seconds (50000 seconds = ~14 hours)
-    # Typical ICU stays are 1-30 days = 1440-43200 minutes = 86400-2592000 seconds
-    max_val = time_series.max()
-    
-    if max_val > 100000:  # > 100000 seconds = 27.8 hours is reasonable for seconds
+
+    # KDIGO accepts both raw source offsets and normalized concept time axes.
+    # Reuse ts_utils' inference, but do not let the generic "charttime" name
+    # override numeric spacing because older callers pass minute offsets under
+    # that column name.
+    index_hint = time_col or getattr(time_series, "name", None)
+    if str(index_hint).lower() == "charttime":
+        index_hint = None
+    inferred = _infer_numeric_time_unit(time_series, index_hint)
+    if inferred == 's':
         return 'seconds'
-    elif max_val > 50000:  # Ambiguous zone, but lean towards seconds
-        return 'seconds'
-    else:
-        return 'minutes'
+    if inferred == 'h':
+        return 'hours'
+    return 'minutes'
 
 
 def _calculate_uo_rates_simple(
@@ -339,32 +346,27 @@ def _calculate_uo_rates_simple(
             if col in weight.columns:
                 weight_col = col
                 break
+
+    if weight_col in weight.columns:
+        weight[weight_col] = pd.to_numeric(weight[weight_col], errors='coerce')
     
     # Get first weight per patient for simplicity
+    global_weight = np.nan
     if weight_id_col and weight_id_col in weight.columns:
         weight_per_patient = weight.groupby(weight_id_col)[weight_col].first().to_dict()
     else:
-        # Single weight value
-        weight_per_patient = {None: weight[weight_col].iloc[0] if len(weight) > 0 else 70.0}
+        # Single weight value applies to all rows if no patient ID is present.
+        if weight_col in weight.columns and len(weight) > 0:
+            global_weight = weight[weight_col].iloc[0]
+        weight_per_patient = {}
     
     # Sort urine by patient and time
     urine = urine.sort_values([id_col, time_col]).reset_index(drop=True)
     
-    # Determine time unit (datetime, minutes, or seconds)
-    time_unit = _detect_time_unit(urine[time_col])
+    # Determine time unit (datetime, hours, minutes, or seconds)
+    time_unit = _detect_time_unit(urine[time_col], time_col)
     logger.debug(f"Detected time unit for UO calculation: {time_unit}")
-    
-    # Define window sizes and conversion factor to get hours
-    if time_unit == 'datetime':
-        # Will convert to minutes in the loop
-        to_minutes_factor = 1.0  # Already handled specially
-    elif time_unit == 'seconds':
-        # SICdb uses seconds
-        to_minutes_factor = 1.0 / 60.0  # 1 second = 1/60 minute
-    else:
-        # Default: minutes
-        to_minutes_factor = 1.0
-    
+
     # Vectorized UO rate calculation using cumsum + searchsorted (O(N log N))
     # Convert time to minutes for uniform window computation
     urine = urine.copy()
@@ -373,13 +375,18 @@ def _calculate_uo_rates_simple(
         urine['_min'] = (urine[time_col] - _ref) / pd.Timedelta(minutes=1)
     elif time_unit == 'seconds':
         urine['_min'] = urine[time_col].astype(np.float64) / 60.0
+    elif time_unit == 'hours':
+        urine['_min'] = urine[time_col].astype(np.float64) * 60.0
     else:
         urine['_min'] = urine[time_col].astype(np.float64)
     
     # Map weights to each row
-    urine['_wt'] = urine[id_col].map(weight_per_patient)
-    urine['_wt'] = urine['_wt'].fillna(70.0)
-    urine.loc[(urine['_wt'] <= 0) | urine['_wt'].isna(), '_wt'] = 70.0
+    if weight_per_patient:
+        urine['_wt'] = urine[id_col].map(weight_per_patient)
+    else:
+        urine['_wt'] = global_weight
+    urine['_wt'] = pd.to_numeric(urine['_wt'], errors='coerce')
+    urine.loc[urine['_wt'] <= 0, '_wt'] = np.nan
     
     urine[urine_col] = urine[urine_col].astype(np.float64)
     urine = urine.sort_values([id_col, '_min']).reset_index(drop=True)
@@ -491,6 +498,46 @@ def _calc_aki_stage_uo(
     return stage
 
 
+def _rrt_active_from_initiation(
+    result: pd.DataFrame,
+    rrt_view: pd.DataFrame,
+    id_col: str,
+    time_col: str,
+) -> pd.Series:
+    """Return True for rows at or after the first documented active RRT time."""
+    active = pd.Series(False, index=result.index, dtype=bool)
+    if result.empty or rrt_view.empty:
+        return active
+
+    rrt = rrt_view.copy()
+    if pd.api.types.is_bool_dtype(rrt["rrt"]) or str(rrt["rrt"].dtype) == "boolean":
+        rrt["_rrt_active"] = rrt["rrt"].fillna(False).astype(bool)
+    elif pd.api.types.is_numeric_dtype(rrt["rrt"]):
+        rrt["_rrt_active"] = pd.to_numeric(rrt["rrt"], errors="coerce").fillna(0) > 0
+    else:
+        rrt["_rrt_active"] = (
+            rrt["rrt"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .isin({"1", "true", "t", "yes", "y", "active"})
+        )
+
+    starts = (
+        rrt.loc[rrt["_rrt_active"], [id_col, time_col]]
+        .dropna(subset=[id_col, time_col])
+        .groupby(id_col, sort=False)[time_col]
+        .min()
+    )
+    if starts.empty:
+        return active
+
+    for pid, start_time in starts.items():
+        row_mask = result[id_col] == pid
+        active.loc[row_mask] = result.loc[row_mask, time_col] >= start_time
+    return active
+
+
 def kdigo_stages(
     crea_df: pd.DataFrame,
     urine_df: Optional[pd.DataFrame] = None,
@@ -590,13 +637,8 @@ def kdigo_stages(
             rrt_view = rrt_df[[rrt_id_col, rrt_time_col, rrt_col]].rename(
                 columns={rrt_id_col: id_col, rrt_time_col: time_col, rrt_col: 'rrt'}
             )
-            result = result.merge(
-                rrt_view,
-                on=[id_col, time_col],
-                how='left'
-            )
-            # RRT = Stage 3
-            rrt_mask = result['rrt'].fillna(False).infer_objects(copy=False).astype(bool)
+            rrt_mask = _rrt_active_from_initiation(result, rrt_view, id_col, time_col)
+            result["rrt"] = rrt_mask
             result.loc[rrt_mask, 'aki_stage_creat'] = np.maximum(
                 result.loc[rrt_mask, 'aki_stage_creat'].fillna(0), 3
             )
@@ -612,7 +654,13 @@ def kdigo_stages(
     result['aki_stage_creat'] = result['aki_stage_creat'].fillna(0).astype(int)
     result['aki_stage_uo'] = result['aki_stage_uo'].fillna(0).astype(int)
     result['aki_stage_rrt'] = result['aki_stage_rrt'].fillna(0).astype(int)
-    result['aki_stage'] = np.maximum(result['aki_stage_creat'], result['aki_stage_uo'])
+    result['aki_stage'] = np.maximum.reduce(
+        [
+            result['aki_stage_creat'].to_numpy(),
+            result['aki_stage_uo'].to_numpy(),
+            result['aki_stage_rrt'].to_numpy(),
+        ]
+    )
     
     # Boolean AKI indicator
     result['aki'] = result['aki_stage'] > 0

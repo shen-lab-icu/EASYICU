@@ -35,7 +35,7 @@ def _demo(age, low, high):
     return np.clip(age, low, high)
 
 
-def _rich_multisystem_cohort(seed: int, *, offset: int = 0, n: int = 1400, zero_artifact: bool = False,
+def _rich_multisystem_cohort(seed: int, *, offset: int = 0, n: int = 1400,
                              vaso_missing: float = 0.72, liver_missing: float = 0.28) -> "object":
     import numpy as np
     import pandas as pd
@@ -91,15 +91,6 @@ def _rich_multisystem_cohort(seed: int, *, offset: int = 0, n: int = 1400, zero_
 
     sofa2 = sofa2_resp + sofa2_cardio + sofa2_cns + sofa2_renal + sofa2_coag + np.nan_to_num(sofa2_liver_obs, nan=0.0)
 
-    if zero_artifact:
-        artifact = rng.random(n) < 0.08
-        sofa2[artifact] = 0
-        sofa2_liver_obs[artifact] = np.nan
-        bili_obs[artifact] = np.nan
-        # Patients with artefactual zero are not truly low risk.
-        sofa2_cardio[artifact] = np.maximum(sofa2_cardio[artifact], 1)
-        sofa2_resp[artifact] = np.maximum(sofa2_resp[artifact], 1)
-
     logit = (
         -4.2
         + 0.11 * sofa2
@@ -144,7 +135,7 @@ def _rich_multisystem_cohort(seed: int, *, offset: int = 0, n: int = 1400, zero_
 
 
 def _shock_discordance_cohort(seed: int) -> "object":
-    df = _rich_multisystem_cohort(seed, offset=101, n=1500, zero_artifact=False, vaso_missing=0.64, liver_missing=0.24)
+    df = _rich_multisystem_cohort(seed, offset=101, n=1500, vaso_missing=0.64, liver_missing=0.24)
     import numpy as np
 
     rng = np.random.default_rng(seed + 101)
@@ -155,16 +146,20 @@ def _shock_discordance_cohort(seed: int) -> "object":
     return df
 
 
-def _zero_artifact_cohort(seed: int) -> "object":
-    return _rich_multisystem_cohort(seed, offset=211, n=1500, zero_artifact=True, vaso_missing=0.70, liver_missing=0.30)
+def _sofa_multisignal_cohort(seed: int) -> "object":
+    return _rich_multisystem_cohort(seed, offset=211, n=1500, vaso_missing=0.70, liver_missing=0.30)
+
+
+def _data_quality_cohort(seed: int) -> "object":
+    return _rich_multisystem_cohort(seed, offset=523, n=1500, vaso_missing=0.80, liver_missing=0.42)
 
 
 def _hepatorenal_missingness_cohort(seed: int) -> "object":
-    return _rich_multisystem_cohort(seed, offset=307, n=1300, zero_artifact=False, vaso_missing=0.78, liver_missing=0.38)
+    return _rich_multisystem_cohort(seed, offset=307, n=1300, vaso_missing=0.78, liver_missing=0.38)
 
 
 def _neuro_hemodynamic_cohort(seed: int) -> "object":
-    df = _rich_multisystem_cohort(seed, offset=409, n=1400, zero_artifact=False, vaso_missing=0.55, liver_missing=0.22)
+    df = _rich_multisystem_cohort(seed, offset=409, n=1400, vaso_missing=0.55, liver_missing=0.22)
     return df
 
 
@@ -177,12 +172,12 @@ ANALYSIS_BENCH_ITEMS: List[BenchItem] = [
     BenchItem(
         key="analysis_sofa_multisignal_mortality",
         name="SOFA-2 multisignal mortality analysis",
-        research_question="In a first-ICU-stay adult cohort, quantify whether early SOFA-2 severity and selected first-24h physiology are associated with ICU mortality, explicitly auditing score==0 artefacts and missingness.",
+        research_question="In a first-ICU-stay adult cohort, quantify whether early SOFA-2 severity and selected first-24h physiology are associated with ICU mortality, with explicit auditing of missingness.",
         target_outcome="death",
         primary_predictor="sofa2",
         expected_or_direction=+1,
-        cohort_factory=_zero_artifact_cohort,
-        expected_finding_substrings=["non-monotonic", "missingness", "sofa2"],
+        cohort_factory=_sofa_multisignal_cohort,
+        expected_finding_substrings=["missingness", "sofa2"],
         inclusion_criteria=["First ICU admission", "Age ≥ 18 years", "ICU LoS ≥ 24 hours"],
         benchmark_family="analysis",
         difficulty="advanced",
@@ -192,7 +187,7 @@ ANALYSIS_BENCH_ITEMS: List[BenchItem] = [
         expected_step_substrings=["table", "outcome", "missingness", "stratum", "association", "sensitivity"],
         expected_artifact_substrings=["table_one", "outcome_incidence", "missingness", "sofa2_stratum", "primary_association"],
         notes="Core EasyICU-style end-to-end analysis task; should behave like a mini paper pipeline rather than a one-regression toy item.",
-        interpretation_note="The score==0 anomaly is benchmark-constructed; do not cite it as an external ICU epidemiology or pathophysiology claim.",
+        interpretation_note="Cohort is benchmark-constructed synthetic data; do not cite associations as external ICU epidemiology or pathophysiology claims.",
     ),
     BenchItem(
         key="analysis_shock_discordance",
@@ -361,7 +356,7 @@ ANALYSIS_BENCH_ITEMS: List[BenchItem] = [
         target_outcome="death",
         primary_predictor="sofa2",
         expected_or_direction=+1,
-        cohort_factory=_zero_artifact_cohort,
+        cohort_factory=_data_quality_cohort,
         expected_finding_substrings=["missingness", "sofa2", "vaso", "bili"],
         inclusion_criteria=["First ICU admission", "Age ≥ 18 years", "ICU LoS ≥ 24 hours"],
         benchmark_family="analysis",

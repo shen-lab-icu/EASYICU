@@ -47,451 +47,144 @@ from .scalar_utils import (
     _first_present_scalar,
     _flatten_scalar_dict,
 )
+from .code_repair_helpers import (  # noqa: F401  (re-exported for back-compat)
+    _BINARY_MODEL_REPAIR_FAMILIES,
+    _KEYERROR_NOT_IN_INDEX_RE,
+    _code_contains_binary_model,
+    _code_mentions_missing_indicator_column,
+    _extract_missing_index_columns,
+    _extract_required_cols_list,
+    _family_allows_binary_model_repair,
+    _infer_analysis_cohort_source_column,
+    _infer_binary_outcome_from_code,
+    _infer_overexpanded_categorical_predictor,
+    _infer_primary_association_predictor_from_code,
+    _normalise_predictor_column_candidate,
+    _ordinal_primary_association_fallback_code,
+    _patch_derived_analysis_cohort_materialization,
+    _patch_json_dump_numpy_key_sanitizer,
+    _patch_primary_predictor_into_design_matrix,
+    _patch_statsmodels_conf_int_filter_axis,
+    _patch_statsmodels_endog_exog_index_alignment,
+    _primary_association_fallback_code,
+    _statsmodels_repair_allowed_for_family,
+    _strip_columns_from_list_literals,
+)
 
 
-def _primary_association_fallback_code(
-    *,
-    predictor: str,
-    outcome: str = "death",
-    reason: str,
-) -> str:
-    """Appendable case-neutral rescue block for common regression failures."""
-
-    predictor_lit = json.dumps(predictor)
-    outcome_lit = json.dumps(outcome or "death")
-    reason_lit = json.dumps(reason)
-    return textwrap.dedent(
-        f"""
-        def _easyicu_primary_association_fallback_v1():
-            import json
-            import os
-            import numpy as np
-            import pandas as pd
-            import statsmodels.api as sm
-
-            cohort_path = os.environ.get("COHORT_PARQUET")
-            out_dir = os.environ.get("STEP_OUT_DIR", ".")
-            if not cohort_path:
-                return
-            df_fallback = pd.read_parquet(cohort_path)
-            predictor_col = {predictor_lit}
-            outcome_col = {outcome_lit}
-            if predictor_col not in df_fallback.columns or outcome_col not in df_fallback.columns:
-                return
-            model_df = df_fallback[[outcome_col, predictor_col]].copy()
-            for col in model_df.columns:
-                model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
-            model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
-            if len(model_df) < 20 or model_df[outcome_col].nunique() < 2:
-                return
-            y = model_df[outcome_col].astype(float)
-            X = sm.add_constant(model_df[[predictor_col]].astype(float), has_constant="add")
-            result = sm.Logit(y, X).fit(disp=0)
-            coef = float(result.params[predictor_col])
-            ci = np.exp(result.conf_int().loc[predictor_col]).tolist()
-            primary_or = float(np.exp(coef))
-            p_value = float(result.pvalues[predictor_col])
-            table_path = os.path.join(out_dir, "primary_association.csv")
-            pd.DataFrame([{{
-                "variable": predictor_col,
-                "odds_ratio": primary_or,
-                "or_lower": float(ci[0]),
-                "or_upper": float(ci[1]),
-                "p_value": p_value,
-                "n_complete": int(len(model_df)),
-                "method": "deterministic_logistic_regression_fallback",
-            }}]).to_csv(table_path, index=False)
-            summary_path = os.path.join(out_dir, "step_summary.json")
-            summary = {{}}
-            if os.path.exists(summary_path):
-                try:
-                    with open(summary_path, "r", encoding="utf-8") as f:
-                        loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        summary.update(loaded)
-                except Exception:
-                    summary = {{}}
-            summary.update({{
-                "primary_predictor": predictor_col,
-                "outcome": outcome_col,
-                "primary_or": primary_or,
-                "statistic:primary_or": primary_or,
-                "primary_or_ci": [float(ci[0]), float(ci[1])],
-                "p_value": p_value,
-                "n_complete": int(len(model_df)),
-                "method": "deterministic_logistic_regression_fallback",
-                "fallback_reason": {reason_lit},
-            }})
-            with open(summary_path, "w", encoding="utf-8") as f:
-                json.dump(summary, f, indent=2, ensure_ascii=False)
-            print(json.dumps(summary, ensure_ascii=False))
-
-        try:
-            _easyicu_primary_association_fallback_v1()
-        except Exception as _easyicu_primary_fallback_exc:
-            print(f"primary_association_fallback_failed: {{_easyicu_primary_fallback_exc}}")
-        """
-    ).strip("\n")
+_NULL_PRIMARY_EFFECT_MARKERS = (
+    '"complete_case_n": null',
+    '"statistic:complete_case_n": null',
+    '"or_estimate": null',
+    '"odds_ratio": null',
+    '"primary_odds_ratio": null',
+    '"primary_or": null',
+    '"statistic:primary_or": null',
+    '"adjusted_or": null',
+    '"statistic:adjusted_or": null',
+    '"adjusted_odds_ratio": null',
+    '"statistic:adjusted_odds_ratio": null',
+    '"estimate": null',
+    '"statistic:estimate": null',
+    '"primary_association_estimate": null',
+    '"statistic:primary_association_estimate": null',
+    '"association_estimate": null',
+    '"statistic:association_estimate": null',
+)
 
 
-def _infer_overexpanded_categorical_predictor(step_summary: Dict[str, Any], code: str) -> Optional[str]:
-    """Infer the source variable behind a singular dummy-expanded score model."""
+# ---------------------------------------------------------------------------
+# Tier-A deterministic concept-audit repair.
+#
+# This runs *inside the static concept-audit gate* (before the script is
+# executed), unlike the runner/summary repairs which run after a failure.
+# It exists so the gate does not have to block-and-stop every time a weak
+# model emits a mechanical ICU anti-pattern that has a single, neutral
+# correct fix. It is deliberately narrow: it only rewrites a pattern when
+# an ``error``-severity finding *objectively names* that anti-pattern, so
+# it can never override a defensible analytical choice (impartiality — it
+# touches only the ``error`` class, never the ``caution`` class).
+# ---------------------------------------------------------------------------
 
-    predictors = step_summary.get("model", {}).get("predictors")
-    if isinstance(predictors, Sequence) and not isinstance(predictors, (str, bytes)):
-        counts: Dict[str, int] = {}
-        for item in predictors:
-            match = re.match(r"C\((?P<name>[A-Za-z_][A-Za-z0-9_]*)\)\[T\.", str(item))
-            if match:
-                name = match.group("name")
-                counts[name] = counts.get(name, 0) + 1
-        if counts:
-            name, count = max(counts.items(), key=lambda pair: pair[1])
-            if count >= 3:
-                return name
-    for match in re.finditer(r"C\((?P<name>[A-Za-z_][A-Za-z0-9_]*)\)", code):
-        return match.group("name")
-    return None
+# A finding message that objectively reports silent zero-imputation. We only
+# rewrite ``fillna(0)`` when the auditor itself flagged zero-imputation, never
+# on our own initiative.
+_ZERO_IMPUTE_FINDING_RE = re.compile(
+    r"(fillna\(\s*0"
+    r"|impute\w*[^.\n]{0,48}\bwith\s+0\b"
+    r"|impute\w*[^.\n]{0,48}\bzero\b"
+    r"|zero[-\s]*impute"
+    r"|silent\w*[^.\n]{0,48}zero)",
+    re.IGNORECASE,
+)
 
+# Columns where a literal 0 is a real value (counts / indicators / component
+# tallies); we must NOT strip ``fillna(0)`` on these — 0 is correct there.
+_COUNT_LIKE_COL_RE = re.compile(
+    r"(n_components|_components\b|_count\b|_counts\b|\bn_\w+|\bevents?\b"
+    r"|_missing\b|_flag\b|_indicator\b|_dummy\b|_present\b|num_\w+|_n\b)",
+    re.IGNORECASE,
+)
 
-def _infer_binary_outcome_from_code(code: str, default: str = "death") -> str:
-    """Best-effort extraction of the left-hand side of a generated formula."""
-
-    match = re.search(r"formula\s*=\s*[\"'](?P<outcome>[A-Za-z_][A-Za-z0-9_]*)\s*~", code)
-    if match:
-        return match.group("outcome")
-    match = re.search(r"(?P<outcome>[A-Za-z_][A-Za-z0-9_]*)\s*~\s*C\(", code)
-    if match:
-        return match.group("outcome")
-    match = re.search(
-        r"(?m)^\s*y\s*=\s*[A-Za-z_][A-Za-z0-9_]*\[[\"'](?P<outcome>[A-Za-z_][A-Za-z0-9_]*)[\"']\]",
-        code,
-    )
-    if match:
-        return match.group("outcome")
-    return default
-
-
-def _normalise_predictor_column_candidate(value: Any, code: str) -> Optional[str]:
-    """Return the dataframe column part of a prose predictor label.
-
-    Generated summaries often write labels such as
-    ``"sofa2_admission (ordinal, per-point)"``.  The deterministic fallback
-    needs the actual dataframe column, not the prose suffix.
-    """
-
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text):
-        return text
-    candidates = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text)
-    for candidate in candidates:
-        if (
-            f"'{candidate}'" in code
-            or f'"{candidate}"' in code
-            or re.search(rf"\b{re.escape(candidate)}\b", code)
-        ):
-            return candidate
-    return candidates[0] if candidates else None
+# ``frame[col] = frame[col].fillna(0)`` (col may be a string literal or a
+# variable such as ``primary_predictor``).
+_FILLNA_ZERO_ASSIGN_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<frame>\w+)\[(?P<col>[^\]\n]+)\]"
+    r"[ \t]*=[ \t]*(?P=frame)\[(?P=col)\]\.fillna\(\s*0(?:\.0)?\s*\)[ \t]*$",
+    re.MULTILINE,
+)
 
 
-def _infer_primary_association_predictor_from_code(
-    step_summary: Dict[str, Any],
+def deterministic_concept_audit_repair(
     code: str,
-) -> Optional[str]:
-    """Infer the predictor for a primary association fallback.
+    audit_messages: Sequence[str],
+) -> tuple[str, List[str]]:
+    """Repair mechanical ICU anti-patterns flagged by the concept-audit gate.
 
-    Generated association scripts often use hand-written dataframe code rather
-    than a formula. When such a script fails before writing a finite effect
-    estimate, the deterministic fallback still needs the predictor column. Keep
-    the inference conservative and case-neutral: prefer explicit summary/code
-    variables, then fall back to the non-outcome member of a required column
-    list.
+    Returns ``(possibly_rewritten_code, applied_repair_names)``. When no
+    repair applies the original ``code`` is returned with an empty list, so
+    the caller can fall through to the LLM repair / block path.
+
+    Currently handles:
+
+    * **silent zero-imputation of a lab/continuous variable** —
+      ``df[col] = df[col].fillna(0)`` is rewritten to complete-case
+      handling (``df = df.dropna(subset=[col])``). This removes the
+      objectively-wrong fabricated zeros while *keeping the missingness
+      visible* in the cohort; it does not pick an imputation strategy
+      (which would be a ``caution``-class analytical choice we must leave
+      to the user). Count/indicator columns are left untouched because 0
+      is a real value there.
     """
+    applied: List[str] = []
+    repaired = code
 
-    for key in ("primary_predictor", "predictor", "exposure"):
-        value = _normalise_predictor_column_candidate(step_summary.get(key), code)
-        if value:
-            return value
-    manifest = (
-        step_summary.get("manifest:robustness_analysis_manifest")
-        or step_summary.get("robustness_analysis_manifest")
-        or {}
+    flagged_zero_impute = any(
+        _ZERO_IMPUTE_FINDING_RE.search(m or "") for m in audit_messages
     )
-    if isinstance(manifest, dict):
-        for key in ("primary_predictor", "predictor", "exposure"):
-            value = _normalise_predictor_column_candidate(manifest.get(key), code)
-            if value:
-                return value
-    for pattern in (
-        r"(?:primary_predictor|predictor_col|primary_exposure)\s*=\s*['\"]([^'\"]+)['\"]",
-        r"predictor\s*=\s*['\"]([^'\"]+)['\"]",
-    ):
-        match = re.search(pattern, code)
-        if match:
-            return match.group(1)
-    outcome = _infer_binary_outcome_from_code(code)
-    required_match = re.search(r"required_cols\s*=\s*\[(?P<body>[^\]]+)\]", code)
-    if required_match:
-        cols = re.findall(r"['\"]([A-Za-z_][A-Za-z0-9_]*)['\"]", required_match.group("body"))
-        for col in cols:
-            if col != outcome and col.lower() not in {"death", "mortality", "outcome"}:
-                return col
-    numeric_assignments = re.findall(
-        r"df\[['\"](?P<name>[A-Za-z_][A-Za-z0-9_]*)['\"]\]\s*=\s*pd\.to_numeric",
-        code,
-    )
-    for col in numeric_assignments:
-        if col != outcome:
-            return col
-    return _infer_overexpanded_categorical_predictor(step_summary, code)
+    if flagged_zero_impute and _FILLNA_ZERO_ASSIGN_RE.search(repaired):
 
-
-def _ordinal_primary_association_fallback_code(
-    *,
-    predictor: str,
-    outcome: str,
-    reason: str,
-) -> str:
-    """Return deterministic code that estimates one ordinal adjusted OR.
-
-    The fallback is intentionally generic: it is triggered by a singular
-    dummy-expanded categorical predictor, then re-estimates a single per-unit
-    odds ratio for the same predictor after numeric coercion. It does not
-    encode one benchmark case or one clinical score; the predictor and outcome
-    are inferred from the generated script / summary.
-    """
-
-    return textwrap.dedent(
-        f"""
-
-        def _easyicu_ordinal_primary_association_fallback_v1():
-            import json
-            import math
-            import os
-            import numpy as np
-            import pandas as pd
-            import statsmodels.api as sm
-
-            def _jsonable(x):
-                if isinstance(x, (np.integer,)):
-                    return int(x)
-                if isinstance(x, (np.floating,)):
-                    value = float(x)
-                    return value if math.isfinite(value) else None
-                if isinstance(x, np.ndarray):
-                    return x.tolist()
-                try:
-                    if pd.isna(x):
-                        return None
-                except Exception:
-                    pass
-                return x
-
-            cohort_path = os.environ.get("COHORT_PARQUET")
-            out_dir = os.environ.get("STEP_OUT_DIR", ".")
-            if not cohort_path:
-                return
-            predictor_col = {predictor!r}
-            outcome_col = {outcome!r}
-            df_fallback = pd.read_parquet(cohort_path)
-            if predictor_col not in df_fallback.columns or outcome_col not in df_fallback.columns:
-                return
-            covariates = [
-                col for col in ("age", "sex", "weight")
-                if col in df_fallback.columns and col not in (predictor_col, outcome_col)
-            ]
-            required = [outcome_col, predictor_col] + covariates
-            model_df = df_fallback[required].copy()
-            if "sex" in model_df.columns:
-                model_df["sex"] = (
-                    model_df["sex"]
-                    .astype(str)
-                    .str.lower()
-                    .isin(["m", "male", "1", "true"])
-                    .astype(float)
-                )
-            for col in model_df.columns:
-                model_df[col] = pd.to_numeric(model_df[col], errors="coerce")
-            model_df = model_df.replace([np.inf, -np.inf], np.nan).dropna()
-            n_complete = int(len(model_df))
-            summary_path = os.path.join(out_dir, "step_summary.json")
-            summary = {{}}
-            if os.path.exists(summary_path):
-                try:
-                    with open(summary_path, "r", encoding="utf-8") as f:
-                        loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        summary.update(loaded)
-                except Exception:
-                    summary = {{}}
-            if (
-                n_complete < 20
-                or model_df[outcome_col].nunique(dropna=True) < 2
-                or model_df[predictor_col].nunique(dropna=True) < 2
-            ):
-                summary.setdefault("fallback_notes", []).append(
-                    "ordinal_primary_association_fallback_v1 could not run because "
-                    "there were too few complete observations or no variation."
-                )
-                with open(summary_path, "w", encoding="utf-8") as f:
-                    json.dump(summary, f, indent=2, default=_jsonable, ensure_ascii=False)
-                return
-            y = model_df[outcome_col].astype(float)
-            X = sm.add_constant(
-                model_df[[predictor_col] + covariates].astype(float),
-                has_constant="add",
+        def _sub(match: "re.Match[str]") -> str:
+            col = match.group("col").strip()
+            # Leave count/indicator columns alone: a literal 0 is legitimate
+            # there, so stripping it would itself be an error.
+            if col[:1] in {"'", '"'} and _COUNT_LIKE_COL_RE.search(col):
+                return match.group(0)
+            indent = match.group("indent")
+            frame = match.group("frame")
+            return (
+                f"{indent}{frame} = {frame}.dropna(subset=[{col}])  "
+                f"# auto-repair[zero_impute_to_complete_case_v1]: silent "
+                f"fillna(0) of a lab/continuous value fabricates zeros; "
+                f"complete-case keeps the missingness honest"
             )
-            result = sm.GLM(y, X, family=sm.families.Binomial()).fit()
-            coef = float(result.params[predictor_col])
-            conf = result.conf_int()
-            ci_low = float(conf.loc[predictor_col, 0])
-            ci_high = float(conf.loc[predictor_col, 1])
-            p_value = float(result.pvalues[predictor_col])
-            odds_ratio = float(np.exp(coef))
-            or_ci_low = float(np.exp(ci_low))
-            or_ci_high = float(np.exp(ci_high))
-            result_row = pd.DataFrame([
-                {{
-                    "variable": predictor_col,
-                    "coef": coef,
-                    "std_err": float(result.bse[predictor_col]),
-                    "ci_low": ci_low,
-                    "ci_high": ci_high,
-                    "p_value": p_value,
-                    "odds_ratio": odds_ratio,
-                    "or_ci_low": or_ci_low,
-                    "or_ci_high": or_ci_high,
-                }}
-            ])
-            result_row.to_csv(os.path.join(out_dir, "association_results.csv"), index=False)
-            summary["model"] = {{
-                "type": "logistic_glm_binomial_ordinal_fallback",
-                "outcome": outcome_col,
-                "predictors": list(X.columns),
-                "n_obs": n_complete,
-                "converged": True,
-                "fallback_reason": {reason!r},
-            }}
-            summary["primary_predictor"] = predictor_col
-            summary["outcome"] = outcome_col
-            summary["primary_association_estimate"] = {{
-                "variable": predictor_col,
-                "odds_ratio": odds_ratio,
-                "ci_low": or_ci_low,
-                "ci_high": or_ci_high,
-                "p_value": p_value,
-            }}
-            summary["primary_or"] = odds_ratio
-            summary["adjusted_odds_ratio"] = odds_ratio
-            summary["primary_ci_low"] = or_ci_low
-            summary["primary_ci_high"] = or_ci_high
-            summary["primary_p_value"] = p_value
-            summary["statistic:primary_or"] = odds_ratio
-            summary["statistic:adjusted_odds_ratio"] = odds_ratio
-            summary["statistic:primary_ci_low"] = or_ci_low
-            summary["statistic:primary_ci_high"] = or_ci_high
-            summary["statistic:primary_p_value"] = p_value
-            summary["statistic:complete_case_n"] = n_complete
-            summary["log:primary_association_fallback"] = (
-                "Deterministic ordinal GLM fallback after generated categorical "
-                "logistic model failed to produce a finite primary association."
-            )
-            with open(summary_path, "w", encoding="utf-8") as f:
-                json.dump(summary, f, indent=2, default=_jsonable, ensure_ascii=False)
-            print(json.dumps(summary, indent=2, default=_jsonable, ensure_ascii=False))
 
-        try:
-            _easyicu_ordinal_primary_association_fallback_v1()
-        except Exception as _easyicu_fallback_exc:
-            print(f"ordinal_primary_association_fallback_failed: {{_easyicu_fallback_exc}}")
-        """
-    ).strip("\n")
+        new_code = _FILLNA_ZERO_ASSIGN_RE.sub(_sub, repaired)
+        if new_code != repaired:
+            repaired = new_code
+            applied.append("zero_impute_to_complete_case_v1")
 
-
-def _patch_primary_predictor_into_design_matrix(
-    *,
-    code: str,
-    predictor: str,
-) -> Optional[str]:
-    function_design_markers = (
-        "    X = model_df[covariates].astype(float)",
-        "    X = model_df[covariates].apply(pd.to_numeric, errors=\"coerce\").astype(float)",
-        "    X = model_df[covariates].copy()",
-    )
-    if (
-        "def compute_or_ci" in code
-        and "if predictor in result.params.index" in code
-        and (
-            "result.params[predictor]" in code
-            or "result.conf_int().loc[predictor" in code
-        )
-    ):
-        for marker in function_design_markers:
-            if marker not in code:
-                continue
-            replacement = (
-                "    design_cols = [predictor] + [col for col in covariates if col != predictor]\n"
-                "    X = model_df[design_cols].apply(pd.to_numeric, errors=\"coerce\").astype(float)"
-            )
-            repaired = code.replace(marker, replacement, 1)
-            if repaired != code:
-                return repaired
-
-    x_assign = re.search(r"(?m)^\s*X\s*=\s*model_df\[\[", code)
-    if x_assign is None:
-        return None
-    line_end = code.find("\n", x_assign.start())
-    if line_end < 0:
-        line_end = len(code)
-    x_line = code[x_assign.start():line_end]
-    if predictor in x_line:
-        return None
-    predictor_lookup_patterns = (
-        f"result.params['{predictor}'",
-        f'result.params["{predictor}"',
-        f"result.conf_int().loc['{predictor}'",
-        f'result.conf_int().loc["{predictor}"',
-        f"result.pvalues['{predictor}'",
-        f'result.pvalues["{predictor}"',
-        f"coef_table.loc['{predictor}'",
-        f'coef_table.loc["{predictor}"',
-    )
-    if not any(pattern in code for pattern in predictor_lookup_patterns):
-        return None
-    repaired = code.replace(
-        "X = model_df[[",
-        f"X = model_df[['{predictor}', ",
-        1,
-    )
-    summary_defaults = textwrap.dedent(
-        """
-        n_total = int(len(df))
-        n_complete = int(len(model_df))
-        """
-    ).strip("\n")
-    if "# Fit logistic regression model" in repaired:
-        repaired = repaired.replace(
-            "# Fit logistic regression model",
-            summary_defaults + "\n\n# Fit logistic regression model",
-            1,
-        )
-    elif "# Fit logistic regression" in repaired:
-        repaired = repaired.replace(
-            "# Fit logistic regression",
-            summary_defaults + "\n\n# Fit logistic regression",
-            1,
-        )
-    elif "\ntry:\n" in repaired:
-        repaired = repaired.replace(
-            "\ntry:\n",
-            "\n" + summary_defaults + "\n\ntry:\n",
-            1,
-        )
-    return repaired
+    return repaired, applied
 
 
 def _deterministic_summary_repair(
@@ -499,6 +192,7 @@ def _deterministic_summary_repair(
     code: str,
     step_summary: Dict[str, Any],
     previous_repair: Optional[str] = None,
+    analysis_family: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     if not isinstance(step_summary, dict) or not step_summary:
         return None
@@ -539,7 +233,7 @@ def _deterministic_summary_repair(
     ).strip()
     estimate = _first_present_scalar(
         step_summary,
-        ("estimate", "primary_or", "odds_ratio", "adjusted_or", "lactate_or", "or"),
+        ("estimate", "primary_or", "odds_ratio", "adjusted_or", "or"),
     )
     if estimate is not None:
         return None
@@ -550,7 +244,9 @@ def _deterministic_summary_repair(
         or ""
     )
     generic_soft_failure = "unknown error" in error_text.lower()
-    dtype_soft_failure = "pandas data cast to numpy dtype of object" in error_text.lower()
+    dtype_soft_failure = (
+        "pandas data cast to numpy dtype of object" in error_text.lower()
+    )
     index_alignment_soft_failure = (
         "indices for endog and exog are not aligned" in error_text.lower()
     )
@@ -561,6 +257,7 @@ def _deterministic_summary_repair(
         and "pd.get_dummies" in code
         and "logit(" in code.lower()
     )
+    binary_model_repair_allowed = _family_allows_binary_model_repair(analysis_family)
     if (
         predictor
         and error_text
@@ -588,7 +285,7 @@ def _deterministic_summary_repair(
             )
             repaired = repaired.replace(
                 "X = model_df[x_cols]\n",
-                "X = model_df[x_cols].apply(pd.to_numeric, errors=\"coerce\").astype(float)\n",
+                'X = model_df[x_cols].apply(pd.to_numeric, errors="coerce").astype(float)\n',
                 1,
             )
             if repaired != code:
@@ -606,19 +303,12 @@ def _deterministic_summary_repair(
             return repair_name, repaired
     if repaired is None or repaired == code:
         skipped = str(step_summary.get("skipped") or "").lower()
-        null_model_summary = (
-            '"complete_case_n": null' in summary_text
-            or '"statistic:complete_case_n": null' in summary_text
-            or '"lactate_or": null' in summary_text
-            or '"statistic:lactate_or_stability": null' in summary_text
-            or '"or_estimate": null' in summary_text
-            or '"odds_ratio": null' in summary_text
-            or '"primary_odds_ratio": null' in summary_text
-            or '"primary_or": null' in summary_text
-            or '"statistic:primary_or": null' in summary_text
-            or '"estimate": null' in summary_text
+        null_model_summary = any(
+            marker in summary_text for marker in _NULL_PRIMARY_EFFECT_MARKERS
         )
-        dtype_summary_failure = "pandas data cast to numpy dtype of object" in summary_text
+        dtype_summary_failure = (
+            "pandas data cast to numpy dtype of object" in summary_text
+        )
         index_alignment_summary_failure = (
             "indices for endog and exog are not aligned" in summary_text
         )
@@ -627,7 +317,7 @@ def _deterministic_summary_repair(
             and "def _fit_logistic" in code
             and 'X = X.apply(pd.to_numeric, errors="coerce")' in code
         )
-        if helper_dtype_summary_failure:
+        if helper_dtype_summary_failure and binary_model_repair_allowed:
             repair_name = "statsmodels_helper_design_float_v1"
             if previous_repair != repair_name:
                 repaired = code.replace(
@@ -637,25 +327,31 @@ def _deterministic_summary_repair(
                 )
                 repaired = repaired.replace(
                     "X_clean = data.drop(columns=[y.name])",
-                    "X_clean = data.drop(columns=[y.name]).apply(pd.to_numeric, errors=\"coerce\").astype(float)\n"
-                    "    y_clean = pd.to_numeric(y_clean, errors=\"coerce\").astype(float)",
+                    'X_clean = data.drop(columns=[y.name]).apply(pd.to_numeric, errors="coerce").astype(float)\n'
+                    '    y_clean = pd.to_numeric(y_clean, errors="coerce").astype(float)',
                     1,
                 )
                 if repaired != code:
                     return repair_name, repaired
-        if dtype_summary_failure:
+        if dtype_summary_failure and _statsmodels_repair_allowed_for_family(
+            code, analysis_family
+        ):
             repaired = _deterministic_runner_repair(
                 code=code,
                 run_log=summary_text,
                 previous_repair=previous_repair,
+                analysis_family=analysis_family,
             )
             if repaired is not None:
                 return repaired
-        if index_alignment_summary_failure:
+        if index_alignment_summary_failure and _statsmodels_repair_allowed_for_family(
+            code, analysis_family
+        ):
             repaired = _deterministic_runner_repair(
                 code=code,
                 run_log=summary_text,
                 previous_repair=previous_repair,
+                analysis_family=analysis_family,
             )
             if repaired is not None:
                 return repaired
@@ -665,23 +361,34 @@ def _deterministic_summary_repair(
             and "sm.Logit" in code
             and "X_final = sm.add_constant(X_encoded" in code
         )
-        if dummy_logit_null_summary:
+        if dummy_logit_null_summary and binary_model_repair_allowed:
             repair_name = "statsmodels_dummy_design_float_v1"
             if previous_repair != repair_name:
-                marker = "X_final = sm.add_constant(X_encoded, has_constant=\"add\")"
+                marker = 'X_final = sm.add_constant(X_encoded, has_constant="add")'
                 patch = (
-                    "X_encoded = X_encoded.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n"
+                    'X_encoded = X_encoded.apply(pd.to_numeric, errors="coerce").astype(float)\n'
                     + marker
                 )
                 repaired = code.replace(marker, patch, 1)
                 if repaired != code:
                     return repair_name, repaired
-        if undefined_dummy_formula_failure and predictor:
+        if (
+            undefined_dummy_formula_failure
+            and predictor
+            and binary_model_repair_allowed
+        ):
             repair_name = "formula_dummy_name_fallback_v1"
             if previous_repair != repair_name:
+                fallback_outcome = str(
+                    step_summary.get("outcome")
+                    or _infer_binary_outcome_from_code(code)
+                    or ""
+                ).strip()
+                if not fallback_outcome:
+                    return None
                 fallback = _primary_association_fallback_code(
                     predictor=predictor,
-                    outcome=str(step_summary.get("outcome") or "death"),
+                    outcome=fallback_outcome,
                     reason=(
                         "Deterministic fallback after statsmodels formula used "
                         "a hard-coded dummy column name that was not present."
@@ -715,17 +422,20 @@ def _deterministic_summary_repair(
                 or '"primary_ci_high": null' in summary_text
             )
         )
-        if glm_primary_effect_null:
+        if glm_primary_effect_null and binary_model_repair_allowed:
             fallback_predictor = _infer_primary_association_predictor_from_code(
                 step_summary,
                 code,
             )
             if fallback_predictor:
+                fallback_outcome = _infer_binary_outcome_from_code(code)
+                if not fallback_outcome:
+                    return None
                 repair_name = "ordinal_primary_association_fallback_v1"
                 if previous_repair != repair_name:
                     fallback = _ordinal_primary_association_fallback_code(
                         predictor=fallback_predictor,
-                        outcome=_infer_binary_outcome_from_code(code),
+                        outcome=fallback_outcome,
                         reason=(
                             "Deterministic fallback after generated GLM/Logit "
                             "model failed to produce a finite primary association."
@@ -741,17 +451,20 @@ def _deterministic_summary_repair(
                 or "primary_or" in summary_text
             )
         )
-        if overexpanded_categorical_singular:
+        if overexpanded_categorical_singular and binary_model_repair_allowed:
             categorical_predictor = _infer_overexpanded_categorical_predictor(
                 step_summary,
                 code,
             )
             if categorical_predictor:
+                fallback_outcome = _infer_binary_outcome_from_code(code)
+                if not fallback_outcome:
+                    return None
                 repair_name = "ordinal_primary_association_fallback_v1"
                 if previous_repair != repair_name:
                     fallback = _ordinal_primary_association_fallback_code(
                         predictor=categorical_predictor,
-                        outcome=_infer_binary_outcome_from_code(code),
+                        outcome=fallback_outcome,
                         reason=(
                             "Deterministic fallback after generated categorical "
                             "logistic model failed with a singular matrix."
@@ -765,7 +478,7 @@ def _deterministic_summary_repair(
             and "pd.get_dummies" not in code
             and ".str.lower().isin(['m', 'male'])" not in code
         )
-        if raw_categorical_sex_logit:
+        if raw_categorical_sex_logit and binary_model_repair_allowed:
             repair_name = "sex_binary_encode_for_logit_v1"
             if previous_repair != repair_name:
                 model_df_assign = re.search(
@@ -792,13 +505,16 @@ def _deterministic_summary_repair(
                         return repair_name, repaired
         categorical_sex_dropna = (
             (
-                "no valid data after dropping lactate missing rows" in skipped
+                (
+                    "no valid data after dropping" in skipped
+                    and "missing rows" in skipped
+                )
                 or "insufficient data" in skipped
                 or "no valid observations" in skipped
                 or null_model_summary
                 or dtype_summary_failure
             )
-            and "model_df = model_df.apply(pd.to_numeric, errors=\"coerce\")" in code
+            and 'model_df = model_df.apply(pd.to_numeric, errors="coerce")' in code
             and "sex" in code
         )
         if categorical_sex_dropna:
@@ -816,9 +532,8 @@ def _deterministic_summary_repair(
             ).strip("\n")
             repaired = re.sub(
                 r"^(?P<indent>\s*)model_df = model_df\.apply\(pd\.to_numeric, errors=\"coerce\"\)",
-                lambda match: match.group("indent") + replacement.replace(
-                    "\n", "\n" + match.group("indent")
-                ),
+                lambda match: match.group("indent")
+                + replacement.replace("\n", "\n" + match.group("indent")),
                 code,
                 count=1,
                 flags=re.MULTILINE,
@@ -832,7 +547,7 @@ def _deterministic_summary_repair(
                 or null_model_summary
             )
             and "for col in x_cols:" in code
-            and "pd.to_numeric(model_df[col], errors=\"coerce\")" in code
+            and 'pd.to_numeric(model_df[col], errors="coerce")' in code
             and "sex" in code
         )
         if categorical_sex_loop_dropna:
@@ -840,14 +555,14 @@ def _deterministic_summary_repair(
             if previous_repair != repair_name:
                 marker = (
                     "for col in x_cols:\n"
-                    "    model_df[col] = pd.to_numeric(model_df[col], errors=\"coerce\")"
+                    '    model_df[col] = pd.to_numeric(model_df[col], errors="coerce")'
                 )
                 replacement = (
                     "for col in x_cols:\n"
-                    "    if col == \"sex\":\n"
-                    "        model_df[col] = model_df[col].astype(str).str.lower().isin([\"m\", \"male\", \"1\", \"true\"]).astype(float)\n"
+                    '    if col == "sex":\n'
+                    '        model_df[col] = model_df[col].astype(str).str.lower().isin(["m", "male", "1", "true"]).astype(float)\n'
                     "        continue\n"
-                    "    model_df[col] = pd.to_numeric(model_df[col], errors=\"coerce\")"
+                    '    model_df[col] = pd.to_numeric(model_df[col], errors="coerce")'
                 )
                 repaired = code.replace(marker, replacement, 1)
                 if repaired != code:
@@ -863,13 +578,18 @@ def _deterministic_summary_repair(
             repair_name = "robustness_missingness_contract_v1"
             if previous_repair != repair_name:
                 repaired = code
-                reduction_marker = "model_df = model_df.replace([np.inf, -np.inf], np.nan)"
+                reduction_marker = (
+                    "model_df = model_df.replace([np.inf, -np.inf], np.nan)"
+                )
                 reduction_patch = (
                     reduction_marker
                     + "\n"
                     + "reduced_covariates = [c for c in covariates if model_df[c].isna().mean() <= 0.2]"
                 )
-                if reduction_marker in repaired and "reduced_covariates =" not in repaired:
+                if (
+                    reduction_marker in repaired
+                    and "reduced_covariates =" not in repaired
+                ):
                     repaired = repaired.replace(reduction_marker, reduction_patch, 1)
                 cc_replacements = {
                     "cc_df = model_df.dropna(subset=[primary_predictor])": (
@@ -881,27 +601,33 @@ def _deterministic_summary_repair(
                 }
                 for old, new in cc_replacements.items():
                     repaired = repaired.replace(old, new)
-                mi_replacements = {
-                    "mi_df['lactate_missing'] = mi_df[primary_predictor].isna().astype(int)": (
-                        "mi_df['lactate_missing'] = mi_df[primary_predictor].isna().astype(int)\n"
-                        "mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)\n"
-                        "mi_df = mi_df.dropna(subset=[outcome_col] + covariates)"
-                    ),
-                    'mi_df["lactate_missing"] = mi_df[primary_predictor].isna().astype(int)': (
-                        'mi_df["lactate_missing"] = mi_df[primary_predictor].isna().astype(int)\n'
-                        'mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)\n'
-                        "mi_df = mi_df.dropna(subset=[outcome_col] + covariates)"
-                    ),
-                }
-                for old, new in mi_replacements.items():
-                    if old in repaired and "fillna(0)" not in repaired:
-                        repaired = repaired.replace(old, new, 1)
+                if "fillna(0)" not in repaired:
+                    missing_assign_pattern = re.compile(
+                        r"(?m)^(?P<indent>\s*)"
+                        r"mi_df\[(?P<missing>(?:['\"][^'\"]+_missing[^'\"]*['\"]|missing_indicator_col))\]"
+                        r"\s*=\s*mi_df\[primary_predictor\]\.isna\(\)\.astype\(int\)\s*$"
+                    )
+
+                    def _patch_mi_assignment(match: re.Match[str]) -> str:
+                        indent = match.group("indent")
+                        missing_expr = match.group("missing")
+                        return (
+                            f"{indent}mi_df[{missing_expr}] = mi_df[primary_predictor].isna().astype(int)\n"
+                            f"{indent}mi_df[primary_predictor] = mi_df[primary_predictor].fillna(0)\n"
+                            f"{indent}mi_df = mi_df.dropna(subset=[outcome_col] + covariates)"
+                        )
+
+                    repaired = missing_assign_pattern.sub(
+                        _patch_mi_assignment,
+                        repaired,
+                        count=1,
+                    )
                 rv_replacements = {
                     "rv_df = model_df.dropna(subset=[primary_predictor])": (
                         "rv_df = model_df[[outcome_col, primary_predictor] + reduced_covariates].dropna()"
                     ),
-                    "rv_X = sm.add_constant(rv_df[covariates], has_constant=\"add\")": (
-                        "rv_X = sm.add_constant(rv_df[[primary_predictor] + reduced_covariates], has_constant=\"add\")"
+                    'rv_X = sm.add_constant(rv_df[covariates], has_constant="add")': (
+                        'rv_X = sm.add_constant(rv_df[[primary_predictor] + reduced_covariates], has_constant="add")'
                     ),
                     "rv_X = sm.add_constant(rv_df[covariates], has_constant='add')": (
                         "rv_X = sm.add_constant(rv_df[[primary_predictor] + reduced_covariates], has_constant='add')"
@@ -916,293 +642,10 @@ def _deterministic_summary_repair(
     return None
 
 
-
-_KEYERROR_NOT_IN_INDEX_RE = re.compile(
-    r"KeyError:\s*\"\[(?P<items>[^\]]+)\]\s*not\s+in\s+index\"",
-    re.MULTILINE,
-)
-
 # Captures ``NameError: name 'foo' is not defined`` for use by Fix F.
 _NAME_ERROR_HELPER_RE = re.compile(
     r"NameError:\s*name\s+['\"](?P<name>[A-Za-z_][A-Za-z0-9_]*)['\"]\s+is\s+not\s+defined"
 )
-
-
-def _extract_missing_index_columns(run_log: str) -> List[str]:
-    """Parse pandas ``KeyError: "['a', 'b'] not in index"`` from a log.
-
-    Returns the unique column names referenced inside the bracketed list,
-    preserving the order they appeared in the error message. Returns an
-    empty list when the log does not contain a recognisable not-in-index
-    KeyError. The matcher tolerates both single and double quoted entries.
-    """
-    if not run_log:
-        return []
-    match = _KEYERROR_NOT_IN_INDEX_RE.search(run_log)
-    if match is None:
-        return []
-    raw = match.group("items")
-    cols: List[str] = []
-    for token in re.findall(r"['\"]([^'\"]+)['\"]", raw):
-        if token and token not in cols:
-            cols.append(token)
-    return cols
-
-
-def _strip_columns_from_list_literals(code: str, missing_cols: Sequence[str]) -> str:
-    """Remove ``"col"`` / ``'col'`` entries from list literals in ``code``.
-
-    Walks through every ``[...]`` slice in the source and, when the slice
-    contains at least one of the missing columns as a literal string,
-    rewrites the list to exclude those entries. The rewriter is
-    intentionally conservative: it only edits non-nested bracket slices
-    whose elements are simple string literals (the common shape produced
-    by agent-emitted ``covariates = [...]`` blocks). Bracket slices
-    containing nested structures or non-string elements are left
-    unchanged so we do not corrupt unrelated indexing expressions.
-    """
-    if not missing_cols:
-        return code
-    missing_set = set(missing_cols)
-
-    list_literal_re = re.compile(r"\[(?P<body>[^\[\]]*)\]")
-
-    def _rewrite(match: re.Match[str]) -> str:
-        body = match.group("body")
-        body_stripped = body.strip()
-        if not body_stripped:
-            return match.group(0)
-        # Split on top-level commas (no nesting handled — body has no
-        # brackets thanks to the regex). Whitespace tolerant.
-        raw_parts = [part.strip() for part in body_stripped.split(",")]
-        # Only rewrite when *all* non-empty parts are simple string
-        # literals; otherwise we may be looking at an expression like
-        # ``[outcome_col, predictor] + covariates`` which we leave alone.
-        only_literals = True
-        kept_literals: List[str] = []
-        contains_missing = False
-        for part in raw_parts:
-            if not part:
-                continue
-            if not (
-                (part.startswith('"') and part.endswith('"'))
-                or (part.startswith("'") and part.endswith("'"))
-            ):
-                only_literals = False
-                break
-            literal_value = part[1:-1]
-            if literal_value in missing_set:
-                contains_missing = True
-                continue
-            kept_literals.append(part)
-        if not only_literals or not contains_missing:
-            return match.group(0)
-        return "[" + ", ".join(kept_literals) + "]"
-
-    return list_literal_re.sub(_rewrite, code)
-
-
-def _extract_required_cols_list(code: str) -> List[str]:
-    """Return literal strings from a generated ``required_cols`` list."""
-
-    match = re.search(r"required_cols\s*=\s*(?P<literal>\[[\s\S]*?\])", code)
-    if match is None:
-        return []
-    try:
-        value = ast.literal_eval(match.group("literal"))
-    except (SyntaxError, ValueError):
-        return []
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, str)]
-
-
-def _infer_analysis_cohort_source_column(code: str) -> Optional[str]:
-    """Infer the source column immediately preceding ``analysis_cohort``.
-
-    Generated association scripts sometimes define a derived analysis stratum
-    column (``analysis_cohort``) but include it in ``required_cols`` before
-    materialising it. Keep the inference local to the generated script shape:
-    the source is the literal column listed immediately before
-    ``analysis_cohort`` in ``required_cols``.
-    """
-
-    required_cols = _extract_required_cols_list(code)
-    try:
-        idx = required_cols.index("analysis_cohort")
-    except ValueError:
-        return None
-    if idx <= 0:
-        return None
-    source = required_cols[idx - 1]
-    if source in {"death", "mortality", "outcome", "analysis_cohort"}:
-        return None
-    return source
-
-
-def _patch_derived_analysis_cohort_materialization(code: str) -> str:
-    """Materialise ``analysis_cohort`` before required-column validation."""
-
-    if "_easyicu_derived_analysis_cohort_materialization_v1" in code:
-        return code
-    source_col = _infer_analysis_cohort_source_column(code)
-    if not source_col:
-        return code
-
-    read_re = re.compile(
-        r"(?m)^(?P<indent>[ \t]*)"
-        r"(?P<target>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*pd\.read_parquet\((?P<args>[^\n]*)\)\s*$"
-    )
-
-    def _rewrite(match: re.Match[str]) -> str:
-        indent = match.group("indent")
-        target = match.group("target")
-        line = match.group(0)
-        return (
-            f"{line}\n"
-            f"{indent}# EasyICU deterministic repair: materialize generated analysis strata.\n"
-            f"{indent}_easyicu_derived_analysis_cohort_materialization_v1 = True\n"
-            f"{indent}if \"analysis_cohort\" not in {target}.columns and {source_col!r} in {target}.columns:\n"
-            f"{indent}    {target}[\"analysis_cohort\"] = {target}[{source_col!r}].astype(\"string\")\n"
-            f"{indent}    {target}.loc[{target}[{source_col!r}].isna(), \"analysis_cohort\"] = pd.NA"
-        )
-
-    return read_re.sub(_rewrite, code, count=1)
-
-
-def _patch_statsmodels_conf_int_filter_axis(code: str) -> str:
-    """Filter ``statsmodels.conf_int()`` rows by coefficient name.
-
-    ``DataFrame.filter(like=...)`` defaults to ``axis=1``. Generated figure
-    scripts often intend to subset confidence intervals by coefficient names,
-    which live on the index of the ``statsmodels`` confidence-interval frame.
-    Rewriting the assignment keeps downstream ``.iloc[:, 0]`` / ``.iloc[:, 1]``
-    code working with the expected two-column CI shape.
-    """
-
-    assignment_re = re.compile(
-        r"(?m)^(?P<indent>[ \t]*)"
-        r"(?P<target>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
-        r"(?P<expr>.+?\.conf_int\(\))\.filter\(\s*like\s*=\s*"
-        r"(?P<needle>['\"][^'\"]+['\"])\s*\)\s*$"
-    )
-    counter = 0
-
-    def _rewrite(match: re.Match[str]) -> str:
-        nonlocal counter
-        counter += 1
-        indent = match.group("indent")
-        target = match.group("target")
-        expr = match.group("expr").strip()
-        needle = match.group("needle")
-        full_name = f"_easyicu_{target}_conf_int_full_{counter}"
-        return (
-            f"{indent}{full_name} = {expr}\n"
-            f"{indent}{target} = {full_name}.loc["
-            f"{full_name}.index.astype(str).str.contains({needle}, regex=False)]"
-        )
-
-    return assignment_re.sub(_rewrite, code)
-
-
-def _patch_statsmodels_endog_exog_index_alignment(code: str) -> str:
-    """Align pandas endog/exog indices before statsmodels model construction.
-
-    Generated scripts often reset the design matrix to a compact 0..n index
-    after dummy encoding, while leaving the outcome series on the original
-    filtered-cohort index. Statsmodels rejects this with "The indices for
-    endog and exog are not aligned". The repair is case-neutral: it wraps
-    statsmodels constructors and only resets indices when X and y have the
-    same row count but different pandas indices.
-    """
-
-    helper_name = "_easyicu_statsmodels_align_index_v1"
-    model_call = re.compile(
-        r"(?P<prefix>\b[A-Za-z_]\w*\s*=\s*sm\.(?:Logit|OLS|GLM)\()\s*"
-        r"(?P<y>[^,]+?)\s*,\s*(?P<X>[^,\)\n]+?)\s*"
-        r"(?P<kwargs>,\s*[^)\n]+)?(?P<suffix>\))"
-    )
-
-    def _rewrite(match: re.Match[str]) -> str:
-        y_expr = match.group("y").strip()
-        x_expr = match.group("X").strip()
-        kwargs = match.group("kwargs") or ""
-        return (
-            f"{match.group('prefix')}*{helper_name}("
-            f"{x_expr}, {y_expr}){kwargs}{match.group('suffix')}"
-        )
-
-    repaired = model_call.sub(_rewrite, code, count=1)
-    if repaired == code:
-        return code
-    if f"def {helper_name}" in repaired:
-        return repaired
-    helper = textwrap.dedent(
-        f"""
-
-        def {helper_name}(X, y):
-            X_work = X.copy() if hasattr(X, "copy") else X
-            y_work = y.copy() if hasattr(y, "copy") else y
-            try:
-                if hasattr(X_work, "index") and hasattr(y_work, "index"):
-                    if len(X_work) == len(y_work) and not X_work.index.equals(y_work.index):
-                        X_work = X_work.reset_index(drop=True)
-                        y_work = y_work.reset_index(drop=True)
-            except Exception:
-                pass
-            return y_work, X_work
-        """
-    ).strip("\n")
-    return helper + "\n\n" + repaired
-
-
-def _patch_json_dump_numpy_key_sanitizer(code: str) -> str:
-    if "_easyicu_json_sanitize_v1" in code:
-        return code
-    helper = textwrap.dedent(
-        """
-        import json as _easyicu_json_module_v1
-        _easyicu_original_json_dump_v1 = _easyicu_json_module_v1.dump
-        _easyicu_original_json_dumps_v1 = _easyicu_json_module_v1.dumps
-        def _easyicu_json_sanitize_v1(value):
-            import math
-            try:
-                import numpy as np
-            except Exception:
-                np = None
-            try:
-                import pandas as pd
-            except Exception:
-                pd = None
-            if isinstance(value, dict):
-                return {str(_easyicu_json_sanitize_v1(k)): _easyicu_json_sanitize_v1(v) for k, v in value.items()}
-            if isinstance(value, (list, tuple)):
-                return [_easyicu_json_sanitize_v1(v) for v in value]
-            if np is not None and isinstance(value, np.integer):
-                return int(value)
-            if np is not None and isinstance(value, np.floating):
-                value = float(value)
-                return value if math.isfinite(value) else None
-            if np is not None and isinstance(value, np.bool_):
-                return bool(value)
-            if np is not None and isinstance(value, np.ndarray):
-                return _easyicu_json_sanitize_v1(value.tolist())
-            if pd is not None:
-                try:
-                    if pd.isna(value):
-                        return None
-                except Exception:
-                    pass
-            return value
-        def _easyicu_json_dump_v1(obj, fp, *args, **kwargs):
-            return _easyicu_original_json_dump_v1(_easyicu_json_sanitize_v1(obj), fp, *args, **kwargs)
-        def _easyicu_json_dumps_v1(obj, *args, **kwargs):
-            return _easyicu_original_json_dumps_v1(_easyicu_json_sanitize_v1(obj), *args, **kwargs)
-        _easyicu_json_module_v1.dump = _easyicu_json_dump_v1
-        _easyicu_json_module_v1.dumps = _easyicu_json_dumps_v1
-        """
-    ).strip()
-    return helper + "\n" + code
 
 
 def _deterministic_runner_repair(
@@ -1210,6 +653,7 @@ def _deterministic_runner_repair(
     code: str,
     run_log: str,
     previous_repair: Optional[str] = None,
+    analysis_family: Optional[str] = None,
 ) -> Optional[tuple[str, str]]:
     """Best-effort execution-layer patch for common numeric model failures.
 
@@ -1219,6 +663,7 @@ def _deterministic_runner_repair(
     coder by handling one family of brittle runtime errors below the LLM layer.
     """
     lowered = (run_log or "").lower()
+    binary_model_repair_allowed = _family_allows_binary_model_repair(analysis_family)
 
     # 🔧 2026-05-17: defend against LLM hallucinating non-existent easyicu
     # sub-modules (e.g. deepseek-v4-flash emitted
@@ -1237,7 +682,9 @@ def _deterministic_runner_repair(
         if previous_repair != repair_name:
             stripped_names: list[str] = []
             _line_re = re.compile(
-                r"^\s*from\s+" + re.escape(bad_module) + r"\s+import\s+(.+?)\s*(?:#.*)?$",
+                r"^\s*from\s+"
+                + re.escape(bad_module)
+                + r"\s+import\s+(.+?)\s*(?:#.*)?$",
                 re.MULTILINE,
             )
             for _match in _line_re.finditer(code):
@@ -1265,8 +712,8 @@ def _deterministic_runner_repair(
                 _stub_lines = "\n".join(
                     f"def {n}(*args, **kwargs): "
                     f"raise NotImplementedError("
-                    f"\"{n} from {bad_module} is not available; "
-                    f"reimplement inline using numpy/scipy/statsmodels.\")"
+                    f'"{n} from {bad_module} is not available; '
+                    f'reimplement inline using numpy/scipy/statsmodels.")'
                     for n in dict.fromkeys(stripped_names)
                 )
                 # Insert after the first contiguous block of imports
@@ -1277,7 +724,10 @@ def _deterministic_runner_repair(
                         insert_at = i + 1
                     else:
                         break
-                lines.insert(insert_at, "\n# auto-stubs for stripped fake imports\n" + _stub_lines + "\n")
+                lines.insert(
+                    insert_at,
+                    "\n# auto-stubs for stripped fake imports\n" + _stub_lines + "\n",
+                )
                 return repair_name, "\n".join(lines)
 
     pandas_cut_observed_keyword = (
@@ -1348,12 +798,9 @@ def _deterministic_runner_repair(
                 return repair_name, repaired
 
     missing_proportion_confint = (
-        (
-            "modulenotfounderror: no module named 'statsmodels'" in lowered
-            or "cannot import name 'proportion_confint' from 'scipy.stats'" in lowered
-        )
-        and "proportion_confint" in code
-    )
+        "modulenotfounderror: no module named 'statsmodels'" in lowered
+        or "cannot import name 'proportion_confint' from 'scipy.stats'" in lowered
+    ) and "proportion_confint" in code
     if missing_proportion_confint:
         repair_name = "local_wilson_proportion_confint_v1"
         if previous_repair != repair_name:
@@ -1416,8 +863,7 @@ def _deterministic_runner_repair(
             return repair_name, repaired
 
     json_numpy_key_failure = (
-        "keys must be str, int, float, bool or none" in lowered
-        and "json.dump(" in code
+        "keys must be str, int, float, bool or none" in lowered and "json.dump(" in code
     )
     if json_numpy_key_failure:
         repair_name = "json_dump_numpy_key_sanitizer_v1"
@@ -1436,15 +882,18 @@ def _deterministic_runner_repair(
         if previous_repair != repair_name:
             return repair_name, "import os\n" + code
 
-    malformed_python_prefix = (
-        "syntaxerror: invalid syntax" in lowered
-        and ("pythonimport " in code or "\npythonimport " in code or "pythonfrom " in code)
+    malformed_python_prefix = "syntaxerror: invalid syntax" in lowered and (
+        "pythonimport " in code or "\npythonimport " in code or "pythonfrom " in code
     )
     if malformed_python_prefix:
         repair_name = "strip_python_prefix_v1"
         if previous_repair != repair_name:
-            repaired = code.replace("pythonimport ", "import ").replace("pythonfrom ", "from ")
-            repaired = repaired.replace("\npythonimport ", "\nimport ").replace("\npythonfrom ", "\nfrom ")
+            repaired = code.replace("pythonimport ", "import ").replace(
+                "pythonfrom ", "from "
+            )
+            repaired = repaired.replace("\npythonimport ", "\nimport ").replace(
+                "\npythonfrom ", "\nfrom "
+            )
             if repaired != code:
                 return repair_name, repaired
 
@@ -1500,7 +949,10 @@ def _deterministic_runner_repair(
         "indices for endog and exog are not aligned" in lowered
         and any(token in code for token in ("sm.Logit(", "sm.OLS(", "sm.GLM("))
     )
-    if statsmodels_endog_exog_index_mismatch:
+    if (
+        statsmodels_endog_exog_index_mismatch
+        and _statsmodels_repair_allowed_for_family(code, analysis_family)
+    ):
         repair_name = "statsmodels_endog_exog_index_align_v1"
         if previous_repair != repair_name:
             repaired = _patch_statsmodels_endog_exog_index_alignment(code)
@@ -1572,10 +1024,7 @@ def _deterministic_runner_repair(
         "keyerror" in lowered
         and "not in index" in lowered
         and "pd.get_dummies" in code
-        and (
-            "model_df[x_cols]" in code
-            or "model_df[[outcome_col] + x_cols]" in code
-        )
+        and ("model_df[x_cols]" in code or "model_df[[outcome_col] + x_cols]" in code)
     )
     if missing_dummy_encoded_column:
         repair_name = "filter_x_cols_after_dummy_encoding_v1"
@@ -1604,10 +1053,10 @@ def _deterministic_runner_repair(
                 r"for col in predictors:\s*\n\s*if col in data:\s*\n\s*data\[col\]\s*=\s*pd\.to_numeric\(data\[col\], errors=\"coerce\"\)",
                 (
                     "for col in predictors:\n"
-                    "    if col in data and col not in [\"sex\"]:\n"
-                    "        data[col] = pd.to_numeric(data[col], errors=\"coerce\")\n"
-                    "if \"sex\" in data:\n"
-                    "    data[\"sex\"] = data[\"sex\"].astype(\"string\")"
+                    '    if col in data and col not in ["sex"]:\n'
+                    '        data[col] = pd.to_numeric(data[col], errors="coerce")\n'
+                    'if "sex" in data:\n'
+                    '    data["sex"] = data["sex"].astype("string")'
                 ),
                 code,
                 count=1,
@@ -1656,7 +1105,9 @@ def _deterministic_runner_repair(
                 frame = match.group("frame")
                 guard = f"{xcols} = [col for col in {xcols} if col in {frame}.columns]"
                 if guard not in code:
-                    repaired = code.replace(match.group("line"), guard + "\n" + match.group("line"), 1)
+                    repaired = code.replace(
+                        match.group("line"), guard + "\n" + match.group("line"), 1
+                    )
                     return repair_name, repaired
 
     missing_indicator_source_frame = (
@@ -1678,11 +1129,20 @@ def _deterministic_runner_repair(
             if repaired != code:
                 return repair_name, repaired
 
+    missing_subset_cols = _extract_missing_index_columns(run_log or "")
+    literal_outcomes = re.findall(
+        r"outcome_col\s*=\s*['\"]([^'\"]+)['\"]",
+        code,
+    )
     missing_outcome_from_subset = (
         "keyerror" in lowered
-        and "death" in lowered
         and "not in index" in lowered
         and "all_vars = [primary_predictor] + covariates" in code
+        and "outcome_col" in code
+        and (
+            not literal_outcomes
+            or any(col in set(missing_subset_cols) for col in literal_outcomes)
+        )
     )
     if missing_outcome_from_subset:
         repair_name = "include_outcome_in_all_vars_v1"
@@ -1700,11 +1160,7 @@ def _deterministic_runner_repair(
         and "none" in lowered
         and "ax.errorbar(" in code
         and ("predictor_col" in code or "primary_predictor" in code)
-        and (
-            "lactate_missing" in code
-            or "Missing-indicator" in code
-            or "missing_indicator" in code.lower()
-        )
+        and _code_mentions_missing_indicator_column(code)
     )
     if robustness_none_plot:
         repair_name = "robustness_predictor_design_and_plot_v1"
@@ -1743,31 +1199,52 @@ def _deterministic_runner_repair(
             replacements = {
                 "cc_X = cc_df[covariates]": "cc_X = cc_df[[predictor_col] + covariates]",
                 "cc_X = complete_case_df[covariates]": "cc_X = complete_case_df[[predictor_col] + covariates]",
-                "mi_X = mi_df[covariates + ['lactate_missing']]": "mi_X = mi_df[[predictor_col] + covariates + ['lactate_missing']]",
-                "mi_X = model_df[covariates + ['lactate_missing']]": "mi_X = model_df[[predictor_col] + covariates + ['lactate_missing']]",
                 "rv_X = rv_df[covariates]": "rv_X = rv_df[[predictor_col] + covariates]",
                 "rv_X = rv_df[reduced_covariates]": "rv_X = rv_df[[predictor_col] + reduced_covariates]",
-                "X_cc = sm.add_constant(complete_case_df[covariates], has_constant=\"add\")": (
-                    f"X_cc = sm.add_constant(complete_case_df[[{predictor_var}] + covariates], has_constant=\"add\")"
+                'X_cc = sm.add_constant(complete_case_df[covariates], has_constant="add")': (
+                    f'X_cc = sm.add_constant(complete_case_df[[{predictor_var}] + covariates], has_constant="add")'
                 ),
-                "X_cc = sm.add_constant(cc_df[covariates], has_constant=\"add\")": (
-                    f"X_cc = sm.add_constant(cc_df[[{predictor_var}] + covariates], has_constant=\"add\")"
+                'X_cc = sm.add_constant(cc_df[covariates], has_constant="add")': (
+                    f'X_cc = sm.add_constant(cc_df[[{predictor_var}] + covariates], has_constant="add")'
                 ),
-                "X_mi = sm.add_constant(missing_indicator_df[covariates + [\"lactate_missing\"]], has_constant=\"add\")": (
-                    f"X_mi = sm.add_constant(missing_indicator_df[[{predictor_var}] + covariates + [\"lactate_missing\"]], has_constant=\"add\")"
+                'X_rv = sm.add_constant(reduced_variable_df[covariates], has_constant="add")': (
+                    f'X_rv = sm.add_constant(reduced_variable_df[[{predictor_var}] + reduced_covariates], has_constant="add")'
                 ),
-                "X_mi = sm.add_constant(mi_df[covariates + [\"lactate_missing\"]], has_constant=\"add\")": (
-                    f"X_mi = sm.add_constant(mi_df[[{predictor_var}] + covariates + [\"lactate_missing\"]], has_constant=\"add\")"
-                ),
-                "X_rv = sm.add_constant(reduced_variable_df[covariates], has_constant=\"add\")": (
-                    f"X_rv = sm.add_constant(reduced_variable_df[[{predictor_var}] + reduced_covariates], has_constant=\"add\")"
-                ),
-                "X_rv = sm.add_constant(rv_df[covariates], has_constant=\"add\")": (
-                    f"X_rv = sm.add_constant(rv_df[[{predictor_var}] + reduced_covariates], has_constant=\"add\")"
+                'X_rv = sm.add_constant(rv_df[covariates], has_constant="add")': (
+                    f'X_rv = sm.add_constant(rv_df[[{predictor_var}] + reduced_covariates], has_constant="add")'
                 ),
             }
             for old, new in replacements.items():
                 repaired = repaired.replace(old, new)
+            missing_expr = (
+                r"(?:['\"][A-Za-z_][A-Za-z0-9_]*_missing(?:_[A-Za-z0-9_]+)?['\"]|"
+                r"missing_indicator_col)"
+            )
+            repaired = re.sub(
+                rf"(?m)^(?P<indent>\s*)"
+                rf"(?P<lhs>mi_X)\s*=\s*(?P<df>mi_df|model_df)"
+                rf"\[covariates\s*\+\s*\[(?P<missing>{missing_expr})\]\]\s*$",
+                lambda match: (
+                    f"{match.group('indent')}{match.group('lhs')} = "
+                    f"{match.group('df')}[[{predictor_var}] + covariates + "
+                    f"[{match.group('missing')}]]"
+                ),
+                repaired,
+            )
+            repaired = re.sub(
+                rf"(?m)^(?P<indent>\s*)"
+                rf"(?P<lhs>X_mi)\s*=\s*sm\.add_constant\("
+                rf"(?P<df>missing_indicator_df|mi_df)"
+                rf"\[covariates\s*\+\s*\[(?P<missing>{missing_expr})\]\], "
+                rf"has_constant=\"add\"\)\s*$",
+                lambda match: (
+                    f"{match.group('indent')}{match.group('lhs')} = "
+                    f"sm.add_constant({match.group('df')}[[{predictor_var}] "
+                    f"+ covariates + [{match.group('missing')}]], "
+                    'has_constant="add")'
+                ),
+                repaired,
+            )
             subset_replacements = {
                 f"complete_case_df = model_df.dropna(subset=[{predictor_var}])": (
                     f"complete_case_df = model_df.dropna(subset=[outcome_col, {predictor_var}] + covariates)"
@@ -1804,22 +1281,22 @@ def _deterministic_runner_repair(
                 "",
             )
             finite_patches = {
-                "X_cc = X_cc.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n    y_cc = y_cc.astype(float)": (
-                    "X_cc = X_cc.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n"
+                'X_cc = X_cc.apply(pd.to_numeric, errors="coerce").astype(float)\n    y_cc = y_cc.astype(float)': (
+                    'X_cc = X_cc.apply(pd.to_numeric, errors="coerce").astype(float)\n'
                     "    y_cc = y_cc.astype(float)\n"
                     "    cc_mask = np.isfinite(X_cc.to_numpy()).all(axis=1) & np.isfinite(y_cc.to_numpy())\n"
                     "    X_cc = X_cc.loc[cc_mask]\n"
                     "    y_cc = y_cc.loc[cc_mask]"
                 ),
-                "X_mi = X_mi.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n    y_mi = y_mi.astype(float)": (
-                    "X_mi = X_mi.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n"
+                'X_mi = X_mi.apply(pd.to_numeric, errors="coerce").astype(float)\n    y_mi = y_mi.astype(float)': (
+                    'X_mi = X_mi.apply(pd.to_numeric, errors="coerce").astype(float)\n'
                     "    y_mi = y_mi.astype(float)\n"
                     "    mi_mask = np.isfinite(X_mi.to_numpy()).all(axis=1) & np.isfinite(y_mi.to_numpy())\n"
                     "    X_mi = X_mi.loc[mi_mask]\n"
                     "    y_mi = y_mi.loc[mi_mask]"
                 ),
-                "X_rv = X_rv.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n    y_rv = y_rv.astype(float)": (
-                    "X_rv = X_rv.apply(pd.to_numeric, errors=\"coerce\").astype(float)\n"
+                'X_rv = X_rv.apply(pd.to_numeric, errors="coerce").astype(float)\n    y_rv = y_rv.astype(float)': (
+                    'X_rv = X_rv.apply(pd.to_numeric, errors="coerce").astype(float)\n'
                     "    y_rv = y_rv.astype(float)\n"
                     "    rv_mask = np.isfinite(X_rv.to_numpy()).all(axis=1) & np.isfinite(y_rv.to_numpy())\n"
                     "    X_rv = X_rv.loc[rv_mask]\n"
@@ -1900,13 +1377,11 @@ def _deterministic_runner_repair(
                 return repair_name, repaired
 
     missing_figure_utils = (
-        (
-            "modulenotfounderror: no module named 'easyicu.research_output'" in lowered
-            or "modulenotfounderror: no module named 'easyicu.research_output.figure_utils'" in lowered
-            or "no module named 'easyicu.research_output'" in lowered
-        )
-        and "easyicu.research_output.figure_utils" in code
-    )
+        "modulenotfounderror: no module named 'easyicu.research_output'" in lowered
+        or "modulenotfounderror: no module named 'easyicu.research_output.figure_utils'"
+        in lowered
+        or "no module named 'easyicu.research_output'" in lowered
+    ) and "easyicu.research_output.figure_utils" in code
     if missing_figure_utils:
         repair_name = "replace_hallucinated_figure_utils_import_v1"
         if previous_repair != repair_name:
@@ -1926,6 +1401,7 @@ def _deterministic_runner_repair(
     if robustness_numeric_check_nan:
         repair_name = "robustness_encode_sex_before_numeric_checks_v1"
         if previous_repair != repair_name:
+
             def _numeric_block(prefix: str) -> str:
                 block = textwrap.dedent(
                     f"""
@@ -1992,8 +1468,9 @@ def _deterministic_runner_repair(
     if table_one_unclosed_syntax:
         repair_name = "table_one_descriptive_repair_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent(
-                """
+            repaired = (
+                textwrap.dedent(
+                    """
                 import json
                 import os
                 import math
@@ -2070,8 +1547,17 @@ def _deterministic_runner_repair(
                 if outcome_col and outcome_col in df.columns:
                     outcome = pd.to_numeric(df[outcome_col], errors="coerce").dropna()
                     summary["outcome_col"] = outcome_col
-                    summary["outcome_n"] = int(outcome.sum()) if len(outcome) else 0
-                    summary["outcome_rate"] = float(outcome.mean()) if len(outcome) else None
+                    outcome_values = set(outcome.astype(float).unique().tolist())
+                    if outcome_values <= {0.0, 1.0}:
+                        summary["outcome_kind"] = "binary_0_1"
+                        summary["outcome_n"] = int(outcome.sum()) if len(outcome) else 0
+                        summary["outcome_rate"] = float(outcome.mean()) if len(outcome) else None
+                    else:
+                        summary["outcome_kind"] = "non_binary"
+                        summary["outcome_note"] = (
+                            "OUTCOME_COL was not summarized as an event rate because "
+                            "it is not a binary 0/1 endpoint."
+                        )
                 if "age" in df.columns:
                     age = pd.to_numeric(df["age"], errors="coerce").dropna()
                     summary["age_median"] = float(age.median()) if len(age) else None
@@ -2082,21 +1568,21 @@ def _deterministic_runner_repair(
                     json.dump(summary, f, indent=2, default=to_jsonable)
                 print(json.dumps({"table": "table_one.csv", "summary": summary}, default=to_jsonable))
                 """
-            ).strip() + "\n"
+                ).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
-    outcome_incidence_broken_syntax = (
-        "syntaxerror" in lowered
-        and (
-            "outcome_incidence" in code.lower()
-            or "incidence_with_missingness_strata" in code.lower()
-        )
+    outcome_incidence_broken_syntax = "syntaxerror" in lowered and (
+        "outcome_incidence" in code.lower()
+        or "incidence_with_missingness_strata" in code.lower()
     )
     if outcome_incidence_broken_syntax:
         repair_name = "outcome_incidence_descriptive_repair_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent(
-                """
+            repaired = (
+                textwrap.dedent(
+                    """
                 import json
                 import os
                 import math
@@ -2135,6 +1621,13 @@ def _deterministic_runner_repair(
                 if outcome_col not in df.columns:
                     raise KeyError(f"OUTCOME_COL={outcome_col!r} is not present in the cohort")
                 outcome = pd.to_numeric(df[outcome_col], errors="coerce")
+                valid_outcome = outcome.dropna().astype(float)
+                outcome_values = set(valid_outcome.unique().tolist())
+                if outcome_values - {0.0, 1.0} or len(outcome_values) < 2:
+                    raise RuntimeError(
+                        "Outcome incidence repair requires a binary 0/1 OUTCOME_COL; "
+                        "refusing to compute an event rate for a continuous or multi-class endpoint."
+                    )
                 rows = []
 
                 def add_row(label, mask):
@@ -2198,7 +1691,9 @@ def _deterministic_runner_repair(
                     json.dump(summary, f, indent=2, default=to_jsonable)
                 print(json.dumps(summary, default=to_jsonable))
                 """
-            ).strip() + "\n"
+                ).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     repeated_keyword_syntax = (
@@ -2206,11 +1701,12 @@ def _deterministic_runner_repair(
         and "train_test_split" in code
         and "figure_contract = figurecontract(" in code.lower()
     )
-    if repeated_keyword_syntax:
+    if repeated_keyword_syntax and binary_model_repair_allowed:
         repair_name = "prediction_split_minimal_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent(
-                """
+            repaired = (
+                textwrap.dedent(
+                    """
                 import json
                 import os
                 import numpy as np
@@ -2229,8 +1725,26 @@ def _deterministic_runner_repair(
 
                 df = pd.read_parquet(os.environ["COHORT_PARQUET"])
                 out = os.environ["STEP_OUT_DIR"]
-                outcome = "death" if "death" in df.columns else df.columns[-1]
-                y = pd.to_numeric(df[outcome], errors="coerce").fillna(0).astype(int)
+                outcome = os.environ.get("OUTCOME_COL")
+                if not outcome:
+                    raise RuntimeError(
+                        "OUTCOME_COL is required for deterministic prediction split repair; "
+                        "refusing to guess a target outcome."
+                    )
+                if outcome not in df.columns:
+                    raise KeyError(
+                        f"OUTCOME_COL={outcome!r} is not present in cohort columns."
+                    )
+                y_numeric = pd.to_numeric(df[outcome], errors="coerce")
+                valid_y = y_numeric.dropna().astype(float)
+                outcome_values = set(valid_y.unique().tolist())
+                if outcome_values - {0.0, 1.0} or len(outcome_values) < 2:
+                    raise RuntimeError(
+                        "Deterministic prediction split repair requires a binary 0/1 OUTCOME_COL; "
+                        "refusing to coerce a continuous or multi-class outcome."
+                    )
+                df = df.loc[y_numeric.notna()].copy()
+                y = y_numeric.loc[df.index].astype(int)
                 X = df.drop(columns=[outcome], errors="ignore").copy()
                 X = X.select_dtypes(include=["number", "bool"]).apply(pd.to_numeric, errors="coerce")
                 if X.empty:
@@ -2255,14 +1769,16 @@ def _deterministic_runner_repair(
                     json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
                 print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
                 """
-            ).strip() + "\n"
+                ).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     logreg_nan = (
         "logisticregression does not accept missing values encoded as nan" in lowered
         and "logisticregression" in code.lower()
     )
-    if logreg_nan:
+    if logreg_nan and binary_model_repair_allowed:
         repair_name = "logreg_impute_v1"
         if previous_repair != repair_name and "_easyicu_logreg_impute_v1" not in code:
             patch = textwrap.dedent(
@@ -2297,10 +1813,15 @@ def _deterministic_runner_repair(
             else:
                 repaired = code
             if repaired == code:
-                predict_call = re.compile(r"(?P<line>y_pred_proba\s*=\s*model(?:_pipeline)?\.predict_proba\(X_test\)\s*\[:,\s*1\]\s*)")
+                predict_call = re.compile(
+                    r"(?P<line>y_pred_proba\s*=\s*model(?:_pipeline)?\.predict_proba\(X_test\)\s*\[:,\s*1\]\s*)"
+                )
                 match = predict_call.search(code)
                 if match:
-                    inject = "X_test = _easyicu_logreg_impute_v1(X_test)\n" + match.group("line")
+                    inject = (
+                        "X_test = _easyicu_logreg_impute_v1(X_test)\n"
+                        + match.group("line")
+                    )
                     repaired = code[: match.start()] + inject + code[match.end() :]
             if repaired != code:
                 if "def _easyicu_logreg_impute_v1" not in repaired:
@@ -2312,11 +1833,12 @@ def _deterministic_runner_repair(
         and "..." in code
         and "model_bundle" in code
     )
-    if placeholder_ellipsis:
+    if placeholder_ellipsis and binary_model_repair_allowed:
         repair_name = "prediction_discrimination_template_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent(
-                """
+            repaired = (
+                textwrap.dedent(
+                    """
                 import json
                 import math
                 import os
@@ -2353,13 +1875,22 @@ def _deterministic_runner_repair(
                 feature_cols = list(model_bundle.get("feature_cols", []))
 
                 df = pd.read_parquet(cohort_path)
-                X_test = df[feature_cols].copy()
                 outcome_col = os.environ.get("OUTCOME_COL") or model_bundle.get("outcome_col")
                 if not outcome_col:
                     raise KeyError("OUTCOME_COL or model_bundle['outcome_col'] is required for prediction evaluation")
                 if outcome_col not in df.columns:
                     raise KeyError(f"Outcome column {outcome_col!r} is not present in the cohort")
-                y_test = pd.to_numeric(df[outcome_col], errors="coerce").fillna(0).astype(int).values
+                y_numeric = pd.to_numeric(df[outcome_col], errors="coerce")
+                valid_y = y_numeric.dropna().astype(float)
+                outcome_values = set(valid_y.unique().tolist())
+                if outcome_values - {0.0, 1.0} or len(outcome_values) < 2:
+                    raise RuntimeError(
+                        "Deterministic prediction evaluation repair requires a binary 0/1 outcome; "
+                        "refusing to compute AUROC for a continuous or multi-class endpoint."
+                    )
+                eval_mask = y_numeric.notna()
+                X_test = df.loc[eval_mask, feature_cols].copy()
+                y_test = y_numeric.loc[eval_mask].astype(int).values
                 for col in X_test.columns:
                     series = pd.to_numeric(X_test[col], errors="ignore")
                     if getattr(series, "dtype", None) is not None and str(series.dtype) != "object" and series.isna().any():
@@ -2408,7 +1939,9 @@ def _deterministic_runner_repair(
                     json.dump(step_summary, f, indent=2, default=to_jsonable, ensure_ascii=False)
                 print(json.dumps(step_summary, indent=2, default=to_jsonable, ensure_ascii=False))
                 """
-            ).strip() + "\n"
+                ).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     omitted_primary_predictor = re.search(
@@ -2416,7 +1949,11 @@ def _deterministic_runner_repair(
         run_log or "",
         flags=re.IGNORECASE,
     )
-    if omitted_primary_predictor and "X = model_df[[" in code:
+    if (
+        omitted_primary_predictor
+        and "X = model_df[[" in code
+        and binary_model_repair_allowed
+    ):
         predictor = omitted_primary_predictor.group(1)
         repair_name = "primary_predictor_omitted_from_design_v1"
         if previous_repair != repair_name:
@@ -2428,8 +1965,7 @@ def _deterministic_runner_repair(
                 return repair_name, repaired
 
     cut_tuple_error = (
-        "typeerror: '<' not supported between instances of 'tuple' and 'int'"
-        in lowered
+        "typeerror: '<' not supported between instances of 'tuple' and 'int'" in lowered
         and "pandas/core/reshape/tile.py" in lowered
         and "pd.cut(" in code
     )
@@ -2457,13 +1993,11 @@ def _deterministic_runner_repair(
                 ):
                     flat_bins = [literal[0][0], *[item[1] for item in literal]]
                     replacement = f"{match.group('name')} = {flat_bins!r}"
-                    repaired = (
-                        code[: match.start()] + replacement + code[match.end() :]
-                    )
+                    repaired = code[: match.start()] + replacement + code[match.end() :]
                     return repair_name, repaired
 
     singular_logit = "singular matrix" in lowered and "sm.logit(" in code.lower()
-    if singular_logit:
+    if singular_logit and binary_model_repair_allowed:
         repair_name = "logit_regularized_fit_v1"
         if previous_repair != repair_name:
             helper = textwrap.dedent(
@@ -2482,7 +2016,11 @@ def _deterministic_runner_repair(
                 if insert_after >= 0:
                     line_end = patched.find("\n", insert_after)
                     patched = (
-                        patched[: line_end + 1] + "\n" + helper + "\n" + patched[line_end + 1 :]
+                        patched[: line_end + 1]
+                        + "\n"
+                        + helper
+                        + "\n"
+                        + patched[line_end + 1 :]
                     )
                 else:
                     patched = helper + "\n\n" + patched
@@ -2495,31 +2033,29 @@ def _deterministic_runner_repair(
             if patched != code:
                 return repair_name, patched
 
-    table_one_binary_keyerror = (
-        "keyerror: 1" in lowered
-        and "in-hospital mortality" in code.lower()
-        and '"counts"][1]' in code
+    table_one_binary_keyerror = "keyerror: 1" in lowered and re.search(
+        r'summary\["outcomes"\]\["[^"]+"\]\["(?:counts|pct)"\]\[1\]',
+        code,
     )
     if table_one_binary_keyerror:
         repair_name = "table_one_binary_key_string_v1"
         if previous_repair != repair_name:
-            repaired = code.replace(
-                'summary["outcomes"]["death"]["counts"][1]',
-                'summary["outcomes"]["death"]["counts"].get("1", summary["outcomes"]["death"]["counts"].get(1, 0))',
-            )
-            repaired = repaired.replace(
-                'summary["outcomes"]["death"]["pct"][1]',
-                'summary["outcomes"]["death"]["pct"].get("1", summary["outcomes"]["death"]["pct"].get(1, 0.0))',
+            repaired = re.sub(
+                r'summary\["outcomes"\]\["(?P<outcome>[^"]+)"\]\["(?P<field>counts|pct)"\]\[1\]',
+                lambda match: (
+                    f'summary["outcomes"]["{match.group("outcome")}"]["{match.group("field")}"].get('
+                    f'"1", summary["outcomes"]["{match.group("outcome")}"]'
+                    f'["{match.group("field")}"].get(1, '
+                    f'{"0" if match.group("field") == "counts" else "0.0"}))'
+                ),
+                code,
             )
             if repaired != code:
                 return repair_name, repaired
 
-    cohort_file_as_dir = (
-        "notadirectoryerror" in lowered
-        and (
-            'os.path.join(cohort_path, "data.parquet")' in code.lower()
-            or 'os.path.join(cohort_path, \'data.parquet\')' in code.lower()
-        )
+    cohort_file_as_dir = "notadirectoryerror" in lowered and (
+        'os.path.join(cohort_path, "data.parquet")' in code.lower()
+        or "os.path.join(cohort_path, 'data.parquet')" in code.lower()
     )
     if cohort_file_as_dir:
         repair_name = "cohort_file_direct_read_v1"
@@ -2546,10 +2082,7 @@ def _deterministic_runner_repair(
     parquet_read_as_csv = (
         "unicodedecodeerror" in lowered
         and "pd.read_csv(" in code.lower()
-        and (
-            "cohort_path" in code.lower()
-            or "cohort_parquet" in code.lower()
-        )
+        and ("cohort_path" in code.lower() or "cohort_parquet" in code.lower())
     )
     if parquet_read_as_csv:
         repair_name = "cohort_csv_to_parquet_v1"
@@ -2569,8 +2102,9 @@ def _deterministic_runner_repair(
     if publication_style_nameerror:
         repair_name = "publication_bundle_promote_script_v1"
         if previous_repair != repair_name:
-            repaired = textwrap.dedent(
-                """
+            repaired = (
+                textwrap.dedent(
+                    """
                 from __future__ import annotations
                 import json
                 import os
@@ -2643,7 +2177,9 @@ def _deterministic_runner_repair(
                     json.dump(summary, f, indent=2, ensure_ascii=False)
                 print(json.dumps(summary, indent=2, ensure_ascii=False))
                 """
-            ).strip() + "\n"
+                ).strip()
+                + "\n"
+            )
             return repair_name, repaired
 
     # ----------------------------------------------------------------
@@ -2735,6 +2271,7 @@ def _deterministic_runner_repair(
         any(sig in lowered for sig in signatures)
         and "_easyicu_runner_repair_v1" not in code
         and any(token in code for token in ("sm.Logit(", "sm.OLS(", "sm.GLM("))
+        and _statsmodels_repair_allowed_for_family(code, analysis_family)
     )
     if dtype_coerce_applies:
         repair_name = "dtype_coerce_v1"
@@ -2771,7 +2308,11 @@ def _deterministic_runner_repair(
             if insert_after >= 0:
                 line_end = patched.find("\n", insert_after)
                 patched = (
-                    patched[: line_end + 1] + "\n" + patch + "\n" + patched[line_end + 1 :]
+                    patched[: line_end + 1]
+                    + "\n"
+                    + patch
+                    + "\n"
+                    + patched[line_end + 1 :]
                 )
             else:
                 patched = patch + "\n\n" + patched
@@ -2793,8 +2334,7 @@ def _deterministic_runner_repair(
 
         repaired = model_call.sub(_rewrite, patched, count=1)
         repaired = repaired.replace(
-            "X_array = X.to_numpy()\n"
-            "y_array = y.to_numpy()\n",
+            "X_array = X.to_numpy()\n" "y_array = y.to_numpy()\n",
             "y, X = _easyicu_runner_repair_v1(X, y)\n"
             "X_array = np.asarray(X, dtype=float)\n"
             "y_array = np.asarray(y, dtype=float)\n",

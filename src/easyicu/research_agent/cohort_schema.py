@@ -69,7 +69,7 @@ PredicateOp = Literal[
 COHORT_LOCK_FILENAME = "cohort_locked.json"
 _CONCEPT_DICT_PATH = Path(__file__).resolve().parents[1] / "data" / "concept-dict.json"
 _ANY_ALL_ALLOWED_OPS = {"==", "!=", "missing", "not_missing"}
-_IMPLEMENTED_AGGREGATIONS = {"max", "min", "last", "first", "any"}
+_IMPLEMENTED_AGGREGATIONS = set(ALLOWED_CTAS_AGGREGATIONS)
 
 
 class CohortSchemaError(ValueError):
@@ -394,6 +394,72 @@ def write_locked_cohort_definition(
     return path
 
 
+ANALYSIS_COHORT_FILENAME = "cohort_analysis.parquet"
+
+
+def materialize_locked_analysis_cohort(
+    *,
+    run_dir: Path,
+    plan: Any,
+    universe_path: Path,
+    stem: str = "cohort_analysis",
+) -> Dict[str, Any]:
+    """Apply the locked cohort definition to the universe → analysis cohort.
+
+    This is the missing bridge between *declaring* a cohort (the locked
+    ``CohortDefinition``, recorded for provenance) and *enforcing* it on the
+    data the analysis steps consume. Without it, the universe-mode flow hands
+    every step the unfiltered universe and silently relies on each LLM-generated
+    step to re-apply inclusion/exclusion — which is unenforced and inconsistent.
+
+    Reuses the deterministic, auditable ``build_cohort`` evaluator. Returns a
+    result dict; ``status`` is one of ``applied`` (wrote ``<stem>.parquet`` +
+    provenance), ``no_definition`` (nothing to apply → caller uses the universe),
+    or ``error`` (predicates could not be evaluated → caller falls back to the
+    universe so the run still proceeds).
+    """
+    result: Dict[str, Any] = {
+        "status": "no_definition",
+        "path": None,
+        "n_universe": None,
+        "n_cohort": None,
+        "error": None,
+    }
+    definition = coerce_cohort_definition(getattr(plan, "cohort", None))
+    if definition is None or not (definition.inclusion or definition.exclusion):
+        return result
+    try:
+        import pandas as pd  # type: ignore
+
+        universe = pd.read_parquet(universe_path)
+        cohort = build_cohort(definition, universe).reset_index(drop=True)
+    except Exception as exc:  # fall back to the universe; never break the run
+        result.update(status="error", error=f"{type(exc).__name__}: {exc}")
+        return result
+
+    out_path = Path(run_dir) / f"{stem}.parquet"
+    cohort.to_parquet(out_path, index=False)
+    provenance = {
+        "schema_version": "easyicu.analysis_cohort/1",
+        "locked_at": datetime.now(timezone.utc).isoformat(),
+        "universe_parquet": str(universe_path),
+        "cohort_definition": definition.to_dict(),
+        "cohort_sha256": cohort_definition_sha(definition),
+        "n_universe": int(len(universe)),
+        "n_analysis_cohort": int(len(cohort)),
+    }
+    (Path(run_dir) / f"{stem}_provenance.json").write_text(
+        json.dumps(provenance, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    result.update(
+        status="applied",
+        path=out_path,
+        n_universe=int(len(universe)),
+        n_cohort=int(len(cohort)),
+    )
+    return result
+
+
 def assert_cohort_definition_locked(*, run_dir: Path, plan: Any) -> None:
     definition = coerce_cohort_definition(getattr(plan, "cohort", None))
     if definition is None:
@@ -442,8 +508,26 @@ def build_cohort(definition: CohortDefinition, data: Any = None) -> Any:
     return data.loc[mask].copy()
 
 
+# Columns of an externally provided, already-materialised cohort (e.g. the
+# EHRFlowBench path or cohort_materializer output). They are not dictionary
+# concepts, but the data is already present, so a planner may legitimately
+# reference them in a CTAS predicate — `_predicate_mask` reads them straight
+# from `data.columns`. Registered per run so the static planner validation does
+# not reject pre-materialised covariates as "unknown concept_id".
+_EXTRA_COHORT_CONCEPT_IDS: set[str] = set()
+
+
+def register_cohort_concept_ids(concept_ids: Any) -> None:
+    """Allow these ids in CTAS predicate validation (pre-materialised columns)."""
+    _EXTRA_COHORT_CONCEPT_IDS.update(str(c) for c in concept_ids)
+
+
+def clear_cohort_concept_ids() -> None:
+    _EXTRA_COHORT_CONCEPT_IDS.clear()
+
+
 def concept_id_exists(concept_id: str) -> bool:
-    return concept_id in known_concept_ids()
+    return concept_id in known_concept_ids() or concept_id in _EXTRA_COHORT_CONCEPT_IDS
 
 
 @lru_cache(maxsize=1)
@@ -455,17 +539,67 @@ def known_concept_ids() -> set[str]:
     return set(payload.keys())
 
 
+# A few EasyICU concepts materialise their value under an output-column name
+# that differs from the dictionary ``concept_id`` because the concept's callback
+# emits a clinically-named column (e.g. the ``kdigo_aki`` concept emits
+# ``aki_stage``; see ``kdigo_aki.py`` and ``api.py``'s SPECIAL_CONCEPTS dispatch
+# ``_KDIGO_OUTPUTS``/``_CIRC_OUTPUTS``). A planner that references the cohort
+# concept by its *dictionary id* (the canonical, cross-database way per the
+# concept layer) then names a predicate whose ``concept_id`` never appears as a
+# universe column, even though the data is present under the output name. This
+# is a general EasyICU concept-layer fact, not a benchmark-specific alias: the
+# mapping holds for every database and every analysis that uses these concepts.
+_CONCEPT_OUTPUT_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    "kdigo_aki": ("aki_stage",),
+    "kdigo_creat": ("aki_stage_creat",),
+    "kdigo_uo": ("aki_stage_uo",),
+    "circ_failure": ("circ_failure", "circ_event"),
+}
+
+
+def _resolve_predicate_column(
+    columns: Any, concept_id: str, aggregation: str
+) -> Optional[str]:
+    """Resolve a predicate ``concept_id`` to an actual universe column.
+
+    The universe wide table names id-level concepts bare (``age``, ``los_icu``,
+    ``death``) and time-series concepts as ``<output>_<aggregation>``
+    (``aki_stage_max`` …). A predicate carries the *dictionary* ``concept_id``
+    plus the requested ``aggregation``; resolve against the columns present,
+    trying in order: the bare id, the wide ``<concept_id>_<aggregation>`` form,
+    and the concept's known output-column alias(es) (bare and aggregated). Return
+    ``None`` when no column honours the requested aggregation, so the caller can
+    fail loudly rather than silently skip an unenforceable predicate.
+    """
+    cols = set(columns)
+    if concept_id in cols:
+        return concept_id
+    aggregated = f"{concept_id}_{aggregation}"
+    if aggregated in cols:
+        return aggregated
+    for stem in _CONCEPT_OUTPUT_COLUMN_ALIASES.get(concept_id, ()):
+        if stem in cols:
+            return stem
+        stem_aggregated = f"{stem}_{aggregation}"
+        if stem_aggregated in cols:
+            return stem_aggregated
+    return None
+
+
 def _predicate_mask(data: Any, pred: ConceptPredicate) -> Any:
     if pred.aggregation not in _IMPLEMENTED_AGGREGATIONS:
         raise NotImplementedError(
             f"aggregation {pred.aggregation!r} is not implemented by the CTAS "
             "dataframe builder"
         )
-    if pred.concept_id not in data.columns:
+    column = _resolve_predicate_column(data.columns, pred.concept_id, pred.aggregation)
+    if column is None:
         raise CohortDataError(
-            f"cohort dataframe is missing concept column {pred.concept_id!r}"
+            f"cohort dataframe is missing concept column {pred.concept_id!r} "
+            f"(also tried {pred.concept_id}_{pred.aggregation} and known output "
+            "aliases)"
         )
-    series = data[pred.concept_id]
+    series = data[column]
     return _apply_op(series, pred.op, pred.value)
 
 
@@ -523,12 +657,14 @@ __all__ = [
     "assert_cohort_definition_locked",
     "build_cohort",
     "coerce_cohort_definition",
+    "clear_cohort_concept_ids",
     "cohort_definition_sha",
     "concept_id_exists",
     "default_pattern_registry",
     "ensure_cohort_definition",
     "expand_named_cohort",
     "known_concept_ids",
+    "register_cohort_concept_ids",
     "register_pattern",
     "register_patterns_from_file",
     "reset_pattern_registry",

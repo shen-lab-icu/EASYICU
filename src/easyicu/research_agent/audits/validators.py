@@ -54,6 +54,102 @@ from ..llm import LLMClient, LLMMessage
 # ---------------------------------------------------------------------------
 
 
+# Patient-level identifier column names. Their presence means a cohort can
+# be reasoned about at the patient level (within-patient non-independence,
+# first-stay selection). Stay-level keys (stay_id, icustay_id) and
+# admission-level keys (hadm_id) deliberately do NOT qualify.
+_PATIENT_ID_COLUMNS = (
+    "subject_id",
+    "patient_id",
+    "patientid",
+    "person_id",
+    "uniquepid",
+)
+# ICU length-of-stay columns, expressed in DAYS in the EasyICU export.
+_LOS_DAY_COLUMNS = ("los_icu", "los", "icu_los", "los_icu_days")
+
+
+def cohort_hygiene_findings(
+    df: pd.DataFrame,
+    context: ResearchContext,
+) -> List[ValidationFinding]:
+    """Impartial, advisory cohort-hygiene flags (``warning``, never blocking).
+
+    These surface standard cohort-hygiene questions — patient-level
+    non-independence and short-stay exposure — so they are visible and
+    recorded. They deliberately do NOT impose an analytical choice (a
+    minimum LoS, first-stay deduplication, ...): per the impartiality rule
+    the analyst decides, and the auditor only ensures the question was put.
+    Severity is always ``warning`` so the gate never fail-closes on them.
+
+    See ``feedback_rules_must_be_impartial`` and
+    ``feedback_coverage_gap_vs_missing_policy``.
+    """
+    findings: List[ValidationFinding] = []
+    cols = {str(c).lower() for c in df.columns}
+
+    # (A) Patient-level non-independence assessability. Only relevant when an
+    # outcome model is in scope (a stay-level association treats each ICU
+    # stay as independent). If no patient identifier is present, that
+    # assumption cannot even be CHECKED from this export — structural
+    # no-source — so advise re-extraction rather than penalising the analysis
+    # or silently assuming independence.
+    outcome = getattr(context, "target_outcome", None)
+    has_patient_id = any(pid in cols for pid in _PATIENT_ID_COLUMNS)
+    if outcome and not has_patient_id:
+        findings.append(ValidationFinding(
+            validator="cohort_auditor",
+            severity="warning",
+            message=(
+                "Cohort is keyed at the ICU-stay level with no patient "
+                "identifier; within-patient non-independence and first-stay "
+                "selection cannot be assessed from this export. Re-extract "
+                "with a patient identifier (e.g. subject_id) if repeat ICU "
+                "stays could affect the outcome model."
+            ),
+            detail={
+                "kind": "cohort_hygiene",
+                "subkind": "patient_independence_unassessable",
+                "structural_no_source": True,
+                "impartial": True,
+            },
+        ))
+
+    # (B) Short-stay exposure. If an ICU LoS column (days) is present, report
+    # the fraction of very short stays. Excluding <24h stays is a defensible
+    # convention, NOT a requirement, so this records the distribution and
+    # leaves the choice to the analyst.
+    los_col = next(
+        (c for c in df.columns if str(c).lower() in _LOS_DAY_COLUMNS),
+        None,
+    )
+    if los_col is not None:
+        los = pd.to_numeric(df[los_col], errors="coerce").dropna()
+        if not los.empty:
+            frac_short = float((los < 1.0).mean())
+            if frac_short > 0:
+                findings.append(ValidationFinding(
+                    validator="cohort_auditor",
+                    severity="warning",
+                    message=(
+                        f"{frac_short:.0%} of stays have ICU length-of-stay "
+                        f"<1 day (column '{los_col}'); consider whether "
+                        "incomplete exposure affects the analysis. No "
+                        "minimum-LoS filter is imposed — recorded for the "
+                        "analyst to judge."
+                    ),
+                    detail={
+                        "kind": "cohort_hygiene",
+                        "subkind": "short_stay_exposure",
+                        "fraction_los_under_1_day": frac_short,
+                        "los_column": los_col,
+                        "impartial": True,
+                    },
+                ))
+
+    return findings
+
+
 class CohortAuditor:
     """Confirm the dataframe matches the descriptor it claims to."""
 
@@ -133,6 +229,11 @@ class CohortAuditor:
                     detail={"fraction_missing": v.missingness.fraction_missing},
                 ))
 
+        # Impartial, advisory cohort-hygiene flags (patient-level
+        # non-independence, short-stay exposure). Always severity="warning",
+        # so they record the question without enforcing a choice.
+        findings.extend(cohort_hygiene_findings(df, context))
+
         return findings
 
 
@@ -158,15 +259,16 @@ _FORBIDDEN_AGG_PATTERNS_BY_KIND = {
 }
 
 
-# Stage-aware severity hook (added 2026-05-26).
+# Severity policy for forbidden-aggregation patterns (added 2026-05-26,
+# corrected 2026-06-13).
 #
-# Default behaviour preserves the strict fail-closed benchmark: every
-# matched pattern produces a severity="error" finding regardless of step
-# stage. Setting EASYICU_AUDIT_RELAX_PROBE=1 downgrades matches to
-# severity="warning" when the step is recognised as descriptive / probe /
-# exploratory, while keeping severity="error" for primary-analysis,
-# manuscript and final-report stages. This hook exists so that a future
-# supplementary ablation can compare strict vs stage-calibrated audit
+# Default behaviour: severity="warning" (advisory). Mean/SD of an ordinal
+# or composite clinical score is a reporting-practice preference, not an
+# objective error, so per the impartiality contract it is surfaced as a
+# caution and never hard-blocks a run. Setting EASYICU_AUDIT_ORDINAL_STRICT=1
+# restores the historical strict fail-closed benchmark (severity="error" /
+# block for primary-analysis & manuscript stages, "warning" for
+# probe/descriptive stages) so a supplementary ablation can compare the two
 # policies on the same benchmark without re-running unrelated logic.
 _PROBE_STAGE_TOKENS = (
     "probe", "descriptive", "exploratory", "qc", "summary",
@@ -178,23 +280,40 @@ _BLOCKING_STAGE_TOKENS = (
 
 
 def _forbidden_agg_severity(step: Optional["AnalysisStep"]) -> str:
-    """Return 'error' (block) or 'warning' for a forbidden-agg pattern.
+    """Severity for a forbidden-*aggregation* pattern (mean/std of an
+    ordinal / composite clinical score).
 
-    Strict (default): always returns 'error'.
-    Relaxed (EASYICU_AUDIT_RELAX_PROBE=1): returns 'warning' when the
-    step id contains a probe/descriptive token and 'error' when it
-    contains a primary-analysis or manuscript token.
+    Default: ``"warning"`` (advisory caution, does NOT block the run).
+
+    These patterns are *reporting-practice preferences*, not objective
+    mathematical errors — the same column may legitimately enter a model
+    as a covariate, and a generic ``describe()``-style helper that returns
+    ``{"mean": ..., "median": ...}`` for a selection-bias diagnostic is a
+    defensible use of ``.mean()``. The impartiality contract (see
+    ``ICU_RULES.general_principles`` kind=="caution": mean-vs-median is a
+    *choice* the rule layer must surface but never impose) means these must
+    advise, not hard-block. This also matches the sibling lab-mean rule,
+    which is already a ``"warning"``. Hard-blocking on a single helper-level
+    ``.mean()`` was observed to degrade an otherwise-correct run (whose
+    primary analysis treated the score as ordinal categories) all the way
+    to ``diagnostic_only`` — a false fail-closed.
+
+    Escape hatch for an ablation that wants the historical strict
+    fail-closed benchmark: ``EASYICU_AUDIT_ORDINAL_STRICT=1`` restores
+    ``"error"`` (block) for primary-analysis / manuscript stages while
+    keeping probe/descriptive stages advisory.
     """
     import os
-    if os.environ.get("EASYICU_AUDIT_RELAX_PROBE") != "1":
-        return "error"
+    if os.environ.get("EASYICU_AUDIT_ORDINAL_STRICT") != "1":
+        return "warning"
     sid = (getattr(step, "step_id", "") or "").lower()
-    for tok in _BLOCKING_STAGE_TOKENS:
-        if tok in sid:
-            return "error"
     for tok in _PROBE_STAGE_TOKENS:
         if tok in sid:
             return "warning"
+    for tok in _BLOCKING_STAGE_TOKENS:
+        if tok in sid:
+            return "error"
+    # Strict ablation, ambiguous stage: block (historical behaviour).
     return "error"
 
 
@@ -916,7 +1035,95 @@ class StatisticalValidator:
                     message=f"Could not parse {perf_csv.name}: {exc}",
                 ))
 
+        # 5. Degenerate-partition disclosure caution (clustering / trajectory).
+        #    When a step emits a cluster-size distribution, surface an OBJECTIVE
+        #    degeneracy fact — a single group, or one dominant cluster plus a
+        #    near-empty (<1% of cohort) pocket — as an advisory caution. This is
+        #    the agent-facing mirror of the post-hoc phenotype validity check:
+        #    silhouette / ARI computed on such a partition are inflated by
+        #    outlier isolation and must NOT be reported as evidence of robust
+        #    subphenotypes without disclosing the size imbalance. It is a
+        #    WARNING, never a block: a degenerate partition is still a legitimate
+        #    (negative) finding to report honestly — the rule layer surfaces the
+        #    fact and never imposes k, algorithm, scaling or outlier handling.
+        deg = self._degenerate_partition(out_dir, step_summary)
+        if deg is not None:
+            findings.append(ValidationFinding(
+                validator=self.name, severity="warning",
+                message=(
+                    f"Degenerate cluster partition ({deg['reason']}). Silhouette "
+                    "and resampling ARI on such a partition are inflated by "
+                    "outlier isolation, not evidence of separated subphenotypes; "
+                    "disclose the cluster sizes and do not present this as a "
+                    "robust multi-subphenotype solution."
+                ),
+                detail=deg,
+            ))
+
         return findings
+
+    @staticmethod
+    def _degenerate_partition(
+        out_dir: Path, step_summary: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Return a degeneracy descriptor when a cluster-size distribution is
+        objectively broken, else ``None``.
+
+        Reuses the post-hoc scorecard threshold (single group, or smallest
+        group < 1% of the cohort). Reads ``cluster_sizes.csv`` (columns include
+        ``n`` and/or ``pct``) or a ``cluster_sizes`` mapping/list in the step
+        summary. Stays silent (``None``) when the step produced no cluster-size
+        evidence — absence is not degeneracy.
+        """
+        ns: List[float] = []
+        # Prefer the emitted table; fall back to the step summary.
+        try:
+            csv_path = out_dir / "cluster_sizes.csv"
+            if not csv_path.exists():
+                for p in out_dir.glob("*cluster_sizes*.csv"):
+                    csv_path = p
+                    break
+            if csv_path.exists():
+                tbl = pd.read_csv(csv_path)
+                if "n" in tbl.columns:
+                    ns = [float(x) for x in tbl["n"].dropna().tolist()]
+                elif "pct" in tbl.columns:
+                    ns = [float(x) for x in tbl["pct"].dropna().tolist()]
+        except Exception:
+            ns = []
+        if not ns:
+            raw = (step_summary or {}).get("cluster_sizes")
+            try:
+                if isinstance(raw, dict):
+                    ns = [float(v) for v in raw.values()]
+                elif isinstance(raw, (list, tuple)):
+                    ns = [float(v) for v in raw]
+            except Exception:
+                ns = []
+        ns = [x for x in ns if x is not None and x >= 0]
+        if not ns:
+            return None
+        k = len(ns)
+        total = sum(ns)
+        if total <= 0:
+            return None
+        min_frac = min(ns) / total
+        if k < 2:
+            return {
+                "reason": f"single-group solution (k={k})",
+                "n_clusters": k,
+                "min_cluster_fraction": round(min_frac, 6),
+            }
+        if min_frac < 0.01:
+            return {
+                "reason": (
+                    f"one dominant cluster plus a near-empty group "
+                    f"({min_frac * 100:.2f}% of cohort) across k={k}"
+                ),
+                "n_clusters": k,
+                "min_cluster_fraction": round(min_frac, 6),
+            }
+        return None
 
 
 class ClinicalConstraintValidator:

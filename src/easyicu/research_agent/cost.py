@@ -58,6 +58,17 @@ _DEFAULT_PRICES: Dict[str, Tuple[float, float]] = {
     # the meter still records a row even when cost is exactly $0).
     "google/gemini-2.0-flash-exp:free": (0.0, 0.0),
     "meta-llama/llama-3.1-8b-instruct:free": (0.0, 0.0),
+    "openai/gpt-oss-120b:free": (0.0, 0.0),
+    "openai/gpt-oss-20b:free": (0.0, 0.0),
+    # DeepSeek (the reliability-baseline / discovery models for the
+    # EasyICU evaluation protocol). APPROXIMATE published API rates —
+    # CONFIRM against the current DeepSeek pricing page before quoting in
+    # the manuscript; token counts are recorded exactly regardless, and a
+    # precise table can always be passed via ``cost_price_table``.
+    "deepseek-chat":     (0.27, 1.10),
+    "deepseek-reasoner": (0.55, 2.19),
+    "deepseek-v4-flash": (0.27, 1.10),  # APPROX — confirm on pricing page
+    "deepseek-v4-pro":   (0.55, 2.19),  # APPROX — confirm on pricing page
 }
 
 

@@ -8048,6 +8048,19 @@
           "dur_var": "endtime",
           "callback": "apply_map(c(`225792` = 'invasive',\n                                     `225794` = 'noninvasive'),\n                                   var = 'sub_var')"
         }
+      ],
+      "sic": [
+        {
+          "ids": [
+            720,
+            3041
+          ],
+          "table": "data_range",
+          "sub_var": "DataID",
+          "value_var": "DataID",
+          "dur_var": "OffsetEnd",
+          "callback": "apply_map(c(`720` = 'invasive',\n                                     `3041` = 'invasive'),\n                                   var = 'sub_var')"
+        }
       ]
     }
   },
@@ -8748,9 +8761,13 @@
       ],
       "sic": [
         {
-          "ids": 713,
+          "ids": [
+            713,
+            2019
+          ],
           "table": "data_float_h",
-          "sub_var": "DataID"
+          "sub_var": "DataID",
+          "_comment": "713=MV (exp); 2019=MV (total minute volume); both unit L. 2019 added 2026-06-08 ricu-audit (docs/ricu_audit_results_20260608.md)"
         }
       ]
     }
@@ -10414,10 +10431,12 @@
           "ids": [
             12281,
             8852,
-            8877
+            8877,
+            6698
           ],
           "table": "numericitems",
-          "sub_var": "itemid"
+          "sub_var": "itemid",
+          "_comment": "6698='PIP'(cmH2O, primary peak insp pressure) added 2026-06-08 ricu-audit; same unit as 12281 Piek druk. Excluded 12365 Piek druk (2) = secondary channel."
         }
       ],
       "eicu": [

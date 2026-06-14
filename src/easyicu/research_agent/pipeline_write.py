@@ -52,6 +52,7 @@ from .replication.notebook import (
     write_notebook,
 )
 from .reporting_checklist import (
+    build_internal_phenotype_checklist,
     build_strobe_checklist,
     build_tripod_ai_checklist,
     choose_checklist,
@@ -123,9 +124,7 @@ def run_write_phase(
     writer_probe_mode = (
         bool(force_writer_probe) and not execution_gate["execution_complete"]
     )
-    writer_probe_failed_steps = _failed_step_labels_from_execution_gate(
-        execution_gate
-    )
+    writer_probe_failed_steps = _failed_step_labels_from_execution_gate(execution_gate)
     if not execution_gate["execution_complete"]:
         if writer_probe_mode:
             findings.append(
@@ -140,9 +139,7 @@ def run_write_phase(
                     detail={
                         **execution_gate,
                         "writer_probe_mode": True,
-                        "writer_probe_failed_steps": list(
-                            writer_probe_failed_steps
-                        ),
+                        "writer_probe_failed_steps": list(writer_probe_failed_steps),
                     },
                 )
             )
@@ -227,9 +224,7 @@ def run_write_phase(
                     # has been exhausted upstream.
                     findings.extend(
                         (
-                            finding.model_copy(
-                                update={"severity": "warning"}
-                            )
+                            finding.model_copy(update={"severity": "warning"})
                             if finding.severity == "error"
                             else finding
                         )
@@ -284,9 +279,7 @@ def run_write_phase(
                 tavily_retmax=pipeline._tavily_retmax,
             ).run(agent_context)
             lit_path = run_dir / "literature_bundle.json"
-            lit_path.write_text(
-                literature.model_dump_json(indent=2), encoding="utf-8"
-            )
+            lit_path.write_text(literature.model_dump_json(indent=2), encoding="utf-8")
             if evidence.get("literature_bundle") is None:
                 evidence.register_file(
                     kind="log",
@@ -454,14 +447,11 @@ def run_write_phase(
                 severity="warning",
                 message=(
                     "Repaired common manuscript evidence placeholder(s): "
-                    + ", ".join(
-                        f"{old}->{new}" for old, new in placeholder_repairs
-                    )
+                    + ", ".join(f"{old}->{new}" for old, new in placeholder_repairs)
                 ),
                 detail={
                     "repairs": [
-                        {"from": old, "to": new}
-                        for old, new in placeholder_repairs
+                        {"from": old, "to": new} for old, new in placeholder_repairs
                     ]
                 },
             )
@@ -575,12 +565,14 @@ def run_write_phase(
             evidence_id=bound_evidence_id,
             producer="pipeline",
             generation_mode="system",
-            metadata={
-                "writer_probe_mode": bool(writer_probe_mode),
-                "writer_probe_failed_steps": list(writer_probe_failed_steps),
-            }
-            if writer_probe_mode
-            else None,
+            metadata=(
+                {
+                    "writer_probe_mode": bool(writer_probe_mode),
+                    "writer_probe_failed_steps": list(writer_probe_failed_steps),
+                }
+                if writer_probe_mode
+                else None
+            ),
         )
     if demoted_missing_ids:
         unfiltered_path = run_dir / "manuscript_scaffold_bound_unfiltered.md"
@@ -763,8 +755,7 @@ def run_write_phase(
                             validator="pdf_render",
                             severity="info",
                             message=(
-                                f"Rendered manuscript PDF via "
-                                f"{pdf_result.engine}."
+                                f"Rendered manuscript PDF via " f"{pdf_result.engine}."
                             ),
                             evidence_ids=["manuscript_scaffold_pdf"],
                         )
@@ -776,8 +767,7 @@ def run_write_phase(
                             severity="warning",
                             message=(
                                 "PDF render failed or no LaTeX "
-                                "engine found: "
-                                + "; ".join(pdf_result.notes)
+                                "engine found: " + "; ".join(pdf_result.notes)
                             ),
                         )
                     )
@@ -874,9 +864,7 @@ def run_write_phase(
         except Exception:
             bound_text = ""
         if pipeline._reporting_checklist_names is not None:
-            wanted = tuple(
-                n.lower() for n in pipeline._reporting_checklist_names
-            )
+            wanted = tuple(n.lower() for n in pipeline._reporting_checklist_names)
         else:
             analysis_family = (
                 (context.user_preferences.inferred_analysis_family or "")
@@ -887,17 +875,35 @@ def run_write_phase(
         checklist_reports = []
         if "strobe" in wanted:
             checklist_reports.append(
-                ("strobe", build_strobe_checklist(
-                    evidence_records=evidence.records(),
-                    bound_manuscript=bound_text,
-                ))
+                (
+                    "strobe",
+                    build_strobe_checklist(
+                        evidence_records=evidence.records(),
+                        bound_manuscript=bound_text,
+                        task_kind=getattr(pipeline, "_benchmark_task_kind", None),
+                    ),
+                )
             )
         if "tripod_ai" in wanted or "tripod+ai" in wanted:
             checklist_reports.append(
-                ("tripod_ai", build_tripod_ai_checklist(
-                    evidence_records=evidence.records(),
-                    bound_manuscript=bound_text,
-                ))
+                (
+                    "tripod_ai",
+                    build_tripod_ai_checklist(
+                        evidence_records=evidence.records(),
+                        bound_manuscript=bound_text,
+                    ),
+                )
+            )
+        if "internal_phenotype" in wanted:
+            checklist_reports.append(
+                (
+                    "internal_phenotype",
+                    build_internal_phenotype_checklist(
+                        evidence_records=evidence.records(),
+                        bound_manuscript=bound_text,
+                        task_kind=getattr(pipeline, "_benchmark_task_kind", None),
+                    ),
+                )
             )
         for key, report in checklist_reports:
             md_path = run_dir / f"reporting_checklist_{key}.md"

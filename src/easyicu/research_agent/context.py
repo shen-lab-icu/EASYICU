@@ -223,6 +223,7 @@ def build_research_context(
     inclusion_criteria: Optional[Sequence[str]] = None,
     exclusion_criteria: Optional[Sequence[str]] = None,
     target_outcome: Optional[str] = None,
+    primary_exposure: Optional[str] = None,
     cross_database_validation: Optional[Sequence[str]] = None,
     id_columns: Optional[Sequence[str]] = None,
     time_columns: Optional[Sequence[str]] = None,
@@ -352,6 +353,7 @@ def build_research_context(
         time_windows=windows,
         temporal_constraints=temporal_constraints,
         target_outcome=target_outcome,
+        primary_exposure=primary_exposure,
         cross_database_validation=list(cross_database_validation or []),
         cohort_parquet=cohort_path,
         user_preferences=prefs_obj,
@@ -362,6 +364,56 @@ def build_research_context(
 # ---------------------------------------------------------------------------
 # Column-level reasoning
 # ---------------------------------------------------------------------------
+
+
+def _observed_domain(series: "pd.Series") -> Optional[Dict[str, Any]]:
+    """Facts about a column's ACTUAL values in the provided cohort.
+
+    Returns ``{n_unique, is_constant, is_binary[, min, max]}`` or ``None`` when
+    the column is empty. This is deliberately interpretation-free: it states
+    what values are present so the planner reads a column by its data rather
+    than guessing a scale from its name. The motivating failure: a column named
+    ``sep3_sofa2_max`` (the within-window max of a BINARY sepsis criterion) was
+    misread as a 0-24 SOFA score and thresholded ``>= 2``, yielding a degenerate
+    (all-zero) exposure. Surfacing ``is_binary``/observed values prevents that
+    without ever telling the agent which derivation to use.
+    """
+    nonnull = series.dropna()
+    if len(nonnull) == 0:
+        return None
+    n_unique = int(nonnull.nunique())
+    domain: Dict[str, Any] = {
+        "n_unique": n_unique,
+        "is_constant": n_unique <= 1,
+        # is_binary means a NUMERIC {0,1} indicator only — never a 2-level
+        # categorical like sex {Male, Female}, which must keep its own labels.
+        "is_binary": False,
+    }
+    is_numeric = bool(pd.api.types.is_numeric_dtype(nonnull))
+    if is_numeric:
+        try:
+            lo = float(nonnull.min())
+            hi = float(nonnull.max())
+            domain["min"] = lo
+            domain["max"] = hi
+        except (TypeError, ValueError):
+            pass
+        # numeric binary = at most two distinct values drawn from {0, 1}.
+        if n_unique <= 2:
+            try:
+                vals = set(int(v) for v in nonnull.unique() if float(v).is_integer())
+                domain["is_binary"] = vals.issubset({0, 1}) and len(vals) >= 1
+            except (TypeError, ValueError):
+                domain["is_binary"] = False
+    elif n_unique <= 8:
+        # low-cardinality categorical: surface the ACTUAL levels so the planner
+        # encodes them as-is (e.g. sex {Male, Female}) rather than assuming a
+        # numeric {0,1} coding it then "cleans" into NaN.
+        try:
+            domain["levels"] = sorted(str(v) for v in nonnull.unique())
+        except (TypeError, ValueError):
+            pass
+    return domain
 
 
 def _describe_column(
@@ -435,6 +487,7 @@ def _describe_column(
         dtype=str(series.dtype),
         unit=hint.unit,
         valid_range=list(hint.valid_range) if hint.valid_range else None,
+        observed_domain=_observed_domain(series),
         allowed_aggregations=allowed,
         aggregation_default=hint.aggregation_default,
         is_ordinal=hint.is_ordinal,
@@ -502,11 +555,34 @@ def _infer_outcome_semantics(
 ) -> Dict[str, str]:
     question = (research_question or "").lower()
     outcome = (outcome_name or "").lower()
+    if any(term in question for term in ("survival", "time-to-event", "time to event", "cox", "hazard")) or outcome in {
+        "survival_time",
+        "time_to_event",
+        "event_time",
+        "followup_time",
+        "follow_up_time",
+    }:
+        return {
+            "label": "time-to-event endpoint",
+            "description": (
+                "Outcome component for a time-to-event analysis; keep the event "
+                "indicator, follow-up time, censoring rule and time zero explicit."
+            ),
+            "source_concept": "time_to_event_endpoint",
+            "substitution_note": (
+                "Do not substitute a binary event-rate, logistic model target, "
+                "or unrelated follow-up horizon for this time-to-event endpoint."
+            ),
+        }
     if "icu mortality" in question or outcome in {"death_icu", "icu_death", "icu_mortality"}:
         return {
             "label": "ICU mortality",
             "description": "Binary outcome flag operationalizing ICU mortality for this analysis.",
             "source_concept": "icu_mortality",
+            "substitution_note": (
+                "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
+                f"for one another when using '{outcome_name}'."
+            ),
         }
     if (
         "in-hospital mortality" in question
@@ -517,24 +593,86 @@ def _infer_outcome_semantics(
             "label": "hospital mortality",
             "description": "Binary outcome flag operationalizing hospital mortality for this analysis.",
             "source_concept": "hospital_mortality",
+            "substitution_note": (
+                "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
+                f"for one another when using '{outcome_name}'."
+            ),
         }
     if "28-day mortality" in question or outcome in {"death_28d", "mortality_28d"}:
         return {
             "label": "28-day mortality",
             "description": "Binary outcome flag operationalizing 28-day mortality for this analysis.",
             "source_concept": "mortality_28d",
+            "substitution_note": (
+                "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
+                f"for one another when using '{outcome_name}'."
+            ),
         }
     if "30-day mortality" in question or outcome in {"death_30d", "mortality_30d"}:
         return {
             "label": "30-day mortality",
             "description": "Binary outcome flag operationalizing 30-day mortality for this analysis.",
             "source_concept": "mortality_30d",
+            "substitution_note": (
+                "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
+                f"for one another when using '{outcome_name}'."
+            ),
         }
     if outcome in {"death", "mortality"}:
         return {
             "label": "all-cause mortality",
             "description": "Binary mortality outcome flag; confirm whether this refers to ICU, hospital, or fixed-horizon mortality before interpretation.",
             "source_concept": "mortality_unspecified",
+            "substitution_note": (
+                "Do not silently substitute ICU, hospital, fixed-horizon, or "
+                "analysis-specific mortality definitions without an explicit protocol."
+            ),
+        }
+    if any(term in question for term in ("length of stay", "los", "duration of stay")) or outcome in {
+        "los",
+        "los_icu",
+        "icu_los",
+        "los_hosp",
+        "hospital_los",
+        "length_of_stay",
+    }:
+        return {
+            "label": "length-of-stay outcome",
+            "description": (
+                "Continuous or count-like length-of-stay outcome; summarize and model "
+                "it with methods appropriate for skewed non-binary endpoints."
+            ),
+            "source_concept": "length_of_stay",
+            "substitution_note": (
+                "Do not convert length of stay into a mortality/event-rate endpoint "
+                "or silently binarize it without an explicit protocol."
+            ),
+        }
+    if "readmission" in question or outcome in {"readmission", "readmit_30d", "readmission_30d"}:
+        return {
+            "label": "readmission outcome",
+            "description": (
+                "Readmission endpoint declared for this analysis; keep the horizon "
+                "and event definition explicit before interpreting rates or models."
+            ),
+            "source_concept": "readmission",
+            "substitution_note": (
+                "Do not substitute mortality, length of stay, or another event "
+                "definition for this declared readmission outcome."
+            ),
+        }
+    if outcome:
+        return {
+            "label": "declared primary outcome",
+            "description": (
+                "Primary outcome column declared by the caller for this analysis; "
+                "use the endpoint definition from the run context or case protocol."
+            ),
+            "source_concept": "declared_primary_outcome",
+            "substitution_note": (
+                "Do not replace this declared outcome with another endpoint, time "
+                "horizon, or transformed target unless the plan explicitly says so."
+            ),
         }
     return {}
 
@@ -558,17 +696,22 @@ def _enrich_target_outcome_descriptor(
             continue
         if descriptor.role != VariableRole.OUTCOME:
             descriptor.role = VariableRole.OUTCOME
-        descriptor.description = semantics["description"]
-        descriptor.source_concept = semantics["source_concept"]
+        if descriptor.description is None or semantics["source_concept"] != "declared_primary_outcome":
+            descriptor.description = semantics["description"]
+        if descriptor.source_concept is None or semantics["source_concept"] != "declared_primary_outcome":
+            descriptor.source_concept = semantics["source_concept"]
         explicit_note = (
             f"For this analysis, '{target_outcome}' is explicitly treated as "
             f"{semantics['label']} because that is what the research question asks for."
         )
         if explicit_note not in descriptor.clinical_caveats:
             descriptor.clinical_caveats.append(explicit_note)
-        harmonization_note = (
-            f"Do not silently substitute ICU, hospital, 28-day, or 30-day mortality "
-            f"for one another when using '{target_outcome}'."
+        harmonization_note = semantics.get(
+            "substitution_note",
+            (
+                "Do not replace this declared outcome with another endpoint, time "
+                "horizon, or transformed target unless the plan explicitly says so."
+            ),
         )
         if harmonization_note not in descriptor.cross_database_notes:
             descriptor.cross_database_notes.append(harmonization_note)
@@ -589,6 +732,7 @@ def build_naive_research_context(
     inclusion_criteria: Optional[Sequence[str]] = None,
     exclusion_criteria: Optional[Sequence[str]] = None,
     target_outcome: Optional[str] = None,
+    primary_exposure: Optional[str] = None,
     cross_database_validation: Optional[Sequence[str]] = None,
     id_columns: Optional[Sequence[str]] = None,
     time_columns: Optional[Sequence[str]] = None,
@@ -678,6 +822,7 @@ def build_naive_research_context(
         variables=descriptors,
         time_windows=windows,
         target_outcome=target_outcome,
+        primary_exposure=primary_exposure,
         cross_database_validation=list(cross_database_validation or []),
         cohort_parquet=cohort_path,
         user_preferences=None,
