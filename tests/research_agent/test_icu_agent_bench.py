@@ -202,11 +202,18 @@ def test_docs_icu_agent_bench_md_matches_live_renderer(ra):
     """
     import pathlib
 
+    import pytest
+
     repo_root = pathlib.Path(__file__).resolve().parents[2]
     doc_path = repo_root / "docs" / "icu_agent_bench.md"
-    assert doc_path.exists(), (
-        f"Expected {doc_path} to exist as the paper-appendix bench doc."
-    )
+    if not doc_path.exists():
+        # docs/*.md is excluded from the slimmed public repository surface
+        # (see 874db1c). When the generated bench doc is absent there is
+        # nothing to compare against the live renderer; skip rather than fail.
+        pytest.skip(
+            f"{doc_path} not present (excluded from the public repo surface); "
+            "drift check only runs where the generated doc is kept."
+        )
     on_disk = doc_path.read_text()
     live = ra.icu_agent_bench_markdown()
     assert on_disk == live, (
