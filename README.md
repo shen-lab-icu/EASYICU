@@ -42,7 +42,7 @@ EasyICU has two layers that answer the two halves of one question — *how trust
 | Host the LLM proxy used by the research-agent | `easyicu-llm-server` |
 | Copy-paste runnable scripts | [`examples/`](examples/) — start with [`quickstart_convert_and_load.py`](examples/quickstart_convert_and_load.py) |
 
-All console scripts are declared in `pyproject.toml` under `[project.scripts]` and become available after `pip install -e ".[dev,webapp]"` (or `".[all]"`).
+All console scripts are declared in `pyproject.toml` under `[project.scripts]` and become available once you install the package — see **[Path B](#path-b-python-api)** for the user vs. developer install options.
 
 ### Documentation Map
 
@@ -85,9 +85,31 @@ Choose this path if you want to:
 - automate feature extraction
 - build reproducible cohort pipelines in code
 
-Minimal install:
-
 Python 3.10+ is recommended for the current packaged dependencies.
+
+**Install it to use it** (no clone needed):
+
+```bash
+pip install "easyicu[webapp] @ git+https://github.com/shen-lab-icu/easyicu.git"
+```
+
+Swap the extra in brackets for what you actually need:
+
+| You want to… | Install |
+|--------------|---------|
+| Python API — extract concepts, SOFA / SOFA-2, sepsis-3, scores | `easyicu` |
+| Streamlit web app (+ the opt-in AI assistant) | `easyicu[webapp]` |
+| Plotly / Kaleido figure export | `easyicu[viz]` |
+| Host the LLM proxy for the research-agent | `easyicu[llmserver]` |
+| Opt-in LangGraph agent graph | `easyicu[agentic]` |
+| Everything above | `easyicu[all]` |
+
+The **core install (`easyicu`) already bundles the research-agent's analytical
+stack** (`scikit-learn`, `statsmodels`), so the Python API and the deterministic
+agent path work out of the box. The research-agent CLI additionally needs an LLM
+client — install `easyicu[webapp]` (bundles `openai`) or run `easyicu-llm-server`.
+
+**Install it to develop it** (editable clone):
 
 ```bash
 git clone "https://github.com/shen-lab-icu/easyicu.git"
