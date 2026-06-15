@@ -155,6 +155,180 @@ def pubmed_fetch(pmids: Iterable[str]) -> list[dict[str, str]]:
     return out
 
 
+# --- PMC open-access full-text adapter (Discussion / Limitations mining) ----
+# Abstracts state findings, not open questions. The S4 extractor is asked for
+# "unresolved question / future direction / limitation / uncertainty / evidence
+# gap" (idea_mining.py), but a PubMed abstract rarely contains that language, so
+# the model regresses to the headline association. The genuine gap language
+# lives in the Discussion / Limitations / Future-directions sections of the full
+# text. For the PubMed Central open-access subset we can fetch that legally and
+# reproducibly via E-utilities and feed it instead of the abstract.
+
+PMC_GAP_SECTION_RE = re.compile(
+    r"(discussion|limitation|future|perspective|unanswered|unresolved|"
+    r"research agenda|implication|conclusion|outlook|knowledge gap)",
+    re.I,
+)
+
+
+def pmids_to_pmcids(pmids: Iterable[str]) -> dict[str, str]:
+    """Map PubMed IDs to PMC IDs via the NCBI ID-converter (OA subset only).
+
+    Returns ``{pmid: pmcid}`` for the articles that have a PMC record; PMIDs
+    with no PMC counterpart (paywalled / not deposited) are simply absent.
+    """
+    ids = [str(p) for p in pmids if str(p).strip()]
+    if not ids:
+        return {}
+    mapping: dict[str, str] = {}
+    for start in range(0, len(ids), 100):
+        batch = ids[start : start + 100]
+        params = urllib.parse.urlencode(
+            {
+                "ids": ",".join(batch),
+                "format": "json",
+                "tool": "EasyICU-S6-validation",
+                "email": "easyicu@example.org",
+            }
+        )
+        url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?{params}"
+        try:
+            payload = _request_json(url)
+        except RuntimeError:
+            continue
+        for record in payload.get("records", []) or []:
+            pmid = str(record.get("pmid") or "").strip()
+            pmcid = str(record.get("pmcid") or "").strip()
+            if pmid and pmcid and not record.get("errmsg"):
+                mapping[pmid] = pmcid
+    return mapping
+
+
+def _extract_pmc_gap_text(article: ET.Element, *, max_chars: int) -> tuple[str, bool]:
+    """Pull Discussion / Limitations / future-direction text from a JATS body.
+
+    Returns ``(text, matched)`` where ``matched`` is True when at least one
+    top-level section title matched the gap-section pattern. When nothing
+    matches (e.g. an editorial with free-form body), falls back to the whole
+    body text so editorial argument prose is still mined.
+    """
+    body = article.find(".//body")
+    if body is None:
+        return "", False
+    matched_blocks: list[str] = []
+    for sec in body.findall("sec"):
+        title = _text_content(sec.find("title"))
+        sec_type = str(sec.get("sec-type") or "")
+        if title and PMC_GAP_SECTION_RE.search(title):
+            matched_blocks.append(_text_content(sec))
+        elif sec_type and PMC_GAP_SECTION_RE.search(sec_type):
+            matched_blocks.append(_text_content(sec))
+    if matched_blocks:
+        return (" ".join(matched_blocks)[:max_chars], True)
+    return (_text_content(body)[:max_chars], False)
+
+
+def pmc_fetch_gap_sections(
+    pmcids: Iterable[str], *, max_chars: int = 9000
+) -> dict[str, dict[str, Any]]:
+    """Fetch PMC full text and extract gap-bearing sections, keyed by PMID.
+
+    Only the open-access subset returns a parseable ``<body>``; closed records
+    come back without one and are reported as ``matched=False, text=""`` so the
+    caller can fall back to the abstract.
+    """
+    ids = [str(p).replace("PMC", "") for p in pmcids if str(p).strip()]
+    if not ids:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for start in range(0, len(ids), 20):
+        batch = ids[start : start + 20]
+        params = urllib.parse.urlencode(
+            {"db": "pmc", "id": ",".join(batch), "retmode": "xml"}
+        )
+        try:
+            root = ET.fromstring(_request_text(f"{EUTILS}/efetch.fcgi?{params}"))
+        except (ET.ParseError, RuntimeError):
+            continue
+        for article in root.findall(".//article"):
+            pmid = ""
+            for aid in article.findall(".//article-id"):
+                if (aid.get("pub-id-type") or "") == "pmid":
+                    pmid = _text_content(aid)
+                    break
+            text, matched = _extract_pmc_gap_text(article, max_chars=max_chars)
+            if pmid:
+                out[pmid] = {"text": text, "matched": matched}
+        time.sleep(0.34)  # E-utilities courtesy rate limit
+    return out
+
+
+def build_fulltext_materials(
+    articles: list[dict[str, str]],
+    *,
+    max_chars: int = 9000,
+) -> tuple[list[SourceMaterial], dict[str, Any]]:
+    """Build extraction materials preferring PMC OA Discussion/Limitations text.
+
+    Falls back to the abstract for any article without OA full text so coverage
+    never drops below the abstract-only path. Returns ``(materials, report)``
+    where ``report`` records how many materials carried real gap-section text vs
+    fell back to the abstract — so the discovery output can state honestly how
+    much of the run was mined from full text.
+    """
+    pmid_to_pmcid = pmids_to_pmcids(a["pmid"] for a in articles)
+    gap_by_pmid = pmc_fetch_gap_sections(
+        pmid_to_pmcid.values(), max_chars=max_chars
+    )
+    materials: list[SourceMaterial] = []
+    n_fulltext_gap = n_fulltext_body = n_abstract = 0
+    for article in articles:
+        pmid = article["pmid"]
+        gap = gap_by_pmid.get(pmid)
+        if gap and gap.get("text"):
+            body_text = str(gap["text"]).strip()
+            text = f"{article['title']} {body_text}".strip()
+            source_kind = "pmc_gap_section" if gap.get("matched") else "pmc_body"
+            locator = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmid_to_pmcid[pmid]}/"
+            if gap.get("matched"):
+                n_fulltext_gap += 1
+            else:
+                n_fulltext_body += 1
+        else:
+            text = f"{article['title']} {article['abstract']}".strip()
+            source_kind = "abstract"
+            locator = article["url"]
+            n_abstract += 1
+        if len(text) < 120:
+            continue
+        citation = CitationRecord(
+            key=f"pubmed_{pmid}",
+            title=article["title"],
+            year=article["year"],
+            venue=article["journal"],
+            relevance=article["abstract"],
+            url=article["url"],
+            pmid=pmid,
+        )
+        materials.append(
+            SourceMaterial(
+                citation=citation,
+                source_adapter_level="user_supplied_excerpt",
+                locator=locator,
+                source_text=text,
+            )
+        )
+    report = {
+        "articles": len(articles),
+        "pmc_mapped": len(pmid_to_pmcid),
+        "materials": len(materials),
+        "from_pmc_gap_section": n_fulltext_gap,
+        "from_pmc_body": n_fulltext_body,
+        "from_abstract_fallback": n_abstract,
+    }
+    return materials, report
+
+
 def _parse_json_object(text: str) -> dict[str, Any]:
     cleaned = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.I)
     cleaned = re.sub(r"\s*```$", "", cleaned)
