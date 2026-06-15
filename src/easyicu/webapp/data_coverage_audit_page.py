@@ -461,11 +461,13 @@ def render_data_coverage_audit_subtab(lang: str, app_context: dict[str, Any] | N
             ],
             hovertemplate="%{y}<br>%{x}: %{z:.1f}%<extra></extra>",
             colorbar=dict(
-                title='Coverage' if lang == 'en' else '覆盖度',
+                title=dict(
+                    text='Coverage' if lang == 'en' else '覆盖度',
+                    font=dict(size=11, color='#6B7280'),
+                ),
                 thickness=10,
                 outlinewidth=0,
                 tickfont=dict(size=11, color='#6B7280'),
-                titlefont=dict(size=11, color='#6B7280'),
             ),
             xgap=4,
             ygap=4,

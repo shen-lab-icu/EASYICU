@@ -1033,7 +1033,7 @@ def _apply_workspace_state_action(state: MutableMapping[str, Any], context: str,
             state["_eu_topbar_run_request"] = {"page": "cross_db", "requested_at": "workspace_states"}
     else:
         state["_active_main_page"] = "research_agent"
-        state["_ra_view"] = "setup"
+        state["_ra_view"] = "workbench"
     state["_scroll_to_top"] = True
 
 
@@ -3375,7 +3375,7 @@ def _render_entry_copilot_layout(
             )
             with st.container(key="eu_entry_prompt_controls"):
                 note_col, send_col = st.columns(
-                    [1, 0.12],
+                    [1, 0.48],
                     gap="small",
                     vertical_alignment="center",
                 )
@@ -3483,7 +3483,7 @@ def _render_entry_cards_layout(lang: str, data_mode: str, is_demo_mode: bool) ->
                         '</div><span class="eu-pill"><span class="dot"></span>'
                         f'{_T(lang, "full control", "完整控制")}</span></div>'
                         f'<div class="eu-entry-card-title">{_T(lang, "Classic Workspace", "经典工作区")}</div>'
-                        f'<p class="eu-entry-card-copy">{_T(lang, "Drive each panel yourself: four-step extraction, patient & cohort review, cross-DB benchmark, and the Research Agent.", "自行操作每个面板：四步抽取、患者与队列审阅、跨库 benchmark，以及 Research Agent。")}</p>',
+                        f'<p class="eu-entry-card-copy">{_T(lang, "Drive each panel yourself: four-step extraction, patient & cohort review, and cross-DB benchmark. Agent Projects handles project runs after handoff.", "自行操作每个面板：四步抽取、患者与队列审阅、跨库 benchmark。交接后由研究项目管理运行。")}</p>',
                         unsafe_allow_html=True,
                     )
                     if st.button(
@@ -3646,7 +3646,7 @@ def render_entry_redesign_page(lang: str) -> None:
                     )
                     with st.container(key="eu_entry_prompt_controls"):
                         note_col, send_col = st.columns(
-                            [1, 0.12],
+                            [1, 0.48],
                             gap="small",
                             vertical_alignment="center",
                         )
@@ -3728,8 +3728,8 @@ def render_entry_redesign_page(lang: str) -> None:
                 if st.button(
                     _T(
                         lang,
-                        "**Research Agent**\nAuditable run → gated manuscript draft",
-                        "**研究 Agent**\n可审计运行 → 闸门草稿",
+                        "**Agent Projects**\nProject runs → evidence → gated draft",
+                        "**研究项目**\n项目运行 → 证据 → 闸门草稿",
                     ),
                     key="_eu_entry_classic_agent",
                     use_container_width=True,

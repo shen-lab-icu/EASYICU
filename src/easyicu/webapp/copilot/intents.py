@@ -309,6 +309,8 @@ def _copilot_usage_help_requested(text: str) -> bool:
             "how to use",
             "how should i use",
             "how does this work",
+            "why copilot",
+            "why research copilot",
             "what can i do",
             "what can i do now",
             "what can this do",
@@ -326,6 +328,8 @@ def _copilot_usage_help_requested(text: str) -> bool:
             "怎么开始用",
             "使用这个",
             "这个怎么用",
+            "为什么这样",
+            "为什么用 copilot",
             "可以干什么",
             "可以做什么",
             "能干什么",
@@ -665,7 +669,8 @@ def _copilot_should_use_llm_route(
     path_help_intent: bool,
     guided_choice_intent: bool,
 ) -> bool:
-    _ = usage_help_intent
+    if usage_help_intent:
+        return False
     if api_intent:
         return False
     if step_by_step_intent:

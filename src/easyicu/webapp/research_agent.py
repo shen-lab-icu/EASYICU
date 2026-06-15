@@ -1763,6 +1763,26 @@ def _default_idea_exploration_form(
     }
 
 
+def _default_idea_exploration_question(*, is_en: bool) -> str:
+    return (
+        "Explore a review-derived ICU idea from a traceable source excerpt, "
+        "map it to the current cohort, and stop at the human registry gate."
+        if is_en else
+        "从可追踪来源摘录中探索 ICU 研究 idea，映射到当前队列，并停在人工 registry 关口。"
+    )
+
+
+def _ensure_idea_exploration_defaults(
+    cohort: Optional[pd.DataFrame],
+    *,
+    is_en: bool,
+) -> Dict[str, str]:
+    defaults = _default_idea_exploration_form(cohort, is_en=is_en)
+    for key, value in defaults.items():
+        st.session_state.setdefault(f"research_agent_idea_{key}", value)
+    return defaults
+
+
 def _binary_outcome_determinability_from_cohort(
     cohort: Optional[pd.DataFrame],
 ) -> Dict[str, str]:
@@ -4491,13 +4511,28 @@ def _section_request_picker() -> Tuple[Optional[str], Optional[str]]:
         textwrap.dedent(f"""
         <div class="ra-request-brief">
           <div>
-            <b>{"Start simple" if is_en else "从简单开始"}</b>
-            <span>{html.escape("Choose a workflow, write one request, then move to Data recipe. Templates are optional." if is_en else "选择工作流，写一句请求，然后进入 Data recipe。模板只是可选加速。")}</span>
+            <b>{html.escape("Idea exploration starts here" if selected_mode == _RA_WORKFLOW_IDEA and is_en else ("Idea 探索从这里开始" if selected_mode == _RA_WORKFLOW_IDEA else ("Start simple" if is_en else "从简单开始")))}</b>
+            <span>{html.escape("Paste a traceable source and name the exposure/outcome in this card; Data recipe and dry-run controls follow below." if selected_mode == _RA_WORKFLOW_IDEA and is_en else ("在当前卡片里粘贴可追踪来源并填写暴露/结局；Data recipe 和 dry-run 控制在下方继续。" if selected_mode == _RA_WORKFLOW_IDEA else ("Choose a workflow, write one request, then move to Data recipe. Templates are optional." if is_en else "选择工作流，写一句请求，然后进入 Data recipe。模板只是可选加速。")))}</span>
           </div>
         </div>
         """).strip(),
         unsafe_allow_html=True,
     )
+
+    if selected_mode == _RA_WORKFLOW_IDEA:
+        if not str(st.session_state.get("research_agent_question") or "").strip():
+            st.session_state["research_agent_question"] = _default_idea_exploration_question(is_en=is_en)
+        _ensure_idea_exploration_defaults(None, is_en=is_en)
+        _render_idea_exploration_core_fields(is_en=is_en)
+        st.caption(
+            "Next: bind a cohort in Data recipe, then run the idea dry-run below. Switching back to Analysis run restores the normal request/template editor."
+            if is_en else
+            "下一步：在 Data recipe 绑定队列，然后在下方运行 idea dry-run。切回正式分析运行后，会恢复普通请求/模板编辑器。"
+        )
+        return (
+            str(st.session_state.get("research_agent_question") or ""),
+            str(st.session_state.get("research_agent_idea_outcome") or ""),
+        )
 
     choice_labels = [_ra_text("starter_none")] + [f"{ex['label']} — {ex['summary']}" for ex in examples]
     selected = st.selectbox(
@@ -7002,32 +7037,7 @@ def _render_execution_preflight(
     return confirmed
 
 
-def _render_idea_exploration_panel(
-    *,
-    cohort: Optional[pd.DataFrame],
-    cohort_label: str,
-    workdir_text: str,
-) -> None:
-    lang = st.session_state.get("language", "en")
-    is_en = lang == "en"
-    defaults = _default_idea_exploration_form(cohort, is_en=is_en)
-    for key, value in defaults.items():
-        st.session_state.setdefault(f"research_agent_idea_{key}", value)
-
-    st.markdown(
-        textwrap.dedent(f"""
-        <div class="ra-preflight-controls-intro">
-          <div>
-            <div class="ra-setup-kicker">{"Discovery / idea exploration" if is_en else "发现 / Idea 探索"}</div>
-            <h3>{"Idea triage before execution" if is_en else "执行前的 idea triage"}</h3>
-            <p>{"Paste the source, name the exposure and outcome, then run the backend dry-run. It freezes the source, maps concepts, probes outcome-blind feasibility, and stops at a human registry gate." if is_en else "粘贴来源、填写暴露与结局，然后运行后端 dry-run。它会冻结来源、映射概念、做 outcome-blind 可行性探查，并停在人工 registry 关口。"}</p>
-          </div>
-          <span>{"stops at human gate" if is_en else "停在人工关口"}</span>
-        </div>
-        """).strip(),
-        unsafe_allow_html=True,
-    )
-
+def _render_idea_exploration_core_fields(*, is_en: bool) -> None:
     with st.container(border=True):
         st.markdown(
             textwrap.dedent(f"""
@@ -7134,19 +7144,48 @@ def _render_idea_exploration_panel(
             height=80,
         )
 
+
+def _render_idea_exploration_panel(
+    *,
+    cohort: Optional[pd.DataFrame],
+    cohort_label: str,
+    workdir_text: str,
+    include_core_fields: bool = True,
+) -> None:
+    lang = st.session_state.get("language", "en")
+    is_en = lang == "en"
+    defaults = _ensure_idea_exploration_defaults(cohort, is_en=is_en)
+
+    st.markdown(
+        textwrap.dedent(f"""
+        <div class="ra-preflight-controls-intro">
+          <div>
+            <div class="ra-setup-kicker">{"Discovery / idea exploration" if is_en else "发现 / Idea 探索"}</div>
+            <h3>{"Run the idea dry-run" if is_en else "运行 idea dry-run"}</h3>
+            <p>{"The active Idea exploration fields are in the current Research request card. After Data recipe binds a cohort, run the backend dry-run here and review the registry gate." if is_en else "当前 Idea 探索字段已放在上方“研究需求”卡片内。Data recipe 绑定队列后，在这里运行后端 dry-run 并复核 registry 关口。"}</p>
+          </div>
+          <span>{"stops at human gate" if is_en else "停在人工关口"}</span>
+        </div>
+        """).strip(),
+        unsafe_allow_html=True,
+    )
+
+    if include_core_fields:
+        _render_idea_exploration_core_fields(is_en=is_en)
+
     rows = int(len(cohort)) if cohort is not None else 0
     cohort_ready = cohort is not None and rows > 0
     st.caption(
         (
             f"Feasibility will use the current web cohort: {cohort_label or 'selected cohort'} · {rows:,} ICU stays."
             if cohort_ready else
-            "Select or build a cohort above before running outcome-blind feasibility."
+            "Select or build a cohort in Data recipe before running outcome-blind feasibility."
         )
         if is_en else
         (
             f"可行性将使用当前 web 队列：{cohort_label or '已选队列'} · {rows:,} 个 ICU stay。"
             if cohort_ready else
-            "请先在上方选择或构建队列，再运行 outcome-blind 可行性检查。"
+            "请先在 Data recipe 中选择或构建队列，再运行 outcome-blind 可行性检查。"
         )
     )
 
@@ -7546,6 +7585,7 @@ def render_research_agent_page(*, show_header: bool = True) -> None:
             cohort=cohort,
             cohort_label=cohort_label,
             workdir_text=workdir_text,
+            include_core_fields=False,
         )
         return
 
