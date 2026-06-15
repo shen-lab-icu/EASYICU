@@ -76,7 +76,9 @@ def _citation() -> CitationRecord:
 
 
 def test_idea_extraction_prompt_is_case_neutral() -> None:
-    material = SourceMaterial(citation=_citation(), source_adapter_level="metadata_only")
+    material = SourceMaterial(
+        citation=_citation(), source_adapter_level="metadata_only"
+    )
 
     messages = build_idea_extraction_messages(
         [material],
@@ -439,7 +441,10 @@ def test_prior_art_broad_query_preserves_specific_icu_population_facets() -> Non
         analysis_family="association",
     )
 
-    assert '"mechanical ventilation"[Title/Abstract]' in build_prior_art_queries(ventilated)["broad"]
+    assert (
+        '"mechanical ventilation"[Title/Abstract]'
+        in build_prior_art_queries(ventilated)["broad"]
+    )
     assert '"septic shock"[Title/Abstract]' in build_prior_art_queries(shock)["broad"]
 
 
@@ -484,9 +489,7 @@ def test_prior_art_freeze_records_direct_same_topic_pmids_and_rationale() -> Non
 
     assert first.novelty_label == "already_done"
     assert first.direct_same_topic_pmids == ["123"]
-    assert first.direct_same_topic_rationales == {
-        "123": "same population and endpoint"
-    }
+    assert first.direct_same_topic_rationales == {"123": "same population and endpoint"}
     assert first.novelty_snapshot_id == second.novelty_snapshot_id
 
 
@@ -523,11 +526,15 @@ def test_prior_art_substring_fallback_does_not_mark_already_done() -> None:
         searched_at="2026-06-04T00:00:00+00:00",
     )
 
-    assert assessment.same_topic_screen_status == "automated-substring-only, NOT screened"
+    assert (
+        assessment.same_topic_screen_status == "automated-substring-only, NOT screened"
+    )
     assert assessment.novelty_label == "crowded_but_differentiable"
     assert assessment.literature_saturation_signal == pytest.approx(0.70)
     assert assessment.direct_same_topic_pmids == ["999"]
-    exact = [record for record in assessment.query_records if record.query_type == "exact"][0]
+    exact = [
+        record for record in assessment.query_records if record.query_type == "exact"
+    ][0]
     assert exact.top_hits[0].direct_same_topic is True
     assert exact.top_hits[0].same_topic_screened is False
 
@@ -760,7 +767,9 @@ def test_non_binary_determinable_outcome_is_not_gated_as_unknown() -> None:
     assert executable.executable
 
 
-def test_ordinal_and_continuous_outcomes_get_non_binary_determinability_from_catalog() -> None:
+def test_ordinal_and_continuous_outcomes_get_non_binary_determinability_from_catalog() -> (
+    None
+):
     # End-to-end with the real catalog: ordinal scores and continuous labs are
     # auto-declared determinable, so the default idea-mining path stops gating
     # them out as "unknown".
@@ -812,9 +821,14 @@ def test_derived_feature_requires_feature_engineering_before_execution() -> None
     assert blocked.resolved_predictor_concept == "lact"
     assert blocked.feasibility_pair_key == ("lact", "endpoint_known")
     assert blocked.feature_derivation_status == "requires_derived_feature"
-    assert "requires repeated measurements >=2" in blocked.feature_derivation_requirements
+    assert (
+        "requires repeated measurements >=2" in blocked.feature_derivation_requirements
+    )
     assert not blocked.executable
-    assert any("derived feature engineering" in reason for reason in blocked.non_executable_reasons)
+    assert any(
+        "derived feature engineering" in reason
+        for reason in blocked.non_executable_reasons
+    )
 
 
 def test_alias_map_resolves_raw_support_but_preserves_derived_feature_gate() -> None:
@@ -975,7 +989,9 @@ def test_llm_screened_prior_art_hits_are_frozen() -> None:
 
     assert assessment.same_topic_screen_status == "top-N same-topic screened"
     assert "Same-topic screening is asymmetric" in assessment.scope_note
-    exact = [record for record in assessment.query_records if record.query_type == "exact"][0]
+    exact = [
+        record for record in assessment.query_records if record.query_type == "exact"
+    ][0]
     assert exact.top_hits[0].same_topic_screened is True
     assert "LLM screen" in str(exact.top_hits[0].direct_same_topic_rationale)
 
@@ -1158,9 +1174,7 @@ def test_dry_run_wires_pairwise_feasibility_registry_and_stops_at_gate(
                                 "adult ICU patients"
                             ),
                             "direct_same_topic": True,
-                            "direct_same_topic_rationale": (
-                                "same marker and endpoint"
-                            ),
+                            "direct_same_topic_rationale": ("same marker and endpoint"),
                         }
                     ],
                 }
@@ -1178,12 +1192,11 @@ def test_dry_run_wires_pairwise_feasibility_registry_and_stops_at_gate(
         ("marker", "endpoint_known"),
     }
     assert result.ranked_candidates
-    assert {
-        candidate["coverage_source"] for candidate in result.ranked_candidates
-    } == {"pair_joint_feasibility"}
+    assert {candidate["coverage_source"] for candidate in result.ranked_candidates} == {
+        "pair_joint_feasibility"
+    }
     assert all(
-        record.multiple_testing_family_size == 2
-        for record in result.candidate_records
+        record.multiple_testing_family_size == 2 for record in result.candidate_records
     )
     assert all(
         record.multiple_testing_executable_family_size == 2
@@ -1208,10 +1221,7 @@ def test_dry_run_wires_pairwise_feasibility_registry_and_stops_at_gate(
         assessment_by_phrase["creatinine"].direct_same_topic_rationales["111"]
         == "same marker and endpoint"
     )
-    assert (
-        assessment_by_phrase["physiologic marker"].novelty_label
-        == "sparse"
-    )
+    assert assessment_by_phrase["physiologic marker"].novelty_label == "sparse"
     saturation_by_predictor = {
         candidate["predictor"]: candidate["literature_saturation_signal"]
         for candidate in result.ranked_candidates
@@ -1225,9 +1235,10 @@ def test_dry_run_wires_pairwise_feasibility_registry_and_stops_at_gate(
     )
     assert result.novelty_snapshot_path
     assert result.discovery_report_path
-    assert "not a novelty claim" in (
-        tmp_path / "dry_run" / "discovery_report.md"
-    ).read_text()
+    assert (
+        "not a novelty claim"
+        in (tmp_path / "dry_run" / "discovery_report.md").read_text()
+    )
     registry = IdeaCandidateRegistry(result.registry_path)
     assert len(registry.records) == 2
     for record in result.candidate_records:
@@ -1376,11 +1387,7 @@ def test_dry_run_warns_on_degenerate_exposure_contrast(tmp_path) -> None:
                 "denominator_n": 100,
                 "source": "synthetic_s1_fixture",
                 # degenerate exposure contrast on the predictor only
-                **(
-                    {"predictor_contrast_fraction": 0.0}
-                    if concept == pair[0]
-                    else {}
-                ),
+                **({"predictor_contrast_fraction": 0.0} if concept == pair[0] else {}),
             }
             for concept in pair
         }
@@ -1430,7 +1437,9 @@ def test_dry_run_tolerates_legacy_probe_without_contrast_kwarg(tmp_path) -> None
         ]
     )
 
-    def legacy_probe(*, concepts, database, data_path, cohort=None, analytic_unit="stay"):
+    def legacy_probe(
+        *, concepts, database, data_path, cohort=None, analytic_unit="stay"
+    ):
         return {
             concept: {
                 "joint_fraction_complete": 0.8,
@@ -1669,10 +1678,12 @@ def test_dry_run_deduplicates_registry_denominator_before_reporting(tmp_path) ->
     assert len(result.literature_ideas) == 2
     assert len(result.candidate_records) == 2
     assert len(registry.records) == 1
-    assert {
-        record.registry_candidate_id for record in result.candidate_records
-    } == {registry.records[0].candidate_id}
-    triage = json.loads((tmp_path / "dry_run" / "candidate_triage_report.json").read_text())
+    assert {record.registry_candidate_id for record in result.candidate_records} == {
+        registry.records[0].candidate_id
+    }
+    triage = json.loads(
+        (tmp_path / "dry_run" / "candidate_triage_report.json").read_text()
+    )
     assert triage["discovery_counts"]["literature_rows"] == 2
     assert triage["discovery_counts"]["unique_executable_hypotheses"] == 1
     assert triage["discovery_counts"]["multiple_testing_denominator"] == 1
@@ -1749,8 +1760,16 @@ def test_fetch_source_materials_from_scope_builds_query_and_wraps_metadata() -> 
 
     client = FakeScopeSearchClient(
         [
-            CitationRecord(key="a_2025", title="A", year="2025", venue="Crit Care", pmid="1"),
-            CitationRecord(key="b_2025", title="B", year="2025", venue="Intensive Care Med", pmid="2"),
+            CitationRecord(
+                key="a_2025", title="A", year="2025", venue="Crit Care", pmid="1"
+            ),
+            CitationRecord(
+                key="b_2025",
+                title="B",
+                year="2025",
+                venue="Intensive Care Med",
+                pmid="2",
+            ),
         ]
     )
     scope = LiteratureScopeSpec(
@@ -1857,3 +1876,114 @@ def test_dry_run_scope_without_client_or_materials_fails_closed(tmp_path) -> Non
             output_dir=tmp_path / "dry_run",
             scope=scope,
         )
+
+
+def _generic_outcome_idea(outcome: str) -> LiteratureIdeaCandidate:
+    return LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="critically ill ICU patients",
+        exposure_or_predictor="sex",
+        outcome=outcome,
+        rationale="The source flags sex disparities in critical care as understudied.",
+        source_quote="future research should examine sex differences in outcomes",
+        analysis_family="association",
+    )
+
+
+def _sex_mortality_concepts() -> list:
+    return [
+        ConceptDescriptor(
+            name="sex",
+            source_concept="sex",
+            role=VariableRole.DEMOGRAPHIC,
+            dtype="object",
+        ),
+        ConceptDescriptor(
+            name="death",
+            source_concept="death",
+            role=VariableRole.OUTCOME,
+            dtype="int64",
+        ),
+    ]
+
+
+def test_generic_outcome_umbrella_normalizes_to_caller_mortality_default() -> None:
+    # A resolvable predictor (sex) with a non-specific outcome umbrella
+    # ("ICU outcomes") must NOT be a false db-cannot-do: it normalizes to the
+    # caller-declared mortality determinable and records the substitution.
+    executable = map_literature_idea_to_executable_candidate(
+        _generic_outcome_idea("ICU outcomes"),
+        available_concepts=_sex_mortality_concepts(),
+        outcome_determinability={
+            "mortality": OutcomeDeterminability(
+                outcome="mortality",
+                status="known_0_1",
+                normalized_outcome_concept="death",
+            ),
+        },
+    )
+    assert executable.resolved_predictor_concept == "sex"
+    assert executable.resolved_outcome_concept == "death"
+    assert executable.normalized_outcome_concept == "death"
+    assert executable.executable
+    assert not any(
+        "outcome concept is not available" in r
+        for r in executable.non_executable_reasons
+    )
+
+
+def test_generic_outcome_keeps_original_label_for_human_confirmation() -> None:
+    executable = map_literature_idea_to_executable_candidate(
+        _generic_outcome_idea("poor prognosis"),
+        available_concepts=_sex_mortality_concepts(),
+        outcome_determinability={
+            "mortality": OutcomeDeterminability(
+                outcome="mortality",
+                status="known_0_1",
+                normalized_outcome_concept="death",
+            ),
+        },
+    )
+    # The original umbrella label is preserved; normalized_outcome_concept is the
+    # visible signal that a human must confirm the mortality substitution.
+    assert executable.outcome_label == "poor prognosis"
+    assert executable.normalized_outcome_concept == "death"
+    assert executable.executable
+
+
+def test_non_generic_unavailable_outcome_still_blocks() -> None:
+    # A specific outcome with no mapping ("neurological outcome") is NOT a generic
+    # umbrella and must remain a genuine db-cannot-do -- the fix must not turn
+    # every unresolved outcome into mortality.
+    idea = _generic_outcome_idea("neurological outcome")
+    executable = map_literature_idea_to_executable_candidate(
+        idea,
+        available_concepts=_sex_mortality_concepts(),
+        outcome_determinability={
+            "mortality": OutcomeDeterminability(
+                outcome="mortality",
+                status="known_0_1",
+                normalized_outcome_concept="death",
+            ),
+        },
+    )
+    assert executable.resolved_outcome_concept is None
+    assert not executable.executable
+    assert any(
+        "outcome concept is not available" in r
+        for r in executable.non_executable_reasons
+    )
+
+
+def test_generic_outcome_without_mortality_default_still_blocks() -> None:
+    # Case-neutral: with no caller-declared mortality default, a generic umbrella
+    # cannot be silently invented into an outcome.
+    executable = map_literature_idea_to_executable_candidate(
+        _generic_outcome_idea("clinical outcomes"),
+        available_concepts=_sex_mortality_concepts(),
+        outcome_determinability={},
+    )
+    assert executable.resolved_outcome_concept is None
+    assert not executable.executable

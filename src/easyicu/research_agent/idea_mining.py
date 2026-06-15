@@ -137,7 +137,6 @@ from .idea_mining_feasibility_tier import (  # noqa: F401  (re-exported)
     classify_feasibility_tier,
 )
 
-
 IDEA_EXTRACTION_SYSTEM_PROMPT = (
     "You extract candidate ICU research directions from review or editorial "
     "source material. Stay case-neutral: do not assume a specific disease, "
@@ -410,6 +409,73 @@ def extract_literature_ideas(
     return candidates
 
 
+# Generic outcome umbrella phrases. An LLM mining a review's "future research"
+# sentence frequently extracts a non-specific outcome ("clinical outcomes",
+# "ICU outcomes", "patient outcomes", "poor prognosis") rather than a measurable
+# concept. These are not a concept but an umbrella that, in an ICU cohort study,
+# defaults to the canonical hard endpoint (mortality). Resolving such an umbrella
+# to the caller-declared mortality determinable -- while recording the
+# substitution in ``normalized_outcome_concept`` so a human can see and confirm
+# it -- prevents a false "outcome concept is not available" db-cannot-do verdict
+# when the predictor itself is perfectly resolvable. Case-neutral by design: this
+# is a linguistic category plus a caller-supplied default, never a hard-coded
+# benchmark outcome mapping.
+_GENERIC_OUTCOME_UMBRELLAS = frozenset(
+    normalize_concept_name(phrase)
+    for phrase in (
+        "outcome",
+        "outcomes",
+        "clinical outcome",
+        "clinical outcomes",
+        "patient outcome",
+        "patient outcomes",
+        "icu outcome",
+        "icu outcomes",
+        "icu outcomes overall",
+        "hospital outcome",
+        "hospital outcomes",
+        "in-hospital outcome",
+        "in-hospital outcomes",
+        "poor outcome",
+        "poor outcomes",
+        "worse outcome",
+        "worse outcomes",
+        "prognosis",
+        "poor prognosis",
+        "worse prognosis",
+        "longer-term prognosis",
+        "poor longer-term prognosis",
+    )
+)
+
+
+def _is_generic_outcome_umbrella(term: str) -> bool:
+    """Whether ``term`` is a non-specific outcome umbrella, not a concept."""
+    return normalize_concept_name(term) in _GENERIC_OUTCOME_UMBRELLAS
+
+
+def _default_mortality_outcome(
+    specs: Mapping[str, OutcomeDeterminability | Mapping[str, Any] | str],
+    lookup: Mapping[str, str],
+) -> Optional[OutcomeDeterminability]:
+    """Pick a caller-declared mortality determinable to back a generic outcome.
+
+    Returns the first ``known_0_1`` determinable whose concept actually resolves
+    in the available catalog, so a generic outcome is never normalised to an
+    endpoint the cohort cannot measure. The mortality default comes entirely from
+    the caller-supplied ``outcome_determinability`` specs, not from a hard-coded
+    concept, keeping this case-neutral.
+    """
+    for key, raw in specs.items():
+        det = _coerce_outcome_determinability(raw, outcome=str(key))
+        if det.status != "known_0_1":
+            continue
+        target = det.normalized_outcome_concept or str(key)
+        if _resolve_concept(str(target), lookup) is not None:
+            return det
+    return None
+
+
 def map_literature_idea_to_executable_candidate(
     candidate: LiteratureIdeaCandidate,
     *,
@@ -460,15 +526,39 @@ def map_literature_idea_to_executable_candidate(
 
     outcome_term = (candidate.outcome_core_concept or "").strip() or candidate.outcome
     outcome_key = _resolve_concept(outcome_term, lookup)
+    generic_outcome_determinability: Optional[OutcomeDeterminability] = None
+    if outcome_key is None and _is_generic_outcome_umbrella(outcome_term):
+        default_mortality = _default_mortality_outcome(
+            outcome_determinability or {}, lookup
+        )
+        if default_mortality is not None:
+            target = (
+                default_mortality.normalized_outcome_concept
+                or default_mortality.outcome
+            )
+            resolved = _resolve_concept(str(target), lookup)
+            if resolved is not None:
+                outcome_key = resolved
+                generic_outcome_determinability = default_mortality
     if outcome_key is None:
         reasons.append(f"outcome concept is not available: {candidate.outcome}")
 
-    determinability = _lookup_outcome_determinability(
-        candidate.outcome,
-        outcome_key,
-        outcome_determinability or {},
+    # A generic outcome umbrella reuses the caller's mortality determinable directly
+    # (its spec key may differ from the resolved concept), so the determinability is
+    # the declared known_0_1 default rather than an unknown re-lookup.
+    determinability = (
+        generic_outcome_determinability
+        or _lookup_outcome_determinability(
+            candidate.outcome,
+            outcome_key,
+            outcome_determinability or {},
+        )
     )
     normalized_outcome = None
+    # A generic outcome umbrella resolved to the caller's mortality default: record
+    # the substitution so the human gate sees the original label was non-specific.
+    if generic_outcome_determinability is not None:
+        normalized_outcome = outcome_key
     # ``known_0_1`` and ``non_binary_determinable`` both pass clean: the gate only
     # blocks the present/NA binary coding trap (``event_present_na``) and the case
     # where determinability could not be established at all (``unknown``). A
