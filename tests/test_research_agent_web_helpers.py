@@ -20,6 +20,7 @@ from easyicu.webapp.agent_workbench import (
     _step_legend_html,
     build_workbench_state_from_manifest,
 )
+from easyicu.webapp.workspace_snapshots import build_agent_project_snapshot
 
 
 class _FakeStreamlit:
@@ -1111,6 +1112,53 @@ def test_workbench_state_builds_from_real_run_manifest(tmp_path: Path) -> None:
     assert state["audit_tasks"][0]["tone"] == "danger"
 
 
+def test_agent_project_snapshot_summarizes_active_run_and_history() -> None:
+    state = {
+        "_ra_view": "workbench",
+        "research_agent_cohort_source": "Module export folder",
+        "_agent_workbench": {
+            "run_id": "run_snapshot",
+            "run_dir": "/tmp/run_snapshot",
+            "research_question": "Does lactate predict mortality?",
+            "steps": [
+                {"status": "ok"},
+                {"status": "fail"},
+            ],
+            "evidence_total": 7,
+            "artifact_counts": {"figures": 2, "tables": 1},
+            "audit": {
+                "counts": {"errors": 1, "warnings": 2},
+                "gates": [{"label": "numeric verified", "ok": False}, {"label": "evidence", "ok": True}],
+                "review_decision": {"decision": "repair_requested"},
+            },
+        },
+    }
+    snapshot = build_agent_project_snapshot(
+        state,
+        history_runs=[{"run_id": "run_prev", "status": "complete", "evidence_count": 4}],
+        lang="en",
+    )
+
+    assert snapshot.project_id == "run_snapshot"
+    assert snapshot.project_title == "Does lactate predict mortality?"
+    assert snapshot.active_view == "workbench"
+    assert snapshot.status == "Needs review"
+    assert snapshot.step_total == 2
+    assert snapshot.step_ok == 1
+    assert snapshot.step_failed == 1
+    assert snapshot.evidence_count == 7
+    assert snapshot.figure_count == 2
+    assert snapshot.table_count == 1
+    assert snapshot.finding_errors == 1
+    assert snapshot.finding_warnings == 2
+    assert snapshot.gates_blocked == 1
+    assert snapshot.review_decision == "repair_requested"
+    assert snapshot.history_runs[0]["run_id"] == "run_prev"
+
+    zh_empty = build_agent_project_snapshot({}, lang="zh")
+    assert zh_empty.project_title == "未命名研究项目"
+
+
 def test_workbench_state_disambiguates_repeated_manifest_step_labels(tmp_path: Path) -> None:
     run_dir = tmp_path / "run_duplicate_steps"
     run_dir.mkdir()
@@ -2152,21 +2200,18 @@ def test_research_agent_shell_identity_card_precedes_view_tabs() -> None:
     assert 'if view == "history":' in app_source
     assert "local history" in app_source
     assert "eu-ra-reference-header" in app_source
-    assert agent_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)") < agent_branch.index('st.container(key="_eu_ra_tabs")')
+    assert agent_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)") < agent_branch.index("_render_agent_projects_shell(lang, _ra_snapshot, _ra_run_context)")
     assert "_research_agent_active_run_context(st.session_state)" in agent_branch
-    assert "_prime_research_agent_header_rerun(st.session_state, _ra_run_context)" in agent_branch
-    # View tabs are now a plain text segmented control (Setup / Workbench /
-    # History / Summary), not inline material-icon buttons.
-    assert 'key="_eu_ra_view_setup"' in agent_branch
-    assert '"Workbench" if lang == \'en\' else "工作台"' in agent_branch
-    assert 'key="_eu_ra_view_workbench"' in agent_branch
-    assert 'key="_eu_ra_view_history"' in agent_branch
-    assert 'key="_eu_ra_view_summary"' in agent_branch
+    assert "_prime_research_agent_header_rerun(st.session_state, run_context)" in app_source
+    # View buttons are now subviews inside the Agent Projects shell.
+    assert 'key=f"_eu_agent_project_view_{view_key}"' in app_source
+    assert '"Workbench" if is_en else "工作台"' in app_source
+    assert '"history", "History" if is_en else "历史"' in app_source
+    assert 'key="_eu_agent_project_rerun"' in app_source
     assert "render_agent_workbench(lang, show_header=False)" in agent_branch
     assert "render_agent_output_summary(lang, show_header=False)" in agent_branch
     assert "render_research_agent_history_page(lang, show_header=False)" in agent_branch
     assert 'st.session_state["_active_main_page"] = "research_agent"' in agent_branch
-    assert "st.session_state['_active_main_page'] = 'research_agent'" in agent_branch
     assert "_draft_resume_pending = bool(" in agent_branch
     assert "_handoff_setup_pending = _research_agent_handoff_setup_ready(st.session_state)" in agent_branch
     assert "research_agent_force_manuscript" in agent_branch
@@ -2180,16 +2225,12 @@ def test_research_agent_shell_identity_card_precedes_view_tabs() -> None:
     assert ".eu-design-page-header-actions" in css
     assert ".eu-design-page-header.eu-ra-reference-header .eu-design-page-header-actions" in css
     assert 'st.container(key="_eu_ra_header_actions")' not in agent_branch
-    assert "with _seg_tail:" in agent_branch
-    assert "margin: -2px 0 18px !important" in css
-    assert "border-bottom: 1px solid var(--hair) !important" in css
-    assert "border-bottom-color: var(--ink) !important" in css
-    assert "flex: 0 0 auto !important;" in css
-    assert "justify-content: flex-end !important;" in css
-    assert "nth-child(-n + 4)" in css
-    assert "nth-child(5)" in css
-    assert "st-key-_eu_ra_header_rerun" in css
-    assert "return ('Agent guide', 'Agent 导览')" in app_source
+    assert "_render_agent_projects_shell(lang, _ra_snapshot, _ra_run_context)" in agent_branch
+    assert 'key="_eu_agent_project_rerun"' in app_source
+    assert ".eu-agent-project-panel" in css
+    assert ".eu-agent-project-timeline" in css
+    assert "st-key-_eu_agent_project_rerun" in css
+    assert "return ('Project guide', '项目导览')" in app_source
     assert '_topbar_type = "secondary"' not in app_source
     assert 'type="primary"' in app_source
 
@@ -2746,14 +2787,16 @@ def test_research_agent_idea_workflow_contract_targets_dry_run_artifacts(
 
 
 def test_idea_exploration_panel_keeps_core_triage_first() -> None:
-    source = inspect.getsource(ra_page._render_idea_exploration_panel)
+    source = inspect.getsource(ra_page._render_idea_exploration_core_fields)
+    panel_source = inspect.getsource(ra_page._render_idea_exploration_panel)
+    picker_source = inspect.getsource(ra_page._section_request_picker)
 
     core_idx = source.index("Core idea triage")
     advanced_idx = source.index("Advanced source and mapping")
-    result_idx = source.index("Latest idea triage")
-    details_idx = source.index("Review triage details")
-    prior_art_idx = source.index("Prior art")
-    broad_exact_idx = source.index("Broad/exact")
+    result_idx = panel_source.index("Latest idea triage")
+    details_idx = panel_source.index("Review triage details")
+    prior_art_idx = panel_source.index("Prior art")
+    broad_exact_idx = panel_source.index("Broad/exact")
 
     assert source.index("Review/editorial excerpt") > core_idx
     assert source.index("Traceable source quote") > core_idx
@@ -2765,22 +2808,24 @@ def test_idea_exploration_panel_keeps_core_triage_first() -> None:
     assert source.index("Analysis family") > advanced_idx
     assert source.index("Aggregation") > advanced_idx
     assert 'key="research_agent_idea_show_advanced_mapping"' in source
-    assert "result = _run_idea_exploration_dry_run(" in source
-    assert "Stage top candidate as analysis question" in source
-    assert source.index("Stage top candidate as analysis question") < details_idx
+    assert "_render_idea_exploration_core_fields(is_en=is_en)" in picker_source
+    assert "return (" in picker_source[picker_source.index("_render_idea_exploration_core_fields(is_en=is_en)"):]
+    assert "result = _run_idea_exploration_dry_run(" in panel_source
+    assert "Stage top candidate as analysis question" in panel_source
+    assert panel_source.index("Stage top candidate as analysis question") < details_idx
     assert result_idx < details_idx
     assert prior_art_idx > result_idx
     assert prior_art_idx < details_idx
     assert broad_exact_idx < details_idx
-    assert "Prior-art query records" in source
-    assert "_idea_prior_art_rows(result)" in source
-    assert 'key="research_agent_idea_show_triage_details"' in source
-    assert "st.dataframe(pd.DataFrame(candidate_rows)" in source
-    assert "st.dataframe(pd.DataFrame(prior_art_rows)" in source
-    assert source.index("st.dataframe(pd.DataFrame(candidate_rows)") > details_idx
-    assert source.index("st.dataframe(pd.DataFrame(prior_art_rows)") > details_idx
-    assert "show_triage_details = st.toggle(" in source
-    assert "if show_triage_details:" in source
+    assert "Prior-art query records" in panel_source
+    assert "_idea_prior_art_rows(result)" in panel_source
+    assert 'key="research_agent_idea_show_triage_details"' in panel_source
+    assert "st.dataframe(pd.DataFrame(candidate_rows)" in panel_source
+    assert "st.dataframe(pd.DataFrame(prior_art_rows)" in panel_source
+    assert panel_source.index("st.dataframe(pd.DataFrame(candidate_rows)") > details_idx
+    assert panel_source.index("st.dataframe(pd.DataFrame(prior_art_rows)") > details_idx
+    assert "show_triage_details = st.toggle(" in panel_source
+    assert "if show_triage_details:" in panel_source
 
 
 def test_web_idea_exploration_dry_run_uses_backend_registry_without_pipeline(

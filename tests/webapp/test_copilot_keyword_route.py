@@ -93,6 +93,21 @@ def test_keyword_route_chinese_quality():
     assert route["analysis_family"] == "quality_audit"
 
 
+def test_copilot_usage_help_stays_deterministic():
+    assert llm_chat._copilot_usage_help_requested("why Copilot?")
+    assert llm_chat._copilot_usage_help_requested("how does this work?")
+    assert not llm_chat._copilot_should_use_llm_route(
+        "why Copilot?",
+        usage_help_intent=True,
+        step_by_step_intent=False,
+        full_cohort_intent=False,
+        cohort_step_intent=False,
+        api_intent=False,
+        path_help_intent=False,
+        guided_choice_intent=False,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # _copilot_normalize_session_title
 # --------------------------------------------------------------------------- #

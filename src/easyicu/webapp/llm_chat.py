@@ -132,6 +132,7 @@ from easyicu.webapp.copilot.sessions import (  # noqa: F401  (re-exported)
     _touch_current_copilot_study_session,
     _write_copilot_study_session_manifest,
 )
+from easyicu.webapp.workspace_snapshots import build_study_workspace_snapshot
 # Phase-6 split (5th batch): pure presentation helpers (labels, intros,
 # stage/step rendering, workflow-snapshot HTML, relative-time) now live in
 # `copilot/presentation.py`. Re-imported here so all call sites keep working. It
@@ -6025,6 +6026,7 @@ def _render_copilot_stage_workspace(lang: str) -> None:
     """Render the lightweight study progress rail from the polish design."""
     is_en = lang == "en"
     study = _ensure_copilot_study_state(st.session_state)
+    snapshot = build_study_workspace_snapshot(st.session_state, study, lang=lang)
     step_items = _copilot_rail_step_items(study, lang)
     note_title = "Evidence-bound" if is_en else "证据绑定"
     note_body = (
@@ -6039,6 +6041,10 @@ def _render_copilot_stage_workspace(lang: str) -> None:
             f'<div class="eu-copilot-rail-eyebrow">{html.escape("Building your study" if is_en else "构建你的研究")}</div>'
             f'<h3>{html.escape("Study workspace" if is_en else "研究工作区")}</h3>'
             f'<p>{html.escape("Assembles as we talk · edit any step" if is_en else "边聊边组装 · 可随时改步骤")}</p>'
+            '<div class="eu-copilot-current-decision">'
+            f'<span>{html.escape("Current decision" if is_en else "当前决策")}</span>'
+            f'<b>{html.escape(snapshot.current_decision)}</b>'
+            '</div>'
             '</div>'
             '</div>',
             unsafe_allow_html=True,
@@ -6122,6 +6128,7 @@ def _render_copilot_state_panel(lang: str) -> None:
     data_path = str(state.get("data_path") or "").strip()
     path_validated = bool(state.get("path_validated"))
     study = _ensure_copilot_study_state(state)
+    snapshot = build_study_workspace_snapshot(state, study, lang=lang)
     study_question = str(study.get("question") or "").strip()
     study_step = str(study.get("step") or "question")
     study_idx = COPILOT_STEP_INDEX.get(study_step, 0)
@@ -6140,6 +6147,11 @@ def _render_copilot_state_panel(lang: str) -> None:
     step3_done = bool(state.get("step3_confirmed")) or selected_count > 0 or study_idx >= COPILOT_STEP_INDEX["concepts"]
     review_done = loaded_count > 0 or patient_count > 0 or study_idx >= COPILOT_STEP_INDEX["review"]
     agent_ready = bool(state.get("research_agent_question")) or review_done or study_idx >= COPILOT_STEP_INDEX["analysis"]
+    step1_done = snapshot.step_done.get("data", step1_done)
+    step2_done = snapshot.step_done.get("cohort", step2_done)
+    step3_done = snapshot.step_done.get("concepts", step3_done)
+    review_done = snapshot.step_done.get("review", review_done)
+    agent_ready = snapshot.step_done.get("analysis", agent_ready)
 
     def status(done: bool, active: bool = False) -> str:
         if done:
@@ -6156,27 +6168,27 @@ def _render_copilot_state_panel(lang: str) -> None:
         ),
         _workflow_status_step(
             "Data source" if is_en else "数据源",
-            f"{mode_label} · {db_label}" + ("" if not data_path else f" · {Path(data_path).name}"),
+            snapshot.data_label,
             status(step1_done, active=study_step == "data" or entry_mode == "none"),
         ),
         _workflow_status_step(
             "Cohort" if is_en else "队列",
-            ("confirmed" if step2_done else "waiting for Step 2") if is_en else ("已确认" if step2_done else "等待第 2 步"),
+            snapshot.cohort_label,
             status(step2_done, active=study_step == "cohort" or (step1_done and not step2_done)),
         ),
         _workflow_status_step(
             "Concepts" if is_en else "变量",
-            (f"{selected_count or len(study.get('modules') or [])} selected" if is_en else f"已选 {selected_count or len(study.get('modules') or [])} 个"),
+            snapshot.concepts_label,
             status(step3_done, active=study_step == "concepts" or (step2_done and not step3_done)),
         ),
         _workflow_status_step(
             "Review" if is_en else "审阅",
-            f"{loaded_count} concepts · {patient_count} patients" if is_en else f"{loaded_count} 个概念 · {patient_count} 位患者",
+            snapshot.review_label,
             status(review_done, active=study_step == "review" or (step3_done and not review_done)),
         ),
         _workflow_status_step(
             "Agent" if is_en else "Agent",
-            ("draft gated" if study_step == "draft" else "ready for handoff") if is_en else ("草稿已闸门锁定" if study_step == "draft" else "可交接"),
+            snapshot.agent_label,
             status(agent_ready, active=study_step in {"analysis", "draft"} or review_done),
         ),
     ]
@@ -6186,6 +6198,10 @@ def _render_copilot_state_panel(lang: str) -> None:
         f'<div class="inline-ai-section-label">{html.escape("Workspace state" if is_en else "工作区状态")}</div>'
         f'<h3>{html.escape("Chat and GUI stay linked" if is_en else "聊天和图形界面保持联动")}</h3>'
         f'<p>{html.escape("Every chat command writes into the same session state as the classic EasyICU panels." if is_en else "每个聊天命令都会写入经典 EasyICU 面板共用的会话状态。")}</p>'
+        '<div class="eu-copilot-current-decision">'
+        f'<span>{html.escape("Current decision" if is_en else "当前决策")}</span>'
+        f'<b>{html.escape(snapshot.current_decision)}</b>'
+        '</div>'
         '<div class="eu-copilot-stepper">'
         + "".join(rows)
         + '</div>'
@@ -7986,15 +8002,15 @@ def render_floating_chat_dock(app_context: dict | None = None):
         @media (max-width: 768px) {
             div.st-key-floating_ai_launcher {
                 right: 12px;
-                bottom: 12px;
+                bottom: calc(72px + env(safe-area-inset-bottom, 0px));
             }
 
             div.st-key-floating_ai_panel {
                 left: 12px;
                 right: 12px;
-                bottom: 82px;
+                bottom: calc(96px + env(safe-area-inset-bottom, 0px));
                 width: auto;
-                max-height: min(74vh, 640px);
+                max-height: min(calc(100vh - 184px), 640px);
             }
         }
         </style>

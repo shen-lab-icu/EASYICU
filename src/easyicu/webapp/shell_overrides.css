@@ -4082,7 +4082,7 @@ div[role="listbox"] li {
     max-width: 100% !important;
     min-width: 0 !important;
     flex-wrap: wrap !important;
-    gap: 4px !important;
+    gap: 2px !important;
     overflow-x: hidden !important;
   }
   .stApp [data-testid="stTabs"] [role="tab"] {
@@ -10910,22 +10910,20 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 }
 .stApp [class*="st-key-eu_entry_prompt_controls"] [class*="st-key-_eu_entry_copilot_start"] button {
   min-height: 34px !important;
-  height: 34px !important;
-  width: 34px !important;
-  min-width: 34px !important;
+  height: auto !important;
+  width: 100% !important;
+  min-width: 168px !important;
   border-radius: var(--r-2) !important;
   background-color: var(--ink) !important;
-  background-image: url("data:image/svg+xml,%3Csvg%20width='26'%20height='26'%20viewBox='0%200%2024%2024'%20fill='none'%20xmlns='http://www.w3.org/2000/svg'%3E%3Cpath%20d='M5%2012h13M13%206l6%206-6%206'%20stroke='%23ffffff'%20stroke-width='2.8'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E") !important;
-  background-repeat: no-repeat !important;
-  background-position: center !important;
-  background-size: 18px 18px !important;
+  background-image: none !important;
   color: var(--surface) !important;
   border: 1px solid var(--ink) !important;
   box-shadow: 0 1px 2px rgba(14, 17, 22, .08) !important;
-  font-size: 18px !important;
-  font-weight: 600 !important;
-  padding: 0 !important;
-  line-height: 1 !important;
+  font-size: 12.5px !important;
+  font-weight: 720 !important;
+  padding: 0 14px !important;
+  line-height: 1.2 !important;
+  white-space: normal !important;
 }
 .stApp [class*="st-key-eu_entry_prompt_controls"] [class*="st-key-_eu_entry_copilot_start"] button:hover {
   background-color: var(--accent-ink) !important;
@@ -11806,6 +11804,18 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   font-size: 13px;
   line-height: 1.5;
 }
+
+/* Streamlit renders expander chevrons with Material Symbols text such as
+   keyboard_arrow_right. Hide only that generated icon span so the label remains
+   readable and the details/summary control still works. */
+.stApp details summary span[class*="emntfgb"],
+.stApp .stExpander summary span[class*="emntfgb"],
+.stApp [data-testid="stExpander"] [data-testid="stIconMaterial"],
+.stApp button[data-testid="stPopoverButton"] span[class*="emntfgb"],
+.stApp button[data-testid="stPopoverButton"] [data-testid="stIconMaterial"] {
+  display: none !important;
+}
+
 .stApp div.st-key-ai_assistant_page_panel [class*="_starter_"] button {
   min-height: 30px !important;
   justify-content: center !important;
@@ -14105,6 +14115,9 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 [data-testid="stSidebar"] [class*="st-key-eunavrow_extract"] {
   margin-top: 12px !important;
 }
+[data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] {
+  margin-top: 12px !important;
+}
 [data-testid="stSidebar"] [class*="st-key-eunavrow_"] [data-testid="stVerticalBlock"] {
   gap: 0 !important;
 }
@@ -14126,6 +14139,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 [data-testid="stSidebar"] [class*="st-key-eunavrow_research_agent"] {
   margin-top: 8px !important;
 }
+[data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] .eu-nav-item .count,
 [data-testid="stSidebar"] [class*="st-key-eunavrow_visualization"] .eu-nav-item .count {
   min-width: 16px;
   height: 16px;
@@ -14138,15 +14152,21 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   line-height: 1;
   color: var(--ink-4);
 }
+[data-testid="stSidebar"] [class*="st-key-eunavchildren_classic_workspace"],
 [data-testid="stSidebar"] [class*="st-key-eunavchildren_visualization"] {
   margin: 0 0 5px !important;
   padding: 1px 0 2px !important;
   border-left: 0 !important;
 }
+[data-testid="stSidebar"] [class*="st-key-eunavchildren_classic_workspace"] [class*="st-key-eunavrow_extract"] {
+  margin-top: 0 !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eunavchildren_classic_workspace"] [class*="st-key-eunavrow_"],
 [data-testid="stSidebar"] [class*="st-key-eunavchildren_visualization"] [class*="st-key-eunavrow_"] {
   min-height: 34px !important;
   height: 34px !important;
 }
+[data-testid="stSidebar"] [class*="st-key-eunavchildren_classic_workspace"] [class*="st-key-eunavrow_"] .eu-nav-item.level-child,
 [data-testid="stSidebar"] [class*="st-key-eunavchildren_visualization"] [class*="st-key-eunavrow_"] .eu-nav-item.level-child {
   margin: 1px 10px 1px 34px !important;
   width: calc(100% - 44px) !important;
@@ -14155,11 +14175,15 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   font-size: 12.6px !important;
   gap: 9px !important;
 }
+[data-testid="stSidebar"] [class*="st-key-eunavchildren_classic_workspace"] [class*="st-key-eunavrow_"] .eu-nav-item.level-child .ico,
 [data-testid="stSidebar"] [class*="st-key-eunavchildren_visualization"] [class*="st-key-eunavrow_"] .eu-nav-item.level-child .ico {
   width: 14px !important;
   height: 14px !important;
   opacity: .7 !important;
 }
+[data-testid="stSidebar"] [class*="st-key-eunavchildren_classic_workspace"] [class*="st-key-eunavrow_"] div[data-testid="stButton"],
+[data-testid="stSidebar"] [class*="st-key-eunavchildren_classic_workspace"] [class*="st-key-eunavrow_"] .stButton,
+[data-testid="stSidebar"] [class*="st-key-eunavchildren_classic_workspace"] [class*="st-key-eunavrow_"] [class*="st-key-euonav_"] button,
 [data-testid="stSidebar"] [class*="st-key-eunavchildren_visualization"] [class*="st-key-eunavrow_"] div[data-testid="stButton"],
 [data-testid="stSidebar"] [class*="st-key-eunavchildren_visualization"] [class*="st-key-eunavrow_"] .stButton,
 [data-testid="stSidebar"] [class*="st-key-eunavchildren_visualization"] [class*="st-key-eunavrow_"] [class*="st-key-euonav_"] button {
@@ -14568,9 +14592,9 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
     min-width: 0 !important;
     max-width: 100% !important;
     min-height: 56px !important;
-    padding: 6px 4px !important;
+    padding: 6px 0 !important;
     border-radius: var(--r-2) !important;
-    font-size: 10.5px !important;
+    font-size: 10px !important;
     color: var(--ink-4) !important;
     background: transparent !important;
     text-align: center !important;
@@ -14594,6 +14618,8 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
+    font-size: 10px !important;
+    line-height: 1.1 !important;
   }
 
   .stApp [class*="st-key-main_nav_bar"] div[role="radiogroup"] > label:has(input:checked) {
@@ -15128,6 +15154,224 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
     background-color: var(--ink) !important;
     color: #fff !important;
     -webkit-text-fill-color: #fff !important;
+  }
+}
+
+.stApp [class*="st-key-eu_agent_projects_shell"] {
+  margin: 0 0 18px !important;
+}
+.stApp .eu-agent-project-panel {
+  min-height: 100%;
+  padding: 14px 15px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: none;
+  box-sizing: border-box;
+}
+.stApp .eu-agent-project-panel h3,
+.stApp .eu-agent-project-panel h2,
+.stApp .eu-agent-project-panel p {
+  margin: 0;
+}
+.stApp .eu-agent-project-panel h3 {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+}
+.stApp .eu-agent-project-main h2 {
+  margin-top: 8px;
+  color: var(--ink);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.22;
+}
+.stApp .eu-agent-project-panel p {
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.42;
+}
+.stApp .eu-agent-project-eyebrow {
+  margin-bottom: 5px;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.stApp .eu-agent-project-run-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.stApp .eu-agent-project-run-row {
+  display: grid;
+  gap: 2px;
+  padding: 8px 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+}
+.stApp .eu-agent-project-run-row b,
+.stApp .eu-agent-project-gate b {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+.stApp .eu-agent-project-run-row span,
+.stApp .eu-agent-project-run-row em {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-style: normal;
+  line-height: 1.3;
+}
+.stApp .eu-agent-project-empty {
+  padding: 12px;
+  border: 1px dashed var(--hair-2);
+  border-radius: var(--r-2);
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.stApp .eu-agent-project-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.stApp .eu-agent-project-headline span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid var(--hair-2);
+  border-radius: 999px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.stApp .eu-agent-project-headline span.ready {
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--hair));
+  color: var(--ok);
+}
+.stApp .eu-agent-project-headline span.warn {
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--hair));
+  color: var(--warn);
+}
+.stApp .eu-agent-project-headline em {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-style: normal;
+}
+.stApp .eu-agent-project-kv {
+  display: grid;
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+.stApp .eu-agent-project-kv div,
+.stApp .eu-agent-project-metrics div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+}
+.stApp .eu-agent-project-kv span,
+.stApp .eu-agent-project-metrics span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--ink-4);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.stApp .eu-agent-project-kv b,
+.stApp .eu-agent-project-metrics b {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-agent-project-timeline {
+  display: grid;
+  gap: 7px;
+  margin-top: 13px;
+}
+.stApp .eu-agent-project-timeline-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+.stApp .eu-agent-project-timeline-row > span {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--hair-3);
+}
+.stApp .eu-agent-project-timeline-row > span.done { background: var(--ok); }
+.stApp .eu-agent-project-timeline-row > span.active { background: var(--accent); }
+.stApp .eu-agent-project-timeline-row b {
+  display: block;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+.stApp .eu-agent-project-timeline-row em {
+  display: block;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-style: normal;
+}
+.stApp .eu-agent-project-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+.stApp .eu-agent-project-gate {
+  display: grid;
+  gap: 3px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--hair));
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.stApp .eu-agent-project-gate span,
+.stApp .eu-agent-project-gate em {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-style: normal;
+}
+.stApp [class*="st-key-_eu_agent_project_view_"] button,
+.stApp [class*="st-key-_eu_agent_project_new_run"] button,
+.stApp [class*="st-key-_eu_agent_project_history"] button,
+.stApp [class*="st-key-_eu_agent_project_rerun"] button {
+  min-height: 34px !important;
+  white-space: nowrap !important;
+}
+.stApp [class*="st-key-_eu_agent_project_view_"] button {
+  padding-inline: 8px !important;
+  font-size: 12px !important;
+}
+.stApp [class*="st-key-_eu_agent_project_view_"] button p {
+  font-size: 12px !important;
+}
+@media (max-width: 900px) {
+  .stApp [class*="st-key-eu_agent_projects_shell"] [data-testid="stHorizontalBlock"] {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+  }
+  .stApp .eu-agent-project-kv {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -17515,6 +17759,27 @@ body ::-moz-selection,
   font-size: 12.5px;
   line-height: 1.45;
 }
+.eu-copilot-current-decision {
+  display: grid;
+  gap: 3px;
+  margin-top: 12px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--hair));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.eu-copilot-current-decision span {
+  color: var(--ink-4);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.eu-copilot-current-decision b {
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.3;
+}
 .eu-copilot-stepper {
   display: grid;
   gap: 8px;
@@ -17629,14 +17894,33 @@ body ::-moz-selection,
   }
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] {
     padding: 0 !important;
+    height: auto !important;
+    min-height: calc(100vh - 56px) !important;
+    overflow: visible !important;
   }
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] > [data-testid="stHorizontalBlock"],
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_copilot_left_rail"]) {
     grid-template-columns: 1fr !important;
+    height: auto !important;
+    overflow: visible !important;
   }
-  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stColumn"]:has([class*="st-key-eu_copilot_left_rail"]),
-  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stColumn"]:has([class*="st-key-eu_copilot_right_rail"]) {
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stColumn"]:has([class*="st-key-eu_copilot_left_rail"]) {
     display: none !important;
+  }
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_guided_shell"] [data-testid="stColumn"]:has([class*="st-key-eu_copilot_right_rail"]) {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_right_rail"] {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    border-left: 0 !important;
+    border-top: 1px solid var(--hair) !important;
+  }
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_study_rail"] {
+    padding: 16px 14px 20px !important;
   }
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-eu_copilot_conversation_shell"] {
     min-height: 0 !important;
@@ -17684,9 +17968,11 @@ body ::-moz-selection,
 .stApp [class*="st-key-eu_entry_prompt_controls"] [class*="st-key-_eu_entry_copilot_start"] button div,
 .stApp [class*="st-key-eu_entry_prompt_controls"] [class*="st-key-_eu_entry_copilot_start"] button p {
   color: var(--surface) !important;
-  font-size: 22px !important;
+  -webkit-text-fill-color: var(--surface) !important;
+  font-size: 12.5px !important;
   font-weight: 700 !important;
-  line-height: 1 !important;
+  line-height: 1.2 !important;
+  white-space: normal !important;
 }
 
 .stApp [class*="st-key-eu_entry_prompt_controls"] [class*="st-key-_eu_entry_copilot_start"] button {
@@ -17694,7 +17980,7 @@ body ::-moz-selection,
 }
 
 .stApp [class*="st-key-eu_entry_prompt_controls"] [class*="st-key-_eu_entry_copilot_start"] button * {
-  opacity: 0 !important;
+  opacity: 1 !important;
 }
 
 /* Arrow is drawn by the background-image SVG above; do not add a second one. */
@@ -17726,6 +18012,19 @@ body ::-moz-selection,
 }
 
 @media (max-width: 760px) {
+  .stApp [class*="st-key-eu_entry_prompt_controls"] [data-testid="stHorizontalBlock"] {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+  .stApp [class*="st-key-eu_entry_prompt_controls"] [data-testid="stColumn"] {
+    width: 100% !important;
+    flex: 0 0 auto !important;
+  }
+  .stApp [class*="st-key-eu_entry_prompt_controls"] [class*="st-key-_eu_entry_copilot_start"] button {
+    min-width: 0 !important;
+    min-height: 38px !important;
+  }
   .stApp [class*="st-key-eu_entry_col_chips"] [data-testid="stHorizontalBlock"] {
     flex-direction: column !important;
     gap: 8px !important;
@@ -18059,18 +18358,17 @@ body ::-moz-selection,
 }
 
 .stApp [class*="st-key-eu_entry_col_prompt"] [class*="st-key-_eu_entry_copilot_start"] button {
-  width: 34px !important;
-  min-width: 34px !important;
-  height: 34px !important;
+  width: 100% !important;
+  min-width: 168px !important;
+  height: auto !important;
   min-height: 34px !important;
   border-radius: var(--r-2) !important;
   border: 1px solid var(--ink) !important;
   background-color: var(--ink) !important;
-  background-image: url("data:image/svg+xml,%3Csvg%20width='26'%20height='26'%20viewBox='0%200%2024%2024'%20fill='none'%20xmlns='http://www.w3.org/2000/svg'%3E%3Cpath%20d='M5%2012h13M13%206l6%206-6%206'%20stroke='%23ffffff'%20stroke-width='2.8'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E") !important;
-  background-repeat: no-repeat !important;
-  background-position: center !important;
-  background-size: 18px 18px !important;
+  background-image: none !important;
   box-shadow: 0 1px 2px rgba(14, 17, 22, .08) !important;
+  padding: 0 14px !important;
+  white-space: normal !important;
 }
 
 .stApp [class*="st-key-eu_entry_col_prompt"] [class*="st-key-_eu_entry_copilot_start"] button:hover {
@@ -18429,12 +18727,26 @@ body ::-moz-selection,
   }
   .stApp [class*="st-key-eu_entry_two_way_home"] > [data-testid="stHorizontalBlock"],
   .stApp [class*="st-key-eu_entry_cards_grid"] > [data-testid="stHorizontalBlock"] {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
     flex-direction: column !important;
+    gap: 14px !important;
+  }
+  .stApp [class*="st-key-eu_entry_two_way_home"] [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_entry_copilot_split_card"]):has([class*="st-key-eu_entry_classic_split_card"]) {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
   }
   .stApp [class*="st-key-eu_entry_two_way_home"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
   .stApp [class*="st-key-eu_entry_cards_grid"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
     flex: 0 0 auto !important;
     width: 100% !important;
+    max-width: 100% !important;
+  }
+  .stApp [class*="st-key-eu_entry_two_way_home"] [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_entry_copilot_split_card"]):has([class*="st-key-eu_entry_classic_split_card"]) > [data-testid="stColumn"] {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
   }
   .stApp [class*="st-key-eu_entry_two_way_home"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] > [data-testid="stVerticalBlockBorderWrapper"],
   .stApp [class*="st-key-eu_entry_two_way_home"] > [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"],
@@ -19364,4 +19676,34 @@ body ::-moz-selection,
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-"][class*="_navactions"] button:hover::after {
   color: var(--accent-ink);
+}
+
+@media (max-width: 520px) {
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker)
+    [data-testid="stHorizontalBlock"]:has([class*="_llm_ai_page_workspace_guided_intent_"]),
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker)
+    [data-testid="stHorizontalBlock"]:has([class*="_llm_ai_page_workspace_guided_hint_"]) {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 8px !important;
+    width: 100% !important;
+  }
+
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker)
+    [data-testid="stHorizontalBlock"]:has([class*="_llm_ai_page_workspace_guided_intent_"]) > [data-testid="stColumn"],
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker)
+    [data-testid="stHorizontalBlock"]:has([class*="_llm_ai_page_workspace_guided_hint_"]) > [data-testid="stColumn"] {
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker)
+    [class*="_llm_ai_page_workspace_guided_intent_"] button,
+  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker)
+    [class*="_llm_ai_page_workspace_guided_hint_"] button {
+    width: 100% !important;
+    justify-content: flex-start !important;
+    white-space: normal !important;
+  }
 }

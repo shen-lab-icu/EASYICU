@@ -397,12 +397,14 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
             textfont=dict(size=12, color=RECLASS_CHART["ink"]),
             hovertemplate=f"SOFA-1: %{{y}}<br>SOFA-2: %{{x}}<br>{unit_label}: %{{z}}<extra></extra>",
             colorbar=dict(
-                title=unit_label,
+                title=dict(
+                    text=unit_label,
+                    font=dict(size=12, color=RECLASS_CHART["ink"]),
+                ),
                 thickness=10,
                 len=0.76,
                 outlinewidth=0,
                 tickfont=dict(size=11, color=RECLASS_CHART["muted"]),
-                titlefont=dict(size=12, color=RECLASS_CHART["ink"]),
             ),
         ))
         _style_reclass_figure(fig, height=410, margin=dict(l=72, r=58, t=24, b=64))

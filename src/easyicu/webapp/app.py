@@ -1326,7 +1326,7 @@ def _topbar_primary_action_label(
 ) -> tuple[str, str]:
     """Return the global topbar action label for the current page."""
     if active_page == 'research_agent':
-        return ('Agent guide', 'Agent 导览')
+        return ('Project guide', '项目导览')
     label_map = {
         'states': ('Patient Review', '患者审阅'),
         'quick_viz': ('Prepare review', '准备审阅'),
@@ -1338,11 +1338,11 @@ def _topbar_primary_action_label(
 
 
 def _topbar_primary_action_icon(active_page: str) -> str | None:
-    """Return an optional material icon for the global topbar action."""
-    if active_page == 'settings':
-        return ':material/refresh:'
-    if active_page == 'states':
-        return ':material/table_chart:'
+    """Return an optional icon for the global topbar action.
+
+    Keep this disabled for now: Streamlit material icons can leak icon names
+    such as ``table_chart`` into button accessible names.
+    """
     return None
 
 
@@ -2516,13 +2516,13 @@ def _render_research_agent_reference_header(lang: str, *, view: str = "setup") -
             f'<span class="dot" style="background:var(--accent)"></span>{html.escape(arm_label)}</span>'
         )
     header_html = cc.render_design_page_header(
-        kicker="Research Agent · research workflow" if lang == "en" else "研究智能体 · 研究工作流",
-        title_en="EasyICU Research Agent",
-        title_zh="EasyICU Research Agent",
+        kicker="Agent Projects · research workflow" if lang == "en" else "研究项目 · 研究工作流",
+        title_en="EasyICU Agent Projects",
+        title_zh="EasyICU 研究项目",
         desc=(
-            "An auditable, evidence-bound workflow — plan, run, review, then draft."
+            "Project-centered runs: plan, execute, inspect evidence, then draft behind review gates."
             if lang == "en" else
-            "可审计、证据绑定的工作流：计划、运行、复核，然后再写作。"
+            "以项目为中心管理运行：计划、执行、检查证据，然后在复核关口后写作。"
         ),
         right_html=actions,
         lang=lang,
@@ -2534,6 +2534,193 @@ def _render_research_agent_reference_header(lang: str, *, view: str = "setup") -
     st.markdown(header_html, unsafe_allow_html=True)
 
 
+def _agent_projects_history_runs(state: Dict[str, Any]) -> list[dict[str, Any]]:
+    """Return local Research Agent run summaries for the project rail."""
+    try:
+        from easyicu.webapp.research_agent import (
+            _default_research_agent_workdir,
+            _scan_research_agent_runs,
+        )
+
+        workdir_text = str(state.get("research_agent_workdir") or "").strip()
+        workdir = Path(workdir_text or _default_research_agent_workdir()).expanduser()
+        return _scan_research_agent_runs(workdir, limit=8)
+    except Exception:
+        return []
+
+
+def _agent_project_escape(value: object) -> str:
+    return html.escape(str(value or ""))
+
+
+def _agent_project_status_label(status: str, lang: str) -> str:
+    raw = str(status or "").strip()
+    if not raw:
+        return "unknown" if lang == "en" else "未知"
+    return raw.replace("_", " ")
+
+
+def _render_agent_project_timeline_html(snapshot: Any, lang: str) -> str:
+    is_en = lang == "en"
+    steps = [
+        (
+            "Setup" if is_en else "配置",
+            snapshot.cohort_label,
+            "done" if snapshot.question and snapshot.cohort_label not in {"not selected", "未选择"} else "active",
+        ),
+        (
+            "Run" if is_en else "运行",
+            f"{snapshot.step_ok}/{snapshot.step_total} steps" if is_en else f"{snapshot.step_ok}/{snapshot.step_total} 步",
+            "done" if snapshot.step_total and not snapshot.step_failed else "active" if snapshot.run_id else "todo",
+        ),
+        (
+            "Evidence" if is_en else "证据",
+            f"{snapshot.evidence_count} evidence" if is_en else f"{snapshot.evidence_count} 条证据",
+            "done" if snapshot.evidence_count else "todo",
+        ),
+        (
+            "Gate" if is_en else "关口",
+            (
+                f"{snapshot.gates_blocked} blocked"
+                if snapshot.gates_blocked
+                else ("clear" if snapshot.gates_total else "waiting")
+            ) if is_en else (
+                f"{snapshot.gates_blocked} 个阻塞"
+                if snapshot.gates_blocked
+                else ("通过" if snapshot.gates_total else "等待")
+            ),
+            "active" if snapshot.gates_blocked or snapshot.finding_warnings else "done" if snapshot.gates_total else "todo",
+        ),
+    ]
+    return "".join(
+        '<div class="eu-agent-project-timeline-row">'
+        f'<span class="{_agent_project_escape(status)}"></span>'
+        '<div>'
+        f'<b>{_agent_project_escape(label)}</b>'
+        f'<em>{_agent_project_escape(detail)}</em>'
+        '</div>'
+        '</div>'
+        for label, detail, status in steps
+    )
+
+
+def _render_agent_projects_shell(lang: str, snapshot: Any, run_context: Dict[str, str]) -> None:
+    """Render the project-centered Agent Projects overview and subview controls."""
+    is_en = lang == "en"
+    with st.container(key="eu_agent_projects_shell"):
+        left, mid, right = st.columns([1.02, 1.92, 1.05], gap="large")
+        with left:
+            recent_rows = "".join(
+                '<div class="eu-agent-project-run-row">'
+                f'<b>{_agent_project_escape(row.get("run_id"))}</b>'
+                f'<span>{_agent_project_escape(_agent_project_status_label(row.get("status"), lang))} · '
+                f'{_agent_project_escape(row.get("evidence_count"))} evidence</span>'
+                f'<em>{_agent_project_escape(row.get("question"))}</em>'
+                '</div>'
+                for row in snapshot.history_runs[:4]
+            )
+            if not recent_rows:
+                recent_rows = (
+                    '<div class="eu-agent-project-empty">'
+                    + _agent_project_escape("No local runs yet" if is_en else "暂无本地运行")
+                    + '</div>'
+                )
+            st.markdown(
+                '<div class="eu-agent-project-panel">'
+                f'<div class="eu-agent-project-eyebrow">{_agent_project_escape("Projects" if is_en else "项目")}</div>'
+                f'<h3>{_agent_project_escape("Agent Projects" if is_en else "研究项目")}</h3>'
+                f'<p>{_agent_project_escape("Runs stay local; manifests and artifacts remain auditable." if is_en else "运行保留在本机；manifest 和产物可审计。")}</p>'
+                f'<div class="eu-agent-project-run-list">{recent_rows}</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            new_col, history_col = st.columns(2, gap="small")
+            with new_col:
+                if st.button(
+                    "New run" if is_en else "新运行",
+                    key="_eu_agent_project_new_run",
+                    type="primary" if snapshot.active_view == "setup" else "secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state["_ra_view"] = "setup"
+                    st.rerun()
+            with history_col:
+                if st.button(
+                    "History" if is_en else "历史",
+                    key="_eu_agent_project_history",
+                    type="primary" if snapshot.active_view == "history" else "secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state["_ra_view"] = "history"
+                    st.rerun()
+        with mid:
+            title = snapshot.project_title
+            run_meta = snapshot.run_id or ("not launched" if is_en else "尚未启动")
+            st.markdown(
+                '<div class="eu-agent-project-panel eu-agent-project-main">'
+                f'<div class="eu-agent-project-headline"><span class="{_agent_project_escape(snapshot.status_tone)}">'
+                f'{_agent_project_escape(snapshot.status)}</span><em>{_agent_project_escape(run_meta)}</em></div>'
+                f'<h2>{_agent_project_escape(title)}</h2>'
+                '<div class="eu-agent-project-kv">'
+                f'<div><span>{"Cohort" if is_en else "队列"}</span><b>{_agent_project_escape(snapshot.cohort_label)}</b></div>'
+                f'<div><span>{"Run directory" if is_en else "运行目录"}</span><b>{_agent_project_escape(snapshot.run_dir or ("pending" if is_en else "待生成"))}</b></div>'
+                '</div>'
+                f'<div class="eu-agent-project-timeline">{_render_agent_project_timeline_html(snapshot, lang)}</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            view_cols = st.columns([1, 1.28, 1.16, 1, 1.2], gap="small")
+            view_buttons = [
+                ("setup", "Setup" if is_en else "配置"),
+                ("workbench", "Workbench" if is_en else "工作台"),
+                ("summary", "Summary" if is_en else "总览"),
+                ("history", "History" if is_en else "历史"),
+            ]
+            for col, (view_key, label) in zip(view_cols[:4], view_buttons):
+                with col:
+                    if st.button(
+                        label,
+                        key=f"_eu_agent_project_view_{view_key}",
+                        type="primary" if snapshot.active_view == view_key else "secondary",
+                        use_container_width=True,
+                    ):
+                        st.session_state["_ra_view"] = view_key
+                        st.rerun()
+            with view_cols[4]:
+                rerun_disabled = not bool(run_context)
+                if st.button(
+                    "Re-run" if is_en else "重新运行",
+                    key="_eu_agent_project_rerun",
+                    type="secondary",
+                    disabled=rerun_disabled,
+                    use_container_width=True,
+                    help=(
+                        "Open Setup in checkpoint-resume mode for the active run."
+                        if is_en else
+                        "使用当前 run 打开配置页的 checkpoint 续跑模式。"
+                    ),
+                ):
+                    _prime_research_agent_header_rerun(st.session_state, run_context)
+                    st.rerun()
+        with right:
+            st.markdown(
+                '<div class="eu-agent-project-panel">'
+                f'<div class="eu-agent-project-eyebrow">{_agent_project_escape("Evidence / artifacts / gates" if is_en else "证据 / 产物 / 关口")}</div>'
+                '<div class="eu-agent-project-metrics">'
+                f'<div><span>{"Evidence" if is_en else "证据"}</span><b>{snapshot.evidence_count}</b></div>'
+                f'<div><span>{"Figures" if is_en else "图件"}</span><b>{snapshot.figure_count}</b></div>'
+                f'<div><span>{"Tables" if is_en else "表格"}</span><b>{snapshot.table_count}</b></div>'
+                f'<div><span>{"Issues" if is_en else "问题"}</span><b>{snapshot.finding_errors}/{snapshot.finding_warnings}</b></div>'
+                '</div>'
+                '<div class="eu-agent-project-gate">'
+                f'<b>{_agent_project_escape("Review gate" if is_en else "复核关口")}</b>'
+                f'<span>{_agent_project_escape(str(snapshot.gates_blocked))} '
+                f'{_agent_project_escape("blocked gates" if is_en else "个阻塞关口")}</span>'
+                f'<em>{_agent_project_escape(snapshot.review_decision or ("waiting for reviewer" if is_en else "等待复核"))}</em>'
+                '</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
 
 
 
@@ -4098,12 +4285,11 @@ def main():
         'quick_viz':      'Patient Review' if lang == 'en' else '患者审阅',
         'cohort':         'Cohort Statistics' if lang == 'en' else '队列统计',
         'cross_db':       'Cross-DB Benchmark' if lang == 'en' else '跨数据库对比',
-        'research_agent': 'Research Agent' if lang == 'en' else '研究智能体',
+        'research_agent': 'Agent Projects' if lang == 'en' else '研究项目',
     }
     _topbar_home_label = 'Home' if lang == 'en' else '首页'
     _data_extraction_label = 'Data extraction' if lang == 'en' else '数据提取'
-    _data_visualization_label = 'Data visualization' if lang == 'en' else '数据可视化'
-    _tools_label = 'Tools' if lang == 'en' else '工具'
+    _classic_workspace_label = 'Classic Workspace' if lang == 'en' else '经典工作区'
     _reference_label = 'Reference' if lang == 'en' else '参考'
     if _active == 'extract':
         if not st.session_state.get('step1_confirmed'):
@@ -4157,12 +4343,11 @@ def main():
     _topbar_path_items_by_page: dict[str, list[tuple[str, str | None]]] = {
         'tutorial': [
             (_topbar_home_label, 'entry'),
-            (_tools_label, None),
+            (_reference_label, None),
             (_page_labels_for_topbar['tutorial'], None),
         ],
         'assistant': [
             (_topbar_home_label, 'entry'),
-            (_tools_label, None),
             (_page_labels_for_topbar['assistant'], None),
         ],
         'states': [
@@ -4176,17 +4361,17 @@ def main():
         ],
         'quick_viz': [
             (_topbar_home_label, 'entry'),
-            (_data_visualization_label, 'data_visualization'),
+            (_classic_workspace_label, 'data_visualization'),
             (_page_labels_for_topbar['quick_viz'], None),
         ],
         'cohort': [
             (_topbar_home_label, 'entry'),
-            (_data_visualization_label, 'data_visualization'),
+            (_classic_workspace_label, 'data_visualization'),
             (_page_labels_for_topbar['cohort'], None),
         ],
         'cross_db': [
             (_topbar_home_label, 'entry'),
-            (_data_visualization_label, 'data_visualization'),
+            (_classic_workspace_label, 'data_visualization'),
             (_page_labels_for_topbar['cross_db'], None),
         ],
         'research_agent': [
@@ -4248,7 +4433,7 @@ def main():
         else:
             # Shell-A topbar: parent breadcrumb buttons plus one explicit action.
             _tb_left, _tb_run = st.columns(
-                [8.6, 1.4], gap="small"
+                [8.2, 1.8], gap="small"
             )
             with _tb_left:
                 _render_topbar_path_nav(
@@ -4318,7 +4503,7 @@ def main():
         "quick_viz": "Patient" if lang == "en" else "患者",
         "cohort": "Cohort" if lang == "en" else "队列",
         "cross_db": "Cross-DB" if lang == "en" else "跨库",
-        "research_agent": "Agent" if lang == "en" else "Agent",
+        "research_agent": "Projects" if lang == "en" else "项目",
         "assistant": "Copilot" if lang == "en" else "助手",
     }
 
@@ -4615,70 +4800,24 @@ def main():
             )
             st.markdown(f'<div class="compact-inline-notice info">{ra_hold_msg}</div>', unsafe_allow_html=True)
         else:
-            # Shell-A redesign: Research Agent has four stateful views.
-            # Setup is the only page that configures and launches runs.
-            # History is a local project picker. Workbench and Summary
-            # render only a live/imported manifest, never a synthetic demo queue.
+            # Shell-A redesign: Agent Projects has one project-centered shell.
+            # Setup/Workbench/History/Summary stay as stateful subviews under
+            # the active project/run rather than competing top-level tabs.
             st.session_state["_active_main_page"] = "research_agent"
-            _default_ra_view = 'setup'
+            _default_ra_view = 'workbench'
             _ra_view = st.session_state.get('_ra_view', _default_ra_view)
             _ra_run_context = _research_agent_active_run_context(st.session_state)
 
             _render_research_agent_reference_header(lang, view=_ra_view)
+            from easyicu.webapp.workspace_snapshots import build_agent_project_snapshot
 
-            with st.container(key="_eu_ra_tabs"):
-                _seg_l, _seg_m, _seg_h, _seg_r, _seg_tail = st.columns([0.88, 1.18, 0.92, 0.98, 6.04])
-                with _seg_l:
-                    if st.button(
-                        "Setup" if lang == 'en' else "配置",
-                        key="_eu_ra_view_setup", use_container_width=True,
-                        type="primary" if _ra_view == 'setup' else "secondary",
-                    ):
-                        st.session_state['_active_main_page'] = 'research_agent'
-                        st.session_state['_ra_view'] = 'setup'
-                        st.rerun()
-                with _seg_m:
-                    if st.button(
-                        "Workbench" if lang == 'en' else "工作台",
-                        key="_eu_ra_view_workbench", use_container_width=True,
-                        type="primary" if _ra_view == 'workbench' else "secondary",
-                    ):
-                        st.session_state['_active_main_page'] = 'research_agent'
-                        st.session_state['_ra_view'] = 'workbench'
-                        st.rerun()
-                with _seg_h:
-                    if st.button(
-                        "History" if lang == 'en' else "历史",
-                        key="_eu_ra_view_history", use_container_width=True,
-                        type="primary" if _ra_view == 'history' else "secondary",
-                    ):
-                        st.session_state['_active_main_page'] = 'research_agent'
-                        st.session_state['_ra_view'] = 'history'
-                        st.rerun()
-                with _seg_r:
-                    if st.button(
-                        "Summary" if lang == 'en' else "总览",
-                        key="_eu_ra_view_summary", use_container_width=True,
-                        type="primary" if _ra_view == 'summary' else "secondary",
-                    ):
-                        st.session_state['_active_main_page'] = 'research_agent'
-                        st.session_state['_ra_view'] = 'summary'
-                        st.rerun()
-                with _seg_tail:
-                    if _ra_run_context:
-                        if st.button(
-                            "Re-run" if lang == 'en' else "重新运行",
-                            key="_eu_ra_header_rerun",
-                            type="primary",
-                            use_container_width=False,
-                            help=(
-                                "Open Setup in checkpoint-resume mode for the active run."
-                                if lang == 'en' else
-                                "使用当前 run 打开配置页的 checkpoint 续跑模式。"
-                            ),
-                        ):
-                            _prime_research_agent_header_rerun(st.session_state, _ra_run_context)
-                            st.rerun()
+            _ra_history_runs = _agent_projects_history_runs(st.session_state)
+            _ra_snapshot = build_agent_project_snapshot(
+                st.session_state,
+                history_runs=_ra_history_runs,
+                lang=lang,
+            )
+            _render_agent_projects_shell(lang, _ra_snapshot, _ra_run_context)
 
             _ra_handoff_success = st.session_state.pop("_eu_ra_handoff_success_message", "")
             if _ra_handoff_success:

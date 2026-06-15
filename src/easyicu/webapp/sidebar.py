@@ -6,6 +6,7 @@ but the long Streamlit rendering block no longer lives in app.py.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any, MutableMapping
 from pathlib import Path
 import html
@@ -52,6 +53,14 @@ _STEP2_WIDGET_KEYS = (
     "cohort_icd_include_query_design",
     "cohort_icd_exclude_query_design",
 )
+
+
+def _sidebar_expander(label: str, *, expanded: bool = False):
+    """Return a Streamlit expander, or a no-op context for bare unit tests."""
+    expander = getattr(st, "expander", None)
+    if callable(expander):
+        return expander(label, expanded=expanded)
+    return nullcontext()
 _STEP2_COHORT_FILTER_KEYS = (
     "age_min",
     "age_max",
@@ -905,7 +914,8 @@ def _shell_nav_items(entry_mode: str) -> list[ShellNavItem]:
             "quick_viz": "Patient Review",
             "cohort": "Cohort Statistics",
             "cross_db": "Cross-DB Benchmark",
-            "research_agent": "Research Agent",
+            "research_agent": "Agent Projects",
+            "assistant": "Research Copilot",
         }
     else:
         labels = {
@@ -913,9 +923,11 @@ def _shell_nav_items(entry_mode: str) -> list[ShellNavItem]:
             "quick_viz": "患者审阅",
             "cohort": "队列统计",
             "cross_db": "跨数据库对比",
-            "research_agent": "研究智能体",
+            "research_agent": "研究项目",
+            "assistant": "研究 Copilot",
         }
     return [
+        ShellNavItem(key="assistant",      label=labels["assistant"],      icon="sparkles", level="top"),
         ShellNavItem(key="extract",        label=labels["tutorial"],       icon="extract", level="top"),
         ShellNavItem(key="quick_viz",      label=labels["quick_viz"],      icon="patient", level="child"),
         ShellNavItem(key="cohort",         label=labels["cohort"],         icon="layers", level="child"),
@@ -1383,7 +1395,7 @@ def _render_shell_footer_icons() -> None:
                     st.rerun()
         with cols[2]:
             with st.container(key=f"eu_footer_settings_{_footer_slot_state('settings')}"):
-                if st.button("Set" if lang == "en" else "设置", key="_eu_footer_settings", help=(
+                if st.button("Prefs" if lang == "en" else "设置", key="_eu_footer_settings", help=(
                         "Settings" if lang == "en" else "设置"),
                         use_container_width=True):
                     st.session_state["_active_main_page"] = "settings"
@@ -1505,14 +1517,14 @@ def _render_sidebar_settings_panel() -> None:
 
 
 def _render_shell_primary_nav() -> None:
-    """Render the three-level product flow: extraction, visualization, agent."""
+    """Render Copilot, Classic Workspace, and Agent Projects primary nav."""
     entry_mode = st.session_state.get("entry_mode", "none")
     items = {item.key: item for item in _shell_nav_items(entry_mode)}
     lang = st.session_state.get("language", "en")
     active = st.session_state.get("_active_main_page", "tutorial")
     visual_active = active
     visualization_keys = ["quick_viz", "cohort", "cross_db"]
-    visualization_label = "Data Visualization" if lang == "en" else "数据可视化"
+    classic_label = "Classic Workspace" if lang == "en" else "经典工作区"
 
     def _queue_demo_review_workspace() -> None:
         if (
@@ -1538,45 +1550,47 @@ def _render_shell_primary_nav() -> None:
                 st.session_state["_inline_ai_panel_open"] = False
                 st.session_state["_floating_ai_open"] = False
                 st.session_state.pop("_ai_pending_question", None)
+                if item.key == "assistant":
+                    st.session_state["_scroll_to_top"] = True
                 if item.key == "quick_viz":
                     _queue_demo_review_workspace()
                 st.rerun()
 
-    def _render_visualization_menu() -> None:
-        expanded_key = "_eu_visualization_nav_open"
-        expanded = bool(st.session_state.get(expanded_key)) or visual_active in visualization_keys
+    def _render_classic_workspace_menu() -> None:
+        expanded_key = "_eu_classic_workspace_nav_open"
+        classic_keys = ["extract", *visualization_keys]
+        expanded = bool(st.session_state.get(expanded_key)) or visual_active in classic_keys
         trigger = ShellNavItem(
-            key="visualization",
-            label=visualization_label,
+            key="classic_workspace",
+            label=classic_label,
             icon="bars",
             count="⌄" if expanded else "›",
             level="top",
         )
-        with st.container(key="eunavrow_visualization"):
+        with st.container(key="eunavrow_classic_workspace"):
             st.markdown(
                 render_nav_item_html(trigger, active=False),
                 unsafe_allow_html=True,
             )
             if st.button(
-                visualization_label,
-                key="euonav_visualization",
+                classic_label,
+                key="euonav_classic_workspace",
                 use_container_width=True,
             ):
                 st.session_state[expanded_key] = True
-                st.session_state["_active_main_page"] = "quick_viz"
-                st.session_state["_main_nav_widget"] = "quick_viz"
+                st.session_state["_active_main_page"] = "extract"
+                st.session_state["_main_nav_widget"] = "extract"
                 st.session_state["_inline_ai_panel_open"] = False
                 st.session_state["_floating_ai_open"] = False
                 st.session_state.pop("_ai_pending_question", None)
-                _queue_demo_review_workspace()
                 st.rerun()
         if expanded:
-            with st.container(key="eunavchildren_visualization"):
-                for key in visualization_keys:
+            with st.container(key="eunavchildren_classic_workspace"):
+                for key in classic_keys:
                     _render_nav_button(items[key])
 
-    _render_nav_button(items["extract"])
-    _render_visualization_menu()
+    _render_nav_button(items["assistant"])
+    _render_classic_workspace_menu()
     _render_nav_button(items["research_agent"])
 
 
@@ -1586,9 +1600,7 @@ def _render_shell_aux_nav() -> None:
     active = st.session_state.get("_active_main_page", "tutorial")
 
     labels = {
-        "tools": "Tools" if lang == "en" else "工具",
         "reference": "Reference" if lang == "en" else "参考",
-        "assistant": "Research Copilot" if lang == "en" else "研究 Copilot",
         "tutorial": "Get Started" if lang == "en" else "开始使用",
         "states": "Workspace States" if lang == "en" else "工作区状态",
     }
@@ -1621,17 +1633,11 @@ def _render_shell_aux_nav() -> None:
                     st.session_state.pop("_ai_pending_question", None)
                 st.rerun()
 
-    _render_group_label(labels["tools"])
-    _render_aux_button(
-        ShellNavItem(key="assistant", label=labels["assistant"], icon="sparkles", level="top"),
-        active_state=active == "assistant",
-    )
+    _render_group_label(labels["reference"])
     _render_aux_button(
         ShellNavItem(key="tutorial", label=labels["tutorial"], icon="help", level="top"),
         active_state=active == "tutorial",
     )
-
-    _render_group_label(labels["reference"])
     _render_aux_button(
         ShellNavItem(key="states", label=labels["states"], icon="grid", level="top"),
         active_state=active == "states",
@@ -3863,11 +3869,12 @@ def _render_step2_cohort_builder_design() -> bool:
 
         with st.container(key="eu_cohort_demographics_card"):
             st.markdown(
-                f'<div class="eu-section-label"><span>{html.escape("Demographics & stay" if lang == "en" else "人口统计与 ICU stay")}</span></div>',
+                f'<div class="eu-section-label"><span>{html.escape("Essentials" if lang == "en" else "必要设置")}</span>'
+                f'<span class="num">{html.escape("age · first ICU · LOS" if lang == "en" else "年龄 · 首次 ICU · LOS")}</span></div>',
                 unsafe_allow_html=True,
             )
             cf = st.session_state.cohort_filter
-            row1 = st.columns([1, 1, 1.2], gap="small")
+            row1 = st.columns([1, 1.1, 1.0], gap="small")
             with row1[0]:
                 age_min = st.number_input(
                     "Min age" if lang == "en" else "最小年龄",
@@ -3878,14 +3885,15 @@ def _render_step2_cohort_builder_design() -> bool:
                 )
                 cf['age_min'] = age_min if st.session_state.cohort_enabled and age_min > 0 else None
             with row1[1]:
-                age_max = st.number_input(
-                    "Max age" if lang == "en" else "最大年龄",
-                    min_value=0, max_value=120,
-                    value=120 if cf.get('age_max') is None else int(cf['age_max']),
-                    key="cohort_age_max_design",
+                los_min = st.number_input(
+                    "Min ICU stay (h)" if lang == "en" else "最短 ICU 时长(h)",
+                    min_value=0, max_value=10000,
+                    value=0 if cf.get('los_min') is None else int(cf['los_min']),
+                    key="cohort_los_min_design",
                     disabled=not st.session_state.cohort_enabled,
                 )
-                cf['age_max'] = age_max if st.session_state.cohort_enabled and age_max < 120 else None
+                cf['los_min'] = los_min if st.session_state.cohort_enabled and los_min > 0 else None
+                cf['los_max'] = None
             with row1[2]:
                 first_opts = {
                     'any': 'Any' if lang == "en" else '不限',
@@ -3903,41 +3911,41 @@ def _render_step2_cohort_builder_design() -> bool:
                 )
                 cf['first_icu_stay'] = True if first_val == 'yes' else False if first_val == 'no' else None
 
-            row2 = st.columns([1, 1, 1], gap="small")
-            with row2[0]:
-                los_min = st.number_input(
-                    "Min ICU stay (h)" if lang == "en" else "最短 ICU 时长(h)",
-                    min_value=0, max_value=10000,
-                    value=0 if cf.get('los_min') is None else int(cf['los_min']),
-                    key="cohort_los_min_design",
-                    disabled=not st.session_state.cohort_enabled,
-                )
-                cf['los_min'] = los_min if st.session_state.cohort_enabled and los_min > 0 else None
-                cf['los_max'] = None
-            with row2[1]:
-                gender_opts = {'any': 'Any' if lang == "en" else '不限', 'M': 'Male' if lang == "en" else '男性', 'F': 'Female' if lang == "en" else '女性'}
-                current_gender = cf.get('gender') or 'any'
-                gender_val = st.selectbox(
-                    "Gender" if lang == "en" else "性别",
-                    options=list(gender_opts.keys()),
-                    format_func=lambda x: gender_opts[x],
-                    index=list(gender_opts.keys()).index(current_gender),
-                    key="cohort_gender_design",
-                    disabled=not st.session_state.cohort_enabled,
-                )
-                cf['gender'] = gender_val if st.session_state.cohort_enabled and gender_val != 'any' else None
-            with row2[2]:
-                survival_opts = {'any': 'Any' if lang == "en" else '不限', 'survived': 'Survived' if lang == "en" else '存活', 'deceased': 'Deceased' if lang == "en" else '死亡'}
-                current_survival = 'survived' if cf.get('survived') is True else 'deceased' if cf.get('survived') is False else 'any'
-                survival_val = st.selectbox(
-                    "Outcome" if lang == "en" else "转归",
-                    options=list(survival_opts.keys()),
-                    format_func=lambda x: survival_opts[x],
-                    index=list(survival_opts.keys()).index(current_survival),
-                    key="cohort_survival_design",
-                    disabled=not st.session_state.cohort_enabled,
-                )
-                cf['survived'] = True if survival_val == 'survived' else False if survival_val == 'deceased' else None
+            with _sidebar_expander("Advanced · demographics" if lang == "en" else "高级 · 人口统计", expanded=False):
+                adv_cols = st.columns([1, 1, 1], gap="small")
+                with adv_cols[0]:
+                    age_max = st.number_input(
+                        "Max age" if lang == "en" else "最大年龄",
+                        min_value=0, max_value=120,
+                        value=120 if cf.get('age_max') is None else int(cf['age_max']),
+                        key="cohort_age_max_design",
+                        disabled=not st.session_state.cohort_enabled,
+                    )
+                    cf['age_max'] = age_max if st.session_state.cohort_enabled and age_max < 120 else None
+                with adv_cols[1]:
+                    gender_opts = {'any': 'Any' if lang == "en" else '不限', 'M': 'Male' if lang == "en" else '男性', 'F': 'Female' if lang == "en" else '女性'}
+                    current_gender = cf.get('gender') or 'any'
+                    gender_val = st.selectbox(
+                        "Gender" if lang == "en" else "性别",
+                        options=list(gender_opts.keys()),
+                        format_func=lambda x: gender_opts[x],
+                        index=list(gender_opts.keys()).index(current_gender),
+                        key="cohort_gender_design",
+                        disabled=not st.session_state.cohort_enabled,
+                    )
+                    cf['gender'] = gender_val if st.session_state.cohort_enabled and gender_val != 'any' else None
+                with adv_cols[2]:
+                    survival_opts = {'any': 'Any' if lang == "en" else '不限', 'survived': 'Survived' if lang == "en" else '存活', 'deceased': 'Deceased' if lang == "en" else '死亡'}
+                    current_survival = 'survived' if cf.get('survived') is True else 'deceased' if cf.get('survived') is False else 'any'
+                    survival_val = st.selectbox(
+                        "Outcome" if lang == "en" else "转归",
+                        options=list(survival_opts.keys()),
+                        format_func=lambda x: survival_opts[x],
+                        index=list(survival_opts.keys()).index(current_survival),
+                        key="cohort_survival_design",
+                        disabled=not st.session_state.cohort_enabled,
+                    )
+                    cf['survived'] = True if survival_val == 'survived' else False if survival_val == 'deceased' else None
 
         with st.container(key="eu_cohort_clinical_card"):
             st.markdown(
@@ -3993,47 +4001,48 @@ def _render_step2_cohort_builder_design() -> bool:
                 cf['has_sepsis'] = None
 
         if _supports_icd_filter(st.session_state.get('database')) or st.session_state.get("entry_mode") == "demo":
-            with st.container(key="eu_cohort_icd_card"):
-                database_hint = _step2_database_display_name(st.session_state.get('database', ''))
-                st.markdown(
-                    '<div class="eu-card-head">'
-                    f'<span>{html.escape("ICD codes" if lang == "en" else "ICD 编码")} <small>({html.escape(database_hint)})</small></span>'
-                    '<em class="mono">comma / space separated</em></div>',
-                    unsafe_allow_html=True,
-                )
-                icd_cols = st.columns(2, gap="small")
-                with icd_cols[0]:
-                    include_value = st.text_input(
-                        "Include" if lang == "en" else "包含",
-                        value=cf.get('icd_include_query', ''),
-                        key="cohort_icd_include_query_design",
-                        placeholder="A41,A42 or A41-42" if lang == "en" else "A41,A42 或 A41-42",
-                        disabled=not st.session_state.cohort_enabled,
+            with _sidebar_expander("Advanced · ICD filters" if lang == "en" else "高级 · ICD 筛选", expanded=False):
+                with st.container(key="eu_cohort_icd_card"):
+                    database_hint = _step2_database_display_name(st.session_state.get('database', ''))
+                    st.markdown(
+                        '<div class="eu-card-head">'
+                        f'<span>{html.escape("ICD codes" if lang == "en" else "ICD 编码")} <small>({html.escape(database_hint)})</small></span>'
+                        '<em class="mono">comma / space separated</em></div>',
+                        unsafe_allow_html=True,
                     )
-                    cf['icd_include_query'] = include_value.strip() if st.session_state.cohort_enabled else ""
-                with icd_cols[1]:
-                    exclude_value = st.text_input(
-                        "Exclude" if lang == "en" else "排除",
-                        value=cf.get('icd_exclude_query', ''),
-                        key="cohort_icd_exclude_query_design",
-                        placeholder="I50,C34 or I50-51" if lang == "en" else "I50,C34 或 I50-51",
-                        disabled=not st.session_state.cohort_enabled,
+                    icd_cols = st.columns(2, gap="small")
+                    with icd_cols[0]:
+                        include_value = st.text_input(
+                            "Include" if lang == "en" else "包含",
+                            value=cf.get('icd_include_query', ''),
+                            key="cohort_icd_include_query_design",
+                            placeholder="A41,A42 or A41-42" if lang == "en" else "A41,A42 或 A41-42",
+                            disabled=not st.session_state.cohort_enabled,
+                        )
+                        cf['icd_include_query'] = include_value.strip() if st.session_state.cohort_enabled else ""
+                    with icd_cols[1]:
+                        exclude_value = st.text_input(
+                            "Exclude" if lang == "en" else "排除",
+                            value=cf.get('icd_exclude_query', ''),
+                            key="cohort_icd_exclude_query_design",
+                            placeholder="I50,C34 or I50-51" if lang == "en" else "I50,C34 或 I50-51",
+                            disabled=not st.session_state.cohort_enabled,
+                        )
+                        cf['icd_exclude_query'] = exclude_value.strip() if st.session_state.cohort_enabled else ""
+                    cf['icd_query'] = cf.get('icd_include_query', '')
+                    cf['icd_mode'] = 'include'
+                    include_query = str(cf.get('icd_include_query', '') or '')
+                    exclude_query = str(cf.get('icd_exclude_query', '') or '')
+                    has_real_icd_tokens = (
+                        st.session_state.get("entry_mode") != "demo"
+                        and bool(_split_query_tokens(include_query) or _split_query_tokens(exclude_query))
                     )
-                    cf['icd_exclude_query'] = exclude_value.strip() if st.session_state.cohort_enabled else ""
-                cf['icd_query'] = cf.get('icd_include_query', '')
-                cf['icd_mode'] = 'include'
-                include_query = str(cf.get('icd_include_query', '') or '')
-                exclude_query = str(cf.get('icd_exclude_query', '') or '')
-                has_real_icd_tokens = (
-                    st.session_state.get("entry_mode") != "demo"
-                    and bool(_split_query_tokens(include_query) or _split_query_tokens(exclude_query))
-                )
-                if has_real_icd_tokens:
-                    _real_step2_icd_preview_counts(include_query, exclude_query)
-                    if not _render_step2_icd_match_preview_panel(lang):
+                    if has_real_icd_tokens:
+                        _real_step2_icd_preview_counts(include_query, exclude_query)
+                        if not _render_step2_icd_match_preview_panel(lang):
+                            _render_step2_icd_preview(lang, include_query, exclude_query)
+                    else:
                         _render_step2_icd_preview(lang, include_query, exclude_query)
-                else:
-                    _render_step2_icd_preview(lang, include_query, exclude_query)
         else:
             cf['icd_query'] = ""
             cf['icd_include_query'] = ""
@@ -4377,31 +4386,13 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
         )
     with header_r:
         st.write("")
-        all_col, clear_col, rec_col = st.columns(3, gap="small")
-        with all_col:
-            if st.button(
-                "Select all" if lang == "en" else "全选",
-                key="concept_select_all_top",
-                use_container_width=True,
-            ):
-                _reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))
-                st.rerun()
-        with clear_col:
-            if st.button(
-                "Clear" if lang == "en" else "清空",
-                key="concept_clear_all_top",
-                use_container_width=True,
-            ):
-                _reset_concepts_to_groups(concept_groups, [])
-                st.rerun()
-        with rec_col:
-            if st.button(
-                "Reset to core" if lang == "en" else "恢复核心",
-                key="concept_reset_core_design",
-                use_container_width=True,
-            ):
-                _reset_concepts_to_groups(concept_groups, _core_concept_groups_for_design(concept_groups))
-                st.rerun()
+        if st.button(
+            "Reset to core" if lang == "en" else "恢复核心",
+            key="concept_reset_core_design",
+            use_container_width=True,
+        ):
+            _reset_concepts_to_groups(concept_groups, _core_concept_groups_for_design(concept_groups))
+            st.rerun()
     selected_concepts = _collect_selected_concepts(concept_groups)
     st.session_state.selected_concepts = selected_concepts
     selected_groups_now = [g for g in st.session_state.get("selected_groups", []) if g in concept_groups]
@@ -4441,17 +4432,15 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
 
     left, right = st.columns([1.48, 1.0], gap="large")
     with left:
-        search = st.text_input(
-            "Filter by name, code, or unit" if lang == "en" else "按名称、代码或单位筛选",
-            key="concept_search_design",
-            placeholder="sofa, lactate, renal..." if lang == "en" else "SOFA、乳酸、肾脏...",
-        ).strip().lower()
+        search = ""
+        default_group_set = set(core_groups) | set(selected_groups_now)
         visible_groups = [
             group_name for group_name, concepts in concept_groups.items()
-            if _concept_group_matches_search(group_name, concepts, search)
+            if group_name in default_group_set and _concept_group_matches_search(group_name, concepts, search)
         ]
         st.markdown(
-            f'<div class="eu-section-label"><span>{html.escape("Modules" if lang == "en" else "模块")}</span></div>',
+            f'<div class="eu-section-label"><span>{html.escape("Core modules" if lang == "en" else "核心模块")}</span>'
+            f'<span class="num">{html.escape("Advanced shows all" if lang == "en" else "高级区显示全部")}</span></div>',
             unsafe_allow_html=True,
         )
         if not visible_groups:
@@ -4501,11 +4490,70 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
         _render_concept_summary(lang, concept_groups, st.session_state.get("selected_concepts", []) or [])
 
     selected_groups = [g for g in st.session_state.selected_groups if g in concept_groups]
-    if selected_groups:
-        with st.expander(
-            "Feature detail configuration" if lang == "en" else "变量详细配置",
-            expanded=False,
-        ):
+    with _sidebar_expander(
+        "Advanced · all modules and feature details" if lang == "en" else "高级 · 全量模块与变量明细",
+        expanded=False,
+    ):
+        adv_cols = st.columns([1, 1, 1], gap="small")
+        with adv_cols[0]:
+            if st.button(
+                "Select all" if lang == "en" else "全选",
+                key="concept_select_all_top",
+                use_container_width=True,
+            ):
+                _reset_concepts_to_groups(concept_groups, _all_concept_groups(concept_groups))
+                st.rerun()
+        with adv_cols[1]:
+            if st.button(
+                "Clear" if lang == "en" else "清空",
+                key="concept_clear_all_top",
+                use_container_width=True,
+            ):
+                _reset_concepts_to_groups(concept_groups, [])
+                st.rerun()
+        with adv_cols[2]:
+            if st.button(
+                "Core only" if lang == "en" else "仅核心",
+                key="concept_core_only_advanced",
+                use_container_width=True,
+            ):
+                _reset_concepts_to_groups(concept_groups, _core_concept_groups_for_design(concept_groups))
+                st.rerun()
+        adv_search = st.text_input(
+            "Filter all modules by name, code, or unit" if lang == "en" else "按名称、代码或单位筛选全部模块",
+            key="concept_search_design",
+            placeholder="sofa, lactate, renal..." if lang == "en" else "SOFA、乳酸、肾脏...",
+        ).strip().lower()
+        adv_visible_groups = [
+            group_name for group_name, concepts in concept_groups.items()
+            if _concept_group_matches_search(group_name, concepts, adv_search)
+        ]
+        st.markdown(
+            f'<div class="eu-section-label"><span>{html.escape("All modules" if lang == "en" else "全量模块")}</span>'
+            f'<span class="num">{html.escape(_module_count_label(len(adv_visible_groups), lang))}</span></div>',
+            unsafe_allow_html=True,
+        )
+        adv_card_cols = st.columns(2, gap="small")
+        for idx, group_name in enumerate(adv_visible_groups):
+            concepts = concept_groups.get(group_name, [])
+            active = group_name in st.session_state.selected_groups
+            display_name = _clean_module_label(group_name)
+            module_status = (
+                ("selected" if lang == "en" else "已选")
+                if active
+                else ("add" if lang == "en" else "添加")
+            )
+            with adv_card_cols[idx % 2]:
+                st.button(
+                    f"{display_name} · {module_status}",
+                    key=f"concept_module_advanced_{idx}",
+                    type="secondary",
+                    use_container_width=True,
+                    on_click=_toggle_concept_group_for_design,
+                    args=(concept_groups, group_name),
+                )
+                st.caption(_export_concept_count_label(len(concepts), lang))
+        if selected_groups:
             import hashlib
             for group_name in selected_groups:
                 key_hash = hashlib.md5(group_name.encode()).hexdigest()[:8]

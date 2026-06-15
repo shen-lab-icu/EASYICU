@@ -447,8 +447,8 @@ def test_concept_checkbox_and_selection_states_do_not_use_black_token_fills() ->
         sidebar_text.index("def _render_step3_concept_selection_design")
     ]
     step3_detail_block = sidebar_text[
-        sidebar_text.index('"Feature detail configuration"'):
-        sidebar_text.index('selected_concepts = _collect_selected_concepts(concept_groups)', sidebar_text.index('"Feature detail configuration"'))
+        sidebar_text.index('"Advanced · all modules and feature details"'):
+        sidebar_text.index('selected_concepts = _collect_selected_concepts(concept_groups)', sidebar_text.index('"Advanced · all modules and feature details"'))
     ]
     assert "st.columns" not in checkbox_helper
     assert "st.columns(3)" not in step3_detail_block
@@ -1913,6 +1913,7 @@ def test_streamlit_theme_is_fixed_to_light_mode() -> None:
 
 def test_coverage_audit_heatmap_uses_shell_style_and_hides_modebar() -> None:
     source = Path(data_coverage_audit_page.__file__).read_text(encoding="utf-8")
+    severity_source = Path(cohort_severity_page.__file__).read_text(encoding="utf-8")
     shell_css = shell_styles._load_shell_overrides_css()
     global_css = Path(styles.__file__).read_text(encoding="utf-8")
     heatmap_source = source[
@@ -1933,6 +1934,9 @@ def test_coverage_audit_heatmap_uses_shell_style_and_hides_modebar() -> None:
     assert '"displayModeBar": False' in heatmap_source
     assert "paper_bgcolor='#FFFFFF'" in heatmap_source
     assert "font=dict(family='IBM Plex Sans" in heatmap_source
+    assert "title=dict(" in heatmap_source
+    assert "titlefont" not in source
+    assert "titlefont" not in severity_source
     assert "'#8fbfc7'" in heatmap_source
     assert "'#059669'" not in heatmap_source
     assert "background: var(--accent-soft)" in audit_css
@@ -2062,7 +2066,7 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "Audit quality" in source_text
     assert "Data Extraction" in source_text
     assert "Data Visualization" in source_text
-    assert "Auditable run → gated manuscript draft" in source_text
+    assert "Project runs → evidence → gated draft" in source_text
     assert "Start demo extraction" not in source_text
     assert "Research Agent static gallery viewable" not in source_text
     assert "Research Agent setup and local-run handoff preview" not in source_text
@@ -3015,7 +3019,8 @@ def test_workspace_states_export_bundle_omits_local_paths_and_patient_rows() -> 
             lang="en",
         ).decode("utf-8")
     )
-    serialized = json.dumps(payload)
+    privacy_payload = {key: value for key, value in payload.items() if key != "exported_at"}
+    serialized = json.dumps(privacy_payload)
 
     assert payload["source"] == "easyicu_workspace_states_bundle"
     assert payload["local_paths_included"] is False
@@ -3066,7 +3071,7 @@ def test_workspace_state_primary_action_routes_selected_context() -> None:
     agent_real: dict[str, object] = {"database": "unknown"}
     pages_redesign._apply_workspace_state_action(agent_real, "agent", "real")
     assert agent_real["_active_main_page"] == "research_agent"
-    assert agent_real["_ra_view"] == "setup"
+    assert agent_real["_ra_view"] == "workbench"
     assert agent_real["entry_mode"] == "real"
     assert agent_real["use_mock_data"] is False
     assert agent_real["database"] == "miiv"
@@ -8881,22 +8886,17 @@ def test_research_agent_history_is_separate_and_setup_has_claude_reference_shell
         app_start:
         app_source.index("_handle_sidebar_export_trigger(default_export_container)", app_start)
     ]
-    assert "_eu_ra_view_history" in app_branch
+    assert 'key=f"_eu_agent_project_view_{view_key}"' in app_source
     assert "_ra_view == 'history'" in app_branch
     assert "_render_research_agent_reference_header(lang, view=_ra_view)" in app_branch
-    assert app_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)") < app_branch.index('st.container(key="_eu_ra_tabs")')
+    assert app_branch.index("_render_research_agent_reference_header(lang, view=_ra_view)") < app_branch.index("_render_agent_projects_shell(lang, _ra_snapshot, _ra_run_context)")
     assert 'st.container(key="_eu_ra_header_actions")' not in app_branch
-    assert "with _seg_tail:" in app_branch
     assert "_research_agent_active_run_context(st.session_state)" in app_branch
-    assert "_eu_ra_header_rerun" in app_branch
-    assert app_branch.index("with _seg_tail:") < app_branch.index("_eu_ra_header_rerun")
-    assert "_prime_research_agent_header_rerun(st.session_state, _ra_run_context)" in app_branch
-    assert 'key="_eu_ra_view_setup"' in app_branch
-    assert '"Workbench" if lang == \'en\' else "工作台"' in app_branch
-    assert 'key="_eu_ra_view_workbench"' in app_branch
-    assert 'key="_eu_ra_view_history"' in app_branch
-    assert 'key="_eu_ra_view_summary"' in app_branch
-    assert 'key="_eu_ra_header_rerun"' in app_branch
+    assert "_eu_agent_project_rerun" in app_source
+    assert "_prime_research_agent_header_rerun(st.session_state, run_context)" in app_source
+    assert 'key=f"_eu_agent_project_view_{view_key}"' in app_source
+    assert '"Workbench" if is_en else "工作台"' in app_source
+    assert '"history", "History" if is_en else "历史"' in app_source
     assert "render_research_agent_history_page(lang, show_header=False)" in app_branch
     assert 'view: str = "setup"' in app_source
     assert 'view == "history"' in app_source
@@ -11802,12 +11802,12 @@ def test_topbar_research_agent_demo_action_opens_guide() -> None:
 
 def test_topbar_research_agent_action_uses_reference_guide_label_but_opens_setup() -> None:
     assert app._topbar_primary_action_label("research_agent", "en", entry_mode="demo") == (
-        "Agent guide",
-        "Agent 导览",
+        "Project guide",
+        "项目导览",
     )
     assert app._topbar_primary_action_label("research_agent", "zh", entry_mode="real") == (
-        "Agent guide",
-        "Agent 导览",
+        "Project guide",
+        "项目导览",
     )
 
     state = {
@@ -11886,7 +11886,7 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
         "Reset to defaults",
         "恢复默认",
     )
-    assert app._topbar_primary_action_icon("settings") == ":material/refresh:"
+    assert app._topbar_primary_action_icon("settings") is None
 
     state = {
         "_eu_topbar_run_request": {"page": "settings"},
@@ -12588,18 +12588,36 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     nav_by_key = {item.key: item for item in nav_items}
 
     assert [item.key for item in nav_items] == [
+        "assistant",
         "extract",
         "quick_viz",
         "cohort",
         "cross_db",
         "research_agent",
     ]
+    assert nav_by_key["assistant"].label == "Research Copilot"
+    assert nav_by_key["assistant"].level == "top"
     assert nav_by_key["extract"].label == "Data Extraction"
     assert nav_by_key["quick_viz"].label == "Patient Review"
     assert nav_by_key["quick_viz"].level == "child"
     assert nav_by_key["cohort"].level == "child"
     assert nav_by_key["cross_db"].level == "child"
+    assert nav_by_key["research_agent"].label == "Agent Projects"
     assert nav_by_key["research_agent"].level == "top"
+
+    zh_streamlit_stub = _SessionStateStreamlit({
+        "language": "zh",
+        "mock_params": {"n_patients": 64},
+        "step2_confirmed": False,
+        "selected_concepts": [],
+    })
+    monkeypatch.setattr(sidebar, "st", zh_streamlit_stub)
+
+    zh_nav_items = sidebar._shell_nav_items("demo")
+    zh_nav_by_key = {item.key: item for item in zh_nav_items}
+    assert i18n.TEXTS["zh"]["agent_projects"] == "研究项目"
+    assert zh_nav_by_key["research_agent"].label == "研究项目"
+    assert zh_nav_by_key["assistant"].label == "研究 Copilot"
 
     assert not hasattr(sidebar, "_sidebar_next_steps_html")
     css_text = shell_styles._load_shell_overrides_css()
@@ -12625,7 +12643,7 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert "min-height: 40px !important" in css_text
     assert "eu-side-guide" not in css_text
     sidebar_text = Path(sidebar.__file__).read_text(encoding="utf-8")
-    assert "_eu_visualization_nav_open" in sidebar_text
+    assert "_eu_classic_workspace_nav_open" in sidebar_text
     assert "def _render_shell_aux_nav" in sidebar_text
     assert "_render_shell_primary_nav()\n                _render_shell_aux_nav()" in sidebar_text
     assert 'if active_main_page in {"assistant", "tutorial", "states"}' not in sidebar_text
@@ -12633,7 +12651,7 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert "assistant" in sidebar_text
     assert "tutorial" in sidebar_text
     assert "states" in sidebar_text
-    assert '"Research Copilot" if lang == "en" else "研究 Copilot"' in sidebar_text
+    assert '"assistant": "Research Copilot"' in sidebar_text
     assert '"Get Started" if lang == "en" else "开始使用"' in sidebar_text
     assert '"Workspace States" if lang == "en" else "工作区状态"' in sidebar_text
     assert 'st.session_state["_active_main_page"] = "assistant"' in sidebar_text

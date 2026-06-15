@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from easyicu.webapp import copilot_engine as ce
+from easyicu.webapp.workspace_snapshots import build_study_workspace_snapshot
 
 
 # --------------------------------------------------------------------------- #
@@ -202,6 +203,34 @@ def test_concepts_uses_shared_feature_counts():
     res = ce.run_copilot_step("concepts", {}, state, engines=eng)
     assert res["counts"] == {"modules": 3, "concepts": 9}
     assert state["_copilot_feature_counts"] == {"modules": 3, "concepts": 9}
+
+
+def test_study_workspace_snapshot_uses_shared_classic_state_keys():
+    state = {
+        "entry_mode": "real",
+        "database": "miiv",
+        "data_path": "/data/prepared_miiv",
+        "path_validated": True,
+        "step2_confirmed": True,
+        "selected_concepts": ["hr", "lactate"],
+        "loaded_concepts": {"hr": object()},
+        "patient_ids": [101, 102],
+        "research_agent_question": "Does lactate predict mortality?",
+    }
+    study = {"step": "concepts", "question": "Does lactate predict mortality?", "modules": ["vitals"]}
+
+    snapshot = build_study_workspace_snapshot(state, study, lang="en")
+
+    assert snapshot.active_step == "concepts"
+    assert snapshot.current_decision == "Keep core modules or add optional modules"
+    assert snapshot.data_label == "Real Data · MIIV · prepared_miiv"
+    assert snapshot.cohort_label == "confirmed"
+    assert snapshot.concepts_label == "2 selected"
+    assert snapshot.review_label == "1 concepts · 2 patients"
+    assert snapshot.agent_label == "ready for handoff"
+    assert snapshot.step_done["data"] is True
+    assert snapshot.step_done["cohort"] is True
+    assert snapshot.step_done["concepts"] is True
 
 
 def test_run_study_up_to_goal_respects_depth():
