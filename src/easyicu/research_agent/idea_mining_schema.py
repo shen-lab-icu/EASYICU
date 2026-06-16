@@ -94,7 +94,9 @@ def _sha256_text(text: str) -> str:
 
 
 def _canonical_json(payload: Any) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
 
 
 def _nonempty_text(value: str, field_name: str) -> str:
@@ -176,8 +178,11 @@ class LiteratureIdeaCandidate(BaseModel):
     citation_key: str
     source_adapter_level: SourceAdapterLevel
     population: str
-    exposure_or_predictor: str
-    outcome: str
+    # Pairwise shape (default). Concept-set families may leave these empty and
+    # populate ``analysis_concepts`` instead; the shape validator enforces that
+    # at least one shape is present.
+    exposure_or_predictor: str = ""
+    outcome: str = ""
     rationale: str
     source_quote: str = Field(max_length=800)
     analysis_family: str = "association"
@@ -190,13 +195,17 @@ class LiteratureIdeaCandidate(BaseModel):
     # incidental qualifier concept ("lactate") that shares the phrase.
     exposure_core_concept: Optional[str] = None
     outcome_core_concept: Optional[str] = None
+    # Concept-SET shape for families that are not predictor->outcome pairs
+    # (clustering / phenotyping, descriptive epidemiology, data-quality audit).
+    # Optional + back-compatible: pairwise ideas leave it empty and keep using
+    # exposure_or_predictor/outcome. A concept-set idea may leave predictor/
+    # outcome empty and list its variables here instead.
+    analysis_concepts: List[str] = Field(default_factory=list)
 
     @field_validator(
         "source_snapshot_id",
         "citation_key",
         "population",
-        "exposure_or_predictor",
-        "outcome",
         "rationale",
         "source_quote",
         "analysis_family",
@@ -207,6 +216,23 @@ class LiteratureIdeaCandidate(BaseModel):
         return _nonempty_text(value, field_name)
 
     @model_validator(mode="after")
+    def _require_a_research_shape(self) -> "LiteratureIdeaCandidate":
+        # An idea must carry SOME analyzable shape: either a predictor->outcome
+        # pair (both non-empty) or a non-empty concept set. This relaxes the old
+        # "predictor and outcome are always required" rule -- which structurally
+        # excluded clustering/descriptive ideas -- without admitting empty ideas.
+        has_pair = bool(self.exposure_or_predictor.strip()) and bool(
+            self.outcome.strip()
+        )
+        has_concept_set = any(str(c).strip() for c in self.analysis_concepts)
+        if not (has_pair or has_concept_set):
+            raise ValueError(
+                "idea must declare either a predictor->outcome pair or a "
+                "non-empty analysis_concepts set"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _fill_stable_id(self) -> "LiteratureIdeaCandidate":
         if not self.literature_idea_id:
             self.literature_idea_id = _stable_idea_id(
@@ -215,6 +241,7 @@ class LiteratureIdeaCandidate(BaseModel):
                     "population": self.population,
                     "predictor": self.exposure_or_predictor,
                     "outcome": self.outcome,
+                    "analysis_concepts": list(self.analysis_concepts),
                     "quote": self.source_quote,
                 }
             )
@@ -257,6 +284,9 @@ class ExecutableHypothesisCandidate(BaseModel):
     outcome_label: str
     resolved_predictor_concept: Optional[str] = None
     resolved_outcome_concept: Optional[str] = None
+    # Resolved concept set for concept-set families (clustering / descriptive /
+    # data-quality). Empty for pairwise predictor->outcome candidates.
+    resolved_analysis_concepts: List[str] = Field(default_factory=list)
     feasibility_pair_key: Optional[Tuple[str, str]] = None
     outcome_determinability_status: OutcomeDeterminabilityStatus = "unknown"
     normalized_outcome_concept: Optional[str] = None
@@ -277,8 +307,7 @@ class ExecutableHypothesisCandidate(BaseModel):
 
         if not self.executable:
             raise NonExecutableCandidateError(
-                "; ".join(self.non_executable_reasons)
-                or "candidate is not executable"
+                "; ".join(self.non_executable_reasons) or "candidate is not executable"
             )
         return True
 
@@ -443,6 +472,10 @@ class IdeaMiningCandidateTriageRecord(BaseModel):
     outcome_label: str
     resolved_predictor_concept: Optional[str] = None
     resolved_outcome_concept: Optional[str] = None
+    # Concept-SET shape surfaced for reviewer readability (clustering /
+    # descriptive / data-quality candidates carry no predictor->outcome pair).
+    analysis_family: str = "association"
+    resolved_analysis_concepts: List[str] = Field(default_factory=list)
     feasibility_pair_key: Optional[Tuple[str, str]] = None
     feature_derivation_status: FeatureDerivationStatus = "raw_concept_available"
     feature_derivation_requirements: List[str] = Field(default_factory=list)
@@ -481,7 +514,9 @@ class IdeaMiningDryRunResult(BaseModel):
     prior_art_assessments: List[PriorArtAssessment] = Field(default_factory=list)
     feasibility_signals: List[IdeaMiningFeasibilityRecord] = Field(default_factory=list)
     ranked_candidates: List[Dict[str, Any]] = Field(default_factory=list)
-    candidate_records: List[IdeaMiningCandidateTriageRecord] = Field(default_factory=list)
+    candidate_records: List[IdeaMiningCandidateTriageRecord] = Field(
+        default_factory=list
+    )
     discovery_records: List[DiscoveryCandidateRecord] = Field(default_factory=list)
     registry_path: str
     manifest_path: str

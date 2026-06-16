@@ -41,8 +41,15 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "how variables are distributed without making primary effect claims."
         ),
         trigger_terms=(
-            "describe", "description", "characteristics", "baseline", "cohort",
-            "incidence", "prevalence", "frequency", "burden",
+            "describe",
+            "description",
+            "characteristics",
+            "baseline",
+            "cohort",
+            "incidence",
+            "prevalence",
+            "frequency",
+            "burden",
         ),
         candidate_steps=(
             "cohort summary (Table 1)",
@@ -63,8 +70,15 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "clinical outcomes with appropriate covariate adjustment."
         ),
         trigger_terms=(
-            "associated", "association", "predictor", "prognostic", "risk factor",
-            "odds ratio", "hazard ratio", "linked", "relationship",
+            "associated",
+            "association",
+            "predictor",
+            "prognostic",
+            "risk factor",
+            "odds ratio",
+            "hazard ratio",
+            "linked",
+            "relationship",
         ),
         candidate_steps=(
             "cohort summary when confounding context matters",
@@ -86,8 +100,16 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "definition, evaluation, and calibration."
         ),
         trigger_terms=(
-            "predict", "prediction", "predictive", "early warning", "classifier",
-            "model performance", "auroc", "auc", "calibration", "brier",
+            "predict",
+            "prediction",
+            "predictive",
+            "early warning",
+            "classifier",
+            "model performance",
+            "auroc",
+            "auc",
+            "calibration",
+            "brier",
         ),
         candidate_steps=(
             "index-time and leakage audit",
@@ -109,8 +131,16 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "and event definitions instead of collapsing them into a binary endpoint."
         ),
         trigger_terms=(
-            "survival", "time-to-event", "time to event", "cox", "kaplan", "kaplan-meier",
-            "hazard", "competing risk", "censoring", "follow-up",
+            "survival",
+            "time-to-event",
+            "time to event",
+            "cox",
+            "kaplan",
+            "kaplan-meier",
+            "hazard",
+            "competing risk",
+            "censoring",
+            "follow-up",
         ),
         candidate_steps=(
             "define time zero and follow-up window",
@@ -132,8 +162,14 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "explicit prediction windows and refresh frequency."
         ),
         trigger_terms=(
-            "dynamic prediction", "time-updated", "time updated", "early warning",
-            "deterioration", "rolling risk", "horizon", "update frequency",
+            "dynamic prediction",
+            "time-updated",
+            "time updated",
+            "early warning",
+            "deterioration",
+            "rolling risk",
+            "horizon",
+            "update frequency",
         ),
         candidate_steps=(
             "define prediction horizon and update cadence",
@@ -155,8 +191,14 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "to discover clinically meaningful subphenotypes."
         ),
         trigger_terms=(
-            "cluster", "clustering", "trajectory", "trajectories", "phenotype",
-            "subphenotype", "longitudinal", "state sequence",
+            "cluster",
+            "clustering",
+            "trajectory",
+            "trajectories",
+            "phenotype",
+            "subphenotype",
+            "longitudinal",
+            "state sequence",
         ),
         candidate_steps=(
             "define time axis and panel structure",
@@ -178,8 +220,15 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "making modality alignment and missingness explicit."
         ),
         trigger_terms=(
-            "multimodal", "notes", "waveform", "imaging", "image", "text modality",
-            "clinical notes", "fusion", "modality",
+            "multimodal",
+            "notes",
+            "waveform",
+            "imaging",
+            "image",
+            "text modality",
+            "clinical notes",
+            "fusion",
+            "modality",
         ),
         candidate_steps=(
             "define available modalities and alignment unit",
@@ -201,8 +250,15 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "and quantify transportability."
         ),
         trigger_terms=(
-            "external validation", "externally validate", "validate score", "benchmark", "compare score",
-            "score comparison", "transportability", "reclassification", "net benefit",
+            "external validation",
+            "externally validate",
+            "validate score",
+            "benchmark",
+            "compare score",
+            "score comparison",
+            "transportability",
+            "reclassification",
+            "net benefit",
         ),
         candidate_steps=(
             "define candidate scores / models and target cohort",
@@ -224,8 +280,13 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "without necessarily claiming a causal estimand."
         ),
         trigger_terms=(
-            "treatment response", "response", "heterogeneity", "drug response",
-            "therapy response", "responder", "nonresponder",
+            "treatment response",
+            "response",
+            "heterogeneity",
+            "drug response",
+            "therapy response",
+            "responder",
+            "nonresponder",
         ),
         candidate_steps=(
             "treatment definition and timing alignment",
@@ -241,12 +302,17 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
     "causal_inference": AnalysisTypeSpec(
         key="causal_inference",
         name="Causal inference / target-trial emulation",
-        description=(
-            "Estimate a treatment effect under an explicit causal design."
-        ),
+        description=("Estimate a treatment effect under an explicit causal design."),
         trigger_terms=(
-            "causal", "treatment effect", "target trial", "propensity", "ipw",
-            "inverse probability", "g-formula", "instrumental variable", "do-calculus",
+            "causal",
+            "treatment effect",
+            "target trial",
+            "propensity",
+            "ipw",
+            "inverse probability",
+            "g-formula",
+            "instrumental variable",
+            "do-calculus",
         ),
         candidate_steps=(
             "define target estimand and time zero",
@@ -267,8 +333,13 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Learn or evaluate dynamic treatment strategies over ICU trajectories."
         ),
         trigger_terms=(
-            "reinforcement learning", "policy learning", "off-policy", "q-learning",
-            "actor-critic", "dynamic treatment regime", "decision policy",
+            "reinforcement learning",
+            "policy learning",
+            "off-policy",
+            "q-learning",
+            "actor-critic",
+            "dynamic treatment regime",
+            "decision policy",
         ),
         candidate_steps=(
             "state / action / reward definition",
@@ -290,8 +361,16 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "without expanding into a full effect-estimation workflow."
         ),
         trigger_terms=(
-            "missingness", "missing", "completeness", "coverage", "data quality",
-            "quality audit", "availability", "schema", "unit check", "range check",
+            "missingness",
+            "missing",
+            "completeness",
+            "coverage",
+            "data quality",
+            "quality audit",
+            "availability",
+            "schema",
+            "unit check",
+            "range check",
         ),
         candidate_steps=(
             "missingness profile",
@@ -312,8 +391,13 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "concept mapping and harmonization notes."
         ),
         trigger_terms=(
-            "replicate", "replication", "cross-database", "external validation",
-            "transportability", "across mimic", "across eicu",
+            "replicate",
+            "replication",
+            "cross-database",
+            "external validation",
+            "transportability",
+            "across mimic",
+            "across eicu",
         ),
         candidate_steps=(
             "concept mapping",
@@ -334,7 +418,12 @@ _FAMILY_ALIASES: Dict[str, str] = {
     "prediction_model": "prediction_model",
     "clustering": "trajectory_clustering",
     "trajectory_clustering": "trajectory_clustering",
+    "subphenotype_clustering": "trajectory_clustering",
+    "subphenotype": "trajectory_clustering",
+    "subphenotyping": "trajectory_clustering",
+    "trajectory": "trajectory_clustering",
     "phenotyping": "trajectory_clustering",
+    "phenotype": "trajectory_clustering",
     "association": "association_study",
     "association_study": "association_study",
     "survival": "survival",
@@ -351,6 +440,34 @@ _FAMILY_ALIASES: Dict[str, str] = {
     "data_quality_audit": "data_quality_audit",
     "cross_database_replication": "cross_database_replication",
 }
+
+
+# Families whose research shape is a CONCEPT SET rather than a predictor->outcome
+# pair. Clustering/phenotyping discovers structure over a set of variables (no
+# single outcome); descriptive epidemiology characterizes a set of concepts; a
+# data-quality audit inspects a set of concepts. For these, idea-mining must NOT
+# force a (predictor, outcome) tuple -- doing so is exactly what made clustering
+# ideas resolve to predictor=None and get buried as db-cannot-do.
+CONCEPT_SET_FAMILIES: frozenset[str] = frozenset(
+    {"trajectory_clustering", "descriptive_epidemiology", "data_quality_audit"}
+)
+
+
+def normalize_analysis_family(value: Optional[str]) -> str:
+    """Map a free-text / benchmark family label to a canonical registry key.
+
+    Unknown labels fall back to ``association_study`` (the predictor->outcome
+    default), so callers always get a key that exists in the registry.
+    """
+    key = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    if key in _REGISTRY:
+        return key
+    return _FAMILY_ALIASES.get(key, "association_study")
+
+
+def is_concept_set_family(value: Optional[str]) -> bool:
+    """Whether a family is shaped as a concept SET, not a predictor->outcome pair."""
+    return normalize_analysis_family(value) in CONCEPT_SET_FAMILIES
 
 
 def list_analysis_types() -> List[AnalysisTypeSpec]:
@@ -438,11 +555,19 @@ def infer_analysis_type(
         return _REGISTRY["multimodal"]
     if _has_any("validation"):
         return _REGISTRY["validation"]
-    if _has_any("prediction_model", extras=("model", "evaluation metric", "evaluation metrics")):
+    if _has_any(
+        "prediction_model", extras=("model", "evaluation metric", "evaluation metrics")
+    ):
         return _REGISTRY["prediction_model"]
     if _has_any("data_quality_audit") and not any(
         _has_any(key)
-        for key in ("association_study", "prediction_model", "causal_inference", "trajectory_clustering", "reinforcement_learning")
+        for key in (
+            "association_study",
+            "prediction_model",
+            "causal_inference",
+            "trajectory_clustering",
+            "reinforcement_learning",
+        )
     ):
         return _REGISTRY["data_quality_audit"]
     if _has_any("treatment_response"):
@@ -455,12 +580,32 @@ def infer_analysis_type(
                 scores[key] += 1
 
     if target_outcome and any(v.role == VariableRole.TIME for v in context.variables):
-        scores["prediction_model"] += 1 if any(_keyword_present(text, term) for term in ("predict", "forecast")) else 0
-        scores["trajectory_clustering"] += 1 if _keyword_present(text, "trajectory") else 0
-        scores["dynamic_prediction"] += 1 if any(_keyword_present(text, term) for term in ("dynamic", "rolling", "updated", "over time")) else 0
+        scores["prediction_model"] += (
+            1
+            if any(_keyword_present(text, term) for term in ("predict", "forecast"))
+            else 0
+        )
+        scores["trajectory_clustering"] += (
+            1 if _keyword_present(text, "trajectory") else 0
+        )
+        scores["dynamic_prediction"] += (
+            1
+            if any(
+                _keyword_present(text, term)
+                for term in ("dynamic", "rolling", "updated", "over time")
+            )
+            else 0
+        )
 
     if any(v.role == VariableRole.TIME for v in context.variables):
-        scores["survival"] += 1 if any(_keyword_present(text, term) for term in ("survival", "kaplan", "cox", "censor", "time-to-event")) else 0
+        scores["survival"] += (
+            1
+            if any(
+                _keyword_present(text, term)
+                for term in ("survival", "kaplan", "cox", "censor", "time-to-event")
+            )
+            else 0
+        )
     if any(
         token in ((v.name or "") + " " + (v.description or "")).lower()
         for v in context.variables

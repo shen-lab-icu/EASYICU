@@ -45,6 +45,7 @@ from .idea_registry import (
     CandidateRegistryEntry,
     IdeaCandidateRegistry,
 )
+from .analysis_types import is_concept_set_family, normalize_analysis_family
 from .idea_scope import LiteratureScopeSpec, build_pubmed_query_from_scope
 from .literature import CitationRecord
 from .idea_mining_schema import (  # noqa: F401  (re-exported for back-compat)
@@ -289,6 +290,7 @@ def build_idea_extraction_messages(
             "exposure_core_concept",
             "outcome",
             "outcome_core_concept",
+            "analysis_concepts",
             "rationale",
             "source_quote",
             "analysis_family",
@@ -297,6 +299,24 @@ def build_idea_extraction_messages(
         ],
         "rules": [
             "source_quote must be copied from available_source_text",
+            (
+                "choose the research SHAPE that fits the gap. For a "
+                "predictor->outcome question (association, prediction, survival, "
+                "causal, treatment response) fill exposure_or_predictor and "
+                "outcome. For a concept-SET question that has NO single "
+                "predictor->outcome pair -- subphenotype/phenotype clustering, "
+                "descriptive epidemiology / cohort characterization, or a "
+                "data-quality audit -- LEAVE exposure_or_predictor and outcome "
+                "empty and instead list the variables in analysis_concepts (each "
+                "a single named construct), and set analysis_family accordingly "
+                "(e.g. subphenotype_clustering, descriptive_epidemiology, "
+                "data_quality_audit)"
+            ),
+            (
+                "analysis_concepts: 2+ specific named constructs for a "
+                "clustering/phenotyping idea, or 1+ for a descriptive / "
+                "data-quality idea; omit (empty) for predictor->outcome ideas"
+            ),
             (
                 "exposure_core_concept: the SINGLE core measurable construct "
                 "being studied as the exposure, with timing windows, dose or "
@@ -350,6 +370,118 @@ def build_idea_extraction_messages(
     ]
 
 
+IDEA_REFLECTION_SYSTEM_PROMPT = (
+    "You are a critical ICU research reviewer refining a draft set of candidate "
+    "research directions. Improve precision and honesty; do not invent. Keep each "
+    "idea's citation_key and source_quote EXACTLY as given (they are provenance "
+    "anchors). Return only JSON."
+)
+
+
+def build_idea_reflection_messages(
+    ideas: Sequence[LiteratureIdeaCandidate],
+    *,
+    materials: Sequence[SourceMaterial | Mapping[str, Any]],
+    source_snapshot_id: str,
+    round_idx: int,
+    num_rounds: int,
+    prior_art_titles: Optional[Sequence[Sequence[str]]] = None,
+) -> List[LLMMessage]:
+    """Build the case-neutral self-critique/refine prompt for one round.
+
+    When ``prior_art_titles`` is given (aligned to ``ideas``), each draft idea
+    carries the top prior-art titles found for it so the model can drop or
+    differentiate already-covered directions (Phase 2b retrieval augmentation).
+    """
+
+    parsed = [
+        raw if isinstance(raw, SourceMaterial) else SourceMaterial.model_validate(raw)
+        for raw in materials
+    ]
+    source_blocks = [
+        {
+            "citation_key": material.citation.key,
+            "available_source_text": _available_source_text(material),
+        }
+        for material in parsed
+    ]
+    draft = []
+    for position, idea in enumerate(ideas):
+        entry = {
+            "citation_key": idea.citation_key,
+            "source_quote": idea.source_quote,
+            "population": idea.population,
+            "exposure_or_predictor": idea.exposure_or_predictor,
+            "outcome": idea.outcome,
+            "analysis_concepts": list(idea.analysis_concepts),
+            "analysis_family": idea.analysis_family,
+            "rationale": idea.rationale,
+        }
+        if prior_art_titles is not None and position < len(prior_art_titles):
+            titles = [str(t) for t in prior_art_titles[position] if str(t).strip()]
+            if titles:
+                entry["prior_art_titles"] = titles
+        draft.append(entry)
+    augmented = prior_art_titles is not None
+    instruction = (
+        "Critically refine the draft ideas. For each idea you keep: keep "
+        "citation_key and source_quote VERBATIM; sharpen vague constructs "
+        "into a single concrete named construct (drop placeholder words like "
+        "marker, biomarker, AI, machine learning, model, score, strategy, "
+        "approach when the source names no concrete construct); pick the "
+        "correct research SHAPE -- a predictor->outcome pair (fill "
+        "exposure_or_predictor + outcome) OR a concept SET (leave the pair "
+        "empty and fill analysis_concepts with 2+ named variables for "
+        "clustering/phenotyping, 1+ for descriptive/data-quality) -- and set "
+        "analysis_family accordingly. Diversify: drop near-duplicate ideas that "
+        "restate the same construct/outcome, keeping only the single sharpest "
+        "version. DROP an idea entirely (omit it) if it is vague, ungrounded in "
+        "its quote, or not feasible as ICU cohort data. Do not invent results, "
+        "effect sizes, or new quotes."
+    )
+    if augmented:
+        instruction += (
+            " Each idea may carry prior_art_titles: if those titles show the "
+            "direction is already well studied, DROP it unless you can name a "
+            "concrete differentiator grounded in the source quote."
+        )
+    user_payload = {
+        "source_snapshot_id": source_snapshot_id,
+        "round": f"{round_idx + 1}/{num_rounds}",
+        "instruction": instruction,
+        "return": "JSON array of the refined ideas (same field names as the draft)",
+        "draft_ideas": draft,
+        "sources": source_blocks,
+    }
+    return [
+        LLMMessage(role="system", content=IDEA_REFLECTION_SYSTEM_PROMPT),
+        LLMMessage(role="user", content=_canonical_json(user_payload)),
+    ]
+
+
+def _available_source_text(material: SourceMaterial) -> str:
+    """The text the model is allowed to quote from, matching the extraction path."""
+    if material.source_adapter_level == "metadata_only":
+        citation = material.citation
+        return " ".join(
+            part
+            for part in [citation.title, citation.venue or "", citation.relevance or ""]
+            if str(part or "").strip()
+        )
+    return material.source_text or ""
+
+
+# The schema's own bound for ``source_quote`` -- read from the model field so a
+# tightened constraint stays in one place and the truncation guard cannot drift.
+_LITERATURE_IDEA_SOURCE_QUOTE_MAX = (
+    LiteratureIdeaCandidate.model_fields["source_quote"].metadata[0].max_length
+)
+
+# The idea contract's accepted field names -- used to strip echoed context fields
+# (e.g. injected ``prior_art_titles``) before validating an LLM item.
+_LITERATURE_IDEA_FIELDS = frozenset(LiteratureIdeaCandidate.model_fields)
+
+
 def extract_literature_ideas(
     *,
     materials: Sequence[SourceMaterial | Mapping[str, Any]],
@@ -357,6 +489,10 @@ def extract_literature_ideas(
     llm: LLMClient,
     untraceable_quote_policy: Literal["raise", "skip"] = "raise",
     dropped_untraceable: Optional[List[str]] = None,
+    batch_size: int = 6,
+    max_tokens: int = 4096,
+    reflection_rounds: int = 0,
+    reflection_search_client: Optional[Any] = None,
 ) -> List[LiteratureIdeaCandidate]:
     """Extract structured literature ideas with a case-neutral JSON prompt.
 
@@ -369,12 +505,15 @@ def extract_literature_ideas(
     idea. Dropped citation keys are appended to ``dropped_untraceable`` when a
     list is supplied. Either way an untraceable quote is NEVER admitted, so the
     provenance guarantee is unchanged; only the blast radius differs.
+
+    Materials are extracted in batches of ``batch_size``. A single call over an
+    entire multi-dozen-article corpus shares one ``max_tokens`` output budget, so
+    the JSON array is truncated and most candidates are silently lost (the yield
+    caps at ~10 ideas regardless of corpus size). Batching gives each small group
+    of articles its own budget and concatenates the results, so yield scales with
+    the corpus and per-article extraction is more thorough.
     """
 
-    messages = build_idea_extraction_messages(
-        materials,
-        source_snapshot_id=source_snapshot_id,
-    )
     parsed_materials = [
         raw if isinstance(raw, SourceMaterial) else SourceMaterial.model_validate(raw)
         for raw in materials
@@ -384,29 +523,276 @@ def extract_literature_ideas(
         material.citation.key: material.source_adapter_level
         for material in parsed_materials
     }
-    raw = llm.complete(messages, max_tokens=2048, temperature=0.0)
-    payload = _parse_json_payload(raw)
-    if not isinstance(payload, list):
-        raise IdeaExtractionError("idea extraction response must be a JSON array")
+
     candidates: List[LiteratureIdeaCandidate] = []
-    for item in payload:
-        if not isinstance(item, Mapping):
-            raise IdeaExtractionError("each idea extraction item must be an object")
-        data = dict(item)
-        data["source_snapshot_id"] = source_snapshot_id
-        citation_key = str(data.get("citation_key") or "").strip()
-        data.setdefault("source_adapter_level", adapter_level_by_key.get(citation_key))
-        quote = str(data.get("source_quote") or "").strip()
-        if not _quote_is_traceable(quote, source_text_by_key.get(citation_key, "")):
-            if untraceable_quote_policy == "skip":
-                if dropped_untraceable is not None:
-                    dropped_untraceable.append(citation_key)
-                continue
-            raise IdeaExtractionError(
-                f"source_quote for citation_key={citation_key!r} is not traceable"
+    step = max(1, int(batch_size))
+    for start in range(0, len(parsed_materials), step):
+        batch = parsed_materials[start : start + step]
+        messages = build_idea_extraction_messages(
+            batch,
+            source_snapshot_id=source_snapshot_id,
+        )
+        raw = llm.complete(messages, max_tokens=max_tokens, temperature=0.0)
+        payload = _parse_json_payload(raw)
+        if not isinstance(payload, list):
+            raise IdeaExtractionError("idea extraction response must be a JSON array")
+        for item in payload:
+            coerced = _coerce_extracted_idea_item(
+                item,
+                source_snapshot_id=source_snapshot_id,
+                source_text_by_key=source_text_by_key,
+                adapter_level_by_key=adapter_level_by_key,
+                untraceable_quote_policy=untraceable_quote_policy,
+                dropped_untraceable=dropped_untraceable,
             )
-        candidates.append(LiteratureIdeaCandidate.model_validate(data))
+            if coerced is not None:
+                candidates.append(coerced)
+
+    # Phase 2 -- agentic reflection. An optional self-critique/refine loop
+    # (inspired by ai-scientist-v2's reflection rounds) that sharpens vague
+    # constructs, fixes the analysis SHAPE/family, and drops ungrounded ideas.
+    # Default ``reflection_rounds=0`` preserves the single-pass behavior exactly.
+    # Provenance is never weakened: each refined idea is re-validated through the
+    # same traceability + length gate, so a tampered/untraceable quote is dropped.
+    rounds = max(0, int(reflection_rounds))
+    for round_idx in range(rounds):
+        if not candidates:
+            break
+        candidates = _reflect_and_refine_ideas(
+            candidates,
+            materials=parsed_materials,
+            source_snapshot_id=source_snapshot_id,
+            llm=llm,
+            source_text_by_key=source_text_by_key,
+            adapter_level_by_key=adapter_level_by_key,
+            untraceable_quote_policy=untraceable_quote_policy,
+            dropped_untraceable=dropped_untraceable,
+            round_idx=round_idx,
+            num_rounds=rounds,
+            max_tokens=max_tokens,
+            reflection_search_client=reflection_search_client,
+        )
+    # Phase 2b -- idea archive. Collapse near-duplicate constructs so the agentic
+    # loop diversifies instead of restating the same idea. Gated to the reflection
+    # path so single-pass extraction keeps its exact prior behavior.
+    if rounds > 0:
+        candidates = _collapse_near_duplicate_ideas(candidates)
     return candidates
+
+
+def _coerce_extracted_idea_item(
+    item: Any,
+    *,
+    source_snapshot_id: str,
+    source_text_by_key: Mapping[str, str],
+    adapter_level_by_key: Mapping[str, Any],
+    untraceable_quote_policy: Literal["raise", "skip"],
+    dropped_untraceable: Optional[List[str]],
+) -> Optional[LiteratureIdeaCandidate]:
+    """Validate one raw extraction/refinement item into a candidate.
+
+    Returns ``None`` when the item is dropped under ``skip`` policy (untraceable
+    quote). Raises ``IdeaExtractionError`` for hard contract violations under the
+    ``raise`` policy. The traceability + over-long-quote guards live here so both
+    the initial pass and the reflection pass enforce the same provenance rules.
+    """
+    if not isinstance(item, Mapping):
+        raise IdeaExtractionError("each idea extraction item must be an object")
+    data = dict(item)
+    data["source_snapshot_id"] = source_snapshot_id
+    citation_key = str(data.get("citation_key") or "").strip()
+    data.setdefault("source_adapter_level", adapter_level_by_key.get(citation_key))
+    quote = str(data.get("source_quote") or "").strip()
+    if not _quote_is_traceable(quote, source_text_by_key.get(citation_key, "")):
+        if untraceable_quote_policy == "skip":
+            if dropped_untraceable is not None:
+                dropped_untraceable.append(citation_key)
+            return None
+        raise IdeaExtractionError(
+            f"source_quote for citation_key={citation_key!r} is not traceable"
+        )
+    quote_max = _LITERATURE_IDEA_SOURCE_QUOTE_MAX
+    if len(quote) > quote_max:
+        data["source_quote"] = quote[:quote_max].rstrip()
+    # A reflection pass may omit the stable id so it can re-derive; drop a stale
+    # one so the refined construct gets a fresh content-addressed id.
+    data.pop("literature_idea_id", None)
+    # Drop any echoed context fields the model may copy back (e.g. the injected
+    # ``prior_art_titles``); the schema forbids extras, and these are not part of
+    # the idea contract.
+    data = {key: value for key, value in data.items() if key in _LITERATURE_IDEA_FIELDS}
+    return LiteratureIdeaCandidate.model_validate(data)
+
+
+def _reflect_and_refine_ideas(
+    ideas: Sequence[LiteratureIdeaCandidate],
+    *,
+    materials: Sequence[SourceMaterial],
+    source_snapshot_id: str,
+    llm: LLMClient,
+    source_text_by_key: Mapping[str, str],
+    adapter_level_by_key: Mapping[str, Any],
+    untraceable_quote_policy: Literal["raise", "skip"],
+    dropped_untraceable: Optional[List[str]],
+    round_idx: int,
+    num_rounds: int,
+    max_tokens: int,
+    reflection_search_client: Optional[Any] = None,
+) -> List[LiteratureIdeaCandidate]:
+    """One self-critique/refine round over the current idea set.
+
+    The model keeps ``citation_key`` and ``source_quote`` verbatim and may only
+    sharpen the construct, fix the analysis shape/family, or drop an idea by
+    omitting it. Refined items are re-validated through the same provenance gate,
+    so the round can never admit an ungrounded idea. On any malformed response
+    the original ideas are returned unchanged (reflection is best-effort).
+
+    When ``reflection_search_client`` is supplied (Phase 2b retrieval-augmented
+    reflection), the top prior-art titles for each idea are fetched and shown to
+    the model so it can drop or differentiate ideas the literature already covers
+    BEFORE they are mapped -- complementing the post-mapping novelty veto net.
+    """
+    prior_art_titles: Optional[List[List[str]]] = None
+    if reflection_search_client is not None:
+        prior_art_titles = _fetch_reflection_prior_art(
+            ideas, search_client=reflection_search_client
+        )
+    messages = build_idea_reflection_messages(
+        ideas,
+        materials=materials,
+        source_snapshot_id=source_snapshot_id,
+        round_idx=round_idx,
+        num_rounds=num_rounds,
+        prior_art_titles=prior_art_titles,
+    )
+    try:
+        raw = llm.complete(messages, max_tokens=max_tokens, temperature=0.0)
+        payload = _parse_json_payload(raw)
+    except Exception:
+        return list(ideas)
+    if not isinstance(payload, list) or not payload:
+        return list(ideas)
+    refined: List[LiteratureIdeaCandidate] = []
+    seen: set[str] = set()
+    for item in payload:
+        try:
+            coerced = _coerce_extracted_idea_item(
+                item,
+                source_snapshot_id=source_snapshot_id,
+                source_text_by_key=source_text_by_key,
+                adapter_level_by_key=adapter_level_by_key,
+                untraceable_quote_policy="skip",
+                dropped_untraceable=dropped_untraceable,
+            )
+        except IdeaExtractionError:
+            continue
+        if coerced is None:
+            continue
+        if coerced.literature_idea_id in seen:
+            continue
+        seen.add(str(coerced.literature_idea_id))
+        refined.append(coerced)
+    # A reflection round that drops everything is treated as a no-op rather than
+    # silently discarding the whole yield.
+    return refined or list(ideas)
+
+
+def _signature_tokens(text: str) -> str:
+    """Order-insensitive token signature of a construct phrase for dedup."""
+    tokens = sorted(
+        {
+            token
+            for token in re.split(r"[^a-z0-9]+", str(text or "").lower())
+            if len(token) > 2 and token not in _GENERIC_CONCEPT_WORDS
+        }
+    )
+    return " ".join(tokens)
+
+
+def _idea_signature(idea: LiteratureIdeaCandidate) -> Tuple[str, ...]:
+    """A coarse content signature used to collapse near-duplicate ideas.
+
+    Pairwise ideas key on (family, predictor-tokens, outcome-tokens); concept-set
+    ideas key on (family, sorted concept-token sets). This collapses "lactate ->
+    mortality" appearing twice, or the same variable set re-proposed, without
+    needing concept resolution.
+    """
+    family = normalize_analysis_family(idea.analysis_family)
+    has_pair = bool(idea.exposure_or_predictor.strip()) and bool(idea.outcome.strip())
+    if not has_pair and any(str(c).strip() for c in idea.analysis_concepts):
+        concepts = tuple(
+            sorted(
+                {
+                    _signature_tokens(str(c))
+                    for c in idea.analysis_concepts
+                    if str(c).strip()
+                }
+            )
+        )
+        return (family, "SET", *concepts)
+    return (
+        family,
+        _signature_tokens(idea.exposure_or_predictor),
+        _signature_tokens(idea.outcome),
+    )
+
+
+def _collapse_near_duplicate_ideas(
+    ideas: Sequence[LiteratureIdeaCandidate],
+) -> List[LiteratureIdeaCandidate]:
+    """Drop later ideas whose coarse signature already appeared (idea archive).
+
+    Diversifies the final set so the agentic loop does not converge on the same
+    construct restated across rounds/articles. Order-preserving: the first
+    occurrence of each signature is kept.
+    """
+    seen: set[Tuple[str, ...]] = set()
+    out: List[LiteratureIdeaCandidate] = []
+    for idea in ideas:
+        sig = _idea_signature(idea)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        out.append(idea)
+    return out
+
+
+def _fetch_reflection_prior_art(
+    ideas: Sequence[LiteratureIdeaCandidate],
+    *,
+    search_client: Any,
+    max_titles: int = 5,
+) -> List[List[str]]:
+    """Best-effort top prior-art titles per idea for retrieval-augmented reflect.
+
+    Returns a list aligned to ``ideas``; each entry is up to ``max_titles`` titles
+    of broad prior-art hits. Any search error yields an empty list for that idea,
+    so reflection degrades gracefully to non-augmented behavior.
+    """
+    per_idea: List[List[str]] = []
+    for idea in ideas:
+        titles: List[str] = []
+        try:
+            query = build_prior_art_queries(idea).get("broad", "")
+            if query:
+                result = search_client.search_prior_art(query, max_results=max_titles)
+                hits = (
+                    result.get("top_hits", [])
+                    if isinstance(result, Mapping)
+                    else getattr(result, "top_hits", [])
+                )
+                for hit in hits[:max_titles]:
+                    title = (
+                        hit.get("title")
+                        if isinstance(hit, Mapping)
+                        else getattr(hit, "title", "")
+                    )
+                    if title:
+                        titles.append(str(title))
+        except Exception:
+            titles = []
+        per_idea.append(titles)
+    return per_idea
 
 
 # Generic outcome umbrella phrases. An LLM mining a review's "future research"
@@ -476,6 +862,95 @@ def _default_mortality_outcome(
     return None
 
 
+# Minimum resolvable concepts a concept-set family needs to be executable.
+# Clustering/phenotyping needs >=2 variables to define a space; descriptive and
+# data-quality audits are meaningful on a single resolvable concept.
+_CONCEPT_SET_MIN_RESOLVED = {"trajectory_clustering": 2}
+
+
+def _concept_set_research_question(
+    family: str, concepts: Sequence[str], population: str
+) -> str:
+    joined = ", ".join(concepts) if concepts else "the named variables"
+    if family == "trajectory_clustering":
+        return f"Do distinct subphenotypes emerge from {joined} in {population}?"
+    if family == "data_quality_audit":
+        return f"What is the data quality / completeness of {joined} in {population}?"
+    return f"How are {joined} distributed in {population}?"
+
+
+def _map_concept_set_candidate(
+    candidate: LiteratureIdeaCandidate,
+    *,
+    lookup: Mapping[str, str],
+) -> ExecutableHypothesisCandidate:
+    """Map a concept-SET idea (clustering / descriptive / data-quality audit).
+
+    These families have no predictor->outcome pair: the research shape is a set
+    of variables to cluster on, characterize, or audit. Feasibility is "enough of
+    the named concepts resolve to real available concepts", not pair joint
+    coverage. Unresolved concepts are recorded as a note (not a hard block) as
+    long as the minimum count resolves, so a partially-covered set is still
+    executable on its resolvable members.
+    """
+    family = normalize_analysis_family(candidate.analysis_family)
+    resolved: List[str] = []
+    unresolved: List[str] = []
+    for raw_term in candidate.analysis_concepts:
+        term = str(raw_term).strip()
+        if not term:
+            continue
+        key = _resolve_concept(term, lookup)
+        if key is None:
+            unresolved.append(term)
+        elif key not in resolved:
+            resolved.append(key)
+
+    named_count = len([c for c in candidate.analysis_concepts if str(c).strip()])
+    min_required = _CONCEPT_SET_MIN_RESOLVED.get(family, 1)
+    reasons: List[str] = []
+    if len(resolved) < min_required:
+        reasons.append(
+            f"{family} needs at least {min_required} resolvable concept(s); "
+            f"resolved {len(resolved)} of {named_count}"
+        )
+
+    note = None
+    if unresolved:
+        note = "analysis concepts not available (omitted): " + ", ".join(unresolved)
+
+    executable_candidate_id = _stable_executable_id(
+        {
+            "literature_idea_id": candidate.literature_idea_id,
+            "analysis_family": family,
+            "analysis_concepts": resolved,
+            "snapshot": candidate.source_snapshot_id,
+        }
+    )
+    return ExecutableHypothesisCandidate(
+        executable_candidate_id=executable_candidate_id,
+        literature_idea_id=str(candidate.literature_idea_id),
+        source_snapshot_id=candidate.source_snapshot_id,
+        citation_key=candidate.citation_key,
+        population=candidate.population,
+        predictor_label="",
+        outcome_label="",
+        resolved_predictor_concept=None,
+        resolved_outcome_concept=None,
+        resolved_analysis_concepts=resolved,
+        feasibility_pair_key=None,
+        analysis_family=family,
+        research_question=_concept_set_research_question(
+            family,
+            resolved or [c for c in candidate.analysis_concepts],
+            candidate.population,
+        ),
+        source_quote=candidate.source_quote,
+        feature_derivation_note=note,
+        non_executable_reasons=reasons,
+    )
+
+
 def map_literature_idea_to_executable_candidate(
     candidate: LiteratureIdeaCandidate,
     *,
@@ -494,6 +969,22 @@ def map_literature_idea_to_executable_candidate(
     """
 
     lookup = _build_concept_lookup(available_concepts, concept_aliases=concept_aliases)
+
+    # Concept-SET shape (clustering / descriptive / data-quality): no
+    # predictor->outcome pair, mapped on a resolvable concept set so it is no
+    # longer buried as predictor=None db-cannot-do. Routed by SHAPE, not just the
+    # family label: an idea that carries a real predictor+outcome pair always
+    # stays on the pairwise path (a "trajectory" predictor->outcome association is
+    # pairwise, not clustering), so existing behavior is fully preserved.
+    _has_pair = bool(candidate.exposure_or_predictor.strip()) and bool(
+        candidate.outcome.strip()
+    )
+    _has_concept_set = any(str(c).strip() for c in candidate.analysis_concepts)
+    if not _has_pair and (
+        _has_concept_set or is_concept_set_family(candidate.analysis_family)
+    ):
+        return _map_concept_set_candidate(candidate, lookup=lookup)
+
     reasons: List[str] = []
 
     predictor_term = (
@@ -717,6 +1208,9 @@ def run_idea_mining_dry_run(
     scope_reference_year: Optional[int] = None,
     scope_retmax: int = 20,
     untraceable_quote_policy: Literal["raise", "skip"] = "raise",
+    reflection_rounds: int = 0,
+    reflection_search_client: Optional[Any] = None,
+    novelty_judge: Optional[Callable[..., Mapping[str, Any]]] = None,
     source_item_index: Optional["SourceItemIndex"] = None,
 ) -> IdeaMiningDryRunResult:
     """Run the S4→S1→S3→S2 idea-triage dry run and stop at the human gate.
@@ -788,6 +1282,8 @@ def run_idea_mining_dry_run(
         llm=llm,
         untraceable_quote_policy=untraceable_quote_policy,
         dropped_untraceable=dropped_untraceable,
+        reflection_rounds=reflection_rounds,
+        reflection_search_client=reflection_search_client,
     )
     default_catalog = _default_concept_catalog_for_idea_run(available_concepts)
     effective_aliases = _merge_concept_aliases(
@@ -852,6 +1348,7 @@ def run_idea_mining_dry_run(
             search_client=prior_art_search_client,
             searched_at=prior_art_searched_at,
             top_n=prior_art_top_n,
+            novelty_judge=novelty_judge,
         )
         prior_art_by_literature_id = {
             assessment.literature_idea_id: assessment
@@ -1685,6 +2182,8 @@ def _build_candidate_records(
                 outcome_label=candidate.outcome_label,
                 resolved_predictor_concept=candidate.resolved_predictor_concept,
                 resolved_outcome_concept=candidate.resolved_outcome_concept,
+                analysis_family=candidate.analysis_family,
+                resolved_analysis_concepts=list(candidate.resolved_analysis_concepts),
                 feasibility_pair_key=pair_key,
                 feature_derivation_status=candidate.feature_derivation_status,
                 feature_derivation_requirements=list(

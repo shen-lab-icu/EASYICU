@@ -601,6 +601,47 @@ def test_extract_literature_ideas_rejects_untraceable_quote() -> None:
         )
 
 
+def test_extract_literature_ideas_truncates_overlong_traceable_quote() -> None:
+    # A verbatim-but-over-long quote must not abort the run: it passes the
+    # traceability check, then is truncated to the schema bound. The tool is
+    # reviewer-facing -- one noisy extraction cannot crash the whole mining pass.
+    from easyicu.research_agent.idea_mining import (
+        _LITERATURE_IDEA_SOURCE_QUOTE_MAX as QUOTE_MAX,
+    )
+
+    long_quote = "lactate clearance predicts survival " * 40  # > 800 chars
+    assert len(long_quote) > QUOTE_MAX
+    material = SourceMaterial(
+        citation=_citation(),
+        source_adapter_level="user_supplied_excerpt",
+        source_text="Background. " + long_quote + " Future work is needed.",
+    )
+    llm = CapturingIdeaLLM(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "lactate clearance",
+                "outcome": "survival",
+                "rationale": "Grounded but verbose.",
+                "source_quote": long_quote,
+                "analysis_family": "association",
+            }
+        ]
+    )
+
+    candidates = extract_literature_ideas(
+        materials=[material],
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        llm=llm,
+    )
+
+    assert len(candidates) == 1
+    assert len(candidates[0].source_quote) <= QUOTE_MAX
+    # The retained slice is still a verbatim prefix of the LLM's quote.
+    assert long_quote.startswith(candidates[0].source_quote)
+
+
 def test_extract_literature_ideas_skip_policy_drops_only_untraceable() -> None:
     """untraceable_quote_policy='skip' must drop ONLY the idea whose quote is
     not verbatim and keep the grounded ones, so one paraphrased quote does not
@@ -947,7 +988,10 @@ def test_generic_differentiators_do_not_create_apparently_gap() -> None:
 
     assert assessment.differentiators == []
     assert assessment.has_specific_differentiator is False
-    assert assessment.novelty_label == "sparse"
+    # The predictor "marker" is a vague construct with no substantive clinical
+    # noun to query on, so a 0 hit count is an artifact, not novelty: the screen
+    # must NOT call it a sparse gap. It is conservatively crowded/needs-human.
+    assert assessment.novelty_label == "crowded_but_differentiable"
     assert "Same-topic screen status" in assessment.novelty_statement
 
 
@@ -1987,3 +2031,752 @@ def test_generic_outcome_without_mortality_default_still_blocks() -> None:
     )
     assert executable.resolved_outcome_concept is None
     assert not executable.executable
+
+
+class _BatchAwareIdeaLLM:
+    """Returns one idea per material present in each batch; records call count."""
+
+    name = "batch-aware-idea-llm"
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.batch_sizes: list[int] = []
+
+    def complete(
+        self, messages, *, max_tokens: int = 2048, temperature: float = 0.0
+    ) -> str:
+        self.calls += 1
+        payload = json.loads(messages[-1].content)
+        sources = payload.get("sources", [])
+        self.batch_sizes.append(len(sources))
+        out = []
+        for src in sources:
+            text = src.get("available_source_text", "")
+            quote = " ".join(text.split()[:6])  # traceable verbatim prefix
+            out.append(
+                {
+                    "citation_key": src["citation_key"],
+                    "population": "adult ICU patients",
+                    "exposure_or_predictor": "serum lactate",
+                    "outcome": "in-hospital mortality",
+                    "rationale": "Open direction from the source.",
+                    "source_quote": quote,
+                    "analysis_family": "association",
+                }
+            )
+        return json.dumps(out)
+
+
+def _excerpt_material(idx: int) -> SourceMaterial:
+    return SourceMaterial(
+        citation=CitationRecord(
+            key=f"review_{idx:02d}",
+            title=f"ICU review {idx}",
+            year="2026",
+            venue="Critical Care",
+        ),
+        source_adapter_level="user_supplied_excerpt",
+        source_text=(
+            f"The authors of review {idx} note that an unresolved question "
+            "remains for future study in critically ill patients."
+        ),
+    )
+
+
+def test_extract_literature_ideas_batches_so_yield_scales_with_corpus() -> None:
+    # 7 articles with batch_size=3 must produce 3 calls (3+3+1) and 7 ideas,
+    # proving the corpus is fully processed rather than capped by one call.
+    materials = [_excerpt_material(i) for i in range(7)]
+    llm = _BatchAwareIdeaLLM()
+
+    candidates = extract_literature_ideas(
+        materials=materials,
+        source_snapshot_id="source-snapshot/sha256:batch",
+        llm=llm,
+        batch_size=3,
+    )
+
+    assert llm.calls == 3
+    assert llm.batch_sizes == [3, 3, 1]
+    assert len(candidates) == 7
+    assert {c.citation_key for c in candidates} == {f"review_{i:02d}" for i in range(7)}
+
+
+def test_extract_literature_ideas_single_batch_when_corpus_small() -> None:
+    materials = [_excerpt_material(i) for i in range(2)]
+    llm = _BatchAwareIdeaLLM()
+
+    candidates = extract_literature_ideas(
+        materials=materials,
+        source_snapshot_id="source-snapshot/sha256:batch",
+        llm=llm,
+        batch_size=6,
+    )
+
+    assert llm.calls == 1
+    assert len(candidates) == 2
+
+
+def test_label_prior_art_high_broad_count_blocks_false_sparse() -> None:
+    # The bug: a heavily-studied pairing returns 0 on the over-specific exact
+    # phrase but hundreds on broad recall; it must NOT be called sparse/gap.
+    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+
+    label = _label_prior_art(
+        broad_count=300,
+        exact_count=0,
+        direct_same_topic_count=0,
+        has_specific_differentiator=True,
+    )
+    assert label == "crowded_but_differentiable"
+    assert label not in ("sparse", "apparently_gap")
+
+
+def test_label_prior_art_genuinely_sparse_still_sparse() -> None:
+    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+
+    # Few broad hits and no exact hits remains a genuine gap/sparse signal.
+    gap = _label_prior_art(
+        broad_count=3,
+        exact_count=0,
+        direct_same_topic_count=0,
+        has_specific_differentiator=True,
+    )
+    assert gap == "apparently_gap"
+    sparse = _label_prior_art(
+        broad_count=3,
+        exact_count=0,
+        direct_same_topic_count=0,
+        has_specific_differentiator=False,
+    )
+    assert sparse == "sparse"
+
+
+def test_label_prior_art_direct_hit_still_already_done() -> None:
+    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+
+    assert (
+        _label_prior_art(broad_count=300, exact_count=10, direct_same_topic_count=2)
+        == "already_done"
+    )
+
+
+def test_construct_is_vague_detection() -> None:
+    from easyicu.research_agent.idea_mining_priorart import _construct_is_vague
+
+    # vague: decorator/method shells with no substantive clinical noun
+    assert _construct_is_vague("robust multiparametric clinical scores") is True
+    assert _construct_is_vague("marker") is True
+    assert _construct_is_vague("novel biomarkers") is True
+    assert _construct_is_vague("") is True
+    # concrete: a real measurable construct survives
+    assert _construct_is_vague("serum lactate") is False
+    assert _construct_is_vague("urea-to-creatinine ratio") is False
+    assert _construct_is_vague("physiologic marker") is False  # "physiologic" survives
+
+
+def test_label_prior_art_vague_construct_blocks_false_sparse() -> None:
+    from easyicu.research_agent.idea_mining_priorart import _label_prior_art
+
+    # Even with 0 broad/exact hits, a vague construct cannot be a sparse gap.
+    assert (
+        _label_prior_art(
+            broad_count=0,
+            exact_count=0,
+            direct_same_topic_count=0,
+            has_specific_differentiator=True,
+            construct_is_concrete=False,
+        )
+        == "crowded_but_differentiable"
+    )
+    # A concrete construct with genuinely low counts is still a real gap.
+    assert (
+        _label_prior_art(
+            broad_count=2,
+            exact_count=0,
+            direct_same_topic_count=0,
+            has_specific_differentiator=True,
+            construct_is_concrete=True,
+        )
+        == "apparently_gap"
+    )
+
+
+def _minimal_prior_art_assessment() -> object:
+    """A neutral assessment; the go/no-go branch under test returns before it is read."""
+    from easyicu.research_agent.idea_mining_priorart import PriorArtAssessment
+
+    return PriorArtAssessment(
+        novelty_snapshot_id="novelty-snapshot/sha256:deadbeef",
+        literature_idea_id="litidea_test",
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        searched_at="2026-06-15T00:00:00+00:00",
+        predictor_literature_phrase="urine output",
+        outcome_literature_phrase="successful CRRT liberation",
+        query_records=[],
+        novelty_label="sparse",
+        literature_saturation_signal=0.0,
+        novelty_statement="prior-art triage is not a novelty claim",
+    )
+
+
+def _candidate_with(
+    *,
+    predictor_concept,
+    outcome_concept,
+    non_executable_reasons,
+    feature_derivation_status="raw_concept_available",
+) -> ExecutableHypothesisCandidate:
+    return ExecutableHypothesisCandidate(
+        executable_candidate_id="execidea_test",
+        literature_idea_id="litidea_test",
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        citation_key="neutral_review_2026",
+        population="adult ICU patients",
+        predictor_label="urine output",
+        outcome_label="successful CRRT liberation",
+        research_question="Does urine output predict CRRT liberation?",
+        source_quote="future work should study CRRT liberation",
+        resolved_predictor_concept=predictor_concept,
+        resolved_outcome_concept=outcome_concept,
+        feature_derivation_status=feature_derivation_status,
+        non_executable_reasons=list(non_executable_reasons),
+    )
+
+
+def test_both_concepts_resolved_but_unknown_determinability_is_hold_not_db_cannot_do() -> (
+    None
+):
+    # The defect this guards: a candidate whose predictor AND outcome both resolve
+    # to real, present concepts was buried as "db-cannot-do" purely because the
+    # outcome's determinability was never declared. The data IS present; the gap
+    # is human operationalization of the outcome event -> a "hold", not a
+    # database limitation. (This does not fabricate feasibility: the candidate
+    # stays non-executable and unranked.)
+    from easyicu.research_agent.idea_mining_priorart import _go_no_go_decision
+
+    candidate = _candidate_with(
+        predictor_concept="urine24",
+        outcome_concept="rrt",
+        non_executable_reasons=[
+            "outcome determinability is unknown for feasibility probing"
+        ],
+    )
+    assert not candidate.executable
+    decision, reason = _go_no_go_decision(
+        candidate=candidate,
+        assessment=_minimal_prior_art_assessment(),
+        triage=None,
+    )
+    assert decision == "hold"
+    assert "operationaliz" in reason
+
+
+def test_genuinely_absent_concept_stays_db_cannot_do() -> None:
+    # The complement: when a concept is genuinely absent (predictor unresolved),
+    # the verdict must remain "db-cannot-do" -- the fix must not reclassify a true
+    # database limitation as a doable hold.
+    from easyicu.research_agent.idea_mining_priorart import _go_no_go_decision
+
+    candidate = _candidate_with(
+        predictor_concept=None,
+        outcome_concept="death",
+        non_executable_reasons=[
+            "predictor concept is not available: circulating renin level"
+        ],
+    )
+    assert not candidate.executable
+    decision, reason = _go_no_go_decision(
+        candidate=candidate,
+        assessment=_minimal_prior_art_assessment(),
+        triage=None,
+    )
+    assert decision == "db-cannot-do"
+
+
+def test_concept_set_clustering_idea_is_executable_without_predictor_outcome() -> None:
+    # A subphenotype-clustering idea has no predictor->outcome pair: it names a
+    # SET of variables to cluster on. Before shape-polymorphism this resolved to
+    # predictor=None and was buried as db-cannot-do. It must now map to an
+    # executable concept-SET candidate on its resolvable members.
+    concepts = [
+        ConceptDescriptor(
+            name=name, source_concept=name, role=VariableRole.LAB, dtype="float64"
+        )
+        for name in ("lact", "crea", "sofa2", "map")
+    ]
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="adult sepsis ICU patients",
+        analysis_family="subphenotype_clustering",
+        rationale="The review calls for data-driven sepsis subphenotypes.",
+        source_quote="future work should identify sepsis subphenotypes",
+        analysis_concepts=["lact", "crea", "sofa2", "frailty index"],
+    )
+
+    candidate = map_literature_idea_to_executable_candidate(
+        idea, available_concepts=concepts
+    )
+
+    assert candidate.analysis_family == "trajectory_clustering"
+    assert candidate.executable
+    assert set(candidate.resolved_analysis_concepts) == {"lact", "crea", "sofa2"}
+    assert candidate.resolved_predictor_concept is None
+    assert candidate.resolved_outcome_concept is None
+    # The unresolved member is recorded as a note, not a hard block.
+    assert candidate.feature_derivation_note is not None
+    assert "frailty index" in candidate.feature_derivation_note
+
+
+def test_concept_set_clustering_idea_too_few_concepts_is_not_executable() -> None:
+    # Clustering needs >=2 resolvable variables; one resolvable concept is not a
+    # cluster space, so it stays non-executable (and the gate keeps it honest).
+    concepts = [
+        ConceptDescriptor(
+            name="crea", source_concept="crea", role=VariableRole.LAB, dtype="float64"
+        )
+    ]
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="adult ICU patients",
+        analysis_family="clustering",
+        rationale="Calls for phenotypes.",
+        source_quote="future work should identify phenotypes",
+        analysis_concepts=["crea", "unmappable biomarker"],
+    )
+
+    candidate = map_literature_idea_to_executable_candidate(
+        idea, available_concepts=concepts
+    )
+
+    assert candidate.analysis_family == "trajectory_clustering"
+    assert not candidate.executable
+    assert any("at least 2" in r for r in candidate.non_executable_reasons)
+
+
+def test_pairwise_trajectory_idea_stays_on_predictor_outcome_path() -> None:
+    # A "trajectory" predictor->outcome association is pairwise, NOT clustering:
+    # the presence of a real pair must keep it on the predictor->outcome path so
+    # existing behavior is preserved despite the trajectory family alias.
+    concepts = [
+        ConceptDescriptor(
+            name="lact", source_concept="lact", role=VariableRole.LAB, dtype="float64"
+        ),
+        ConceptDescriptor(
+            name="death",
+            source_concept="death",
+            role=VariableRole.OUTCOME,
+            dtype="int64",
+        ),
+    ]
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="adult ICU patients",
+        exposure_or_predictor="lact",
+        outcome="death",
+        analysis_family="trajectory",
+        rationale="Trajectory predictor of mortality.",
+        source_quote="future work should study lactate trajectory and mortality",
+    )
+
+    candidate = map_literature_idea_to_executable_candidate(
+        idea,
+        available_concepts=concepts,
+        outcome_determinability={
+            "death": OutcomeDeterminability(outcome="death", status="known_0_1")
+        },
+    )
+
+    assert candidate.resolved_predictor_concept == "lact"
+    assert candidate.resolved_outcome_concept == "death"
+    assert candidate.resolved_analysis_concepts == []
+
+
+class SequenceIdeaLLM:
+    """Mock LLM returning a scripted response per call (extract, then refine...)."""
+
+    name = "sequence-idea-llm"
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    def complete(self, messages, **kwargs):
+        idx = min(self.calls, len(self.responses) - 1)
+        self.calls += 1
+        return self.responses[idx]
+
+
+def _reflection_material() -> SourceMaterial:
+    return SourceMaterial(
+        citation=_citation(),
+        source_adapter_level="user_supplied_excerpt",
+        source_text=(
+            "Future work should identify sepsis subphenotypes from lactate and "
+            "creatinine, and study biomarkers broadly."
+        ),
+    )
+
+
+def test_reflection_round_drops_vague_idea_and_keeps_refined() -> None:
+    # Phase 2: a reflection round sharpens/keeps grounded ideas and drops a vague
+    # placeholder ("biomarkers") that the source does not name concretely.
+    extract = json.dumps(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "sepsis ICU",
+                "exposure_or_predictor": "biomarkers",
+                "outcome": "outcomes",
+                "rationale": "vague",
+                "source_quote": "study biomarkers broadly",
+                "analysis_family": "association",
+            },
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "sepsis ICU",
+                "analysis_concepts": ["lactate", "creatinine"],
+                "analysis_family": "subphenotype_clustering",
+                "rationale": "cluster",
+                "source_quote": "identify sepsis subphenotypes from lactate and creatinine",
+            },
+        ]
+    )
+    refine = json.dumps(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "sepsis ICU",
+                "analysis_concepts": ["lactate", "creatinine"],
+                "analysis_family": "subphenotype_clustering",
+                "rationale": "cluster on physiology",
+                "source_quote": "identify sepsis subphenotypes from lactate and creatinine",
+            }
+        ]
+    )
+
+    ideas = extract_literature_ideas(
+        materials=[_reflection_material()],
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        llm=SequenceIdeaLLM([extract, refine]),
+        untraceable_quote_policy="skip",
+        reflection_rounds=1,
+    )
+
+    assert len(ideas) == 1
+    assert ideas[0].analysis_family == "subphenotype_clustering"
+    assert ideas[0].analysis_concepts == ["lactate", "creatinine"]
+
+
+def test_reflection_zero_rounds_is_single_pass() -> None:
+    # Back-compat: reflection_rounds=0 must not call the refine step at all.
+    extract = json.dumps(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "sepsis ICU",
+                "exposure_or_predictor": "lactate",
+                "outcome": "mortality",
+                "rationale": "grounded",
+                "source_quote": "lactate and creatinine",
+                "analysis_family": "association",
+            }
+        ]
+    )
+    llm = SequenceIdeaLLM([extract])
+    ideas = extract_literature_ideas(
+        materials=[_reflection_material()],
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        llm=llm,
+        untraceable_quote_policy="skip",
+        reflection_rounds=0,
+    )
+    assert len(ideas) == 1
+    assert llm.calls == 1  # only the extraction call, no reflection call
+
+
+def test_reflection_drops_idea_with_tampered_untraceable_quote() -> None:
+    # Provenance is never weakened by reflection: if the refine step returns a
+    # quote that is not verbatim in the source, that idea is dropped.
+    extract = json.dumps(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "sepsis ICU",
+                "exposure_or_predictor": "lactate",
+                "outcome": "mortality",
+                "rationale": "grounded",
+                "source_quote": "lactate and creatinine",
+                "analysis_family": "association",
+            }
+        ]
+    )
+    refine = json.dumps(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "sepsis ICU",
+                "exposure_or_predictor": "lactate clearance",
+                "outcome": "mortality",
+                "rationale": "tampered",
+                "source_quote": "a fabricated quote not in the source",
+                "analysis_family": "association",
+            }
+        ]
+    )
+    # The refine round drops the only idea (untraceable) -> no-op fallback returns
+    # the original grounded idea unchanged.
+    ideas = extract_literature_ideas(
+        materials=[_reflection_material()],
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        llm=SequenceIdeaLLM([extract, refine]),
+        untraceable_quote_policy="skip",
+        reflection_rounds=1,
+    )
+    assert len(ideas) == 1
+    assert ideas[0].source_quote == "lactate and creatinine"
+
+
+def _sparse_idea_and_search():
+    idea = LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="adult ICU patients with shock",
+        exposure_or_predictor="vasopressin exposure",
+        outcome="intensive-care unit mortality",
+        rationale="The source identifies this as an unresolved exposure question.",
+        source_quote="future work should study vasopressin exposure",
+        analysis_family="association",
+    )
+    search = FakePriorArtSearchClient(
+        {
+            "vasopressin[Title/Abstract]": {
+                "hit_count": 17,
+                "top_hits": [
+                    {
+                        "pmid": "777",
+                        "title": "Vasopressin and mortality in critically ill adults",
+                        "abstract": "Adjacent prior-art hit.",
+                    }
+                ],
+            }
+        }
+    )
+    return idea, search
+
+
+def test_novelty_judge_duplicate_verdict_tightens_label() -> None:
+    # Phase 3: the count screen alone labels this "sparse"; an LLM judge that
+    # reads the hits and calls it a duplicate must tighten it to already_done.
+    from easyicu.research_agent.idea_mining_priorart import assess_prior_art_for_idea
+
+    idea, search = _sparse_idea_and_search()
+    baseline = assess_prior_art_for_idea(
+        idea, search_client=search, searched_at="2026-06-15T00:00:00+00:00"
+    )
+    assert baseline.novelty_label == "sparse"
+
+    def judge(*, idea, executable_candidate, hits, count_label):
+        assert hits  # the judge is handed the prior-art titles
+        return {"verdict": "duplicate", "rationale": "PMID 777 is the same study."}
+
+    idea2, search2 = _sparse_idea_and_search()
+    judged = assess_prior_art_for_idea(
+        idea2,
+        search_client=search2,
+        searched_at="2026-06-15T00:00:00+00:00",
+        novelty_judge=judge,
+    )
+    assert judged.novelty_label == "already_done"
+    assert "same study" in judged.novelty_statement
+
+
+def test_novelty_judge_cannot_upgrade_label() -> None:
+    # Veto-net: a "differentiated" verdict must NOT make a sparse label look more
+    # novel; the count screen remains the ceiling on novelty.
+    from easyicu.research_agent.idea_mining_priorart import assess_prior_art_for_idea
+
+    idea, search = _sparse_idea_and_search()
+
+    def generous_judge(*, idea, executable_candidate, hits, count_label):
+        return {"verdict": "differentiated", "rationale": "Looks novel to me."}
+
+    judged = assess_prior_art_for_idea(
+        idea,
+        search_client=search,
+        searched_at="2026-06-15T00:00:00+00:00",
+        novelty_judge=generous_judge,
+    )
+    # stays sparse (cannot be pushed to apparently_gap)
+    assert judged.novelty_label == "sparse"
+
+
+def test_more_conservative_novelty_helper() -> None:
+    from easyicu.research_agent.idea_mining_priorart import _more_conservative_novelty
+
+    assert (
+        _more_conservative_novelty("apparently_gap", "already_done") == "already_done"
+    )
+    assert (
+        _more_conservative_novelty("sparse", "crowded_but_differentiable")
+        == "crowded_but_differentiable"
+    )
+    assert _more_conservative_novelty("already_done", "sparse") == "already_done"
+
+
+def test_novelty_judge_error_is_best_effort_noop() -> None:
+    # A judge that raises must leave the count label untouched (best-effort).
+    from easyicu.research_agent.idea_mining_priorart import assess_prior_art_for_idea
+
+    idea, search = _sparse_idea_and_search()
+
+    def boom(*, idea, executable_candidate, hits, count_label):
+        raise RuntimeError("judge unavailable")
+
+    judged = assess_prior_art_for_idea(
+        idea,
+        search_client=search,
+        searched_at="2026-06-15T00:00:00+00:00",
+        novelty_judge=boom,
+    )
+    assert judged.novelty_label == "sparse"
+
+
+def _idea(
+    predictor="", outcome="", concepts=None, family="association", quote="q in src"
+):
+    return LiteratureIdeaCandidate(
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        citation_key="neutral_review_2026",
+        source_adapter_level="user_supplied_excerpt",
+        population="adult ICU patients",
+        exposure_or_predictor=predictor,
+        outcome=outcome,
+        analysis_concepts=list(concepts or []),
+        analysis_family=family,
+        rationale="r",
+        source_quote=quote,
+    )
+
+
+def test_collapse_near_duplicate_ideas_archive() -> None:
+    # Phase 2b idea archive: the same construct restated (token-order/case/synonym
+    # noise) collapses to one; genuinely distinct ideas survive.
+    from easyicu.research_agent.idea_mining import _collapse_near_duplicate_ideas
+
+    ideas = [
+        _idea(predictor="lactate clearance", outcome="mortality"),
+        _idea(predictor="Lactate  clearance", outcome="Mortality"),  # dup
+        _idea(predictor="creatinine", outcome="mortality"),  # distinct
+        _idea(concepts=["compliance", "driving pressure"], family="clustering"),
+        _idea(concepts=["driving pressure", "compliance"], family="clustering"),  # dup
+    ]
+    collapsed = _collapse_near_duplicate_ideas(ideas)
+    assert len(collapsed) == 3
+
+
+def test_reflection_prompt_includes_prior_art_titles_when_supplied() -> None:
+    # Phase 2b retrieval augmentation: supplied prior-art titles surface in the
+    # reflection prompt with the drop-or-differentiate instruction.
+    from easyicu.research_agent.idea_mining import build_idea_reflection_messages
+
+    ideas = [_idea(predictor="lactate", outcome="mortality")]
+    material = SourceMaterial(
+        citation=_citation(),
+        source_adapter_level="user_supplied_excerpt",
+        source_text="lactate and mortality discussion",
+    )
+    messages = build_idea_reflection_messages(
+        ideas,
+        materials=[material],
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        round_idx=0,
+        num_rounds=1,
+        prior_art_titles=[["Lactate predicts ICU mortality: a meta-analysis"]],
+    )
+    blob = "\n".join(m.content for m in messages)
+    assert "Lactate predicts ICU mortality" in blob
+    assert "prior_art_titles" in blob
+    assert "already well studied" in blob
+
+
+def test_retrieval_augmented_reflection_uses_search_client() -> None:
+    # End-to-end: a search client supplied to extraction is queried during the
+    # reflection round (retrieval-augmented), and near-dups are collapsed after.
+    extract = json.dumps(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "sepsis ICU",
+                "exposure_or_predictor": "lactate",
+                "outcome": "mortality",
+                "rationale": "grounded",
+                "source_quote": "lactate and creatinine",
+                "analysis_family": "association",
+            }
+        ]
+    )
+    refine = extract  # model keeps the (grounded) idea
+    material = _reflection_material()
+    search = FakePriorArtSearchClient(
+        {"lact": {"hit_count": 9, "top_hits": [{"title": "Lactate and ICU mortality"}]}}
+    )
+    ideas = extract_literature_ideas(
+        materials=[material],
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        llm=SequenceIdeaLLM([extract, refine]),
+        untraceable_quote_policy="skip",
+        reflection_rounds=1,
+        reflection_search_client=search,
+    )
+    assert len(ideas) == 1
+    # the reflection round issued at least one prior-art search
+    assert search.queries
+
+
+def test_reflection_strips_echoed_context_fields() -> None:
+    # The model may echo the injected prior_art_titles context back into a refined
+    # idea; the schema forbids extras, so it must be stripped, not crash the run.
+    extract = json.dumps(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "sepsis ICU",
+                "exposure_or_predictor": "lactate",
+                "outcome": "mortality",
+                "rationale": "grounded",
+                "source_quote": "lactate and creatinine",
+                "analysis_family": "association",
+            }
+        ]
+    )
+    refine = json.dumps(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "sepsis ICU",
+                "exposure_or_predictor": "lactate",
+                "outcome": "mortality",
+                "rationale": "grounded",
+                "source_quote": "lactate and creatinine",
+                "analysis_family": "association",
+                "prior_art_titles": ["Lactate and ICU mortality: a meta-analysis"],
+            }
+        ]
+    )
+    ideas = extract_literature_ideas(
+        materials=[_reflection_material()],
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        llm=SequenceIdeaLLM([extract, refine]),
+        untraceable_quote_policy="skip",
+        reflection_rounds=1,
+    )
+    assert len(ideas) == 1
+    assert ideas[0].exposure_or_predictor == "lactate"

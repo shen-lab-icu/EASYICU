@@ -12,11 +12,23 @@ re-exports every name defined here for backward compatibility.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
+import re
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from .concept_availability import normalize_concept_name
 from .literature import CitationRecord
 from .idea_mining_pubmed import (
+    _GENERIC_CONCEPT_WORDS,
     _clean_literature_phrase,
     _is_specific_differentiator,
     _ordered_unique,
@@ -41,6 +53,49 @@ from .idea_mining_schema import (
     _utc_now_iso,
 )
 
+# Family-specific novelty term: what would make a concept-set study "already
+# done" is that someone ran THAT kind of analysis on those variables.
+_CONCEPT_SET_FAMILY_NOVELTY_TERM = {
+    "trajectory_clustering": "(subphenotype OR phenotype OR cluster OR clustering)",
+    "descriptive_epidemiology": "(epidemiology OR incidence OR prevalence)",
+    "data_quality_audit": '("data quality" OR completeness OR missingness)',
+}
+
+
+def _build_concept_set_prior_art_queries(
+    idea: LiteratureIdeaCandidate,
+) -> Dict[str, str]:
+    from .analysis_types import normalize_analysis_family
+
+    family = normalize_analysis_family(idea.analysis_family)
+    concept_phrases = [
+        _clean_literature_phrase(str(c))
+        for c in idea.analysis_concepts
+        if str(c).strip()
+    ]
+    concept_clauses = [_pubmed_phrase_clause(p) for p in concept_phrases]
+    concept_clauses = [c for c in concept_clauses if c]
+    population_recall = _pubmed_population_recall_clause(
+        _clean_literature_phrase(idea.population)
+    )
+    family_term = _CONCEPT_SET_FAMILY_NOVELTY_TERM.get(family, "")
+
+    # broad: family term + a recall-friendly OR of the variables (+ population)
+    broad_parts = [family_term] if family_term else []
+    if concept_clauses:
+        broad_parts.append("(" + " OR ".join(concept_clauses) + ")")
+    if population_recall:
+        broad_parts.append(population_recall)
+
+    # exact: family term AND each variable (the conjunction is the "same study")
+    exact_parts = [family_term] if family_term else []
+    exact_parts.extend(concept_clauses)
+
+    return {
+        "broad": " AND ".join(part for part in broad_parts if part),
+        "exact": " AND ".join(part for part in exact_parts if part),
+    }
+
 
 def build_prior_art_queries(
     idea: LiteratureIdeaCandidate,
@@ -53,6 +108,16 @@ def build_prior_art_queries(
     recall fallback. This avoids false gaps caused by over-specific wording
     while still avoiding EasyICU canonical keys such as ``lact``.
     """
+
+    # Concept-SET ideas (clustering / descriptive / data-quality) have no
+    # predictor->outcome phrasing; build their novelty query from the variable
+    # set plus a family term so the prior-art screen is not handed an empty query.
+    if (
+        not idea.exposure_or_predictor.strip()
+        and not idea.outcome.strip()
+        and any(str(c).strip() for c in idea.analysis_concepts)
+    ):
+        return _build_concept_set_prior_art_queries(idea)
 
     predictor_phrase = _clean_literature_phrase(idea.exposure_or_predictor)
     outcome_phrase = _clean_literature_phrase(idea.outcome)
@@ -86,6 +151,83 @@ def build_prior_art_queries(
     }
 
 
+# Novelty labels ordered MOST -> LEAST conservative (least -> most novel-looking).
+_NOVELTY_CONSERVATISM_ORDER: Tuple[NoveltyLabel, ...] = (
+    "already_done",
+    "crowded_but_differentiable",
+    "sparse",
+    "apparently_gap",
+)
+
+
+def _more_conservative_novelty(a: NoveltyLabel, b: NoveltyLabel) -> NoveltyLabel:
+    """Return the LESS-novel (more conservative) of two novelty labels.
+
+    Used as the Phase-3 veto-net merge: the LLM differentiation judge can only
+    move a label toward ``already_done``, never toward ``sparse``/``apparently_gap``.
+    Unknown labels are treated as least-conservative so they never loosen a count
+    verdict.
+    """
+    order = {label: i for i, label in enumerate(_NOVELTY_CONSERVATISM_ORDER)}
+    last = len(_NOVELTY_CONSERVATISM_ORDER)
+    return a if order.get(a, last) <= order.get(b, last) else b
+
+
+# Map an LLM differentiation verdict to the most-novel label it permits. The
+# merge with the count label then keeps whichever is MORE conservative, so the
+# LLM can tighten a false gap but never invent novelty the counts do not support.
+_NOVELTY_JUDGE_VERDICT_CEILING: Dict[str, NoveltyLabel] = {
+    "duplicate": "already_done",
+    "crowded": "crowded_but_differentiable",
+    # "differentiated" imposes no ceiling -> keep the count label as-is.
+}
+
+
+def _apply_novelty_judge(
+    count_label: NoveltyLabel,
+    *,
+    idea: LiteratureIdeaCandidate,
+    executable_candidate: Optional[ExecutableHypothesisCandidate],
+    query_records: Sequence[Any],
+    novelty_judge: Callable[..., Mapping[str, Any]],
+) -> Tuple[NoveltyLabel, Optional[str]]:
+    """Phase 3: let an LLM read the prior-art hits and tighten the count label.
+
+    Returns ``(label, rationale)``. The judge is best-effort: any error or
+    malformed verdict leaves the count label untouched. The judge can only make
+    the label MORE conservative (veto-net), never more novel.
+    """
+    hits = [
+        {
+            "pmid": hit.pmid,
+            "title": getattr(hit, "title", "") or "",
+        }
+        for record in query_records
+        for hit in getattr(record, "top_hits", [])
+    ]
+    if not hits:
+        return count_label, None
+    try:
+        verdict = novelty_judge(
+            idea=idea,
+            executable_candidate=executable_candidate,
+            hits=hits,
+            count_label=count_label,
+        )
+    except Exception:
+        return count_label, None
+    if not isinstance(verdict, Mapping):
+        return count_label, None
+    rationale = str(verdict.get("rationale") or "").strip() or None
+    verdict_key = str(verdict.get("verdict") or "").strip().lower()
+    if verdict.get("is_duplicate"):
+        verdict_key = "duplicate"
+    ceiling = _NOVELTY_JUDGE_VERDICT_CEILING.get(verdict_key)
+    if ceiling is None:
+        return count_label, rationale
+    return _more_conservative_novelty(count_label, ceiling), rationale
+
+
 def assess_prior_art_for_idea(
     idea: LiteratureIdeaCandidate,
     *,
@@ -93,8 +235,17 @@ def assess_prior_art_for_idea(
     executable_candidate: Optional[ExecutableHypothesisCandidate] = None,
     searched_at: Optional[str] = None,
     top_n: int = 20,
+    novelty_judge: Optional[Callable[..., Mapping[str, Any]]] = None,
 ) -> PriorArtAssessment:
-    """Run layered prior-art triage for one literature-derived idea."""
+    """Run layered prior-art triage for one literature-derived idea.
+
+    ``novelty_judge`` (Phase 3, optional) is an LLM-backed callable that reads the
+    candidate plus the prior-art hit titles and returns a verdict
+    (``duplicate`` / ``crowded`` / ``differentiated`` with a ``rationale``). It can
+    only make the count-based novelty label MORE conservative -- the substring/
+    count screen remains the veto net, so the judge can catch a false gap but can
+    never upgrade a crowded field into apparent novelty.
+    """
 
     timestamp = searched_at or _utc_now_iso()
     queries = build_prior_art_queries(idea)
@@ -128,14 +279,28 @@ def assess_prior_art_for_idea(
     differentiators = _candidate_differentiators(idea)
     has_specific_differentiator = bool(differentiators)
     same_topic_screen_status = _same_topic_screen_status(query_records)
+    construct_is_concrete = not (
+        _construct_is_vague(idea.exposure_or_predictor)
+        or _construct_is_vague(idea.outcome)
+    )
     novelty_label = _label_prior_art(
         broad_count=broad.hit_count,
         exact_count=exact.hit_count,
         direct_same_topic_count=len(screened_direct_hits),
         has_specific_differentiator=has_specific_differentiator,
+        construct_is_concrete=construct_is_concrete,
     )
     if direct_hits and not screened_direct_hits:
         novelty_label = "crowded_but_differentiable"
+    judge_rationale: Optional[str] = None
+    if novelty_judge is not None:
+        novelty_label, judge_rationale = _apply_novelty_judge(
+            novelty_label,
+            idea=idea,
+            executable_candidate=executable_candidate,
+            query_records=query_records,
+            novelty_judge=novelty_judge,
+        )
     saturation = _saturation_for_novelty_label(novelty_label)
     feasibility_pair_key = (
         executable_candidate.feasibility_pair_key
@@ -153,6 +318,8 @@ def assess_prior_art_for_idea(
         "a novelty claim and requires human prior-art review. "
         f"Same-topic screen status: {same_topic_screen_status}."
     )
+    if judge_rationale:
+        statement += f" LLM differentiation note: {judge_rationale}"
     payload = {
         "schema_version": IDEA_NOVELTY_SNAPSHOT_SCHEMA_VERSION,
         "literature_idea_id": idea.literature_idea_id,
@@ -203,6 +370,7 @@ def assess_prior_art_for_candidates(
     search_client: Any,
     searched_at: Optional[str] = None,
     top_n: int = 20,
+    novelty_judge: Optional[Callable[..., Mapping[str, Any]]] = None,
 ) -> List[PriorArtAssessment]:
     """Assess all literature ideas, preserving literature phrase provenance."""
 
@@ -216,6 +384,7 @@ def assess_prior_art_for_candidates(
             executable_candidate=candidates_by_idea.get(str(idea.literature_idea_id)),
             searched_at=searched_at,
             top_n=top_n,
+            novelty_judge=novelty_judge,
         )
         for idea in literature_ideas
     ]
@@ -501,16 +670,137 @@ def _same_topic_screen_status(
     return "automated-substring-only, NOT screened"
 
 
+# Decorator / method-shell tokens that carry no queryable clinical construct.
+# A predictor like "robust multiparametric clinical scores" or an outcome like
+# "marker" reduces to nothing substantive once these and the generic concept
+# words are removed; a low hit count for such a phrase reflects an unqueryable
+# construct, NOT genuine novelty. Case-neutral: no disease/score/database here.
+_VAGUE_CONSTRUCT_TOKENS = frozenset(
+    {
+        "robust",
+        "multiparametric",
+        "multiparameter",
+        "novel",
+        "new",
+        "advanced",
+        "comprehensive",
+        "integrated",
+        "optimal",
+        "appropriate",
+        "individualized",
+        "individualised",
+        "personalized",
+        "personalised",
+        "tailored",
+        "dynamic",
+        "complex",
+        "multimodal",
+        "multidimensional",
+        "improved",
+        "enhanced",
+        "emerging",
+        "innovative",
+        "promising",
+        "potential",
+        "various",
+        "different",
+        "multiple",
+        "several",
+        "selected",
+        "specific",
+        "general",
+        "standardized",
+        "standardised",
+        "strategy",
+        "strategies",
+        "approach",
+        "approaches",
+        "tool",
+        "tools",
+        "algorithm",
+        "algorithms",
+        "technique",
+        "techniques",
+        "method",
+        "methods",
+        "framework",
+        "frameworks",
+        "scheme",
+        "score",
+        "scores",
+        "marker",
+        "markers",
+        "biomarker",
+        "biomarkers",
+        "factor",
+        "factors",
+        "predictor",
+        "predictors",
+        "parameter",
+        "parameters",
+        "variable",
+        "variables",
+        "index",
+        "indices",
+        "pattern",
+        "patterns",
+        "profile",
+        "profiles",
+        "signature",
+        "signatures",
+    }
+)
+
+
+def _construct_is_vague(phrase: str) -> bool:
+    """Whether a construct has no substantive clinical noun to query on.
+
+    After removing generic concept words and decorator/method-shell tokens, a
+    construct with nothing substantive left (e.g. "marker", "robust
+    multiparametric clinical scores") cannot be reliably queried, so a low hit
+    count for it is an artifact, not evidence of novelty.
+    """
+    text = _clean_literature_phrase(phrase).lower()
+    if not text:
+        return True
+    tokens = [tok for tok in re.split(r"[^a-z0-9]+", text) if tok]
+    substantive = [
+        tok
+        for tok in tokens
+        if len(tok) > 2
+        and tok not in _GENERIC_CONCEPT_WORDS
+        and tok not in _VAGUE_CONSTRUCT_TOKENS
+    ]
+    return not substantive
+
+
 def _label_prior_art(
     *,
     broad_count: int,
     exact_count: int,
     direct_same_topic_count: int,
     has_specific_differentiator: bool = True,
+    construct_is_concrete: bool = True,
     sparse_threshold: int = 5,
+    crowded_broad_threshold: int = 40,
 ) -> NoveltyLabel:
     if direct_same_topic_count > 0:
         return "already_done"
+    # A large broad-recall count means the topic area is well populated, so the
+    # candidate cannot be a sparse gap even when the over-specific exact phrase
+    # returns nothing. The exact query is built from the literature's literal,
+    # often idiosyncratic wording (e.g. an odd outcome phrase), so exact_count is
+    # ~always 0 and must NOT by itself drive a "sparse"/"gap" label; otherwise a
+    # heavily studied pairing (hundreds of broad hits) is mislabelled novel. A
+    # novelty screen should err toward "someone likely did this" — a novelty
+    # claim always needs human confirmation, never a zero-exact-count artifact.
+    if broad_count >= crowded_broad_threshold:
+        return "crowded_but_differentiable"
+    # A construct too vague to query reliably (a decorator/method shell with no
+    # substantive clinical noun) yields a low count by artifact, not novelty; we
+    # cannot assert a sparse gap about it. Same conservative direction as above.
+    if not construct_is_concrete:
+        return "crowded_but_differentiable"
     if exact_count == 0 and broad_count <= sparse_threshold:
         return "apparently_gap" if has_specific_differentiator else "sparse"
     if exact_count <= sparse_threshold:
@@ -645,6 +935,26 @@ def _go_no_go_decision(
     if candidate.feature_derivation_status == "unsupported":
         return "db-cannot-do", "feature derivation is unsupported"
     if not candidate.executable:
+        # Distinguish a genuine database limit from an analyst-side gap. When
+        # BOTH the predictor and the outcome resolve to concepts that exist in
+        # the available catalogue, the data is present -- the candidate is
+        # non-executable only because the outcome event still has to be
+        # operationalized (its determinability was never declared) or otherwise
+        # defined by a human. That is a "hold" (doable, needs human definition),
+        # not "the database cannot do it". ``db-cannot-do`` is reserved for a
+        # genuinely absent predictor or outcome concept. This does NOT fabricate
+        # feasibility: the candidate stays non-executable and unranked, and no
+        # joint coverage is claimed -- it is merely surfaced honestly instead of
+        # being buried as a database failure.
+        if (
+            candidate.resolved_predictor_concept is not None
+            and candidate.resolved_outcome_concept is not None
+        ):
+            return (
+                "hold",
+                "concepts resolve to available data; outcome event needs "
+                "operationalization before feasibility probing",
+            )
         return "db-cannot-do", "concept or outcome gate prevents execution"
     if assessment.novelty_label == "already_done":
         return "hold", "direct same-topic prior art found"
