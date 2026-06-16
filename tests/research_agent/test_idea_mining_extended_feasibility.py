@@ -126,3 +126,50 @@ def test_reconsider_genuinely_absent_returns_none(index):
         outcome="neuromuscular electrical stimulation response",
     )
     assert index.reconsider(idea=idea, candidate=None) is None
+
+
+# ---- cross-DB transportability novelty axis (prior-art) ----------------
+from easyicu.research_agent.idea_mining_priorart import (  # noqa: E402
+    _cross_db_prior_art_differentiator,
+)
+from easyicu.research_agent.idea_mining_schema import (  # noqa: E402
+    PriorArtQueryRecord,
+    PriorArtSearchHit,
+)
+
+_TARGETS = ["miiv", "mimic", "eicu", "aumc", "hirid", "sic"]
+
+
+def _qr(*hits):
+    return PriorArtQueryRecord(query_type="broad", query="q", hit_count=len(hits),
+                               top_hits=list(hits))
+
+
+def _hit(title, direct=True, rationale=None):
+    return PriorArtSearchHit(pmid="1", title=title, direct_same_topic=direct,
+                             direct_same_topic_rationale=rationale)
+
+
+def test_crossdb_diff_added_when_crowded_and_no_db_mention():
+    hits = [_hit("Obesity and mortality in critically ill patients")]
+    diff = _cross_db_prior_art_differentiator([_qr(*hits)], hits, _TARGETS)
+    assert diff is not None and "transportability" in diff
+
+
+def test_crossdb_diff_none_when_prior_art_uses_target_db():
+    hits = [_hit("Obesity paradox validated in the MIMIC-IV database")]
+    diff = _cross_db_prior_art_differentiator([_qr(*hits)], hits, _TARGETS)
+    assert diff is None
+
+
+def test_crossdb_diff_none_when_multidb_prior_art():
+    hits = [_hit("External validation of the obesity paradox across multiple cohorts")]
+    diff = _cross_db_prior_art_differentiator([_qr(*hits)], hits, _TARGETS)
+    assert diff is None
+
+
+def test_crossdb_diff_none_when_no_direct_hits_or_disabled():
+    hits = [_hit("Unrelated topic", direct=False)]
+    assert _cross_db_prior_art_differentiator([_qr(*hits)], [], _TARGETS) is None
+    real = [_hit("Obesity and mortality")]
+    assert _cross_db_prior_art_differentiator([_qr(*real)], real, None) is None

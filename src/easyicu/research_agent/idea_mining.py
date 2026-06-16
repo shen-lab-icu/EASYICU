@@ -1213,6 +1213,7 @@ def run_idea_mining_dry_run(
     novelty_judge: Optional[Callable[..., Mapping[str, Any]]] = None,
     source_item_index: Optional["SourceItemIndex"] = None,
     extended_feasibility_index: Optional[object] = None,
+    cross_db_targets: Optional[Sequence[str]] = None,
 ) -> IdeaMiningDryRunResult:
     """Run the S4→S1→S3→S2 idea-triage dry run and stop at the human gate.
 
@@ -1350,6 +1351,7 @@ def run_idea_mining_dry_run(
             searched_at=prior_art_searched_at,
             top_n=prior_art_top_n,
             novelty_judge=novelty_judge,
+            cross_db_targets=cross_db_targets,
         )
         prior_art_by_literature_id = {
             assessment.literature_idea_id: assessment

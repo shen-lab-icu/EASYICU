@@ -236,8 +236,19 @@ def assess_prior_art_for_idea(
     searched_at: Optional[str] = None,
     top_n: int = 20,
     novelty_judge: Optional[Callable[..., Mapping[str, Any]]] = None,
+    cross_db_targets: Optional[Sequence[str]] = None,
 ) -> PriorArtAssessment:
     """Run layered prior-art triage for one literature-derived idea.
+
+    ``cross_db_targets`` (optional) enables the cross-database transportability
+    novelty axis: when the field is crowded with same-topic prior art but none of
+    the retrieved hits (by title/rationale) reference these target databases, a
+    "cross-database transportability" differentiator is added as a HUMAN-REVIEW
+    trigger (not a novelty claim) -- a study replicated across these harmonized
+    public databases is differentiated from predominantly single-database prior
+    art. Title-level detection is conservative; the human confirms prior art is
+    single-database. Only rescues crowded fields; never embellishes an already
+    apparently-novel idea.
 
     ``novelty_judge`` (Phase 3, optional) is an LLM-backed callable that reads the
     candidate plus the prior-art hit titles and returns a verdict
@@ -277,6 +288,11 @@ def assess_prior_art_for_idea(
         for hit in direct_hits
     }
     differentiators = _candidate_differentiators(idea)
+    cross_db_diff = _cross_db_prior_art_differentiator(
+        query_records, direct_hits, cross_db_targets
+    )
+    if cross_db_diff is not None:
+        differentiators = _ordered_unique([*differentiators, cross_db_diff])
     has_specific_differentiator = bool(differentiators)
     same_topic_screen_status = _same_topic_screen_status(query_records)
     construct_is_concrete = not (
@@ -371,6 +387,7 @@ def assess_prior_art_for_candidates(
     searched_at: Optional[str] = None,
     top_n: int = 20,
     novelty_judge: Optional[Callable[..., Mapping[str, Any]]] = None,
+    cross_db_targets: Optional[Sequence[str]] = None,
 ) -> List[PriorArtAssessment]:
     """Assess all literature ideas, preserving literature phrase provenance."""
 
@@ -385,6 +402,7 @@ def assess_prior_art_for_candidates(
             searched_at=searched_at,
             top_n=top_n,
             novelty_judge=novelty_judge,
+            cross_db_targets=cross_db_targets,
         )
         for idea in literature_ideas
     ]
@@ -920,6 +938,58 @@ def _database_feasibility_payload(
         "executable": triage.executable,
         "non_executable_reasons": list(triage.non_executable_reasons),
     }
+
+
+# Title/rationale tokens that signal a hit already used one of the target public
+# databases (so the cross-DB transportability angle is NOT a differentiator).
+_TARGET_DB_ALIASES = {
+    "miiv": ("mimic", "mimic-iv", "mimic iv", "mimiciv"),
+    "mimic": ("mimic", "mimic-iii", "mimic iii", "mimiciii"),
+    "eicu": ("eicu", "eicu-crd", "philips eicu"),
+    "aumc": ("amsterdam", "amsterdamumc", "amsterdamumcdb"),
+    "hirid": ("hirid",),
+    "sic": ("sicdb", "salzburg intensive care"),
+}
+_MULTI_DB_TERMS = (
+    "multi-database", "multidatabase", "multiple databases", "external validation",
+    "externally validated", "transportability", "cross-database", "multi-cohort",
+    "multiple cohorts", "multicenter database",
+)
+
+
+def _cross_db_prior_art_differentiator(
+    query_records: Sequence[PriorArtQueryRecord],
+    direct_hits: Sequence[PriorArtSearchHit],
+    cross_db_targets: Optional[Sequence[str]],
+) -> Optional[str]:
+    """Cross-database transportability differentiator (human-review trigger).
+
+    Returns a differentiator string only when (a) the axis is enabled, (b) the
+    field is crowded (there is same-topic prior art to differentiate from), and
+    (c) no retrieved hit's title/rationale references the target databases or
+    multi-database/external-validation work. Title-level detection is
+    deliberately conservative -- the differentiator is a human-confirm trigger,
+    not a novelty claim.
+    """
+    if not cross_db_targets or not direct_hits:
+        return None
+    aliases: List[str] = []
+    for db in cross_db_targets:
+        aliases.extend(_TARGET_DB_ALIASES.get(str(db).lower(), (str(db).lower(),)))
+    aliases.extend(_MULTI_DB_TERMS)
+    blob = " \n ".join(
+        f"{hit.title} {hit.direct_same_topic_rationale or ''}".lower()
+        for record in query_records
+        for hit in record.top_hits
+    )
+    if any(alias in blob for alias in aliases):
+        return None  # prior art already uses these DBs / is multi-DB
+    n = len(list(cross_db_targets))
+    return (
+        f"cross-database transportability across {n} harmonized public ICU "
+        f"databases (no retrieved prior art references these databases by title; "
+        f"human must confirm prior art is predominantly single-database)"
+    )
 
 
 def _go_no_go_decision(
