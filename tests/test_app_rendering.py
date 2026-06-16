@@ -49,6 +49,7 @@ import easyicu.webapp.shell_styles as shell_styles
 import easyicu.webapp.styles as styles
 import easyicu.webapp.sofa_reclassification as sofa_reclassification
 import easyicu.webapp.subprocess_workers as subprocess_workers
+import easyicu.webapp.timeseries_page as timeseries_page
 import easyicu.webapp.ui_helpers as ui_helpers
 import pandas as pd
 import pytest
@@ -463,8 +464,8 @@ def test_concept_checkbox_and_selection_states_do_not_use_black_token_fills() ->
     assert "font-size: 12px" in cohort_chip_block.group("body")
     assert "min-height: 22px" in cohort_chip_block.group("body")
     assert "background: var(--ink)" not in cohort_chip_block.group("body")
-    assert "background: var(--surface) !important" in concept_module_block.group("body")
-    assert "border: 2px solid var(--ink) !important" in concept_module_block.group("body")
+    assert "background: var(--accent-soft) !important" in concept_module_block.group("body")
+    assert "border: 1px solid var(--accent-border) !important" in concept_module_block.group("body")
     assert "background: var(--ink)" not in concept_module_block.group("body")
 
 
@@ -2036,6 +2037,58 @@ def test_quality_panel_switcher_renders_one_lazy_panel(monkeypatch) -> None:
     assert quality_page._render_quality_panel_switcher("en", screenshot_mode=True) == "missingness"
 
 
+def test_patient_review_quality_uses_qc_ledger_primitives() -> None:
+    page_source = inspect.getsource(quality_page.render_quality_page)
+    module_source = Path(quality_page.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "_quality_contract_html(" in page_source
+    assert "_render_quality_notice(" in page_source
+    assert "_apply_quality_plot_style(" in page_source
+    for legacy_call in ("st.info(", "st.success(", "st.warning(", "st.error("):
+        assert legacy_call not in page_source
+    for legacy_emoji in ("📊", "✅"):
+        assert legacy_emoji not in page_source
+
+    for required_class in (
+        ".eu-quality-contract",
+        ".eu-quality-contract-row",
+        ".eu-quality-contract-list",
+        ".eu-quality-notice",
+        ".quality-summary-grid",
+    ):
+        assert required_class in css_text
+
+    contract_html = quality_page._quality_contract_html(
+        lang="en",
+        concept_count=19,
+        patient_count=10,
+        total_records=1234,
+        overall_missing=7.5,
+        overall_outliers=0.4,
+        overall_duplicates=0.0,
+    )
+    assert "QC ledger" in contract_html
+    assert "local export -&gt; denominator -&gt; gate -&gt; chart" in contract_html
+    assert "19 concepts" in contract_html
+    assert "10 ICU stays" in contract_html
+    assert "Missingness gate" in contract_html
+    assert "Physiologic range" in contract_html
+    assert "Temporal integrity" in contract_html
+    assert "eu-quality-contract-row warning" in contract_html
+
+    notice_html = quality_page._quality_notice_html(
+        "info",
+        "Quality workspace",
+        "Local export required",
+        "Open Data Extraction first.",
+        "Data Tables -> Data Quality",
+    )
+    assert "eu-quality-notice info" in notice_html
+    assert "Data Tables -&gt; Data Quality" in notice_html
+    assert "def _quality_notice_html" in module_source
+
+
 def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     source_text = "\n".join(
         inspect.getsource(func)
@@ -2054,7 +2107,10 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "_entry_home_layout" in source_text
     assert "_eu_entry_home_layout" in source_text
     assert "What would you like to study?" in source_text
+    assert "Welcome to EasyICU" in source_text
     assert "Local-first ICU research workspace" in source_text
+    assert "Research journey · 4 checkpoints" in source_text
+    assert "Two routes, one local workflow" in source_text
     assert "How would you like to work?" in source_text
     assert "Pick a way in. Your data choice applies to either." in source_text
     assert "Research Copilot walks you through question, data, cohort, modules" in source_text
@@ -2091,6 +2147,8 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "eu_entry_copilot_card" not in source_text
     assert "eu_entry_classic_card" not in source_text
     assert "eu_entry_two_way_home" in source_text
+    assert "eu-entry-journey" in source_text
+    assert "eu-entry-journey-track" in source_text
     assert "eu_entry_copilot_split_card" in source_text
     assert "eu_entry_classic_split_card" in source_text
     assert "eu_entry_col_prompt" in source_text
@@ -2110,6 +2168,9 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "eu-entry-rail" not in source_text
     assert "_route_to_copilot_entry" in inspect.getsource(pages_redesign)
     assert "st-key-eu_entry_two_way_home" in css_text
+    assert ".stApp .eu-entry-journey {" in css_text
+    assert ".stApp .eu-entry-journey-track {" in css_text
+    assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in css_text
     assert "st-key-eu_entry_copilot_split_card" in css_text
     assert "st-key-eu_entry_classic_split_card" in css_text
     assert "st-key-eu_entry_col_prompt" in css_text
@@ -2124,7 +2185,7 @@ def test_entry_page_copy_and_cta_spacing_address_review_comments() -> None:
     assert "st-key-eu_entry_floating_copilot" in css_text
     assert "max-width: 1100px" in css_text
     assert "max-width: 760px" in css_text
-    assert "min-height: 408px" in css_text
+    assert "min-height: 430px" in css_text
     assert '> [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]' in css_text
     assert 'min-height: 100% !important' in css_text
     assert '[data-testid="stElementContainer"]:has(.eu-entry-classic-dataline)' in css_text
@@ -2347,7 +2408,7 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
     ]
     severity_chart_block = cohort_dashboard_source[
         cohort_dashboard_source.index("severity_df = review['severity']"):
-        cohort_dashboard_source.index('st.warning("No SOFA severity column found"')
+        cohort_dashboard_source.index("reclass = review.get")
     ]
     assert '"plot": "#fbfaf7"' in chart_theme_block
     assert '"teal": "#0f766e"' in chart_theme_block
@@ -2374,13 +2435,16 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
     assert "COHORT_GROUP_DEFAULT_MODULES" in cohort_group_source
     assert "COHORT_GROUP_LEGACY_MODULE_MAP" in cohort_group_source
     assert "COHORT_GROUP_BASE_MODULES" in cohort_group_source
-    assert "Open the **SOFA reclassification** panel for the matrix" in cohort_dashboard_source
+    assert "Open the SOFA reclassification panel for the matrix" in cohort_dashboard_source
     assert "SOFA-1 vs SOFA-2 Reclassification" not in cohort_dashboard_source
     assert "dash_reclass_matrix" not in cohort_dashboard_source
     assert "dash_reclass_organ_contrib" not in cohort_dashboard_source
     assert "st.columns(6)" not in cohort_dashboard_source
     assert "_style_readout_figure" in cohort_dashboard_source
     assert "Clinical phenotype prevalence" in cohort_dashboard_source
+    assert "_render_cohort_loader_notice" in cohort_group_source
+    assert "_render_cohort_loader_notice" in cohort_dashboard_source
+    assert ".eu-cohort-loader-notice" in css_text
     assert "reclass_matrix" in cohort_severity_source
     assert "reclass_organ_contrib" in cohort_severity_source
     assert "_style_reclass_figure" in cohort_severity_source
@@ -2488,6 +2552,12 @@ def test_main_shell_copy_hides_internal_feature_counts() -> None:
     assert "position: fixed" not in topbar_stage_css
     assert "right: 390px" not in topbar_stage_css
     assert "top: 21px" not in topbar_stage_css
+    status_strip_css = css_text[
+        css_text.index(".eu-status-strip {"): css_text.index(".eu-status-item {")
+    ]
+    assert "display: grid" in status_strip_css
+    assert "grid-template-columns: repeat(auto-fit, minmax(128px, 1fr))" in status_strip_css
+    assert "display: none" not in status_strip_css
     assert "st-key-eu_extract_breadcrumb_nav" in css_text
     assert "st-key-eu_page_breadcrumb_nav_" in css_text
     assert ".eu-bc-current" in css_text
@@ -2589,6 +2659,64 @@ def test_patient_feature_snapshot_grid_owns_caption_spacing() -> None:
     assert ".patient-feature-snapshot-caption" in css_text
     caption_css = css_text[css_text.index(".stApp .patient-feature-snapshot-caption"):]
     assert "clear: both !important" in caption_css[:400]
+
+
+def test_patient_category_view_uses_design_system_tiles_and_sparklines() -> None:
+    patient_source = Path(patient_page.__file__).read_text(encoding="utf-8")
+    category_source = patient_source[
+        patient_source.index("elif view_mode == category_mode:"):
+        patient_source.index("elif view_mode == table_mode:")
+    ]
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "_render_patient_category_section(" in category_source
+    assert "_collect_patient_category_items(" in patient_source
+    assert "_render_patient_category_chart(" in patient_source
+    assert "eu-patient-category-grid" in patient_source
+    assert "eu-patient-category-card" in patient_source
+    assert "eu-patient-category-notice" in patient_source
+    assert "eu-patient-category-chart-title" in patient_source
+
+    for legacy_call in ("st.metric(", "st.line_chart("):
+        assert legacy_call not in category_source
+    for legacy_markup in ("**Mechanical Vent**", "**RRT**", "metric-card", "stat-number"):
+        assert legacy_markup not in category_source
+
+    for css_class in (
+        ".eu-patient-category-grid",
+        ".eu-patient-category-card",
+        ".eu-patient-category-notice",
+        ".eu-patient-category-chart-title",
+    ):
+        assert css_class in css_text
+
+
+def test_patient_dashboard_states_use_owned_notice_components() -> None:
+    patient_source = Path(patient_page.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "def _render_patient_notice(" in patient_source
+    assert "eu-patient-notice" in patient_source
+    assert "Dashboard guard" in patient_source
+    assert "Organ comparison unavailable" in patient_source
+    assert "SOFA comparison waiting for paired scores" in patient_source
+    assert ".eu-patient-notice" in css_text
+    assert ".eu-patient-notice.danger" in css_text
+
+    for legacy_call in ("st.warning(", "st.info(", "st.error("):
+        assert legacy_call not in patient_source
+
+
+def test_cohort_snapshot_render_guard_uses_owned_notice_without_raw_traceback() -> None:
+    cohort_dashboard_source = Path(cohort_dashboard_page.__file__).read_text(encoding="utf-8")
+    render_guard_source = cohort_dashboard_source[
+        cohort_dashboard_source.index("except Exception as e:"):
+    ]
+
+    assert "_render_cohort_loader_notice(" in render_guard_source
+    assert "Render guard" in render_guard_source
+    assert "st.code(" not in render_guard_source
+    assert "traceback.format_exc" not in render_guard_source
 
 
 def test_page_header_renders_html_without_markdown_code_blocks(monkeypatch) -> None:
@@ -2909,8 +3037,14 @@ def test_workspace_states_page_keeps_overview_and_adds_reference_catalog() -> No
     assert render_source.index("_workspace_status_overview_html(state, lang)") < render_source.index("key=\"eu_states_controls\"")
     assert ".stApp .eu-workspace-status-shell" in css_text
     assert ".stApp .eu-workspace-session-strip" in css_text
-    assert ".stApp .eu-workspace-status-grid" in css_text
-    assert ".stApp .eu-workspace-status-tile.accent" in css_text
+    assert ".stApp .eu-workspace-state-ledger" in css_text
+    assert ".stApp .eu-workspace-state-list" in css_text
+    assert ".stApp .eu-workspace-state-row.accent .eu-workspace-state-node" in css_text
+    assert ".stApp .eu-workspace-state-copy" in css_text
+    assert "eu-workspace-status-grid" not in page_source
+    assert "eu-workspace-status-tile" not in page_source
+    assert ".eu-workspace-status-grid" not in css_text
+    assert ".eu-workspace-status-tile" not in css_text
     assert ".stApp .eu-workspace-flow-step.active" in css_text
     assert ".stApp .eu-state-primitive-grid" in css_text
     assert '.stApp [class*="st-key-eu_workspace_status_actions"]' in css_text
@@ -2942,7 +3076,13 @@ def test_workspace_status_overview_summarizes_current_session_without_fake_loadi
     assert "eu-workspace-session-strip" in html
     assert "Session snapshot" in html
     assert "Operational overview" in html
-    assert html.count("eu-workspace-status-tile") == 4
+    assert "eu-workspace-state-ledger" in html
+    assert "Session state ledger" in html
+    assert "Data -> extraction -> review -> agent" in html
+    assert html.count("eu-workspace-state-row") == 4
+    assert "eu-workspace-state-node" in html
+    assert "eu-workspace-state-copy" in html
+    assert "eu-workspace-status-tile" not in html
     assert "eu-workspace-flow-step done" in html
     assert "eu-workspace-flow-step active" in html
     assert "eu-workspace-flow-step pending" in html
@@ -2974,10 +3114,12 @@ def test_workspace_states_mobile_layout_stacks_status_tiles() -> None:
 
     mobile_css = css_text[css_text.index("@media (max-width: 780px)"):]
     assert ".stApp .eu-workspace-session-strip" in mobile_css
-    assert ".stApp .eu-workspace-status-grid," in mobile_css
+    assert ".stApp .eu-workspace-state-list," in mobile_css
     assert ".stApp .eu-workspace-flow," in mobile_css
     assert ".stApp .eu-workspace-handoff" in mobile_css
     assert "grid-template-columns: 1fr;" in mobile_css
+    assert ".stApp .eu-workspace-state-ledger-head" in mobile_css
+    assert ".stApp .eu-workspace-state-row" in mobile_css
     assert ".stApp .eu-workspace-flow-step:first-child" in mobile_css
     assert ".stApp .eu-workspace-handoff > div:last-child" in mobile_css
 
@@ -3504,7 +3646,78 @@ def test_real_data_mode_requires_data_path_before_validation(tmp_path, monkeypat
     at.run(timeout=60)
     at.button(key="validate_path").click().run(timeout=60)
 
-    assert any(error.value == "Please enter a data path" for error in at.error)
+    rendered_markdown = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "eu-source-validation-notice error" in rendered_markdown
+    assert "Path required" in rendered_markdown
+    assert "Please enter a data path" in rendered_markdown
+    assert not any(error.value == "Please enter a data path" for error in at.error)
+
+
+def test_real_data_validation_nonexistent_path_uses_contract_notice(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.run(timeout=60)
+    at.session_state["entry_mode"] = "real"
+    at.session_state["use_mock_data"] = False
+    at.session_state["database"] = "miiv"
+    at.button(key="_eu_entry_demo").click().run(timeout=60)
+    at.run(timeout=60)
+    at.text_input(key="sidebar_data_path_input").input(str(tmp_path / "missing-mimiciv")).run(timeout=60)
+    at.button(key="validate_path").click().run(timeout=60)
+
+    rendered_markdown = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    assert "eu-source-validation-notice error" in rendered_markdown
+    assert "Path not found" in rendered_markdown
+    assert "Path does not exist" in rendered_markdown
+    assert not any(error.value == "Path does not exist" for error in at.error)
+
+
+def test_real_data_validation_convertible_path_uses_recovery_actions(tmp_path, monkeypatch) -> None:
+    streamlit_testing = pytest.importorskip("streamlit.testing.v1")
+
+    monkeypatch.setenv("MPLCONFIGDIR", str(tmp_path / "mplconfig"))
+    os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+    csv_dir = tmp_path / "mimiciv-csv-source"
+    csv_dir.mkdir()
+    for filename in (
+        "icustays.csv",
+        "patients.csv",
+        "admissions.csv",
+        "chartevents.csv",
+        "labevents.csv",
+        "inputevents.csv",
+        "prescriptions.csv",
+    ):
+        (csv_dir / filename).touch()
+
+    at = streamlit_testing.AppTest.from_file(app.__file__)
+    at.session_state["entry_lang_select"] = "EN"
+    at.session_state["language"] = "en"
+    at.run(timeout=60)
+    at.session_state["entry_mode"] = "real"
+    at.session_state["use_mock_data"] = False
+    at.session_state["database"] = "miiv"
+    at.button(key="_eu_entry_demo").click().run(timeout=60)
+    at.run(timeout=60)
+    at.text_input(key="sidebar_data_path_input").input(str(csv_dir)).run(timeout=60)
+    at.button(key="validate_path").click().run(timeout=60)
+
+    rendered_markdown = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
+    button_keys = {button.key for button in at.button}
+    assert "eu-source-validation-notice warn" in rendered_markdown
+    assert "Conversion available" in rendered_markdown
+    assert "need conversion" in rendered_markdown
+    assert "eu-source-action-hint" in rendered_markdown
+    assert "convert_csv" in button_keys
+    assert at.session_state["last_validation"]["can_convert"] is True
+    assert at.session_state["last_validated_path"] == str(csv_dir)
+    assert not at.session_state["path_validated"]
 
 
 def test_validate_data_path_is_accent_secondary_action() -> None:
@@ -3522,6 +3735,10 @@ def test_validate_data_path_is_accent_secondary_action() -> None:
     ]
 
     assert 'key="validate_path"' in validate_source
+    assert "_queue_source_validation_notice(" in source
+    assert "_render_source_validation_notice(" in source
+    assert "eu-source-validation-notice" in css_text
+    assert "eu_source_recovery_actions" in source
     # Redesign dropped the inline search icon; it stays a plain accent secondary.
     assert 'type="primary"' not in validate_source
     assert "🔍 Validate Data Path" not in validate_source
@@ -3751,6 +3968,23 @@ def test_data_table_preview_has_easyicu_owned_csv_downloads() -> None:
     assert "data_table_merged_preview_csv_" in source
 
 
+def test_data_table_preview_states_use_owned_notice_components() -> None:
+    source = Path(data_table_page.__file__).read_text(encoding="utf-8")
+    render_source = source[source.index("def render_data_table_subtab"):]
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "def _dt_notice_html(" in source
+    assert "def _render_dt_notice(" in source
+    assert "_render_dt_notice(" in render_source
+    assert "dt-preview-notice" in source
+    assert ".dt-preview-notice" in css_text
+
+    for legacy_call in ("st.warning(", "st.info(", "st.error("):
+        assert legacy_call not in render_source
+    for legacy_visual in ("✅", "⚠️", "🔎"):
+        assert legacy_visual not in render_source
+
+
 def test_single_feature_preview_copy_matches_preview_style() -> None:
     english = app._get_single_feature_preview_copy("sofa", "en")
     chinese = app._get_single_feature_preview_copy("sofa", "zh")
@@ -3767,6 +4001,62 @@ def test_select_timeseries_screenshot_concepts_prefers_representative_clinical_s
     )
 
     assert selected == ["hr", "map", "spo2", "crea"]
+
+
+def test_patient_review_timeseries_uses_trajectory_ledger_primitives() -> None:
+    source = Path(timeseries_page.__file__).read_text(encoding="utf-8")
+    render_source = source[source.index("def render_timeseries_page"):]
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "_timeseries_contract_html(" in render_source
+    assert "_ts_notice_html(" in source
+    assert "_ts_static_value_html(" in source
+    assert "_apply_ts_plot_style(" in source
+    assert "_TS_SERIES_COLORS" in render_source
+
+    for legacy_call in ("st.warning(", "st.info(", "st.error(", "st.metric("):
+        assert legacy_call not in render_source
+    for legacy_visual in ("📈", "ℹ️", "⚠️", "#1f77b4", "#ff7f0e", "color='black'"):
+        assert legacy_visual not in render_source
+
+    for css_class in (
+        ".eu-ts-contract",
+        ".eu-ts-contract-row",
+        ".eu-ts-notice",
+        ".eu-ts-lane-head",
+        ".eu-ts-static-value",
+        ".eu-ts-table-title",
+    ):
+        assert css_class in css_text
+
+    contract_html = timeseries_page._timeseries_contract_html(
+        lang="en",
+        mode="Clinical Lanes",
+        concept_count=19,
+        patient_count=10,
+        lane_count=4,
+    )
+    assert "Trajectory ledger" in contract_html
+    assert "Patient -&gt; signal -&gt; lane -&gt; chart" in contract_html
+    assert "10 patients" in contract_html
+    assert "19 concepts" in contract_html
+    assert "4 lanes available" in contract_html
+
+    empty_html = timeseries_page._ts_notice_html(
+        "info",
+        "Trajectory workspace",
+        "Local export required",
+        "Load exported module files before reviewing patient trajectories.",
+        "Data Tables -> Time Series",
+    )
+    assert "eu-ts-notice info" in empty_html
+    assert "Local export required" in empty_html
+    assert "Data Tables -&gt; Time Series" in empty_html
+
+    static_html = timeseries_page._ts_static_value_html("LACTATE", 2.4, "en")
+    assert "eu-ts-static-value" in static_html
+    assert "Static value" in static_html
+    assert "LACTATE" in static_html
 
 
 def test_select_quality_distribution_concept_prefers_interpretable_lab_over_score() -> None:
@@ -4282,6 +4572,35 @@ def test_quick_viz_loader_surfaces_export_path_recovery_controls() -> None:
     assert "st-key-viz_use_export_candidate_" in css_text
 
 
+def test_quick_viz_loader_uses_design_notice_states() -> None:
+    source = Path(quick_visualization_page.__file__).read_text(encoding="utf-8")
+    render_source = inspect.getsource(quick_visualization_page.render_quick_visualization_page)
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "_render_qv_loader_notice(" in render_source
+    assert "eu-qv-loader-notice" in source
+    assert ".eu-qv-loader-notice" in css_text
+    assert ".eu-qv-loader-notice.ready" in css_text
+    assert ".eu-qv-loader-notice.warning" in css_text
+    assert ".eu-qv-loader-notice.danger" in css_text
+    for legacy_call in ("st.success(", "st.warning(", "st.error("):
+        assert legacy_call not in render_source
+    for legacy_emoji in ("✅", "⚠️", "❌"):
+        assert legacy_emoji not in render_source
+
+    html = quick_visualization_page._qv_loader_notice_html(
+        "ready",
+        "Export scan",
+        "27 data files found",
+        "Choose tables before opening the review workspace.",
+        "/Users/haibo/easyicu_export -> local",
+    )
+    assert "eu-qv-loader-notice ready" in html
+    assert "Export scan" in html
+    assert "27 data files found" in html
+    assert "/Users/haibo/easyicu_export -&gt; local" in html
+
+
 def test_local_user_history_outputs_are_gitignored() -> None:
     repo_root = Path(easyicu.__file__).parents[2]
     gitignore = (repo_root / ".gitignore").read_text(encoding="utf-8")
@@ -4499,6 +4818,17 @@ def test_research_copilot_real_agent_handoff_uses_loaded_concepts(tmp_path: Path
     assert state["_eu_ra_force_setup_from_handoff"] is True
     assert state["_eu_ra_module_pick_force_manual"] is True
     assert state["_eu_ra_apply_export_file_selection"] is True
+    packet = state["research_agent_copilot_handoff_packet"]
+    assert packet["source"] == "Research Copilot"
+    assert packet["source_kind"] == "session_cohort"
+    assert packet["source_label"] == "Research Copilot loaded export · 2 stays · 2 concepts"
+    assert packet["rows"] == 2
+    assert packet["concept_count"] == 2
+    assert packet["selected_count"] == 3
+    assert packet["selected_concepts"] == ["age", "death", "sofa2"]
+    assert packet["export_dir"] == str(tmp_path / "easyicu_export")
+    assert packet["preflight_status"] == "needs_review"
+    assert "confirm preflight" in packet["next_step"]
     assert "research_agent_preflight_confirmed" not in state
     assert "research_agent_preflight_signature" not in state
     assert app._research_agent_handoff_setup_ready(state) is True
@@ -4541,6 +4871,12 @@ def test_research_copilot_real_agent_handoff_uses_export_folder_without_stale_de
     assert "research_agent_inbound_cohort_label" not in state
     assert "research_agent_inbound_signature" not in state
     assert "_eu_ra_force_setup_from_handoff" not in state
+    packet = state["research_agent_copilot_handoff_packet"]
+    assert packet["source_kind"] == "module_export"
+    assert packet["source_label"] == "Module export folder"
+    assert packet["export_dir"] == str(export_dir)
+    assert packet["rows"] is None
+    assert packet["question"] == "Use the latest local export for an Agent analysis."
 
 
 def test_research_copilot_agent_idea_workflow_opens_idea_exploration(monkeypatch) -> None:
@@ -4851,8 +5187,102 @@ def test_research_copilot_chat_configures_cohort_and_agent_handoff(monkeypatch) 
     assert "research_agent_inbound_cohort_label" not in state
     assert "_eu_ra_force_setup_from_handoff" not in state
     assert state["_eu_ra_focus_no_data"] is True
+    packet = state["research_agent_copilot_handoff_packet"]
+    assert packet["source_kind"] == "no_data"
+    assert packet["source_label"] == "No cohort loaded yet"
+    assert packet["patient_n"] == 30
+    assert packet["cohort_filters"] == ["sepsis-3"]
+    assert packet["concept_count"] == len(study["selected_concepts"])
     assert "research_agent_preflight_confirmed" not in state
     assert "research_agent_preflight_signature" not in state
+
+
+def test_research_copilot_depth_rail_has_explicit_agent_setup_handoff() -> None:
+    depth_source = inspect.getsource(llm_chat._render_copilot_depth_control)
+    rail_source = inspect.getsource(llm_chat._render_copilot_stage_workspace)
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "Open Agent setup" in depth_source
+    assert "eu_copilot_depth_agent_handoff" in depth_source
+    assert "_copilot_depth_agent_setup" in depth_source
+    assert "_prepare_research_agent_handoff_from_ai(st.session_state)" in depth_source
+    assert "disabled=not question_ready" in depth_source
+    assert "_copilot_agent_readiness_contract_html" in rail_source
+    assert rail_source.index("_render_copilot_depth_control(study, lang)") < rail_source.index(
+        "_copilot_agent_readiness_contract_html"
+    )
+    assert rail_source.index("_copilot_agent_readiness_contract_html") < rail_source.index(
+        'with st.container(key="eu_study_step_list")'
+    )
+    assert "st-key-_copilot_depth_agent_setup" in css_text
+    assert "st-key-eu_copilot_depth_agent_handoff" in css_text
+    assert ".eu-copilot-agent-contract" in css_text
+    assert ".eu-copilot-agent-contract-grid" in css_text
+    assert ".eu-copilot-agent-contract-node" in css_text
+    assert ".eu-copilot-agent-contract-copy" in css_text
+    agent_grid_css = css_text[
+        css_text.index(".eu-copilot-agent-contract-grid {"): css_text.index(
+            ".eu-copilot-agent-contract-tile {"
+        )
+    ]
+    assert "grid-template-columns: 1fr" in agent_grid_css
+
+
+def test_research_copilot_agent_readiness_contract_maps_live_payload(tmp_path: Path) -> None:
+    study = {
+        "question": "Do first 24h features predict mortality?",
+        "step": "analysis",
+        "data_mode": "real",
+        "selected_concepts": ["lact", "map", "death"],
+        "modules": ["Lab - Chemistry", "Vitals"],
+        "cohort_configured": True,
+    }
+    state = _AttrSessionState({
+        "entry_mode": "real",
+        "database": "miiv",
+        "data_path": str(tmp_path / "prepared_miiv"),
+        "path_validated": True,
+        "selected_concepts": ["lact", "map", "death"],
+        "_copilot_guided_study": study,
+    })
+    snapshot = llm_chat.build_study_workspace_snapshot(state, study, lang="en")
+
+    html = llm_chat._copilot_agent_readiness_contract_html(state, study, snapshot, "en")
+
+    assert "eu-copilot-agent-contract ready" in html
+    assert "eu-copilot-agent-contract-tile ready" in html
+    assert "eu-copilot-agent-contract-node" in html
+    assert "eu-copilot-agent-contract-copy" in html
+    assert ">01<" in html
+    assert "Copilot -&gt; Agent readiness" in html
+    assert "available" not in html.lower()
+    assert "Question" in html
+    assert "Source" in html
+    assert "Cohort" in html
+    assert "Concepts" in html
+    assert "Setup packet" in html
+    assert "ready to write" in html
+    assert "Open Agent setup -&gt; Research Agent setup packet" in html
+    assert "validated" in html
+    assert "3 mapped" in html
+    assert "local-only" in html
+    assert "Do first 24h features predict mortality?" in html
+
+    pending_study = {"step": "question"}
+    pending_state = _AttrSessionState({"entry_mode": "none", "_copilot_guided_study": pending_study})
+    pending_snapshot = llm_chat.build_study_workspace_snapshot(pending_state, pending_study, lang="en")
+    pending_html = llm_chat._copilot_agent_readiness_contract_html(
+        pending_state,
+        pending_study,
+        pending_snapshot,
+        "en",
+    )
+    assert "eu-copilot-agent-contract pending" in pending_html
+    assert "eu-copilot-agent-contract-tile pending" in pending_html
+    assert "missing" in pending_html
+    assert "waiting for question" in pending_html
+    assert "no prepared path yet" in pending_html
+    assert "Complete the missing question/source/cohort pieces" in pending_html
 
 
 def test_research_copilot_chat_configures_described_stays() -> None:
@@ -8192,7 +8622,17 @@ def test_research_copilot_page_uses_minimal_chat_workspace(tmp_path, monkeypatch
     page_text = " ".join(getattr(markdown, "value", "") for markdown in at.markdown)
     assert "Research Copilot" in page_text
     assert "What would you like to study?" in page_text
-    assert "Recent" in page_text
+    assert "Active study" in page_text
+    assert "Local workspace" in page_text
+    assert "Studies · local folders" in page_text
+    assert "Launch contract" in page_text
+    assert "Start with a study path, not a blank chat" in page_text
+    assert "Model ICU outcomes" in page_text
+    assert "Compare across ICU databases" in page_text
+    assert "Audit data quality first" in page_text
+    assert "review-before-draft" in page_text
+    assert "Evidence discipline" in page_text
+    assert "Local state, review first" in page_text
     assert "No studies yet" in page_text
     assert "Study workspace" in page_text
     assert "Building your study" in page_text
@@ -8218,6 +8658,10 @@ def test_research_copilot_page_uses_minimal_chat_workspace(tmp_path, monkeypatch
     assert '<span class="brand-mark">✦</span>' not in llm_source
     assert "Lactate trajectory · 48h" not in llm_source
     assert "Current ICU study" not in llm_source
+    assert "_copilot_active_study_context_html" in llm_source
+    assert "_copilot_welcome_workbench_html" in llm_source
+    assert "No question framed yet" in llm_source
+    assert "Study folders, paths, and handoff packets stay on this machine" in llm_source
     assert "_copilot_list_study_sessions" in llm_source
     assert "COPILOT_SESSION_MESSAGE_SAVE_LIMIT = 80" in llm_source
     assert "COPILOT_RENDER_MESSAGE_LIMIT = 5" in llm_source
@@ -8232,7 +8676,72 @@ def test_research_copilot_page_uses_minimal_chat_workspace(tmp_path, monkeypatch
     compact_chat_source = inspect.getsource(llm_chat._render_compact_chat_panel)
     assert "llm_messages[-COPILOT_RENDER_MESSAGE_LIMIT:]" in compact_chat_source
     assert ".eu-copilot-topbrand .brand-mark svg" in css_text
+    assert "eu-copilot-active-study-card" in css_text
+    assert "eu-copilot-active-study-grid" in css_text
+    assert "eu-copilot-active-study-folder" in css_text
+    assert "eu-copilot-launch-contract" in css_text
+    assert "eu-copilot-launch-paths" in css_text
+    assert "eu-copilot-launch-steps" in css_text
+    assert "eu-copilot-launch-guarantees" in css_text
+    assert "eu-copilot-rail-context" in css_text
+    assert "Research Copilot right rail scroll lock" in css_text
     assert "_copilot_session_open_" in css_text
+
+
+def test_research_copilot_active_study_context_binds_live_state(tmp_path) -> None:
+    workdir = tmp_path / "study_20260616T101500"
+    state = {
+        "language": "en",
+        "entry_mode": "real",
+        "database": "miiv",
+        "data_path": str(tmp_path / "mimic-iv"),
+        "path_validated": True,
+        "_copilot_current_session_dir": str(workdir),
+        "_copilot_current_session_title": "Untitled study",
+    }
+    study = {
+        "question": "Does vasopressor exposure predict ICU mortality?",
+        "step": "concepts",
+        "depth": "review",
+        "data_mode": "real",
+        "modules": ["Demographics"],
+        "selected_concepts": ["heart_rate", "map"],
+    }
+    snapshot = llm_chat.build_study_workspace_snapshot(state, study, lang="en")
+
+    html = llm_chat._copilot_active_study_context_html(state, study, snapshot, "en")
+
+    assert "eu-copilot-active-study-card" in html
+    assert "Active study" in html
+    assert "Does vasopressor exposure predict ICU mortality?" in html
+    assert "Concept modules" in html
+    assert "Real Data" in html
+    assert "Extract + review" in html
+    assert "2 mapped" in html
+    assert "study_20260616T101500" in html
+    assert "No question framed yet" not in html
+    assert "Lactate trajectory" not in html
+    assert "AKI onset across MIMIC-IV" not in html
+
+
+def test_research_copilot_welcome_workbench_maps_real_launch_paths() -> None:
+    html = llm_chat._copilot_welcome_workbench_html("en")
+
+    assert "eu-copilot-launch-contract" in html
+    assert "Launch contract" in html
+    assert "Start with a study path, not a blank chat" in html
+    assert "Model ICU outcomes" in html
+    assert "Compare across ICU databases" in html
+    assert "Audit data quality first" in html
+    assert "Question -&gt; cohort -&gt; feature modules -&gt; review" in html
+    assert "01" in html
+    assert "05" in html
+    assert "local-only" in html
+    assert "evidence-gated" in html
+    assert "review-before-draft" in html
+    assert "Study plan" not in html
+    assert "Predict sepsis mortality" not in html
+    assert "Lactate trajectory" not in html
 
 
 def test_research_copilot_new_study_creates_real_local_session(tmp_path) -> None:
@@ -9010,6 +9519,94 @@ def test_research_agent_history_export_omits_absolute_local_paths() -> None:
     assert run["findings"] == {"errors": 0, "warnings": 1}
 
 
+def test_agent_projects_shell_uses_manifest_contract_instead_of_metric_grid() -> None:
+    snapshot = types.SimpleNamespace(
+        status_tone="warn",
+        run_id="run_20260616T120000_agent",
+        evidence_count=14,
+        figure_count=2,
+        table_count=3,
+        gates_total=4,
+        gates_blocked=1,
+        finding_errors=0,
+        finding_warnings=2,
+        review_decision="review pending",
+    )
+
+    html = app._render_agent_project_contract_html(snapshot, "en")
+    app_source = Path(app.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "eu-agent-project-contract warn" in html
+    assert "Local manifest contract" in html
+    assert "Run -&gt; ledger -&gt; gate -&gt; draft" in html
+    assert "eu-agent-project-contract-node" in html
+    assert ">01<" in html
+    assert ">04<" in html
+    assert "14 evidence · 5 artifacts" in html
+    assert "1 blocked / 4 gates · 0/2 findings" in html
+    assert '<div class="eu-agent-project-metrics">' not in app_source
+    assert ".eu-agent-project-contract {" in css_text
+    assert ".eu-agent-project-contract-row {" in css_text
+    assert ".eu-agent-project-contract-node" in css_text
+    assert ".eu-agent-project-contract-copy" in css_text
+
+
+def test_agent_project_shell_handoff_receipt_uses_research_agent_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    export_dir = tmp_path / "easyicu_export"
+    export_dir.mkdir()
+    files = [
+        export_dir / "demographics.parquet",
+        export_dir / "vitals.parquet",
+        export_dir / "outcome.parquet",
+    ]
+    for path in files:
+        path.write_bytes(b"stub")
+    state: dict[str, object] = {
+        "_eu_ra_focus_module_folder": True,
+        "_eu_ra_apply_export_file_selection": True,
+        "research_agent_module_dir_text": str(export_dir),
+        "patient_ids": [10001, 10002, 10003],
+        "loaded_concepts": {
+            "age": pd.DataFrame({"stay_id": [10001, 10002, 10003]}),
+            "hr": pd.DataFrame({"stay_id": [10001, 10002, 10003]}),
+        },
+        "_review_source_concept_count": 3,
+        "_review_subset_concept_count": 2,
+        "_export_success_result": {
+            "files": [str(path) for path in files],
+            "patient_count": 3,
+        },
+    }
+    monkeypatch.setattr(app, "st", types.SimpleNamespace(session_state=state))
+
+    html = app._agent_project_handoff_receipt_html("en")
+
+    assert 'ra-agent-handoff-receipt-shell' in html
+    assert "Loaded context ready for Agent Projects" in html
+    assert "Patient Review -&gt; Agent Projects" in html
+    assert "2 / 3" in html
+    assert "10001" not in html
+    assert state["_eu_ra_handoff_receipt_rendered_in_shell"] is True
+
+    state.clear()
+    assert app._agent_project_handoff_receipt_html("en") == ""
+    assert "_eu_ra_handoff_receipt_rendered_in_shell" not in state
+
+
+def test_agent_projects_empty_rail_points_to_manifest_workdir() -> None:
+    app_source = Path(app.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "Open History to choose the folder that directly contains run_* manifests." in app_source
+    assert "打开历史页，选择直接包含 run_* manifest 的本机目录。" in app_source
+    assert ".eu-agent-project-empty b" in css_text
+    assert ".eu-agent-project-empty em" in css_text
+
+
 def test_research_agent_summary_bundle_index_omits_absolute_local_paths() -> None:
     href, filename = agent_workbench._summary_bundle_index_download(
         {
@@ -9138,10 +9735,11 @@ def test_research_agent_summary_exports_real_bundle_zip_without_local_paths(tmp_
     assert "../outside.py" not in names
 
     summary_html = agent_workbench._output_summary_html(state, "en")
-    assert "eu-summary-bundle-details" in summary_html
-    assert "eu-summary-bundle-summary" in summary_html
+    assert "eu-summary-export-terminal available" in summary_html
+    assert "Summary export terminal" in summary_html
+    assert "eu-summary-export-row available" in summary_html
     assert "Export package is ready" in summary_html
-    assert "Export bundle" in summary_html
+    assert "Export review ZIP" in summary_html
     assert "Export bundle index" not in summary_html
     assert "_output_bundle.zip" in summary_html
 
@@ -9154,8 +9752,11 @@ def test_research_agent_summary_decline_matches_polish_gate_semantics(tmp_path: 
     assert '_T(lang, "Add reviewer note", "添加审核备注")' in source
     assert "_eu_summary_review_note_visible_" in source
     assert "note_visible = st.toggle(" in source
-    assert source.index("approve_col, lock_col, draft_col") < source.index("note_visible = st.toggle(")
+    assert '_eu_summary_review_actions_' in source
+    assert "_remember_summary_review_receipt" in source
+    assert source.index('_eu_summary_review_actions_') < source.index("note_visible = st.toggle(")
     assert 'type="primary" if reviewer_ready else "secondary"' in source
+    assert "st.warning(" not in source
     assert "Keep locked" not in source
 
     run_dir = tmp_path / "run_decline_001"
@@ -9310,6 +9911,7 @@ def test_research_agent_header_rerun_routes_to_checkpoint_setup() -> None:
 
 def test_research_agent_manifest_step_records_do_not_nest_expanders() -> None:
     ra_source = Path(research_agent.__file__).read_text(encoding="utf-8")
+    css_source = Path(research_agent.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
     step_source = ra_source[
         ra_source.index("def _render_step_records"):
         ra_source.index("def _render_artifact_gallery")
@@ -9319,6 +9921,128 @@ def test_research_agent_manifest_step_records_do_not_nest_expanders() -> None:
     assert 'with st.expander(_ra_text("full_step_summary")' not in step_source
     assert 'st.markdown(f"**{_ra_text(\'full_step_summary\')}**")' in step_source
     assert "st.json(summary)" in step_source
+    assert "_step_records_contract_html(" in step_source
+    assert "_step_record_meta_contract_html(" in step_source
+    assert "cols = st.columns(4)" not in step_source
+    assert "meta_cols = st.columns(4)" not in step_source
+    assert ".ra-step-contract" in css_source
+    assert ".ra-step-record-contract" in css_source
+    assert ".ra-step-contract-node" in css_source
+
+
+def test_research_agent_step_records_use_manifest_contract_html() -> None:
+    manifest = {
+        "per_step_records": [
+            {"step_id": "01_table", "status": "ok", "generation_mode": "system"},
+            {
+                "step_id": "02_model",
+                "status": "execution_failed",
+                "returncode": 1,
+                "code_repair_attempts": 2,
+                "evidence_ids": ["fig_model"],
+            },
+        ],
+        "evidence": [
+            {
+                "evidence_id": "fig_model",
+                "kind": "figure",
+                "relative_path": "figures/roc.png",
+                "produced_by_step": "02_model",
+            },
+        ],
+    }
+    records = manifest["per_step_records"]
+
+    overview_html = research_agent._step_records_contract_html(records, manifest, is_en=True)
+    assert "Step execution contract" in overview_html
+    assert "manifest -> steps -> evidence -> review" in overview_html
+    assert overview_html.count("ra-step-contract-row") == 4
+    assert "Planned steps" in overview_html
+    assert "Completed" in overview_html
+    assert "Attention" in overview_html
+    assert "Figures" in overview_html
+    assert '<b>2</b>' in overview_html
+    assert '<div class="ra-step-contract-row danger">' in overview_html
+    assert '<div class="ra-step-contract-row accent">' in overview_html
+
+    meta_html = research_agent._step_record_meta_contract_html(
+        records[1],
+        manifest,
+        idx=2,
+        status="execution_failed",
+        is_en=True,
+    )
+    assert "ra-step-record-contract danger" in meta_html
+    assert "Step record 02" in meta_html
+    assert "02_model" in meta_html
+    assert "Return code" in meta_html
+    assert "Repair attempts" in meta_html
+    assert "Evidence" in meta_html
+    assert '<b>1</b>' in meta_html
+    assert '<b>2</b>' in meta_html
+
+
+def test_research_agent_reproducibility_uses_readiness_and_findings_ledgers() -> None:
+    ra_source = Path(research_agent.__file__).read_text(encoding="utf-8")
+    css_source = Path(research_agent.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
+    repro_source = ra_source[
+        ra_source.index("def _render_reproducibility_panel"):
+        ra_source.index(
+            "def _render_review_decision_controls",
+            ra_source.index("def _render_reproducibility_panel"),
+        )
+    ]
+    findings_source = ra_source[
+        ra_source.index("def _render_findings"):
+        ra_source.index("def _render_evidence_table")
+    ]
+
+    assert "_readiness_gate_contract_html(" in repro_source
+    assert "_findings_contract_html(" in repro_source
+    assert "_findings_list_html(" in repro_source
+    assert "grid = st.columns(min(3, len(gate_items)))" not in repro_source
+    assert "c1, c2, c3 = st.columns(3)" not in repro_source
+    assert ".metric(" not in repro_source
+    assert "✅" not in repro_source
+    assert "❌" not in repro_source
+    assert ".metric(" not in findings_source
+    assert "_FINDING_BADGE" not in findings_source
+    assert ".ra-readiness-contract" in css_source
+    assert ".ra-findings-contract" in css_source
+    assert ".ra-finding-row" in css_source
+
+    gates_html = research_agent._readiness_gate_contract_html(
+        [
+            ("execution_complete", True),
+            ("numeric_verified", False),
+        ],
+        {"completed_step_count": 3, "required_step_count": 5},
+        is_en=True,
+    )
+    assert "Fail-closed readiness ledger" in gates_html
+    assert "readiness -> evidence -> draft unlock" in gates_html
+    assert "execution complete" in gates_html
+    assert "numeric verified" in gates_html
+    assert '<div class="ra-step-contract-row danger">' in gates_html
+    assert "Execution: 3/5 planned steps completed." in gates_html
+
+    findings = [
+        {"severity": "error", "validator": "runner", "message": "model failed"},
+        {"severity": "warning", "validator": "critic", "message": "review claim"},
+        {"severity": "info", "validator": "ledger", "message": "manifest bound"},
+    ]
+    findings_html = research_agent._findings_contract_html(findings, is_en=True)
+    assert "Findings review contract" in findings_html
+    assert "strict block" in findings_html
+    assert findings_html.count("ra-step-contract-row") == 3
+    assert '<div class="ra-step-contract-row danger">' in findings_html
+    assert '<div class="ra-step-contract-row warn">' in findings_html
+
+    list_html = research_agent._findings_list_html(findings, is_en=True, include_info=True)
+    assert "Reviewable findings" in list_html
+    assert "runner" in list_html
+    assert "model failed" in list_html
+    assert "ledger" in list_html
 
 
 def test_research_agent_demo_setup_uses_claude_reference_overview() -> None:
@@ -9501,6 +10225,12 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
     assert "Evidence gate" in overview_source
     assert "Ready to run" in overview_source
     assert "ra-core-overview" in overview_source
+    assert "ra-agent-workbench" in overview_source
+    assert "ra-agent-rail" in overview_source
+    assert "ra-agent-studycard" in overview_source
+    assert "ra-agent-src" in overview_source
+    assert "ra-agent-pipe" in overview_source
+    assert "ra-agent-nextbar" in overview_source
     assert "ra-core-grid" in overview_source
     assert "ra-core-next" in overview_source
     assert "ra-core-details" in overview_source
@@ -9545,6 +10275,11 @@ def test_research_agent_real_setup_groups_controls_and_defers_data_recipe() -> N
     assert "research_agent_disable_icu" not in ra_source
     assert "Disable ICU-aware context" not in ra_source
     assert ".ra-context-policy" in css_source
+    assert ".ra-agent-workbench" in css_source
+    assert ".ra-agent-rail" in css_source
+    assert ".ra-agent-studycard" in css_source
+    assert ".ra-agent-pipe" in css_source
+    assert ".ra-agent-nextbar" in css_source
     assert ".ra-preflight-details" in css_source
     assert "grid-template-columns: repeat(auto-fit, minmax(150px, 1fr))" in css_source
     assert 'st.session_state["research_agent_preflight_signature"] = signature' in preflight_source
@@ -11222,6 +11957,74 @@ def test_crossdb_detailed_loader_uses_plain_desktop_labels() -> None:
     assert "📂 \" + (\"Directory Structure Guide\"" not in data_path_source
 
 
+def test_crossdb_loader_uses_design_cards_for_setup_state() -> None:
+    loader_source = Path(cohort_multidb_page.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "_render_crossdb_db_cards(" in loader_source
+    assert "_crossdb_setup_contract_html(" in loader_source
+    assert "eu-crossdb-db-card" in loader_source
+    assert "eu-crossdb-setup-contract" in loader_source
+    for css_class in (
+        ".stApp .eu-crossdb-db-grid",
+        ".stApp .eu-crossdb-db-card",
+        ".stApp .eu-crossdb-setup-contract",
+        ".stApp .eu-crossdb-setup-node",
+    ):
+        assert css_class in css_text
+
+    html = cohort_multidb_page._crossdb_setup_contract_html(
+        data_root="/data/icudb",
+        selected_dbs=["miiv", "eicu"],
+        db_labels={"miiv": "MIMIC-IV", "eicu": "eICU-CRD"},
+        selected_group="Vital Signs",
+        selected_features=["hr", "map"],
+        max_patients=500,
+        lang="en",
+    )
+    assert "eu-crossdb-setup-contract" in html
+    assert html.count("eu-crossdb-setup-node") == 4
+    assert "Cross-database loader readiness" in html
+    assert "2 selected" in html
+    assert "ready up to 500 patients" in html
+
+
+def test_directory_structure_guide_uses_owned_markup_without_code_block() -> None:
+    source = Path(data_paths.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+    html = data_paths._directory_structure_guide_html("en")
+
+    assert "_directory_structure_guide_html" in source
+    assert "st.markdown(_directory_structure_guide_html(lang), unsafe_allow_html=True)" in source
+    assert "```" not in source[source.index("def _directory_structure_guide_html"): source.index("def render_directory_structure_guide")]
+    assert "eu-directory-guide" in html
+    assert "mimiciv/" in html
+    assert "Nothing is uploaded" in html
+    assert ".stApp .eu-directory-guide" in css_text
+    assert ".stApp .eu-directory-guide-row" in css_text
+
+
+def test_cohort_and_crossdb_loader_states_use_owned_notice_components() -> None:
+    cohort_group_source = Path(cohort_group_page.__file__).read_text(encoding="utf-8")
+    cohort_dashboard_source = Path(cohort_dashboard_page.__file__).read_text(encoding="utf-8")
+    cohort_severity_source = Path(cohort_severity_page.__file__).read_text(encoding="utf-8")
+    crossdb_source = Path(cohort_multidb_page.__file__).read_text(encoding="utf-8")
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "eu-cohort-loader-notice" in cohort_group_source
+    assert "eu-cohort-loader-notice" in cohort_dashboard_source
+    assert "eu-cohort-loader-notice" in cohort_severity_source
+    assert "_render_reclass_notice" in cohort_severity_source
+    assert "eu-crossdb-loader-notice" in crossdb_source
+    assert ".eu-cohort-loader-notice" in css_text
+    assert ".eu-crossdb-loader-notice" in css_text
+    for source in (cohort_group_source, cohort_dashboard_source, cohort_severity_source, crossdb_source):
+        for legacy_call in ("st.info(", "st.success(", "st.warning(", "st.error("):
+            assert legacy_call not in source
+        for legacy_prefix in ("✅", "⚠️", "❌", "👆", "🧭", "📁", "🚀", "🔒"):
+            assert legacy_prefix not in source
+
+
 def test_crossdb_chinese_copy_uses_natural_product_labels(monkeypatch) -> None:
     class _FakeStreamlit:
         def __init__(self, session_state) -> None:
@@ -11428,6 +12231,81 @@ def test_crossdb_demo_workspace_keeps_six_database_story(monkeypatch) -> None:
     assert rows[0][1:-1] == ["144", "144", "144", "144", "144", "144"]
 
 
+def test_crossdb_loaded_summary_uses_owned_dense_primitives(monkeypatch) -> None:
+    state = {
+        "entry_mode": "demo",
+        "multidb_is_demo": True,
+        "multidb_data": {
+            "miiv": pd.DataFrame({"stay_id": [1, 2], "hr": [80, 90], "map": [70, 75]}),
+            "eicu": pd.DataFrame({"patientunitstayid": [10, 11], "hr": [82, 92], "map": [68, None]}),
+        },
+        "multidb_concepts": ["hr", "map"],
+    }
+    monkeypatch.setattr(cohort_redesign, "st", _SessionStateStreamlit(state))
+
+    columns, rows = cohort_redesign._crossdb_kpi_rows("en")
+    availability_columns, availability_rows = cohort_redesign._crossdb_availability_rows("en")
+    ledger_html = cohort_redesign._crossdb_summary_ledger_html(
+        lang="en",
+        title="Loaded cross-database distribution summary",
+        columns=columns,
+        rows=rows,
+    )
+    board_html = cohort_redesign._crossdb_availability_board_html(
+        lang="en",
+        columns=availability_columns,
+        rows=availability_rows,
+    )
+    render_source = inspect.getsource(cohort_redesign.render_cross_db_redesign_page)
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "eu-crossdb-summary-ledger" in ledger_html
+    assert "eu-crossdb-summary-row" in ledger_html
+    assert "eu-crossdb-availability-board" in board_html
+    assert "eu-crossdb-availability-cell ok" in board_html
+    assert "100%" in board_html
+    assert "<table" not in ledger_html + board_html
+    assert "cc.render_mono_table(" not in render_source
+    assert "cc.render_availability_matrix(" not in render_source
+    assert ".stApp .eu-crossdb-summary-ledger" in css_text
+    assert ".stApp .eu-crossdb-availability-board" in css_text
+    assert ".stApp .eu-crossdb-availability-grid" in css_text
+
+
+def test_crossdb_loaded_strip_and_active_rail_use_owned_primitives(monkeypatch) -> None:
+    state = {
+        "entry_mode": "demo",
+        "multidb_is_demo": True,
+        "multidb_data": {
+            "miiv": pd.DataFrame({"stay_id": [1, 2], "hr": [80, 90]}),
+            "eicu": pd.DataFrame({"patientunitstayid": [10, 11], "hr": [82, 92]}),
+        },
+        "multidb_concepts": ["hr"],
+    }
+    monkeypatch.setattr(cohort_redesign, "st", _SessionStateStreamlit(state))
+
+    summary = cohort_redesign._crossdb_workspace_summary("en")
+    active = cohort_redesign._crossdb_active_databases("en")
+    strip_html = cohort_redesign._crossdb_loaded_strip_html("en", summary)
+    rail_html = cohort_redesign._crossdb_active_database_rail_html(active, lang="en")
+    render_source = inspect.getsource(cohort_redesign.render_cross_db_redesign_page)
+    css_text = shell_styles._load_shell_overrides_css()
+
+    assert "eu-crossdb-loaded-strip" in strip_html
+    assert strip_html.count("eu-crossdb-loaded-stat") == 3
+    assert "Feature rows" in strip_html
+    assert "eu-crossdb-active-rail" in rail_html
+    assert rail_html.count("eu-crossdb-active-node") == 2
+    assert "MIMIC-IV" in rail_html
+    assert "<svg" not in rail_html
+    assert "eu-card" not in rail_html
+    assert "cc.render_active_databases(" not in render_source
+    assert ".stApp .eu-crossdb-loaded-strip" in css_text
+    assert ".stApp .eu-crossdb-loaded-kpis" in css_text
+    assert ".stApp .eu-crossdb-active-rail" in css_text
+    assert ".stApp .eu-crossdb-active-track" in css_text
+
+
 def test_crossdb_benchmark_summary_exports_without_database_rows(monkeypatch) -> None:
     state = {
         "entry_mode": "real",
@@ -11499,8 +12377,11 @@ def test_crossdb_loaded_bar_markup_and_actions_are_present(monkeypatch) -> None:
 
     page_source = "\n".join(streamlit_stub.markdown_calls)
     assert streamlit_stub.container_key == "eu_crossdb_loaded_bar"
+    assert "eu-crossdb-loaded-strip" in page_source
+    assert page_source.count("eu-crossdb-loaded-stat") == 3
     assert "Benchmark assembled" in page_source
-    assert "2 databases · 4 feature rows · 1 concepts" in page_source
+    assert "Feature rows" in page_source
+    assert "4" in page_source
     assert streamlit_stub.buttons[0]["label"] == "Change selection"
     assert streamlit_stub.downloads[0]["label"] == "Export"
     assert streamlit_stub.downloads[0]["mime"] == "application/json"
@@ -11512,7 +12393,7 @@ def test_crossdb_loaded_bar_markup_and_actions_are_present(monkeypatch) -> None:
     assert state["_scroll_to_top"] is True
 
     css = Path(shell_styles.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
-    assert "eu-crossdb-loaded-bar" in css
+    assert "eu-crossdb-loaded-strip" in css
     assert "st-key-eu_crossdb_loaded_bar" in css
 
 
@@ -11601,23 +12482,43 @@ def test_cohort_redesign_defaults_to_real_panel_body(monkeypatch) -> None:
         "SOFA reclassification",
     ]
     page_source = "\n".join(streamlit_stub.markdown_calls)
+    assert "eu-cohort-loaded-strip" in page_source
+    assert "Demo cohort workspace ready" in page_source
+    assert "10 ICU stays · demo review feature set · 4 panels unlocked" in page_source
+    assert "Active panel: Coverage audit" in page_source
+    assert "eu-cohort-loaded-stat" in page_source
     assert "Agent preflight" in page_source
     assert "Draft gate" in page_source
+    assert "Cohort evidence contract" in page_source
     assert "10 ICU stays · demo review feature set" in page_source
     assert "agent drafts only after review" in page_source
     assert "current session" in page_source
+    assert "eu-cohort-readiness-contract" in page_source
+    assert page_source.count("eu-cohort-readiness-row") == 4
     assert "cohort_statistics:250:0" not in page_source
     assert "250 stays" not in page_source
     cohort_source = Path(cohort_redesign.__file__).read_text(encoding="utf-8")
+    assert "_render_cohort_loaded_workspace_bar(lang)" in cohort_source
+    assert "def _cohort_loaded_workspace_summary" in cohort_source
+    assert "def _cohort_loaded_workspace_strip_html" in cohort_source
     assert "_render_cohort_readiness_strip(lang)" in cohort_source
+    assert "def _cohort_readiness_contract_html" in cohort_source
     assert "eu-cohort-agent-preflight" in cohort_source
 
     css_text = shell_styles._load_shell_overrides_css()
     assert "st-key-cohort_active_panel" in css_text
+    assert "st-key-eu_cohort_loaded_bar" in css_text
+    assert ".eu-cohort-loaded-strip" in css_text
+    assert ".eu-cohort-loaded-kpis" in css_text
+    assert ".eu-cohort-loaded-stat" in css_text
     assert "eu-readiness-strip" in css_text
+    assert ".eu-cohort-readiness-contract" in css_text
+    assert ".eu-cohort-readiness-head" in css_text
+    assert ".eu-cohort-readiness-list" in css_text
+    assert ".eu-cohort-readiness-row" in css_text
+    assert ".eu-cohort-readiness-node" in css_text
     assert "grid-template-columns: repeat(4, minmax(0, 1fr))" in css_text
-    assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in css_text
-    assert ".eu-readiness-strip .eu-gate-card .k::before" in css_text
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css_text
     assert "@media (max-width: 760px)" in css_text
     cohort_panel_css = css_text[
         css_text.index('[class*="st-key-cohort_active_panel"] div[role="radiogroup"]'):
@@ -11626,6 +12527,51 @@ def test_cohort_redesign_defaults_to_real_panel_body(monkeypatch) -> None:
     assert "gap: 8px !important" in cohort_panel_css
     assert "display: flex !important" in cohort_panel_css
     assert "display: none !important" not in cohort_panel_css
+
+
+def test_cohort_readiness_contract_maps_ready_and_blocked_states() -> None:
+    ready_html = cohort_redesign._cohort_readiness_contract_html(
+        lang="en",
+        patient_count=42,
+        concept_count=8,
+        is_ready=True,
+        input_body="42 ICU stays · 8 review features",
+        evidence_body="coverage + denominators ready",
+        review_body="agent drafts only after review",
+        input_tone="ok",
+        evidence_tone="ok",
+        review_tone="warn",
+    )
+    blocked_html = cohort_redesign._cohort_readiness_contract_html(
+        lang="en",
+        patient_count=0,
+        concept_count=0,
+        is_ready=False,
+        input_body="waiting for local cohort",
+        evidence_body="load data for denominators",
+        review_body="draft gate blocked until data load",
+        input_tone="warn",
+        evidence_tone="warn",
+        review_tone="warn",
+    )
+
+    assert "eu-cohort-readiness-contract" in ready_html
+    assert "Cohort evidence contract" in ready_html
+    assert ready_html.count("eu-cohort-readiness-row") == 4
+    assert ">01</span>" in ready_html
+    assert ">04</span>" in ready_html
+    assert "Denominator" in ready_html
+    assert "Feature evidence" in ready_html
+    assert "Review required" in ready_html
+    assert "42 ICU stays · 8 review features" in ready_html
+    assert "agent drafts only after review" in ready_html
+    assert "eu-gate-card" not in ready_html
+
+    assert "setup needed" in blocked_html
+    assert "Not set" in blocked_html
+    assert "Blocked" in blocked_html
+    assert "draft gate blocked until data load" in blocked_html
+    assert "agent drafts only after review" not in blocked_html
 
 
 def test_cohort_redesign_real_unconfigured_does_not_show_demo_denominators(monkeypatch) -> None:
@@ -11665,9 +12611,45 @@ def test_cohort_redesign_real_unconfigured_does_not_show_demo_denominators(monke
     assert "load data for denominators" in page_source
     assert "draft gate blocked until data load" in page_source
     assert "agent drafts only after review" not in page_source
+    assert "eu-cohort-loaded-strip" not in page_source
+    assert "Cohort workspace ready" not in page_source
     assert "demo concept set" not in page_source
     assert "250 stays" not in page_source
     assert "Sepsis vs Non-sepsis" not in page_source
+
+
+def test_cohort_loaded_workspace_summary_and_strip_use_real_state(monkeypatch) -> None:
+    state = {
+        "entry_mode": "real",
+        "loaded_data_origin": "loaded_exports",
+        "cohort_active_panel": "coverage",
+        "patient_ids": [10001, 10002, 10003],
+        "loaded_concepts": {
+            "hr": pd.DataFrame({"stay_id": [10001, 10002, 10003]}),
+            "map": pd.DataFrame({"stay_id": [10001, 10002, 10003]}),
+        },
+    }
+    monkeypatch.setattr(cohort_redesign, "st", _SessionStateStreamlit(state))
+
+    summary = cohort_redesign._cohort_loaded_workspace_summary("en")
+    html = cohort_redesign._cohort_loaded_workspace_strip_html("en", summary)
+
+    assert summary["loaded"] is True
+    assert summary["source_label"] == "Loaded export workspace"
+    assert summary["patient_count"] == 3
+    assert summary["concept_count"] == 2
+    assert summary["active_panel_label"] == "Coverage audit"
+    assert summary["panel_count"] == 4
+    assert "eu-cohort-loaded-strip" in html
+    assert html.count("eu-cohort-loaded-stat") == 3
+    assert "Loaded export workspace ready" in html
+    assert "ICU stays" in html
+    assert "Review features" in html
+    assert "Panels" in html
+    assert "Coverage audit" in html
+    assert "10001" not in html
+    assert "10002" not in html
+    assert "10003" not in html
 
 
 def test_cohort_redesign_real_loaded_export_uses_patient_ids_for_readiness(monkeypatch) -> None:
@@ -11676,6 +12658,7 @@ def test_cohort_redesign_real_loaded_export_uses_patient_ids_for_readiness(monke
             self.session_state = {
                 "entry_mode": "real",
                 "cohort_active_panel": "coverage",
+                "loaded_data_origin": "loaded_exports",
                 "patient_ids": [10001, 10002, 10003],
                 "loaded_concepts": {
                     "hr": pd.DataFrame({"stay_id": [10001, 10002, 10003]}),
@@ -11705,6 +12688,10 @@ def test_cohort_redesign_real_loaded_export_uses_patient_ids_for_readiness(monke
 
     page_source = "\n".join(streamlit_stub.markdown_calls)
     assert rendered == ["coverage"]
+    assert "eu-cohort-loaded-strip" in page_source
+    assert "Loaded export workspace ready" in page_source
+    assert "3 ICU stays · 2 review features · 4 panels unlocked" in page_source
+    assert "Active panel: Coverage audit" in page_source
     assert "3 ICU stays · 2 review features" in page_source
     assert "coverage + denominators ready" in page_source
     assert "Draft gate" in page_source
@@ -11876,11 +12863,88 @@ def test_topbar_settings_action_matches_reference_and_resets_defaults() -> None:
     assert "Documentation" in page_source
     assert "Export diagnostics" in page_source
     assert "_settings_diagnostics_json" in page_source
+    assert "def _settings_connection_ledger_html" in page_source
+    assert "def _settings_privacy_contract_html" in page_source
+    assert "def _settings_agent_contract_html" in page_source
+    assert "def _settings_display_contract_html" in page_source
+    assert "def _settings_environment_contract_html" in page_source
+    assert "def _settings_defaults_ledger_html" in page_source
+    assert "def _settings_overview_cockpit_html" in page_source
+    assert "Settings cockpit" in page_source
+    assert "Local-first control plane" in page_source
+    assert "Privacy contract" in page_source
+    assert "Local-first boundary" in page_source
+    assert "Source rows, cohort frames, and patient review tables never enter model payloads." in page_source
+    assert "static_privacy_rows" not in page_source
+    assert "static_rows" not in page_source
+    assert "Run contract" in page_source
+    assert "Research Agent guardrails" in page_source
+    assert "Model choice is only one part of the run" in page_source
+    assert "Display contract" in page_source
+    assert "Desktop-first workspace" in page_source
+    assert "The visual shell follows one dense research-console contract" in page_source
+    assert "Environment contract" in page_source
+    assert "Support bundle map" in page_source
+    assert "The downloads below are generated from these live runtime facts" in page_source
+    assert "New workspace launch contract" in page_source
+    assert "Entry cover" in page_source
+    assert "def _settings_path_contract_html" in page_source
+    assert "Settings persistence map" in page_source
+    assert "Local path contract" in page_source
+    assert "Agent runs" in page_source
+    assert "Export bundle" in page_source
+    assert "Data source" in page_source
+    assert "Module folder" in page_source
     assert "secrets_included" in page_source
     assert "patient_rows_included" in page_source
     assert 'key="_eu_settings_diagnostics_download"' in page_source
+    assert "eu-settings-card eu-settings-env" not in page_source
     assert "eu_settings_env_actions" in css_text
     assert ".stDownloadButton > button" in css_text
+    assert ".eu-settings-connection-ledger" in css_text
+    assert ".eu-settings-connection-row" in css_text
+    assert ".eu-settings-connection-node" in css_text
+    assert ".eu-settings-privacy-contract" in css_text
+    assert ".eu-settings-privacy-contract-row" in css_text
+    assert ".eu-settings-privacy-node" in css_text
+    assert ".eu-settings-privacy-list" in css_text
+    assert ".eu-settings-agent-contract" in css_text
+    assert ".eu-settings-agent-contract-row" in css_text
+    assert ".eu-settings-agent-node" in css_text
+    assert ".eu-settings-agent-list" in css_text
+    assert ".eu-settings-display-contract" in css_text
+    assert ".eu-settings-display-head" in css_text
+    assert ".eu-settings-environment-contract" in css_text
+    assert ".eu-settings-environment-head" in css_text
+    assert ".eu-settings-environment-row" in css_text
+    assert ".eu-settings-environment-copy code" in css_text
+    assert ".eu-settings-defaults-ledger" in css_text
+    assert ".eu-settings-defaults-list" in css_text
+    assert ".eu-settings-default-node" in css_text
+    assert "eu-settings-status-grid" not in page_source
+    assert "eu-settings-status-tile" not in page_source
+    assert ".eu-settings-status-grid" not in css_text
+    assert ".eu-settings-status-tile" not in css_text
+    assert ".eu-settings-overview-cockpit" in css_text
+    assert ".eu-settings-overview-brief" in css_text
+    assert ".eu-settings-overview-row" in css_text
+    assert ".eu-settings-overview-grid" not in page_source
+    assert ".eu-settings-overview-grid" not in css_text
+    assert "eu-settings-privacy-row" not in page_source
+    assert ".eu-settings-privacy-row" not in css_text
+    assert "_settings_static_toggle" not in page_source
+    assert "eu-settings-segment" not in page_source
+    assert ".eu-settings-segment" not in css_text
+    assert ".eu-settings-toggle-wrap" not in css_text
+    assert ".eu-settings-path-contract" in css_text
+    assert ".eu-settings-path-card" in css_text
+    assert ".eu-settings-path-grid" in css_text
+    assert ".eu-settings-path-node" in css_text
+    assert ".eu-settings-path-copy" in css_text
+    assert ".eu-settings-path-controls-head" in css_text
+    assert ".eu-settings-path-control-chip" in css_text
+    assert ".eu-settings-env {" not in css_text
+    assert "grid-template-columns: 1fr" in css_text
 
     assert app._topbar_primary_action_label("settings", "en") == (
         "Reset to defaults",
@@ -12060,6 +13124,293 @@ def test_settings_home_layout_buttons_switch_entry_cover(tmp_path, monkeypatch) 
     assert at.session_state["_eu_entry_home_layout"] == "cards"
 
 
+def test_settings_overview_cockpit_maps_live_status_rows() -> None:
+    rows = [
+        {
+            "label": "Start mode",
+            "value": "Demo workspace",
+            "detail": "10 demo patients · 24h default",
+            "tone": "ok",
+        },
+        {
+            "label": "Research Agent",
+            "value": "Setup needed",
+            "detail": "Add the API key/model, or choose MockLLMClient.",
+            "tone": "bad",
+        },
+    ]
+
+    html = pages_redesign._settings_overview_cockpit_html(
+        lang="en",
+        rows=rows,
+        outbound_enabled=False,
+    )
+
+    assert "eu-settings-overview-cockpit" in html
+    assert "Settings cockpit" in html
+    assert "Local-first control plane" in html
+    assert "Patient rows remain on this machine" in html
+    assert "model calls opt-in" in html
+    assert "eu-settings-overview-row ok" in html
+    assert "eu-settings-overview-row bad" in html
+    assert "Demo workspace" in html
+    assert "MockLLMClient" in html
+
+
+def test_settings_connection_ledger_replaces_status_tile_grid() -> None:
+    html = pages_redesign._settings_connection_ledger_html(
+        rows=[
+            {
+                "label": "Outbound calls",
+                "value": "Off by default",
+                "detail": "Patient rows stay local.",
+                "tone": "warn",
+            },
+            {
+                "label": "Provider",
+                "value": "EasyICU hosted",
+                "detail": "Assistant relay only.",
+                "tone": "neutral",
+            },
+        ],
+    )
+
+    assert "eu-settings-connection-ledger" in html
+    assert "eu-settings-connection-row warn" in html
+    assert "eu-settings-connection-node" in html
+    assert ">01</span>" in html
+    assert ">02</span>" in html
+    assert "Outbound calls" in html
+    assert "Patient rows stay local." in html
+    assert "eu-settings-status-grid" not in html
+    assert "eu-settings-status-tile" not in html
+
+
+def test_settings_privacy_contract_maps_local_first_and_outbound_state() -> None:
+    html = pages_redesign._settings_privacy_contract_html(
+        lang="en",
+        outbound_enabled=True,
+        credential_value="Session key present",
+        credential_detail="API keys stay in this browser session only.",
+        credential_tone="ok",
+    )
+
+    assert "eu-settings-privacy-contract" in html
+    assert "Privacy contract" in html
+    assert "Local-first boundary" in html
+    assert "opt-in" in html
+    assert "Patient rows" in html
+    assert "Local only" in html
+    assert "Outbound model calls" in html
+    assert "Allowed" in html
+    assert "Usage telemetry" in html
+    assert "Credential state" in html
+    assert "eu-settings-privacy-contract-row warn" in html
+    assert "eu-settings-privacy-contract-row ok" in html
+    assert ">01</span>" in html
+    assert ">04</span>" in html
+    assert "patient review tables never enter model payloads" in html
+    assert "sk-" not in html
+    assert "eu-settings-privacy-row" not in html
+
+
+def test_settings_agent_contract_replaces_static_run_rows() -> None:
+    html = pages_redesign._settings_agent_contract_html(
+        lang="en",
+        agent_run_value="Shared external ready",
+        agent_run_detail="OpenRouter · openai/gpt-oss-120b:free",
+        agent_run_tone="ok",
+    )
+
+    assert "eu-settings-agent-contract" in html
+    assert "Run contract" in html
+    assert "Research Agent guardrails" in html
+    assert "evidence-gated" in html
+    assert "Run route" in html
+    assert "Shared external ready" in html
+    assert "Token budget" in html
+    assert "120,000" in html
+    assert "Auto-repair" in html
+    assert "Enabled" in html
+    assert "Evidence gate" in html
+    assert "Strict" in html
+    assert "eu-settings-agent-contract-row ok" in html
+    assert "eu-settings-agent-contract-row neutral" in html
+    assert ">01</span>" in html
+    assert ">04</span>" in html
+    assert "eu-settings-segment" not in html
+    assert "eu-settings-toggle-wrap" not in html
+
+
+def test_settings_display_contract_maps_language_density_and_motion_state() -> None:
+    html = pages_redesign._settings_display_contract_html(
+        lang="en",
+        is_english=True,
+        density_pref="compact",
+        display_target="desktop",
+        reduce_motion=True,
+    )
+
+    assert "eu-settings-display-contract" in html
+    assert "eu-settings-display-head" in html
+    assert "Display contract" in html
+    assert "Desktop-first workspace" in html
+    assert "display state" in html
+    assert "Interface language" in html
+    assert "English" in html
+    assert "Density" in html
+    assert "Compact" in html
+    assert "Display target" in html
+    assert "Desktop" in html
+    assert "Motion" in html
+    assert "Reduced" in html
+    assert "eu-settings-display-row ok" in html
+    assert "eu-settings-agent-contract-row" in html
+    assert ">01</span>" in html
+    assert ">04</span>" in html
+    assert "Project default is the desktop app-like layout" in html
+
+
+def test_settings_environment_contract_maps_support_bundle_and_runtime(tmp_path: Path) -> None:
+    workdir = tmp_path / "easyicu-runs"
+    workdir.mkdir()
+
+    html = pages_redesign._settings_environment_contract_html(
+        lang="en",
+        workdir=str(workdir),
+    )
+
+    assert "eu-settings-environment-contract" in html
+    assert "Environment contract" in html
+    assert "Support bundle map" in html
+    assert "downloadable" in html
+    assert "Build" in html
+    assert "EasyICU 1.0.0" in html
+    assert "Python runtime" in html
+    assert sys.version.split()[0] in html
+    assert "Database catalog" in html
+    assert "6 ICU sources" in html
+    assert "MIMIC-IV" in html
+    assert "SICdb" in html
+    assert "Diagnostics root" in html
+    assert str(workdir) in html
+    assert f"<code>{workdir}</code>" in html
+    assert "secrets and patient rows" in html
+    assert "eu-settings-agent-contract-row" in html
+    assert "eu-settings-environment-row ok" in html
+    assert "eu-settings-environment-node" in html
+    assert ">01</span>" in html
+    assert ">04</span>" in html
+    assert "eu-settings-card eu-settings-env" not in html
+    assert "sk-" not in html
+
+
+def test_settings_defaults_ledger_maps_session_defaults() -> None:
+    html = pages_redesign._settings_defaults_ledger_html(
+        lang="en",
+        rows=[
+            {
+                "label": "Start mode",
+                "value": "Real data",
+                "detail": "real data opens the local source validation gate.",
+                "tone": "neutral",
+            },
+            {
+                "label": "Entry cover",
+                "value": "Question prompt",
+                "detail": "first-screen route selector",
+                "tone": "neutral",
+            },
+            {
+                "label": "Demo cohort",
+                "value": "50 patients",
+                "detail": "lightweight demo patient frames",
+                "tone": "neutral",
+            },
+            {
+                "label": "Timeline window",
+                "value": "168 hours",
+                "detail": "hourly stay horizon",
+                "tone": "neutral",
+            },
+        ],
+    )
+
+    assert "eu-settings-defaults-ledger" in html
+    assert "eu-settings-defaults-head" in html
+    assert "New workspace launch contract" in html
+    assert "real Streamlit session state" in html
+    assert "eu-settings-default-row neutral" in html
+    assert "eu-settings-default-node" in html
+    assert "eu-settings-default-copy" in html
+    assert ">01</span>" in html
+    assert ">04</span>" in html
+    assert "Real data" in html
+    assert "Question prompt" in html
+    assert "168 hours" in html
+
+
+def test_settings_path_contract_maps_live_session_paths(tmp_path: Path) -> None:
+    workdir = tmp_path / "agent-runs"
+    workdir.mkdir()
+    export_dir = tmp_path / "exports"
+    state = {
+        "path_validated": True,
+        "data_path": str(tmp_path / "mimic-iv-3.1"),
+        "research_agent_module_dir_text": "",
+    }
+
+    html = pages_redesign._settings_path_contract_html(
+        state,
+        lang="en",
+        workdir=str(workdir),
+        export_hint=str(export_dir),
+    )
+
+    assert "eu-settings-path-contract" in html
+    assert "Settings persistence map" in html
+    assert "Agent runs" in html
+    assert "Run history, manifests, reviewer decisions" in html
+    assert "Export bundle" in html
+    assert "evidence-ledger bundles" in html
+    assert "Data source" in html
+    assert "validated" in html
+    assert "Module folder" in html
+    assert "optional" in html
+    assert "patient rows are uploaded" in html
+    assert "eu-settings-path-node" in html
+    assert "eu-settings-path-copy" in html
+    assert ">01</span>" in html
+    assert ">04</span>" in html
+    assert 'eu-settings-path-card ok' in html
+    assert 'eu-settings-path-card warn' in html
+    assert 'eu-settings-path-card neutral' in html
+
+
+def test_settings_path_controls_head_maps_editable_session_keys(tmp_path: Path) -> None:
+    workdir = tmp_path / "agent-runs"
+    workdir.mkdir()
+    export_dir = tmp_path / "exports"
+
+    html = pages_redesign._settings_path_controls_head_html(
+        lang="en",
+        workdir=str(workdir),
+        export_hint=str(export_dir),
+        module_folder="",
+    )
+
+    assert "eu-settings-path-controls-head" in html
+    assert "Path edit console" in html
+    assert "Local workspace controls" in html
+    assert "live Streamlit session keys" in html
+    assert "research_agent_workdir" in html
+    assert "export_path" in html
+    assert "module_dir_text" in html
+    assert "eu-settings-path-control-chip ok" in html
+    assert "eu-settings-path-control-chip warn" in html
+    assert "eu-settings-path-control-chip neutral" in html
+
+
 def test_settings_diagnostics_payload_omits_secrets_and_patient_rows() -> None:
     payload_text = pages_redesign._settings_diagnostics_json(
         {
@@ -12162,6 +13513,40 @@ def test_history_open_workbench_clears_resume_markers_and_records_last_run() -> 
 
     assert "clear_agent_continuation_state(st.session_state)" in source
     assert 'st.session_state["research_agent_last_run_id"] = run_id' in source
+    assert "_remember_research_agent_workdir(" in source
+
+
+def test_bind_workbench_state_preserves_selected_history_workdir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_dir = tmp_path / "bench" / "D1" / "aware" / "run_20260615T074303_c90961"
+    run_dir.mkdir(parents=True)
+    state = _AttrSessionState({"language": "en", "research_agent_workdir": str(tmp_path / "old")})
+    monkeypatch.setattr(research_agent, "st", _SessionStateStreamlit(state))
+
+    research_agent._bind_workbench_state(
+        run_dir=run_dir,
+        manifest={
+            "run_id": "run_20260615T074303_c90961",
+            "research_question": "Does first-24h urea-to-creatinine ratio predict mortality?",
+            "per_step_records": [{"step_id": "cohort_summary", "status": "ok"}],
+            "evidence": [{"evidence_id": "table_one", "kind": "table"}],
+            "findings": [],
+        },
+        partial=False,
+    )
+
+    assert state["research_agent_workdir"] == str(run_dir.parent.resolve())
+    assert state["_research_agent_history_workdir"] == str(run_dir.parent.resolve())
+    assert state["research_agent_last_run_id"] == "run_20260615T074303_c90961"
+    assert state["_agent_workbench_source_run_dir"] == str(run_dir)
+
+    state.pop("research_agent_workdir")
+    assert research_agent._research_agent_workdir_text(
+        state,
+        str(tmp_path / "default"),
+    ) == str(run_dir.parent.resolve())
 
 
 def test_settings_reset_request_reruns_shell_and_preserves_notice(monkeypatch) -> None:
@@ -12819,7 +14204,7 @@ def test_sidebar_spacing_and_removes_noninteractive_rail_guide(monkeypatch) -> N
     assert '[aria-label="Chat message from user"]' in shell_styles._load_shell_overrides_css()
     assert '[data-testid="stChatMessageAvatarCustom"]' in shell_styles._load_shell_overrides_css()
     assert '[data-testid="stChatMessageContent"][aria-label="Chat message from user"] [data-testid="stVerticalBlockBorderWrapper"]' in shell_styles._load_shell_overrides_css()
-    assert "bottom: calc(96px + env(safe-area-inset-bottom, 0px))" in shell_styles._load_shell_overrides_css()
+    assert "bottom: calc(108px + env(safe-area-inset-bottom, 0px))" in shell_styles._load_shell_overrides_css()
     assert 'max-height: calc(100vh - 184px)' in shell_styles._load_shell_overrides_css()
     assert ':has([class*="st-key-_floating_ai_size_s_btn"])' in shell_styles._load_shell_overrides_css()
     assert '[class*="st-key-_floating_ai_close_btn"] button' in shell_styles._load_shell_overrides_css()
@@ -12982,11 +14367,14 @@ def test_sidebar_settings_gear_opens_full_settings_page() -> None:
     assert "defaulting from\n    # Settings/Hosted straight into a Custom external endpoint" in agent_text
     assert ".eu-settings-page-head" in css_text
     assert ".eu-settings-card" in css_text
-    assert ".eu-settings-toggle" in css_text
+    assert ".eu-settings-agent-contract" in css_text
+    assert ".eu-settings-agent-contract-row" in css_text
+    assert ".eu-settings-toggle" not in css_text
     assert "st-key-eu_settings_privacy_card" in css_text
     assert "st-key-_eu_settings_allow_outbound_model_calls" in css_text
     assert ".eu-llm-settings-status" in css_text
-    assert ".eu-settings-status-grid" in css_text
+    assert ".eu-settings-connection-ledger" in css_text
+    assert ".eu-settings-status-grid" not in css_text
     assert ".eu-settings-route-note" in css_text
 
 
@@ -13711,15 +15099,15 @@ def test_large_desktop_density_keeps_sidebar_readable() -> None:
         css_text.index("/* Large desktop comfort density."):
         css_text.index("/* Tablet (901-1100px)")
     ]
-    assert "--eu-sidebar-w: 280px" in large_density_css
-    assert "max-width: 1840px !important" in large_density_css
+    assert "--eu-sidebar-w: 248px" in large_density_css
+    assert "max-width: 1540px !important" in large_density_css
     assert "font-size: 15px;" in large_density_css
     assert "font-size: 14.5px !important" in large_density_css
     assert "font-size: 13.8px !important" in large_density_css
     assert "font-size: 12.8px" in large_density_css
     assert "width: 18px !important" in large_density_css
-    assert "padding-left: 44px !important" in large_density_css
-    assert "padding-right: 44px !important" in large_density_css
+    assert "padding-left: 32px !important" in large_density_css
+    assert "padding-right: 32px !important" in large_density_css
     assert "vw" not in large_density_css
 
 

@@ -51,6 +51,26 @@ def _render_chart_heading(title: str, subtitle: str, eyebrow: str | None = None)
     )
 
 
+def _reclass_notice_html(tone: str, kicker: str, title: str, body: str = "", meta: str = "") -> str:
+    body_html = f'<p>{html.escape(body)}</p>' if body else ""
+    meta_html = f'<em>{html.escape(meta)}</em>' if meta else ""
+    return (
+        f'<div class="eu-cohort-loader-notice {html.escape(tone)}">'
+        f'<span>{html.escape(kicker)}</span>'
+        f'<b>{html.escape(title)}</b>'
+        f'{body_html}'
+        f'{meta_html}'
+        '</div>'
+    )
+
+
+def _render_reclass_notice(tone: str, kicker: str, title: str, body: str = "", meta: str = "") -> None:
+    st.markdown(
+        _reclass_notice_html(tone, kicker, title, body, meta),
+        unsafe_allow_html=True,
+    )
+
+
 RECLASS_CHART = {
     "ink": "#1d2935",
     "muted": "#65727f",
@@ -185,21 +205,21 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
         st.caption(mode_cfg['description_en'] if lang == 'en' else mode_cfg['description_zh'])
     if locked_modes and not screenshot_mode:
         locked_text = ", ".join(mode_labels[key] for key in locked_modes)
-        # Use a visible warning callout instead of a caption — locked
-        # modes are a structural limitation users need to act on, not
-        # incidental footnote text (2026-05 Phase D polish).
-        st.warning(
+        _render_reclass_notice(
+            "warning",
+            "Definition gate" if lang == 'en' else "定义门禁",
+            "Time-aligned modes are locked" if lang == 'en' else "同时间点口径暂未解锁",
             (
-                f"🔒 **{locked_text}** {'is' if len(locked_modes) == 1 else 'are'} locked: "
+                f"{locked_text} {'is' if len(locked_modes) == 1 else 'are'} locked: "
                 "this mode needs time-aligned `sofa` and `sofa2` concepts. "
-                "Load both via **Patient Review → Previously Exported Data** "
+                "Load both via Patient Review > Previously Exported Data "
                 "or generate them in Demo Mode."
                 if lang == 'en' else
-                f"🔒 **{locked_text}** 暂未解锁："
+                f"{locked_text} 暂未解锁："
                 "该口径需要同时间点的 `sofa` 与 `sofa2` 概念。"
-                "请在 **患者审阅 → 之前导出的结果文件** 中同时加载二者，"
+                "请在患者审阅 > 之前导出的结果文件中同时加载二者，"
                 "或在演示模式中生成。"
-            )
+            ),
         )
 
     source_df, source_label = _get_sofa_reclassification_source(lang, mode=mode)
@@ -230,7 +250,7 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
             with col_b:
                 _compact_spacer(28)
                 if st.button(
-                    "🚀 " + ("Load real SOFA concepts" if lang == 'en' else "加载真实 SOFA 特征"),
+                    "Load real SOFA concepts" if lang == 'en' else "加载真实 SOFA 特征",
                     type="primary",
                     use_container_width=True,
                     key="real_sofa_reclass_load",
@@ -242,7 +262,14 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
                         database = _default_real_database()
                         data_path = _default_real_data_root()
                         if not data_path or not Path(data_path).exists():
-                            st.error("Please validate a real data path in the sidebar first." if lang == 'en' else "请先在侧边栏验证真实数据路径。")
+                            _render_reclass_notice(
+                                "danger",
+                                "Real SOFA load" if lang == 'en' else "真实 SOFA 加载",
+                                "Validated path required" if lang == 'en' else "需要已验证路径",
+                                "Please validate a real data path in the sidebar first."
+                                if lang == 'en' else
+                                "请先在侧边栏验证真实数据路径。",
+                            )
                             return
 
                         concepts = [
@@ -259,7 +286,12 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
                                                   if lang == 'en' else f"正在加载 {len(concepts)} 个特征 ({len(patient_ids):,} stays)...")
                         except Exception as e:
                             progress_bar.empty()
-                            st.error(f"Failed to load demographics: {e}")
+                            _render_reclass_notice(
+                                "danger",
+                                "Real SOFA load" if lang == 'en' else "真实 SOFA 加载",
+                                "Demographics load failed" if lang == 'en' else "人口统计加载失败",
+                                str(e),
+                            )
                             return
 
                         try:
@@ -274,12 +306,24 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
                             progress_bar.progress(80, text="Splitting concept frames..." if lang == 'en' else "正在拆分特征表...")
                         except Exception as e:
                             progress_bar.empty()
-                            st.error(f"Concept extraction failed: {e}")
+                            _render_reclass_notice(
+                                "danger",
+                                "Real SOFA load" if lang == 'en' else "真实 SOFA 加载",
+                                "Concept extraction failed" if lang == 'en' else "概念提取失败",
+                                str(e),
+                            )
                             return
 
                         if concept_df is None or concept_df.empty:
                             progress_bar.empty()
-                            st.warning("No paired SOFA data were returned for the selected stays." if lang == 'en' else "所选 stay 未返回可用的配对 SOFA 数据。")
+                            _render_reclass_notice(
+                                "warning",
+                                "Real SOFA load" if lang == 'en' else "真实 SOFA 加载",
+                                "No paired SOFA data returned" if lang == 'en' else "未返回配对 SOFA 数据",
+                                "No paired SOFA data were returned for the selected stays."
+                                if lang == 'en' else
+                                "所选 stay 未返回可用的配对 SOFA 数据。",
+                            )
                             return
 
                         split_concepts = dict(st.session_state.get('loaded_concepts', {}) or {})
@@ -300,60 +344,96 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
                         st.session_state['loaded_data_origin'] = 'real_sofa_reclassification'
                         progress_bar.progress(100, text="Done!" if lang == 'en' else "完成！")
 
-                        # Show per-concept results
-                        st.success(
+                        loaded_meta = ", ".join(loaded_ok[:10])
+                        if len(loaded_ok) > 10:
+                            loaded_meta += f" +{len(loaded_ok) - 10}"
+                        _render_reclass_notice(
+                            "ready",
+                            "Real SOFA load" if lang == 'en' else "真实 SOFA 加载",
+                            "SOFA concepts loaded" if lang == 'en' else "SOFA 特征已加载",
                             f"Loaded {len(loaded_ok)} concept frames for {len(patient_ids):,} stays."
                             if lang == 'en' else
-                            f"已为 {len(patient_ids):,} 个 stay 加载 {len(loaded_ok)} 个特征表。"
+                            f"已为 {len(patient_ids):,} 个 stay 加载 {len(loaded_ok)} 个特征表。",
+                            loaded_meta,
                         )
-                        if loaded_ok:
-                            st.caption("✅ " + ", ".join(f"`{c}`" for c in loaded_ok))
                         if failed_concepts:
-                            st.warning(
-                                f"⚠️ {len(failed_concepts)} concepts not found in extraction result: "
-                                + ", ".join(f"`{c}`" for c in failed_concepts)
+                            _render_reclass_notice(
+                                "warning",
+                                "Real SOFA load" if lang == 'en' else "真实 SOFA 加载",
+                                f"{len(failed_concepts)} concepts missing"
                                 if lang == 'en' else
-                                f"⚠️ {len(failed_concepts)} 个概念在提取结果中缺失："
-                                + ", ".join(f"`{c}`" for c in failed_concepts)
+                                f"{len(failed_concepts)} 个概念缺失",
+                                "Not found in extraction result."
+                                if lang == 'en' else
+                                "这些概念未出现在提取结果中。",
+                                ", ".join(failed_concepts[:10]),
                             )
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error loading real SOFA concepts: {e}")
+                        _render_reclass_notice(
+                            "danger",
+                            "Real SOFA load" if lang == 'en' else "真实 SOFA 加载",
+                            "SOFA concept load failed" if lang == 'en' else "SOFA 特征加载失败",
+                            str(e),
+                        )
                         return
             return
 
         if mode != 'worst_icu':
-            st.warning(
+            _render_reclass_notice(
+                "warning",
+                "Definition gate" if lang == 'en' else "定义门禁",
+                "Definition not available" if lang == 'en' else "当前口径不可用",
                 "This definition is not available for the current session yet. Load real time-series concepts: `sofa`, `sofa2`, and optionally organ components in Quick Visualization first."
                 if lang == 'en' else
-                "当前会话还不能使用这个口径。请先在快速可视化中载入真实时间序列特征：`sofa`、`sofa2`，以及可选的器官组成分。"
+                "当前会话还不能使用这个口径。请先在快速可视化中载入真实时间序列特征：`sofa`、`sofa2`，以及可选的器官组成分。",
             )
             return
-        _render_demo_generation_card(
-            "🧭",
+        _render_reclass_notice(
+            "pending",
+            "Demo source" if lang == 'en' else "演示来源",
             "Generate SOFA-1 vs SOFA-2 Demo" if lang == 'en' else "生成 SOFA-1 vs SOFA-2 演示",
             "Create a patient-level paired SOFA-1/SOFA-2 cohort to inspect definition-driven reclassification." if lang == 'en' else "生成患者级SOFA-1/SOFA-2配对队列，用于查看定义差异导致的重新分层。",
         )
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             if st.button(
-                "🚀 " + ("Generate Reclassification Demo" if lang == 'en' else "生成重新分层演示"),
+                "Generate Reclassification Demo" if lang == 'en' else "生成重新分层演示",
                 type="primary",
                 use_container_width=True,
                 key="reclass_generate_demo_btn",
             ):
                 st.session_state['reclass_demo_df'] = _generate_mock_cohort_dashboard_data(lang)
                 st.rerun()
-        st.info("Use Cohort Snapshot demo data, loaded Quick Visualization concepts, or generate demo data here." if lang == 'en' else "可使用队列快照演示数据、快速可视化已载入特征，或在此生成演示数据。")
+        _render_reclass_notice(
+            "info",
+            "Source options" if lang == 'en' else "来源选项",
+            "No paired SOFA source loaded yet" if lang == 'en' else "尚未加载配对 SOFA 来源",
+            "Use Cohort Snapshot demo data, loaded Quick Visualization concepts, or generate demo data here."
+            if lang == 'en' else
+            "可使用队列快照演示数据、快速可视化已载入特征，或在此生成演示数据。",
+        )
         return
 
     reclass = _build_sofa_reclassification_stats(source_df, lang=lang)
     if not reclass.get('available'):
-        st.warning("The selected dataset does not contain paired SOFA-1 and SOFA-2 columns." if lang == 'en' else "当前数据不包含配对的SOFA-1和SOFA-2列。")
+        _render_reclass_notice(
+            "warning",
+            "Source check" if lang == 'en' else "来源检查",
+            "Paired SOFA columns missing" if lang == 'en' else "缺少配对 SOFA 列",
+            "The selected dataset does not contain paired SOFA-1 and SOFA-2 columns."
+            if lang == 'en' else
+            "当前数据不包含配对的 SOFA-1 和 SOFA-2 列。",
+        )
         return
 
     if not screenshot_mode:
-        st.info(("Source: " if lang == 'en' else "数据来源：") + source_label)
+        _render_reclass_notice(
+            "info",
+            "Analysis source" if lang == 'en' else "分析来源",
+            "Paired SOFA source selected" if lang == 'en' else "已选择配对 SOFA 来源",
+            source_label,
+        )
     _render_reclassification_cards(reclass, lang)
     if reclass['metrics'].get('denominator_label') == "Paired points":
         st.caption(
@@ -559,7 +639,14 @@ def render_severity_reclassification_subtab(lang: str, app_context: dict[str, An
             fig.update_yaxes(title_text="")
             st.plotly_chart(fig, use_container_width=True, key="reclass_organ_contrib", config=_get_plotly_chart_config())
         else:
-            st.info("Organ-level SOFA component columns are not available." if lang == 'en' else "当前数据没有器官级SOFA组成列。")
+            _render_reclass_notice(
+                "info",
+                "Organ contributors" if lang == 'en' else "器官贡献",
+                "Organ-level columns are unavailable" if lang == 'en' else "缺少器官级组成列",
+                "Organ-level SOFA component columns are not available."
+                if lang == 'en' else
+                "当前数据没有器官级 SOFA 组成列。",
+            )
 
     table_title = "Time-point reclassification table" if reclass['metrics'].get('denominator_label') == "Paired points" and lang == 'en' else (
         "时间点重新分层表" if reclass['metrics'].get('denominator_label') == "配对时间点" else ("Patient-level reclassification table" if lang == 'en' else "患者级重新分层表")

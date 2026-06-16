@@ -923,6 +923,58 @@ def test_scans_research_agent_history_from_final_and_partial_manifests(tmp_path:
     assert final["table_count"] == 1
 
 
+def test_discovers_nested_research_agent_workdir_candidates(tmp_path: Path) -> None:
+    aware_dir = tmp_path / "research_output" / "q1_e2e" / "bench" / "E1" / "aware"
+    run_dir = aware_dir / "run_20260611T101151_2bdd3d"
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps({
+            "run_id": "run_real_manifest",
+            "research_question": "Does Sepsis-3 predict mortality?",
+            "per_step_records": [{"step_id": "00_probe", "status": "ok"}],
+            "evidence": [{"evidence_id": "tbl1", "kind": "table"}],
+        }),
+        encoding="utf-8",
+    )
+    ignored_dir = tmp_path / "research_output" / "dry_run"
+    ignored_dir.mkdir(parents=True)
+    (ignored_dir / "source_snapshot_manifest.json").write_text("{}", encoding="utf-8")
+
+    candidates = ra_page._discover_research_agent_workdir_candidates(
+        tmp_path / "research_output",
+        limit=3,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0]["workdir"] == aware_dir.resolve()
+    assert candidates[0]["run_count"] == 1
+    assert candidates[0]["latest_run"] == run_dir.name
+    assert "source_snapshot" not in json.dumps(candidates, default=str)
+
+
+def test_research_agent_history_empty_state_surfaces_manifest_discovery(tmp_path: Path) -> None:
+    workdir = tmp_path / "research_output" / "webapp"
+    candidate = tmp_path / "research_output" / "q1_e2e" / "bench" / "E1" / "aware"
+    html_text = ra_page._history_empty_discovery_html(
+        workdir=workdir,
+        candidates=[{
+            "workdir": candidate,
+            "label": ".../bench/E1/aware",
+            "run_count": 2,
+            "latest_run": "run_20260611T101151_2bdd3d",
+        }],
+        is_en=True,
+    )
+
+    assert "ra-history-discovery" in html_text
+    assert "Manifest discovery" in html_text
+    assert "Scanning now" in html_text
+    assert str(workdir) in html_text
+    assert ".../bench/E1/aware" in html_text
+    assert "2 runs" in html_text
+    assert "run_20260611T101151_2bdd3d" in html_text
+
+
 def test_run_summary_counts_failed_steps_and_missing_outputs(tmp_path: Path) -> None:
     manifest = {
         "run_id": "run_failed",
@@ -1628,12 +1680,20 @@ def test_summary_review_gate_uses_checklist_and_locked_draft_card() -> None:
     assert "Draft methods + results" in summary_source
     assert "Output bundle" not in summary_source
     assert "Export package" in summary_source
-    assert "eu-summary-bundle-details" in summary_source
-    assert "eu-summary-bundle-summary" in summary_source
+    assert "Summary export terminal" in source
+    assert "eu-summary-export-terminal" in source
+    assert "eu-summary-export-row" in source
+    assert "_summary_export_terminal_html" in summary_source
     assert "Export package is demo-only" in summary_source
-    assert "Export bundle" in summary_source
+    assert "Export review ZIP" in source
     assert "One reviewer sign-off outstanding" in summary_source
-    assert "eu-summary-review-control-head" in summary_source
+    assert "eu-summary-review-terminal" in source
+    assert "eu-summary-review-action-row" in source
+    assert "_summary_review_action_terminal_html" in summary_source
+    assert "_remember_summary_review_receipt" in summary_source
+    assert "st.columns([1, 1, 1.15])" not in summary_source
+    assert "st.success(" not in summary_source
+    assert "st.warning(" not in summary_source
     assert "Add reviewer note" in summary_source
     assert "_eu_summary_review_note_visible_" in summary_source
     assert "note_visible = st.toggle(" in summary_source
@@ -1665,12 +1725,17 @@ def test_summary_review_gate_uses_checklist_and_locked_draft_card() -> None:
     assert ".eu-summary-action-token" in css
     assert ".eu-summary-action-token.ready" in css
     assert ".eu-summary-reference-grid" in css
+    assert ".eu-summary-export-terminal" in css
+    assert ".eu-summary-export-row" in css
+    assert ".eu-summary-export-button" in css
+    assert ".eu-summary-review-terminal" in css
+    assert ".eu-summary-review-action-row" in css
+    assert ".eu-summary-review-receipt" in css
     assert ".eu-summary-bundle-details:not([open]) > :not(summary)" in css
     assert ".eu-summary-bundle-summary" in css
     assert ".eu-summary-bundle-row" in css
     assert ".eu-summary-bundle-button" in css
-    assert ".eu-summary-review-control-head" in css
-    assert "width: min(100%, calc(100% - 316px))" in css
+    assert "width: min(100%, calc(100% - 316px))" not in css
     assert "grid-column: 1 / -1" in css
 
 
@@ -1839,6 +1904,93 @@ def test_research_agent_question_widget_uses_session_state_without_duplicate_def
     assert 'value=st.session_state.get("research_agent_question", "")' not in request_source
 
 
+def test_research_agent_renders_copilot_handoff_packet_before_fallback_notice() -> None:
+    source = Path(ra_page.__file__).read_text(encoding="utf-8")
+    request_source = source[
+        source.index("def _section_request_picker"):
+        source.index("def _section_method_preferences")
+    ]
+    helper_source = inspect.getsource(ra_page._render_copilot_handoff_packet)
+    css_source = Path(ra_page.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
+
+    assert "research_agent_copilot_handoff_packet" in helper_source
+    assert "Copilot handoff packet" in helper_source
+    assert "ra-copilot-handoff" in helper_source
+    assert "ra-copilot-handoff-ledger" in helper_source
+    assert "ra-copilot-handoff-node" in helper_source
+    assert "Setup packet landing" in helper_source
+    assert "preflight_status" in helper_source
+    assert "_render_copilot_handoff_packet(" in request_source
+    assert "question_handoff_notice and not packet_rendered" in request_source
+    assert ".ra-copilot-handoff" in css_source
+    assert ".ra-copilot-handoff-facts" in css_source
+    assert ".ra-copilot-handoff-node" in css_source
+    assert ".ra-copilot-handoff-receipt" in css_source
+    assert "border-left: 4px solid var(--accent)" in css_source
+
+
+def test_research_agent_handoff_receipt_summarizes_loaded_export_without_patient_ids(
+    tmp_path: Path,
+) -> None:
+    export_dir = tmp_path / "easyicu_export"
+    export_dir.mkdir()
+    files = [
+        export_dir / "demographics.parquet",
+        export_dir / "vitals.parquet",
+        export_dir / "outcome.parquet",
+    ]
+    for path in files:
+        path.write_bytes(b"stub")
+    state = {
+        "_eu_ra_focus_module_folder": True,
+        "_eu_ra_apply_export_file_selection": True,
+        "research_agent_module_dir_text": str(export_dir),
+        "research_agent_cohort_source": "Pick an EasyICU module export folder",
+        "patient_ids": [10001, 10002, 10003],
+        "loaded_concepts": {
+            "age": pd.DataFrame({"stay_id": [10001, 10002, 10003]}),
+            "hr": pd.DataFrame({"stay_id": [10001, 10002, 10003]}),
+        },
+        "_review_source_concept_count": 3,
+        "_review_subset_concept_count": 2,
+        "_export_success_result": {
+            "files": [str(path) for path in files],
+            "patient_count": 3,
+        },
+    }
+
+    summary = ra_page._agent_handoff_context_summary(state, is_en=True)
+    html = ra_page._agent_handoff_context_html(summary, is_en=True)
+    render_source = inspect.getsource(ra_page.render_research_agent_page)
+    css_source = Path(ra_page.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
+
+    assert summary["active"] is True
+    assert summary["patient_count"] == 3
+    assert summary["feature_count"] == 2
+    assert summary["selected_count"] == 3
+    assert summary["file_count"] == 3
+    assert summary["export_dir"] == str(export_dir)
+    assert "ra-agent-handoff-receipt" in html
+    assert "Patient Review -&gt; Agent Projects" in html
+    assert "Loaded context ready for Agent Projects" in html
+    assert "ICU stays" in html
+    assert "Review features" in html
+    assert "2 / 3" in html
+    assert "Export files" in html
+    assert str(export_dir) in html
+    assert "10001" not in html
+    assert "10002" not in html
+    assert "10003" not in html
+    assert "_render_agent_handoff_context_receipt(st.session_state, is_en=_is_en)" in render_source
+    assert "_eu_ra_handoff_receipt_rendered_in_shell" in inspect.getsource(
+        ra_page._render_agent_handoff_context_receipt
+    )
+    assert ".ra-agent-handoff-receipt" in css_source
+    assert ".ra-agent-handoff-receipt-shell" in css_source
+    assert ".ra-agent-handoff-stats" in css_source
+    assert ".ra-agent-handoff-path code" in css_source
+
+
 def test_research_agent_method_widgets_use_session_state_without_duplicate_defaults() -> None:
     source = Path(ra_page.__file__).read_text(encoding="utf-8")
     preferences_source = source[
@@ -1901,7 +2053,13 @@ def test_summary_reference_uses_manifest_evidence_total_and_icons() -> None:
     assert "One reviewer sign-off outstanding" not in html
     assert "0E / 15W" not in html
     assert "0E/15W" not in html
-    assert "eu-summary-bundle-ico\"><svg" in html
+    assert "Summary export terminal" in html
+    assert "eu-summary-export-terminal available" in html
+    assert "eu-summary-export-row available" in html
+    assert "run_demo_output_bundle.zip" in html
+    assert "Export review ZIP" in html
+    assert "eu-summary-bundle-details" not in html
+    assert "eu-summary-bundle-ico\"><svg" not in html
     assert ">F</span>" not in html
     assert ".eu-summary-bundle-ico svg" in Path(wb_page.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
 
@@ -2010,6 +2168,8 @@ def test_summary_gate_unlocks_after_saved_reviewer_signoff() -> None:
     assert "Reviewer gate ready" in html
     assert "<button>Draft methods + results</button>" not in html
     assert "eu-summary-action-token ready" in html
+    assert "Summary export terminal" in html
+    assert "run_signed_off_output_bundle.zip" in html
     assert filename == "run_signed_off_bundle_index.json"
     assert all(check["ok"] is True for check in payload["review_checks"])
     assert payload["review_checks"][3]["status"] == "2/2 reviewed"
@@ -2482,6 +2642,9 @@ def test_workbench_download_empty_state_uses_specific_result_context() -> None:
     source = Path(wb_page.__file__).read_text(encoding="utf-8")
 
     assert "Results carry no local file paths (demo or unresolved)." not in source
+    assert "_result_download_ledger_html" in source
+    assert "Result download ledger" in source
+    assert "Output bundle terminal" in source
     assert "Demo preview does not write downloadable result files." in source
     assert "No downloadable result files are registered for this selected step." in source
     assert "Registered result paths are not available on disk from this run directory." in source
@@ -2601,6 +2764,228 @@ def test_workbench_evidence_rows_preserve_paths_for_inspector() -> None:
     assert rows[0]["sha8"] == "abcdef12"
     assert rows[0]["sha256"] == "abcdef1234567890"
     assert rows[0]["evidence_id"] == "script_1"
+
+
+def test_workbench_evidence_rows_bind_real_artifact_file_state(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run_01"
+    evidence_dir = run_dir / "evidence"
+    evidence_dir.mkdir(parents=True)
+    table_path = evidence_dir / "table_one.csv"
+    table_path.write_text("stay_id,age\n1,62\n", encoding="utf-8")
+
+    rows = wb_page._evidence_rows_from_records(
+        [
+            {
+                "evidence_id": "table_one",
+                "kind": "table",
+                "description": "Table 1 export.",
+                "relative_path": "evidence/table_one.csv",
+                "produced_by_step": "02_table_one",
+                "sha256": "1234567890abcdef",
+            },
+            {
+                "evidence_id": "missing_plot",
+                "kind": "figure",
+                "relative_path": "evidence/missing_plot.png",
+            },
+        ],
+        fallback_label="02_table_one",
+        run_dir=run_dir,
+    )
+
+    assert rows[0]["file_exists"] is True
+    assert rows[0]["file_state"] == "available"
+    assert rows[0]["artifact_path"] == str(table_path)
+    assert rows[0]["file_name"] == "table_one.csv"
+    assert rows[0]["suffix"] == "csv"
+    assert rows[0]["size_label"].endswith("B")
+    assert rows[0]["produced_by_step"] == "02_table_one"
+    assert rows[1]["file_exists"] is False
+    assert rows[1]["file_state"] == "missing"
+
+
+def test_workbench_artifact_action_contract_maps_real_file_states(tmp_path: Path) -> None:
+    table_path = tmp_path / "evidence" / "table_one.csv"
+    table_path.parent.mkdir()
+    table_path.write_text("stay_id,age\n1,62\n", encoding="utf-8")
+    record = {
+        "evidence_id": "table_one",
+        "kind": "table",
+        "suffix": "csv",
+        "produced_by_step": "02_table_one",
+        "sha256": "1234567890abcdef",
+    }
+
+    available_html = wb_page._artifact_action_contract_html(
+        record,
+        raw_path="evidence/table_one.csv",
+        target_path=table_path,
+        file_state="available",
+        lang="en",
+    )
+    assert "eu-wb-artifact-contract available" in available_html
+    assert "Local artifact contract" in available_html
+    assert "eu-wb-artifact-tile available" in available_html
+    assert "eu-wb-artifact-node" in available_html
+    assert ">01<" in available_html
+    assert "eu-wb-artifact-copy" in available_html
+    assert "eu-wb-artifact-action-strip" in available_html
+    assert 'eu-wb-artifact-action enabled">Open file' in available_html
+    assert 'eu-wb-artifact-action enabled">Download' in available_html
+    assert "available on disk" in available_html
+    assert "Open and download enabled" in available_html
+    assert "02_table_one" in available_html
+    assert "1234567890ab" in available_html
+
+    missing_html = wb_page._artifact_action_contract_html(
+        record,
+        raw_path="evidence/missing.csv",
+        target_path=tmp_path / "evidence" / "missing.csv",
+        file_state="missing",
+        lang="en",
+    )
+    assert "eu-wb-artifact-contract missing" in missing_html
+    assert "eu-wb-artifact-tile missing" in missing_html
+    assert 'eu-wb-artifact-action disabled">Open file' in missing_html
+    assert 'eu-wb-artifact-action disabled">Download' in missing_html
+    assert 'eu-wb-artifact-action enabled">SHA' in missing_html
+    assert 'eu-wb-artifact-action enabled">Copy ID' in missing_html
+    assert "registered but missing" in missing_html
+    assert "Metadata only until the file is present" in missing_html
+
+    unbound_html = wb_page._artifact_action_contract_html(
+        {},
+        raw_path="",
+        target_path=None,
+        file_state="unbound",
+        lang="en",
+    )
+    assert "eu-wb-artifact-contract unbound" in unbound_html
+    assert "eu-wb-artifact-action-strip" in unbound_html
+    assert 'eu-wb-artifact-action disabled">Open file' in unbound_html
+    assert 'eu-wb-artifact-action disabled">Download' in unbound_html
+    assert "no file path bound" in unbound_html
+    assert "This evidence row has no registered file path." in unbound_html
+
+    terminal_html = wb_page._artifact_action_terminal_html(
+        receipt={
+            "action": "download",
+            "label": "Download",
+            "detail": str(table_path),
+        },
+        file_exists=True,
+        has_sha=True,
+        has_id=True,
+        raw_path="evidence/table_one.csv",
+        lang="en",
+    )
+    assert "eu-wb-artifact-terminal" in terminal_html
+    assert "Action terminal" in terminal_html
+    assert "Open / download receipt" in terminal_html
+    assert "Download: " in terminal_html
+    assert "eu-wb-artifact-terminal-row done" in terminal_html
+    assert "Requests the local desktop to open" in terminal_html
+    assert "Reveals the evidence ID" in terminal_html
+
+    disabled_terminal_html = wb_page._artifact_action_terminal_html(
+        receipt=None,
+        file_exists=False,
+        has_sha=False,
+        has_id=False,
+        raw_path="",
+        lang="en",
+    )
+    assert "No artifact action has been requested" in disabled_terminal_html
+    assert "eu-wb-artifact-terminal-row disabled" in disabled_terminal_html
+    assert "Download unlocks when the local file exists" in disabled_terminal_html
+
+
+def test_workbench_result_download_ledger_maps_file_states() -> None:
+    rows = [
+        {
+            "idx": 1,
+            "title": "Primary table",
+            "file_name": "table_one.csv",
+            "meta": "csv · 4.2 KB",
+            "file_state": "available",
+            "state_label": "ready to download",
+            "action": "download_1",
+        },
+        {
+            "idx": 2,
+            "title": "Forest plot",
+            "file_name": "forest.svg",
+            "meta": "figure",
+            "file_state": "missing",
+            "state_label": "missing on disk",
+            "action": "download_2",
+        },
+        {
+            "idx": 3,
+            "title": "Unbound result",
+            "file_name": "No file path registered",
+            "meta": "artifact",
+            "file_state": "unbound",
+            "state_label": "metadata only",
+            "action": "download_3",
+        },
+    ]
+
+    html = wb_page._result_download_ledger_html(
+        rows,
+        lang="en",
+        receipt={"action": "download_1", "label": "Download 01", "detail": "table_one.csv"},
+    )
+
+    assert "eu-wb-result-download-ledger" in html
+    assert "Output bundle terminal" in html
+    assert "Result download ledger" in html
+    assert "1 ready / 1 missing" in html
+    assert "eu-wb-result-download-row available done" in html
+    assert "eu-wb-result-download-row missing" in html
+    assert "eu-wb-result-download-row unbound" in html
+    assert "Download 01: table_one.csv" in html
+    assert ">01<" in html
+    assert "ready to download" in html
+
+
+def test_workbench_evidence_ledger_uses_project_artifact_inspector_surface() -> None:
+    source = Path(wb_page.__file__).read_text(encoding="utf-8")
+    css = Path(wb_page.__file__).with_name("shell_overrides.css").read_text(encoding="utf-8")
+    drilldown_source = source[
+        source.index("def _render_evidence_drilldown"):
+        source.index("def _render_result_downloads")
+    ]
+
+    assert "eu-wb-evidence-ledger" in source
+    assert "eu-wb-evidence-row" in source
+    assert "eu-wb-evidence-inspector" in drilldown_source
+    assert "_artifact_action_contract_html" in drilldown_source
+    assert "_artifact_action_terminal_html" in drilldown_source
+    assert "_remember_artifact_action_receipt" in drilldown_source
+    assert "eu-wb-artifact-contract" in source
+    assert "_artifact_file_meta" in source
+    assert "_artifact_mime(target_path)" in drilldown_source
+    assert "st.download_button" in drilldown_source
+    assert "on_click=_remember_artifact_action_receipt" in drilldown_source
+    assert ".eu-wb-evidence-ledger" in css
+    assert ".eu-wb-evidence-inspector" in css
+    assert ".eu-wb-evidence-state.available" in css
+    assert ".eu-wb-artifact-contract" in css
+    assert ".eu-wb-artifact-grid" in css
+    assert ".eu-wb-artifact-node" in css
+    assert ".eu-wb-artifact-copy" in css
+    assert ".eu-wb-artifact-action-strip" in css
+    assert ".eu-wb-artifact-terminal" in css
+    assert ".eu-wb-artifact-terminal-row.done" in css
+    assert ".eu-wb-result-download-ledger" in css
+    assert ".eu-wb-result-download-row.available" in css
+    assert 'key=f"_eu_wb_result_download_' in source
+    assert "on_click=_remember_artifact_action_receipt" in source
+    artifact_grid_css = css[
+        css.index(".eu-wb-artifact-grid {"): css.index(".eu-wb-artifact-tile {")
+    ]
+    assert "grid-template-columns: 1fr" in artifact_grid_css
 
 
 def test_step_view_hides_raw_logs_json_and_code_from_result_artifacts() -> None:

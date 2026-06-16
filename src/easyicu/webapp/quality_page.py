@@ -16,6 +16,159 @@ def _install_app_context(app_context: dict[str, Any]) -> None:
             globals()[name] = value
 
 
+def _quality_escape(value: object) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def _quality_rate_tone(value: float, *, warn: float = 5.0, danger: float = 20.0) -> str:
+    if value >= danger:
+        return "danger"
+    if value >= warn:
+        return "warning"
+    return "ready"
+
+
+def _quality_notice_html(tone: str, kicker: str, title: str, body: str, meta: str = "") -> str:
+    meta_html = f'<em>{_quality_escape(meta)}</em>' if meta else ""
+    return (
+        f'<div class="eu-quality-notice {tone}">'
+        f'<span>{_quality_escape(kicker)}</span>'
+        f'<b>{_quality_escape(title)}</b>'
+        f'<p>{_quality_escape(body)}</p>'
+        f'{meta_html}'
+        '</div>'
+    )
+
+
+def _render_quality_notice(tone: str, kicker: str, title: str, body: str, meta: str = "") -> None:
+    st.markdown(_quality_notice_html(tone, kicker, title, body, meta), unsafe_allow_html=True)
+
+
+def _quality_contract_row_html(index: str, label: str, detail: str, tone: str) -> str:
+    return (
+        f'<div class="eu-quality-contract-row {tone}">'
+        f'<span>{_quality_escape(index)}</span>'
+        '<div>'
+        f'<b>{_quality_escape(label)}</b>'
+        f'<em>{_quality_escape(detail)}</em>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _quality_contract_html(
+    *,
+    lang: str,
+    concept_count: int,
+    patient_count: int,
+    total_records: int,
+    overall_missing: float,
+    overall_outliers: float,
+    overall_duplicates: float,
+) -> str:
+    is_en = lang == "en"
+    rows = [
+        _quality_contract_row_html(
+            "01",
+            "Local concept scope" if is_en else "本地概念范围",
+            (
+                f"{concept_count} concepts · {patient_count} ICU stays · {total_records:,} records"
+                if is_en
+                else f"{concept_count} 个概念 · {patient_count} 个 ICU stay · {total_records:,} 条记录"
+            ),
+            "ready" if concept_count and total_records else "neutral",
+        ),
+        _quality_contract_row_html(
+            "02",
+            "Missingness gate" if is_en else "缺失率关口",
+            (
+                f"{overall_missing:.1f}% weighted missing"
+                if is_en
+                else f"加权缺失 {overall_missing:.1f}%"
+            ),
+            _quality_rate_tone(overall_missing),
+        ),
+        _quality_contract_row_html(
+            "03",
+            "Physiologic range" if is_en else "生理范围",
+            (
+                f"{overall_outliers:.1f}% out-of-physio values"
+                if is_en
+                else f"越出生理范围 {overall_outliers:.1f}%"
+            ),
+            _quality_rate_tone(overall_outliers, warn=1.0, danger=5.0),
+        ),
+        _quality_contract_row_html(
+            "04",
+            "Temporal integrity" if is_en else "时序完整性",
+            (
+                f"{overall_duplicates:.1f}% duplicate patient-time rows"
+                if is_en
+                else f"重复患者-时间行 {overall_duplicates:.1f}%"
+            ),
+            _quality_rate_tone(overall_duplicates, warn=0.5, danger=2.0),
+        ),
+    ]
+    return (
+        '<div class="eu-quality-contract">'
+        '<div class="eu-quality-contract-head">'
+        f'<span>{_quality_escape("QC ledger" if is_en else "质控账本")}</span>'
+        f'<b>{_quality_escape("local export -> denominator -> gate -> chart" if is_en else "本地导出 -> 分母 -> 关口 -> 图表")}</b>'
+        '</div>'
+        f'<p>{_quality_escape("Quality review stays tied to loaded local concepts, denominator definitions, and patient-time integrity before modeling." if is_en else "质控审阅绑定已加载本地概念、分母定义与患者-时间完整性，再进入建模。")}</p>'
+        '<div class="eu-quality-contract-list">'
+        + "".join(rows)
+        + '</div>'
+        '</div>'
+    )
+
+
+def _apply_quality_plot_style(
+    fig: Any,
+    *,
+    title: str,
+    height: int,
+    x_title: str = "",
+    y_title: str = "",
+    showlegend: bool = False,
+    margin: dict[str, int] | None = None,
+) -> Any:
+    fig.update_layout(
+        template="plotly_white",
+        title=dict(text=title, font=dict(size=13, color="#0e1116")),
+        height=height,
+        showlegend=showlegend,
+        margin=margin or dict(l=76, r=28, t=46, b=42),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="#ffffff",
+        font=dict(
+            family="IBM Plex Sans, PingFang SC, Hiragino Sans GB, system-ui, sans-serif",
+            size=12,
+            color="#2e3338",
+        ),
+        hoverlabel=dict(bgcolor="#0e1116", font=dict(color="#ffffff", size=12)),
+    )
+    fig.update_xaxes(
+        title=x_title,
+        gridcolor="#eeeee8",
+        zerolinecolor="#dcdad2",
+        tickfont=dict(size=11, color="#6b7280"),
+        title_font=dict(size=12, color="#2e3338"),
+        showline=True,
+        linecolor="#e7e5df",
+    )
+    fig.update_yaxes(
+        title=y_title,
+        gridcolor="#eeeee8",
+        zerolinecolor="#dcdad2",
+        tickfont=dict(size=11, color="#6b7280"),
+        title_font=dict(size=12, color="#2e3338"),
+        showline=True,
+        linecolor="#e7e5df",
+    )
+    return fig
+
+
 def _render_quality_panel_switcher(lang: str, screenshot_mode: bool = False) -> str:
     panel_options = {
         "missingness": "Missingness" if lang == 'en' else "缺失分析",
@@ -71,15 +224,17 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
         st.markdown(f'<div class="compact-inline-notice info">{focus_note}</div>', unsafe_allow_html=True)
 
     if len(st.session_state.loaded_concepts) == 0:
-        _no_data_msg = "Load data to begin quality analysis." if lang == 'en' else "请先加载数据以进行质量分析。"
-        _tip_msg = 'Try "Demo Mode" for a quick start.' if lang == 'en' else '选择「演示模式」快速开始。'
-        st.markdown(f'''
-        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:28px;text-align:center;margin:20px 0">
-            <div style="font-size:2rem;margin-bottom:10px">📊</div>
-            <div style="font-weight:600;color:#111827;margin-bottom:4px">{_no_data_msg}</div>
-            <div style="font-size:.85rem;color:#9ca3af">{_tip_msg}</div>
-        </div>
-        ''', unsafe_allow_html=True)
+        _render_quality_notice(
+            "info",
+            "Quality workspace" if lang == "en" else "质控工作台",
+            "Local export required" if lang == "en" else "需要本地导出",
+            (
+                'Load concepts from Data Extraction or use Demo Mode before reviewing missingness, physiologic ranges, and temporal integrity.'
+                if lang == "en"
+                else "请先从 Data Extraction 加载概念，或使用演示模式，再审阅缺失率、生理范围和时序完整性。"
+            ),
+            'Data Extraction -> Patient Review -> Data Quality',
+        )
         return
 
     mock_params = st.session_state.get('mock_params', {}) or {}
@@ -176,10 +331,10 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
 
     def _metric_color(value: float) -> str:
         if value < 5:
-            return "#10b981"
+            return "#0f766e"
         if value < 20:
-            return "#f59e0b"
-        return "#ef4444"
+            return "#b45309"
+        return "#b91c1c"
 
     st.markdown(f'''
     <div class="quality-summary-grid">
@@ -201,6 +356,19 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
         </div>
     </div>
     ''', unsafe_allow_html=True)
+
+    st.markdown(
+        _quality_contract_html(
+            lang=lang,
+            concept_count=len(quality_df),
+            patient_count=total_patients_in_session,
+            total_records=total_records,
+            overall_missing=overall_missing,
+            overall_outliers=overall_outliers,
+            overall_duplicates=overall_duplicates,
+        ),
+        unsafe_allow_html=True,
+    )
 
     def _quality_action_for_row(row: Any) -> str:
         concept = str(row.get('Concept') or "").lower()
@@ -361,7 +529,16 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
             )
 
         if quality_df.empty:
-            st.info("No quality metrics available." if lang == 'en' else "当前没有可用的质量指标。")
+            _render_quality_notice(
+                "info",
+                "Missingness gate" if lang == "en" else "缺失率关口",
+                "No quality metrics available" if lang == "en" else "当前没有可用的质量指标",
+                (
+                    "Loaded concepts did not produce QC rows. Recheck the selected concept tables and patient identifier."
+                    if lang == "en"
+                    else "已加载概念没有生成质控行，请复核概念表和患者标识列。"
+                ),
+            )
         else:
             import plotly.express as px
 
@@ -382,8 +559,16 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
 
             st.caption(denom_caption)
             if missing_plot_df[missing_rate_label].sum() == 0:
-                good_msg = "Missingness is negligible across loaded concepts." if lang == 'en' else "当前已加载概念几乎没有缺失。"
-                st.success(good_msg)
+                _render_quality_notice(
+                    "ready",
+                    "Missingness gate" if lang == "en" else "缺失率关口",
+                    "Missingness is negligible" if lang == "en" else "缺失率很低",
+                    (
+                        "Loaded concepts are complete enough for downstream review; keep denominator notes in the report."
+                        if lang == "en"
+                        else "已加载概念足够完整，可进入下游审阅；报告中仍保留分母说明。"
+                    ),
+                )
             else:
                 # In screenshot mode keep a compact fixed size; in the
                 # interactive web view show ALL concepts so nothing is hidden.
@@ -410,36 +595,36 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                     orientation='h',
                     color=bin_label,
                     color_discrete_map={
-                        '< 25': '#6B7280',
-                        '25–50': '#C7902F',
-                        '50–75': '#B5762A',
-                        '75–100': '#BC4A3C',
+                        '< 25': '#0f766e',
+                        '25–50': '#b45309',
+                        '50–75': '#c2410c',
+                        '75–100': '#b91c1c',
                     },
                     hover_data=[records_col, patients_col, denom_hover],
+                )
+                fig = _apply_quality_plot_style(
+                    fig,
                     title='Missingness by concept' if lang == 'en' else '各概念缺失率',
+                    height=max(340, len(chart_df) * 34 + 110),
+                    x_title=missing_rate_label,
+                    y_title="",
+                    showlegend=True,
+                    margin=dict(l=92, r=160, t=44, b=44),
                 )
                 fig.update_layout(
-                    template="plotly_white",
-                    height=max(340, len(chart_df) * 34 + 110),
-                    showlegend=True,
                     legend=dict(
                         title='Missing rate (%)' if lang == 'en' else '缺失率 (%)',
                         orientation='v',
                         x=1.02,
                         y=0.72,
                         bgcolor='rgba(255,255,255,0.92)',
-                        bordercolor='#dbeafe',
+                        bordercolor='#e7e5df',
                         borderwidth=1,
-                        font=dict(size=12, color='#0b1f44'),
+                        font=dict(size=12, color='#2e3338'),
                     ),
-                    yaxis_title="",
-                    yaxis=dict(autorange='reversed'),
-                    margin=dict(l=92, r=160, t=44, b=44),
-                    font=dict(size=12, color='#0b1f44'),
-                    xaxis=dict(range=[0, 100], title=missing_rate_label, gridcolor='#e8eef7'),
-                    plot_bgcolor='#ffffff',
-                    paper_bgcolor='#ffffff',
+                    yaxis=dict(autorange='reversed', title=""),
                 )
+                fig.update_xaxes(range=[0, 100])
                 if total_quality_concepts > len(chart_df):
                     fig.add_annotation(
                         xref='paper', yref='paper', x=1.0, y=1.08,
@@ -449,14 +634,23 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                             else f"显示 {len(chart_df)} / {total_quality_concepts}"
                         ),
                         showarrow=False,
-                        font=dict(size=11, color='#60718a'),
+                        font=dict(size=11, color='#6b7280'),
                         align='right',
                 )
                 st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
 
     elif active_quality_panel == "outliers":
         if quality_df.empty:
-            st.info("No quality metrics available." if lang == 'en' else "当前没有可用的质量指标。")
+            _render_quality_notice(
+                "info",
+                "Physiologic range" if lang == "en" else "生理范围",
+                "No quality metrics available" if lang == "en" else "当前没有可用的质量指标",
+                (
+                    "Range QC needs loaded numeric concept profiles."
+                    if lang == "en"
+                    else "生理范围质控需要已加载的数值型概念画像。"
+                ),
+            )
         else:
             import plotly.express as px
 
@@ -474,7 +668,16 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
             outlier_df = outlier_df.sort_values(outlier_rate_label, ascending=False)
 
             if outlier_df[outlier_rate_label].max() <= 0:
-                st.success("✅ No loaded concept currently exceeds the physiologic QC ranges." if lang == 'en' else "✅ 当前已加载概念没有明显越出生理范围的值。")
+                _render_quality_notice(
+                    "ready",
+                    "Physiologic range" if lang == "en" else "生理范围",
+                    "No range flags detected" if lang == "en" else "未发现越界值",
+                    (
+                        "Loaded numeric concepts currently stay inside configured physiologic QC ranges."
+                        if lang == "en"
+                        else "当前已加载数值概念均在配置的生理质控范围内。"
+                    ),
+                )
             else:
                 fig = px.bar(
                     outlier_df,
@@ -482,24 +685,33 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                     y='Concept',
                     orientation='h',
                     color=outlier_rate_label,
-                    color_continuous_scale=['#dbeafe', '#f59e0b', '#dc2626'],
+                    color_continuous_scale=['#ccfbf1', '#fbbf24', '#b91c1c'],
                     hover_data=[records_col],
+                )
+                fig = _apply_quality_plot_style(
+                    fig,
                     title='Physiologic Range QC' if lang == 'en' else '生理范围质控',
-                )
-                fig.update_layout(
-                    template='plotly_white',
                     height=max(320, len(outlier_df) * 36),
+                    x_title=outlier_rate_label,
+                    y_title="",
                     showlegend=False,
-                    yaxis_title='',
-                    yaxis=dict(autorange='reversed'),
                     margin=dict(l=90, r=20, t=44, b=40),
-                    font=dict(size=13, color='#111827'),
                 )
+                fig.update_yaxes(autorange='reversed', title="")
                 st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
 
     elif active_quality_panel == "temporal":
         if quality_df.empty:
-            st.info("No quality metrics available." if lang == 'en' else "当前没有可用的质量指标。")
+            _render_quality_notice(
+                "info",
+                "Temporal integrity" if lang == "en" else "时序完整性",
+                "No quality metrics available" if lang == "en" else "当前没有可用的质量指标",
+                (
+                    "Temporal QC needs loaded concept profiles with patient-time rows."
+                    if lang == "en"
+                    else "时序质控需要已加载概念的患者-时间记录画像。"
+                ),
+            )
         else:
             import plotly.express as px
 
@@ -518,7 +730,16 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                 duplicate_df[records_col] = duplicate_df['_records']
                 duplicate_df = duplicate_df.sort_values(duplicate_rate_label, ascending=False)
                 if duplicate_df[duplicate_rate_label].max() <= 0:
-                    st.success("✅ No duplicate patient-time rows were detected in the loaded concepts." if lang == 'en' else "✅ 当前已加载概念未检测到重复的患者-时间行。")
+                    _render_quality_notice(
+                        "ready",
+                        "Temporal integrity" if lang == "en" else "时序完整性",
+                        "No duplicate patient-time rows" if lang == "en" else "未发现重复患者-时间行",
+                        (
+                            "Loaded concepts do not show duplicate timestamps for the same patient and concept."
+                            if lang == "en"
+                            else "当前已加载概念没有同一患者同一概念的重复时间戳。"
+                        ),
+                    )
                 else:
                     fig_dup = px.bar(
                         duplicate_df,
@@ -526,19 +747,19 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                         y='Concept',
                         orientation='h',
                         color=duplicate_rate_label,
-                        color_continuous_scale=['#bfdbfe', '#f59e0b', '#dc2626'],
+                        color_continuous_scale=['#ccfbf1', '#fbbf24', '#b91c1c'],
                         hover_data=[records_col],
+                    )
+                    fig_dup = _apply_quality_plot_style(
+                        fig_dup,
                         title='Duplicate Timestamp Rate' if lang == 'en' else '重复时间戳比例',
-                    )
-                    fig_dup.update_layout(
-                        template='plotly_white',
                         height=max(320, len(duplicate_df) * 34),
+                        x_title=duplicate_rate_label,
+                        y_title="",
                         showlegend=False,
-                        yaxis_title='',
-                        yaxis=dict(autorange='reversed'),
                         margin=dict(l=90, r=20, t=44, b=40),
-                        font=dict(size=13, color='#111827'),
                     )
+                    fig_dup.update_yaxes(autorange='reversed', title="")
                     st.plotly_chart(fig_dup, use_container_width=True, config=_get_plotly_chart_config())
 
             with temporal_cols[1]:
@@ -550,7 +771,16 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
 
                 density_df = density_df[density_df['_density_median'] > 0].copy()
                 if density_df.empty:
-                    st.info("Density summaries need time-stamped concepts." if lang == 'en' else "密度摘要需要带时间戳的概念。")
+                    _render_quality_notice(
+                        "info",
+                        "Density profile" if lang == "en" else "密度画像",
+                        "Time-stamped concepts required" if lang == "en" else "需要带时间戳的概念",
+                        (
+                            "Density summaries appear after loaded concepts include usable patient-time observations."
+                            if lang == "en"
+                            else "已加载概念包含可用患者-时间观测后，才会显示密度摘要。"
+                        ),
+                    )
                 else:
                     has_duplicates = float(density_df['_dup_rate'].max() or 0) > 0
                     density_df['_iqr_text'] = density_df.apply(
@@ -574,21 +804,22 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                             text='_label',
                             hover_name='Concept',
                             hover_data={'_density_median': ':.2f', '_dup_rate': ':.2f', '_missing_rate': ':.1f', '_iqr_text': True, '_label': False},
-                            color_continuous_scale=['#10b981', '#f59e0b', '#ef4444'],
+                            color_continuous_scale=['#0f766e', '#fbbf24', '#b91c1c'],
                             labels={
                                 '_density_median': density_label,
                                 '_dup_rate': dup_label,
                                 '_missing_rate': missing_label,
                                 '_iqr_text': iqr_label,
                             },
-                            title='Temporal Density vs Duplicate Rate' if lang == 'en' else '时序密度与重复率',
                         )
                         fig_density.update_traces(textposition='top center', textfont=dict(size=11))
-                        fig_density.update_layout(
-                            template='plotly_white',
+                        fig_density = _apply_quality_plot_style(
+                            fig_density,
+                            title='Temporal Density vs Duplicate Rate' if lang == 'en' else '时序密度与重复率',
                             height=420,
+                            x_title=density_label,
+                            y_title=dup_label,
                             margin=dict(l=30, r=20, t=44, b=40),
-                            font=dict(size=13, color='#111827'),
                         )
                         st.plotly_chart(fig_density, use_container_width=True, config=_get_plotly_chart_config())
                     else:
@@ -605,7 +836,7 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                             y='Concept',
                             orientation='h',
                             color='_missing_rate',
-                            color_continuous_scale=['#10b981', '#f59e0b', '#ef4444'],
+                            color_continuous_scale=['#0f766e', '#fbbf24', '#b91c1c'],
                             hover_data={
                                 '_density_median': ':.2f',
                                 '_density_q25': ':.2f',
@@ -628,14 +859,20 @@ def render_quality_page(app_context: dict[str, Any] | None = None):
                                 else f"密度排名前 {len(ranked)} 的概念"
                             ),
                         )
-                        fig_density.update_layout(
-                            template='plotly_white',
+                        fig_density = _apply_quality_plot_style(
+                            fig_density,
+                            title=(
+                                f"Top {len(ranked)} concepts by density"
+                                if lang == 'en'
+                                else f"密度排名前 {len(ranked)} 的概念"
+                            ),
                             height=max(320, len(ranked) * 22),
+                            x_title=density_label,
+                            y_title="",
                             margin=dict(l=90, r=20, t=44, b=40),
-                            font=dict(size=12, color='#111827'),
-                            yaxis_title='',
                             showlegend=False,
                         )
+                        fig_density.update_yaxes(title="")
                         total_concepts = int(len(quality_df[quality_df['_density_median'] > 0]))
                         if total_concepts > len(ranked):
                             fig_density.add_annotation(

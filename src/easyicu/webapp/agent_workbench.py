@@ -49,7 +49,7 @@ import base64
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, MutableMapping, Sequence
 
 import streamlit as st
 
@@ -577,11 +577,350 @@ def _step_subtitle(record: dict[str, Any], manifest: dict[str, Any]) -> str:
 
 
 def _artifact_path_for_preview(run_dir: Path | None, record: dict[str, Any]) -> Path | None:
-    raw = record.get("relative_path") or record.get("path")
+    raw = _raw_artifact_path(record)
     if not raw:
         return None
-    path = Path(str(raw))
-    return path if path.is_absolute() else ((run_dir / path) if run_dir else path)
+    return _resolve_artifact_path(run_dir, raw)
+
+
+def _raw_artifact_path(record: dict[str, Any]) -> str:
+    return str(
+        record.get("relative_path")
+        or record.get("path")
+        or record.get("artifact_path")
+        or record.get("file")
+        or ""
+    ).strip()
+
+
+def _resolve_artifact_path(run_dir: Path | str | None, raw_path: object) -> Path | None:
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+    path = Path(text).expanduser()
+    if path.is_absolute():
+        return path
+    if run_dir:
+        return Path(str(run_dir)).expanduser() / path
+    return path
+
+
+def _artifact_mime(path: Path) -> str:
+    return {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+        ".pdf": "application/pdf",
+        ".tiff": "image/tiff",
+        ".csv": "text/csv",
+        ".tsv": "text/tab-separated-values",
+        ".json": "application/json",
+        ".parquet": "application/octet-stream",
+        ".md": "text/markdown",
+        ".txt": "text/plain",
+        ".py": "text/x-python",
+        ".r": "text/plain",
+        ".sql": "text/plain",
+    }.get(path.suffix.lower(), "application/octet-stream")
+
+
+def _artifact_size_label(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _artifact_file_meta(
+    record: dict[str, Any],
+    *,
+    run_dir: Path | str | None = None,
+) -> dict[str, Any]:
+    raw_path = _raw_artifact_path(record)
+    resolved = _resolve_artifact_path(run_dir, raw_path)
+    exists = False
+    size_label = ""
+    if resolved is not None:
+        try:
+            stat = resolved.stat()
+            exists = resolved.is_file()
+            if exists:
+                size_label = _artifact_size_label(stat.st_size)
+        except OSError:
+            exists = False
+    display_path = raw_path
+    suffix = ""
+    file_name = ""
+    if resolved is not None:
+        suffix = resolved.suffix.lower().lstrip(".")
+        file_name = resolved.name
+    elif raw_path:
+        raw_as_path = Path(raw_path)
+        suffix = raw_as_path.suffix.lower().lstrip(".")
+        file_name = raw_as_path.name
+    if not suffix:
+        suffix = str(record.get("kind") or record.get("tag") or "artifact").lower()
+    return {
+        "relative_path": display_path,
+        "path": display_path,
+        "artifact_path": str(resolved) if resolved is not None else display_path,
+        "file_name": file_name,
+        "file_exists": exists,
+        "file_state": "available" if exists else ("missing" if raw_path else "unbound"),
+        "size_label": size_label,
+        "suffix": suffix,
+        "produced_by_step": str(record.get("produced_by_step") or record.get("step_id") or ""),
+    }
+
+
+def _artifact_action_contract_html(
+    record: dict[str, Any],
+    *,
+    raw_path: str,
+    target_path: Path | None,
+    file_state: str,
+    lang: str,
+) -> str:
+    """Claude-style selected artifact contract for the evidence inspector."""
+    normalized_state = file_state if file_state in {"available", "missing", "unbound"} else "unbound"
+    file_exists = normalized_state == "available"
+    state_label = {
+        "available": _T(lang, "available on disk", "磁盘文件可用"),
+        "missing": _T(lang, "registered but missing", "已注册但文件缺失"),
+        "unbound": _T(lang, "no file path bound", "未绑定文件路径"),
+    }[normalized_state]
+    step = str(record.get("produced_by_step") or record.get("step_id") or "").strip()
+    sha = str(record.get("sha256") or record.get("sha8") or "").strip()
+    ev_id = str(record.get("evidence_id") or "").strip()
+    kind = str(record.get("suffix") or record.get("kind") or record.get("tag") or "artifact").strip()
+    path_label = raw_path or _T(lang, "This evidence row has no registered file path.", "该证据行未注册文件路径。")
+    action_label = (
+        _T(lang, "Open and download enabled", "可打开与下载")
+        if file_exists
+        else _T(lang, "Metadata only until the file is present", "文件存在前仅显示元数据")
+    )
+    location = _compact_label(target_path if target_path else path_label, max_len=78)
+    provenance = sha[:12] if sha else (ev_id or _T(lang, "manifest row", "manifest 行"))
+    tiles = [
+        (_T(lang, "Disk state", "磁盘状态"), state_label, location),
+        (_T(lang, "Source step", "来源步骤"), step or _T(lang, "run-level evidence", "运行级证据"), kind),
+        (_T(lang, "Available actions", "可用动作"), action_label, _T(lang, "Open file · Download · SHA · Copy ID", "打开文件 · 下载 · SHA · 复制 ID")),
+        (_T(lang, "Provenance", "出处"), provenance, ev_id or _T(lang, "checksum / id shown on request", "按需显示校验值 / ID")),
+    ]
+
+    def _tile_tone(label: str, value: str) -> str:
+        normalized = f"{label} {value}".lower()
+        if any(term in normalized for term in ("available", "enabled", "可用", "打开与下载")):
+            return "available"
+        if any(term in normalized for term in ("missing", "unbound", "metadata only", "缺失", "未绑定", "仅显示元数据")):
+            return "missing"
+        return "neutral"
+
+    tile_html = "".join(
+        f'<div class="eu-wb-artifact-tile {_tile_tone(label, value)}">'
+        f'<span class="eu-wb-artifact-node">{idx:02d}</span>'
+        '<div class="eu-wb-artifact-copy">'
+        f'<span>{_esc(label)}</span>'
+        f'<b>{_esc(value)}</b>'
+        f'<small>{_esc(detail)}</small>'
+        '</div>'
+        '</div>'
+        for idx, (label, value, detail) in enumerate(tiles, start=1)
+    )
+    action_items = [
+        (_T(lang, "Open file", "打开文件"), file_exists),
+        (_T(lang, "Download", "下载"), file_exists),
+        (_T(lang, "SHA", "SHA"), bool(sha)),
+        (_T(lang, "Copy ID", "复制 ID"), bool(ev_id)),
+    ]
+    action_html = "".join(
+        '<span class="eu-wb-artifact-action '
+        f'{"enabled" if enabled else "disabled"}">'
+        f'{_esc(label)}'
+        '</span>'
+        for label, enabled in action_items
+    )
+    return (
+        f'<div class="eu-wb-artifact-contract {normalized_state}">'
+        '<div class="eu-wb-artifact-contract-head">'
+        '<div>'
+        f'<span>{_esc(_T(lang, "Selected evidence", "当前证据"))}</span>'
+        f'<b>{_esc(_T(lang, "Local artifact contract", "本地产物契约"))}</b>'
+        '</div>'
+        f'<em>{_esc(_T(lang, "real file actions", "真实文件动作"))}</em>'
+        '</div>'
+        '<div class="eu-wb-artifact-grid">'
+        f'{tile_html}'
+        '</div>'
+        '<div class="eu-wb-artifact-action-strip">'
+        f'{action_html}'
+        '</div>'
+        '</div>'
+    )
+
+
+def _remember_artifact_action_receipt(
+    state: MutableMapping[str, Any],
+    key: str,
+    *,
+    action: str,
+    label: str,
+    detail: str,
+    tone: str = "done",
+) -> None:
+    """Record the last visible evidence action for the selected artifact."""
+    state[key] = {
+        "action": action,
+        "label": label,
+        "detail": detail,
+        "tone": tone,
+    }
+
+
+def _artifact_action_terminal_html(
+    *,
+    receipt: Mapping[str, Any] | None,
+    file_exists: bool,
+    has_sha: bool,
+    has_id: bool,
+    raw_path: str,
+    lang: str,
+) -> str:
+    """Small Claude-style terminal ledger for artifact action outcomes."""
+    active_action = str(receipt.get("action") if isinstance(receipt, Mapping) else "")
+    receipt_label = str(receipt.get("label") if isinstance(receipt, Mapping) else "")
+    receipt_detail = str(receipt.get("detail") if isinstance(receipt, Mapping) else "")
+    rows = [
+        (
+            "open",
+            _T(lang, "Open file", "打开文件"),
+            _T(lang, "ready", "就绪") if file_exists else _T(lang, "disabled", "不可用"),
+            _T(lang, "Requests the local desktop to open the selected artifact.", "请求本机桌面打开所选产物。")
+            if file_exists else _T(lang, "The registered file is not available on disk.", "注册文件在磁盘上不可用。"),
+        ),
+        (
+            "download",
+            _T(lang, "Download", "下载"),
+            _T(lang, "ready", "就绪") if file_exists else _T(lang, "disabled", "不可用"),
+            _T(lang, "Streams the same local file through the browser download control.", "通过浏览器下载同一个本机文件。")
+            if file_exists else _T(lang, "Download unlocks when the local file exists.", "本机文件存在后才可下载。"),
+        ),
+        (
+            "sha",
+            "SHA",
+            _T(lang, "ready", "就绪") if has_sha else _T(lang, "disabled", "不可用"),
+            _T(lang, "Reveals the checksum stored in the manifest.", "显示 manifest 中记录的校验值。")
+            if has_sha else _T(lang, "No checksum is registered for this row.", "该行未注册校验值。"),
+        ),
+        (
+            "id",
+            _T(lang, "Copy ID", "复制 ID"),
+            _T(lang, "ready", "就绪") if has_id else _T(lang, "disabled", "不可用"),
+            _T(lang, "Reveals the evidence ID in a copyable code block.", "在可复制代码块中显示证据 ID。")
+            if has_id else _T(lang, "No evidence ID is registered for this row.", "该行未注册证据 ID。"),
+        ),
+    ]
+    row_html = "".join(
+        '<div class="eu-wb-artifact-terminal-row '
+        f'{"done" if action == active_action else "ready" if status in {"ready", "就绪"} else "disabled"}">'
+        f'<span>{idx:02d}</span>'
+        '<div>'
+        f'<b>{_esc(label)}</b>'
+        f'<small>{_esc(detail)}</small>'
+        '</div>'
+        f'<em>{_esc("done" if action == active_action else status)}</em>'
+        '</div>'
+        for idx, (action, label, status, detail) in enumerate(rows, start=1)
+    )
+    summary = (
+        f"{receipt_label}: {receipt_detail}" if receipt_label else
+        _T(lang, "No artifact action has been requested for this selected row yet.", "当前选中行尚未请求产物动作。")
+    )
+    return (
+        '<div class="eu-wb-artifact-terminal">'
+        '<div class="eu-wb-artifact-terminal-head">'
+        '<div>'
+        f'<span>{_esc(_T(lang, "Action terminal", "动作终端"))}</span>'
+        f'<b>{_esc(_T(lang, "Open / download receipt", "打开 / 下载回执"))}</b>'
+        f'<p>{_esc(summary)}</p>'
+        '</div>'
+        f'<code>{_esc(_compact_label(raw_path or "manifest row", max_len=44))}</code>'
+        '</div>'
+        '<div class="eu-wb-artifact-terminal-grid">'
+        f'{row_html}'
+        '</div>'
+        '</div>'
+    )
+
+
+def _result_download_ledger_html(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    lang: str,
+    receipt: Mapping[str, Any] | None = None,
+    notice: str = "",
+) -> str:
+    """Claude-style result download ledger for full audit trail outputs."""
+    available_n = sum(1 for row in rows if row.get("file_state") == "available")
+    missing_n = sum(1 for row in rows if row.get("file_state") == "missing")
+    active_action = str(receipt.get("action") if isinstance(receipt, Mapping) else "")
+    receipt_label = str(receipt.get("label") if isinstance(receipt, Mapping) else "")
+    receipt_detail = str(receipt.get("detail") if isinstance(receipt, Mapping) else "")
+    if notice:
+        summary = notice
+    elif receipt_label:
+        summary = f"{receipt_label}: {receipt_detail}"
+    else:
+        summary = _T(
+            lang,
+            "No result download has been requested in this run view yet.",
+            "当前运行视图尚未请求结果下载。",
+        )
+    if rows:
+        row_html = "".join(
+            '<div class="eu-wb-result-download-row '
+            f'{_esc(str(row.get("file_state") or "unbound"))} '
+            f'{"done" if str(row.get("action")) == active_action else ""}">'
+            f'<span>{int(row.get("idx") or 0):02d}</span>'
+            '<div class="eu-wb-result-download-copy">'
+            f'<b>{_esc(row.get("title") or _T(lang, "Result artifact", "结果产物"))}</b>'
+            f'<small>{_esc(row.get("file_name") or row.get("path") or "")}</small>'
+            f'<em>{_esc(row.get("meta") or "")}</em>'
+            '</div>'
+            f'<code>{_esc(row.get("state_label") or "")}</code>'
+            '</div>'
+            for row in rows
+        )
+    else:
+        row_html = (
+            '<div class="eu-wb-result-download-row unbound empty">'
+            '<span>00</span>'
+            '<div class="eu-wb-result-download-copy">'
+            f'<b>{_esc(_T(lang, "No downloadable result files", "没有可下载结果文件"))}</b>'
+            f'<small>{_esc(summary)}</small>'
+            f'<em>{_esc(_T(lang, "open a real run with bound artifacts", "打开绑定产物的真实运行"))}</em>'
+            '</div>'
+            f'<code>{_esc(_T(lang, "unbound", "未绑定"))}</code>'
+            '</div>'
+        )
+    return (
+        '<div class="eu-wb-result-download-ledger">'
+        '<div class="eu-wb-result-download-head">'
+        '<div>'
+        f'<span>{_esc(_T(lang, "Output bundle terminal", "输出 bundle 终端"))}</span>'
+        f'<b>{_esc(_T(lang, "Result download ledger", "结果下载账本"))}</b>'
+        f'<p>{_esc(summary)}</p>'
+        '</div>'
+        f'<em>{_esc(_T(lang, f"{available_n} ready / {missing_n} missing", f"{available_n} 个就绪 / {missing_n} 个缺失"))}</em>'
+        '</div>'
+        '<div class="eu-wb-result-download-grid">'
+        f'{row_html}'
+        '</div>'
+        '</div>'
+    )
 
 
 @st.cache_data(show_spinner=False, max_entries=256)
@@ -600,12 +939,7 @@ def _cached_figure_preview_html(fingerprint: tuple[str, int, int], name: str) ->
             if "<svg" not in svg.lower() or "<script" in svg.lower():
                 return ""
             return f'<div class="eu-result-artifact-preview real">{svg}</div>'
-        mime = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".webp": "image/webp",
-        }.get(suffix)
+        mime = _artifact_mime(path) if suffix in {".png", ".jpg", ".jpeg", ".webp"} else ""
         if mime:
             data = base64.b64encode(path.read_bytes()[:4_000_000]).decode("ascii")
             return (
@@ -653,18 +987,21 @@ def _result_cards_from_evidence(
         kind = str(record.get("kind") or "").lower()
         if kind not in {"figure", "table"}:
             continue
-        path = _artifact_path_for_preview(run_dir, record)
+        meta = _artifact_file_meta(record, run_dir=run_dir)
+        path = _resolve_artifact_path(run_dir, meta["relative_path"])
         preview_html = _figure_file_preview_html(path) if kind == "figure" else ""
-        rel = str(record.get("relative_path") or record.get("path") or "")
-        resolved_path = str(path) if path is not None and path.exists() and path.is_file() else ""
         cards.append({
             "kind": kind,
             "title": _evidence_label(record),
             "metric": _T(lang, "rendered", "已渲染") if preview_html else _T(lang, "registered", "已注册"),
-            "sub": rel or _evidence_sub(record),
-            "relative_path": rel,
-            "path": rel,
-            "artifact_path": resolved_path or rel,
+            "sub": meta["relative_path"] or _evidence_sub(record),
+            "relative_path": meta["relative_path"],
+            "path": meta["path"],
+            "artifact_path": meta["artifact_path"],
+            "file_exists": meta["file_exists"],
+            "file_state": meta["file_state"],
+            "size_label": meta["size_label"],
+            "suffix": meta["suffix"],
             "sha256": str(record.get("sha256") or ""),
             "evidence_id": str(record.get("evidence_id") or ""),
             "preview_html": preview_html or _artifact_slot_html(kind.title(), lang=lang, real=True),
@@ -985,17 +1322,16 @@ def _step_contract_from_record(
     }
 
 
-def _evidence_rows_from_records(evidence: list[dict[str, Any]], *, fallback_label: str) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
+def _evidence_rows_from_records(
+    evidence: list[dict[str, Any]],
+    *,
+    fallback_label: str,
+    run_dir: Path | str | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for record in evidence[:12]:
         sha = str(record.get("sha256") or "")
-        raw_path = str(
-            record.get("relative_path")
-            or record.get("path")
-            or record.get("artifact_path")
-            or record.get("file")
-            or ""
-        )
+        file_meta = _artifact_file_meta(record, run_dir=run_dir)
         rows.append({
             "label": _evidence_label(record),
             "sub": _evidence_sub(record),
@@ -1003,8 +1339,8 @@ def _evidence_rows_from_records(evidence: list[dict[str, Any]], *, fallback_labe
             "sha8": sha[:8] if sha else "",
             "sha256": sha,
             "evidence_id": str(record.get("evidence_id") or ""),
-            "relative_path": raw_path,
-            "path": raw_path,
+            "kind": str(record.get("kind") or ""),
+            **file_meta,
         })
     if not rows:
         rows.append({
@@ -1016,6 +1352,14 @@ def _evidence_rows_from_records(evidence: list[dict[str, Any]], *, fallback_labe
             "evidence_id": "",
             "relative_path": "",
             "path": "",
+            "artifact_path": "",
+            "file_name": "",
+            "file_exists": False,
+            "file_state": "unbound",
+            "size_label": "",
+            "suffix": "artifact",
+            "produced_by_step": "",
+            "kind": "",
         })
     return rows
 
@@ -1049,7 +1393,7 @@ def _step_detail_from_record(
         "code_path": code_path,
         "trace": _step_trace_from_record(record, step_evidence),
         "results": _result_cards_from_evidence(step_evidence, run_dir=run_path, lang=lang),
-        "evidence": _evidence_rows_from_records(step_evidence, fallback_label=step_id),
+        "evidence": _evidence_rows_from_records(step_evidence, fallback_label=step_id, run_dir=run_path),
         "step_contract": _step_contract_from_record(
             run_path=run_path,
             manifest=manifest,
@@ -2104,16 +2448,9 @@ def build_workbench_state_from_manifest(
 
     code, code_path = _code_from_run(run_path, manifest, records)
     result_cards = _result_cards_from_evidence(evidence, run_dir=run_path, lang=lang)
-    evidence_rows = [
-        {
-            "label": _evidence_label(record),
-            "sub": _evidence_sub(record),
-            "tag": _evidence_tag(record),
-        }
-        for record in evidence[:12]
-    ]
-    if not evidence_rows:
-        evidence_rows = [{"label": "manifest", "sub": run_id, "tag": "test"}]
+    evidence_rows = _evidence_rows_from_records(evidence, fallback_label="manifest", run_dir=run_path)
+    if len(evidence_rows) == 1 and not evidence:
+        evidence_rows[0]["sub"] = run_id
 
     trace = []
     for event in progress_events[-8:]:
@@ -2898,44 +3235,65 @@ def _result_evidence_html(state: dict[str, Any], lang: str) -> str:
             + '</div>'
         )
 
-    evidence = state.get("evidence", [])
-    tag_style = {
-        "fix": ("var(--warn-soft)", "oklch(40% 0.10 75)"),
-        "data": ("var(--accent-soft)", "var(--accent-ink)"),
-        "paper": ("var(--surface-2)", "var(--ink-3)"),
-        "code": ("var(--surface-2)", "var(--ink-3)"),
-        "test": ("var(--surface-2)", "var(--ink-3)"),
-    }
+    evidence = [e for e in state.get("evidence", []) if isinstance(e, dict)]
+    available_n = sum(1 for e in evidence if e.get("file_exists") is True)
+    missing_n = sum(1 for e in evidence if e.get("file_state") == "missing")
     ev_rows = []
     for i, e in enumerate(evidence):
-        bg, fg = tag_style.get(e["tag"], ("var(--surface-2)", "var(--ink-3)"))
+        tag = str(e.get("tag") or e.get("kind") or "artifact")
         sha8 = str(e.get("sha8") or "")
         ev_id = str(e.get("evidence_id") or "")
+        produced_by = str(e.get("produced_by_step") or "")
+        file_state = str(e.get("file_state") or ("available" if e.get("file_exists") else "unbound"))
+        state_label = {
+            "available": _T(lang, "file", "文件"),
+            "missing": _T(lang, "missing", "缺失"),
+            "unbound": _T(lang, "no path", "无路径"),
+        }.get(file_state, file_state)
+        path_text = str(e.get("relative_path") or e.get("path") or e.get("artifact_path") or "")
+        meta_bits = [str(e.get("suffix") or tag)]
+        if e.get("size_label"):
+            meta_bits.append(str(e["size_label"]))
+        if produced_by:
+            meta_bits.append(f"step:{produced_by}")
         prov_bits = []
         if sha8:
             prov_bits.append(f"sha:{sha8}")
         if ev_id:
             prov_bits.append(ev_id)
+        if not prov_bits and path_text:
+            prov_bits.append(path_text)
         prov_html = (
-            f'<div class="mono" style="font-size:10px;color:var(--ink-4);'
-            f'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
-            f'margin-top:2px">{_esc(" · ".join(prov_bits))}</div>'
+            f'<div class="eu-wb-evidence-prov mono">{_esc(" · ".join(prov_bits))}</div>'
         ) if prov_bits else ""
         ev_rows.append(
-            f'<div style="padding:8px 12px;display:grid;grid-template-columns:20px 1fr auto;gap:8px;'
-            f'align-items:center;{"border-top:1px solid var(--hair);" if i else ""}">'
-            f'<span style="color:var(--ink-3);display:flex;align-items:center;justify-content:center">'
-            f'{_evidence_icon_svg(e["tag"])}</span>'
-            '<div style="min-width:0">'
-            f'<div class="mono" style="font-size:11.5px;color:var(--ink);white-space:nowrap;'
-            f'overflow:hidden;text-overflow:ellipsis">{_esc(e["label"])}</div>'
-            f'<div style="font-size:10.5px;color:var(--ink-4)">{_esc(e["sub"])}</div>'
+            f'<div class="eu-wb-evidence-row { _esc(file_state) }">'
+            f'<span class="eu-wb-evidence-icon">{_evidence_icon_svg(tag)}</span>'
+            '<div class="eu-wb-evidence-main">'
+            f'<div class="eu-wb-evidence-title mono">{_esc(e.get("label", ""))}</div>'
+            f'<div class="eu-wb-evidence-path">{_esc(path_text or e.get("sub", ""))}</div>'
             f'{prov_html}'
             '</div>'
-            f'<span class="eu-chip mono" style="font-size:9.5px;padding:0 5px;background:{bg};color:{fg}">'
-            f'{_esc(e["tag"])}</span>'
+            '<div class="eu-wb-evidence-side">'
+            f'<span class="eu-wb-evidence-state { _esc(file_state) }">{_esc(state_label)}</span>'
+            f'<small>{_esc(" · ".join(meta_bits))}</small>'
+            '</div>'
             '</div>'
         )
+    if not ev_rows:
+        ev_rows.append(
+            '<div class="eu-wb-evidence-row unbound empty">'
+            '<span class="eu-wb-evidence-icon"></span>'
+            '<div class="eu-wb-evidence-main">'
+            f'<div class="eu-wb-evidence-title mono">{_T(lang, "No evidence registered", "暂无证据注册")}</div>'
+            f'<div class="eu-wb-evidence-path">{_T(lang, "Run the agent or open a local manifest.", "运行 agent 或打开本机 manifest。")}</div>'
+            '</div></div>'
+        )
+    ledger_meta = _T(
+        lang,
+        f"{available_n} files available · {missing_n} missing",
+        f"{available_n} 个文件可用 · {missing_n} 个缺失",
+    )
 
     return (
         '<div style="padding:14px;display:flex;flex-direction:column;gap:12px;height:100%;overflow:auto">'
@@ -2945,9 +3303,14 @@ def _result_evidence_html(state: dict[str, Any], lang: str) -> str:
         f'<div class="mono" style="font-size:11px;color:var(--ink-4)">{_esc(state.get("subtitle_short", ""))}</div>'
         '</div></div>'
         + "".join(result_cards)
-        + f'<div class="eu-section-label" style="padding:0;margin-top:4px">'
-          f'<span>{_T(lang, "Evidence", "证据")} · {len(evidence)}</span></div>'
-        '<div class="eu-card" style="padding:0;overflow:hidden">'
+        + '<div class="eu-wb-evidence-ledger">'
+        '<div class="eu-wb-evidence-ledger-head">'
+        '<div>'
+        f'<b>{_T(lang, "Evidence ledger", "证据账本")} · {len(evidence)}</b>'
+        f'<span>{_esc(ledger_meta)}</span>'
+        '</div>'
+        f'<em>{_T(lang, "local manifest", "本机 manifest")}</em>'
+        '</div>'
         + "".join(ev_rows)
         + '</div></div>'
     )
@@ -3678,6 +4041,174 @@ def _summary_bundle_zip_download(state: dict[str, Any], lang: str) -> tuple[str,
     return f"data:application/zip;base64,{encoded}", f"{filename}_output_bundle.zip"
 
 
+def _summary_export_terminal_html(
+    *,
+    bundle_rows: list[tuple[str, str, str]],
+    bundle_href: str,
+    bundle_filename: str,
+    bundle_summary_title: str,
+    bundle_summary_detail: str,
+    lang: str,
+    is_demo: bool,
+) -> str:
+    row_html: list[str] = []
+    for idx, (title, detail, icon) in enumerate(bundle_rows, start=1):
+        state = "locked" if is_demo else "available"
+        state_label = _T(lang, "locked", "锁定") if is_demo else _T(lang, "packaged", "已打包")
+        row_html.append(
+            f'<div class="eu-summary-export-row {state}">'
+            f'<span>{idx:02d}</span>'
+            '<div class="eu-summary-export-copy">'
+            f'<b>{_esc(title)}</b>'
+            f'<small>{_esc(detail)}</small>'
+            '</div>'
+            f'<em>{_summary_bundle_icon(icon)}{_esc(state_label)}</em>'
+            '</div>'
+        )
+    bundle_action = (
+        f'<span class="eu-summary-export-button disabled">{_T(lang, "Real run required", "需要真实运行")}</span>'
+        if is_demo else
+        (
+            f'<a class="eu-summary-export-button" href="{_esc(bundle_href)}" '
+            f'download="{_esc(bundle_filename)}">{_T(lang, "Export review ZIP", "导出复核 ZIP")}</a>'
+        )
+    )
+    file_label = _T(lang, "demo placeholder", "演示占位") if is_demo else bundle_filename
+    return (
+        f'<div class="eu-summary-export-terminal {"locked" if is_demo else "available"}">'
+        '<div class="eu-summary-export-head">'
+        '<span class="mono">Summary export terminal</span>'
+        f'<b>{_esc(bundle_summary_title)}</b>'
+        f'<p>{_esc(bundle_summary_detail)}</p>'
+        f'<code>{_esc(file_label)}</code>'
+        '</div>'
+        f'<div class="eu-summary-export-list">{"".join(row_html)}</div>'
+        f'{bundle_action}'
+        '</div>'
+    )
+
+
+def _remember_summary_review_receipt(
+    *,
+    run_id: object,
+    label: str,
+    detail: str,
+    tone: str = "done",
+) -> None:
+    st.session_state["_eu_summary_review_receipt"] = {
+        "run_id": str(run_id or ""),
+        "label": label,
+        "detail": detail,
+        "tone": tone,
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def _summary_review_receipt_html(receipt: object, *, run_id: object, lang: str) -> str:
+    if not isinstance(receipt, dict):
+        return ""
+    if str(receipt.get("run_id") or "") != str(run_id or ""):
+        return ""
+    tone = re.sub(r"[^a-z0-9_-]+", "", str(receipt.get("tone") or "done").lower()) or "done"
+    label = _compact_label(receipt.get("label"), max_len=72)
+    detail = _compact_label(receipt.get("detail"), max_len=150)
+    updated = _compact_label(receipt.get("updated_at"), max_len=40)
+    return (
+        f'<div class="eu-summary-review-receipt {tone}">'
+        f'<span>{_T(lang, "receipt", "回执")}</span>'
+        '<div>'
+        f'<b>{_esc(label)}</b>'
+        f'<p>{_esc(detail)}</p>'
+        '</div>'
+        f'<em>{_esc(updated)}</em>'
+        '</div>'
+    )
+
+
+def _summary_review_action_terminal_html(
+    *,
+    lang: str,
+    passed: int,
+    total: int,
+    control_tone: str,
+    control_title: str,
+    control_detail: str,
+    non_reviewer_ready: bool,
+    reviewer_ready: bool,
+    saved_approval_stale: bool,
+    finding_review_state: dict[str, Any],
+    receipt_html: str,
+) -> str:
+    reviewable = int(finding_review_state.get("reviewable_finding_count") or 0)
+    reviewed = int(finding_review_state.get("reviewed_finding_count") or 0)
+    signoff_state = "done" if reviewer_ready else "ready" if non_reviewer_ready else "locked"
+    signoff_detail = (
+        _T(lang, "review_decision.json is current", "review_decision.json 已是最新")
+        if reviewer_ready else
+        _T(lang, "saved sign-off needs refresh", "已保存签字需要刷新")
+        if saved_approval_stale else
+        _T(lang, "ready to write local review_decision.json", "可写入本机 review_decision.json")
+        if non_reviewer_ready else
+        _T(lang, "wait for evidence checks", "等待证据检查")
+    )
+    draft_state = "ready" if reviewer_ready else "locked"
+    note_state = "ready" if non_reviewer_ready else "locked"
+    rows = [
+        (
+            "01",
+            _T(lang, "Evidence checks", "证据检查"),
+            f"{passed} / {total} {_T(lang, 'checks passed', '项检查通过')}",
+            "ready" if passed == total else "pending",
+        ),
+        (
+            "02",
+            _T(lang, "Sign-off file", "签字文件"),
+            signoff_detail,
+            signoff_state,
+        ),
+        (
+            "03",
+            _T(lang, "Draft setup handoff", "草稿配置交接"),
+            _T(lang, "opens force-manuscript setup for this run", "为该 run 打开强制写稿配置"),
+            draft_state,
+        ),
+        (
+            "04",
+            _T(lang, "Reviewer note", "审核备注"),
+            _T(
+                lang,
+                f"{reviewed} / {reviewable} reviewable findings acknowledged",
+                f"{reviewed} / {reviewable} 个可复核发现已确认",
+            ),
+            note_state,
+        ),
+    ]
+    row_html = "".join(
+        f'<div class="eu-summary-review-action-row {state}">'
+        f'<span>{idx}</span>'
+        '<div>'
+        f'<b>{_esc(title)}</b>'
+        f'<small>{_esc(detail)}</small>'
+        '</div>'
+        f'<em>{_esc(state)}</em>'
+        '</div>'
+        for idx, title, detail, state in rows
+    )
+    return (
+        f'<div class="eu-summary-review-terminal {control_tone}">'
+        '<div class="eu-summary-review-terminal-head">'
+        f'<span class="mono">{passed} / {total} {_T(lang, "checks", "项检查")}</span>'
+        '<div>'
+        f'<b>{_esc(control_title)}</b>'
+        f'<p>{_esc(control_detail)}</p>'
+        '</div>'
+        '</div>'
+        f'<div class="eu-summary-review-action-list">{row_html}</div>'
+        f'{receipt_html}'
+        '</div>'
+    )
+
+
 def _output_summary_html(state: dict[str, Any], lang: str) -> str:
     audit = state.get("audit") if isinstance(state.get("audit"), dict) else {}
     counts = audit.get("counts") if isinstance(audit.get("counts"), dict) else {}
@@ -3765,25 +4296,10 @@ def _output_summary_html(state: dict[str, Any], lang: str) -> str:
                 "code",
             ),
         ]
-    bundle_html = "".join(
-        '<div class="eu-summary-bundle-row">'
-        f'<span class="eu-summary-bundle-ico">{_summary_bundle_icon(icon)}</span>'
-        '<div>'
-        f'<b>{_esc(title)}</b>'
-        f'<p>{_esc(detail)}</p>'
-        '</div>'
-        '</div>'
-        for title, detail, icon in bundle_rows
-    )
     bundle_href, bundle_filename = _summary_bundle_zip_download(state, lang)
     demo_notice = (
         f'<div class="eu-summary-demo-note">{_esc(state.get("demo_notice", ""))}</div>'
         if is_demo and state.get("demo_notice") else ""
-    )
-    bundle_action = (
-        f'<span class="eu-summary-bundle-button disabled">{_T(lang, "Real run required", "需要真实运行")}</span>'
-        if is_demo else
-        f'<a class="eu-summary-bundle-button" href="{_esc(bundle_href)}" download="{_esc(bundle_filename)}">{_T(lang, "Export bundle", "导出 bundle")}</a>'
     )
     bundle_summary_title = (
         _T(lang, "Export package is demo-only", "导出包为演示占位")
@@ -3798,6 +4314,15 @@ def _output_summary_html(state: dict[str, Any], lang: str) -> str:
             f"{bundle_counts['figures']} figures · {bundle_counts['tables']} tables · {bundle_counts['evidence']} evidence · {bundle_counts['code']} code",
             f"{bundle_counts['figures']} 个图件 · {bundle_counts['tables']} 张表 · {bundle_counts['evidence']} 条证据 · {bundle_counts['code']} 个代码产物",
         )
+    )
+    export_terminal_html = _summary_export_terminal_html(
+        bundle_rows=bundle_rows,
+        bundle_href=bundle_href,
+        bundle_filename=bundle_filename,
+        bundle_summary_title=bundle_summary_title,
+        bundle_summary_detail=bundle_summary_detail,
+        lang=lang,
+        is_demo=is_demo,
     )
 
     return (
@@ -3823,18 +4348,7 @@ def _output_summary_html(state: dict[str, Any], lang: str) -> str:
         '</div>'
         '</div>'
         '</div>'
-        '<details class="eu-summary-bundle eu-summary-bundle-details">'
-        '<summary class="eu-summary-bundle-summary">'
-        '<div>'
-        f'<div class="eu-section-label">{_T(lang, "Export package", "导出包")}</div>'
-        f'<b>{_esc(bundle_summary_title)}</b>'
-        f'<p>{_esc(bundle_summary_detail)}</p>'
-        '</div>'
-        f'<span>{_T(lang, "Details", "详情")}</span>'
-        '</summary>'
-        f'<div class="eu-summary-bundle-list">{bundle_html}</div>'
-        f'{bundle_action}'
-        '</details>'
+        f'{export_terminal_html}'
         '</div>'
         '</div>'
     )
@@ -4005,20 +4519,27 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
 
     with st.container(key=f"_eu_summary_review_panel_{safe_run}"):
         st.markdown(
-            (
-                '<div class="eu-summary-review-control-head">'
-                f'<span class="mono {control_tone}">{passed} / {total} {_T(lang, "checks", "项检查")}</span>'
-                '<div>'
-                f'<b>{_esc(control_title)}</b>'
-                f'<p>{_esc(control_detail)}</p>'
-                '</div>'
-                '</div>'
+            _summary_review_action_terminal_html(
+                lang=lang,
+                passed=passed,
+                total=total,
+                control_tone=control_tone,
+                control_title=control_title,
+                control_detail=control_detail,
+                non_reviewer_ready=non_reviewer_ready,
+                reviewer_ready=reviewer_ready,
+                saved_approval_stale=saved_approval_stale,
+                finding_review_state=finding_review_state,
+                receipt_html=_summary_review_receipt_html(
+                    st.session_state.get("_eu_summary_review_receipt"),
+                    run_id=state.get("run_id") or run_dir.name,
+                    lang=lang,
+                ),
             ),
             unsafe_allow_html=True,
         )
         note = str(st.session_state.get(note_key, default_note) or "")
-        approve_col, lock_col, draft_col = st.columns([1, 1, 1.15])
-        with approve_col:
+        with st.container(key=f"_eu_summary_review_actions_{safe_run}"):
             if st.button(
                 _T(lang, "Sign off review", "签字通过复核"),
                 key=f"_eu_summary_review_approve_{safe_run}",
@@ -4039,11 +4560,15 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
                     finding_review_state=finding_review_state,
                 )
                 _sync_review_decision_to_workbench_state(payload, lang=lang)
+                _remember_summary_review_receipt(
+                    run_id=state.get("run_id") or run_dir.name,
+                    label=_T(lang, "Review sign-off saved", "审核签字已保存"),
+                    detail="review_decision.json",
+                    tone="done",
+                )
                 st.session_state["_active_main_page"] = "research_agent"
                 st.session_state["_ra_view"] = "summary"
-                st.success(_T(lang, "Review sign-off saved.", "审核签字已保存。"))
                 st.rerun()
-        with lock_col:
             if st.button(
                 _T(lang, "Decline", "退回"),
                 key=f"_eu_summary_review_decline_{safe_run}",
@@ -4067,11 +4592,15 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
                     finding_review_state=finding_review_state,
                 )
                 _sync_review_decision_to_workbench_state(payload, lang=lang)
+                _remember_summary_review_receipt(
+                    run_id=state.get("run_id") or run_dir.name,
+                    label=_T(lang, "Review gate declined", "复核关口已退回"),
+                    detail=_T(lang, "Draft gate remains locked.", "草稿关口保持锁定。"),
+                    tone="warn",
+                )
                 st.session_state["_active_main_page"] = "research_agent"
                 st.session_state["_ra_view"] = "summary"
-                st.warning(_T(lang, "Review gate declined; draft remains locked.", "复核关口已退回；草稿保持锁定。"))
                 st.rerun()
-        with draft_col:
             if st.button(
                 _T(lang, "Draft methods + results", "生成方法与结果草稿"),
                 key=f"_eu_summary_review_draft_{safe_run}",
@@ -4084,6 +4613,12 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
                     "使用该已复核 run 打开 Setup 的强制写稿模式。",
                 ),
             ):
+                _remember_summary_review_receipt(
+                    run_id=state.get("run_id") or run_dir.name,
+                    label=_T(lang, "Draft setup handoff opened", "草稿配置交接已打开"),
+                    detail=_T(lang, "force-manuscript setup", "强制写稿配置"),
+                    tone="done",
+                )
                 _prime_summary_draft_setup(state)
                 st.rerun()
         note_visible = st.toggle(
@@ -4108,15 +4643,6 @@ def _render_summary_review_controls(state: dict[str, Any], lang: str) -> None:
                 ),
                 disabled=not non_reviewer_ready,
             )
-        if reviewer_ready:
-            st.success(
-                _T(
-                    lang,
-                    f"Saved decision: {review.get('decision', 'approved')} · {review.get('updated_at', '')}",
-                    f"已保存决定：{review.get('decision', 'approved')} · {review.get('updated_at', '')}",
-                )
-            )
-
 
 def render_agent_output_summary(lang: str, *, show_header: bool = True) -> None:
     """Render the analysis-first Research Agent summary page."""
@@ -5141,14 +5667,22 @@ def _render_evidence_drilldown(
         return
     step_id = str(active_state.get("step_id") or active_state.get("run_id") or "wb")
     select_state_key = f"_eu_wb_evidence_pick_{step_id}_{key_suffix}"
+    available_n = sum(1 for e in evidence if e.get("file_exists") is True)
     options = list(range(len(evidence)))
     labels = [
-        f"{i + 1:02d} · {(e.get('label') or e.get('tag') or 'evidence')[:48]}"
+        f"{i + 1:02d} · {(e.get('file_name') or e.get('label') or e.get('tag') or 'evidence')[:48]}"
         for i, e in enumerate(evidence)
     ]
     st.markdown(
-        '<div class="eu-section-label" style="padding:0;margin:10px 0 4px">'
-        f'{_esc(_T(lang, "Inspect evidence", "查看证据"))}</div>',
+        (
+            '<div class="eu-wb-evidence-inspector-head">'
+            '<div>'
+            f'<b>{_esc(_T(lang, "Inspect evidence", "查看证据"))}</b>'
+            f'<span>{_T(lang, f"{available_n} / {len(evidence)} files available", f"{available_n} / {len(evidence)} 个文件可用")}</span>'
+            '</div>'
+            f'<em>{_esc(_T(lang, "Artifact inspector", "产物检查器"))}</em>'
+            '</div>'
+        ),
         unsafe_allow_html=True,
     )
     picked = st.selectbox(
@@ -5159,15 +5693,52 @@ def _render_evidence_drilldown(
         label_visibility="collapsed",
     )
     rec = evidence[picked] if 0 <= picked < len(evidence) else {}
-    raw_path = (
-        rec.get("relative_path")
-        or rec.get("path")
-        or rec.get("artifact_path")
-        or rec.get("file")
-        or ""
-    )
+    raw_path = _raw_artifact_path(rec)
+    run_dir = active_state.get("run_dir")
+    target_path = _resolve_artifact_path(run_dir, raw_path)
+    if (target_path is None or not target_path.exists()) and rec.get("artifact_path"):
+        target_path = _resolve_artifact_path(run_dir, rec.get("artifact_path"))
+    file_exists = bool(target_path and target_path.exists() and target_path.is_file())
+    file_state = "available" if file_exists else ("missing" if raw_path else "unbound")
+    state_label = {
+        "available": _T(lang, "available on disk", "磁盘文件可用"),
+        "missing": _T(lang, "registered but missing", "已注册但文件缺失"),
+        "unbound": _T(lang, "no file path", "未绑定文件路径"),
+    }[file_state]
     sha = str(rec.get("sha256") or rec.get("sha8") or "")
     ev_id = str(rec.get("evidence_id") or "")
+    file_name = str(rec.get("file_name") or (target_path.name if target_path else "") or rec.get("label") or "artifact")
+    receipt_key = f"_eu_wb_ev_action_receipt_{step_id}_{key_suffix}_{picked}"
+    target_label = str(target_path or raw_path or file_name)
+    meta_bits = [
+        str(rec.get("suffix") or rec.get("kind") or rec.get("tag") or "artifact"),
+        str(rec.get("size_label") or ""),
+        f"step:{rec.get('produced_by_step')}" if rec.get("produced_by_step") else "",
+    ]
+    meta = " · ".join(bit for bit in meta_bits if bit)
+    st.markdown(
+        (
+            f'<div class="eu-wb-evidence-inspector {file_state}">'
+            '<div>'
+            f'<span class="eu-wb-evidence-state {file_state}">{_esc(state_label)}</span>'
+            f'<b>{_esc(file_name)}</b>'
+            f'<p>{_esc(raw_path or rec.get("sub") or "")}</p>'
+            f'<small>{_esc(meta)}</small>'
+            '</div>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        _artifact_action_contract_html(
+            rec,
+            raw_path=raw_path,
+            target_path=target_path,
+            file_state=file_state,
+            lang=lang,
+        ),
+        unsafe_allow_html=True,
+    )
 
     # path display + copy (st.code adds a built-in copy button)
     if raw_path:
@@ -5175,22 +5746,19 @@ def _render_evidence_drilldown(
     else:
         st.caption(_T(lang, "No path on this evidence record.", "该证据未携带文件路径。"))
 
-    cols = st.columns([1, 1, 1], gap="small")
+    cols = st.columns([1, 1, 1, 1], gap="small")
     with cols[0]:
         if st.button(
-            _T(lang, "Open", "打开"),
+            _T(lang, "Open file", "打开文件"),
             key=f"_eu_wb_ev_open_{step_id}_{key_suffix}",
             use_container_width=True,
-            disabled=not raw_path,
+            disabled=not file_exists,
             help=_T(lang, "Open the selected evidence path from the run directory.", "从 run 目录打开所选证据路径。"),
         ):
             import os
             import subprocess
             import sys
-            target = str(raw_path)
-            run_dir = active_state.get("run_dir")
-            if run_dir and not os.path.isabs(target):
-                target = os.path.join(str(run_dir), target)
+            target = str(target_path or raw_path)
             try:
                 if sys.platform == "darwin":
                     subprocess.run(["open", target], check=False)
@@ -5198,10 +5766,56 @@ def _render_evidence_drilldown(
                     subprocess.run(["xdg-open", target], check=False)
                 elif sys.platform == "win32":
                     os.startfile(target)  # type: ignore[attr-defined]
+                _remember_artifact_action_receipt(
+                    st.session_state,
+                    receipt_key,
+                    action="open",
+                    label=_T(lang, "Open file", "打开文件"),
+                    detail=_compact_label(target, max_len=88),
+                )
                 st.toast(_T(lang, "Opened.", "已打开。"))
             except Exception as exc:  # pragma: no cover - desktop only
+                _remember_artifact_action_receipt(
+                    st.session_state,
+                    receipt_key,
+                    action="open",
+                    label=_T(lang, "Open failed", "打开失败"),
+                    detail=str(exc),
+                    tone="fail",
+                )
                 st.warning(f"open failed: {exc}")
     with cols[1]:
+        if file_exists and target_path is not None:
+            try:
+                data = _cached_artifact_bytes(_file_fingerprint(target_path))
+            except Exception:
+                data = b""
+            st.download_button(
+                _T(lang, "Download", "下载"),
+                data=data,
+                file_name=target_path.name,
+                mime=_artifact_mime(target_path),
+                key=f"_eu_wb_ev_download_{step_id}_{key_suffix}_{picked}",
+                use_container_width=True,
+                disabled=not data,
+                help=_T(lang, "Download the selected registered artifact.", "下载所选已注册产物。"),
+                on_click=_remember_artifact_action_receipt,
+                args=(st.session_state, receipt_key),
+                kwargs={
+                    "action": "download",
+                    "label": _T(lang, "Download", "下载"),
+                    "detail": _compact_label(target_path, max_len=88),
+                },
+            )
+        else:
+            st.button(
+                _T(lang, "Download", "下载"),
+                key=f"_eu_wb_ev_download_disabled_{step_id}_{key_suffix}_{picked}",
+                use_container_width=True,
+                disabled=True,
+                help=_T(lang, "The registered artifact file is not available on disk.", "已注册产物文件在磁盘上不可用。"),
+            )
+    with cols[2]:
         if st.button(
             _T(lang, "SHA", "SHA"),
             key=f"_eu_wb_ev_sha_{step_id}_{key_suffix}",
@@ -5209,8 +5823,15 @@ def _render_evidence_drilldown(
             disabled=not sha,
             help=_T(lang, "Show the full checksum for this evidence record.", "查看该证据记录的完整校验值。"),
         ):
-            st.session_state[f"_eu_wb_ev_sha_show_{step_id}_{key_suffix}"] = True
-    with cols[2]:
+            st.session_state[f"_eu_wb_ev_sha_show_{step_id}_{key_suffix}_{picked}"] = True
+            _remember_artifact_action_receipt(
+                st.session_state,
+                receipt_key,
+                action="sha",
+                label="SHA",
+                detail=_T(lang, "Checksum revealed below.", "校验值已在下方显示。"),
+            )
+    with cols[3]:
         if st.button(
             _T(lang, "Copy ID", "复制 ID"),
             key=f"_eu_wb_ev_id_{step_id}_{key_suffix}",
@@ -5218,108 +5839,182 @@ def _render_evidence_drilldown(
             disabled=not ev_id,
             help=_T(lang, "Reveal the evidence identifier so it can be copied.", "显示证据 ID 以便复制。"),
         ):
-            st.session_state[f"_eu_wb_ev_id_show_{step_id}_{key_suffix}"] = True
+            st.session_state[f"_eu_wb_ev_id_show_{step_id}_{key_suffix}_{picked}"] = True
+            _remember_artifact_action_receipt(
+                st.session_state,
+                receipt_key,
+                action="id",
+                label=_T(lang, "Copy ID", "复制 ID"),
+                detail=_T(lang, "Evidence ID revealed below for copy.", "证据 ID 已在下方显示，可复制。"),
+            )
 
-    if st.session_state.get(f"_eu_wb_ev_sha_show_{step_id}_{key_suffix}"):
+    receipt = st.session_state.get(receipt_key)
+    st.markdown(
+        _artifact_action_terminal_html(
+            receipt=receipt if isinstance(receipt, Mapping) else None,
+            file_exists=file_exists,
+            has_sha=bool(sha),
+            has_id=bool(ev_id),
+            raw_path=target_label,
+            lang=lang,
+        ),
+        unsafe_allow_html=True,
+    )
+
+    if st.session_state.get(f"_eu_wb_ev_sha_show_{step_id}_{key_suffix}_{picked}"):
         st.code(sha, language="text")
-    if st.session_state.get(f"_eu_wb_ev_id_show_{step_id}_{key_suffix}"):
+    if st.session_state.get(f"_eu_wb_ev_id_show_{step_id}_{key_suffix}_{picked}"):
         st.code(ev_id, language="text")
 
 
 def _render_result_downloads(active_state: dict[str, Any], lang: str) -> None:
-    """Item 5: per-result download buttons (figure / CSV / artifact).
-
-    The HTML tile grid stays for design fidelity; this row makes the
-    artifacts actually accessible.
-    """
+    """Item 5: per-result download buttons (figure / CSV / artifact)."""
     results = [r for r in active_state.get("results", []) if isinstance(r, dict)]
     if not results:
         return
     run_dir = active_state.get("run_dir")
     run_dir_path = Path(str(run_dir)) if run_dir else None
-    rows_emitted = False
+    ledger_rows: list[dict[str, Any]] = []
+    downloadable_rows: list[dict[str, Any]] = []
     path_hints_seen = False
-    st.markdown(
-        '<div class="eu-section-label" style="padding:0;margin:14px 0 4px">'
-        f'{_esc(_T(lang, "Download results", "下载结果"))}</div>',
-        unsafe_allow_html=True,
-    )
-    for i, r in enumerate(results):
-        raw_path = (
-            r.get("artifact_path")
-            or r.get("path")
-            or r.get("relative_path")
-            or r.get("file")
-            or ""
-        )
+    receipt_key = "_eu_wb_result_download_receipt"
+    for i, r in enumerate(results, start=1):
+        raw_path = _raw_artifact_path(r) or r.get("file") or ""
+        title = str(r.get("title") or r.get("kind") or _T(lang, "Result artifact", "结果产物"))
+        kind = str(r.get("kind") or r.get("tag") or "artifact").lower()
         if not raw_path:
+            ledger_rows.append(
+                {
+                    "idx": i,
+                    "title": title,
+                    "file_name": _T(lang, "No file path registered", "未注册文件路径"),
+                    "path": "",
+                    "meta": kind,
+                    "file_state": "unbound",
+                    "state_label": _T(lang, "metadata only", "仅元数据"),
+                    "action": f"download_{i}",
+                }
+            )
             continue
         path_hints_seen = True
-        path = Path(str(raw_path))
-        if not path.is_absolute() and run_dir_path is not None:
-            path = run_dir_path / path
+        path = _resolve_artifact_path(run_dir_path, raw_path) or Path(str(raw_path))
         if not path.exists() or not path.is_file():
+            ledger_rows.append(
+                {
+                    "idx": i,
+                    "title": title,
+                    "file_name": path.name or str(raw_path),
+                    "path": str(path),
+                    "meta": kind,
+                    "file_state": "missing",
+                    "state_label": _T(lang, "missing on disk", "磁盘缺失"),
+                    "action": f"download_{i}",
+                }
+            )
             continue
-        suffix = path.suffix.lower()
-        mime = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".svg": "image/svg+xml",
-            ".pdf": "application/pdf",
-            ".tiff": "image/tiff",
-            ".csv": "text/csv",
-            ".tsv": "text/tab-separated-values",
-            ".json": "application/json",
-            ".parquet": "application/octet-stream",
-            ".md": "text/markdown",
-        }.get(suffix, "application/octet-stream")
+        mime = _artifact_mime(path)
         try:
             data = _cached_artifact_bytes(_file_fingerprint(path))
         except Exception:
-            continue
+            data = b""
         if not data:
+            ledger_rows.append(
+                {
+                    "idx": i,
+                    "title": title,
+                    "file_name": path.name,
+                    "path": str(path),
+                    "meta": f"{kind} · {_T(lang, 'empty or unreadable', '空文件或不可读')}",
+                    "file_state": "missing",
+                    "state_label": _T(lang, "unreadable", "不可读"),
+                    "action": f"download_{i}",
+                }
+            )
             continue
-        title = r.get("title") or r.get("kind") or path.name
-        cols = st.columns([3, 1.4])
-        with cols[0]:
-            st.markdown(
-                f'<div style="font-size:12px;color:var(--ink);font-weight:500">{_esc(title)}</div>'
-                f'<div class="mono" style="font-size:10.5px;color:var(--ink-4);'
-                f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{_esc(path.name)}'
-                f' · {len(data) / 1024:.1f} KB</div>',
-                unsafe_allow_html=True,
-            )
-        with cols[1]:
-            st.download_button(
-                _T(lang, "Download", "下载"),
-                data=data,
-                file_name=path.name,
-                mime=mime,
-                key=f"_eu_wb_dl_{i}_{path.name}",
-                use_container_width=True,
-            )
-        rows_emitted = True
-    if not rows_emitted:
+        suffix = path.suffix.lower().lstrip(".") or kind
+        row = {
+            "idx": i,
+            "title": title,
+            "file_name": path.name,
+            "path": str(path),
+            "meta": f"{suffix} · {_artifact_size_label(len(data))}",
+            "file_state": "available",
+            "state_label": _T(lang, "ready to download", "可下载"),
+            "action": f"download_{i}",
+            "data": data,
+            "mime": mime,
+        }
+        ledger_rows.append(row)
+        downloadable_rows.append(row)
+    if not ledger_rows:
         if active_state.get("is_demo"):
-            caption = _T(
+            notice = _T(
                 lang,
                 "Demo preview does not write downloadable result files. Open a real run to download bound artifacts.",
                 "Demo 预览不会写入可下载结果文件。打开真实运行后可下载绑定产物。",
             )
         elif path_hints_seen:
-            caption = _T(
+            notice = _T(
                 lang,
                 "Registered result paths are not available on disk from this run directory.",
                 "已注册的结果路径在当前 run 目录下不可用。",
             )
         else:
-            caption = _T(
+            notice = _T(
                 lang,
                 "No downloadable result files are registered for this selected step.",
                 "当前步骤没有注册可下载的结果文件。",
             )
-        st.caption(caption)
+        st.markdown(
+            _result_download_ledger_html([], lang=lang, notice=notice),
+            unsafe_allow_html=True,
+        )
+        return
+    receipt = st.session_state.get(receipt_key)
+    st.markdown(
+        _result_download_ledger_html(
+            ledger_rows,
+            lang=lang,
+            receipt=receipt if isinstance(receipt, Mapping) else None,
+        ),
+        unsafe_allow_html=True,
+    )
+    if not downloadable_rows:
+        return
+    st.markdown(
+        '<div class="eu-wb-result-download-actions-label">'
+        f'{_esc(_T(lang, "Download actions", "下载动作"))}</div>',
+        unsafe_allow_html=True,
+    )
+    for group_start in range(0, len(downloadable_rows), 3):
+        group = downloadable_rows[group_start: group_start + 3]
+        cols = st.columns(len(group))
+        for col, row in zip(cols, group):
+            with col:
+                label = _T(lang, f"Download {int(row['idx']):02d}", f"下载 {int(row['idx']):02d}")
+                detail = _compact_label(row.get("path") or row.get("file_name"), max_len=88)
+                safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(row["file_name"]))[:80]
+                action = str(row["action"])
+                data = row.get("data")
+                if not isinstance(data, bytes):
+                    data = b""
+                st.download_button(
+                    label,
+                    data=data,
+                    file_name=str(row["file_name"]),
+                    mime=str(row.get("mime") or "application/octet-stream"),
+                    key=f"_eu_wb_result_download_{int(row['idx'])}_{safe_name}",
+                    use_container_width=True,
+                    disabled=not data,
+                    help=_T(lang, "Download this bound result artifact.", "下载这个已绑定结果产物。"),
+                    on_click=_remember_artifact_action_receipt,
+                    args=(st.session_state, receipt_key),
+                    kwargs={
+                        "action": action,
+                        "label": label,
+                        "detail": detail,
+                    },
+                )
 
 
 def _render_timeline_jump(state: dict[str, Any], lang: str, select_key: str) -> None:

@@ -63,6 +63,43 @@ def _render_section_heading(title: str, eyebrow: str | None = None) -> None:
     )
 
 
+def _render_cohort_metric_grid(items: list[tuple[str, str, str, str]]) -> None:
+    cards_html = "".join(
+        (
+            f'<div class="eu-cohort-metric-card {html.escape(tone)}">'
+            f'<span>{html.escape(label)}</span>'
+            f'<b>{html.escape(value)}</b>'
+            f'<em>{html.escape(note)}</em>'
+            '</div>'
+        )
+        for label, value, note, tone in items
+    )
+    st.markdown(
+        f'<div class="eu-cohort-metric-grid">{cards_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _cohort_loader_notice_html(tone: str, kicker: str, title: str, body: str = "", meta: str = "") -> str:
+    body_html = f'<p>{html.escape(body)}</p>' if body else ""
+    meta_html = f'<em>{html.escape(meta)}</em>' if meta else ""
+    return (
+        f'<div class="eu-cohort-loader-notice {html.escape(tone)}">'
+        f'<span>{html.escape(kicker)}</span>'
+        f'<b>{html.escape(title)}</b>'
+        f'{body_html}'
+        f'{meta_html}'
+        '</div>'
+    )
+
+
+def _render_cohort_loader_notice(tone: str, kicker: str, title: str, body: str = "", meta: str = "") -> None:
+    st.markdown(
+        _cohort_loader_notice_html(tone, kicker, title, body, meta),
+        unsafe_allow_html=True,
+    )
+
+
 def _clean_module_label(label: str) -> str:
     parts = str(label).split(" ", 1)
     if len(parts) == 2 and not parts[0].isalnum():
@@ -315,15 +352,15 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 
     # ========== Real Data模式：显示完整数据配置 ==========
     else:
-        with st.expander("⚙️ " + ("Data Configuration" if lang == 'en' else "数据配置"), expanded=True):
+        with st.expander("Data Configuration" if lang == 'en' else "数据配置", expanded=True):
             # 数据源选择 — 支持3种模式
             _src_label = "Data Source" if lang == 'en' else "数据来源"
             _allow_demo = entry_mode != 'real'
             _src_keys = ["raw", "exported"] + (["demo"] if _allow_demo else [])
             _src_labels = {
-                "raw": "📂 Raw Database" if lang == 'en' else "📂 原始数据库",
-                "exported": "📦 Previously Exported Results" if lang == 'en' else "📦 之前导出的结果文件",
-                "demo": "🧪 Demo Data" if lang == 'en' else "🧪 模拟数据",
+                "raw": "Raw Database" if lang == 'en' else "原始数据库",
+                "exported": "Previously Exported Results" if lang == 'en' else "之前导出的结果文件",
+                "demo": "Demo Data" if lang == 'en' else "模拟数据",
             }
             _default_src = "demo" if _allow_demo and entry_mode == 'demo' else "raw"
             grp_src = st.radio(
@@ -336,12 +373,12 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             if grp_src == "demo":
                 # ===== 模拟数据模式 =====
                 n_patients = st.slider(
-                    "👥 " + ("Number of ICU stays" if lang == 'en' else "ICU stay 数量"),
+                    "Number of ICU stays" if lang == 'en' else "ICU stay 数量",
                     min_value=50, max_value=500, value=st.session_state.mock_params.get('n_patients', 100),
                     key="grp_demo_patients_inline"
                 )
                 load_btn = st.button(
-                    "🚀 " + ("Generate Demo Data" if lang == 'en' else "生成模拟数据"),
+                    "Generate Demo Data" if lang == 'en' else "生成模拟数据",
                     type="primary", key="grp_load_demo_btn"
                 )
                 if load_btn:
@@ -360,7 +397,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 
                 with col1:
                     data_root = _directory_input(
-                        "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
+                        "ICU Data Root" if lang == 'en' else "ICU 数据根目录",
                         value=st.session_state.get('grp_data_root', ''),
                         input_key="grp_data_root",
                         button_key="grp_data_root_browse",
@@ -373,7 +410,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                     db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
                     default_db = st.session_state.get('grp_db_select') or _default_real_database()
                     selected_db = st.selectbox(
-                        "🏥 " + ("Database" if lang == 'en' else "数据库"),
+                        "Database" if lang == 'en' else "数据库",
                         options=list(db_options.keys()),
                         index=list(db_options.keys()).index(default_db) if default_db in db_options else 0,
                         format_func=lambda x: db_options[x],
@@ -382,7 +419,7 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 
                 with col3:
                     max_patients = st.number_input(
-                        "👥 " + ("Max ICU stays" if lang == 'en' else "最大 ICU stay 数"),
+                        "Max ICU stays" if lang == 'en' else "最大 ICU stay 数",
                         min_value=100,
                         max_value=10000,
                         value=1000,
@@ -395,15 +432,37 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                 path_ok = bool(full_data_path) and os.path.exists(full_data_path)
 
                 if not data_root_str:
-                    st.info("ℹ️ " + ("Enter the ICU data root above to validate the database path."
-                                     if lang == 'en' else "请在上方填写 ICU 数据根目录以验证数据库路径。"))
+                    _render_cohort_loader_notice(
+                        "pending",
+                        "Source check" if lang == "en" else "来源检查",
+                        "Data root required" if lang == "en" else "需要数据根目录",
+                        "Enter the ICU data root above to validate the database path."
+                        if lang == 'en' else
+                        "请在上方填写 ICU 数据根目录以验证数据库路径。",
+                    )
                 elif path_ok:
-                    st.success(f"✅ " + (f"Path valid: `{full_data_path}`" if lang == 'en' else f"路径有效: `{full_data_path}`"))
+                    _render_cohort_loader_notice(
+                        "ready",
+                        "Source check" if lang == "en" else "来源检查",
+                        "Path validated" if lang == "en" else "路径已验证",
+                        "The selected database folder is available for group comparison."
+                        if lang == 'en' else
+                        "所选数据库文件夹可用于分组对比。",
+                        full_data_path,
+                    )
                 else:
-                    st.warning(f"⚠️ " + (f"Path not found: `{full_data_path}`" if lang == 'en' else f"路径不存在: `{full_data_path}`"))
+                    _render_cohort_loader_notice(
+                        "warning",
+                        "Source check" if lang == "en" else "来源检查",
+                        "Path not found" if lang == "en" else "路径不存在",
+                        "Choose the folder that contains this database before loading demographics."
+                        if lang == 'en' else
+                        "请先选择包含该数据库的文件夹，再加载人口统计学数据。",
+                        full_data_path,
+                    )
 
                 load_btn = st.button(
-                    "🚀 " + ("Load Patient Demographics" if lang == 'en' else "加载患者人口统计学数据"),
+                    "Load Patient Demographics" if lang == 'en' else "加载患者人口统计学数据",
                     type="primary",
                     disabled=not path_ok,
                     key="grp_load_btn"
@@ -425,17 +484,30 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                             st.session_state['grp_loaded_path'] = full_data_path
                             st.session_state['grp_is_demo'] = False
 
-                        st.success(f"✅ Loaded {len(demographics_df):,} ICU stays" if lang == 'en' else f"✅ 已加载 {len(demographics_df):,} 个 ICU stay")
+                        _render_cohort_loader_notice(
+                            "ready",
+                            "Demographics load" if lang == "en" else "人口统计加载",
+                            "Cohort ready" if lang == "en" else "队列已就绪",
+                            f"Loaded {len(demographics_df):,} ICU stays"
+                            if lang == 'en' else
+                            f"已加载 {len(demographics_df):,} 个 ICU stay",
+                            full_data_path,
+                        )
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error: {e}")
+                        _render_cohort_loader_notice(
+                            "danger",
+                            "Demographics load" if lang == "en" else "人口统计加载",
+                            "Load failed" if lang == "en" else "加载失败",
+                            str(e),
+                        )
 
             elif grp_src == "exported":
                 # ===== 导出文件模式 =====
                 col1, col2 = st.columns([3, 2])
                 with col1:
                     export_root = _directory_input(
-                        "📦 " + ("Folder with Exported Data Files" if lang == 'en' else "存放导出结果文件的文件夹"),
+                        "Folder with Exported Data Files" if lang == 'en' else "存放导出结果文件的文件夹",
                         value=st.session_state.get('export_path', ''),
                         input_key="grp_export_root",
                         button_key="grp_export_root_browse",
@@ -448,25 +520,41 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 
                 with col2:
                     if _export_folders:
-                        folder_options = {f[0]: f"📁 {f[0]} ({f[1]} files)" for f in _export_folders}
+                        folder_options = {f[0]: f"{f[0]} ({f[1]} files)" for f in _export_folders}
                         selected_folder = st.selectbox(
-                            "📁 " + ("Select an Export Result Folder" if lang == 'en' else "选择一批导出结果"),
+                            "Select an Export Result Folder" if lang == 'en' else "选择一批导出结果",
                             options=list(folder_options.keys()),
                             format_func=lambda x: folder_options[x],
                             key="grp_export_folder"
                         )
                     elif export_root and os.path.isdir(export_root):
-                        st.warning("⚠️ " + ("No valid export folders found (need demographics_*.parquet)" if lang == 'en' else "未找到有效的导出文件夹（需要 demographics_*.parquet）"))
+                        _render_cohort_loader_notice(
+                            "warning",
+                            "Export scan" if lang == "en" else "导出扫描",
+                            "No valid export folder" if lang == "en" else "未找到有效导出文件夹",
+                            "Expected at least one folder with demographics_*.parquet."
+                            if lang == 'en' else
+                            "需要至少一个包含 demographics_*.parquet 的文件夹。",
+                            export_root,
+                        )
                         selected_folder = None
                     else:
                         selected_folder = None
 
                 if _export_folders and selected_folder:
                     selected_path = os.path.join(export_root, selected_folder)
-                    st.success(f"✅ `{selected_path}`")
+                    _render_cohort_loader_notice(
+                        "ready",
+                        "Export selection" if lang == "en" else "导出选择",
+                        "Export folder selected" if lang == "en" else "已选择导出文件夹",
+                        "This folder can be loaded into the group comparison workspace."
+                        if lang == 'en' else
+                        "该文件夹可加载到分组对比工作区。",
+                        selected_path,
+                    )
 
                     load_btn = st.button(
-                        "🚀 " + ("Load Exported Result Files" if lang == 'en' else "加载这批导出结果文件"),
+                        "Load Exported Result Files" if lang == 'en' else "加载这批导出结果文件",
                         type="primary",
                         key="grp_load_export_btn"
                     )
@@ -482,17 +570,37 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                                 st.session_state['grp_loaded_path'] = selected_path
                                 st.session_state['grp_is_demo'] = False
 
-                            st.success(f"✅ Loaded {len(demographics_df):,} ICU stays from exported result files" if lang == 'en' else f"✅ 已从这批导出结果文件中加载 {len(demographics_df):,} 个 ICU stay")
+                            _render_cohort_loader_notice(
+                                "ready",
+                                "Export load" if lang == "en" else "导出加载",
+                                "Export loaded" if lang == "en" else "导出已加载",
+                                f"Loaded {len(demographics_df):,} ICU stays from exported result files"
+                                if lang == 'en' else
+                                f"已从这批导出结果文件中加载 {len(demographics_df):,} 个 ICU stay",
+                                selected_path,
+                            )
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Error: {e}")
+                            _render_cohort_loader_notice(
+                                "danger",
+                                "Export load" if lang == "en" else "导出加载",
+                                "Load failed" if lang == "en" else "加载失败",
+                                str(e),
+                            )
 
     if not screenshot_mode:
         _render_compact_divider()
 
     # ========== 分组对比区域 ==========
     if 'grp_demographics' not in st.session_state:
-        st.info("👆 " + ("Configure data source and click 'Load' to start" if lang == 'en' else "配置数据源并点击'加载'开始"))
+        _render_cohort_loader_notice(
+            "pending",
+            "Group workspace" if lang == "en" else "分组工作区",
+            "Group comparison is waiting for data" if lang == "en" else "分组对比等待数据",
+            "Configure a data source and click Load to start."
+            if lang == 'en' else
+            "配置数据源并点击加载，即可开始分组对比。",
+        )
         return
 
     demographics_df = st.session_state['grp_demographics']
@@ -501,17 +609,37 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 
     if not screenshot_mode:
         # 显示数据概览
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total ICU stays" if lang == 'en' else "ICU stay 总数", f"{len(demographics_df):,}")
-        with col2:
-            avg_age = demographics_df['age'].mean() if 'age' in demographics_df.columns else 0
-            st.metric("Mean Age" if lang == 'en' else "平均年龄", f"{avg_age:.1f}")
-        with col3:
-            male_pct = (demographics_df['gender'] == 'M').mean() * 100 if 'gender' in demographics_df.columns else 0
-            st.metric("Male %" if lang == 'en' else "男性占比", f"{male_pct:.1f}%")
-        with col4:
-            st.metric("Mortality" if lang == 'en' else "死亡率", _cohort_mortality_display(demographics_df))
+        avg_age = demographics_df['age'].mean() if 'age' in demographics_df.columns else 0
+        male_pct = (demographics_df['gender'] == 'M').mean() * 100 if 'gender' in demographics_df.columns else 0
+        source_note = (
+            "demo workspace" if st.session_state.get("grp_is_demo") else (str(database).upper() or "loaded cohort")
+        )
+        _render_cohort_metric_grid([
+            (
+                "Total ICU stays" if lang == 'en' else "ICU stay 总数",
+                f"{len(demographics_df):,}",
+                source_note if lang == 'en' else ("演示工作区" if st.session_state.get("grp_is_demo") else (str(database).upper() or "已加载队列")),
+                "accent",
+            ),
+            (
+                "Mean age" if lang == 'en' else "平均年龄",
+                f"{avg_age:.1f}",
+                "years" if lang == 'en' else "岁",
+                "neutral",
+            ),
+            (
+                "Male share" if lang == 'en' else "男性占比",
+                f"{male_pct:.1f}%",
+                "gender balance" if lang == 'en' else "性别构成",
+                "neutral",
+            ),
+            (
+                "Mortality" if lang == 'en' else "死亡率",
+                _cohort_mortality_display(demographics_df),
+                "outcome availability" if lang == 'en' else "结局可用性",
+                "warn",
+            ),
+        ])
 
         _render_compact_divider()
 
@@ -548,14 +676,17 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                     if lang == "en"
                     else compare_options[fallback_mode][1]
                 )
-                st.info(
+                _render_cohort_loader_notice(
+                    "info",
+                    "Comparison mode" if lang == "en" else "对比模式",
+                    "Fallback comparison selected" if lang == "en" else "已切换备用对比",
                     (
                         f"{survival_notice} Switched to {fallback_label}; expand the cohort or choose a cohort with outcome variation to use survival/death."
                     )
                     if lang == "en"
                     else (
                         f"{survival_notice} 已切换到「{fallback_label}」；扩大样本或选择有死亡结局变异的队列后，可再使用存活/死亡对照。"
-                    )
+                    ),
                 )
         selected_compare_mode = st.radio(
             "Comparison Mode" if lang == 'en' else "对比模式",
@@ -765,7 +896,14 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
                             feature_data = {**feature_data, **generated}
                             st.session_state['grp_feature_data'] = feature_data
                 else:
-                    st.info((f"{len(missing_concepts)} review features need to be loaded: " if lang == 'en' else f"需要加载 {len(missing_concepts)} 个审阅变量: ") + ", ".join(missing_concepts[:5]) + ("..." if len(missing_concepts) > 5 else ""))
+                    _render_cohort_loader_notice(
+                        "pending",
+                        "Feature modules" if lang == "en" else "特征模块",
+                        f"{len(missing_concepts)} review features need to be loaded"
+                        if lang == 'en' else
+                        f"需要加载 {len(missing_concepts)} 个审阅变量",
+                        ", ".join(missing_concepts[:5]) + ("..." if len(missing_concepts) > 5 else ""),
+                    )
                     load_features_btn = st.button(
                         f"Load {len(missing_concepts)} review features" if lang == 'en' else f"加载 {len(missing_concepts)} 个审阅变量",
                         type="primary",
@@ -813,17 +951,34 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 
                                 progress_bar.empty()
                                 st.session_state['grp_feature_data'] = feature_data
-                                st.success(f"✅ " + (f"Loaded {loaded_count}/{len(missing_concepts)} review features" if lang == 'en' else f"已加载 {loaded_count}/{len(missing_concepts)} 个审阅特征"))
+                                _render_cohort_loader_notice(
+                                    "ready",
+                                    "Feature modules" if lang == "en" else "特征模块",
+                                    "Review features loaded" if lang == "en" else "审阅特征已加载",
+                                    f"Loaded {loaded_count}/{len(missing_concepts)} review features"
+                                    if lang == 'en' else
+                                    f"已加载 {loaded_count}/{len(missing_concepts)} 个审阅特征",
+                                )
                                 st.rerun()
                         except Exception as e:
-                            st.error(f"Error loading features: {e}")
+                            _render_cohort_loader_notice(
+                                "danger",
+                                "Feature modules" if lang == "en" else "特征模块",
+                                "Feature load failed" if lang == "en" else "特征加载失败",
+                                str(e),
+                            )
                     if compare_mode in {'sepsis', 'custom'}:
                         dependency_msg = (
                             "Load the grouping variable first to compute this comparison."
                             if lang == 'en'
                             else "请先加载分组所需变量后再计算此对比。"
                         )
-                        st.warning(dependency_msg)
+                        _render_cohort_loader_notice(
+                            "warning",
+                            "Grouping dependency" if lang == "en" else "分组依赖",
+                            "Grouping variable required" if lang == "en" else "需要分组变量",
+                            dependency_msg,
+                        )
                         return
 
         analysis_df = base_df.copy()
@@ -834,7 +989,12 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
         if compare_mode == 'survival':
             survival_ready, survival_notice = _survival_contrast_status(analysis_df, lang=lang)
             if not survival_ready:
-                st.warning(survival_notice)
+                _render_cohort_loader_notice(
+                    "warning",
+                    "Survival split" if lang == "en" else "生存分组",
+                    "Outcome variation required" if lang == "en" else "需要结局变异",
+                    survival_notice,
+                )
                 return
 
             survival_values = _cohort_survival_values(analysis_df)
@@ -859,7 +1019,14 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 
         elif compare_mode == 'gender':
             if 'gender' not in analysis_df.columns:
-                st.warning("Gender data not available" if lang == 'en' else "无性别数据")
+                _render_cohort_loader_notice(
+                    "warning",
+                    "Gender split" if lang == "en" else "性别分组",
+                    "Gender data not available" if lang == "en" else "无性别数据",
+                    "Load demographics with a gender column before using this comparison."
+                    if lang == 'en' else
+                    "请先加载包含性别列的人口统计数据，再使用该对比。",
+                )
                 return
             male_df = analysis_df[analysis_df['gender'] == 'M']
             female_df = analysis_df[analysis_df['gender'] == 'F']
@@ -870,7 +1037,14 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
 
         elif compare_mode == 'los':
             if 'los_hours' not in analysis_df.columns:
-                st.warning("Length of stay data not available" if lang == 'en' else "无住院时长数据")
+                _render_cohort_loader_notice(
+                    "warning",
+                    "LOS split" if lang == "en" else "住院时长分组",
+                    "Length of stay data not available" if lang == "en" else "无住院时长数据",
+                    "Load demographics with LOS fields before using this comparison."
+                    if lang == 'en' else
+                    "请先加载包含住院时长字段的人口统计数据，再使用该对比。",
+                )
                 return
             threshold = st.session_state.get('group_comp_los_threshold', int(analysis_df['los_hours'].median()))
             short_df = analysis_df[analysis_df['los_hours'] < threshold]
@@ -882,7 +1056,14 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
         elif compare_mode == 'sepsis':
             sepsis_col = next((c for c in ['sep3_sofa2', 'sep3_sofa1'] if c in analysis_df.columns), None)
             if sepsis_col is None:
-                st.warning("Sepsis-3 labels are not available for grouping." if lang == 'en' else "当前没有可用于分组的 Sepsis-3 标签。")
+                _render_cohort_loader_notice(
+                    "warning",
+                    "Sepsis split" if lang == "en" else "脓毒症分组",
+                    "Sepsis-3 labels are not available" if lang == "en" else "当前没有可用于分组的 Sepsis-3 标签",
+                    "Load Sepsis-3 / SOFA modules before using this comparison."
+                    if lang == 'en' else
+                    "请先加载 Sepsis-3 / SOFA 模块，再使用该对比。",
+                )
                 return
             sepsis_mask = pd.to_numeric(analysis_df[sepsis_col], errors='coerce').fillna(0) > 0
             non_sepsis_df = analysis_df[~sepsis_mask]
@@ -894,19 +1075,40 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
         elif compare_mode == 'custom':
             custom_var = st.session_state.get('group_comp_custom_feature')
             if not custom_var or custom_var not in analysis_df.columns:
-                st.warning("Threshold variable is not available." if lang == 'en' else "阈值变量当前不可用。")
+                _render_cohort_loader_notice(
+                    "warning",
+                    "Custom split" if lang == "en" else "自定义分组",
+                    "Threshold variable is not available" if lang == "en" else "阈值变量当前不可用",
+                    "Load the selected variable before computing a custom split."
+                    if lang == 'en' else
+                    "请先加载所选变量，再计算自定义分组。",
+                )
                 return
             custom_values = pd.to_numeric(analysis_df[custom_var], errors='coerce')
             valid_values = custom_values.dropna()
             if valid_values.empty:
-                st.warning("Threshold variable has no numeric values." if lang == 'en' else "阈值变量没有可用的数值。")
+                _render_cohort_loader_notice(
+                    "warning",
+                    "Custom split" if lang == "en" else "自定义分组",
+                    "Threshold variable has no numeric values" if lang == "en" else "阈值变量没有可用的数值",
+                    "Choose a numeric variable or load more complete data."
+                    if lang == 'en' else
+                    "请选择数值变量，或加载更完整的数据。",
+                )
                 return
             min_value = float(valid_values.min())
             max_value = float(valid_values.max())
             default_threshold = float(valid_values.median())
             if np.isclose(min_value, max_value):
                 threshold = min_value
-                st.info("All ICU stays share the same threshold value; the split may be degenerate." if lang == 'en' else "所有 ICU stay 的阈值变量相同，分组可能退化。")
+                _render_cohort_loader_notice(
+                    "info",
+                    "Custom split" if lang == "en" else "自定义分组",
+                    "Degenerate threshold" if lang == "en" else "阈值可能退化",
+                    "All ICU stays share the same threshold value; the split may be degenerate."
+                    if lang == 'en' else
+                    "所有 ICU stay 的阈值变量相同，分组可能退化。",
+                )
             elif pd.api.types.is_integer_dtype(valid_values) or np.allclose(valid_values, np.round(valid_values)):
                 slider_default = int(round(st.session_state.get('group_comp_custom_threshold', default_threshold)))
                 slider_default = min(max(slider_default, int(np.floor(min_value))), int(np.ceil(max_value)))
@@ -944,18 +1146,28 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             "Summary" if lang == 'en' else "概览",
         )
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric(group1_name, f"{len(group1_ids):,}")
-        with col2:
-            st.metric(group2_name, f"{len(group2_ids):,}")
-        with col3:
-            total = len(group1_ids) + len(group2_ids)
-            pct1 = len(group1_ids) / total * 100 if total > 0 else 0
-            st.metric("Ratio" if lang == 'en' else "比例", f"{pct1:.1f}% / {100-pct1:.1f}%")
+        total = len(group1_ids) + len(group2_ids)
+        pct1 = len(group1_ids) / total * 100 if total > 0 else 0
+        _render_cohort_metric_grid([
+            (group1_name, f"{len(group1_ids):,}", "group A" if lang == 'en' else "A 组", "accent"),
+            (group2_name, f"{len(group2_ids):,}", "group B" if lang == 'en' else "B 组", "neutral"),
+            (
+                "Ratio" if lang == 'en' else "比例",
+                f"{pct1:.1f}% / {100-pct1:.1f}%",
+                "balance check" if lang == 'en' else "平衡检查",
+                "warn" if min(len(group1_ids), len(group2_ids)) < 10 else "neutral",
+            ),
+        ])
 
         if len(group1_ids) == 0 or len(group2_ids) == 0:
-            st.warning("One group is empty, please adjust criteria" if lang == 'en' else "其中一个分组为空，请调整条件")
+            _render_cohort_loader_notice(
+                "warning",
+                "Group balance" if lang == "en" else "分组平衡",
+                "One group is empty" if lang == "en" else "其中一个分组为空",
+                "Adjust the criteria before interpreting the comparison."
+                if lang == 'en' else
+                "请先调整分组条件，再解读对比结果。",
+            )
             return
 
         _render_compact_divider()
@@ -1281,6 +1493,11 @@ def render_group_comparison_subtab(lang: str, app_context: dict[str, Any] | None
             )
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        _render_cohort_loader_notice(
+            "danger",
+            "Render guard" if lang == "en" else "渲染保护",
+            "Render error" if lang == "en" else "渲染错误",
+            str(e),
+        )
         import traceback
         st.code(traceback.format_exc())

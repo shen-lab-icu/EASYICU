@@ -503,6 +503,113 @@ def _current_input_matches_validated_data_path(state: Any, effective_data_path: 
     return any(candidate and Path(candidate).expanduser() == current_path for candidate in candidates)
 
 
+def _clean_source_validation_text(value: Any) -> str:
+    """Return validation text without transport/status emoji from lower-level helpers."""
+    text = str(value or "").strip()
+    text = re.sub(r"^[✅⚠️❌💡ℹ️\uFE0F\s]+", "", text).strip()
+    return text
+
+
+def _queue_source_validation_notice(
+    *,
+    tone: str,
+    title: str,
+    message: str,
+    suggestion: str = "",
+    meta: str = "",
+) -> None:
+    """Persist a one-step source validation notice across the Streamlit rerender."""
+    st.session_state["_source_validation_notice"] = {
+        "tone": tone,
+        "title": title,
+        "message": _clean_source_validation_text(message),
+        "suggestion": _clean_source_validation_text(suggestion),
+        "meta": _clean_source_validation_text(meta),
+    }
+
+
+def _render_source_validation_notice(
+    *,
+    tone: str,
+    title: str,
+    message: str,
+    suggestion: str = "",
+    meta: str = "",
+) -> None:
+    """Render Step 1 validation feedback as an EasyICU-owned source contract card."""
+    clean_title = _clean_source_validation_text(title)
+    clean_message = _clean_source_validation_text(message)
+    clean_suggestion = _clean_source_validation_text(suggestion)
+    clean_meta = _clean_source_validation_text(meta)
+    body_html = (
+        f'<p>{html.escape(clean_message)}</p>'
+        if clean_message else
+        ""
+    )
+    suggestion_html = (
+        f'<div class="eu-source-validation-suggestion">{html.escape(clean_suggestion)}</div>'
+        if clean_suggestion else
+        ""
+    )
+    meta_html = (
+        f'<span>{html.escape(clean_meta)}</span>'
+        if clean_meta else
+        ""
+    )
+    st.markdown(
+        f'<div class="eu-source-validation-notice {html.escape(tone)}">'
+        '<div class="notice-glyph" aria-hidden="true"></div>'
+        '<div class="notice-copy">'
+        f'<div class="notice-head"><b>{html.escape(clean_title)}</b>{meta_html}</div>'
+        f'{body_html}'
+        f'{suggestion_html}'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_source_recovery_actions(
+    *,
+    validation_result: dict[str, Any],
+    effective_data_path: str,
+    is_en: bool,
+    show_convert: bool,
+) -> None:
+    """Render conversion/download actions for recoverable real-source validation."""
+    if not show_convert and not validation_result.get("download_url"):
+        return
+
+    with st.container(key="eu_source_recovery_actions"):
+        if show_convert:
+            convert_btn = "Convert & Setup" if is_en else "转换并设置"
+            if st.button(convert_btn, use_container_width=True, type="primary", key="convert_csv", icon=":material/sync:"):
+                st.session_state.show_convert_dialog = True
+                st.session_state.convert_source_path = _validation_resolved_path(validation_result, effective_data_path)
+                st.rerun()
+            convert_hint = "One-click: convert -> validate -> ready" if is_en else "一键完成：转换 -> 验证 -> 就绪"
+            st.markdown(
+                f'<div class="eu-source-action-hint">{html.escape(convert_hint)}</div>',
+                unsafe_allow_html=True,
+            )
+
+        if validation_result.get("download_url"):
+            st.link_button(
+                validation_result.get("download_label") or (
+                    "Open database download page"
+                    if is_en else
+                    "打开数据库下载页"
+                ),
+                validation_result["download_url"],
+                use_container_width=True,
+            )
+            if validation_result.get("download_note"):
+                st.markdown(
+                    f'<div class="eu-source-action-hint muted">{html.escape(str(validation_result["download_note"]))}</div>',
+                    unsafe_allow_html=True,
+                )
+
+
 def _render_step1_data_source(entry_mode: str) -> None:
     """Render Step 1: data-source configuration.
 
@@ -744,165 +851,295 @@ def _render_step1_data_source(entry_mode: str) -> None:
         detected_db = detect_database_from_path(st.session_state.get('data_path', ''))
         default_idx = db_options.index(detected_db) if detected_db in db_options else 0
 
-        db_label = "Select Database" if st.session_state.language == 'en' else "选择数据库"
-        database = st.selectbox(
-            db_label,
-            options=db_options,
-            index=default_idx,
-            format_func=lambda x: {
-                'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD',
-                'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID',
-                'mimic': 'MIMIC-III', 'sic': 'SICdb'
-            }.get(x, x)
+        lang = st.session_state.language
+        is_en = lang == "en"
+        st.markdown(
+            '<div class="eu-source-real-hero">'
+            '<div>'
+            f'<span class="eyebrow">{html.escape("Recommended extraction path" if is_en else "推荐提取路径")}</span>'
+            f'<h2>{html.escape("Connect a local ICU data source" if is_en else "连接本地 ICU 数据源")}</h2>'
+            f'<p>{html.escape("Pick the database, validate the local directory, then continue into cohort and variable selection. Nothing leaves this machine." if is_en else "选择数据库，验证本地目录，然后进入队列和变量配置。数据不离开本机。")}</p>'
+            '</div>'
+            '<div class="eu-source-real-steps">'
+            f'<span>{html.escape("1 Database" if is_en else "1 数据库")}</span>'
+            f'<span>{html.escape("2 Local path" if is_en else "2 本地路径")}</span>'
+            f'<span>{html.escape("3 Validate" if is_en else "3 验证")}</span>'
+            f'<span>{html.escape("4 Continue" if is_en else "4 继续")}</span>'
+            '</div>'
+            '</div>',
+            unsafe_allow_html=True,
         )
-        st.session_state.database = database
-        st.session_state.use_mock_data = False
 
-        # 数据库简称 → 显示名映射
-        _db_display_names = {
-            'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD',
-            'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID',
-            'mimic': 'MIMIC-III', 'sic': 'SICdb'
-        }
-        _db_display = _db_display_names.get(database, database)
+        form_col, summary_col = st.columns([1.62, 0.86], gap="large")
+        with form_col:
+            with st.container(key="eu_source_real_gate_card"):
+                st.markdown(
+                    '<div class="eu-card-head eu-source-contract-head">'
+                    f'<span>{html.escape("Source contract" if is_en else "数据源契约")}</span>'
+                    f'<small>{html.escape("format detection before cohort work" if is_en else "先验证格式，再进入队列")}</small>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+                db_label = "Select Database" if is_en else "选择数据库"
+                database = st.selectbox(
+                    db_label,
+                    options=db_options,
+                    index=default_idx,
+                    format_func=lambda x: {
+                        'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD',
+                        'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID',
+                        'mimic': 'MIMIC-III', 'sic': 'SICdb'
+                    }.get(x, x)
+                )
+                st.session_state.database = database
+                st.session_state.use_mock_data = False
 
-        import platform
-        _is_win = platform.system() == 'Windows'
-        _placeholder = f"D:\\data\\{database}" if _is_win else f"/path/to/{database}"
-        _hint = f"Enter the path to your {_db_display} data directory" if st.session_state.language == 'en' else f"请输入 {_db_display} 数据目录的路径"
+                # 数据库简称 → 显示名映射
+                _db_display_names = {
+                    'miiv': 'MIMIC-IV', 'eicu': 'eICU-CRD',
+                    'aumc': 'AmsterdamUMCdb', 'hirid': 'HiRID',
+                    'mimic': 'MIMIC-III', 'sic': 'SICdb'
+                }
+                _db_display = _db_display_names.get(database, database)
 
-        path_label = "Data Path" if st.session_state.language == 'en' else "数据路径"
-        if st.session_state.get("data_path") and not st.session_state.get("sidebar_data_path_input"):
-            st.session_state.sidebar_data_path_input = st.session_state.data_path
-        data_path = _directory_input(
-            path_label,
-            value=st.session_state.data_path or "",
-            input_key="sidebar_data_path_input",
-            button_key="sidebar_data_path_browse",
-            placeholder=_placeholder,
-            help=_hint,
-        )
-        effective_data_path = data_path or st.session_state.get("data_path", "")
+                import platform
+                _is_win = platform.system() == 'Windows'
+                _placeholder = f"D:\\data\\{database}" if _is_win else f"/path/to/{database}"
+                _hint = f"Enter the path to your {_db_display} data directory" if is_en else f"请输入 {_db_display} 数据目录的路径"
 
-        # 🔧 当路径变化时自动检测并更新数据库
-        if effective_data_path and effective_data_path != st.session_state.get('_last_data_path', ''):
-            detected_db = detect_database_from_path(effective_data_path)
-            if detected_db != database:
-                st.session_state.database = detected_db
-                st.session_state._last_data_path = effective_data_path
-                st.rerun()
-            st.session_state._last_data_path = effective_data_path
+                path_label = "Data Path" if is_en else "数据路径"
+                if st.session_state.get("data_path") and not st.session_state.get("sidebar_data_path_input"):
+                    st.session_state.sidebar_data_path_input = st.session_state.data_path
+                data_path = _directory_input(
+                    path_label,
+                    value=st.session_state.data_path or "",
+                    input_key="sidebar_data_path_input",
+                    button_key="sidebar_data_path_browse",
+                    placeholder=_placeholder,
+                    help=_hint,
+                )
+                effective_data_path = data_path or st.session_state.get("data_path", "")
 
-        # 验证按钮
-        validate_btn = "Validate Data Path" if st.session_state.language == 'en' else "验证数据路径"
-        validate_spacer, validate_action = st.columns([5, 1.8], gap="small")
-        with validate_action:
-            if st.button(validate_btn, use_container_width=True, key="validate_path"):
-                if not effective_data_path:
-                    err_msg = "Please enter a data path" if st.session_state.language == 'en' else "请输入数据路径"
-                    st.error(err_msg)
-                elif not Path(effective_data_path).exists():
-                    err_msg = "Path does not exist" if st.session_state.language == 'en' else "路径不存在"
-                    st.error(err_msg)
-                else:
-                    # 检查数据库所需文件
-                    validation_result = validate_database_path(effective_data_path, database)
-                    resolved_data_path = _validation_resolved_path(validation_result, effective_data_path)
-                    st.session_state.last_validation = validation_result
+                # 🔧 当路径变化时自动检测并更新数据库
+                if effective_data_path and effective_data_path != st.session_state.get('_last_data_path', ''):
+                    detected_db = detect_database_from_path(effective_data_path)
+                    if detected_db != database:
+                        st.session_state.database = detected_db
+                        st.session_state._last_data_path = effective_data_path
+                        st.rerun()
+                    st.session_state._last_data_path = effective_data_path
 
-                    if validation_result['valid']:
-                        st.session_state.data_path = resolved_data_path
-                        _queue_sidebar_data_path_input(resolved_data_path)
-                        st.session_state.last_validated_path = resolved_data_path
-                        st.session_state.path_validated = True
+                # 验证按钮
+                validate_btn = "Validate Data Path" if is_en else "验证数据路径"
+                validate_spacer, validate_action = st.columns([5, 1.8], gap="small")
+                with validate_action:
+                    if st.button(validate_btn, use_container_width=True, key="validate_path"):
+                        if not effective_data_path:
+                            err_msg = "Please enter a data path" if is_en else "请输入数据路径"
+                            _queue_source_validation_notice(
+                                tone="error",
+                                title="Path required" if is_en else "需要数据路径",
+                                message=err_msg,
+                                suggestion=(
+                                    "Choose a local ICU database folder or use Browse."
+                                    if is_en else
+                                    "请选择本地 ICU 数据库目录，或使用浏览按钮。"
+                                ),
+                                meta=_db_display,
+                            )
+                        elif not Path(effective_data_path).exists():
+                            err_msg = "Path does not exist" if is_en else "路径不存在"
+                            _queue_source_validation_notice(
+                                tone="error",
+                                title="Path not found" if is_en else "未找到路径",
+                                message=err_msg,
+                                suggestion=(
+                                    "Check the folder path or browse to an existing directory."
+                                    if is_en else
+                                    "请检查目录路径，或浏览选择一个已存在的文件夹。"
+                                ),
+                                meta=_db_display,
+                            )
+                        else:
+                            validation_result = validate_database_path(effective_data_path, database)
+                            resolved_data_path = _validation_resolved_path(validation_result, effective_data_path)
+                            st.session_state.last_validation = validation_result
+
+                            if validation_result['valid']:
+                                st.session_state.data_path = resolved_data_path
+                                _queue_sidebar_data_path_input(resolved_data_path)
+                                st.session_state.last_validated_path = resolved_data_path
+                                st.session_state.path_validated = True
+                                st.session_state.step1_confirmed = False
+                                st.session_state.step2_confirmed = False
+                                st.session_state.step3_confirmed = False
+                                st.session_state.export_completed = False
+                                _queue_source_validation_notice(
+                                    tone="ready",
+                                    title="Source contract ready" if is_en else "数据源契约已就绪",
+                                    message=validation_result["message"],
+                                    meta=_db_display,
+                                )
+                            else:
+                                st.session_state.last_validated_path = effective_data_path
+                                st.session_state.path_validated = False
+                                st.session_state.step1_confirmed = False
+                                can_convert = bool(validation_result.get("can_convert"))
+                                _queue_source_validation_notice(
+                                    tone="warn" if can_convert else "error",
+                                    title=(
+                                        "Conversion available"
+                                        if can_convert and is_en else
+                                        "可进行转换"
+                                        if can_convert else
+                                        "Validation failed"
+                                        if is_en else
+                                        "验证未通过"
+                                    ),
+                                    message=validation_result["message"],
+                                    suggestion=validation_result.get("suggestion", ""),
+                                    meta=_db_display,
+                                )
+
+                last_validation = st.session_state.get('last_validation', {})
+                last_path = st.session_state.get('last_validated_path', '')
+                pending_validation_notice = st.session_state.pop("_source_validation_notice", None)
+
+                if _current_input_matches_validated_data_path(st.session_state, effective_data_path):
+                    if pending_validation_notice and pending_validation_notice.get("tone") == "ready":
+                        _render_source_validation_notice(
+                            tone=str(pending_validation_notice.get("tone", "ready")),
+                            title=str(pending_validation_notice.get("title") or ("Source contract ready" if is_en else "数据源契约已就绪")),
+                            message=str(pending_validation_notice.get("message") or ("Path validated" if is_en else "路径已验证")),
+                            suggestion=str(pending_validation_notice.get("suggestion") or ""),
+                            meta=str(pending_validation_notice.get("meta") or _db_display),
+                        )
+                    else:
+                        validated_msg = "Path validated" if is_en else "路径已验证"
+                        _render_source_validation_notice(
+                            tone="ready",
+                            title="Source contract ready" if is_en else "数据源契约已就绪",
+                            message=validated_msg,
+                            meta=_db_display,
+                        )
+                elif pending_validation_notice:
+                    _render_source_validation_notice(
+                        tone=str(pending_validation_notice.get("tone") or "pending"),
+                        title=str(pending_validation_notice.get("title") or ("Validation status" if is_en else "验证状态")),
+                        message=str(pending_validation_notice.get("message") or ""),
+                        suggestion=str(pending_validation_notice.get("suggestion") or ""),
+                        meta=str(pending_validation_notice.get("meta") or _db_display),
+                    )
+                    if last_validation.get("can_convert") and last_path == effective_data_path:
+                        _render_source_recovery_actions(
+                            validation_result=last_validation,
+                            effective_data_path=effective_data_path,
+                            is_en=is_en,
+                            show_convert=True,
+                        )
+                elif last_validation.get('can_convert') and last_path == effective_data_path:
+                    _render_source_validation_notice(
+                        tone="warn",
+                        title="Conversion available" if is_en else "可进行转换",
+                        message=str(last_validation.get("message") or ""),
+                        suggestion=str(last_validation.get("suggestion") or ""),
+                        meta=_db_display,
+                    )
+                    _render_source_recovery_actions(
+                        validation_result=last_validation,
+                        effective_data_path=effective_data_path,
+                        is_en=is_en,
+                        show_convert=True,
+                    )
+                elif last_validation and (not last_validation.get('valid')) and last_path == effective_data_path:
+                    _render_source_validation_notice(
+                        tone="error",
+                        title="Validation failed" if is_en else "验证未通过",
+                        message=str(last_validation.get("message") or ""),
+                        suggestion=str(last_validation.get("suggestion") or ""),
+                        meta=_db_display,
+                    )
+                    if last_validation.get("download_url"):
+                        _render_source_recovery_actions(
+                            validation_result=last_validation,
+                            effective_data_path=effective_data_path,
+                            is_en=is_en,
+                            show_convert=False,
+                        )
+                elif effective_data_path and Path(effective_data_path).exists():
+                    _render_source_validation_notice(
+                        tone="pending",
+                        title="Ready to validate" if is_en else "等待验证",
+                        message=(
+                            "Directory found. Validate the format before cohort work."
+                            if is_en else
+                            "已找到目录。进入队列配置前请先验证数据格式。"
+                        ),
+                        suggestion=(
+                            "Click Validate Data Path to inspect required tables."
+                            if is_en else
+                            "点击“验证数据路径”检查所需数据表。"
+                        )
+                    )
+
+                real_ready = _real_data_source_ready()
+                footer_l, reset_col, confirm_col = st.columns([5, 1.45, 2.25], gap="small")
+                with footer_l:
+                    st.markdown(
+                        f'<div class="eu-source-footer-note">{html.escape("Step 1 of 4" if is_en else "第 1 步 / 共 4 步")}</div>',
+                        unsafe_allow_html=True,
+                    )
+                with reset_col:
+                    if st.button("Reset" if is_en else "重置", use_container_width=True, key="step1_reset_real"):
+                        st.session_state.data_path = ""
+                        _queue_sidebar_data_path_input("")
+                        st.session_state.path_validated = False
+                        st.session_state.last_validation = {}
+                        st.session_state.last_validated_path = ""
+                        st.session_state.pop("_source_validation_notice", None)
                         st.session_state.step1_confirmed = False
                         st.session_state.step2_confirmed = False
                         st.session_state.step3_confirmed = False
                         st.session_state.export_completed = False
-                        st.success(validation_result['message'])
-                    else:
-                        st.session_state.last_validated_path = effective_data_path
-                        st.session_state.path_validated = False
-                        st.session_state.step1_confirmed = False
-                        st.error(validation_result['message'])
-                    if validation_result.get('suggestion'):
-                        st.info(validation_result['suggestion'])
+                        st.rerun()
+                with confirm_col:
+                    confirm_clicked = st.button(
+                        "Confirm data source" if is_en else "确认数据源",
+                        type="primary",
+                        use_container_width=True,
+                        key="step1_confirm_real",
+                        disabled=not real_ready,
+                    )
+                if confirm_clicked and real_ready:
+                    _confirm_real_data_source()
+                    st.rerun()
 
-        # 显示当前验证状态和转换按钮
-        last_validation = st.session_state.get('last_validation', {})
-        last_path = st.session_state.get('last_validated_path', '')
-
-        if _current_input_matches_validated_data_path(st.session_state, effective_data_path):
-            validated_msg = "Path validated" if st.session_state.language == 'en' else "路径已验证"
-            st.success(validated_msg)
-        elif last_validation.get('can_convert') and last_path == effective_data_path:
-            # 显示转换按钮
-            convert_btn = "Convert & Setup" if st.session_state.language == 'en' else "转换并设置"
-            if st.button(convert_btn, use_container_width=True, type="primary", key="convert_csv", icon=":material/sync:"):
-                st.session_state.show_convert_dialog = True
-                st.session_state.convert_source_path = _validation_resolved_path(last_validation, effective_data_path)
-                st.rerun()
-            convert_hint = "One-click: convert → validate → ready" if st.session_state.language == 'en' else "一键完成：转换 → 验证 → 就绪"
-            st.caption(convert_hint)
-            if last_validation.get('download_url'):
-                st.link_button(
-                    last_validation.get('download_label') or (
-                        "Open database download page"
-                        if st.session_state.language == 'en' else
-                        "打开数据库下载页"
-                    ),
-                    last_validation['download_url'],
-                    use_container_width=True,
-                )
-                if last_validation.get('download_note'):
-                    st.caption(last_validation['download_note'])
-        elif last_validation and (not last_validation.get('valid')) and last_path == effective_data_path:
-            if last_validation.get('download_url'):
-                st.link_button(
-                    last_validation.get('download_label') or (
-                        "Open database download page"
-                        if st.session_state.language == 'en' else
-                        "打开数据库下载页"
-                    ),
-                    last_validation['download_url'],
-                    use_container_width=True,
-                )
-                if last_validation.get('download_note'):
-                    st.caption(last_validation['download_note'])
-        elif effective_data_path and Path(effective_data_path).exists():
-            validate_hint = "Click the button above to validate data format" if st.session_state.language == 'en' else "点击上方按钮验证数据格式"
-            st.caption(validate_hint)
-
-        real_ready = _real_data_source_ready()
-        footer_l, reset_col, confirm_col = st.columns([5, 1.45, 2.25], gap="small")
-        with footer_l:
+        with summary_col:
+            summary_status = "Ready" if real_ready else ("Needs validation" if is_en else "需要验证")
+            summary_tone = "ready" if real_ready else "pending"
+            path_display = effective_data_path or ("Not selected" if is_en else "未选择")
+            summary_items = [
+                ("Database" if is_en else "数据库", _db_display),
+                ("Path" if is_en else "路径", path_display),
+                ("Validation" if is_en else "验证", summary_status),
+                ("Privacy" if is_en else "隐私", "Local only" if is_en else "仅本地"),
+            ]
+            summary_html = "".join(
+                '<div class="eu-source-real-summary-row">'
+                f'<span>{html.escape(label)}</span>'
+                f'<b>{html.escape(str(value))}</b>'
+                '</div>'
+                for label, value in summary_items
+            )
             st.markdown(
-                f'<div class="eu-source-footer-note">{html.escape("Step 1 of 4" if st.session_state.language == "en" else "第 1 步 / 共 4 步")}</div>',
+                '<div class="eu-source-real-summary">'
+                f'<div class="summary-state {html.escape(summary_tone)}">{html.escape(summary_status)}</div>'
+                f'<h3>{html.escape("Extraction readiness" if is_en else "提取就绪度")}</h3>'
+                f'<p>{html.escape("The next pages use this contract for cohort filters, feature queues, and export manifests." if is_en else "后续页面会基于这个契约生成队列过滤、特征队列和导出 manifest。")}</p>'
+                f'{summary_html}'
+                '</div>',
                 unsafe_allow_html=True,
             )
-        with reset_col:
-            if st.button("Reset" if st.session_state.language == "en" else "重置", use_container_width=True, key="step1_reset_real"):
-                st.session_state.data_path = ""
-                _queue_sidebar_data_path_input("")
-                st.session_state.path_validated = False
-                st.session_state.last_validation = {}
-                st.session_state.last_validated_path = ""
-                st.session_state.step1_confirmed = False
-                st.session_state.step2_confirmed = False
-                st.session_state.step3_confirmed = False
-                st.session_state.export_completed = False
-                st.rerun()
-        with confirm_col:
-            confirm_clicked = st.button(
-                "Confirm data source" if st.session_state.language == "en" else "确认数据源",
-                type="primary",
-                use_container_width=True,
-                key="step1_confirm_real",
-                disabled=not real_ready,
-            )
-        if confirm_clicked and real_ready:
-            _confirm_real_data_source()
-            st.rerun()
 
 
 def _shell_nav_items(entry_mode: str) -> list[ShellNavItem]:
@@ -3213,12 +3450,22 @@ def _render_step4_export(selected_concepts: list[str]) -> bool:
         '</div>'
         for label, value, ok in check_items
     )
+    review_hero_meta = (
+        f"{_module_count_label(_n_mods, lang)} · {_pat_str} · local manifest"
+        if lang == "en"
+        else f"{_module_count_label(_n_mods, lang)} · {_pat_str} · 本地清单"
+    )
     with review_col:
         st.markdown(
             '<div class="eu-export-review-card">'
             '<div class="eu-card-head">'
             f'<span>{html.escape("Bundle review" if lang == "en" else "导出包复核")}</span>'
             f'<small>{html.escape("Step 4 of 4" if lang == "en" else "第 4 / 4 步")}</small>'
+            '</div>'
+            '<div class="eu-export-review-hero">'
+            f'<small>{html.escape("You will extract" if lang == "en" else "即将导出")}</small>'
+            f'<strong>{html.escape(_export_concept_count_label(_n_feats, lang))}</strong>'
+            f'<span>{html.escape(review_hero_meta)}</span>'
             '</div>'
             '<div class="eu-export-summary-grid">'
             f'<div><small>{html.escape("ICU stays" if lang == "en" else "ICU stay")}</small><strong>{html.escape(_pat_str)}</strong></div>'
@@ -4385,7 +4632,6 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
             unsafe_allow_html=True,
         )
     with header_r:
-        st.write("")
         if st.button(
             "Reset to core" if lang == "en" else "恢复核心",
             key="concept_reset_core_design",
@@ -4462,27 +4708,24 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
             active = group_name in st.session_state.selected_groups
             display_name = _clean_module_label(group_name)
             module_key_prefix = "concept_module_active" if active else "concept_module_add"
-            module_status = (
-                ("selected" if lang == "en" else "已选")
-                if active
-                else ("add" if lang == "en" else "添加")
-            )
             with card_cols[idx % 2]:
                 st.button(
-                    f"{display_name} · {module_status}",
+                    display_name,
                     key=f"{module_key_prefix}_{idx}",
                     type="secondary",
                     use_container_width=True,
                     on_click=_toggle_concept_group_for_design,
                     args=(concept_groups, group_name),
                 )
-                caption = _export_concept_count_label(len(concepts), lang)
-                if active and selected_count != len(concepts):
+                if active:
                     caption = (
-                        f"{selected_count}/{_export_concept_count_label(len(concepts), lang)}"
-                        if lang == "en" else
+                        f"selected · {selected_count}/{len(concepts)} concepts"
+                        if lang == "en"
+                        else
                         f"{selected_count}/{len(concepts)} 个导出概念"
                     )
+                else:
+                    caption = _export_concept_count_label(len(concepts), lang)
                 st.caption(caption)
 
 
@@ -4538,15 +4781,11 @@ def _render_step3_concept_selection_design(concept_groups: dict[str, list[str]])
             concepts = concept_groups.get(group_name, [])
             active = group_name in st.session_state.selected_groups
             display_name = _clean_module_label(group_name)
-            module_status = (
-                ("selected" if lang == "en" else "已选")
-                if active
-                else ("add" if lang == "en" else "添加")
-            )
+            module_key_prefix = "concept_module_advanced_active" if active else "concept_module_advanced_add"
             with adv_card_cols[idx % 2]:
                 st.button(
-                    f"{display_name} · {module_status}",
-                    key=f"concept_module_advanced_{idx}",
+                    display_name,
+                    key=f"{module_key_prefix}_{idx}",
                     type="secondary",
                     use_container_width=True,
                     on_click=_toggle_concept_group_for_design,

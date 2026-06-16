@@ -45,6 +45,26 @@ def _render_chart_heading(title: str, subtitle: str, eyebrow: str | None = None)
     )
 
 
+def _cohort_loader_notice_html(tone: str, kicker: str, title: str, body: str = "", meta: str = "") -> str:
+    body_html = f'<p>{html.escape(body)}</p>' if body else ""
+    meta_html = f'<em>{html.escape(meta)}</em>' if meta else ""
+    return (
+        f'<div class="eu-cohort-loader-notice {html.escape(tone)}">'
+        f'<span>{html.escape(kicker)}</span>'
+        f'<b>{html.escape(title)}</b>'
+        f'{body_html}'
+        f'{meta_html}'
+        '</div>'
+    )
+
+
+def _render_cohort_loader_notice(tone: str, kicker: str, title: str, body: str = "", meta: str = "") -> None:
+    st.markdown(
+        _cohort_loader_notice_html(tone, kicker, title, body, meta),
+        unsafe_allow_html=True,
+    )
+
+
 def _render_metric_grid(cards: list[tuple[str, str, str, str, str]], *, accent_value: bool = False) -> None:
     body = []
     value_class = "kpi-value accent" if accent_value else "kpi-value"
@@ -155,15 +175,15 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
 
     # ========== Real Data模式：显示数据配置 ==========
     else:
-        with st.expander("⚙️ " + ("Data Configuration" if lang == 'en' else "数据配置"), expanded=True):
+        with st.expander("Data Configuration" if lang == 'en' else "数据配置", expanded=True):
             # 数据源选择 — 支持3种模式
             _src_label = "Data Source" if lang == 'en' else "数据来源"
             _allow_demo = entry_mode != 'real'
             _src_keys = ["raw", "exported"] + (["demo"] if _allow_demo else [])
             _src_labels = {
-                "raw": "📂 Raw Database" if lang == 'en' else "📂 原始数据库",
-                "exported": "📦 Previously Exported Results" if lang == 'en' else "📦 之前导出的结果文件",
-                "demo": "🧪 Demo Data" if lang == 'en' else "🧪 模拟数据",
+                "raw": "Raw Database" if lang == 'en' else "原始数据库",
+                "exported": "Previously Exported Results" if lang == 'en' else "之前导出的结果文件",
+                "demo": "Demo Data" if lang == 'en' else "模拟数据",
             }
             _default_src = "demo" if _allow_demo and entry_mode == 'demo' else "raw"
             dash_src = st.radio(
@@ -176,7 +196,7 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
             if dash_src == "demo":
                 # ===== 模拟数据模式 =====
                 load_btn = st.button(
-                    "🚀 " + ("Generate Demo Snapshot" if lang == 'en' else "生成演示快照"),
+                    "Generate Demo Snapshot" if lang == 'en' else "生成演示快照",
                     type="primary", key="dash_load_demo_btn"
                 )
                 if load_btn:
@@ -193,7 +213,7 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
 
                 with col1:
                     data_root = _directory_input(
-                        "📁 " + ("ICU Data Root" if lang == 'en' else "ICU数据根目录"),
+                        "ICU Data Root" if lang == 'en' else "ICU 数据根目录",
                         value=st.session_state.get('dash_data_root', ''),
                         input_key="dash_data_root",
                         button_key="dash_data_root_browse",
@@ -206,7 +226,7 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                     db_options = {'miiv': 'MIMIC-IV', 'eicu': 'eICU', 'aumc': 'AUMC', 'hirid': 'HiRID', 'mimic': 'MIMIC-III', 'sic': 'SICdb'}
                     default_db = st.session_state.get('dash_db_select') or _default_real_database()
                     selected_db = st.selectbox(
-                        "🏥 " + ("Database" if lang == 'en' else "数据库"),
+                        "Database" if lang == 'en' else "数据库",
                         options=list(db_options.keys()),
                         index=list(db_options.keys()).index(default_db) if default_db in db_options else 0,
                         format_func=lambda x: db_options[x],
@@ -215,7 +235,7 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
 
                 with col3:
                     max_patients = st.number_input(
-                        "👥 " + ("Max Patients" if lang == 'en' else "最大患者数"),
+                        "Max ICU stays" if lang == 'en' else "最大 ICU stay 数",
                         min_value=100,
                         max_value=10000,
                         value=1000,
@@ -228,15 +248,37 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                 path_ok = bool(full_data_path) and os.path.exists(full_data_path)
 
                 if not data_root_str:
-                    st.info("ℹ️ " + ("Enter the ICU data root above to validate the database path."
-                                     if lang == 'en' else "请在上方填写 ICU 数据根目录以验证数据库路径。"))
+                    _render_cohort_loader_notice(
+                        "pending",
+                        "Source check" if lang == "en" else "来源检查",
+                        "Data root required" if lang == "en" else "需要数据根目录",
+                        "Enter the ICU data root above to validate the database path."
+                        if lang == 'en' else
+                        "请在上方填写 ICU 数据根目录以验证数据库路径。",
+                    )
                 elif path_ok:
-                    st.success(f"✅ " + (f"Path valid: `{full_data_path}`" if lang == 'en' else f"路径有效: `{full_data_path}`"))
+                    _render_cohort_loader_notice(
+                        "ready",
+                        "Source check" if lang == "en" else "来源检查",
+                        "Path validated" if lang == "en" else "路径已验证",
+                        "The selected database folder is available for snapshot loading."
+                        if lang == 'en' else
+                        "所选数据库文件夹可用于加载队列快照。",
+                        full_data_path,
+                    )
                 else:
-                    st.warning(f"⚠️ " + (f"Path not found: `{full_data_path}`" if lang == 'en' else f"路径不存在: `{full_data_path}`"))
+                    _render_cohort_loader_notice(
+                        "warning",
+                        "Source check" if lang == "en" else "来源检查",
+                        "Path not found" if lang == "en" else "路径不存在",
+                        "Choose the folder that contains this database before loading the snapshot."
+                        if lang == 'en' else
+                        "请先选择包含该数据库的文件夹，再加载队列快照。",
+                        full_data_path,
+                    )
 
                 load_btn = st.button(
-                    "🚀 " + ("Load Snapshot Data" if lang == 'en' else "加载快照数据"),
+                    "Load Snapshot Data" if lang == 'en' else "加载快照数据",
                     type="primary",
                     disabled=not path_ok,
                     key="dash_load_btn"
@@ -256,23 +298,39 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                                 load_concepts=True,
                             )
                             if not ok or bundle is None:
-                                st.error(f"❌ {msg}")
+                                _render_cohort_loader_notice(
+                                    "danger",
+                                    "Snapshot load" if lang == "en" else "快照加载",
+                                    "Load failed" if lang == "en" else "加载失败",
+                                    str(msg),
+                                )
                             else:
                                 _seed_workspace_state(st.session_state, bundle)
                                 st.session_state['dash_data_root'] = data_root_str
                                 st.session_state['dash_db_select'] = selected_db
                                 st.session_state['dash_loaded_path'] = bundle.resolved_path or full_data_path
-                                st.success(f"✅ {msg}")
+                                _render_cohort_loader_notice(
+                                    "ready",
+                                    "Snapshot load" if lang == "en" else "快照加载",
+                                    "Snapshot ready" if lang == "en" else "快照已就绪",
+                                    str(msg),
+                                    bundle.resolved_path or full_data_path,
+                                )
                                 st.rerun()
                     except Exception as e:
-                        st.error(f"Error: {e}")
+                        _render_cohort_loader_notice(
+                            "danger",
+                            "Snapshot load" if lang == "en" else "快照加载",
+                            "Load failed" if lang == "en" else "加载失败",
+                            str(e),
+                        )
 
             elif dash_src == "exported":
                 # ===== 导出文件模式 =====
                 col1, col2 = st.columns([3, 2])
                 with col1:
                     export_root = _directory_input(
-                        "📦 " + ("Folder with Exported Data Files" if lang == 'en' else "存放导出结果文件的文件夹"),
+                        "Folder with Exported Data Files" if lang == 'en' else "存放导出结果文件的文件夹",
                         value=st.session_state.get('export_path', ''),
                         input_key="dash_export_root",
                         button_key="dash_export_root_browse",
@@ -284,25 +342,41 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
 
                 with col2:
                     if _export_folders:
-                        folder_options = {f[0]: f"📁 {f[0]} ({f[1]} files)" for f in _export_folders}
+                        folder_options = {f[0]: f"{f[0]} ({f[1]} files)" for f in _export_folders}
                         selected_folder = st.selectbox(
-                            "📁 " + ("Select an Export Result Folder" if lang == 'en' else "选择一批导出结果"),
+                            "Select an Export Result Folder" if lang == 'en' else "选择一批导出结果",
                             options=list(folder_options.keys()),
                             format_func=lambda x: folder_options[x],
                             key="dash_export_folder"
                         )
                     elif export_root and os.path.isdir(export_root):
-                        st.warning("⚠️ " + ("No valid export folders found (need demographics_*.parquet)" if lang == 'en' else "未找到有效的导出文件夹（需要 demographics_*.parquet）"))
+                        _render_cohort_loader_notice(
+                            "warning",
+                            "Export scan" if lang == "en" else "导出扫描",
+                            "No valid export folder" if lang == "en" else "未找到有效导出文件夹",
+                            "Expected at least one folder with demographics_*.parquet."
+                            if lang == 'en' else
+                            "需要至少一个包含 demographics_*.parquet 的文件夹。",
+                            export_root,
+                        )
                         selected_folder = None
                     else:
                         selected_folder = None
 
                 if _export_folders and selected_folder:
                     selected_path = os.path.join(export_root, selected_folder)
-                    st.success(f"✅ `{selected_path}`")
+                    _render_cohort_loader_notice(
+                        "ready",
+                        "Export selection" if lang == "en" else "导出选择",
+                        "Export folder selected" if lang == "en" else "已选择导出文件夹",
+                        "This folder can be loaded into the cohort snapshot workspace."
+                        if lang == 'en' else
+                        "该文件夹可加载到队列快照工作区。",
+                        selected_path,
+                    )
 
                     load_btn = st.button(
-                        "🚀 " + ("Load Exported Result Files" if lang == 'en' else "加载这批导出结果文件"),
+                        "Load Exported Result Files" if lang == 'en' else "加载这批导出结果文件",
                         type="primary",
                         key="dash_load_export_btn"
                     )
@@ -318,16 +392,36 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                                 st.session_state['dash_loaded_path'] = selected_path
                                 st.session_state['dash_is_demo'] = False
 
-                            st.success(f"✅ Loaded {len(demographics_df):,} patients from exported result files" if lang == 'en' else f"✅ 已从这批导出结果文件中加载 {len(demographics_df):,} 名患者")
+                            _render_cohort_loader_notice(
+                                "ready",
+                                "Export load" if lang == "en" else "导出加载",
+                                "Export loaded" if lang == "en" else "导出已加载",
+                                f"Loaded {len(demographics_df):,} patients from exported result files"
+                                if lang == 'en' else
+                                f"已从这批导出结果文件中加载 {len(demographics_df):,} 名患者",
+                                selected_path,
+                            )
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Error: {e}")
+                            _render_cohort_loader_notice(
+                                "danger",
+                                "Export load" if lang == "en" else "导出加载",
+                                "Load failed" if lang == "en" else "加载失败",
+                                str(e),
+                            )
 
     _render_compact_divider()
 
     # ========== 仪表板内容 ==========
     if 'dash_demographics' not in st.session_state:
-        st.info("👆 " + ("Configure data source and click 'Load' to view the cohort snapshot" if lang == 'en' else "配置数据源并点击'加载'查看队列快照"))
+        _render_cohort_loader_notice(
+            "pending",
+            "Snapshot workspace" if lang == "en" else "快照工作区",
+            "Cohort snapshot is waiting for data" if lang == "en" else "队列快照等待数据",
+            "Configure a data source and click Load to view the cohort snapshot."
+            if lang == 'en' else
+            "配置数据源并点击加载，即可查看队列快照。",
+        )
         return
 
     df = st.session_state['dash_demographics']
@@ -401,7 +495,14 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                 fig.update_yaxes(title_text="")
                 st.plotly_chart(fig, use_container_width=True, key="dash_phenotype_prevalence", config=_get_plotly_chart_config())
             else:
-                st.warning("No clinical phenotype columns found" if lang == 'en' else "未找到临床表型列")
+                _render_cohort_loader_notice(
+                    "warning",
+                    "Clinical panel" if lang == "en" else "临床面板",
+                    "No phenotype columns found" if lang == "en" else "未找到临床表型列",
+                    "Load clinical concept modules to populate phenotype prevalence."
+                    if lang == 'en' else
+                    "请加载临床概念模块以生成表型占比。",
+                )
 
         with chart_col2:
             _render_chart_heading(
@@ -469,22 +570,40 @@ def render_cohort_dashboard_subtab(lang: str, app_context: dict[str, Any] | None
                 fig.update_xaxes(title_text="SOFA group" if lang == 'en' else "SOFA分层")
                 st.plotly_chart(fig, use_container_width=True, key="dash_severity_outcome", config=_get_plotly_chart_config())
             else:
-                st.warning("No SOFA severity column found" if lang == 'en' else "未找到SOFA严重程度列")
+                _render_cohort_loader_notice(
+                    "warning",
+                    "Severity panel" if lang == "en" else "严重程度面板",
+                    "No SOFA severity column found" if lang == "en" else "未找到SOFA严重程度列",
+                    "Load SOFA modules to populate severity and outcome stratification."
+                    if lang == 'en' else
+                    "请加载 SOFA 模块以生成严重程度与结局分层。",
+                )
 
         reclass = review.get('reclassification') or {}
         if reclass.get('available'):
             discordant_pct = reclass.get('metrics', {}).get('discordant_pct', '')
             teaser_en = (
                 f"Under SOFA-2, {discordant_pct} of patients reclassify. "
-                "Open the **SOFA reclassification** panel for the matrix, organ contributors, and mortality breakdown."
+                "Open the SOFA reclassification panel for the matrix, organ contributors, and mortality breakdown."
             )
             teaser_zh = (
                 f"在 SOFA-2 下，共 {discordant_pct} 的患者发生重新分层。"
-                "请切换到 **SOFA 重分层** 面板查看重分类矩阵、器官贡献度与死亡率分解。"
+                "请切换到 SOFA 重分层面板查看重分类矩阵、器官贡献度与死亡率分解。"
             )
-            st.info(teaser_en if lang == 'en' else teaser_zh, icon="🧭")
+            _render_cohort_loader_notice(
+                "info",
+                "SOFA reclassification" if lang == "en" else "SOFA 重分层",
+                "Reclassification signal available" if lang == "en" else "发现重分层信号",
+                teaser_en if lang == 'en' else teaser_zh,
+            )
 
     except Exception as e:
-        st.error(f"Render error: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+        _render_cohort_loader_notice(
+            "danger",
+            "Render guard" if lang == "en" else "渲染保护",
+            "Render error" if lang == "en" else "渲染错误",
+            "The cohort snapshot stopped before charts were drawn. Check the terminal traceback before using this view for interpretation."
+            if lang == 'en' else
+            "队列快照在绘制图表前停止。用于解释前请先检查终端 traceback。",
+            str(e),
+        )

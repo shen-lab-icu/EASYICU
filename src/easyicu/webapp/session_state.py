@@ -105,6 +105,8 @@ AGENT_STATE_KEYS = {
     "research_agent_inbound_cohort",
     "research_agent_inbound_cohort_label",
     "research_agent_inbound_signature",
+    "research_agent_copilot_context",
+    "research_agent_copilot_handoff_packet",
     "research_agent_resume_cohort_signature",
     "research_agent_progress_events",
 }
@@ -119,6 +121,8 @@ AGENT_CONTINUATION_STATE_KEYS = {
     "research_agent_resume_relax_probe",
     "research_agent_preflight_confirmed",
     "research_agent_preflight_signature",
+    "research_agent_copilot_context",
+    "research_agent_copilot_handoff_packet",
 }
 
 

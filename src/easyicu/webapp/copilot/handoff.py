@@ -267,6 +267,110 @@ def _seed_research_agent_real_source_from_copilot(
     return False
 
 
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except Exception:
+        return None
+
+
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        raw_items = [value]
+    elif isinstance(value, Mapping):
+        raw_items = list(value.keys())
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raw_items = []
+    return [str(item) for item in raw_items if str(item).strip()]
+
+
+def _research_agent_handoff_packet_source(
+    state: Mapping[str, object],
+    *,
+    lang: str,
+) -> tuple[str, str, int | None, str]:
+    """Summarize the active Agent source as a stable handoff packet row."""
+    inbound_label = str(state.get("research_agent_inbound_cohort_label") or "").strip()
+    inbound = state.get("research_agent_inbound_cohort")
+    rows: int | None = None
+    if inbound is not None:
+        try:
+            rows = int(len(inbound))  # type: ignore[arg-type]
+        except Exception:
+            rows = None
+    export_dir = str(state.get("research_agent_module_dir_text") or "").strip()
+    if inbound_label:
+        return "session_cohort", inbound_label, rows, export_dir
+    if export_dir and state.get("_eu_ra_focus_module_folder"):
+        label = "Module export folder" if lang == "en" else "模块导出目录"
+        return "module_export", label, None, export_dir
+    if state.get("_eu_ra_focus_no_data"):
+        label = "No cohort loaded yet" if lang == "en" else "尚未加载队列"
+        return "no_data", label, None, export_dir
+    if str(state.get("entry_mode") or "").strip().lower() == "demo":
+        label = "Demo cohort prepared by Copilot" if lang == "en" else "Copilot 准备的演示队列"
+        return "demo_cohort", label, rows, export_dir
+    label = str(state.get("research_agent_cohort_source") or "").strip()
+    return "configured_source", label, rows, export_dir
+
+
+def _store_research_agent_copilot_handoff_packet(
+    state: MutableMapping[str, object],
+    *,
+    lang: str,
+    source_kind: str | None = None,
+) -> None:
+    """Persist a compact handoff packet for the Agent setup UI."""
+    context = state.get("research_agent_copilot_context")
+    context_map: Mapping[str, object] = context if isinstance(context, Mapping) else {}
+    source_key, source_label, rows, export_dir = _research_agent_handoff_packet_source(state, lang=lang)
+    if source_kind:
+        source_key = source_kind
+    selected_raw = context_map.get("selected_concepts") or state.get("selected_concepts") or []
+    selected = _string_list(selected_raw)
+    filters_raw = context_map.get("cohort_filters") or []
+    cohort_filters = _string_list(filters_raw)
+    loaded_concepts = state.get("loaded_concepts")
+    loaded_concept_count = len(loaded_concepts) if isinstance(loaded_concepts, Mapping) else 0
+    question = str(
+        state.get("research_agent_question")
+        or context_map.get("question")
+        or state.get("_copilot_last_question")
+        or ""
+    ).strip()
+    if not question:
+        state.pop("research_agent_copilot_handoff_packet", None)
+        return
+
+    state["research_agent_copilot_handoff_packet"] = {
+        "source": "Research Copilot",
+        "source_kind": source_key,
+        "source_label": source_label,
+        "question": question[:1200],
+        "branch": str(context_map.get("branch") or "predict"),
+        "data_mode": str(context_map.get("data_mode") or state.get("entry_mode") or "demo"),
+        "patient_n": _int_or_none(context_map.get("patient_n")),
+        "window": str(context_map.get("window") or ""),
+        "outcome": str(context_map.get("outcome") or state.get("research_agent_target_outcome") or ""),
+        "exposure": str(context_map.get("exposure") or ""),
+        "selected_concepts": selected[:12],
+        "selected_count": len(selected),
+        "concept_count": loaded_concept_count or len(selected),
+        "cohort_filters": cohort_filters[:8],
+        "template_key": str(context_map.get("template_key") or state.get("research_agent_template_current") or ""),
+        "rows": rows,
+        "export_dir": export_dir,
+        "preflight_status": "needs_review",
+        "next_step": (
+            "Review setup, confirm preflight, then run Agent"
+            if lang == "en" else
+            "复核 setup，确认 preflight 后再运行 Agent"
+        ),
+    }
+
+
 def _apply_copilot_study_to_workspace(state: MutableMapping[str, object]) -> None:
     study = _ensure_copilot_study_state(state)
     question = str(study.get("question") or _copilot_frame_question(study, state.get("language", "en"))).strip()
@@ -346,6 +450,7 @@ def _seed_research_agent_from_copilot_study(state: MutableMapping[str, object]) 
     state.pop("research_agent_preflight_confirmed", None)
     state.pop("research_agent_preflight_ack", None)
     state.pop("research_agent_preflight_signature", None)
+    _store_research_agent_copilot_handoff_packet(state, lang=lang)
     return bool(str(state.get("research_agent_question") or "").strip()) and not had_agent_question
 
 
@@ -425,6 +530,12 @@ def _prepare_research_agent_handoff_from_ai(state: MutableMapping[str, object]) 
             state["research_agent_question"] = handoff_question
             state["_research_agent_question_handoff_notice"] = True
             seeded = True
+    if seeded and not isinstance(state.get("research_agent_copilot_handoff_packet"), Mapping):
+        _store_research_agent_copilot_handoff_packet(
+            state,
+            lang=str(state.get("language") or "en"),
+            source_kind="copilot_prompt",
+        )
 
     state["_active_main_page"] = "research_agent"
     state["_ra_view"] = "setup"
