@@ -1212,6 +1212,7 @@ def run_idea_mining_dry_run(
     reflection_search_client: Optional[Any] = None,
     novelty_judge: Optional[Callable[..., Mapping[str, Any]]] = None,
     source_item_index: Optional["SourceItemIndex"] = None,
+    extended_feasibility_index: Optional[object] = None,
 ) -> IdeaMiningDryRunResult:
     """Run the S4→S1→S3→S2 idea-triage dry run and stop at the human gate.
 
@@ -1458,6 +1459,7 @@ def run_idea_mining_dry_run(
             candidate_records=candidate_records,
             source_materials=parsed_materials,
             source_item_index=source_item_index,
+            extended_feasibility_index=extended_feasibility_index,
         )
         discovery_counts = _discovery_report_counts(discovery_records)
         discovery_path = out_dir / "discovery_report.md"
@@ -1573,6 +1575,7 @@ def build_discovery_candidate_records(
     candidate_records: Sequence[IdeaMiningCandidateTriageRecord],
     source_materials: Sequence[SourceMaterial],
     source_item_index: Optional["SourceItemIndex"] = None,
+    extended_feasibility_index: Optional[object] = None,
 ) -> List[DiscoveryCandidateRecord]:
     """Build S6 human-facing discovery records from frozen structured inputs.
 
@@ -1580,6 +1583,12 @@ def build_discovery_candidate_records(
     three-tier source-feasibility verdict (executable / T1 re-extract / T2 new
     concept authorable / T3 not in this database) so the report no longer
     collapses every blocked candidate into one ``db-cannot-do`` cell.
+
+    When ``extended_feasibility_index`` is supplied, a ``db-cannot-do`` verdict is
+    reconsidered: if the cohort is ICD-derivable (Case 1) or a blocking construct
+    is a dictionary concept reachable on this or another database (Case 2), the
+    verdict is downgraded to ``hold`` with an actionable, human-confirm reason.
+    This only downgrades; it never promotes to executable.
     """
 
     candidates_by_idea = {
@@ -1613,6 +1622,18 @@ def build_discovery_candidate_records(
             assessment=assessment,
             triage=triage,
         )
+        extended_meta: Optional[Dict[str, Any]] = None
+        if decision == "db-cannot-do" and extended_feasibility_index is not None:
+            try:
+                verdict = extended_feasibility_index.reconsider(
+                    idea=idea, candidate=candidate
+                )
+            except Exception:  # noqa: BLE001 - reconsideration is best-effort
+                verdict = None
+            if verdict is not None:
+                decision = verdict.decision
+                decision_reason = verdict.reason
+                extended_meta = {"case": verdict.case, **verdict.metadata}
         risks = _discovery_risks(
             candidate=candidate,
             assessment=assessment,
@@ -1659,6 +1680,7 @@ def build_discovery_candidate_records(
                 feasibility_tier=tier,
                 feasibility_tier_note=tier_note,
                 feasibility_source_items=tier_items,
+                extended_feasibility=extended_meta,
             )
         )
     return records
