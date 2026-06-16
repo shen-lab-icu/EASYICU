@@ -443,6 +443,11 @@ class DiscoveryCandidateRecord(BaseModel):
     feasibility_tier: Optional[str] = None
     feasibility_tier_note: Optional[str] = None
     feasibility_source_items: List[Dict[str, Any]] = Field(default_factory=list)
+    # Extended-feasibility reconsideration (None unless an ExtendedFeasibilityIndex
+    # downgraded a db-cannot-do): Case 1 ICD-derivable cohort or Case 2
+    # dictionary/cross-DB reachable construct. Always human-confirm; never
+    # promotes to executable.
+    extended_feasibility: Optional[Dict[str, Any]] = None
 
 
 class DiscoveryTriageResult(BaseModel):
