@@ -2539,11 +2539,13 @@ def _agent_projects_history_runs(state: Dict[str, Any]) -> list[dict[str, Any]]:
     try:
         from easyicu.webapp.research_agent import (
             _default_research_agent_workdir,
+            _research_agent_workdir_text,
             _scan_research_agent_runs,
         )
 
-        workdir_text = str(state.get("research_agent_workdir") or "").strip()
-        workdir = Path(workdir_text or _default_research_agent_workdir()).expanduser()
+        default_workdir = _default_research_agent_workdir()
+        workdir_text = _research_agent_workdir_text(state, default_workdir)
+        workdir = Path(workdir_text or default_workdir).expanduser()
         return _scan_research_agent_runs(workdir, limit=8)
     except Exception:
         return []
@@ -2604,12 +2606,111 @@ def _render_agent_project_timeline_html(snapshot: Any, lang: str) -> str:
     )
 
 
+def _render_agent_project_contract_html(snapshot: Any, lang: str) -> str:
+    """Render the Agent Projects manifest/evidence contract from live state."""
+    is_en = lang == "en"
+    has_run = bool(snapshot.run_id)
+    artifact_total = int(snapshot.figure_count or 0) + int(snapshot.table_count or 0)
+    has_evidence = int(snapshot.evidence_count or 0) > 0
+    has_gate = int(snapshot.gates_total or 0) > 0
+    has_blocker = bool(snapshot.gates_blocked or snapshot.finding_errors)
+
+    def _row(index: str, label: str, detail: str, tone: str) -> str:
+        return (
+            f'<div class="eu-agent-project-contract-row {tone}">'
+            f'<span class="eu-agent-project-contract-node">{index}</span>'
+            '<div class="eu-agent-project-contract-copy">'
+            f'<b>{_agent_project_escape(label)}</b>'
+            f'<em>{_agent_project_escape(detail)}</em>'
+            '</div>'
+            '</div>'
+        )
+
+    rows = [
+        _row(
+            "01",
+            "Run source" if is_en else "运行来源",
+            snapshot.run_id or ("waiting for setup" if is_en else "等待配置"),
+            "ready" if has_run else "neutral",
+        ),
+        _row(
+            "02",
+            "Evidence ledger" if is_en else "证据账本",
+            (
+                f"{snapshot.evidence_count} evidence · {artifact_total} artifacts"
+                if is_en else
+                f"{snapshot.evidence_count} 条证据 · {artifact_total} 个产物"
+            ),
+            "ready" if has_evidence else "warn" if has_run else "neutral",
+        ),
+        _row(
+            "03",
+            "Review gate" if is_en else "复核关口",
+            (
+                f"{snapshot.gates_blocked} blocked / {snapshot.gates_total} gates · "
+                f"{snapshot.finding_errors}/{snapshot.finding_warnings} findings"
+                if is_en else
+                f"{snapshot.gates_blocked} 个阻塞 / {snapshot.gates_total} 个关口 · "
+                f"{snapshot.finding_errors}/{snapshot.finding_warnings} 个发现"
+            ),
+            "warn" if has_blocker else "ready" if has_gate else "neutral",
+        ),
+        _row(
+            "04",
+            "Draft state" if is_en else "草稿状态",
+            snapshot.review_decision or (
+                "locked until evidence review" if is_en else "证据复核前保持锁定"
+            ),
+            "warn" if has_blocker else "ready" if snapshot.review_decision else "neutral",
+        ),
+    ]
+    return (
+        f'<div class="eu-agent-project-contract {snapshot.status_tone}">'
+        '<div class="eu-agent-project-contract-head">'
+        f'<span>{_agent_project_escape("Local manifest contract" if is_en else "本地 manifest 合同")}</span>'
+        f'<b>{_agent_project_escape("Run -> ledger -> gate -> draft" if is_en else "运行 -> 账本 -> 关口 -> 草稿")}</b>'
+        '</div>'
+        f'<div class="eu-agent-project-contract-sub">{_agent_project_escape("Every Agent Project must resolve these states before drafting." if is_en else "每个研究项目都必须先解决这些状态，再进入起草。")}</div>'
+        '<div class="eu-agent-project-contract-list">'
+        + "".join(rows)
+        + '</div>'
+        '</div>'
+    )
+
+
+def _agent_project_handoff_receipt_html(lang: str) -> str:
+    """Render the Patient Review -> Agent Projects handoff in the shell."""
+    try:
+        from easyicu.webapp.research_agent import (
+            _agent_handoff_context_html,
+            _agent_handoff_context_summary,
+        )
+
+        is_en = lang == "en"
+        summary = _agent_handoff_context_summary(st.session_state, is_en=is_en)
+        html_body = _agent_handoff_context_html(summary, is_en=is_en)
+    except Exception:
+        st.session_state.pop("_eu_ra_handoff_receipt_rendered_in_shell", None)
+        return ""
+    if not html_body:
+        st.session_state.pop("_eu_ra_handoff_receipt_rendered_in_shell", None)
+        return ""
+    st.session_state["_eu_ra_handoff_receipt_rendered_in_shell"] = True
+    return html_body.replace(
+        'class="ra-agent-handoff-receipt"',
+        'class="ra-agent-handoff-receipt ra-agent-handoff-receipt-shell"',
+        1,
+    )
+
+
 def _render_agent_projects_shell(lang: str, snapshot: Any, run_context: Dict[str, str]) -> None:
     """Render the project-centered Agent Projects overview and subview controls."""
     is_en = lang == "en"
+    handoff_receipt_html = _agent_project_handoff_receipt_html(lang)
     with st.container(key="eu_agent_projects_shell"):
-        left, mid, right = st.columns([1.02, 1.92, 1.05], gap="large")
+        left, mid, right = st.columns([1.16, 2.36, 1.16], gap="large")
         with left:
+            run_count = len(snapshot.history_runs)
             recent_rows = "".join(
                 '<div class="eu-agent-project-run-row">'
                 f'<b>{_agent_project_escape(row.get("run_id"))}</b>'
@@ -2620,15 +2721,24 @@ def _render_agent_projects_shell(lang: str, snapshot: Any, run_context: Dict[str
                 for row in snapshot.history_runs[:4]
             )
             if not recent_rows:
+                raw_workdir = str(st.session_state.get("research_agent_workdir") or "").strip()
+                workdir_hint = Path(raw_workdir).name if raw_workdir else "research_output/webapp"
                 recent_rows = (
                     '<div class="eu-agent-project-empty">'
-                    + _agent_project_escape("No local runs yet" if is_en else "暂无本地运行")
+                    f'<b>{_agent_project_escape("No local runs yet" if is_en else "暂无本地运行")}</b>'
+                    f'<span>{_agent_project_escape("Open History to choose the folder that directly contains run_* manifests." if is_en else "打开历史页，选择直接包含 run_* manifest 的本机目录。")}</span>'
+                    f'<em>{_agent_project_escape(workdir_hint)}</em>'
                     + '</div>'
                 )
             st.markdown(
                 '<div class="eu-agent-project-panel">'
-                f'<div class="eu-agent-project-eyebrow">{_agent_project_escape("Projects" if is_en else "项目")}</div>'
+                '<div class="eu-agent-project-list-head">'
+                '<div>'
+                f'<div class="eu-agent-project-eyebrow">{_agent_project_escape("Local studies" if is_en else "本地研究")}</div>'
                 f'<h3>{_agent_project_escape("Agent Projects" if is_en else "研究项目")}</h3>'
+                '</div>'
+                f'<span>{run_count}</span>'
+                '</div>'
                 f'<p>{_agent_project_escape("Runs stay local; manifests and artifacts remain auditable." if is_en else "运行保留在本机；manifest 和产物可审计。")}</p>'
                 f'<div class="eu-agent-project-run-list">{recent_rows}</div>'
                 '</div>',
@@ -2665,6 +2775,7 @@ def _render_agent_projects_shell(lang: str, snapshot: Any, run_context: Dict[str
                 f'<div><span>{"Cohort" if is_en else "队列"}</span><b>{_agent_project_escape(snapshot.cohort_label)}</b></div>'
                 f'<div><span>{"Run directory" if is_en else "运行目录"}</span><b>{_agent_project_escape(snapshot.run_dir or ("pending" if is_en else "待生成"))}</b></div>'
                 '</div>'
+                f'{handoff_receipt_html}'
                 f'<div class="eu-agent-project-timeline">{_render_agent_project_timeline_html(snapshot, lang)}</div>'
                 '</div>',
                 unsafe_allow_html=True,
@@ -2706,18 +2817,7 @@ def _render_agent_projects_shell(lang: str, snapshot: Any, run_context: Dict[str
             st.markdown(
                 '<div class="eu-agent-project-panel">'
                 f'<div class="eu-agent-project-eyebrow">{_agent_project_escape("Evidence / artifacts / gates" if is_en else "证据 / 产物 / 关口")}</div>'
-                '<div class="eu-agent-project-metrics">'
-                f'<div><span>{"Evidence" if is_en else "证据"}</span><b>{snapshot.evidence_count}</b></div>'
-                f'<div><span>{"Figures" if is_en else "图件"}</span><b>{snapshot.figure_count}</b></div>'
-                f'<div><span>{"Tables" if is_en else "表格"}</span><b>{snapshot.table_count}</b></div>'
-                f'<div><span>{"Issues" if is_en else "问题"}</span><b>{snapshot.finding_errors}/{snapshot.finding_warnings}</b></div>'
-                '</div>'
-                '<div class="eu-agent-project-gate">'
-                f'<b>{_agent_project_escape("Review gate" if is_en else "复核关口")}</b>'
-                f'<span>{_agent_project_escape(str(snapshot.gates_blocked))} '
-                f'{_agent_project_escape("blocked gates" if is_en else "个阻塞关口")}</span>'
-                f'<em>{_agent_project_escape(snapshot.review_decision or ("waiting for reviewer" if is_en else "等待复核"))}</em>'
-                '</div>'
+                f'{_render_agent_project_contract_html(snapshot, lang)}'
                 '</div>',
                 unsafe_allow_html=True,
             )

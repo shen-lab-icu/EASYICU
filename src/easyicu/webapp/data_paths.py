@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import os
 from datetime import date
 from pathlib import Path
@@ -354,7 +355,7 @@ def _directory_input(
     browser_cwd_key = f"{button_key}_cwd"
     browser_filter_key = f"{button_key}_filter"
 
-    col_input, col_button = st.columns([8, 1.2])
+    col_input, col_button = st.columns([7, 1.7])
     with col_input:
         text_input_kwargs = {
             "key": input_key,
@@ -587,54 +588,69 @@ def _sync_real_data_panel_defaults(
             st.session_state[multi_sync_key] = [default_db]
 
 
+def _directory_structure_guide_html(lang: str = 'en') -> str:
+    if lang == 'en':
+        title = "Directory structure contract"
+        subtitle = "EasyICU scans each database folder locally and auto-detects optional version folders."
+        root_label = "Your ICU Data Root"
+        version_note = "version folder optional"
+        alias_label = "accepted aliases"
+        tips = [
+            "Version folders such as 3.1 or 2.0.1 can be present or omitted.",
+            "Database folder names can vary; aliases are resolved before loading.",
+            "Nothing is uploaded while scanning this structure.",
+        ]
+        rows = [
+            ("icudb/", root_label, "root"),
+            ("mimiciv/", f"{alias_label}: mimic-iv, miiv", version_note),
+            ("eicu/", "eICU-CRD", version_note),
+            ("aumc/", "AmsterdamUMCdb", version_note),
+            ("hirid/", "HiRID", version_note),
+            ("mimiciii/", f"{alias_label}: mimic-iii, mimic", version_note),
+            ("sicdb/", f"{alias_label}: sic", version_note),
+        ]
+    else:
+        title = "目录结构合同"
+        subtitle = "EasyICU 会在本地扫描每个数据库文件夹，并自动识别可选版本目录。"
+        root_label = "ICU 数据根目录"
+        version_note = "版本文件夹可选"
+        alias_label = "可接受别名"
+        tips = [
+            "3.1、2.0.1 等版本文件夹可存在也可省略。",
+            "数据库文件夹名称可以变化；加载前会先解析别名。",
+            "扫描该结构时不会上传任何数据。",
+        ]
+        rows = [
+            ("icudb/", root_label, "root"),
+            ("mimiciv/", f"{alias_label}: mimic-iv, miiv", version_note),
+            ("eicu/", "eICU-CRD", version_note),
+            ("aumc/", "AmsterdamUMCdb", version_note),
+            ("hirid/", "HiRID", version_note),
+            ("mimiciii/", f"{alias_label}: mimic-iii, mimic", version_note),
+            ("sicdb/", f"{alias_label}: sic", version_note),
+        ]
+    rows_html = "".join(
+        (
+            '<div class="eu-directory-guide-row">'
+            f'<span>{html.escape(path)}</span>'
+            f'<b>{html.escape(label)}</b>'
+            f'<em>{html.escape(note)}</em>'
+            '</div>'
+        )
+        for path, label, note in rows
+    )
+    tips_html = "".join(f'<li>{html.escape(tip)}</li>' for tip in tips)
+    return (
+        '<div class="eu-directory-guide">'
+        f'<div class="eu-directory-guide-head"><span>{html.escape(title)}</span>'
+        f'<p>{html.escape(subtitle)}</p></div>'
+        f'<div class="eu-directory-guide-tree">{rows_html}</div>'
+        f'<ul class="eu-directory-guide-tips">{tips_html}</ul>'
+        '</div>'
+    )
+
+
 def render_directory_structure_guide(lang: str = 'en'):
     """渲染目录结构指南弹窗"""
     with st.popover("Directory Structure Guide" if lang == 'en' else "目录结构指南"):
-        struct_info = """
-**Expected directory structure:**
-
-```
-icudb/                    ← Your ICU Data Root
-├── mimiciv/              ← or mimic-iv/, miiv/
-│   └── 3.1/              ← version folder (optional)
-├── eicu/
-│   └── 2.0.1/
-├── aumc/
-│   └── 1.0.2/
-├── hirid/
-│   └── 1.1.1/
-├── mimiciii/             ← or mimic-iii/, mimic/
-│   └── 1.4/
-└── sicdb/                ← or sic/
-    └── 1.0.6/
-```
-
-**Tips:**
-- Version folders (3.1, 2.0.1, etc.) are optional
-- Database folder names can vary (mimiciv, mimic-iv, miiv)
-- System will auto-detect the correct path
-""" if lang == 'en' else """
-**期望的目录结构：**
-
-```
-icudb/                    ← 你的ICU数据根目录
-├── mimiciv/              ← 或 mimic-iv/, miiv/
-│   └── 3.1/              ← 版本文件夹（可选）
-├── eicu/
-│   └── 2.0.1/
-├── aumc/
-│   └── 1.0.2/
-├── hirid/
-│   └── 1.1.1/
-├── mimiciii/             ← 或 mimic-iii/, mimic/
-│   └── 1.4/
-└── sicdb/                ← 或 sic/
-    └── 1.0.6/
-```
-
-**提示：**
-- 版本文件夹 (3.1, 2.0.1 等) 是可选的
-- 数据库文件夹名称可以变化 (mimiciv, mimic-iv, miiv)
-- 系统会自动检测正确的路径
-"""
-        st.markdown(struct_info)
+        st.markdown(_directory_structure_guide_html(lang), unsafe_allow_html=True)

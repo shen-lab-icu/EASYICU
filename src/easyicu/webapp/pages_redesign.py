@@ -26,7 +26,7 @@ import html
 import json
 import platform
 import sys
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -1158,7 +1158,7 @@ def _workspace_status_overview_html(state: MutableMapping[str, Any], lang: str) 
         (_T(lang, "Research question is staged.", "研究问题已暂存。") if agent_question else _T(lang, "Define question, cohort, and launch gate.", "配置研究问题、队列和启动闸门。"))
     )
 
-    tiles = [
+    status_rows = [
         (
             _T(lang, "Data mode", "数据模式"),
             mode_label,
@@ -1184,15 +1184,20 @@ def _workspace_status_overview_html(state: MutableMapping[str, Any], lang: str) 
             "ok" if agent_run else "neutral",
         ),
     ]
-    tiles_html = "".join(
-        '<div class="eu-workspace-status-tile {tone}">'
-        '<span>{label}</span><b>{value}</b><p>{detail}</p></div>'.format(
+    ledger_html = "".join(
+        '<div class="eu-workspace-state-row {tone}">'
+        '<span class="eu-workspace-state-node">{index}</span>'
+        '<div class="eu-workspace-state-copy">'
+        '<b>{label}</b><strong>{value}</strong><em>{detail}</em>'
+        '</div>'
+        '</div>'.format(
+            index=f"{idx:02d}",
             tone=_esc(tone),
             label=_esc(label),
             value=_esc(value),
             detail=_esc(detail),
         )
-        for label, value, detail, tone in tiles
+        for idx, (label, value, detail, tone) in enumerate(status_rows, start=1)
     )
 
     steps_html = ""
@@ -1247,8 +1252,12 @@ def _workspace_status_overview_html(state: MutableMapping[str, Any], lang: str) 
         '</div>'
         f'<em>{_esc(session_detail)}</em>'
         '</div>'
-        '<div class="eu-workspace-status-grid">'
-        f'{tiles_html}'
+        '<div class="eu-workspace-state-ledger">'
+        '<div class="eu-workspace-state-ledger-head">'
+        f'<span>{_T(lang, "Session state ledger", "会话状态账本")}</span>'
+        f'<b>{_T(lang, "Data -> extraction -> review -> agent", "数据 -> 提取 -> 审阅 -> 智能体")}</b>'
+        '</div>'
+        f'<div class="eu-workspace-state-list">{ledger_html}</div>'
         '</div>'
         '<div class="eu-workspace-overview-card">'
         '<div class="eu-workspace-card-head">'
@@ -1798,21 +1807,334 @@ def _settings_value_pill(value: object, *, icon: str = "folder") -> str:
     )
 
 
-def _settings_static_toggle(*, active: bool, label: str = "") -> str:
-    cls = " on" if active else ""
-    label_html = f'<span class="eu-settings-toggle-label">{_esc(label)}</span>' if label else ""
-    return (
-        '<div class="eu-settings-toggle-wrap">'
-        f'{label_html}<span class="eu-settings-toggle{cls}"><span></span></span>'
-        '</div>'
-    )
-
-
 def _settings_state_chip(label: str, *, tone: str = "neutral") -> str:
     return f'<span class="eu-settings-chip {tone}"><i></i>{_esc(label)}</span>'
 
 
-def _settings_status_tile(
+def _settings_connection_ledger_html(
+    *,
+    rows: Sequence[Mapping[str, str]],
+) -> str:
+    rows_html = "".join(
+        '<div class="eu-settings-connection-row {tone}">'
+        '<span class="eu-settings-connection-node">{index}</span>'
+        '<div class="eu-settings-connection-copy">'
+        '<span>{label}</span>'
+        '<b>{value}</b>'
+        '<p>{detail}</p>'
+        '</div>'
+        '</div>'.format(
+            index=f"{index:02d}",
+            tone=_esc(str(row.get("tone") or "neutral")),
+            label=_esc(row["label"]),
+            value=_esc(row["value"]),
+            detail=_esc(row["detail"]),
+        )
+        for index, row in enumerate(rows, start=1)
+    )
+    return f'<div class="eu-settings-connection-ledger">{rows_html}</div>'
+
+
+def _settings_privacy_contract_html(
+    *,
+    lang: str,
+    outbound_enabled: bool,
+    credential_value: str,
+    credential_detail: str,
+    credential_tone: str,
+) -> str:
+    rows = [
+        {
+            "label": _T(lang, "Patient rows", "患者行数据"),
+            "value": _T(lang, "Local only", "仅本地"),
+            "detail": _T(
+                lang,
+                "Source rows, cohort frames, and patient review tables never enter model payloads.",
+                "源数据行、队列数据帧和患者复核表不会进入模型 payload。",
+            ),
+            "tone": "ok",
+        },
+        {
+            "label": _T(lang, "Outbound model calls", "模型端调用"),
+            "value": _T(lang, "Allowed", "已允许") if outbound_enabled else _T(lang, "Off by default", "默认关闭"),
+            "detail": _T(
+                lang,
+                "When enabled, only prompts, plans, and run logs may reach the configured endpoint.",
+                "开启后，只有提示词、计划和运行日志可能发送到配置端点。",
+            ),
+            "tone": "warn" if outbound_enabled else "ok",
+        },
+        {
+            "label": _T(lang, "Usage telemetry", "使用遥测"),
+            "value": _T(lang, "None", "无"),
+            "detail": _T(
+                lang,
+                "EasyICU does not collect analytics unless you add your own instrumentation.",
+                "EasyICU 不收集分析遥测，除非你自己添加埋点。",
+            ),
+            "tone": "ok",
+        },
+        {
+            "label": _T(lang, "Credential state", "凭证状态"),
+            "value": credential_value,
+            "detail": credential_detail,
+            "tone": credential_tone,
+        },
+    ]
+    rows_html = "".join(
+        '<div class="eu-settings-privacy-contract-row {tone}">'
+        '<span class="eu-settings-privacy-node">{index}</span>'
+        '<div class="eu-settings-privacy-copy">'
+        '<span>{label}</span>'
+        '<b>{value}</b>'
+        '<p>{detail}</p>'
+        '</div>'
+        '</div>'.format(
+            index=f"{index:02d}",
+            tone=_esc(str(row["tone"])),
+            label=_esc(row["label"]),
+            value=_esc(row["value"]),
+            detail=_esc(row["detail"]),
+        )
+        for index, row in enumerate(rows, start=1)
+    )
+    boundary_label = _T(lang, "opt-in", "显式开启") if outbound_enabled else _T(lang, "locked local", "本地锁定")
+    return (
+        '<div class="eu-settings-privacy-contract">'
+        '<div class="eu-settings-privacy-head">'
+        '<div>'
+        f'<span>{_T(lang, "Privacy contract", "隐私契约")}</span>'
+        f'<b>{_T(lang, "Local-first boundary", "本地优先边界")}</b>'
+        f'<p>{_T(lang, "The safety boundary is explicit: data stays local, endpoint use is reversible, and diagnostics export only configuration metadata.", "安全边界明确：数据保留本地，端点使用可随时回退，诊断导出只包含配置元数据。")}</p>'
+        '</div>'
+        f'<em>{_esc(boundary_label)}</em>'
+        '</div>'
+        '<div class="eu-settings-privacy-list">'
+        f'{rows_html}'
+        '</div>'
+        '</div>'
+    )
+
+
+def _settings_agent_contract_html(
+    *,
+    lang: str,
+    agent_run_value: str,
+    agent_run_detail: str,
+    agent_run_tone: str,
+) -> str:
+    rows = [
+        {
+            "label": _T(lang, "Run route", "运行路径"),
+            "value": agent_run_value,
+            "detail": agent_run_detail,
+            "tone": agent_run_tone,
+        },
+        {
+            "label": _T(lang, "Token budget", "Token 预算"),
+            "value": "120,000",
+            "detail": _T(
+                lang,
+                "Soft cap per external run. Demo and MockLLMClient runs use zero tokens.",
+                "外部模型运行的软上限。演示与 MockLLMClient 运行不使用 token。",
+            ),
+            "tone": "neutral",
+        },
+        {
+            "label": _T(lang, "Auto-repair", "自动修复"),
+            "value": _T(lang, "Enabled", "已启用"),
+            "detail": _T(
+                lang,
+                "Failed analysis steps retry deterministically before the run halts.",
+                "分析步骤失败时，在停止前进行确定性重试。",
+            ),
+            "tone": "ok",
+        },
+        {
+            "label": _T(lang, "Evidence gate", "证据闸门"),
+            "value": _T(lang, "Strict", "严格"),
+            "detail": _T(
+                lang,
+                "Drafting unlocks only after the cohort, evidence, and review contracts pass.",
+                "只有队列、证据与复核契约通过后才解锁草稿。",
+            ),
+            "tone": "ok",
+        },
+    ]
+    rows_html = "".join(
+        '<div class="eu-settings-agent-contract-row {tone}">'
+        '<span class="eu-settings-agent-node">{index}</span>'
+        '<div class="eu-settings-agent-copy">'
+        '<span>{label}</span>'
+        '<b>{value}</b>'
+        '<p>{detail}</p>'
+        '</div>'
+        '</div>'.format(
+            index=f"{index:02d}",
+            tone=_esc(str(row["tone"])),
+            label=_esc(row["label"]),
+            value=_esc(row["value"]),
+            detail=_esc(row["detail"]),
+        )
+        for index, row in enumerate(rows, start=1)
+    )
+    return (
+        '<div class="eu-settings-agent-contract">'
+        '<div class="eu-settings-agent-head">'
+        '<div>'
+        f'<span>{_T(lang, "Run contract", "运行契约")}</span>'
+        f'<b>{_T(lang, "Research Agent guardrails", "研究智能体护栏")}</b>'
+        f'<p>{_T(lang, "Model choice is only one part of the run. The same session state also controls token limits, deterministic repair, and evidence-gated drafting.", "模型选择只是运行的一部分；同一会话状态还控制 token 限额、确定性修复与证据闸门。")}</p>'
+        '</div>'
+        f'<em>{_T(lang, "evidence-gated", "证据门控")}</em>'
+        '</div>'
+        '<div class="eu-settings-agent-list">'
+        f'{rows_html}'
+        '</div>'
+        '</div>'
+    )
+
+
+def _settings_display_contract_html(
+    *,
+    lang: str,
+    is_english: bool,
+    density_pref: str,
+    display_target: str,
+    reduce_motion: bool,
+) -> str:
+    language_value = "English" if is_english else "中文"
+    density_value = (
+        _T(lang, "Compact", "紧凑")
+        if density_pref == "compact"
+        else _T(lang, "Comfortable", "舒适")
+    )
+    display_value = (
+        _T(lang, "Responsive fallback", "响应式兜底")
+        if display_target == "responsive"
+        else _T(lang, "Desktop", "电脑端")
+    )
+    motion_value = (
+        _T(lang, "Reduced", "已减少")
+        if reduce_motion
+        else _T(lang, "Standard", "标准")
+    )
+    rows = [
+        {
+            "label": _T(lang, "Interface language", "界面语言"),
+            "value": language_value,
+            "detail": _T(
+                lang,
+                "Labels and clinical copy render in the selected bilingual surface.",
+                "标签和临床文案使用当前选择的双语界面呈现。",
+            ),
+            "tone": "neutral",
+        },
+        {
+            "label": _T(lang, "Density", "密度"),
+            "value": density_value,
+            "detail": _T(
+                lang,
+                "Comfortable adds breathing room; compact maximises rows on screen.",
+                "舒适模式增加留白；紧凑模式增加屏幕行数。",
+            ),
+            "tone": "neutral",
+        },
+        {
+            "label": _T(lang, "Display target", "展示目标"),
+            "value": display_value,
+            "detail": _T(
+                lang,
+                "Project default is the desktop app-like layout; responsive rules are fallback only.",
+                "项目默认追求电脑端软件式展示；响应式规则仅作为兜底。",
+            ),
+            "tone": "ok" if display_target == "desktop" else "warn",
+        },
+        {
+            "label": _T(lang, "Motion", "动态效果"),
+            "value": motion_value,
+            "detail": _T(
+                lang,
+                "Reduce motion disables shimmer and progress animations.",
+                "减少动态效果会关闭 shimmer 和进度动画。",
+            ),
+            "tone": "ok" if reduce_motion else "neutral",
+        },
+    ]
+    rows_html = "".join(
+        '<div class="eu-settings-agent-contract-row eu-settings-display-row {tone}">'
+        '<span class="eu-settings-agent-node eu-settings-display-node">{index}</span>'
+        '<div class="eu-settings-agent-copy eu-settings-display-copy">'
+        '<span>{label}</span>'
+        '<b>{value}</b>'
+        '<p>{detail}</p>'
+        '</div>'
+        '</div>'.format(
+            index=f"{index:02d}",
+            tone=_esc(str(row["tone"])),
+            label=_esc(row["label"]),
+            value=_esc(row["value"]),
+            detail=_esc(row["detail"]),
+        )
+        for index, row in enumerate(rows, start=1)
+    )
+    return (
+        '<div class="eu-settings-agent-contract eu-settings-display-contract">'
+        '<div class="eu-settings-agent-head eu-settings-display-head">'
+        '<div>'
+        f'<span>{_T(lang, "Display contract", "显示契约")}</span>'
+        f'<b>{_T(lang, "Desktop-first workspace", "电脑端优先工作区")}</b>'
+        f'<p>{_T(lang, "The visual shell follows one dense research-console contract: bilingual labels, controlled density, desktop-first framing, and optional reduced motion.", "视觉 shell 遵循同一套紧凑研究工作台契约：双语标签、可控密度、电脑端优先框架，以及可选减少动态。")}</p>'
+        '</div>'
+        f'<em>{_T(lang, "display state", "显示状态")}</em>'
+        '</div>'
+        '<div class="eu-settings-agent-list eu-settings-display-list">'
+        f'{rows_html}'
+        '</div>'
+        '</div>'
+    )
+
+
+def _settings_defaults_ledger_html(
+    *,
+    lang: str,
+    rows: Sequence[Mapping[str, str]],
+) -> str:
+    rows_html = "".join(
+        '<div class="eu-settings-default-row {tone}">'
+        '<span class="eu-settings-default-node">{index}</span>'
+        '<div class="eu-settings-default-copy">'
+        '<span>{label}</span>'
+        '<b>{value}</b>'
+        '<p>{detail}</p>'
+        '</div>'
+        '</div>'.format(
+            index=f"{index:02d}",
+            tone=_esc(str(row.get("tone") or "neutral")),
+            label=_esc(row["label"]),
+            value=_esc(row["value"]),
+            detail=_esc(row["detail"]),
+        )
+        for index, row in enumerate(rows, start=1)
+    )
+    return (
+        '<div class="eu-settings-defaults-ledger">'
+        '<div class="eu-settings-defaults-head">'
+        '<div>'
+        f'<span>{_T(lang, "Session defaults", "会话默认值")}</span>'
+        f'<b>{_T(lang, "New workspace launch contract", "新工作区启动契约")}</b>'
+        f'<p>{_T(lang, "These values feed the real Streamlit session state before a demo or real-data workflow opens.", "这些值会在演示或真实数据工作流打开前写入真实 Streamlit 会话状态。")}</p>'
+        '</div>'
+        f'<em>{_T(lang, "reversible", "可回退")}</em>'
+        '</div>'
+        '<div class="eu-settings-defaults-list">'
+        f'{rows_html}'
+        '</div>'
+        '</div>'
+    )
+
+
+def _settings_overview_row(
     *,
     label: str,
     value: str,
@@ -1820,10 +2142,295 @@ def _settings_status_tile(
     tone: str = "neutral",
 ) -> str:
     return (
-        f'<div class="eu-settings-status-tile {tone}">'
+        f'<div class="eu-settings-overview-row {tone}">'
+        '<span class="eu-settings-overview-dot"></span>'
+        '<div class="eu-settings-overview-copy">'
         f'<span>{_esc(label)}</span>'
         f'<b>{_esc(value)}</b>'
         f'<p>{_esc(detail)}</p>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _settings_overview_cockpit_html(
+    *,
+    lang: str,
+    rows: Sequence[Mapping[str, str]],
+    outbound_enabled: bool,
+) -> str:
+    rows_html = "".join(
+        _settings_overview_row(
+            label=str(row["label"]),
+            value=str(row["value"]),
+            detail=str(row["detail"]),
+            tone=str(row.get("tone") or "neutral"),
+        )
+        for row in rows
+    )
+    consent_chip = (
+        _T(lang, "model calls opt-in", "模型调用需授权")
+        if not outbound_enabled else
+        _T(lang, "outbound enabled", "外部调用已开启")
+    )
+    return (
+        '<div class="eu-settings-overview-cockpit">'
+        '<div class="eu-settings-overview-brief">'
+        f'<span>{_T(lang, "Settings cockpit", "设置驾驶舱")}</span>'
+        f'<b>{_T(lang, "Local-first control plane", "本地优先控制台")}</b>'
+        f'<p>{_T(lang, "Paths, session defaults, model consent, and display preferences stay reversible. Patient rows remain on this machine.", "路径、会话默认值、模型授权和显示偏好都可以回退；患者行数据始终留在本机。")}</p>'
+        '<div class="eu-settings-overview-badges">'
+        f'<em>{_T(lang, "local only", "仅本机")}</em>'
+        f'<em>{_T(lang, "reversible", "可回退")}</em>'
+        f'<em>{consent_chip}</em>'
+        '</div>'
+        '</div>'
+        '<div class="eu-settings-overview-list">'
+        f'{rows_html}'
+        '</div>'
+        '</div>'
+    )
+
+
+def _settings_path_tone(path_text: str) -> str:
+    if not str(path_text or "").strip():
+        return "warn"
+    try:
+        path = Path(str(path_text)).expanduser()
+        return "ok" if path.exists() else "warn"
+    except (OSError, ValueError):
+        return "bad"
+
+
+def _settings_path_controls_head_html(
+    *,
+    lang: str,
+    workdir: str,
+    export_hint: str,
+    module_folder: str,
+) -> str:
+    """Introduce the editable path controls without replacing their callbacks."""
+    chips = [
+        (
+            "research_agent_workdir",
+            _settings_path_tone(workdir),
+            _T(lang, "Agent run root", "Agent 运行根目录"),
+        ),
+        (
+            "export_path",
+            _settings_path_tone(export_hint),
+            _T(lang, "Export root", "导出根目录"),
+        ),
+        (
+            "module_dir_text",
+            _settings_path_tone(module_folder) if module_folder else "neutral",
+            _T(lang, "Reusable module folder", "可复用模块目录"),
+        ),
+    ]
+    chips_html = "".join(
+        '<span class="eu-settings-path-control-chip {tone}">'
+        '<i></i><b>{key}</b><em>{label}</em>'
+        '</span>'.format(
+            tone=_esc(tone),
+            key=_esc(key),
+            label=_esc(label),
+        )
+        for key, tone, label in chips
+    )
+    return (
+        '<div class="eu-settings-path-controls-head">'
+        '<div>'
+        f'<span>{_T(lang, "Path edit console", "路径编辑控制台")}</span>'
+        f'<b>{_T(lang, "Local workspace controls", "本地工作区控制")}</b>'
+        f'<p>{_T(lang, "These controls write directly to the live Streamlit session keys used by extraction, review, and agent runs.", "这些控件直接写入抽取、审阅和 Agent 运行使用的真实 Streamlit 会话键。")}</p>'
+        '</div>'
+        f'<div class="eu-settings-path-control-chips">{chips_html}</div>'
+        '</div>'
+    )
+
+
+def _settings_path_contract_html(
+    state: MutableMapping[str, Any],
+    *,
+    lang: str,
+    workdir: str,
+    export_hint: str,
+) -> str:
+    """Summarize which local settings drive each real workspace surface."""
+    data_path = str(state.get("data_path") or state.get("last_validated_path") or "").strip()
+    path_validated = bool(state.get("path_validated", False))
+    module_folder = str(state.get("research_agent_module_dir_text") or "").strip()
+    workdir_tone = _settings_path_tone(workdir)
+    export_tone = _settings_path_tone(export_hint)
+    data_tone = "ok" if path_validated else ("warn" if data_path else "neutral")
+    module_tone = _settings_path_tone(module_folder) if module_folder else "neutral"
+
+    cards = [
+        {
+            "label": _T(lang, "Agent runs", "Agent 运行"),
+            "value": Path(workdir).expanduser().name or workdir,
+            "detail": _T(
+                lang,
+                "Run history, manifests, reviewer decisions, and replication utilities read this folder.",
+                "运行历史、manifest、审核决定和复现实用工具都会读取这个目录。",
+            ),
+            "path": workdir,
+            "tone": workdir_tone,
+        },
+        {
+            "label": _T(lang, "Export bundle", "导出包"),
+            "value": Path(export_hint).expanduser().name or export_hint,
+            "detail": _T(
+                lang,
+                "Tables, figures, and evidence-ledger bundles default here after extraction or review.",
+                "抽取或复核后的表格、图件和证据账本包默认写到这里。",
+            ),
+            "path": export_hint,
+            "tone": export_tone,
+        },
+        {
+            "label": _T(lang, "Data source", "数据源"),
+            "value": (
+                _T(lang, "validated", "已验证")
+                if path_validated else
+                (_T(lang, "waiting", "待验证") if data_path else _T(lang, "not set", "未设置"))
+            ),
+            "detail": _T(
+                lang,
+                "Data Extraction and Classic Workspace use this local path when real-data mode is active.",
+                "真实数据模式下，数据抽取和 Classic Workspace 使用这个本机路径。",
+            ),
+            "path": data_path or _T(lang, "Set from Data Extraction", "从数据抽取页设置"),
+            "tone": data_tone,
+        },
+        {
+            "label": _T(lang, "Module folder", "模块目录"),
+            "value": Path(module_folder).expanduser().name if module_folder else _T(lang, "optional", "可选"),
+            "detail": _T(
+                lang,
+                "Research Agent can reuse an exported module folder instead of asking you to re-extract.",
+                "Research Agent 可复用已导出的模块目录，而不是要求重新抽取。",
+            ),
+            "path": module_folder or _T(lang, "Enabled by Module-folder mode", "由模块目录模式启用"),
+            "tone": module_tone,
+        },
+    ]
+    cards_html = "".join(
+        '<div class="eu-settings-path-card {tone}">'
+        '<span class="eu-settings-path-node">{index}</span>'
+        '<div class="eu-settings-path-copy">'
+        '<span>{label}</span>'
+        '<b>{value}</b>'
+        '<p>{detail}</p>'
+        '<code>{path}</code>'
+        '</div>'
+        '</div>'.format(
+            index=f"{index:02d}",
+            tone=_esc(str(card["tone"])),
+            label=_esc(card["label"]),
+            value=_esc(card["value"]),
+            detail=_esc(card["detail"]),
+            path=_esc(card["path"]),
+        )
+        for index, card in enumerate(cards, start=1)
+    )
+    return (
+        '<div class="eu-settings-path-contract">'
+        '<div class="eu-settings-path-head">'
+        '<div>'
+        f'<span>{_T(lang, "Local path contract", "本机路径契约")}</span>'
+        f'<b>{_T(lang, "Settings persistence map", "设置持久化映射")}</b>'
+        f'<p>{_T(lang, "These are the live session paths used by the real Streamlit workflow; no patient rows are uploaded.", "这些是真实 Streamlit 工作流正在使用的会话路径；患者行数据不会上传。")}</p>'
+        '</div>'
+        f'<em>{_T(lang, "local only", "仅本机")}</em>'
+        '</div>'
+        '<div class="eu-settings-path-grid">'
+        f'{cards_html}'
+        '</div>'
+        '</div>'
+    )
+
+
+def _settings_environment_contract_html(*, lang: str, workdir: str) -> str:
+    """Summarize the runtime facts used by the support downloads."""
+    database_catalog = "MIMIC-IV · eICU · AUMC · HiRID · MIMIC-III · SICdb"
+    python_version = sys.version.split()[0]
+    workspace_name = Path(workdir).expanduser().name or workdir
+    workspace_tone = _settings_path_tone(workdir)
+    rows = [
+        {
+            "label": _T(lang, "Build", "版本"),
+            "value": "EasyICU 1.0.0",
+            "detail": _T(
+                lang,
+                "Release notes and diagnostics use this application version stamp.",
+                "发布说明和诊断包使用这个应用版本标记。",
+            ),
+            "tone": "ok",
+        },
+        {
+            "label": _T(lang, "Python runtime", "Python 运行时"),
+            "value": python_version,
+            "detail": _T(
+                lang,
+                "Running interpreter for Streamlit, extraction utilities, and local agent helpers.",
+                "当前 Streamlit、抽取工具和本地 Agent 辅助程序使用的解释器。",
+            ),
+            "tone": "ok",
+        },
+        {
+            "label": _T(lang, "Database catalog", "数据库目录"),
+            "value": _T(lang, "6 ICU sources", "6 个 ICU 数据源"),
+            "detail": database_catalog,
+            "tone": "ok",
+        },
+        {
+            "label": _T(lang, "Diagnostics root", "诊断根目录"),
+            "value": workspace_name,
+            "detail": _T(
+                lang,
+                "Support bundles reference this local workspace while excluding secrets and patient rows.",
+                "支持包会引用这个本地工作区，同时排除密钥和患者行数据。",
+            ),
+            "path": workdir,
+            "tone": workspace_tone,
+        },
+    ]
+    row_fragments = []
+    for index, row in enumerate(rows, start=1):
+        path_html = f'<code>{_esc(str(row["path"]))}</code>' if row.get("path") else ""
+        row_fragments.append(
+            '<div class="eu-settings-agent-contract-row eu-settings-environment-row {tone}">'
+            '<span class="eu-settings-agent-node eu-settings-environment-node">{index}</span>'
+            '<div class="eu-settings-agent-copy eu-settings-environment-copy">'
+            '<span>{label}</span>'
+            '<b>{value}</b>'
+            '<p>{detail}</p>'
+            '{path}'
+            '</div>'
+            '</div>'.format(
+                index=f"{index:02d}",
+                tone=_esc(str(row["tone"])),
+                label=_esc(row["label"]),
+                value=_esc(row["value"]),
+                detail=_esc(row["detail"]),
+                path=path_html,
+            )
+        )
+    rows_html = "".join(row_fragments)
+    return (
+        '<div class="eu-settings-agent-contract eu-settings-environment-contract">'
+        '<div class="eu-settings-agent-head eu-settings-environment-head">'
+        '<div>'
+        f'<span>{_T(lang, "Environment contract", "环境契约")}</span>'
+        f'<b>{_T(lang, "Support bundle map", "支持包映射")}</b>'
+        f'<p>{_T(lang, "The downloads below are generated from these live runtime facts; they do not include patient rows, API keys, or local secrets.", "下方下载内容由这些实时运行事实生成；不包含患者行、API key 或本机密钥。")}</p>'
+        '</div>'
+        f'<em>{_T(lang, "downloadable", "可下载")}</em>'
+        '</div>'
+        '<div class="eu-settings-agent-list eu-settings-environment-list">'
+        f'{rows_html}'
+        '</div>'
         '</div>'
     )
 
@@ -2091,11 +2698,54 @@ def render_settings_redesign_page(lang: str) -> None:
         state["_scroll_to_top"] = True
 
     st.markdown(
+        '<div class="eu-page-marker eu-settings-page-marker"></div>'
         '<div class="eu-settings-page-head">'
         f'<div class="eyebrow">{_T(lang, "Workspace · 设置", "工作区 · 设置")}</div>'
         f'<h1>{_T(lang, "Settings", "设置")}</h1>'
         f'<p>{_T(lang, "Configure how EasyICU reads data, runs the agent, and presents the workspace. Everything is local and reversible.", "配置 EasyICU 如何读取数据、运行 agent 并呈现工作区。所有设置都保留在本机，且可以随时改回。")}</p>'
         '</div>',
+        unsafe_allow_html=True,
+    )
+    overview_rows = [
+        {
+            "label": _T(lang, "Start mode", "启动模式"),
+            "value": _T(lang, "Demo workspace", "演示工作区") if entry_mode == "demo" else _T(lang, "Real data", "真实数据"),
+            "detail": _T(
+                lang,
+                f"{demo_patients} demo patients · {demo_hours}h default" if entry_mode == "demo" else "New sessions open against local database paths.",
+                f"{demo_patients} 位演示患者 · 默认 {demo_hours}h" if entry_mode == "demo" else "新会话默认连接本地数据库路径。",
+            ),
+            "tone": "ok" if entry_mode == "demo" else "neutral",
+        },
+        {
+            "label": _T(lang, "Export root", "导出目录"),
+            "value": Path(export_hint).name or export_hint,
+            "detail": export_hint,
+            "tone": "neutral",
+        },
+        {
+            "label": _T(lang, "Research Agent", "研究智能体"),
+            "value": agent_run_value,
+            "detail": agent_run_detail,
+            "tone": agent_run_tone,
+        },
+        {
+            "label": _T(lang, "Privacy", "隐私"),
+            "value": _T(lang, "Local-first", "本地优先"),
+            "detail": _T(
+                lang,
+                "Patient rows stay on this machine; outbound model calls are opt-in.",
+                "患者行数据留在本机；模型端调用需要显式开启。",
+            ),
+            "tone": "ok" if not outbound_enabled else "warn",
+        },
+    ]
+    st.markdown(
+        _settings_overview_cockpit_html(
+            lang=lang,
+            rows=overview_rows,
+            outbound_enabled=outbound_enabled,
+        ),
         unsafe_allow_html=True,
     )
 
@@ -2107,6 +2757,15 @@ def render_settings_redesign_page(lang: str) -> None:
         unsafe_allow_html=True,
     )
     with st.container(key="eu_settings_workspace_card"):
+        st.markdown(
+            _settings_path_controls_head_html(
+                lang=lang,
+                workdir=workdir,
+                export_hint=export_hint,
+                module_folder=module_folder,
+            ),
+            unsafe_allow_html=True,
+        )
         left, right = st.columns([1.35, 1.0], gap="large")
         with left:
             st.markdown(
@@ -2218,10 +2877,71 @@ def render_settings_redesign_page(lang: str) -> None:
             )
 
     st.markdown(
+        _settings_path_contract_html(
+            state,
+            lang=lang,
+            workdir=workdir,
+            export_hint=export_hint,
+        ),
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
         '<div class="eu-settings-section-head">'
         f'<span>{_T(lang, "Data mode", "数据模式")}</span>'
         f'<h2>{_T(lang, "Defaults for new sessions", "新会话默认值")}</h2>'
         '</div>',
+        unsafe_allow_html=True,
+    )
+    entry_layout_labels = {
+        "prompt": _T(lang, "Question prompt", "问题入口"),
+        "copilot": _T(lang, "Copilot chat", "Copilot 对话"),
+        "cards": _T(lang, "Two-route cards", "双入口卡片"),
+    }
+    default_rows = [
+        {
+            "label": _T(lang, "Start mode", "启动模式"),
+            "value": _T(lang, "Demo workspace", "演示工作区") if entry_mode == "demo" else _T(lang, "Real data", "真实数据"),
+            "detail": _T(
+                lang,
+                "Demo opens the synthetic ICU path; real data opens the local source validation gate.",
+                "演示模式进入合成 ICU 路径；真实数据模式进入本机数据源验证关口。",
+            ),
+            "tone": "ok" if entry_mode == "demo" else "neutral",
+        },
+        {
+            "label": _T(lang, "Entry cover", "入口封面"),
+            "value": entry_layout_labels.get(entry_home_layout, entry_layout_labels["prompt"]),
+            "detail": _T(
+                lang,
+                "Controls which first-screen route selector appears before the workspace shell.",
+                "控制进入工作区 shell 前显示哪一种首屏入口选择。",
+            ),
+            "tone": "neutral",
+        },
+        {
+            "label": _T(lang, "Demo cohort", "演示队列"),
+            "value": _T(lang, f"{demo_patients} patients", f"{demo_patients} 位患者"),
+            "detail": _T(
+                lang,
+                "Used when EasyICU creates lightweight demo patient, cohort, and visualization frames.",
+                "用于 EasyICU 创建轻量演示患者、队列和可视化数据帧。",
+            ),
+            "tone": "neutral",
+        },
+        {
+            "label": _T(lang, "Timeline window", "时间窗"),
+            "value": _T(lang, f"{demo_hours} hours", f"{demo_hours} 小时"),
+            "detail": _T(
+                lang,
+                "Sets the hourly stay horizon for demo trajectories and review snapshots.",
+                "设置演示轨迹和复核快照的小时级 stay 时间范围。",
+            ),
+            "tone": "neutral",
+        },
+    ]
+    st.markdown(
+        _settings_defaults_ledger_html(lang=lang, rows=default_rows),
         unsafe_allow_html=True,
     )
     with st.container(key="eu_settings_data_mode_card"):
@@ -2344,26 +3064,17 @@ def render_settings_redesign_page(lang: str) -> None:
         unsafe_allow_html=True,
     )
     with st.container(key="eu_settings_privacy_card"):
-        static_privacy_rows = [
-            (
-                _T(lang, "Local-only mode", "本地模式"),
-                _T(lang, "Patient data never leaves your machine. This guarantee is enforced and cannot be disabled.", "患者数据不会离开你的机器。该保障强制启用，不能关闭。"),
-                True,
-                _T(lang, "enforced", "强制"),
+        st.markdown(
+            _settings_privacy_contract_html(
+                lang=lang,
+                outbound_enabled=outbound_enabled,
+                credential_value=credential_value,
+                credential_detail=credential_detail,
+                credential_tone=credential_tone,
             ),
-            (
-                _T(lang, "Anonymous usage telemetry", "匿名使用遥测"),
-                _T(lang, "EasyICU collects nothing unless you explicitly add your own instrumentation.", "EasyICU 不收集遥测，除非你自己显式添加。"),
-                False,
-                "",
-            ),
-            (
-                _T(lang, "Cache cohort frames", "缓存队列数据帧"),
-                _T(lang, "Keep extracted frames on disk to speed up repeat reviews.", "将已抽取数据帧保存在本地，加速重复复核。"),
-                True,
-                "",
-            ),
-        ]
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
         left, right = st.columns([1.35, 1.0], gap="large")
         with left:
             st.markdown(
@@ -2398,16 +3109,6 @@ def render_settings_redesign_page(lang: str) -> None:
             if bool(state.get("_eu_settings_allow_outbound_model_calls", False)) != outbound_enabled:
                 _settings_outbound_model_calls_changed()
                 st.rerun()
-        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
-
-        for title, desc, active, label in static_privacy_rows:
-            st.markdown(
-                '<div class="eu-settings-privacy-row">'
-                f'{_settings_row_copy(title, desc)}'
-                f'{_settings_static_toggle(active=active, label=label)}'
-                '</div>',
-                unsafe_allow_html=True,
-            )
 
     st.markdown(
         '<div class="eu-settings-section-head">'
@@ -2476,30 +3177,15 @@ def render_settings_redesign_page(lang: str) -> None:
                 unsafe_allow_html=True,
             )
         st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
-        static_rows = [
-            (
-                _T(lang, "Token budget", "Token 预算"),
-                _T(lang, "Soft cap per external run. Demo and Mock runs use zero tokens.", "外部模型运行的软上限。演示与 Mock 运行不使用 token。"),
-                '<div class="eu-settings-value mono"><span>120,000</span></div>',
+        st.markdown(
+            _settings_agent_contract_html(
+                lang=lang,
+                agent_run_value=agent_run_value,
+                agent_run_detail=agent_run_detail,
+                agent_run_tone=agent_run_tone,
             ),
-            (
-                _T(lang, "Auto-repair steps", "自动修复步骤"),
-                _T(lang, "Deterministically retry a failed analysis step before halting the run.", "分析步骤失败时，在停止前进行确定性重试。"),
-                _settings_static_toggle(active=True),
-            ),
-            (
-                _T(lang, "Evidence gate", "证据闸门"),
-                _T(lang, "Strict requires every contract to pass before drafting unlocks.", "Strict 要求每个契约通过后才解锁草稿。"),
-                '<div class="eu-settings-segment mono"><span class="active">Strict</span><span>Standard</span></div>',
-            ),
-        ]
-        for title, desc, control_html in static_rows:
-            left, right = st.columns([1.35, 1.0], gap="large")
-            with left:
-                st.markdown(_settings_row_copy(title, desc), unsafe_allow_html=True)
-            with right:
-                st.markdown(control_html, unsafe_allow_html=True)
-            st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
+            unsafe_allow_html=True,
+        )
 
     with st.container(key="eu_settings_llm_live_card"):
         st.markdown(
@@ -2509,37 +3195,38 @@ def render_settings_redesign_page(lang: str) -> None:
             '</div>',
             unsafe_allow_html=True,
         )
-        st.markdown(
-            '<div class="eu-settings-status-grid">'
-            + _settings_status_tile(
-                label=_T(lang, "Outbound calls", "模型端调用"),
-                value=_T(lang, "Allowed", "已允许") if outbound_enabled else _T(lang, "Off by default", "默认关闭"),
-                detail=_T(
+        connection_rows = [
+            {
+                "label": _T(lang, "Outbound calls", "模型端调用"),
+                "value": _T(lang, "Allowed", "已允许") if outbound_enabled else _T(lang, "Off by default", "默认关闭"),
+                "detail": _T(
                     lang,
                     "Patient rows stay local; only prompts/plans/logs may leave when enabled.",
                     "患者行数据仍保留本地；开启后仅提示词、计划和日志可能离开。",
                 ),
-                tone="ok" if outbound_enabled else "warn",
-            )
-            + _settings_status_tile(
-                label=_T(lang, "Provider", "服务商"),
-                value=provider_label,
-                detail=base_url_label or _T(lang, "Endpoint will be requested in the per-run override.", "端点将在单次运行覆盖中填写。"),
-                tone="neutral" if hosted_model_active else "ok",
-            )
-            + _settings_status_tile(
-                label=_T(lang, "Credential", "凭证"),
-                value=credential_value,
-                detail=credential_detail,
-                tone=credential_tone,
-            )
-            + _settings_status_tile(
-                label=_T(lang, "Research Agent", "研究智能体"),
-                value=agent_run_value,
-                detail=agent_run_detail,
-                tone=agent_run_tone,
-            )
-            + '</div>',
+                "tone": "ok" if outbound_enabled else "warn",
+            },
+            {
+                "label": _T(lang, "Provider", "服务商"),
+                "value": provider_label,
+                "detail": base_url_label or _T(lang, "Endpoint will be requested in the per-run override.", "端点将在单次运行覆盖中填写。"),
+                "tone": "neutral" if hosted_model_active else "ok",
+            },
+            {
+                "label": _T(lang, "Credential", "凭证"),
+                "value": credential_value,
+                "detail": credential_detail,
+                "tone": credential_tone,
+            },
+            {
+                "label": _T(lang, "Research Agent", "研究智能体"),
+                "value": agent_run_value,
+                "detail": agent_run_detail,
+                "tone": agent_run_tone,
+            },
+        ]
+        st.markdown(
+            _settings_connection_ledger_html(rows=connection_rows),
             unsafe_allow_html=True,
         )
         from easyicu.webapp.llm_chat import render_llm_settings
@@ -2558,6 +3245,17 @@ def render_settings_redesign_page(lang: str) -> None:
         unsafe_allow_html=True,
     )
     with st.container(key="eu_settings_language_card"):
+        st.markdown(
+            _settings_display_contract_html(
+                lang=lang,
+                is_english=is_en,
+                density_pref=density_pref,
+                display_target=display_target,
+                reduce_motion=reduce_motion,
+            ),
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
         left, right = st.columns([1.35, 1.0], gap="large")
         with left:
             st.markdown(
@@ -2612,25 +3310,6 @@ def render_settings_redesign_page(lang: str) -> None:
         with left:
             st.markdown(
                 _settings_row_copy(
-                    _T(lang, "Display target", "展示目标"),
-                    _T(
-                        lang,
-                        "Project default is the desktop app-like layout; responsive rules are fallback only.",
-                        "项目默认追求电脑端软件式展示；响应式规则仅作为兜底。",
-                    ),
-                ),
-                unsafe_allow_html=True,
-            )
-        with right:
-            st.markdown(
-                _settings_value_pill(_T(lang, "Desktop", "电脑端"), icon="desktop"),
-                unsafe_allow_html=True,
-            )
-        st.markdown('<div class="eu-settings-divider"></div>', unsafe_allow_html=True)
-        left, right = st.columns([1.35, 1.0], gap="large")
-        with left:
-            st.markdown(
-                _settings_row_copy(
                     _T(lang, "Reduce motion", "减少动态效果"),
                     _T(lang, "Disable shimmer and progress animations.", "关闭 shimmer 和进度动画。"),
                 ),
@@ -2652,12 +3331,7 @@ def render_settings_redesign_page(lang: str) -> None:
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div class="eu-settings-card eu-settings-env">'
-        '<div><span>Version</span><b class="mono">EasyICU 1.0.0</b></div>'
-        '<div><span>Python</span><b class="mono">3.10+</b></div>'
-        '<div><span>Databases detected</span><b class="mono">MIMIC-IV · eICU · AUMC · HiRID · MIMIC-III · SICdb</b></div>'
-        f'<div><span>Workspace</span><b class="mono">{_esc(workdir)}</b></div>'
-        '</div>',
+        _settings_environment_contract_html(lang=lang, workdir=workdir),
         unsafe_allow_html=True,
     )
     docs_text = _settings_repo_file_text(
@@ -3605,12 +4279,53 @@ def render_entry_redesign_page(lang: str) -> None:
         _render_entry_copilot_layout(lang, data_mode, is_demo_mode, starter_prompts)
         return
 
+    journey_steps = [
+        (
+            "01",
+            _T(lang, "Frame", "框定"),
+            _T(lang, "question", "研究问题"),
+        ),
+        (
+            "02",
+            _T(lang, "Extract", "抽取"),
+            _T(lang, "cohort + modules", "队列 + 模块"),
+        ),
+        (
+            "03",
+            _T(lang, "Review", "复核"),
+            _T(lang, "patients + statistics", "患者 + 统计"),
+        ),
+        (
+            "04",
+            _T(lang, "Analyze", "分析"),
+            _T(lang, "evidence -> draft gate", "证据 -> 草稿闸门"),
+        ),
+    ]
+    journey_html = "".join(
+        '<div class="eu-entry-journey-step">'
+        f'<div class="eu-entry-journey-num">{_esc(number)}</div>'
+        '<div>'
+        f'<div class="eu-entry-journey-label">{_esc(label)}</div>'
+        f'<div class="eu-entry-journey-sub">{_esc(subtitle)}</div>'
+        '</div>'
+        '</div>'
+        for number, label, subtitle in journey_steps
+    )
     st.markdown(
         '<div class="eu-entry-hero">'
-        f'<h1 style="margin:0;font-size:30px;font-weight:600;letter-spacing:-0.02em;color:var(--ink)">'
-        f'{_T(lang, "What would you like to study?", "你想研究什么？")}</h1>'
+        f'<div class="eu-entry-hero-kicker">{_esc(_T(lang, "Local-first ICU research workspace", "本地优先 ICU 研究工作台"))}</div>'
+        f'<h1 style="margin:0;font-size:34px;font-weight:650;letter-spacing:-0.02em;color:var(--ink)">'
+        f'{_T(lang, "Welcome to EasyICU", "欢迎使用 EasyICU")}</h1>'
         f'<div class="eu-entry-hero-copy" style="font-size:13.5px;color:var(--ink-3);margin-top:12px">'
-        f'{_T(lang, "New here? Let Research Copilot walk you through it. Know your way around? Drive the panels yourself in Classic Workspace. Same local engine — nothing is uploaded.", "第一次用？让 Research Copilot 带你一步步走。已经熟悉？在经典工作区直接操作面板。两者用的是同一个本机引擎，都不上传数据。")}</div>'
+        f'{_T(lang, "What would you like to study? Describe it to Research Copilot, or drive the panels yourself in Classic Workspace. Same local engine; nothing is uploaded.", "你想研究什么？可以交给 Research Copilot 对话推进，也可以在经典工作区手动操作。两者使用同一个本机引擎，不上传数据。")}</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="eu-entry-journey">'
+        f'<div class="eu-entry-journey-cap">{_esc(_T(lang, "Research journey · 4 checkpoints", "研究旅程 · 四个检查点"))}</div>'
+        f'<div class="eu-entry-journey-track">{journey_html}</div>'
+        f'<div class="eu-entry-journey-foot">{_esc(_T(lang, "Two routes, one local workflow: Copilot-guided or manually controlled.", "两种入口，同一条本地工作流：Copilot 引导或手动控制。"))}</div>'
         '</div>',
         unsafe_allow_html=True,
     )

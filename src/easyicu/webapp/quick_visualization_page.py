@@ -12,6 +12,41 @@ from typing import Any
 _EXPORT_TABLE_SUFFIXES = {".csv", ".parquet", ".xlsx"}
 
 
+def _qv_escape(value: object) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def _qv_loader_notice_html(
+    tone: str,
+    kicker: str,
+    title: str,
+    body: str,
+    meta: str = "",
+) -> str:
+    meta_html = f'<em>{_qv_escape(meta)}</em>' if meta else ""
+    return (
+        f'<div class="eu-qv-loader-notice {tone}">'
+        f'<span>{_qv_escape(kicker)}</span>'
+        f'<b>{_qv_escape(title)}</b>'
+        f'<p>{_qv_escape(body)}</p>'
+        f'{meta_html}'
+        '</div>'
+    )
+
+
+def _render_qv_loader_notice(
+    tone: str,
+    kicker: str,
+    title: str,
+    body: str,
+    meta: str = "",
+) -> None:
+    st.markdown(
+        _qv_loader_notice_html(tone, kicker, title, body, meta),
+        unsafe_allow_html=True,
+    )
+
+
 def _install_app_context(app_context: dict[str, Any]) -> None:
     """Expose app-level helpers/constants to this extracted renderer."""
     protected = {'render_quick_visualization_page', "_install_app_context"}
@@ -419,15 +454,21 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                     selected_files=auto_viz_request.get('selected_files'),
                 )
             st.session_state['_viz_auto_load_notice'] = (
-                f"✅ Auto-loaded exported files from `{auto_path}`"
+                f"Auto-loaded exported files from {auto_path}"
                 if lang == 'en' else
-                f"✅ 已自动加载最新导出文件：`{auto_path}`"
+                f"已自动加载最新导出文件：{auto_path}"
             )
             recent_export_path = auto_path
 
     auto_notice = st.session_state.pop('_viz_auto_load_notice', None)
     if auto_notice:
-        st.success(auto_notice)
+        _render_qv_loader_notice(
+            "ready",
+            "Review workspace" if lang == "en" else "审阅工作区",
+            "Export loaded" if lang == "en" else "导出已加载",
+            str(auto_notice),
+            "local-only",
+        )
 
     data_loaded = len(st.session_state.loaded_concepts) > 0
     show_data_loader = not data_loaded
@@ -487,8 +528,20 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                         file_names = list(dict.fromkeys(file.stem for file in available_files))
 
                         if file_names:
-                            st.success(
-                                f"✅ Found {len(file_names)} data files" if lang == 'en' else f"✅ 发现 {len(file_names)} 个数据文件"
+                            _render_qv_loader_notice(
+                                "ready",
+                                "Export scan" if lang == "en" else "导出扫描",
+                                (
+                                    f"{len(file_names)} data files found"
+                                    if lang == "en"
+                                    else f"发现 {len(file_names)} 个数据文件"
+                                ),
+                                (
+                                    "Choose tables and an ICU stay limit before opening the review workspace."
+                                    if lang == "en"
+                                    else "先选择表格和 ICU stay 加载上限，再打开审阅工作区。"
+                                ),
+                                str(export_dir),
                             )
                             selected_files = st.multiselect(
                                 "Select Tables to Load" if lang == 'en' else "选择要加载的表格",
@@ -525,15 +578,44 @@ def render_quick_visualization_page(app_context: dict[str, Any] | None = None):
                                         load_from_exported(export_path, max_patients=max_patients, selected_files=selected_files)
                                     st.rerun()
                             else:
-                                st.warning("⚠️ Please select at least one file" if lang == 'en' else "⚠️ 请至少选择一个文件")
+                                _render_qv_loader_notice(
+                                    "warning",
+                                    "Selection gate" if lang == "en" else "选择关口",
+                                    "Select at least one table" if lang == "en" else "请至少选择一个表格",
+                                    (
+                                        "The review workspace needs one or more exported tables to build Data Tables, Time Series, Patient Overview, and Data Quality panels."
+                                        if lang == "en"
+                                        else "审阅工作区需要至少一个导出表格，才能生成 Data Tables、Time Series、Patient Overview 和 Data Quality 面板。"
+                                    ),
+                                )
                         else:
-                            st.warning(
-                                "⚠️ No data files found in this directory (CSV/Parquet/Excel)"
-                                if lang == 'en'
-                                else "⚠️ 该目录下未找到数据文件 (CSV/Parquet/Excel)"
+                            _render_qv_loader_notice(
+                                "warning",
+                                "Export scan" if lang == "en" else "导出扫描",
+                                (
+                                    "No loadable tables found"
+                                    if lang == "en"
+                                    else "未找到可加载表格"
+                                ),
+                                (
+                                    "Choose a folder containing EasyICU CSV, Parquet, or Excel exports."
+                                    if lang == "en"
+                                    else "请选择包含 EasyICU CSV、Parquet 或 Excel 导出的文件夹。"
+                                ),
+                                str(export_dir),
                             )
                     else:
-                        st.error("❌ Directory does not exist" if lang == 'en' else "❌ 目录不存在")
+                        _render_qv_loader_notice(
+                            "danger",
+                            "Local path" if lang == "en" else "本地路径",
+                            "Directory does not exist" if lang == "en" else "目录不存在",
+                            (
+                                "Confirm the local export path or use a remembered export folder."
+                                if lang == "en"
+                                else "请确认本地导出路径，或使用已记住的导出目录。"
+                            ),
+                            str(export_dir),
+                        )
 
             elif current_source == "demo":
                 demo_patients = int(globals().get("LIGHTWEIGHT_DEMO_PATIENTS", 24))

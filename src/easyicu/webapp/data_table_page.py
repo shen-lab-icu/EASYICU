@@ -72,6 +72,26 @@ def _render_preview_csv_download(
     )
 
 
+def _dt_notice_html(tone: str, kicker: str, title: str, body: str = "", meta: str = "") -> str:
+    body_html = f'<p>{html.escape(body)}</p>' if body else ""
+    meta_html = f'<em>{html.escape(meta)}</em>' if meta else ""
+    return (
+        f'<div class="dt-preview-notice {html.escape(tone)}">'
+        f'<span>{html.escape(kicker)}</span>'
+        f'<b>{html.escape(title)}</b>'
+        f'{body_html}'
+        f'{meta_html}'
+        '</div>'
+    )
+
+
+def _render_dt_notice(tone: str, kicker: str, title: str, body: str = "", meta: str = "") -> None:
+    st.markdown(
+        _dt_notice_html(tone, kicker, title, body, meta),
+        unsafe_allow_html=True,
+    )
+
+
 def _render_data_table_detail_gate(
     *,
     lang: str,
@@ -150,7 +170,12 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
             unsafe_allow_html=True,
         )
         no_data_msg = "Please load data first in the settings above." if lang == 'en' else "请先在上方设置中加载数据。"
-        st.warning(no_data_msg)
+        _render_dt_notice(
+            "pending",
+            "Data table" if lang == "en" else "数据表格",
+            "Review workspace is not loaded" if lang == "en" else "审阅工作区尚未加载",
+            no_data_msg,
+        )
         return
 
     # 🔧 FIX (2026-02-12): 使用内部分组定义来构建映射
@@ -215,7 +240,12 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
 
     if not module_options:
         no_module_msg = "No modules found in loaded data." if lang == 'en' else "加载的数据中没有找到模块。"
-        st.info(no_module_msg)
+        _render_dt_notice(
+            "warning",
+            "Module map" if lang == "en" else "模块映射",
+            "No review modules found" if lang == "en" else "未找到审阅模块",
+            no_module_msg,
+        )
         return
 
     if st.session_state.get('data_table_module_select') not in module_options:
@@ -418,7 +448,7 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                         st.dataframe(col_info, hide_index=True, use_container_width=True)
 
                     # 添加搜索/过滤选项
-                    filter_expander_label = "🔎 Preview Filters" if lang == 'en' else "🔎 预览筛选"
+                    filter_expander_label = "Preview Filters" if lang == 'en' else "预览筛选"
                     with st.expander(filter_expander_label, expanded=False):
                         # 患者过滤
                         id_col = st.session_state.get('id_col', 'stay_id')
@@ -461,7 +491,12 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                     # 不提供下载按钮，因为数据是用户导入的
                 else:
                     empty_msg = f"No data available for {selected_feature}" if lang == 'en' else f"{selected_feature} 没有可用数据"
-                    st.info(empty_msg)
+                    _render_dt_notice(
+                        "info",
+                        "Single feature" if lang == "en" else "单特征",
+                        "Feature preview is empty" if lang == "en" else "特征预览为空",
+                        empty_msg,
+                    )
 
         else:
             # 合并全部模式（宽表）
@@ -516,7 +551,12 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
 
             if len(dfs_to_merge) == 0:
                 no_data_msg = "No data to merge in this module." if lang == 'en' else "该模块没有可合并的数据。"
-                st.warning(no_data_msg)
+                _render_dt_notice(
+                    "warning",
+                    "Merged preview" if lang == "en" else "合并预览",
+                    "No mergeable tables" if lang == "en" else "没有可合并表",
+                    no_data_msg,
+                )
             elif len(dfs_to_merge) == 1:
                 merged_df = dfs_to_merge[0]
                 display_merged = merged_df.head(1000).copy()
@@ -539,7 +579,12 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
 
                 if not any(id_col in df.columns for df in dfs_to_merge):
                     no_common_msg = "Cannot merge: patient ID column is missing in all features." if lang == 'en' else "无法合并：所有特征都缺少患者 ID 列。"
-                    st.warning(no_common_msg)
+                    _render_dt_notice(
+                        "warning",
+                        "Merged preview" if lang == "en" else "合并预览",
+                        "Patient ID column is missing" if lang == "en" else "缺少患者 ID 列",
+                        no_common_msg,
+                    )
                 else:
                     try:
                         merging_msg = "Merging data..." if lang == 'en' else "正在合并数据..."
@@ -611,7 +656,12 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
 
                             if merged_df is None:
                                 no_data_msg = "No unique data columns to merge." if lang == 'en' else "没有唯一的数据列可合并。"
-                                st.warning(no_data_msg)
+                                _render_dt_notice(
+                                    "warning",
+                                    "Merged preview" if lang == "en" else "合并预览",
+                                    "No unique columns" if lang == "en" else "没有唯一列",
+                                    no_data_msg,
+                                )
                                 return
 
                         sampled_for_preview = total_rows_before > MAX_ROWS_PER_DF * len(dfs_to_merge)
@@ -645,15 +695,15 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                                 summary_cols = st.columns([1.12, 0.9, 0.9])
                                 with summary_cols[0]:
                                     summary_badge = (
-                                        f"⚠️ Sample preview · max {MAX_ROWS_PER_DF:,} rows per feature"
+                                        f"Sample preview · max {MAX_ROWS_PER_DF:,} rows per feature"
                                         if sampled_for_preview and lang == 'en'
                                         else (
-                                            f"⚠️ 采样预览 · 每个特征最多 {MAX_ROWS_PER_DF:,} 行"
+                                            f"采样预览 · 每个特征最多 {MAX_ROWS_PER_DF:,} 行"
                                             if sampled_for_preview
                                             else (
-                                                "✅ Merged preview ready"
+                                                "Merged preview ready"
                                                 if lang == 'en'
-                                                else "✅ 合并预览已就绪"
+                                                else "合并预览已就绪"
                                             )
                                         )
                                     )
@@ -681,4 +731,9 @@ def render_data_table_subtab(app_context: dict[str, Any] | None = None):
                     # 不提供下载按钮，因为数据是用户导入的
                     except Exception as e:
                         err_msg = f"Error merging data: {e}" if lang == 'en' else f"合并数据时出错: {e}"
-                        st.error(err_msg)
+                        _render_dt_notice(
+                            "danger",
+                            "Merged preview" if lang == "en" else "合并预览",
+                            "Merge failed" if lang == "en" else "合并失败",
+                            err_msg,
+                        )

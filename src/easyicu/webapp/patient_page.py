@@ -51,6 +51,10 @@ def _patient_navigation_target(
     raise ValueError(f"Unknown patient navigation action: {action}")
 
 
+def _patient_html(value: Any) -> str:
+    return html.escape(str(value))
+
+
 def render_patient_page(app_context: dict[str, Any] | None = None):
     """渲染患者视图页面。"""
     if app_context is not None:
@@ -89,9 +93,283 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
             return None
         return series.iloc[-1]
 
+    def _render_patient_micro_heading(kicker: str, title: str, subtitle: str | None = None) -> None:
+        subtitle_html = f'<p>{_patient_html(subtitle)}</p>' if subtitle else ""
+        st.markdown(
+            '<div class="eu-patient-mini-heading">'
+            f'<span>{_patient_html(kicker)}</span>'
+            f'<b>{_patient_html(title)}</b>'
+            f'{subtitle_html}'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    def _patient_signal_grid(cards: list[tuple[str, str, str, str]]) -> None:
+        card_html = "".join(
+            (
+                f'<div class="eu-patient-signal-card {tone}">'
+                f'<span>{_patient_html(label)}</span>'
+                f'<b>{_patient_html(value)}</b>'
+                f'<em>{_patient_html(note)}</em>'
+                '</div>'
+            )
+            for label, value, note, tone in cards
+        )
+        st.markdown(
+            f'<div class="eu-patient-signal-grid">{card_html}</div>',
+            unsafe_allow_html=True,
+        )
+
+    def _patient_key_fragment(value: Any) -> str:
+        fragment = "".join(ch if ch.isalnum() else "_" for ch in str(value).lower()).strip("_")
+        return fragment or "item"
+
+    def _patient_time_column(frame) -> str | None:
+        for candidate in time_candidates:
+            if candidate in frame.columns:
+                return candidate
+        return None
+
+    def _patient_value_column(concept_name: str, frame, id_col_name: str) -> str | None:
+        if concept_name in frame.columns:
+            return concept_name
+        value_col = _choose_concept_value_column(concept_name, frame)
+        if value_col is not None and value_col in frame.columns:
+            return value_col
+        excluded_cols = {id_col_name, *time_candidates}
+        candidates = [column for column in frame.columns if column not in excluded_cols]
+        return candidates[-1] if candidates else None
+
+    def _format_patient_category_value(raw_value: Any, decimals: int) -> str:
+        try:
+            return safe_format_number(float(raw_value), decimals)
+        except Exception:
+            return str(raw_value)
+
+    def _patient_delta_note(series, decimals: int, lang: str) -> str:
+        numeric = pd.to_numeric(series, errors="coerce").dropna()
+        if len(numeric) > 1:
+            delta = float(numeric.iloc[-1] - numeric.iloc[0])
+            if abs(delta) < 1e-9:
+                return "stable" if lang == "en" else "稳定"
+            sign = "+" if delta > 0 else ""
+            return f"Δ {sign}{safe_format_number(delta, decimals)}"
+        return "latest" if lang == "en" else "最新"
+
+    def _patient_category_tone(concept_name: str, raw_value: Any, boolean_active: bool | None = None) -> str:
+        if boolean_active is not None:
+            if concept_name in {"sep3_sofa1", "sep3_sofa2", "susp_inf", "infection_icd"}:
+                return "danger" if boolean_active else "ok"
+            if concept_name in {"vent_ind", "mech_vent", "rrt", "vaso_ind"}:
+                return "warn" if boolean_active else "ok"
+            return "accent" if boolean_active else "neutral"
+        try:
+            numeric = float(raw_value)
+        except Exception:
+            return "neutral"
+        if concept_name in {"sofa", "sofa2", "qsofa", "sirs", "mews", "news"}:
+            return "ok" if numeric < 6 else "warn" if numeric < 10 else "danger"
+        if concept_name == "gcs":
+            return "ok" if numeric >= 13 else "warn" if numeric >= 9 else "danger"
+        return "neutral"
+
+    def _patient_category_notice(tone: str, title: str, body: str) -> None:
+        st.markdown(
+            f'<div class="eu-patient-category-notice {html.escape(tone)}">'
+            f'<b>{_patient_html(title)}</b>'
+            f'<p>{_patient_html(body)}</p>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    def _render_patient_notice(tone: str, kicker: str, title: str, body: str = "", meta: str = "") -> None:
+        body_html = f'<p>{_patient_html(body)}</p>' if body else ""
+        meta_html = f'<em>{_patient_html(meta)}</em>' if meta else ""
+        st.markdown(
+            f'<div class="eu-patient-notice {html.escape(tone)}">'
+            f'<span>{_patient_html(kicker)}</span>'
+            f'<b>{_patient_html(title)}</b>'
+            f'{body_html}'
+            f'{meta_html}'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+    def _collect_patient_category_items(
+        concepts: list[str],
+        patient_id: Any,
+        id_col_name: str,
+        *,
+        decimals: int,
+        boolean_modes: dict[str, str] | None = None,
+        include_chart: bool = True,
+    ) -> tuple[list[dict[str, str]], list[tuple[str, Any, str, str]]]:
+        boolean_modes = boolean_modes or {}
+        cards: list[dict[str, str]] = []
+        series_items: list[tuple[str, Any, str, str]] = []
+
+        for concept_name in concepts:
+            frame = loaded_concepts_map.get(concept_name)
+            if not isinstance(frame, pd.DataFrame):
+                continue
+            patient_frame = frame[frame[id_col_name] == patient_id].copy() if id_col_name in frame.columns else frame.copy()
+            if patient_frame.empty:
+                continue
+            value_col = _patient_value_column(concept_name, patient_frame, id_col_name)
+            if value_col is None or value_col not in patient_frame.columns:
+                continue
+            series = patient_frame[value_col].dropna()
+            if series.empty:
+                continue
+
+            bool_mode = boolean_modes.get(concept_name)
+            if bool_mode:
+                numeric = pd.to_numeric(series, errors="coerce").dropna()
+                bool_raw = numeric.max() if bool_mode == "max" and not numeric.empty else numeric.iloc[-1] if not numeric.empty else series.iloc[-1]
+                try:
+                    is_active = float(bool_raw) == 1.0
+                except Exception:
+                    is_active = str(bool_raw).strip().lower() in {"1", "true", "yes", "y"}
+                value = "Yes" if is_active and lang == "en" else "No" if lang == "en" else "是" if is_active else "否"
+                note = "ever observed" if bool_mode == "max" and lang == "en" else "latest flag" if lang == "en" else "曾出现" if bool_mode == "max" else "最新标记"
+                cards.append({
+                    "label": concept_name.upper(),
+                    "value": value,
+                    "note": note,
+                    "tone": _patient_category_tone(concept_name, bool_raw, is_active),
+                })
+                continue
+
+            latest_value = series.iloc[-1]
+            cards.append({
+                "label": concept_name.upper(),
+                "value": _format_patient_category_value(latest_value, decimals),
+                "note": _patient_delta_note(series, decimals, lang),
+                "tone": _patient_category_tone(concept_name, latest_value),
+            })
+
+            if include_chart:
+                time_col = _patient_time_column(patient_frame)
+                if time_col is None:
+                    continue
+                plot_frame = patient_frame[[time_col, value_col]].copy()
+                plot_frame[value_col] = pd.to_numeric(plot_frame[value_col], errors="coerce")
+                plot_frame = plot_frame.dropna(subset=[time_col, value_col])
+                if plot_frame.empty:
+                    continue
+                try:
+                    plot_frame = plot_frame.sort_values(time_col)
+                except Exception:
+                    pass
+                series_items.append((concept_name.upper(), plot_frame.tail(48), time_col, value_col))
+
+        return cards, series_items
+
+    def _render_patient_category_grid(cards: list[dict[str, str]]) -> None:
+        card_html = "".join(
+            (
+                f'<div class="eu-patient-category-card {html.escape(card["tone"])}">'
+                f'<span>{_patient_html(card["label"])}</span>'
+                f'<b>{_patient_html(card["value"])}</b>'
+                f'<em>{_patient_html(card["note"])}</em>'
+                '</div>'
+            )
+            for card in cards
+        )
+        st.markdown(
+            f'<div class="eu-patient-category-grid">{card_html}</div>',
+            unsafe_allow_html=True,
+        )
+
+    def _render_patient_category_chart(section_key: str, title: str, series_items: list[tuple[str, Any, str, str]]) -> None:
+        if not series_items:
+            return
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
+        visible_items = series_items[:6]
+        n_cols = min(3, len(visible_items))
+        n_rows = (len(visible_items) + n_cols - 1) // n_cols
+        fig = make_subplots(
+            rows=n_rows,
+            cols=n_cols,
+            subplot_titles=[item[0] for item in visible_items],
+            vertical_spacing=0.2 if n_rows > 1 else 0.12,
+            horizontal_spacing=0.08,
+        )
+        palette = ["#0f766e", "#334155", "#9f3a57", "#a16207", "#0e7490", "#475569"]
+        for idx, (label, plot_frame, time_col, value_col) in enumerate(visible_items):
+            row = idx // n_cols + 1
+            col = idx % n_cols + 1
+            fig.add_trace(
+                go.Scatter(
+                    x=plot_frame[time_col],
+                    y=plot_frame[value_col],
+                    mode="lines+markers",
+                    name=label,
+                    line=dict(color=palette[idx % len(palette)], width=2.2, shape="spline", smoothing=0.35),
+                    marker=dict(size=4.5, color=palette[idx % len(palette)]),
+                    hovertemplate=f"{label}: %{{y:.2f}}<extra></extra>",
+                ),
+                row=row,
+                col=col,
+            )
+        fig.update_layout(
+            height=168 if n_rows == 1 else 294 if n_rows == 2 else 420,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="#fbfaf7",
+            showlegend=False,
+            margin=dict(l=34, r=16, t=34, b=22),
+            font=dict(size=11, color="#1f2937"),
+        )
+        fig.update_xaxes(showgrid=False, zeroline=False, tickfont=dict(size=9, color="#64748b"))
+        fig.update_yaxes(showgrid=True, gridcolor="#ece7df", zeroline=False, tickfont=dict(size=10, color="#64748b"))
+        st.markdown(
+            f'<div class="eu-patient-category-chart-title">{_patient_html(title)}</div>',
+            unsafe_allow_html=True,
+        )
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            key=f"patient_category_{_patient_key_fragment(section_key)}_sparkline",
+            config=_get_plotly_chart_config(),
+        )
+
+    def _render_patient_category_section(
+        section_key: str,
+        title: str,
+        subtitle: str,
+        concepts: list[str],
+        *,
+        decimals: int = 1,
+        boolean_modes: dict[str, str] | None = None,
+        include_chart: bool = True,
+        no_data_body: str | None = None,
+    ) -> None:
+        _render_patient_micro_heading("Category" if lang == "en" else "分类", title, subtitle)
+        cards, series_items = _collect_patient_category_items(
+            concepts,
+            patient_id,
+            id_col,
+            decimals=decimals,
+            boolean_modes=boolean_modes,
+            include_chart=include_chart,
+        )
+        if not cards:
+            _patient_category_notice(
+                "pending",
+                "No signals in this category" if lang == "en" else "该分类暂无信号",
+                no_data_body or ("The current workspace has no loaded rows for these concepts." if lang == "en" else "当前工作台未加载这些概念的患者行。"),
+            )
+            return
+        _render_patient_category_grid(cards)
+        if include_chart:
+            _render_patient_category_chart(section_key, f"{title} · compact trend", series_items)
+
     _pat_title = "Patient Overview" if lang == 'en' else "患者综合视图"
     _pat_sub = "Multi-dimensional patient dashboard" if lang == 'en' else "多维度患者仪表盘"
     st.markdown(f'''
+    <div class="eu-page-marker eu-patient-page-marker"></div>
     <div class="eu-subhead">
         <div class="t">{_pat_title}</div>
         <div class="s">{_pat_sub}</div>
@@ -101,16 +379,24 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
     if len(st.session_state.loaded_concepts) == 0:
         _msg = "Load data to view patient dashboards." if lang == 'en' else "请先加载数据以查看患者视图。"
         st.markdown(f'''
-        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:14px;padding:28px;text-align:center;margin:20px 0">
-            <div style="font-size:2rem;margin-bottom:10px">🏥</div>
-            <div style="font-weight:600;color:#111827">{_msg}</div>
+        <div class="eu-patient-empty-state">
+            <div class="eu-patient-empty-icon">Data</div>
+            <b>{_patient_html(_msg)}</b>
+            <p>{_patient_html("Use Data Extraction or load an exported module folder to open the review workspace." if lang == 'en' else "通过数据提取或已导出的模块目录打开审阅工作台。")}</p>
         </div>
         ''', unsafe_allow_html=True)
         return
 
     if not st.session_state.patient_ids:
-        warn_msg = "⚠️ No patient data found" if lang == 'en' else "⚠️ 未找到患者数据"
-        st.warning(warn_msg)
+        warn_msg = "No patient data found" if lang == 'en' else "未找到患者数据"
+        _render_patient_notice(
+            "warning",
+            "Patient index" if lang == "en" else "患者索引",
+            warn_msg,
+            "The loaded tables did not expose any ICU stay identifiers for patient-level review."
+            if lang == 'en' else
+            "当前已加载表未提供可用于患者级审阅的 ICU stay 标识。",
+        )
         return
 
     # ============ Patient Summary Header (审稿式 Case Review) ============
@@ -153,13 +439,19 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
         _sup_lbl = get_text('key_supports')
 
         st.markdown(f"""
-        <div style="background:linear-gradient(135deg,#f0f9ff,#e0f2fe);border:1px solid #bae6fd;border-radius:14px;padding:16px 20px;margin-bottom:16px">
-            <div style="font-size:1.1rem;font-weight:800;color:#0369a1;margin-bottom:10px">{get_text('patient_summary')} — Patient {pid}</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px">
-                <div><div style="font-size:.72rem;color:#6b7280;text-transform:uppercase;font-weight:700">{_demo_lbl}</div><div style="font-weight:600">{_sex}, {_age}y</div></div>
-                <div><div style="font-size:.72rem;color:#6b7280;text-transform:uppercase;font-weight:700">{_los_lbl}</div><div style="font-weight:600">{_los}</div></div>
-                <div><div style="font-size:.72rem;color:#6b7280;text-transform:uppercase;font-weight:700">{_mort_lbl}</div><div style="font-weight:600">{_mort}</div></div>
-                <div><div style="font-size:.72rem;color:#6b7280;text-transform:uppercase;font-weight:700">{_sup_lbl}</div><div style="font-weight:600">{_supports_str}</div></div>
+        <div class="eu-patient-summary-card">
+            <div class="eu-patient-summary-head">
+                <div>
+                    <span>{_patient_html("Case review" if lang == 'en' else "病例复核")}</span>
+                    <b>{_patient_html(get_text('patient_summary'))} · Patient {_patient_html(pid)}</b>
+                </div>
+                <em>{_patient_html("local workspace" if lang == 'en' else "本地工作区")}</em>
+            </div>
+            <div class="eu-patient-summary-grid">
+                <div><span>{_patient_html(_demo_lbl)}</span><b>{_patient_html(_sex)}, {_patient_html(_age)}y</b></div>
+                <div><span>{_patient_html(_los_lbl)}</span><b>{_patient_html(_los)}</b></div>
+                <div><span>{_patient_html(_mort_lbl)}</span><b>{_patient_html(_mort)}</b></div>
+                <div><span>{_patient_html(_sup_lbl)}</span><b>{_patient_html(_supports_str)}</b></div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -167,8 +459,13 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
     # 患者选择面板
     if not screenshot_mode:
         select_title = "Patient Selection" if lang == 'en' else "患者选择"
+        select_hint = "Move between ICU stays, then inspect the dashboard, category tables, or raw rows." if lang == 'en' else "切换 ICU stay 后查看仪表盘、分类表或原始数据行。"
         st.markdown(f'''
-        <div style="font-size:1.05rem;font-weight:700;color:#111827;margin-bottom:10px">{select_title}</div>
+        <div class="eu-patient-control-heading">
+            <span>{_patient_html("Case navigator" if lang == 'en' else "病例导航")}</span>
+            <b>{_patient_html(select_title)}</b>
+            <p>{_patient_html(select_hint)}</p>
+        </div>
         ''', unsafe_allow_html=True)
 
     # 快速导航按钮
@@ -245,7 +542,10 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                 )
                 st.rerun()
         with nav_cols[5]:
-            st.markdown(f"<div style='text-align:center;padding:0.5rem;background:rgba(30,40,50,0.6);border-radius:4px'>{current_idx + 1}/{len(st.session_state.patient_ids)}</div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='eu-patient-nav-count'><span>{_patient_html('Case' if lang == 'en' else '病例')}</span><b>{current_idx + 1}/{len(st.session_state.patient_ids)}</b></div>",
+                unsafe_allow_html=True,
+            )
 
     # ============ Render Patient Summary Card ============
     _current_pid = st.session_state.get('patient_view_id', st.session_state.patient_ids[0] if st.session_state.patient_ids else None)
@@ -305,13 +605,13 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
 
             data_label = "Available Data" if lang == 'en' else "可用数据"
             st.markdown(f'''
-            <div class="metric-card" style="padding:0.5rem 1rem">
-                <div class="stat-label">{data_label}</div>
-                <div style="display:flex;gap:1rem;font-size:0.9rem">
-                    <span>{n_concepts} total</span>
-                    <span>{n_vitals} vitals</span>
-                    <span>{n_labs} labs</span>
-                    <span>{n_scores} scores</span>
+            <div class="eu-patient-availability-card metric-card">
+                <span>{_patient_html(data_label)}</span>
+                <div>
+                    <b>{n_concepts}</b><em>{_patient_html("total" if lang == 'en' else "总计")}</em>
+                    <b>{n_vitals}</b><em>{_patient_html("vitals" if lang == 'en' else "生命体征")}</em>
+                    <b>{n_labs}</b><em>{_patient_html("labs" if lang == 'en' else "实验室")}</em>
+                    <b>{n_scores}</b><em>{_patient_html("scores" if lang == 'en' else "评分")}</em>
                 </div>
             </div>
             ''', unsafe_allow_html=True)
@@ -324,8 +624,16 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
 
         if view_mode == dashboard_mode:
             # 自定义综合仪表盘
-            dash_title = "### Dashboard" if lang == 'en' else "### 综合仪表盘"
-            st.markdown(dash_title)
+            dash_title = "Dashboard" if lang == 'en' else "综合仪表盘"
+            dash_sub = "Trend tiles, score comparison, and endpoint flags for the selected ICU stay." if lang == 'en' else "当前 ICU stay 的趋势卡片、评分对比与终点标记。"
+            st.markdown(
+                '<div class="eu-patient-section-heading">'
+                f'<span>{_patient_html("Review surface" if lang == "en" else "审阅界面")}</span>'
+                f'<b>{_patient_html(dash_title)}</b>'
+                f'<p>{_patient_html(dash_sub)}</p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
             if screenshot_mode:
                 dash_focus_note = (
                     "Figure preset: emphasizing SOFA comparison and compact case summary."
@@ -374,7 +682,13 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                     if not trend_items:
                         return
 
-                    st.markdown(f"#### {title}")
+                    st.markdown(
+                        '<div class="eu-patient-mini-heading">'
+                        f'<span>{_patient_html("Trend panel" if lang == "en" else "趋势面板")}</span>'
+                        f'<b>{_patient_html(title)}</b>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
                     visible_items = trend_items[:6]
                     n_cols = min(3, len(visible_items))
                     n_rows = (len(visible_items) + n_cols - 1) // n_cols
@@ -389,7 +703,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                         vertical_spacing=0.18 if n_rows > 1 else 0.12,
                         horizontal_spacing=0.08,
                     )
-                    palette = ['#2563eb', '#16a34a', '#dc2626', '#7c3aed', '#ea580c', '#0891b2']
+                    palette = ['#0f766e', '#334155', '#991b1b', '#6b7280', '#a16207', '#0e7490']
                     for idx, (concept_name, display_name, _unit, plot_frame, time_col, value_col) in enumerate(visible_items):
                         row = idx // n_cols + 1
                         col = idx % n_cols + 1
@@ -412,10 +726,10 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                         template="plotly_white",
                         showlegend=False,
                         margin=dict(l=36, r=14, t=38, b=24),
-                        font=dict(size=12, color='black'),
+                        font=dict(size=12, color='#111827'),
                     )
-                    fig.update_xaxes(tickfont=dict(size=10, color='black'), showgrid=True)
-                    fig.update_yaxes(tickfont=dict(size=10, color='black'), showgrid=True)
+                    fig.update_xaxes(tickfont=dict(size=10, color='#4b5563'), showgrid=True, gridcolor='#ece7df')
+                    fig.update_yaxes(tickfont=dict(size=10, color='#4b5563'), showgrid=True, gridcolor='#ece7df')
                     st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
 
                 vital_specs = [
@@ -450,8 +764,11 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                                 break
 
                         if len(patient_sofa) > 0 and sofa_time_col and not screenshot_mode:
-                            sofa_trend = "#### SOFA Score Trend" if lang == 'en' else "#### SOFA 评分趋势"
-                            st.markdown(sofa_trend)
+                            _render_patient_micro_heading(
+                                "Score trajectory" if lang == 'en' else "评分轨迹",
+                                "SOFA Score Trend" if lang == 'en' else "SOFA 评分趋势",
+                                "Stacked organ contribution over the selected ICU stay." if lang == 'en' else "当前 ICU stay 内各器官评分贡献的堆叠轨迹。",
+                            )
 
                             # SOFA 分解堆叠图
                             sofa_components = ['sofa_resp', 'sofa_coag', 'sofa_liver',
@@ -460,7 +777,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
 
                             if available_components:
                                 fig = go.Figure()
-                                colors = ['#ff6b6b', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#5f27cd']
+                                colors = ['#0f766e', '#334155', '#6b7280', '#a16207', '#991b1b', '#0f172a']
 
                                 for i, comp in enumerate(available_components):
                                     fig.add_trace(go.Bar(
@@ -479,10 +796,11 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                                     xaxis_title=time_label,
                                     yaxis_title=score_label,
                                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
-                                    font=dict(size=14, color='black'),
+                                    font=dict(size=12, color='#111827'),
+                                    margin=dict(l=52, r=18, t=54, b=44),
                                 )
-                                fig.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                                fig.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                                fig.update_xaxes(tickfont=dict(size=11, color='#4b5563'), title_font=dict(size=12, color='#4b5563'), gridcolor='#ece7df')
+                                fig.update_yaxes(tickfont=dict(size=11, color='#4b5563'), title_font=dict(size=12, color='#4b5563'), gridcolor='#ece7df')
 
                                 st.plotly_chart(fig, use_container_width=True, config=_get_plotly_chart_config())
 
@@ -491,8 +809,11 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                 has_sofa2 = 'sofa2' in st.session_state.loaded_concepts
 
                 if has_sofa1 and has_sofa2:
-                    compare_title = "#### SOFA-1 vs SOFA-2 Comparison" if lang == 'en' else "#### SOFA-1 与 SOFA-2 对比"
-                    st.markdown(compare_title)
+                    _render_patient_micro_heading(
+                        "Comparator" if lang == 'en' else "对照",
+                        "SOFA-1 vs SOFA-2 Comparison" if lang == 'en' else "SOFA-1 与 SOFA-2 对比",
+                        "Review score drift before using the case in cohort-level interpretation." if lang == 'en' else "在进入队列解释前，先复核评分体系变化。",
+                    )
 
                     sofa1_df = st.session_state.loaded_concepts['sofa']
                     sofa2_df = st.session_state.loaded_concepts['sofa2']
@@ -520,8 +841,10 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
 
                         if time_col1 and time_col2:
                             # 1. 总分对比折线图
-                            total_compare = "**Total Score Comparison**" if lang == 'en' else "**总分对比**"
-                            st.markdown(total_compare)
+                            _render_patient_micro_heading(
+                                "Total score" if lang == 'en' else "总分",
+                                "Total Score Comparison" if lang == 'en' else "总分对比",
+                            )
 
                             fig_total = go.Figure()
 
@@ -532,8 +855,8 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                                     y=patient_sofa1['sofa'],
                                     mode='lines+markers',
                                     name='SOFA-1 (Traditional)',
-                                    line=dict(color='#1f77b4', width=3),
-                                    marker=dict(size=8)
+                                    line=dict(color='#0f172a', width=2.5),
+                                    marker=dict(size=6)
                                 ))
 
                             # SOFA-2 总分
@@ -543,8 +866,8 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                                     y=patient_sofa2['sofa2'],
                                     mode='lines+markers',
                                     name='SOFA-2 (2025 New)',
-                                    line=dict(color='#ff7f0e', width=3, dash='dash'),
-                                    marker=dict(size=8, symbol='diamond')
+                                    line=dict(color='#0f766e', width=2.5, dash='dash'),
+                                    marker=dict(size=6, symbol='diamond')
                                 ))
 
                             time_label = "Time (hours from ICU admission)" if lang == 'en' else "时间 (ICU入院后小时)"
@@ -556,16 +879,19 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                                 yaxis_title=score_label,
                                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
                                 hovermode='x unified',
-                                font=dict(size=14, color='black'),
+                                font=dict(size=12, color='#111827'),
+                                margin=dict(l=52, r=18, t=48, b=44),
                             )
-                            fig_total.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                            fig_total.update_yaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                            fig_total.update_xaxes(tickfont=dict(size=11, color='#4b5563'), title_font=dict(size=12, color='#4b5563'), gridcolor='#ece7df')
+                            fig_total.update_yaxes(tickfont=dict(size=11, color='#4b5563'), title_font=dict(size=12, color='#4b5563'), gridcolor='#ece7df')
 
                             st.plotly_chart(fig_total, use_container_width=True, config=_get_plotly_chart_config())
 
                             # 2. 子器官评分对比（6个子图）
-                            organ_compare = "**Organ-specific Score Comparison**" if lang == 'en' else "**各器官评分对比**"
-                            st.markdown(organ_compare)
+                            _render_patient_micro_heading(
+                                "Organ domains" if lang == 'en' else "器官域",
+                                "Organ-specific Score Comparison" if lang == 'en' else "各器官评分对比",
+                            )
 
                             # 定义器官映射
                             organ_pairs = [
@@ -626,7 +952,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                                             name='SOFA-1' if idx == 0 else None,
                                             legendgroup='sofa1',
                                             showlegend=(idx == 0),
-                                            line=dict(color='#1f77b4', width=2),
+                                            line=dict(color='#0f172a', width=2),
                                             marker=dict(size=5)
                                         ),
                                         row=row, col=col
@@ -645,7 +971,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                                             name='SOFA-2' if idx == 0 else None,
                                             legendgroup='sofa2',
                                             showlegend=(idx == 0),
-                                            line=dict(color='#ff7f0e', width=2, dash='dash'),
+                                            line=dict(color='#0f766e', width=2, dash='dash'),
                                             marker=dict(size=5, symbol='diamond')
                                         ),
                                         row=row, col=col
@@ -657,23 +983,31 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                                     template="plotly_white",
                                     legend=dict(orientation="h", yanchor="bottom", y=1.08, xanchor="center", x=0.5),
                                     hovermode='x unified',
-                                    font=dict(size=14, color='black'),
+                                    font=dict(size=12, color='#111827'),
+                                    margin=dict(l=44, r=18, t=58, b=42),
                                 )
 
                                 # 更新 y 轴范围 (0-4)
                                 for i in range(1, 7):
                                     fig_organs.update_yaxes(range=[0, 4.5], row=(i-1)//3+1, col=(i-1)%3+1,
-                                                           tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
-                                fig_organs.update_xaxes(tickfont=dict(size=14, color='black'), title_font=dict(size=16, color='black'))
+                                                           tickfont=dict(size=10, color='#4b5563'), title_font=dict(size=11, color='#4b5563'), gridcolor='#ece7df')
+                                fig_organs.update_xaxes(tickfont=dict(size=10, color='#4b5563'), title_font=dict(size=11, color='#4b5563'), gridcolor='#ece7df')
 
                                 st.plotly_chart(fig_organs, use_container_width=True, config=_get_plotly_chart_config())
                             else:
-                                no_organ_msg = "ℹ️ Organ-specific scores not available in current data. Load individual organ concepts (e.g., sofa_resp, sofa2_resp) to see detailed comparison." if lang == 'en' else "ℹ️ 当前数据中无法获取器官子评分。请加载单独的器官概念（如 sofa_resp, sofa2_resp）以查看详细对比。"
-                                st.info(no_organ_msg)
+                                no_organ_msg = "Organ-specific scores are not available in current data. Load individual organ concepts (e.g., sofa_resp, sofa2_resp) to see detailed comparison." if lang == 'en' else "当前数据中无法获取器官子评分。请加载单独的器官概念（如 sofa_resp, sofa2_resp）以查看详细对比。"
+                                _render_patient_notice(
+                                    "info",
+                                    "Organ domains" if lang == "en" else "器官域",
+                                    "Organ comparison unavailable" if lang == "en" else "器官对比不可用",
+                                    no_organ_msg,
+                                )
 
                             # 3. 差异分析表格
-                            diff_title = "**Score Difference (SOFA-2 - SOFA-1)**" if lang == 'en' else "**评分差异 (SOFA-2 - SOFA-1)**"
-                            st.markdown(diff_title)
+                            _render_patient_micro_heading(
+                                "Delta audit" if lang == 'en' else "差异审阅",
+                                "Score Difference (SOFA-2 - SOFA-1)" if lang == 'en' else "评分差异 (SOFA-2 - SOFA-1)",
+                            )
 
                             # 计算最新时间点的差异
                             latest_sofa1 = patient_sofa1.iloc[-1] if len(patient_sofa1) > 0 else {}
@@ -696,7 +1030,7 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                             total1 = latest_sofa1.get('sofa', 0) if isinstance(latest_sofa1, dict) or hasattr(latest_sofa1, 'get') else (latest_sofa1['sofa'] if 'sofa' in latest_sofa1.index else 0)
                             total2 = latest_sofa2.get('sofa2', 0) if isinstance(latest_sofa2, dict) or hasattr(latest_sofa2, 'get') else (latest_sofa2['sofa2'] if 'sofa2' in latest_sofa2.index else 0)
                             diff_data.append({
-                                'Organ' if lang == 'en' else '器官': '**Total**' if lang == 'en' else '**总分**',
+                                'Organ' if lang == 'en' else '器官': 'Total' if lang == 'en' else '总分',
                                 'SOFA-1': int(total1),
                                 'SOFA-2': int(total2),
                                 'Diff' if lang == 'en' else '差异': int(total2 - total1)
@@ -706,131 +1040,145 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                             if not screenshot_mode:
                                 _st_dataframe_compat(st, diff_df, width="stretch", hide_index=True)
                     else:
-                        no_compare = "ℹ️ Need both SOFA-1 and SOFA-2 data for comparison" if lang == 'en' else "ℹ️ 需要同时有 SOFA-1 和 SOFA-2 数据才能对比"
-                        st.info(no_compare)
+                        no_compare = "Need both SOFA-1 and SOFA-2 data for comparison." if lang == 'en' else "需要同时有 SOFA-1 和 SOFA-2 数据才能对比。"
+                        _render_patient_notice(
+                            "pending",
+                            "Comparator" if lang == "en" else "对比器",
+                            "SOFA comparison waiting for paired scores" if lang == "en" else "SOFA 对比等待成对评分",
+                            no_compare,
+                        )
 
                 # Dashboard 快速摘要面板
-                summary_title = "#### Quick Summary" if lang == 'en' else "#### 快速摘要"
-                st.markdown(summary_title)
+                _render_patient_micro_heading(
+                    "Case signals" if lang == 'en' else "病例信号",
+                    "Quick Summary" if lang == 'en' else "快速摘要",
+                    "Endpoint and support flags computed from the currently loaded concepts." if lang == 'en' else "根据当前已加载概念计算终点与支持治疗信号。",
+                )
 
-                summary_cols = st.columns(4)
-                not_selected_status = "Not selected ⚪" if lang == 'en' else "未选择 ⚪"
+                not_selected_status = "Not loaded" if lang == 'en' else "未加载"
 
-                # Sepsis 状态
-                with summary_cols[0]:
-                    sepsis_status = not_selected_status
-                    sepsis_color = "#6c757d"
+                sepsis_status = not_selected_status
+                sepsis_note = "sep3_sofa2 / sep3_sofa1" if lang == 'en' else "sep3_sofa2 / sep3_sofa1"
+                sepsis_tone = "muted"
+                found_sep = False
+                concept_key = ''
+                if 'sep3_sofa2' in st.session_state.loaded_concepts:
+                    sep_df = st.session_state.loaded_concepts['sep3_sofa2']
+                    concept_key = 'sep3_sofa2'
+                    found_sep = True
+                elif 'sep3_sofa1' in st.session_state.loaded_concepts:
+                    sep_df = st.session_state.loaded_concepts['sep3_sofa1']
+                    concept_key = 'sep3_sofa1'
+                    found_sep = True
 
-                    found_sep = False
-                    if 'sep3_sofa2' in st.session_state.loaded_concepts:
-                        sep_df = st.session_state.loaded_concepts['sep3_sofa2']
-                        concept_key = 'sep3_sofa2'
-                        found_sep = True
-                    elif 'sep3_sofa1' in st.session_state.loaded_concepts:
-                        sep_df = st.session_state.loaded_concepts['sep3_sofa1']
-                        concept_key = 'sep3_sofa1'
-                        found_sep = True
-
-                    if found_sep:
-                        sepsis_status = "Unknown"
-                        if isinstance(sep_df, pd.DataFrame) and id_col in sep_df.columns:
-                            patient_sep = sep_df[sep_df[id_col] == patient_id]
-                            if len(patient_sep) > 0 and concept_key in patient_sep.columns:
-                                if patient_sep[concept_key].max() == 1:
-                                    sepsis_status = "Sepsis ⚠️" if lang == 'en' else "脓毒症 ⚠️"
-                                    sepsis_color = "#dc3545"
-                                else:
-                                    sepsis_status = "No Sepsis ✅" if lang == 'en' else "无脓毒症 ✅"
-                                    sepsis_color = "#28a745"
+                if found_sep:
+                    sepsis_status = "Unknown" if lang == 'en' else "未知"
+                    sepsis_note = concept_key
+                    if isinstance(sep_df, pd.DataFrame) and id_col in sep_df.columns:
+                        patient_sep = sep_df[sep_df[id_col] == patient_id]
+                        if len(patient_sep) > 0 and concept_key in patient_sep.columns:
+                            if patient_sep[concept_key].max() == 1:
+                                sepsis_status = "Flagged" if lang == 'en' else "已触发"
+                                sepsis_tone = "danger"
                             else:
-                                sepsis_status = "No Records" if lang == 'en' else "无记录"
+                                sepsis_status = "Clear" if lang == 'en' else "未触发"
+                                sepsis_tone = "ok"
+                        else:
+                            sepsis_status = "No records" if lang == 'en' else "无记录"
 
-                    st.markdown(f"**Sepsis-3**" if lang == 'en' else f"**脓毒症-3**")
-                    st.markdown(f"<span style='color:{sepsis_color};font-weight:bold'>{sepsis_status}</span>", unsafe_allow_html=True)
+                vent_status = not_selected_status
+                vent_note = "vent_ind / mech_vent" if lang == 'en' else "vent_ind / mech_vent"
+                vent_tone = "muted"
+                vent_concepts = ['vent_ind', 'mech_vent', 'vent_start']
+                found_vent = any(c in st.session_state.loaded_concepts for c in vent_concepts)
+                if found_vent:
+                    vent_status = "Unknown" if lang == 'en' else "未知"
+                    for vc in vent_concepts:
+                        vdf = st.session_state.loaded_concepts.get(vc)
+                        if not isinstance(vdf, pd.DataFrame) or id_col not in vdf.columns:
+                            continue
+                        pvdf = vdf[vdf[id_col] == patient_id]
+                        if pvdf.empty:
+                            continue
+                        val_col = vc if vc in pvdf.columns else pvdf.columns[-1]
+                        vent_note = vc
+                        try:
+                            active = pd.to_numeric(pvdf[val_col], errors='coerce').fillna(0).max() > 0
+                        except Exception:
+                            active = False
+                        vent_status = "Active" if active and lang == 'en' else ("使用中" if active else ("Absent" if lang == 'en' else "未使用"))
+                        vent_tone = "warn" if active else "ok"
+                        break
 
-                # 机械通气
-                with summary_cols[1]:
-                    vent_status = not_selected_status
-                    vent_concepts = ['vent_ind', 'mech_vent', 'vent_start']
+                vaso_status = not_selected_status
+                vaso_note = "norepi / epi / dopa" if lang == 'en' else "升压药概念"
+                vaso_tone = "muted"
+                vaso_concepts = ['norepi_rate', 'epi_rate', 'dopa_rate', 'vaso_ind']
+                found_vaso = any(c in st.session_state.loaded_concepts for c in vaso_concepts)
+                if found_vaso:
+                    vaso_status = "Absent" if lang == 'en' else "未使用"
+                    vaso_tone = "ok"
+                    for vc in vaso_concepts:
+                        vdf = st.session_state.loaded_concepts.get(vc)
+                        if not isinstance(vdf, pd.DataFrame) or id_col not in vdf.columns:
+                            continue
+                        pvdf = vdf[vdf[id_col] == patient_id]
+                        if pvdf.empty:
+                            continue
+                        val_col = vc if vc in pvdf.columns else pvdf.columns[-1]
+                        try:
+                            active = pd.to_numeric(pvdf[val_col], errors='coerce').fillna(0).max() > 0
+                        except Exception:
+                            active = False
+                        if active:
+                            vaso_status = "Active" if lang == 'en' else "使用中"
+                            vaso_note = vc
+                            vaso_tone = "warn"
+                            break
 
-                    # 检查是否有相关 concept 被加载
-                    found_vent = any(c in st.session_state.loaded_concepts for c in vent_concepts)
+                gcs_val = "Not loaded" if lang == 'en' else "未加载"
+                gcs_note = "gcs / sofa_cns" if lang == 'en' else "gcs / sofa_cns"
+                gcs_tone = "muted"
+                if 'gcs' in st.session_state.loaded_concepts:
+                    gcs_val = "N/A"
+                    gcs_df = st.session_state.loaded_concepts['gcs']
+                    if isinstance(gcs_df, pd.DataFrame) and id_col in gcs_df.columns:
+                        patient_gcs = gcs_df[gcs_df[id_col] == patient_id]
+                        if len(patient_gcs) > 0 and 'gcs' in patient_gcs.columns:
+                            val = patient_gcs['gcs'].iloc[-1]
+                            try:
+                                val_num = float(val)
+                                gcs_val = safe_format_number(val_num, 0)
+                                gcs_tone = "ok" if val_num >= 13 else ("warn" if val_num >= 9 else "danger")
+                            except (ValueError, TypeError):
+                                gcs_val = str(val)
+                        else:
+                            gcs_val = "No records" if lang == 'en' else "无记录"
+                elif 'sofa_cns' in st.session_state.loaded_concepts or 'sofa2_cns' in st.session_state.loaded_concepts:
+                    cns_col = 'sofa_cns' if 'sofa_cns' in st.session_state.loaded_concepts else 'sofa2_cns'
+                    cns_df = st.session_state.loaded_concepts[cns_col]
+                    if isinstance(cns_df, pd.DataFrame) and id_col in cns_df.columns:
+                        patient_cns = cns_df[cns_df[id_col] == patient_id]
+                        if len(patient_cns) > 0 and cns_col in patient_cns.columns:
+                            cns_score = patient_cns[cns_col].iloc[-1]
+                            gcs_note = f"estimated from {cns_col}" if lang == 'en' else f"由 {cns_col} 估计"
+                            if cns_score == 0:
+                                gcs_val, gcs_tone = "15 est.", "ok"
+                            elif cns_score == 1:
+                                gcs_val, gcs_tone = "13-14 est.", "ok"
+                            elif cns_score == 2:
+                                gcs_val, gcs_tone = "10-12 est.", "warn"
+                            elif cns_score == 3:
+                                gcs_val, gcs_tone = "6-9 est.", "danger"
+                            elif cns_score == 4:
+                                gcs_val, gcs_tone = "<6 est.", "danger"
 
-                    if found_vent:
-                        vent_status = "Unknown"
-                        if 'vent_ind' in st.session_state.loaded_concepts:
-                            vent_df = st.session_state.loaded_concepts['vent_ind']
-                            if isinstance(vent_df, pd.DataFrame) and id_col in vent_df.columns:
-                                patient_vent = vent_df[vent_df[id_col] == patient_id]
-                                if len(patient_vent) > 0 and 'vent_ind' in patient_vent.columns:
-                                    vent_status = "Yes ✅" if patient_vent['vent_ind'].max() == 1 else "No ❌"
-                                else:
-                                    vent_status = "No Records" if lang == 'en' else "无记录"
-
-                    st.markdown(f"**Mechanical Vent**" if lang == 'en' else f"**机械通气**")
-                    st.markdown(vent_status)
-
-                # 血管活性药物
-                with summary_cols[2]:
-                    vaso_status = not_selected_status
-                    vaso_concepts = ['norepi_rate', 'epi_rate', 'dopa_rate', 'vaso_ind']
-
-                    found_vaso = any(c in st.session_state.loaded_concepts for c in vaso_concepts)
-
-                    if found_vaso:
-                        vaso_status = "No ❌"
-                        for vc in vaso_concepts:
-                            if vc in st.session_state.loaded_concepts:
-                                vdf = st.session_state.loaded_concepts[vc]
-                                if isinstance(vdf, pd.DataFrame) and id_col in vdf.columns:
-                                    pvdf = vdf[vdf[id_col] == patient_id]
-                                    if len(pvdf) > 0:
-                                        val_col = vc if vc in pvdf.columns else pvdf.columns[-1]
-                                        if pvdf[val_col].max() > 0:
-                                            vaso_status = "Yes ✅"
-                                            break
-
-                    st.markdown(f"**Vasopressors**" if lang == 'en' else f"**血管活性药**")
-                    st.markdown(vaso_status)
-
-                # GCS
-                with summary_cols[3]:
-                    gcs_val = "Not selected" if lang == 'en' else "未选择"
-                    gcs_color = "#6c757d"
-
-                    if 'gcs' in st.session_state.loaded_concepts:
-                        gcs_val = "N/A"
-                        gcs_df = st.session_state.loaded_concepts['gcs']
-                        if isinstance(gcs_df, pd.DataFrame) and id_col in gcs_df.columns:
-                            patient_gcs = gcs_df[gcs_df[id_col] == patient_id]
-                            if len(patient_gcs) > 0 and 'gcs' in patient_gcs.columns:
-                                val = patient_gcs['gcs'].iloc[-1]
-                                try:
-                                    val_num = float(val)
-                                    gcs_color = "#28a745" if val_num >= 13 else ("#ffc107" if val_num >= 9 else "#dc3545")
-                                    gcs_val = safe_format_number(val_num, 0)
-                                except (ValueError, TypeError):
-                                    gcs_val = str(val)
-                                    gcs_color = "#6c757d"
-                            else:
-                                gcs_val = "No Records" if lang == 'en' else "无记录"
-                    # 尝试从 sofa_cns 推断
-                    elif 'sofa_cns' in st.session_state.loaded_concepts or 'sofa2_cns' in st.session_state.loaded_concepts:
-                        cns_col = 'sofa_cns' if 'sofa_cns' in st.session_state.loaded_concepts else 'sofa2_cns'
-                        cns_df = st.session_state.loaded_concepts[cns_col]
-                        if isinstance(cns_df, pd.DataFrame) and id_col in cns_df.columns:
-                            patient_cns = cns_df[cns_df[id_col] == patient_id]
-                            if len(patient_cns) > 0 and cns_col in patient_cns.columns:
-                                cns_score = patient_cns[cns_col].iloc[-1]
-                                # 0:15, 1:13-14, 2:10-12, 3:6-9, 4:<6
-                                if cns_score == 0: gcs_val, gcs_color = "15 (est)", "#28a745"
-                                elif cns_score == 1: gcs_val, gcs_color = "13-14 (est)", "#28a745"
-                                elif cns_score == 2: gcs_val, gcs_color = "10-12 (est)", "#ffc107"
-                                elif cns_score == 3: gcs_val, gcs_color = "6-9 (est)", "#dc3545"
-                                elif cns_score == 4: gcs_val, gcs_color = "<6 (est)", "#dc3545"
-
-                    st.markdown("**GCS**")
-                    st.markdown(f"<span style='color:{gcs_color};font-weight:bold;font-size:1.2rem'>{gcs_val}</span>", unsafe_allow_html=True)
+                _patient_signal_grid([
+                    ("Sepsis-3" if lang == 'en' else "脓毒症-3", sepsis_status, sepsis_note, sepsis_tone),
+                    ("Mechanical vent" if lang == 'en' else "机械通气", vent_status, vent_note, vent_tone),
+                    ("Vasopressors" if lang == 'en' else "血管活性药", vaso_status, vaso_note, vaso_tone),
+                    ("GCS" if lang == 'en' else "GCS", gcs_val, gcs_note, gcs_tone),
+                ])
 
                 snapshot_candidates = []
                 snapshot_excluded = {
@@ -850,8 +1198,11 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
                     snapshot_candidates.append((concept_name, formatted))
 
                 if snapshot_candidates and not screenshot_mode:
-                    snapshot_title = "#### 🧩 Loaded Feature Snapshot" if lang == 'en' else "#### 🧩 已加载特征快照"
-                    st.markdown(snapshot_title)
+                    _render_patient_micro_heading(
+                        "Loaded values" if lang == 'en' else "已加载值",
+                        "Feature Snapshot" if lang == 'en' else "特征快照",
+                        "Latest patient-level values outside the endpoint/support flags." if lang == 'en' else "除终点和支持治疗外的最新患者级取值。",
+                    )
                     visible_snapshots = snapshot_candidates[:8]
                     cards_html = "".join(
                         (
@@ -875,291 +1226,118 @@ def render_patient_page(app_context: dict[str, Any] | None = None):
 
             except Exception as e:
                 err_msg = f"Dashboard rendering failed: {e}" if lang == 'en' else f"综合仪表盘渲染失败: {e}"
-                st.warning(err_msg)
                 switch_msg = "Please try switching to 'Category View'" if lang == 'en' else "请尝试切换到「分类视图」"
-                st.info(switch_msg)
+                _render_patient_notice(
+                    "danger",
+                    "Dashboard guard" if lang == "en" else "仪表盘保护",
+                    "Dashboard rendering failed" if lang == "en" else "综合仪表盘渲染失败",
+                    err_msg,
+                    switch_msg,
+                )
 
         elif view_mode == category_mode:
-            # 生命体征
-            vitals_title = "### Vital Signs" if lang == 'en' else "### 生命体征"
-            st.markdown(vitals_title)
             vitals = ['hr', 'map', 'sbp', 'resp', 'temp', 'spo2']
-            vitals_data = {k: v for k, v in st.session_state.loaded_concepts.items()
-                          if k in vitals and isinstance(v, pd.DataFrame)}
-
-            if vitals_data:
-                cols = st.columns(min(3, len(vitals_data)))
-
-                for i, (concept, df) in enumerate(vitals_data.items()):
-                    with cols[i % 3]:
-                        if id_col in df.columns:
-                            patient_df = df[df[id_col] == patient_id]
-                        else:
-                            patient_df = df
-
-                        if len(patient_df) > 0:
-                            # 显示最新值
-                            value_col = concept if concept in patient_df.columns else patient_df.columns[-1]
-                            latest_val = patient_df[value_col].iloc[-1]
-                            st.metric(concept.upper(), safe_format_number(latest_val, 1))
-
-                            # 小型趋势图 - 检测时间列
-                            time_col = None
-                            for tc in time_candidates:
-                                if tc in patient_df.columns:
-                                    time_col = tc
-                                    break
-                            if time_col:
-                                st.line_chart(patient_df.set_index(time_col)[value_col], height=120)
-            else:
-                no_vitals = "ℹ️ No standard vital signs are present in the current loaded features" if lang == 'en' else "ℹ️ 当前已加载特征中不包含标准生命体征"
-                st.info(no_vitals)
-
-            # SOFA/SOFA2 评分
             sofa_concepts = ['sofa', 'sofa2']
-            sofa_data = {k: v for k, v in st.session_state.loaded_concepts.items()
-                        if k in sofa_concepts and isinstance(v, pd.DataFrame)}
-
-            if sofa_data:
-                sofa_title = "### SOFA Score" if lang == 'en' else "### SOFA 评分"
-                st.markdown(sofa_title)
-
-                for sofa_key, sofa_df in sofa_data.items():
-                    if id_col in sofa_df.columns:
-                        patient_sofa = sofa_df[sofa_df[id_col] == patient_id]
-                    else:
-                        patient_sofa = sofa_df
-
-                    if len(patient_sofa) > 0:
-                        latest = patient_sofa.iloc[-1]
-                        col1, col2 = st.columns([1, 2])
-                        with col1:
-                            sofa_val = latest.get(sofa_key, 0)
-                            sofa_color = "#28a745" if sofa_val < 6 else ("#ffc107" if sofa_val < 10 else "#dc3545")
-                            label = f"Latest {sofa_key.upper()}" if lang == 'en' else f"最新 {sofa_key.upper()}"
-                            st.markdown(f'''
-                            <div class="metric-card" style="text-align:center">
-                                <div class="stat-label">{label}</div>
-                                <div class="stat-number" style="color:{sofa_color}">{sofa_val}</div>
-                            </div>
-                            ''', unsafe_allow_html=True)
-
-                        with col2:
-                            sofa_time_col = None
-                            for tc in time_candidates:
-                                if tc in patient_sofa.columns:
-                                    sofa_time_col = tc
-                                    break
-                            if sofa_key in patient_sofa.columns and sofa_time_col:
-                                st.line_chart(patient_sofa.set_index(sofa_time_col)[sofa_key], height=150)
-
-            # Sepsis-3 诊断状态
             sepsis_concepts = ['sep3_sofa1', 'sep3_sofa2', 'susp_inf', 'infection_icd']
-            sepsis_data = {k: v for k, v in st.session_state.loaded_concepts.items()
-                          if k in sepsis_concepts and isinstance(v, pd.DataFrame)}
-
-            if sepsis_data:
-                sepsis_title = "### Sepsis-3 Status" if lang == 'en' else "### Sepsis-3 诊断"
-                st.markdown(sepsis_title)
-                cols = st.columns(len(sepsis_data))
-                for i, (concept, df) in enumerate(sepsis_data.items()):
-                    with cols[i]:
-                        if id_col in df.columns:
-                            patient_df = df[df[id_col] == patient_id]
-                        else:
-                            patient_df = df
-
-                        if len(patient_df) > 0:
-                            value_col = concept if concept in patient_df.columns else patient_df.columns[-1]
-                            val = patient_df[value_col].iloc[-1] if len(patient_df) > 0 else 0
-                            if val == 1:
-                                st.markdown(f"✅ **{concept}**: Yes" if lang == 'en' else f"✅ **{concept}**: 是")
-                            else:
-                                st.markdown(f"❌ **{concept}**: No" if lang == 'en' else f"❌ **{concept}**: 否")
-
-            # 实验室检查 - 扩展更多指标
             labs = ['bili', 'crea', 'lac', 'lact', 'plt', 'wbc', 'hgb', 'hct', 'inr_pt', 'ptt', 'alb', 'glu', 'na', 'k', 'cl', 'bun']
-            labs_data = {k: v for k, v in st.session_state.loaded_concepts.items()
-                        if k in labs and isinstance(v, pd.DataFrame)}
-
-            if labs_data:
-                labs_title = "### Laboratory Tests" if lang == 'en' else "### 实验室检查"
-                st.markdown(labs_title)
-                cols = st.columns(min(4, len(labs_data)))
-                for i, (concept, df) in enumerate(labs_data.items()):
-                    with cols[i % 4]:
-                        if id_col in df.columns:
-                            patient_df = df[df[id_col] == patient_id]
-                        else:
-                            patient_df = df
-
-                        if len(patient_df) > 0:
-                            value_col = concept if concept in patient_df.columns else patient_df.columns[-1]
-                            st.metric(
-                                label=concept.upper(),
-                                value=f"{patient_df[value_col].iloc[-1]:.2f}",
-                                delta=f"{patient_df[value_col].iloc[-1] - patient_df[value_col].iloc[0]:.2f}" if len(patient_df) > 1 else None
-                            )
-                            lab_time_col = None
-                            for tc in time_candidates:
-                                if tc in patient_df.columns:
-                                    lab_time_col = tc
-                                    break
-                            if lab_time_col:
-                                st.line_chart(patient_df.set_index(lab_time_col)[value_col], height=120)
-
-            # 血气分析
             blood_gas = ['ph', 'pco2', 'po2', 'pafi', 'safi', 'be', 'hco3', 'bicar', 'fio2']
-            bg_data = {k: v for k, v in st.session_state.loaded_concepts.items()
-                      if k in blood_gas and isinstance(v, pd.DataFrame)}
-
-            if bg_data:
-                bg_title = "### Blood Gas Analysis" if lang == 'en' else "### 血气分析"
-                st.markdown(bg_title)
-                cols = st.columns(min(4, len(bg_data)))
-                for i, (concept, df) in enumerate(bg_data.items()):
-                    with cols[i % 4]:
-                        if id_col in df.columns:
-                            patient_df = df[df[id_col] == patient_id]
-                        else:
-                            patient_df = df
-
-                        if len(patient_df) > 0:
-                            value_col = concept if concept in patient_df.columns else patient_df.columns[-1]
-                            st.metric(label=concept.upper(), value=f"{patient_df[value_col].iloc[-1]:.2f}")
-
-            # 血管活性药物
             vasopressors = ['norepi_rate', 'epi_rate', 'dopa_rate', 'dobu_rate', 'adh_rate', 'phn_rate', 'vaso_ind']
-            vaso_data = {k: v for k, v in st.session_state.loaded_concepts.items()
-                        if k in vasopressors and isinstance(v, pd.DataFrame)}
-
-            if vaso_data:
-                vaso_title = "### Vasopressors" if lang == 'en' else "### 血管活性药物"
-                st.markdown(vaso_title)
-                cols = st.columns(min(4, len(vaso_data)))
-                for i, (concept, df) in enumerate(vaso_data.items()):
-                    with cols[i % 4]:
-                        if id_col in df.columns:
-                            patient_df = df[df[id_col] == patient_id]
-                        else:
-                            patient_df = df
-
-                        if len(patient_df) > 0:
-                            value_col = concept if concept in patient_df.columns else patient_df.columns[-1]
-                            if concept == 'vaso_ind':
-                                val = patient_df[value_col].max()
-                                st.markdown(f"**{concept}**: {'Yes ✅' if val == 1 else 'No ❌'}")
-                            else:
-                                st.metric(label=concept.upper(), value=f"{patient_df[value_col].iloc[-1]:.3f}")
-                                vaso_time_col = None
-                                for tc in time_candidates:
-                                    if tc in patient_df.columns:
-                                        vaso_time_col = tc
-                                        break
-                                if vaso_time_col:
-                                    st.line_chart(patient_df.set_index(vaso_time_col)[value_col], height=100)
-
-            # 呼吸支持
             resp_support = ['vent_ind', 'fio2', 'spo2', 'pafi', 'safi', 'resp']
-            resp_data = {k: v for k, v in st.session_state.loaded_concepts.items()
-                        if k in resp_support and isinstance(v, pd.DataFrame) and k not in bg_data}  # 避免重复
-
-            if resp_data:
-                resp_title = "### 💨 Respiratory Support" if lang == 'en' else "### 💨 呼吸支持"
-                st.markdown(resp_title)
-                cols = st.columns(min(4, len(resp_data)))
-                for i, (concept, df) in enumerate(resp_data.items()):
-                    with cols[i % 4]:
-                        if id_col in df.columns:
-                            patient_df = df[df[id_col] == patient_id]
-                        else:
-                            patient_df = df
-
-                        if len(patient_df) > 0:
-                            value_col = concept if concept in patient_df.columns else patient_df.columns[-1]
-                            if concept == 'vent_ind':
-                                val = patient_df[value_col].max()
-                                st.markdown(f"**Mechanical Vent**: {'Yes ✅' if val == 1 else 'No ❌'}" if lang == 'en' else f"**机械通气**: {'是 ✅' if val == 1 else '否 ❌'}")
-                            else:
-                                st.metric(label=concept.upper(), value=safe_format_number(patient_df[value_col].iloc[-1], 1))
-
-            # 神经系统
             neuro = ['gcs', 'egcs', 'mgcs', 'vgcs', 'rass', 'avpu']
-            neuro_data = {k: v for k, v in st.session_state.loaded_concepts.items()
-                         if k in neuro and isinstance(v, pd.DataFrame)}
-
-            if neuro_data:
-                neuro_title = "### 🧠 Neurological" if lang == 'en' else "### 🧠 神经系统"
-                st.markdown(neuro_title)
-                cols = st.columns(min(4, len(neuro_data)))
-                for i, (concept, df) in enumerate(neuro_data.items()):
-                    with cols[i % 4]:
-                        if id_col in df.columns:
-                            patient_df = df[df[id_col] == patient_id]
-                        else:
-                            patient_df = df
-
-                        if len(patient_df) > 0:
-                            value_col = concept if concept in patient_df.columns else patient_df.columns[-1]
-                            val = patient_df[value_col].iloc[-1]
-                            # GCS 颜色编码
-                            if concept == 'gcs':
-                                try:
-                                    val_num = float(val)
-                                    color = "#28a745" if val_num >= 13 else ("#ffc107" if val_num >= 9 else "#dc3545")
-                                    st.markdown(f"<div style='color:{color};font-size:1.5rem;font-weight:bold'>GCS: {safe_format_number(val_num, 0)}</div>", unsafe_allow_html=True)
-                                except (ValueError, TypeError):
-                                    st.markdown(f"<div style='font-size:1.5rem;font-weight:bold'>GCS: {val}</div>", unsafe_allow_html=True)
-                            else:
-                                st.metric(label=concept.upper(), value=safe_format_number(val, 0))
-
-            # 肾脏功能
             renal = ['urine', 'urine24', 'crea', 'bun', 'rrt']
-            renal_data = {k: v for k, v in st.session_state.loaded_concepts.items()
-                         if k in renal and isinstance(v, pd.DataFrame) and k not in labs_data}
-
-            if renal_data:
-                renal_title = "### 🚰 Renal Function" if lang == 'en' else "### 🚰 肾脏功能"
-                st.markdown(renal_title)
-                cols = st.columns(min(4, len(renal_data)))
-                for i, (concept, df) in enumerate(renal_data.items()):
-                    with cols[i % 4]:
-                        if id_col in df.columns:
-                            patient_df = df[df[id_col] == patient_id]
-                        else:
-                            patient_df = df
-
-                        if len(patient_df) > 0:
-                            value_col = concept if concept in patient_df.columns else patient_df.columns[-1]
-                            if concept == 'rrt':
-                                val = patient_df[value_col].max()
-                                st.markdown(f"**RRT**: {'Yes ✅' if val == 1 else 'No ❌'}")
-                            else:
-                                st.metric(label=concept.upper(), value=safe_format_number(patient_df[value_col].iloc[-1], 1))
-
-            # 其他评分
             other_scores = ['qsofa', 'sirs', 'mews', 'news']
-            score_data = {k: v for k, v in st.session_state.loaded_concepts.items()
-                         if k in other_scores and isinstance(v, pd.DataFrame)}
 
-            if score_data:
-                score_title = "### Other Scores" if lang == 'en' else "### 其他评分"
-                st.markdown(score_title)
-                cols = st.columns(min(4, len(score_data)))
-                for i, (concept, df) in enumerate(score_data.items()):
-                    with cols[i % 4]:
-                        if id_col in df.columns:
-                            patient_df = df[df[id_col] == patient_id]
-                        else:
-                            patient_df = df
+            loaded_names = {
+                name
+                for name, frame in loaded_concepts_map.items()
+                if isinstance(frame, pd.DataFrame)
+            }
+            labs_present = set(labs) & loaded_names
+            blood_gas_present = set(blood_gas) & loaded_names
 
-                        if len(patient_df) > 0:
-                            value_col = concept if concept in patient_df.columns else patient_df.columns[-1]
-                            st.metric(label=concept.upper(), value=safe_format_number(patient_df[value_col].iloc[-1], 0))
+            _render_patient_category_section(
+                "vital_signs",
+                "Vital Signs" if lang == 'en' else "生命体征",
+                "Latest observed value with compact trend context." if lang == 'en' else "最新观测值与紧凑趋势上下文。",
+                vitals,
+                decimals=1,
+                no_data_body="No standard vital signs are present in the current loaded features." if lang == 'en' else "当前已加载特征中不包含标准生命体征。",
+            )
+            _render_patient_category_section(
+                "sofa_score",
+                "SOFA Score" if lang == 'en' else "SOFA 评分",
+                "Severity scores stay in the same review rhythm as other patient signals." if lang == 'en' else "严重程度评分与其他患者信号保持同一审阅节奏。",
+                sofa_concepts,
+                decimals=0,
+            )
+            _render_patient_category_section(
+                "sepsis_status",
+                "Sepsis-3 Status" if lang == 'en' else "Sepsis-3 诊断",
+                "Binary infection and organ-dysfunction flags are shown as reviewable status tiles." if lang == 'en' else "感染与器官功能障碍标记以可审阅状态卡展示。",
+                sepsis_concepts,
+                decimals=0,
+                boolean_modes={concept: "last" for concept in sepsis_concepts},
+                include_chart=False,
+            )
+            _render_patient_category_section(
+                "laboratory_tests",
+                "Laboratory Tests" if lang == 'en' else "实验室检查",
+                "Key laboratory values keep their first-to-latest delta visible without default metric chrome." if lang == 'en' else "关键实验室指标保留首末差值，但不再使用默认 metric 外观。",
+                labs,
+                decimals=2,
+            )
+            _render_patient_category_section(
+                "blood_gas",
+                "Blood Gas Analysis" if lang == 'en' else "血气分析",
+                "Gas-exchange and acid-base values use the same compact signal grid." if lang == 'en' else "气体交换与酸碱指标使用同一紧凑信号网格。",
+                blood_gas,
+                decimals=2,
+            )
+            _render_patient_category_section(
+                "vasopressors",
+                "Vasopressors" if lang == 'en' else "血管活性药物",
+                "Dose traces and exposure flags are grouped together for bedside-style scanning." if lang == 'en' else "剂量轨迹与暴露标记合并展示，便于床旁式浏览。",
+                vasopressors,
+                decimals=3,
+                boolean_modes={"vaso_ind": "max"},
+            )
+            _render_patient_category_section(
+                "respiratory_support",
+                "Respiratory Support" if lang == 'en' else "呼吸支持",
+                "Ventilation flags and respiratory measurements avoid duplicate blood-gas cards." if lang == 'en' else "通气标记与呼吸测量会避开已在血气中展示的重复项。",
+                [concept for concept in resp_support if concept not in blood_gas_present],
+                decimals=1,
+                boolean_modes={"vent_ind": "max"},
+            )
+            _render_patient_category_section(
+                "neurological",
+                "Neurological" if lang == 'en' else "神经系统",
+                "Neurological scores use tone-coded tiles so low GCS remains visually legible." if lang == 'en' else "神经评分使用色调编码，低 GCS 保持清晰可见。",
+                neuro,
+                decimals=0,
+            )
+            _render_patient_category_section(
+                "renal_function",
+                "Renal Function" if lang == 'en' else "肾脏功能",
+                "Renal output, chemistry, and RRT status are reviewed as one category." if lang == 'en' else "尿量、肾功能化验与 RRT 状态归入同一审阅分类。",
+                [concept for concept in renal if concept not in labs_present],
+                decimals=1,
+                boolean_modes={"rrt": "max"},
+            )
+            _render_patient_category_section(
+                "other_scores",
+                "Other Scores" if lang == 'en' else "其他评分",
+                "Screening scores are compact because they support context rather than own the page." if lang == 'en' else "筛查评分保持紧凑，用于补充上下文而非占据页面。",
+                other_scores,
+                decimals=0,
+            )
 
         elif view_mode == table_mode:
-            table_title = "### Patient Data Table" if lang == 'en' else "### 患者数据表格"
-            st.markdown(table_title)
+            _render_patient_micro_heading(
+                "Raw rows" if lang == 'en' else "原始行",
+                "Patient Data Table" if lang == 'en' else "患者数据表格",
+                "Per-concept extracted rows for the selected ICU stay." if lang == 'en' else "当前 ICU stay 的逐概念抽取行。",
+            )
             for concept, df in st.session_state.loaded_concepts.items():
                 if id_col in df.columns:
                     patient_df = df[df[id_col] == patient_id]

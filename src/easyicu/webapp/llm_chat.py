@@ -5866,11 +5866,79 @@ def _append_copilot_rail_step_action(step_id: str, lang: str) -> bool:
     return True
 
 
+def _copilot_active_study_context_html(
+    state: Mapping[str, object],
+    study: Mapping[str, object],
+    snapshot: object,
+    lang: str,
+) -> str:
+    """Left-rail active study summary bound to the live Copilot session state."""
+    is_en = lang == "en"
+    question = str(
+        study.get("question")
+        or state.get("research_agent_question")
+        or state.get("_copilot_last_question")
+        or ""
+    ).strip()
+    session_title = str(state.get("_copilot_current_session_title") or "").strip()
+    fallback_title = _copilot_session_fallback_title(lang)
+    if session_title == fallback_title and not question:
+        session_title = ""
+    title = _copilot_contract_text(
+        question or session_title or ("No question framed yet" if is_en else "尚未确定研究问题"),
+        max_len=84,
+    )
+    raw_workdir = str(state.get("_copilot_current_session_dir") or "").strip()
+    folder_name = Path(raw_workdir).name if raw_workdir else (
+        "not saved yet" if is_en else "尚未保存"
+    )
+    folder_detail = (
+        "Create a local study folder before handoff."
+        if is_en else
+        "交接前会创建本地研究文件夹。"
+    ) if not raw_workdir else _copilot_contract_text(raw_workdir, max_len=82)
+    depth = _copilot_engine.normalize_depth(study.get("depth"))
+    depth_label = {
+        "extract": "Extract only" if is_en else "只提取",
+        "review": "Extract + review" if is_en else "提取 + 审阅",
+        "full": "Full study" if is_en else "全流程研究",
+    }.get(depth, depth)
+    selected = int(getattr(snapshot, "selected_concepts", 0) or 0)
+    selected = selected or len(study.get("selected_concepts") or []) or len(study.get("modules") or [])
+    rows = [
+        ("Step" if is_en else "步骤", str(getattr(snapshot, "active_step_label", "") or "")),
+        ("Source" if is_en else "来源", str(getattr(snapshot, "data_label", "") or "")),
+        ("Depth" if is_en else "深度", depth_label),
+        ("Concepts" if is_en else "变量", f"{selected} mapped" if is_en else f"{selected} 个已映射"),
+    ]
+    row_html = "".join(
+        '<span>'
+        f'<em>{html.escape(label)}</em>'
+        f'<b>{html.escape(_copilot_contract_text(value, max_len=34))}</b>'
+        '</span>'
+        for label, value in rows
+    )
+    return (
+        '<div class="eu-copilot-active-study-card">'
+        f'<div class="eu-copilot-rail-eyebrow">{html.escape("Active study" if is_en else "当前研究")}</div>'
+        f'<strong>{html.escape(title)}</strong>'
+        f'<p>{html.escape(str(getattr(snapshot, "current_decision", "") or ""))}</p>'
+        f'<div class="eu-copilot-active-study-grid">{row_html}</div>'
+        '<div class="eu-copilot-active-study-folder">'
+        f'<span>{html.escape("Local workspace" if is_en else "本地工作区")}</span>'
+        f'<b>{html.escape(folder_name)}</b>'
+        f'<small>{html.escape(folder_detail)}</small>'
+        '</div>'
+        '</div>'
+    )
+
+
 def _render_copilot_session_rail(lang: str) -> None:
     """Render the polish-design session rail for the standalone Copilot page."""
     is_en = lang == "en"
     state = st.session_state
-    _ensure_copilot_study_state(state)
+    study = _ensure_copilot_study_state(state)
+    snapshot = build_study_workspace_snapshot(state, study, lang=lang)
 
     if st.button(
         "New study" if is_en else "新研究",
@@ -5880,11 +5948,16 @@ def _render_copilot_session_rail(lang: str) -> None:
         _start_new_copilot_study_session(state, lang)
         st.rerun()
 
+    st.markdown(
+        _copilot_active_study_context_html(state, study, snapshot, lang),
+        unsafe_allow_html=True,
+    )
+
     sessions = _copilot_list_study_sessions(state)
     current_session_id = str(state.get("_copilot_current_session_id") or "")
     st.markdown(
         '<div class="eu-copilot-rail-body">'
-        f'<div class="eu-copilot-rail-eyebrow">{html.escape("Recent" if is_en else "最近")}</div>'
+        f'<div class="eu-copilot-rail-eyebrow">{html.escape("Studies · local folders" if is_en else "研究 · 本地文件夹")}</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -5907,6 +5980,8 @@ def _render_copilot_session_rail(lang: str) -> None:
             rel = ("active now" if is_en else "进行中") if active else _copilot_relative_time(
                 str(session.get("updated_at") or ""), lang
             )
+            folder = Path(str(session.get("workdir") or session_id)).name
+            meta = " · ".join(part for part in (folder, rel) if part)
             # Clean session row: small dot + title + inline relative time (design parity).
             with st.container(key=f"eu_copilot_session_{'active' if active else 'idle'}_{idx}"):
                 if st.button(
@@ -5918,14 +5993,22 @@ def _render_copilot_session_rail(lang: str) -> None:
                     if session_id:
                         _open_copilot_study_session(state, session_id, lang)
                     st.rerun()
-                if rel:
+                if meta:
                     st.markdown(
                         f'<div class="eu-copilot-session-meta{" active" if active else ""}">'
-                        f'{html.escape(rel)}</div>',
+                        f'{html.escape(meta)}</div>',
                         unsafe_allow_html=True,
                     )
 
     st.markdown('<div class="eu-copilot-left-spacer"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="eu-copilot-rail-context">'
+        f'<span>{html.escape("Evidence discipline" if is_en else "证据纪律")}</span>'
+        f'<b>{html.escape("Local state, review first" if is_en else "本地状态，先审阅")}</b>'
+        f'<p>{html.escape("Study folders, paths, and handoff packets stay on this machine; drafts remain gated until evidence checks pass." if is_en else "研究目录、路径和交接包保留在本机；证据检查通过前不释放草稿。")}</p>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     if st.button(
         "Classic workspace" if is_en else "经典工作区",
@@ -6020,6 +6103,151 @@ def _render_copilot_depth_control(study: Mapping[str, object], lang: str) -> Non
     if selected and selected != current:
         _apply_chat_workflow_action(f"study_depth_{selected}")
         st.rerun()
+    question_ready = bool(
+        str(study.get("question") or "").strip()
+        or str(st.session_state.get("_copilot_last_question") or "").strip()
+    )
+    with st.container(key="eu_copilot_depth_agent_handoff"):
+        if st.button(
+            "Open Agent setup" if is_en else "打开 Agent 配置",
+            key="_copilot_depth_agent_setup",
+            icon=":material/assignment:",
+            use_container_width=True,
+            disabled=not question_ready,
+            help=(
+                "Hand the current Copilot question, source choice, cohort, and modules to Agent setup."
+                if is_en else
+                "把当前 Copilot 的问题、数据来源、队列和模块交给 Agent 配置。"
+            ),
+        ):
+            _prepare_research_agent_handoff_from_ai(st.session_state)
+            st.rerun()
+
+
+def _copilot_contract_text(value: object, *, max_len: int = 62) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text if len(text) <= max_len else text[: max_len - 1].rstrip() + "..."
+
+
+def _copilot_agent_readiness_contract_html(
+    state: Mapping[str, object],
+    study: Mapping[str, object],
+    snapshot: object,
+    lang: str,
+) -> str:
+    """Design-reference handoff contract for Copilot -> Agent setup."""
+    is_en = lang == "en"
+    question = str(
+        study.get("question")
+        or state.get("research_agent_question")
+        or state.get("_copilot_last_question")
+        or ""
+    ).strip()
+    question_ready = bool(question)
+    export_dir = str(state.get("last_export_dir") or state.get("export_path") or "").strip()
+    data_path = str(state.get("data_path") or "").strip()
+    path_validated = bool(state.get("path_validated"))
+    real_source_ready = _copilot_real_source_ready(state)
+    entry_mode = str(state.get("entry_mode") or study.get("data_mode") or "none")
+    source_path = export_dir or data_path
+    source_detail = (
+        _copilot_contract_text(source_path, max_len=72)
+        if source_path else
+        ("demo workspace" if entry_mode == "demo" and is_en else "演示工作区" if entry_mode == "demo" else "")
+    )
+    if not source_detail:
+        source_detail = "no prepared path yet" if is_en else "尚无 prepared 路径"
+    source_ready = entry_mode == "demo" or real_source_ready
+    cohort_ready = bool(getattr(snapshot, "step_done", {}).get("cohort"))
+    concepts_ready = bool(getattr(snapshot, "step_done", {}).get("concepts"))
+    module_count = len(study.get("modules") or [])
+    selected_count = int(getattr(snapshot, "selected_concepts", 0) or 0)
+    concept_count = selected_count or len(study.get("selected_concepts") or []) or module_count
+    agent_ready = question_ready and source_ready and (cohort_ready or concepts_ready or concept_count > 0)
+    contract_state = "ready" if agent_ready else "pending"
+
+    source_status = (
+        "validated" if path_validated else
+        "module export" if export_dir else
+        "demo" if entry_mode == "demo" else
+        "pending"
+    )
+    tiles = [
+        (
+            "Question" if is_en else "研究问题",
+            "ready" if question_ready else "missing",
+            _copilot_contract_text(question, max_len=88) or (
+                "Ask one question first" if is_en else "先提出一个研究问题"
+            ),
+        ),
+        (
+            "Source" if is_en else "数据来源",
+            source_status,
+            source_detail,
+        ),
+        (
+            "Cohort" if is_en else "队列",
+            "bound" if cohort_ready else "pending",
+            _copilot_contract_text(getattr(snapshot, "cohort_label", ""), max_len=64),
+        ),
+        (
+            "Concepts" if is_en else "变量",
+            f"{concept_count} mapped" if is_en else f"{concept_count} 个已映射",
+            _copilot_contract_text(getattr(snapshot, "concepts_label", ""), max_len=64),
+        ),
+        (
+            "Setup packet" if is_en else "配置包",
+            "ready to write" if question_ready else ("waiting for question" if is_en else "等待研究问题"),
+            "Open Agent setup -> Research Agent setup packet"
+            if is_en else
+            "打开 Agent 配置 -> 写入研究项目配置包",
+        ),
+    ]
+    def _tile_tone(value: str) -> str:
+        normalized = value.lower()
+        if any(term in normalized for term in ("ready", "validated", "demo", "bound", "mapped", "已映射")):
+            return "ready"
+        if any(term in normalized for term in ("missing", "pending", "waiting", "缺", "待")):
+            return "pending"
+        return "neutral"
+
+    tile_html = "".join(
+        f'<div class="eu-copilot-agent-contract-tile {_tile_tone(str(value))}">'
+        f'<span class="eu-copilot-agent-contract-node">{idx:02d}</span>'
+        '<div class="eu-copilot-agent-contract-copy">'
+        f'<span>{html.escape(label)}</span>'
+        f'<b>{html.escape(value)}</b>'
+        f'<small>{html.escape(detail)}</small>'
+        '</div>'
+        '</div>'
+        for idx, (label, value, detail) in enumerate(tiles, start=1)
+    )
+    summary = (
+        "Ready to seed Agent setup without uploading patient rows."
+        if agent_ready else
+        "Complete the missing question/source/cohort pieces before Agent setup."
+    ) if is_en else (
+        "可交给 Agent 配置，且不上传患者行数据。"
+        if agent_ready else
+        "先补齐问题、数据来源或队列后再交给 Agent 配置。"
+    )
+    return (
+        f'<div class="eu-copilot-agent-contract {contract_state}">'
+        '<div class="eu-copilot-agent-contract-head">'
+        '<div>'
+        f'<span>{html.escape("Agent handoff" if is_en else "Agent 交接")}</span>'
+        f'<b>{html.escape("Copilot -> Agent readiness" if is_en else "Copilot -> Agent 就绪度")}</b>'
+        f'<p>{html.escape(summary)}</p>'
+        '</div>'
+        f'<em>{html.escape("local-only" if is_en else "仅本机")}</em>'
+        '</div>'
+        '<div class="eu-copilot-agent-contract-grid">'
+        f'{tile_html}'
+        '</div>'
+        '</div>'
+    )
 
 
 def _render_copilot_stage_workspace(lang: str) -> None:
@@ -6050,6 +6278,10 @@ def _render_copilot_stage_workspace(lang: str) -> None:
             unsafe_allow_html=True,
         )
         _render_copilot_depth_control(study, lang)
+        st.markdown(
+            _copilot_agent_readiness_contract_html(st.session_state, study, snapshot, lang),
+            unsafe_allow_html=True,
+        )
         with st.container(key="eu_study_step_list"):
             for idx, item in enumerate(step_items):
                 step_id = str(item["id"])
@@ -6246,6 +6478,82 @@ def render_ai_assistant_page(lang: str | None = None, app_context: dict | None =
     _render_ai_assistant_workspace_page(lang, pending_prompt=pending_prompt)
 
 
+def _copilot_welcome_workbench_html(lang: str) -> str:
+    """Static design-reference launch contract for the empty Copilot thread."""
+    is_en = lang == "en"
+    paths = [
+        (
+            COPILOT_BRANCH_CONFIG["predict"]["chip"] if is_en else "建模 ICU 结局",
+            "Question -> cohort -> feature modules -> review"
+            if is_en else
+            "问题 -> 队列 -> 特征模块 -> 审阅",
+        ),
+        (
+            COPILOT_BRANCH_CONFIG["crossdb"]["chip"] if is_en else "跨库比较",
+            "Shared definitions, availability, and distribution deltas"
+            if is_en else
+            "共享定义、可得性与分布差异",
+        ),
+        (
+            COPILOT_BRANCH_CONFIG["quality"]["chip"] if is_en else "先审计数据质量",
+            "Coverage, ranges, missingness, and trust flags"
+            if is_en else
+            "覆盖率、范围、缺失与可信标记",
+        ),
+    ]
+    steps = [
+        ("01", "Question" if is_en else "问题"),
+        ("02", "Data" if is_en else "数据"),
+        ("03", "Cohort" if is_en else "队列"),
+        ("04", "Review" if is_en else "审阅"),
+        ("05", "Agent" if is_en else "Agent"),
+    ]
+    guarantees = [
+        "local-only" if is_en else "仅本机",
+        "evidence-gated" if is_en else "证据闸门",
+        "review-before-draft" if is_en else "先审阅再起草",
+    ]
+    path_html = "".join(
+        '<div class="eu-copilot-launch-path">'
+        '<span class="lp-dot"></span>'
+        '<div>'
+        f'<b>{html.escape(label)}</b>'
+        f'<p>{html.escape(detail)}</p>'
+        '</div>'
+        '</div>'
+        for label, detail in paths
+    )
+    step_html = "".join(
+        f'<span><em>{html.escape(num)}</em>{html.escape(label)}</span>'
+        for num, label in steps
+    )
+    guarantee_html = "".join(
+        f'<em>{html.escape(item)}</em>'
+        for item in guarantees
+    )
+    return (
+        '<div class="eu-copilot-launch-contract">'
+        '<div class="eu-copilot-launch-head">'
+        '<div>'
+        f'<span>{html.escape("Launch contract" if is_en else "启动契约")}</span>'
+        f'<b>{html.escape("Start with a study path, not a blank chat" if is_en else "从研究路径开始，而不是空白聊天")}</b>'
+        f'<p>{html.escape("Choose a path below or type a question; Copilot writes into the same local EasyICU workflow state." if is_en else "选择下方路径或直接输入问题；Copilot 会写入同一个本地 EasyICU 工作流状态。")}</p>'
+        '</div>'
+        f'<small>{html.escape("real workflow" if is_en else "真实工作流")}</small>'
+        '</div>'
+        '<div class="eu-copilot-launch-paths">'
+        f'{path_html}'
+        '</div>'
+        '<div class="eu-copilot-launch-steps">'
+        f'{step_html}'
+        '</div>'
+        '<div class="eu-copilot-launch-guarantees">'
+        f'{guarantee_html}'
+        '</div>'
+        '</div>'
+    )
+
+
 def _render_chat_welcome(
     *,
     lang: str,
@@ -6276,6 +6584,7 @@ def _render_chat_welcome(
             '<span class="m-ava">AI</span>'
             f'<div class="m-bubble compact">{html.escape(ask)}</div>'
             '</div>'
+            f'{_copilot_welcome_workbench_html(lang)}'
             '</div>',
             unsafe_allow_html=True,
         )

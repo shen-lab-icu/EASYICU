@@ -133,6 +133,82 @@ def _render_page_header(
     )
 
 
+def _cohort_readiness_contract_html(
+    *,
+    lang: str,
+    patient_count: int,
+    concept_count: int,
+    is_ready: bool,
+    input_body: str,
+    evidence_body: str,
+    review_body: str,
+    input_tone: str,
+    evidence_tone: str,
+    review_tone: str,
+) -> str:
+    rows = [
+        {
+            "label": _T(lang, "Input package", "输入包"),
+            "value": _T(lang, "Loaded", "已加载") if is_ready else _T(lang, "Waiting", "等待中"),
+            "detail": input_body,
+            "tone": input_tone,
+        },
+        {
+            "label": _T(lang, "Denominator", "分母"),
+            "value": f"{patient_count:,}" if patient_count else _T(lang, "Not set", "未设置"),
+            "detail": (
+                _T(lang, "ICU stays available for this statistics surface.", "可用于当前统计页面的 ICU stay。")
+                if patient_count else
+                _T(lang, "Connect or generate a cohort before treating this page as evidence.", "先连接或生成队列，再把本页作为证据使用。")
+            ),
+            "tone": input_tone,
+        },
+        {
+            "label": _T(lang, "Feature evidence", "变量证据"),
+            "value": f"{concept_count}" if concept_count else _T(lang, "Demo set", "演示集") if is_ready else _T(lang, "None", "无"),
+            "detail": evidence_body,
+            "tone": evidence_tone,
+        },
+        {
+            "label": _T(lang, "Draft gate", "草稿闸门"),
+            "value": _T(lang, "Review required", "需要复核") if is_ready else _T(lang, "Blocked", "已锁定"),
+            "detail": review_body,
+            "tone": review_tone,
+        },
+    ]
+    rows_html = "".join(
+        '<div class="eu-cohort-readiness-row {tone}">'
+        '<span class="eu-cohort-readiness-node">{index}</span>'
+        '<div class="eu-cohort-readiness-copy">'
+        '<span>{label}</span>'
+        '<b>{value}</b>'
+        '<p>{detail}</p>'
+        '</div>'
+        '</div>'.format(
+            index=f"{index:02d}",
+            tone=html.escape(row["tone"]),
+            label=html.escape(row["label"]),
+            value=html.escape(row["value"]),
+            detail=html.escape(row["detail"]),
+        )
+        for index, row in enumerate(rows, start=1)
+    )
+    ready_badge = _T(lang, "current session", "当前会话") if is_ready else _T(lang, "setup needed", "需要配置")
+    return (
+        '<div class="eu-readiness-strip eu-cohort-agent-preflight eu-cohort-readiness-contract">'
+        '<div class="eu-cohort-readiness-head">'
+        '<div>'
+        f'<span>{_T(lang, "Agent preflight", "智能体预检")}</span>'
+        f'<b>{_T(lang, "Cohort evidence contract", "队列证据契约")}</b>'
+        f'<p>{_T(lang, "Cohort Statistics can feed Agent Projects only after denominator, feature evidence, and the review gate are explicit.", "只有在分母、变量证据和复核闸门都明确后，队列统计才会交给研究项目。")}</p>'
+        '</div>'
+        f'<em>{ready_badge}</em>'
+        '</div>'
+        f'<div class="eu-cohort-readiness-list">{rows_html}</div>'
+        '</div>'
+    )
+
+
 def _render_cohort_readiness_strip(lang: str) -> None:
     """Agent-aware preflight strip for the statistics page."""
     loaded_concepts = st.session_state.get("loaded_concepts") or {}
@@ -165,42 +241,172 @@ def _render_cohort_readiness_strip(lang: str) -> None:
         evidence_body = _T(lang, "coverage + denominators ready", "覆盖率 + 分母已就绪")
         review_body = _T(lang, "agent drafts only after review", "复核后智能体才会起草")
         review_tone = "warn"
-    signature = _T(lang, "current session", "当前会话")
-    rows = [
-        (
-            _T(lang, "Input package", "输入包"),
-            input_body,
-            input_tone,
-        ),
-        (
-            _T(lang, "Evidence checks", "证据检查"),
-            evidence_body,
-            evidence_tone,
-        ),
-        (
-            _T(lang, "Draft gate", "草稿闸门"),
-            review_body,
-            review_tone,
-        ),
-    ]
-    cards = []
-    for title, body, tone in rows:
-        cards.append(
-            f'<div class="eu-gate-card {tone}">'
-            f'<div class="k">{title}</div>'
-            f'<div class="v">{body}</div>'
-            '</div>'
-        )
     st.markdown(
-        '<div class="eu-readiness-strip eu-cohort-agent-preflight">'
-        '<div class="eu-readiness-strip-head">'
-        f'<span class="mono">{_T(lang, "Agent preflight", "智能体预检")}</span>'
-        f'<span class="mono muted">{signature}</span>'
-        '</div>'
-        f'<div class="eu-readiness-strip-grid">{"".join(cards)}</div>'
-        '</div>',
+        _cohort_readiness_contract_html(
+            lang=lang,
+            patient_count=patient_count,
+            concept_count=concept_count,
+            is_ready=bool(patient_count and (st.session_state.get("entry_mode") == "demo" or concept_count)),
+            input_body=input_body,
+            evidence_body=evidence_body,
+            review_body=review_body,
+            input_tone=input_tone,
+            evidence_tone=evidence_tone,
+            review_tone=review_tone,
+        ),
         unsafe_allow_html=True,
     )
+
+
+def _cohort_loaded_workspace_summary(lang: str) -> dict[str, Any]:
+    """Build the Cohort Statistics loaded-workspace contract from session state."""
+    state = st.session_state
+    loaded_concepts = state.get("loaded_concepts") if isinstance(state.get("loaded_concepts"), dict) else {}
+    concept_names = sorted(str(name) for name in loaded_concepts)
+    df = _demographics_df()
+    state_patient_count = _patient_count_from_state()
+    try:
+        all_patient_count = int(state.get("all_patient_count") or 0)
+    except (TypeError, ValueError):
+        all_patient_count = 0
+    if df is not None:
+        patient_count = len(df)
+    elif state_patient_count:
+        patient_count = state_patient_count
+    elif all_patient_count:
+        patient_count = all_patient_count
+    elif state.get("entry_mode") == "demo":
+        patient_count = _demo_mock_params_n()
+    else:
+        patient_count = 0
+
+    origin = str(state.get("loaded_data_origin") or "none")
+    source_labels = {
+        "demo_viz": ("Demo review workspace", "演示审阅工作区"),
+        "exported_files": ("Exported EasyICU tables", "已导出的 EasyICU 表格"),
+        "loaded_exports": ("Loaded export workspace", "已加载导出工作区"),
+        "quick_load": ("Quick-loaded local data", "快速加载的本地数据"),
+        "quick_preview": ("Preview data", "预览数据"),
+        "preview": ("Preview data", "预览数据"),
+        "real_sofa_reclassification": ("Real SOFA workspace", "真实 SOFA 工作区"),
+        "real_workspace": ("Real cohort workspace", "真实队列工作区"),
+        "none": ("Cohort workspace", "队列工作区"),
+    }
+    source_label_en, source_label_zh = source_labels.get(origin, (origin.replace("_", " ").title(), origin))
+    if origin in {"preview", "quick_preview"} and (
+        state.get("entry_mode") == "demo" or state.get("use_mock_data") or state.get("database") == "mock"
+    ):
+        source_label_en, source_label_zh = "Demo review workspace", "演示审阅工作区"
+    if origin == "none" and state.get("entry_mode") == "demo":
+        source_label_en, source_label_zh = "Demo cohort workspace", "演示队列工作区"
+
+    panel_keys = ["groups", "coverage", "snapshot", "sofa"]
+    panel_labels = dict(zip(panel_keys, _SUBTABS_EN if lang == "en" else _SUBTABS_ZH))
+    active_panel = str(state.get("cohort_active_panel") or panel_keys[0])
+    active_panel_label = panel_labels.get(active_panel, active_panel)
+    concept_count = len(concept_names)
+    is_demo = state.get("entry_mode") == "demo"
+    loaded = bool(patient_count and (is_demo or concept_count))
+    is_en = lang == "en"
+    feature_label = (
+        f"{concept_count} review features"
+        if concept_count and is_en else
+        f"{concept_count} 个审阅特征"
+        if concept_count else
+        "demo review feature set"
+        if is_en else
+        "演示审阅特征集"
+    )
+    status_text = (
+        f"{patient_count:,} ICU stays · {feature_label} · {len(panel_keys)} panels unlocked"
+        if is_en else
+        f"{patient_count:,} 个 ICU stay · {feature_label} · {len(panel_keys)} 个面板已解锁"
+    )
+    local_note = (
+        "local-only workspace"
+        if is_en else
+        "仅本地工作区"
+    )
+    return {
+        "loaded": loaded,
+        "origin": origin,
+        "source_label": source_label_en if is_en else source_label_zh,
+        "patient_count": patient_count,
+        "concept_count": concept_count,
+        "concepts": concept_names,
+        "feature_label": feature_label,
+        "panel_count": len(panel_keys),
+        "active_panel": active_panel,
+        "active_panel_label": active_panel_label,
+        "status_text": status_text,
+        "local_note": local_note,
+    }
+
+
+def _cohort_loaded_workspace_strip_html(lang: str, summary: dict[str, Any]) -> str:
+    """Compact Cohort loaded status strip backed by the real workspace summary."""
+    if not summary.get("loaded"):
+        return ""
+    patient_count = int(summary.get("patient_count") or 0)
+    concept_count = int(summary.get("concept_count") or 0)
+    feature_value = (
+        f"{concept_count:,}" if concept_count else _T(lang, "demo", "演示")
+    )
+    stats = [
+        (_T(lang, "ICU stays", "ICU stay"), f"{patient_count:,}"),
+        (_T(lang, "Review features", "审阅特征"), feature_value),
+        (_T(lang, "Panels", "面板"), f"{int(summary.get('panel_count') or 0):,}"),
+    ]
+    stats_html = "".join(
+        '<div class="eu-cohort-loaded-stat">'
+        f'<span>{html.escape(label)}</span>'
+        f'<b>{html.escape(value)}</b>'
+        '</div>'
+        for label, value in stats
+    )
+    title = (
+        f"{summary.get('source_label')} ready"
+        if lang == "en" else
+        f"{summary.get('source_label')}已就绪"
+    )
+    status_text = str(summary.get("status_text") or "")
+    active_panel = str(summary.get("active_panel_label") or "")
+    local_note = str(summary.get("local_note") or "")
+    detail = (
+        f"{status_text} · Active panel: {active_panel} · {local_note}"
+        if lang == "en" else
+        f"{status_text} · 当前面板：{active_panel} · {local_note}"
+    )
+    return (
+        '<div class="eu-cohort-loaded-strip">'
+        '<div class="eu-cohort-loaded-main">'
+        f'<span class="eu-cohort-loaded-pill">{html.escape(_T(lang, "Loaded", "已加载"))}</span>'
+        '<div>'
+        f'<b>{html.escape(title)}</b>'
+        f'<p>{html.escape(detail)}</p>'
+        '</div>'
+        '</div>'
+        f'<div class="eu-cohort-loaded-kpis">{stats_html}</div>'
+        '</div>'
+    )
+
+
+def _render_cohort_loaded_workspace_bar(lang: str) -> None:
+    """Render the Cohort loaded-workspace success state when data are present."""
+    summary = _cohort_loaded_workspace_summary(lang)
+    if not summary["loaded"]:
+        return
+
+    container = (
+        st.container(key="eu_cohort_loaded_bar")
+        if callable(getattr(st, "container", None)) else
+        nullcontext()
+    )
+    with container:
+        st.markdown(
+            _cohort_loaded_workspace_strip_html(lang, summary),
+            unsafe_allow_html=True,
+        )
 
 
 # =====================================================================
@@ -570,6 +776,8 @@ def render_cohort_redesign_page(
     Setting ``st.session_state["_eu_shell_only"] = True`` falls back
     to the synthetic design-preview bodies for isolated visual QA.
     """
+    st.markdown('<div class="eu-page-marker eu-cohort-page-marker"></div>', unsafe_allow_html=True)
+
     title_en, title_zh = _cohort_page_title(lang)
     _render_page_header(
         title_en=title_en,
@@ -585,6 +793,7 @@ def render_cohort_redesign_page(
         lang=lang,
     )
 
+    _render_cohort_loaded_workspace_bar(lang)
     _render_cohort_readiness_strip(lang)
 
     tabs_labels = list(_SUBTABS_EN if lang == "en" else _SUBTABS_ZH)
@@ -930,6 +1139,167 @@ def _crossdb_availability_rows(lang: str) -> tuple[tuple[str, ...], list[tuple[s
     return (), []
 
 
+def _crossdb_summary_ledger_html(
+    *,
+    lang: str,
+    title: str,
+    columns: list[str],
+    rows: list[list[str]],
+) -> str:
+    """Render the Cross-DB summary as a dense owned ledger, not a generic table."""
+    db_columns = list(columns[1:-1]) if len(columns) >= 3 else list(columns[1:])
+    delta_label = columns[-1] if len(columns) >= 3 else _T(lang, "Status", "状态")
+    grid_cols = max(1, len(db_columns))
+    subtitle = _T(
+        lang,
+        "Real loaded frame values only; no static design numbers are injected.",
+        "只展示真实加载数据帧计算出的值；不注入静态设计稿数字。",
+    )
+    if not rows:
+        rows = [[_T(lang, "Cross-database summary", "跨数据库摘要"), _T(lang, "No rows", "暂无行"), ""]]
+
+    header_labels = [columns[0] if columns else _T(lang, "Metric", "指标"), *(db_columns or [_T(lang, "Status", "状态")]), delta_label]
+    header_html = (
+        f'<div class="eu-crossdb-summary-header-row" style="--eu-crossdb-summary-cols:{grid_cols}">'
+        + "".join(f'<span>{html.escape(str(label))}</span>' for label in header_labels)
+        + '</div>'
+    )
+    row_html: list[str] = []
+    for row in rows:
+        padded = [str(value) for value in row] + [""] * max(0, len(columns) - len(row))
+        metric = padded[0] if padded else ""
+        values = padded[1: 1 + len(db_columns)] if db_columns else padded[1:-1]
+        if not values:
+            values = [padded[1] if len(padded) > 1 else ""]
+        delta_value = padded[-1] if len(padded) >= 2 else ""
+        value_html = "".join(
+            '<div class="eu-crossdb-summary-value">'
+            f'<span>{html.escape(str(label))}</span>'
+            f'<b>{html.escape(str(value) or "--")}</b>'
+            '</div>'
+            for label, value in zip(db_columns or [_T(lang, "Status", "状态")], values)
+        )
+        row_html.append(
+            f'<div class="eu-crossdb-summary-row" style="--eu-crossdb-summary-cols:{grid_cols}">'
+            '<div class="eu-crossdb-summary-metric">'
+            f'<b>{html.escape(str(metric))}</b>'
+            '</div>'
+            f'{value_html}'
+            '<div class="eu-crossdb-summary-delta">'
+            f'<span>{html.escape(str(delta_label))}</span>'
+            f'<b>{html.escape(str(delta_value) or "--")}</b>'
+            '</div>'
+            '</div>'
+        )
+
+    return (
+        '<section class="eu-crossdb-summary-ledger">'
+        '<div class="eu-crossdb-summary-head">'
+        '<div>'
+        f'<span>{html.escape(_T(lang, "Distribution ledger", "分布账本"))}</span>'
+        f'<b>{html.escape(title)}</b>'
+        f'<p>{html.escape(subtitle)}</p>'
+        '</div>'
+        f'<em>{html.escape(_T(lang, "Loaded result", "已加载结果"))}</em>'
+        '</div>'
+        '<div class="eu-crossdb-summary-rows">'
+        f'{header_html}'
+        f'{"".join(row_html)}'
+        '</div>'
+        '</section>'
+    )
+
+
+def _crossdb_availability_status(value: float) -> tuple[str, str]:
+    if np.isnan(value):
+        return "missing", "n/a"
+    pct = int(round(float(value) * 100))
+    if value >= 0.95:
+        return "ok", f"{pct}%"
+    if value >= 0.5:
+        return "partial", f"{pct}%"
+    if value > 0:
+        return "sparse", f"{pct}%"
+    return "missing", "0%"
+
+
+def _crossdb_availability_board_html(
+    *,
+    lang: str,
+    columns: tuple[str, ...],
+    rows: list[tuple[str, list[float]]],
+) -> str:
+    """Render concept availability with Cross-DB-specific board markup."""
+    title = _T(lang, "Concept availability across databases", "概念在不同数据库的可用性")
+    subtitle = _T(
+        lang,
+        "Each cell is the non-null share for that concept in the loaded local frame.",
+        "每个单元格表示该概念在本地已加载数据帧中的非空占比。",
+    )
+    if not rows:
+        return (
+            '<section class="eu-crossdb-availability-empty">'
+            f'<span>{html.escape(_T(lang, "Coverage board", "覆盖度面板"))}</span>'
+            f'<b>{html.escape(_T(lang, "Concept availability matrix not generated", "概念可用性矩阵尚未生成"))}</b>'
+            f'<p>{html.escape(_T(lang, "The matrix is computed only after loaded database frames are available; no placeholder percentages are shown.", "该矩阵只会在数据库数据帧加载成功后计算；这里不再展示占位百分比。"))}</p>'
+            '</section>'
+        )
+
+    column_count = max(1, len(columns))
+    header_cells = "".join(
+        f'<div class="eu-crossdb-availability-col">{html.escape(str(column))}</div>'
+        for column in columns
+    )
+    body_cells: list[str] = []
+    for concept, values in rows:
+        body_cells.append(f'<div class="eu-crossdb-availability-concept">{html.escape(str(concept))}</div>')
+        for value in list(values)[:column_count]:
+            status, label = _crossdb_availability_status(float(value))
+            body_cells.append(
+                f'<div class="eu-crossdb-availability-cell {status}">'
+                f'<span>{html.escape(label)}</span>'
+                '</div>'
+            )
+        for _ in range(max(0, column_count - len(values))):
+            body_cells.append(
+                '<div class="eu-crossdb-availability-cell missing"><span>n/a</span></div>'
+            )
+
+    legend = (
+        (
+            ("ok", _T(lang, "95-100%", "95-100%")),
+            ("partial", _T(lang, "50-94%", "50-94%")),
+            ("sparse", _T(lang, "1-49%", "1-49%")),
+            ("missing", _T(lang, "0 / n/a", "0 / n/a")),
+        )
+    )
+    legend_html = "".join(
+        f'<span class="{klass}">{html.escape(label)}</span>'
+        for klass, label in legend
+    )
+
+    return (
+        '<section class="eu-crossdb-availability-board">'
+        '<div class="eu-crossdb-availability-head">'
+        '<div>'
+        f'<span>{html.escape(_T(lang, "Coverage board", "覆盖度面板"))}</span>'
+        f'<b>{html.escape(title)}</b>'
+        f'<p>{html.escape(subtitle)}</p>'
+        '</div>'
+        f'<em>{html.escape(str(column_count))} {html.escape(_T(lang, "databases", "个数据库"))}</em>'
+        '</div>'
+        '<div class="eu-crossdb-availability-scroll">'
+        f'<div class="eu-crossdb-availability-grid" style="--eu-crossdb-availability-cols:{column_count}">'
+        f'<div class="eu-crossdb-availability-corner">{html.escape(_T(lang, "Concept", "概念"))}</div>'
+        f'{header_cells}'
+        f'{"".join(body_cells)}'
+        '</div>'
+        '</div>'
+        f'<div class="eu-crossdb-availability-legend">{legend_html}</div>'
+        '</section>'
+    )
+
+
 def _render_crossdb_distribution_launcher(
     lang: str,
     *,
@@ -966,22 +1336,93 @@ def _render_crossdb_distribution_launcher(
     )
 
 
+def _crossdb_loaded_strip_html(lang: str, summary: dict[str, Any]) -> str:
+    """Compact Cross-DB loaded status strip backed by the real workspace summary."""
+    stats = [
+        (_T(lang, "Databases", "数据库"), f"{int(summary.get('database_count') or 0):,}"),
+        (_T(lang, "Feature rows", "特征行"), f"{int(summary.get('row_count') or 0):,}"),
+        (_T(lang, "Concepts", "概念"), f"{int(summary.get('concept_count') or 0):,}"),
+    ]
+    stats_html = "".join(
+        '<div class="eu-crossdb-loaded-stat">'
+        f'<span>{html.escape(label)}</span>'
+        f'<b>{html.escape(value)}</b>'
+        '</div>'
+        for label, value in stats
+    )
+    return (
+        '<div class="eu-crossdb-loaded-strip">'
+        '<div class="eu-crossdb-loaded-main">'
+        f'<span class="eu-crossdb-loaded-pill">{html.escape(_T(lang, "Loaded", "已加载"))}</span>'
+        '<div>'
+        f'<b>{html.escape(_T(lang, "Benchmark assembled", "Benchmark 已组装"))}</b>'
+        f'<p>{html.escape(_T(lang, "Ready for cross-database summary, coverage, and distribution review.", "跨数据库摘要、覆盖度和分布复核已就绪。"))}</p>'
+        '</div>'
+        '</div>'
+        f'<div class="eu-crossdb-loaded-kpis">{stats_html}</div>'
+        '</div>'
+    )
+
+
+def _crossdb_active_database_rail_html(
+    databases: list[tuple[str, str, bool, bool]],
+    *,
+    lang: str,
+) -> str:
+    """Render loaded database state as a dense Cross-DB rail, not shared cards."""
+    if not databases:
+        return ""
+    ready_count = sum(1 for _, _, ok, _ in databases if ok)
+    head_label = _T(lang, "Active databases", "已选择数据库")
+    count_label = (
+        f"{ready_count} / {len(databases)} ready"
+        if lang == "en" else
+        f"{ready_count} / {len(databases)} 就绪"
+    )
+    nodes = []
+    for idx, (name, detail, ok, is_primary) in enumerate(databases, start=1):
+        status = (
+            _T(lang, "ready", "就绪")
+            if ok else
+            _T(lang, "missing", "缺失")
+        )
+        classes = " ".join(
+            [
+                "eu-crossdb-active-node",
+                "ready" if ok else "missing",
+                "primary" if is_primary else "",
+            ]
+        ).strip()
+        nodes.append(
+            f'<div class="{classes}">'
+            f'<span>{idx:02d}</span>'
+            '<div>'
+            f'<b>{html.escape(str(name))}</b>'
+            f'<p>{html.escape(str(detail))}</p>'
+            '</div>'
+            f'<em>{html.escape(status)}</em>'
+            '</div>'
+        )
+
+    return (
+        '<section class="eu-crossdb-active-rail">'
+        '<div class="eu-crossdb-active-head">'
+        f'<span>{html.escape(head_label)}</span>'
+        f'<em>{html.escape(count_label)}</em>'
+        '</div>'
+        '<div class="eu-crossdb-active-track">'
+        f'{"".join(nodes)}'
+        '</div>'
+        '</section>'
+    )
+
+
 def _render_crossdb_loaded_bar(lang: str) -> None:
     """Render the assembled benchmark status bar and concrete actions."""
     summary = _crossdb_workspace_summary(lang)
     if not summary["loaded"]:
         return
 
-    is_en = lang == "en"
-    status_text = (
-        f"{summary['database_count']} databases · {summary['row_count']:,} feature rows · "
-        f"{summary['concept_count']} concepts"
-        if is_en else
-        f"{summary['database_count']} 个数据库 · {summary['row_count']:,} 行特征数据 · "
-        f"{summary['concept_count']} 个概念"
-    )
-    title = _T(lang, "Benchmark assembled", "Benchmark 已组装")
-    pill = _T(lang, "Loaded", "已加载")
     container = (
         st.container(key="eu_crossdb_loaded_bar")
         if callable(getattr(st, "container", None)) else
@@ -989,13 +1430,7 @@ def _render_crossdb_loaded_bar(lang: str) -> None:
     )
     with container:
         st.markdown(
-            '<div class="eu-crossdb-loaded-bar">'
-            '<div class="eu-crossdb-loaded-copy">'
-            f'<span class="eu-crossdb-loaded-pill">{html.escape(pill)}</span>'
-            f'<b>{html.escape(title)}</b>'
-            f'<p>{html.escape(status_text)}</p>'
-            '</div>'
-            '</div>',
+            _crossdb_loaded_strip_html(lang, summary),
             unsafe_allow_html=True,
         )
         can_render_actions = (
@@ -1038,6 +1473,7 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
     remains available behind an explicit details toggle.
     """
     _clear_demo_crossdb_state_for_real_mode(st.session_state)
+    st.markdown('<div class="eu-page-marker eu-crossdb-page-marker"></div>', unsafe_allow_html=True)
 
     _render_page_header(
         title_en="Cross-DB benchmark",
@@ -1069,15 +1505,41 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
 
     active_databases = _crossdb_active_databases(lang)
     if active_databases:
-        st.markdown(cc.render_active_databases(active_databases, lang=lang), unsafe_allow_html=True)
+        st.markdown(_crossdb_active_database_rail_html(active_databases, lang=lang), unsafe_allow_html=True)
     else:
         st.markdown(
-            '<div class="eu-card" style="padding:14px">'
-            f'<div style="font-size:12.5px;font-weight:500">'
-            f'{_T(lang, "No database loaded yet", "尚未加载数据库")}</div>'
-            f'<div style="margin-top:6px;font-size:12px;color:var(--ink-3)">'
-            f'{_T(lang, "Use the loader below to connect at least two database roots; EasyICU will only render comparison cards after real frames are loaded.", "请使用下方加载器连接至少两个数据库根目录；只有真实数据帧加载成功后，EasyICU 才会展示对比卡片。")}'
-            '</div></div>',
+            '<div class="eu-crossdb-empty-workbench">'
+            '<div class="eu-crossdb-empty-copy">'
+            f'<span>{_T(lang, "Benchmark gate", "基准闸门")}</span>'
+            f'<b>{_T(lang, "No database loaded yet", "尚未加载数据库")}</b>'
+            f'<p>{_T(lang, "Use the detailed loader below to connect at least two ICU database roots; EasyICU will only render comparison cards after real frames are loaded.", "请使用下方详细加载器连接至少两个 ICU 数据库根目录；只有真实数据帧加载成功后，EasyICU 才会展示对比卡片。")}</p>'
+            '</div>'
+            '<div class="eu-crossdb-empty-steps">'
+            + ''.join(
+                '<div>'
+                f'<span>{idx:02d}</span>'
+                f'<b>{title}</b>'
+                f'<p>{detail}</p>'
+                '</div>'
+                for idx, (title, detail) in enumerate(
+                    [
+                        (
+                            _T(lang, "Select sources", "选择数据库"),
+                            _T(lang, "Pick two or more standardized ICU folders.", "选择两个或更多标准化 ICU 数据库目录。"),
+                        ),
+                        (
+                            _T(lang, "Load frames", "加载数据帧"),
+                            _T(lang, "Feature frames stay local and are checked before plotting.", "特征数据帧保留在本地，并在绘图前检查。"),
+                        ),
+                        (
+                            _T(lang, "Review evidence", "复核证据"),
+                            _T(lang, "Summary, availability, and distributions unlock together.", "摘要、可用性矩阵和分布图会同时解锁。"),
+                        ),
+                    ],
+                    start=1,
+                )
+            )
+            + '</div></div>',
             unsafe_allow_html=True,
         )
 
@@ -1090,39 +1552,24 @@ def render_cross_db_redesign_page(lang: str, *, multidb_fn=None) -> None:
            "跨数据库摘要待生成")
     )
     st.markdown(
-        '<div style="margin-top:14px">'
-        + cc.render_mono_table(
+        _crossdb_summary_ledger_html(
+            lang=lang,
             title=summary_title,
             columns=kpi_columns,
             rows=kpi_rows,
-        )
-        + '</div>',
+        ),
         unsafe_allow_html=True,
     )
 
     availability_columns, availability_rows = _crossdb_availability_rows(lang)
-    if availability_rows:
-        st.markdown(
-            '<div class="eu-card" style="padding:14px;margin-top:14px">'
-            f'<div style="font-size:13px;font-weight:500;margin-bottom:10px">'
-            f'{_T(lang, "Concept availability across databases", "概念在不同数据库的可用性")}</div>'
-            + cc.render_availability_matrix(
-                availability_rows,
-                columns=availability_columns,
-            )
-            + '</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            '<div class="eu-card" style="padding:14px;margin-top:14px">'
-            f'<div style="font-size:13px;font-weight:500">'
-            f'{_T(lang, "Concept availability matrix not generated", "概念可用性矩阵尚未生成")}</div>'
-            f'<div style="margin-top:6px;font-size:12px;color:var(--ink-3)">'
-            f'{_T(lang, "The matrix is computed only after loaded database frames are available; no placeholder percentages are shown.", "该矩阵只会在数据库数据帧加载成功后计算；这里不再展示占位百分比。")}'
-            '</div></div>',
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        _crossdb_availability_board_html(
+            lang=lang,
+            columns=availability_columns,
+            rows=availability_rows,
+        ),
+        unsafe_allow_html=True,
+    )
 
     if multidb_fn is not None and not st.session_state.get("_eu_shell_only"):
         open_key = "_eu_crossdb_distribution_open"
