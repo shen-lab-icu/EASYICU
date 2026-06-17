@@ -591,6 +591,18 @@ def bind_numeric_values(
 ) -> Tuple[str, Dict[str, NumericClaim], List[str]]:
     """Bind every numeric value in ``manuscript`` to a registered claim.
 
+    **Engine-agnostic provenance invariant.** This binder takes only the
+    manuscript *string* plus the :class:`EvidenceStore`; it has no knowledge of
+    which brain produced the text. That is deliberate and load-bearing: whether
+    the manuscript came from the offline mock, an API model, or a local
+    coding-agent CLI (Codex / Claude Code), every printed number must still
+    trace to a registered :class:`NumericClaim` or it is treated as untraced.
+    No engine — however capable — can bypass this gate. As external agents get
+    stronger they also get more confidently wrong, so this value-level check is
+    the part of the framework that *gains* value as the brain improves, not the
+    part that gets commoditised away. Do not add an engine-specific trust path
+    that lets some provider's numbers skip binding.
+
     Each matched value gets a Markdown footnote ``[^claim_N]`` whose
     definition is appended at the bottom of the manuscript pointing to
     the source step, source field, and owning evidence id. Numbers

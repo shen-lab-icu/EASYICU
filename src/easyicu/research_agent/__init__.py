@@ -181,12 +181,41 @@ __all__ = [
     "real_data_concept_feasibility",
     "render_discovery_report",
     "run_idea_mining_dry_run",
+    "LiteratureFunnelResult",
+    "LiteratureFunnelRoute",
+    "LiteratureFunnelSpec",
+    "build_literature_funnel_queries",
+    "extract_gap_sections_from_text",
+    "fetch_literature_funnel_corpus",
+    "fetch_literature_funnel_source_materials",
+    "IDEA_QUALITY_EVAL_SCHEMA_VERSION",
+    "IdeaQualityEvalItem",
+    "IdeaQualityEvalSet",
+    "IdeaQualityExpectedLabel",
+    "IdeaQualityPrediction",
+    "IdeaQualityScorecard",
+    "default_idea_quality_eval_path",
+    "load_idea_quality_eval_set",
+    "score_idea_quality_predictions",
+    "summarize_idea_quality_eval_set",
     # Idea-mining literature scope (discovery lever 1)
     "JOURNAL_PRESETS",
     "LiteratureScopeSpec",
     "build_pubmed_query_from_scope",
     "resolve_journals",
     "resolve_year_range",
+    "DISCOVERY_HANDOFF_SCHEMA_VERSION",
+    "DISCOVERY_PACKAGE_SCHEMA_VERSION",
+    "DiscoveryHandoffPacket",
+    "DiscoveryManuscriptPackageAssessment",
+    "ManuscriptFigureInventoryItem",
+    "build_handoff_from_row",
+    "load_discovery_ledger",
+    "select_discovery_row",
+    "render_discovery_story_figure",
+    "validate_discovery_manuscript_package",
+    "write_discovery_package_assessment",
+    "write_handoff_packet",
     "ExperimentSpec",
     "CohortInputSpec",
     "RuntimeSpec",
@@ -197,7 +226,9 @@ __all__ = [
     "LLMClient",
     "MockLLMClient",
     "OpenAIClient",
+    "CLIAgentLLMClient",
     "LLMRouter",
+    "build_llm_client",
     # Agents
     "PlannerAgent",
     "ReplannerAgent",
@@ -563,6 +594,58 @@ def __getattr__(name: str):
 
         return getattr(_idea_scope, name)
     if name in {
+        "LiteratureFunnelResult",
+        "LiteratureFunnelRoute",
+        "LiteratureFunnelSpec",
+        "build_literature_funnel_queries",
+        "extract_gap_sections_from_text",
+        "fetch_literature_funnel_corpus",
+        "fetch_literature_funnel_source_materials",
+    }:
+        from . import idea_mining_funnel as _idea_mining_funnel
+
+        return getattr(_idea_mining_funnel, name)
+    if name in {
+        "IDEA_QUALITY_EVAL_SCHEMA_VERSION",
+        "IdeaQualityEvalItem",
+        "IdeaQualityEvalSet",
+        "IdeaQualityExpectedLabel",
+        "IdeaQualityPrediction",
+        "IdeaQualityScorecard",
+        "default_idea_quality_eval_path",
+        "load_idea_quality_eval_set",
+        "score_idea_quality_predictions",
+        "summarize_idea_quality_eval_set",
+    }:
+        from . import idea_mining_eval as _idea_mining_eval
+
+        return getattr(_idea_mining_eval, name)
+    if name in {
+        "DISCOVERY_HANDOFF_SCHEMA_VERSION",
+        "DiscoveryHandoffPacket",
+        "build_handoff_from_row",
+        "load_discovery_ledger",
+        "select_discovery_row",
+        "write_handoff_packet",
+    }:
+        from . import discovery_handoff as _discovery_handoff
+
+        return getattr(_discovery_handoff, name)
+    if name in {
+        "DISCOVERY_PACKAGE_SCHEMA_VERSION",
+        "DiscoveryManuscriptPackageAssessment",
+        "ManuscriptFigureInventoryItem",
+        "validate_discovery_manuscript_package",
+        "write_discovery_package_assessment",
+    }:
+        from . import discovery_package as _discovery_package
+
+        return getattr(_discovery_package, name)
+    if name in {"render_discovery_story_figure"}:
+        from . import discovery_story_figure as _discovery_story_figure
+
+        return getattr(_discovery_story_figure, name)
+    if name in {
         "ExperimentSpec",
         "CohortInputSpec",
         "RuntimeSpec",
@@ -591,7 +674,10 @@ def __getattr__(name: str):
         from . import case_contexts as _case_contexts
 
         return getattr(_case_contexts, name)
-    if name in {"LLMClient", "MockLLMClient", "OpenAIClient", "LLMRouter"}:
+    if name in {
+        "LLMClient", "MockLLMClient", "OpenAIClient", "CLIAgentLLMClient",
+        "LLMRouter", "build_llm_client",
+    }:
         from . import llm as _llm
 
         return getattr(_llm, name)

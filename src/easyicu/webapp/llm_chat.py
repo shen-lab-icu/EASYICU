@@ -4277,13 +4277,22 @@ def _is_configured() -> bool:
 
 def _get_client():
     """Build and return an OpenAI-compatible client, or *None* on error."""
+    provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))
+
+    # Local coding-agent CLI backends (claude / codex) are driven through an
+    # OpenAI-shaped adapter instead of an HTTP client — see copilot.cli_agent.
+    from easyicu.webapp.copilot import cli_agent
+    if cli_agent.is_cli_provider(provider):
+        if not cli_agent.cli_available(provider):
+            return None
+        return cli_agent.CLIAgentClient(provider=provider)
+
     try:
         from openai import OpenAI
         import httpx
     except ImportError:
         return None
 
-    provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))
     _display, default_url, _default_model, _needs_key, _desc_en, _desc_zh = public_provider_defaults(provider)
     api_key = st.session_state.get("llm_api_key", "").strip()
     base_url = st.session_state.get("llm_base_url", "").strip() or default_url or None
@@ -4310,6 +4319,34 @@ def _get_client():
         follow_redirects=True,
     )
     return OpenAI(**client_kwargs, http_client=http_client)
+
+
+def _client_unavailable_message(lang: str) -> str:
+    """Actionable error when the selected provider could not be built.
+
+    Concern #1: a local coding-agent CLI is an *optional* engine. When the user
+    picked one but it is not installed, say so specifically and point them at
+    the alternatives, instead of a generic "check your configuration".
+    """
+    provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))
+    from easyicu.webapp.copilot import cli_agent
+    if cli_agent.is_cli_provider(provider) and not cli_agent.cli_available(provider):
+        command = cli_agent.cli_command_for(provider) or provider
+        if lang == "en":
+            return (
+                f"The `{command}` CLI was not found on this machine. The local "
+                f"CLI backend is optional — install `{command}`, or pick another "
+                "provider (OpenAI / OpenRouter / DeepSeek / …) in AI settings."
+            )
+        return (
+            f"未在本机检测到 `{command}` CLI。本地 CLI 后端是可选项——"
+            f"请安装 `{command}`，或在 AI 设置里改用其它服务商"
+            "（OpenAI / OpenRouter / DeepSeek 等）。"
+        )
+    return (
+        "Failed to create API client. Check your configuration."
+        if lang == "en" else "无法创建 API 客户端，请检查配置。"
+    )
 
 
 def _provider_default_headers(provider: str) -> dict[str, str] | None:
@@ -5700,7 +5737,7 @@ def _render_ai_assistant_workspace_page(lang: str, *, pending_prompt: bool) -> N
         with st.container(key="eu_copilot_guided_top"):
             brand_col, exit_col, classic_col = st.columns([1, 0.16, 0.28], gap="small")
             with brand_col:
-                brand_icon = icon("flask")
+                brand_icon = icon("spark") or icon("flask")
                 st.markdown(
                     '<div class="eu-copilot-topbrand">'
                     f'<span class="brand-mark">{brand_icon}</span>'
@@ -5720,6 +5757,7 @@ def _render_ai_assistant_workspace_page(lang: str, *, pending_prompt: bool) -> N
                     st.session_state["_scroll_to_top"] = True
                     st.session_state["_inline_ai_panel_open"] = False
                     st.session_state["_floating_ai_open"] = False
+                    st.session_state.pop("_eu_guided_fullscreen", None)
                     st.session_state.pop("_ai_pending_question", None)
                     st.rerun()
             with classic_col:
@@ -5728,6 +5766,7 @@ def _render_ai_assistant_workspace_page(lang: str, *, pending_prompt: bool) -> N
                     key="_copilot_top_classic_workspace",
                     use_container_width=True,
                 ):
+                    st.session_state.pop("_eu_guided_fullscreen", None)
                     _apply_chat_workflow_action("study_extract")
                     st.rerun()
 
@@ -5929,6 +5968,98 @@ def _copilot_active_study_context_html(
         f'<b>{html.escape(folder_name)}</b>'
         f'<small>{html.escape(folder_detail)}</small>'
         '</div>'
+        '</div>'
+    )
+
+
+def _copilot_conversation_brief_html(
+    state: Mapping[str, object],
+    study: Mapping[str, object],
+    snapshot: object,
+    lang: str,
+) -> str:
+    """Conversation-column study brief bound to the live Copilot workflow state."""
+    is_en = lang == "en"
+    question = str(
+        study.get("question")
+        or state.get("research_agent_question")
+        or state.get("_copilot_last_question")
+        or ""
+    ).strip()
+    question_label = _copilot_contract_text(
+        question or ("Question not framed yet" if is_en else "尚未框定研究问题"),
+        max_len=132,
+    )
+    branch = str(study.get("branch") or "predict")
+    branch_config = COPILOT_BRANCH_CONFIG.get(branch, COPILOT_BRANCH_CONFIG["predict"])
+    branch_label = str(branch_config.get("chip") or branch)
+    depth = _copilot_engine.normalize_depth(study.get("depth"))
+    depth_label = {
+        "extract": "Extract only" if is_en else "只提取",
+        "review": "Extract + review" if is_en else "提取 + 审阅",
+        "full": "Full study" if is_en else "全流程研究",
+    }.get(depth, depth)
+    selected = int(getattr(snapshot, "selected_concepts", 0) or 0)
+    selected = selected or len(study.get("selected_concepts") or []) or len(study.get("modules") or [])
+    folder = Path(str(state.get("_copilot_current_session_dir") or "")).name
+    local_label = folder or ("not saved yet" if is_en else "尚未保存")
+    rows = [
+        ("Study path" if is_en else "研究路径", branch_label),
+        ("Current step" if is_en else "当前步骤", str(getattr(snapshot, "active_step_label", "") or "")),
+        ("Current source" if is_en else "当前来源", str(getattr(snapshot, "data_label", "") or "")),
+        ("Depth" if is_en else "深度", depth_label),
+        ("Concepts" if is_en else "变量", f"{selected} mapped" if is_en else f"{selected} 个已映射"),
+        ("Local state" if is_en else "本地状态", local_label),
+    ]
+    row_html = "".join(
+        '<span>'
+        f'<b>{html.escape(label)}</b>'
+        f'<em>{html.escape(_copilot_contract_text(str(value), max_len=42))}</em>'
+        '</span>'
+        for label, value in rows
+    )
+
+    active_step = str(getattr(snapshot, "active_step", "") or study.get("step") or "question")
+    active_idx = COPILOT_STEP_INDEX.get(active_step, 0)
+    step_done = getattr(snapshot, "step_done", {}) or {}
+    visible_steps = ("question", "data", "cohort", "concepts", "review", "analysis")
+    step_html = ""
+    for idx, step in enumerate(visible_steps, start=1):
+        step_idx = COPILOT_STEP_INDEX.get(step, 0)
+        if step == active_step:
+            tone = "active"
+        elif bool(step_done.get(step)) or step_idx < active_idx:
+            tone = "done"
+        else:
+            tone = "pending"
+        step_html += (
+            f'<span class="{tone}">'
+            f'<em>{idx:02d}</em>'
+            f'{html.escape(_copilot_step_label(step, lang))}'
+            '</span>'
+        )
+
+    guarantee_html = "".join(
+        f'<em>{html.escape(item)}</em>'
+        for item in (
+            ("local state" if is_en else "本地状态"),
+            ("evidence-gated" if is_en else "证据闸门"),
+            ("review-before-draft" if is_en else "先审阅再起草"),
+        )
+    )
+    return (
+        '<div class="eu-copilot-conversation-brief">'
+        '<div class="eu-copilot-conversation-brief-head">'
+        '<div>'
+        f'<span>{html.escape("Live study brief" if is_en else "实时研究简报")}</span>'
+        f'<b>{html.escape("Study state follows the conversation" if is_en else "研究状态随对话推进")}</b>'
+        '</div>'
+        f'<small>{html.escape("real workflow" if is_en else "真实工作流")}</small>'
+        '</div>'
+        f'<p class="eu-copilot-conversation-question">{html.escape(question_label)}</p>'
+        f'<div class="eu-copilot-conversation-facts">{row_html}</div>'
+        f'<div class="eu-copilot-conversation-steps">{step_html}</div>'
+        f'<div class="eu-copilot-conversation-guarantees">{guarantee_html}</div>'
         '</div>'
     )
 
@@ -6277,7 +6408,8 @@ def _render_copilot_stage_workspace(lang: str) -> None:
             '</div>',
             unsafe_allow_html=True,
         )
-        _render_copilot_depth_control(study, lang)
+        if not st.session_state.get("_eu_guided_fullscreen"):
+            _render_copilot_depth_control(study, lang)
         st.markdown(
             _copilot_agent_readiness_contract_html(st.session_state, study, snapshot, lang),
             unsafe_allow_html=True,
@@ -7289,6 +7421,13 @@ def _render_compact_chat_panel(
         recent_messages = st.session_state.llm_messages[-COPILOT_RENDER_MESSAGE_LIMIT:]
         latest_assistant_idx = -1
         if is_codex_workspace:
+            raw_study = st.session_state.get("_copilot_guided_study")
+            study = raw_study if isinstance(raw_study, Mapping) else _ensure_copilot_study_state(st.session_state)
+            snapshot = build_study_workspace_snapshot(st.session_state, study, lang=lang)
+            st.markdown(
+                _copilot_conversation_brief_html(st.session_state, study, snapshot, lang),
+                unsafe_allow_html=True,
+            )
             for idx, item in enumerate(recent_messages):
                 if str(item.get("role") or "") == "assistant":
                     latest_assistant_idx = idx
@@ -8619,9 +8758,7 @@ def _stream_response(messages: list, lang: str):
         return
     client = _get_client()
     if client is None:
-        err = ("Failed to create API client. Check your configuration."
-               if lang == "en" else "无法创建 API 客户端，请检查配置。")
-        st.error(err)
+        st.error(_client_unavailable_message(lang))
         return
 
     provider = coerce_public_provider(st.session_state.get("llm_provider", public_default_provider_key()))

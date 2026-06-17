@@ -66,6 +66,62 @@ coverage / literature-saturation / gate-pass weights, but it should not
 be described as "Scientific Discovery" in paper-facing text. In manuscripts use
 "candidate hypothesis ranking, human-curated".
 
+### Engine ownership — what is swappable vs. house-owned forever
+
+The LLM/agent "brain" is a **commodity, swappable engine**, not part of the
+moat. General coding agents (Codex, Claude Code, and whatever comes next) will
+keep getting better at the *generative* roles (planning, writing analysis code,
+drafting prose), and we deliberately let them — they plug in behind the
+`LLMClient` protocol (`complete(messages) -> str`). What does **not**
+commoditise, and what this layer owns permanently, is the ICU concept
+foundation (Layer 1) and the value-level evidence runtime (Layer 2). The table
+below is the contract; treat it as a guardrail when integrating any external
+agent.
+
+| Role / component | Ownership | Rule |
+| --- | --- | --- |
+| planner / replanner | engine-swappable | route to any `LLMClient` (mock / API / CLI agent) |
+| coder | engine-swappable | generates code *text*; execution stays house-owned |
+| writer / analyzer | engine-swappable | output still passes the evidence gate below |
+| concept resolution / cross-DB mapping (Layer 1) | **house-owned forever** | domain knowledge a general agent does not have |
+| evidence store / `NumericClaim` binding / `bind_numeric_values` | **house-owned forever, non-LLM** | the provenance moat |
+| validators / replay / restricted-AST formula evaluator | **house-owned forever, non-LLM** | deterministic, auditable, never delegated |
+
+Two invariants enforce this split:
+
+1. **The engine is optional, never required — capability degradation ladder.**
+   `llm.build_llm_client(prefer=...)` walks
+   `CLI agent (codex/claude) → OpenAI → OpenRouter → MockLLMClient`, returning
+   an `LLMClientSelection` that records what actually ran and why it fell back.
+   A user without any coding-agent CLI or API key still gets a working,
+   end-to-end pipeline on the offline `MockLLMClient` floor (design rule #1 in
+   `llm.py`). Adding `CLIAgentLLMClient` did **not** introduce a hard
+   dependency.
+
+2. **No engine bypasses `NumericClaim` binding — engine-agnostic provenance.**
+   `manuscript_post.bind_numeric_values` takes only the manuscript *string* plus
+   the `EvidenceStore`; in STRICT mode every printed number must trace to a
+   registered claim or it is rejected, regardless of which brain wrote it
+   (mock, API, or a local Codex/Claude CLI). Stronger engines hallucinate more
+   confidently, so this gate *gains* value as the brain improves. Do not add an
+   engine-specific "trusted" path that lets some provider's numbers skip
+   binding; `tests/research_agent/test_numeric_provenance_engine_agnostic.py`
+   fails if you do.
+
+**Opt-in agentic coder (altitude-2a).** Setting
+`EASYICU_AGENTIC_CODER_BACKEND=codex` (or `claude`) makes the execute phase
+delegate *script authoring + self-repair* to a local coding-agent CLI
+(`agentic_coder.AgenticCoderAgent`): the CLI runs its own write→run→fix loop in
+a sandbox against the cohort parquet (`COHORT_PARQUET`) and returns only the
+final script. That script is then executed and evidence-bound by the
+instrumented runtime exactly as the LLM coder's output is — so the *numbers*
+still come from our pipeline, never from the CLI's own run. It is **off by
+default**, degrades to the LLM `CoderAgent` when the CLI is absent, and applies
+the same method-compatibility check. The real CLI-driven loop is validated
+under `needs_real_data`; the offline unit tests
+(`tests/research_agent/test_agentic_coder.py`) lock the delegation/fallback
+contract.
+
 S1 idea-triage note: `concept_availability.real_data_concept_feasibility`
 adds an outcome-blind data-layer feasibility probe for future
 review/editorial-derived idea triage. It reports denominator counts,
