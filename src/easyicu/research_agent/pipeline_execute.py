@@ -276,6 +276,13 @@ def run_execute_phase(
         cohort_path = _analysis_cohort_path
 
     coder = CoderAgent(role_resolver("coder"))
+    # Opt-in altitude-2a: delegate script authoring + self-repair to a local
+    # coding-agent CLI when EASYICU_AGENTIC_CODER_BACKEND is set. Off by default;
+    # degrades back to ``coder`` when the CLI is unavailable. The script it
+    # returns is still executed + evidence-bound by the instrumented runtime.
+    from .agentic_coder import maybe_wrap_coder
+
+    coder = maybe_wrap_coder(coder)
     analyzer = AnalyzerAgent(role_resolver("analyzer"))
     supervisor = RuntimeSupervisor(
         clinical_semantics=ClinicalSemanticsAgent(),

@@ -134,6 +134,22 @@ PROVIDERS: Dict[str, ProviderInfo] = {
         "China-based, DeepSeek/Qwen. Free tier available.",
         "国内平台，DeepSeek/Qwen 等模型，注册赠送额度。",
     ),
+    "cli_claude": (
+        "Claude CLI (local)",
+        "local-cli",
+        "sonnet",
+        False,
+        "Drives your local, already-signed-in `claude` CLI. No API key needed.",
+        "驱动本机已登录的 `claude` CLI，无需填写 API Key。",
+    ),
+    "cli_codex": (
+        "Codex CLI (local)",
+        "local-cli",
+        "default",
+        False,
+        "Drives your local, already-signed-in `codex` CLI. No API key needed.",
+        "驱动本机已登录的 `codex` CLI，无需填写 API Key。",
+    ),
     "custom": (
         "Custom / Compatible",
         "",

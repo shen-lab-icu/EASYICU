@@ -849,6 +849,306 @@ class LLMRouter:
         return self._default.complete(messages, max_tokens=max_tokens, temperature=temperature)
 
 
+class CLIAgentLLMClient:
+    """Drive a local, pre-authenticated coding-agent CLI as a text backend.
+
+    This is the *altitude-1* integration of a local coding agent (Codex CLI /
+    Claude Code CLI) into the research-agent framework: the CLI satisfies the
+    same ``LLMClient`` protocol every other provider does, so any role
+    (planner / coder / analyzer / writer / critic) can use it via
+    ``llm.complete(messages) -> str``.
+
+    What this is **not**: it does NOT delegate execution or evidence binding to
+    the CLI. Generated code still runs inside the instrumented Safe Analytical
+    Runtime and every number is still bound as a ``NumericClaim`` there, exactly
+    as with :class:`OpenAIClient`. Letting the CLI itself run the analysis loop
+    (the "Coder/repair" delegation) is a separate, larger change that has to
+    re-route results back through the evidence pipeline — deliberately out of
+    scope here.
+
+    Safety posture (mirrors the webapp ``copilot.cli_agent`` twin): the CLI is
+    invoked in text-only / read-only-sandbox mode, in a throwaway cwd, with no
+    tool-write permission. It is still a real external model call, so it must be
+    used behind the same opt-in the other real providers sit behind.
+
+    The CLIs do not honour ``max_tokens`` / ``temperature`` / ``seed`` /
+    ``top_p``; those are accepted for protocol compatibility and ignored.
+    """
+
+    _SUPPORTED = {"codex", "claude"}
+
+    def __init__(
+        self,
+        backend: str = "codex",
+        model: Optional[str] = None,
+        request_timeout: float = 180.0,
+    ) -> None:
+        backend = str(backend or "").strip().lower()
+        if backend not in self._SUPPORTED:
+            raise ValueError(
+                f"Unknown CLI backend {backend!r}; expected one of {sorted(self._SUPPORTED)}."
+            )
+        self._backend = backend
+        self._command = backend  # executable name == backend name
+        self._model = (model or "").strip()  # "" => CLI default
+        self._timeout = float(request_timeout)
+        self.name = f"{backend}-cli"
+
+    @staticmethod
+    def _flatten(messages: Sequence[LLMMessage]) -> tuple[str, str]:
+        system_parts: List[str] = []
+        convo_parts: List[str] = []
+        for m in messages:
+            content = str(getattr(m, "content", "") or "").strip()
+            if not content:
+                continue
+            role = str(getattr(m, "role", "user") or "user").strip().lower()
+            if role == "system":
+                system_parts.append(content)
+            elif role == "assistant":
+                convo_parts.append(f"Assistant:\n{content}")
+            else:
+                convo_parts.append(f"User:\n{content}")
+        return "\n\n".join(system_parts), "\n\n".join(convo_parts)
+
+    def _build_argv(self, system: str, cwd: str) -> List[str]:
+        model = self._model
+        if self._backend == "claude":
+            argv = [self._command, "-p", "--output-format", "text"]
+            if model:
+                argv += ["--model", model]
+            if system:
+                argv += ["--append-system-prompt", system]
+            # print mode + default permissions: any tool call needing approval
+            # is auto-denied (no interactive approver) => stays a text generator.
+            return argv
+        # codex
+        argv = [
+            self._command, "exec",
+            "--sandbox", "read-only",
+            "--skip-git-repo-check",
+            "--color", "never",
+            "-C", cwd,
+        ]
+        if model:
+            argv += ["-m", model]
+        return argv
+
+    def complete(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        seed: Optional[int] = None,
+        top_p: Optional[float] = None,
+        **_ignored: Any,
+    ) -> str:
+        import shutil
+        import subprocess
+        import tempfile
+
+        if not shutil.which(self._command):
+            raise RuntimeError(
+                f"The '{self._command}' CLI is not installed or not on PATH."
+            )
+        system, conversation = self._flatten(messages)
+        with tempfile.TemporaryDirectory(prefix="easyicu-research-cli-") as cwd:
+            argv = self._build_argv(system, cwd)
+            if self._backend == "codex":
+                # codex has no system flag; fold system into the prompt.
+                prompt = f"{system}\n\n{conversation}".strip() if system else conversation
+            else:
+                prompt = conversation
+            try:
+                proc = subprocess.run(
+                    argv,
+                    input=prompt,
+                    capture_output=True,
+                    text=True,
+                    timeout=self._timeout,
+                    cwd=cwd,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"{self._command} timed out after {self._timeout:.0f}s."
+                ) from exc
+            except OSError as exc:
+                raise RuntimeError(f"Failed to launch {self._command}: {exc}") from exc
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            raise RuntimeError(
+                f"{self._command} exited with code {proc.returncode}: {detail[:500]}"
+            )
+        text = _strip_reasoning_blocks((proc.stdout or "").strip())
+        if not text:
+            raise RuntimeError(f"{self._command} returned an empty response.")
+        return text
+
+
+@dataclass
+class LLMClientSelection:
+    """The outcome of :func:`build_llm_client`'s capability ladder.
+
+    Recorded so a run envelope can show *what brain actually ran* and why it
+    fell back — reviewers should never have to guess whether a result came
+    from a local coding-agent CLI, an API model, or the offline mock.
+    """
+
+    client: Any
+    backend: str          # what was actually built ("codex" / "openai" / "mock" ...)
+    requested: str        # what the caller preferred
+    fell_back: bool       # True when backend != requested
+    reason: str           # human-readable explanation
+    ladder: List[str]     # the order that was tried
+
+
+# Backends served by a local coding-agent CLI vs. an OpenAI-compatible API.
+_CLI_BACKENDS = {"codex", "claude"}
+_API_BACKENDS = {"openai", "openrouter", "custom"}
+
+_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def cli_backend_available(backend: str) -> bool:
+    """True when the CLI executable backing *backend* is installed on PATH."""
+    import shutil
+
+    if backend not in _CLI_BACKENDS:
+        return False
+    return shutil.which(backend) is not None
+
+
+def _api_key_present(api_key: Optional[str]) -> bool:
+    return bool(
+        api_key
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("OPENROUTER_API_KEY")
+    )
+
+
+def _backend_available(backend: str, *, api_key: Optional[str], allow_mock: bool) -> bool:
+    if backend in _CLI_BACKENDS:
+        return cli_backend_available(backend)
+    if backend in _API_BACKENDS:
+        return _api_key_present(api_key)
+    if backend == "mock":
+        return allow_mock
+    return False
+
+
+def _construct_backend(
+    backend: str,
+    *,
+    model: Optional[str],
+    api_key: Optional[str],
+    base_url: Optional[str],
+    extra_headers: Optional[Dict[str, str]],
+) -> Any:
+    if backend in _CLI_BACKENDS:
+        return CLIAgentLLMClient(backend=backend, model=model or None)
+    if backend in _API_BACKENDS:
+        resolved_base = base_url
+        if backend == "openrouter" and not resolved_base:
+            resolved_base = _OPENROUTER_BASE_URL
+        kwargs: Dict[str, Any] = {}
+        if model:
+            kwargs["model"] = model
+        if api_key:
+            kwargs["api_key"] = api_key
+        if resolved_base:
+            kwargs["base_url"] = resolved_base
+        if extra_headers:
+            kwargs["extra_headers"] = extra_headers
+        return OpenAIClient(**kwargs)
+    if backend == "mock":
+        from .llm_mocks import MockLLMClient
+
+        return MockLLMClient()
+    raise ValueError(f"Unknown LLM backend: {backend!r}")
+
+
+def build_llm_client(
+    prefer: str = "codex",
+    *,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    allow_mock: bool = True,
+    ladder: Optional[Sequence[str]] = None,
+) -> LLMClientSelection:
+    """Build the best available LLM client, degrading gracefully.
+
+    The whole point of this factory is concern #1: **a local coding-agent CLI
+    (Codex / Claude Code) must be an *optional* engine, never a dependency.**
+    Not everyone has it installed, so selection walks a capability ladder and
+    returns the first engine that is actually usable:
+
+        prefer (e.g. "codex")  ->  "openai"  ->  "openrouter"  ->  "mock"
+
+    - CLI backends are available iff their executable is on ``PATH``.
+    - API backends are available iff an API key is supplied / in the env.
+    - ``mock`` is always available (unless ``allow_mock=False``) and is the
+      guaranteed floor: the pipeline still runs end-to-end with zero external
+      agent, exactly as design rule #1 in this module requires.
+
+    The returned :class:`LLMClientSelection` records what actually ran and why,
+    so the choice is auditable rather than silent.
+    """
+    requested = str(prefer or "").strip().lower() or "codex"
+    if ladder is None:
+        default_chain = [requested, "openai", "openrouter", "mock"]
+        # de-duplicate while preserving order
+        seen: set[str] = set()
+        chain: List[str] = []
+        for name in default_chain:
+            if name and name not in seen:
+                seen.add(name)
+                chain.append(name)
+    else:
+        chain = [str(name).strip().lower() for name in ladder if str(name).strip()]
+    if not allow_mock:
+        chain = [name for name in chain if name != "mock"]
+
+    for backend in chain:
+        if not _backend_available(backend, api_key=api_key, allow_mock=allow_mock):
+            continue
+        client = _construct_backend(
+            backend,
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            extra_headers=extra_headers,
+        )
+        fell_back = backend != requested
+        if not fell_back:
+            reason = f"using requested backend {backend!r}"
+        elif backend in _CLI_BACKENDS:
+            reason = f"requested {requested!r} unavailable; using CLI backend {backend!r}"
+        elif backend == "mock":
+            reason = (
+                f"requested {requested!r} unavailable and no API key configured; "
+                "fell back to the offline mock"
+            )
+        else:
+            reason = f"requested {requested!r} unavailable; fell back to {backend!r}"
+        return LLMClientSelection(
+            client=client,
+            backend=backend,
+            requested=requested,
+            fell_back=fell_back,
+            reason=reason,
+            ladder=chain,
+        )
+
+    raise RuntimeError(
+        f"No usable LLM backend in ladder {chain!r}. "
+        "Install a coding-agent CLI (codex/claude), configure an API key, "
+        "or allow the offline mock."
+    )
+
+
 def resolve_role_client(llm: Any, role: str) -> Any:
     """Return the client to use for ``role``.
 
@@ -939,7 +1239,11 @@ __all__ = [
     "LLMClient",
     "MockLLMClient",
     "OpenAIClient",
+    "CLIAgentLLMClient",
     "LLMRouter",
+    "LLMClientSelection",
+    "build_llm_client",
+    "cli_backend_available",
     "llm_is_mockish",
     "llm_supports_vision",
     "openrouter_reasoning_extra_body",
