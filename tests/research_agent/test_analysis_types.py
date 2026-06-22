@@ -7,16 +7,29 @@ from pathlib import Path
 
 import pandas as pd
 
+from easyicu.research_agent.analysis_types import (
+    is_concept_set_family,
+    normalize_analysis_family,
+)
+
 
 def test_infer_analysis_type_quality_audit(ra):
     schema = ra.schema
     ctx = ra.ResearchContext(
         research_question="Audit bilirubin and vasopressor measurement completeness in this ICU cohort.",
-        cohort=ra.CohortDescriptor(cohort_name="c", database="synthetic", n_patients=10, n_stays=10),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+        ),
         variables=[
-            ra.ConceptDescriptor(name="bili", role=schema.VariableRole.LAB, dtype="float64"),
-            ra.ConceptDescriptor(name="vaso", role=schema.VariableRole.INTERVENTION, dtype="float64"),
-            ra.ConceptDescriptor(name="death", role=schema.VariableRole.OUTCOME, dtype="int64"),
+            ra.ConceptDescriptor(
+                name="bili", role=schema.VariableRole.LAB, dtype="float64"
+            ),
+            ra.ConceptDescriptor(
+                name="vaso", role=schema.VariableRole.INTERVENTION, dtype="float64"
+            ),
+            ra.ConceptDescriptor(
+                name="death", role=schema.VariableRole.OUTCOME, dtype="int64"
+            ),
         ],
         target_outcome="death",
     )
@@ -24,14 +37,58 @@ def test_infer_analysis_type_quality_audit(ra):
     assert spec.key == "data_quality_audit"
 
 
+def test_new_idea_mining_families_are_concept_set_shapes() -> None:
+    assert normalize_analysis_family("measurement bias") == "measurement_bias_audit"
+    assert (
+        normalize_analysis_family("definition_sensitivity")
+        == "cohort_definition_sensitivity"
+    )
+    assert normalize_analysis_family("imputation_policy") == "score_policy_sensitivity"
+    assert is_concept_set_family("measurement_bias_audit")
+    assert is_concept_set_family("cohort_definition_sensitivity")
+    assert is_concept_set_family("score_policy_sensitivity")
+
+
+def test_infer_analysis_type_measurement_bias_before_generic_quality_audit(ra):
+    schema = ra.schema
+    ctx = ra.ResearchContext(
+        research_question=(
+            "Audit measurement bias from selective laboratory testing frequency "
+            "and missingness in this ICU cohort."
+        ),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+        ),
+        variables=[
+            ra.ConceptDescriptor(
+                name="lactate", role=schema.VariableRole.LAB, dtype="float64"
+            ),
+            ra.ConceptDescriptor(
+                name="death", role=schema.VariableRole.OUTCOME, dtype="int64"
+            ),
+        ],
+        target_outcome="death",
+    )
+
+    spec = ra.infer_analysis_type(ctx, target_outcome="death")
+
+    assert spec.key == "measurement_bias_audit"
+
+
 def test_infer_analysis_type_respects_user_preference_hint(ra):
     schema = ra.schema
     ctx = ra.ResearchContext(
         research_question="Please compare ICU severity scores across cohorts.",
-        cohort=ra.CohortDescriptor(cohort_name="c", database="synthetic", n_patients=10, n_stays=10),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+        ),
         variables=[
-            ra.ConceptDescriptor(name="sofa2", role=schema.VariableRole.COMPOSITE_SCORE, dtype="float64"),
-            ra.ConceptDescriptor(name="death", role=schema.VariableRole.OUTCOME, dtype="int64"),
+            ra.ConceptDescriptor(
+                name="sofa2", role=schema.VariableRole.COMPOSITE_SCORE, dtype="float64"
+            ),
+            ra.ConceptDescriptor(
+                name="death", role=schema.VariableRole.OUTCOME, dtype="int64"
+            ),
         ],
         target_outcome="death",
         user_preferences=schema.UserPreferences(
@@ -50,10 +107,16 @@ def test_infer_analysis_type_prefers_validation_over_prediction_keywords(ra):
             "Externally validate SOFA-2 and qSOFA for ICU mortality, "
             "compare discrimination, calibration, and transportability across cohorts."
         ),
-        cohort=ra.CohortDescriptor(cohort_name="c", database="synthetic", n_patients=10, n_stays=10),
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="synthetic", n_patients=10, n_stays=10
+        ),
         variables=[
-            ra.ConceptDescriptor(name="sofa2", role=schema.VariableRole.COMPOSITE_SCORE, dtype="float64"),
-            ra.ConceptDescriptor(name="death", role=schema.VariableRole.OUTCOME, dtype="int64"),
+            ra.ConceptDescriptor(
+                name="sofa2", role=schema.VariableRole.COMPOSITE_SCORE, dtype="float64"
+            ),
+            ra.ConceptDescriptor(
+                name="death", role=schema.VariableRole.OUTCOME, dtype="int64"
+            ),
         ],
         target_outcome="death",
     )
@@ -61,13 +124,17 @@ def test_infer_analysis_type_prefers_validation_over_prediction_keywords(ra):
     assert spec.key == "validation"
 
 
-def test_mock_planner_emits_prediction_analysis_and_publication_for_prediction_question(ra, tmp_path: Path):
-    cohort = pd.DataFrame({
-        "stay_id": range(1, 81),
-        "age": [40 + (i % 30) for i in range(80)],
-        "heart_rate": [70 + (i % 15) for i in range(80)],
-        "death": [1 if i % 8 == 0 else 0 for i in range(80)],
-    })
+def test_mock_planner_emits_prediction_analysis_and_publication_for_prediction_question(
+    ra, tmp_path: Path
+):
+    cohort = pd.DataFrame(
+        {
+            "stay_id": range(1, 81),
+            "age": [40 + (i % 30) for i in range(80)],
+            "heart_rate": [70 + (i % 15) for i in range(80)],
+            "death": [1 if i % 8 == 0 else 0 for i in range(80)],
+        }
+    )
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
     result = pipeline.run(
         question="Build an ICU mortality prediction model and define evaluation metrics.",
@@ -89,16 +156,20 @@ def test_mock_planner_emits_prediction_analysis_and_publication_for_prediction_q
     assert "04_primary_association" not in step_ids
 
 
-def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clustering_runs(ra, tmp_path: Path):
-    cohort = pd.DataFrame({
-        "stay_id": range(1, 61),
-        "age": [45 + (i % 25) for i in range(60)],
-        "lact_t0": [1.2 + (i % 5) * 0.3 for i in range(60)],
-        "lact_t6": [1.1 + (i % 5) * 0.25 for i in range(60)],
-        "map_t0": [75 + (i % 7) * 2 for i in range(60)],
-        "map_t6": [78 + (i % 7) * 2 for i in range(60)],
-        "death": [1 if i % 9 == 0 else 0 for i in range(60)],
-    })
+def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clustering_runs(
+    ra, tmp_path: Path
+):
+    cohort = pd.DataFrame(
+        {
+            "stay_id": range(1, 61),
+            "age": [45 + (i % 25) for i in range(60)],
+            "lact_t0": [1.2 + (i % 5) * 0.3 for i in range(60)],
+            "lact_t6": [1.1 + (i % 5) * 0.25 for i in range(60)],
+            "map_t0": [75 + (i % 7) * 2 for i in range(60)],
+            "map_t6": [78 + (i % 7) * 2 for i in range(60)],
+            "death": [1 if i % 9 == 0 else 0 for i in range(60)],
+        }
+    )
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
 
     first = pipeline.run(
@@ -132,14 +203,18 @@ def test_reused_mock_pipeline_refreshes_context_between_prediction_and_clusterin
     assert "01_phenotype_trajectory_clustering" in second_step_ids, second_step_ids
 
 
-def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_preferences(ra, tmp_path: Path):
-    cohort = pd.DataFrame({
-        "stay_id": range(1, 81),
-        "time_to_event_hours": [12 + (i % 30) for i in range(80)],
-        "censor_time_hours": [36 + (i % 20) for i in range(80)],
-        "death": [1 if i % 7 == 0 else 0 for i in range(80)],
-        "age": [50 + (i % 20) for i in range(80)],
-    })
+def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_preferences(
+    ra, tmp_path: Path
+):
+    cohort = pd.DataFrame(
+        {
+            "stay_id": range(1, 81),
+            "time_to_event_hours": [12 + (i % 30) for i in range(80)],
+            "censor_time_hours": [36 + (i % 20) for i in range(80)],
+            "death": [1 if i % 7 == 0 else 0 for i in range(80)],
+            "age": [50 + (i % 20) for i in range(80)],
+        }
+    )
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
     result = pipeline.run(
         question=(
@@ -158,7 +233,9 @@ def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_prefer
     )
 
     plan = json.loads(Path(result.plan_path).read_text(encoding="utf-8"))
-    ctx = json.loads((Path(result.workdir) / "research_context.json").read_text(encoding="utf-8"))
+    ctx = json.loads(
+        (Path(result.workdir) / "research_context.json").read_text(encoding="utf-8")
+    )
     step_ids = [step["step_id"] for step in plan["steps"]]
 
     assert "04_survival_protocol" in step_ids, step_ids

@@ -28,7 +28,14 @@ from typing import (
     Tuple,
 )
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from .concept_availability import (
     normalize_concept_name,
@@ -215,6 +222,10 @@ def freeze_source_snapshot(
                 citation=material.citation,
                 source_adapter_level=material.source_adapter_level,
                 locator=material.locator,
+                discovery_route=material.discovery_route,
+                source_text_role=material.source_text_role,
+                parent_citation_key=material.parent_citation_key,
+                source_rank=material.source_rank,
                 source_text_sha256=sha,
                 source_text_char_count=len(text),
                 source_text_stored=False,
@@ -277,6 +288,8 @@ def build_idea_extraction_messages(
                 "venue": citation.venue,
                 "year": citation.year,
                 "source_adapter_level": material.source_adapter_level,
+                "discovery_route": material.discovery_route,
+                "source_text_role": material.source_text_role,
                 "available_source_text": available_text or "",
             }
         )
@@ -306,16 +319,29 @@ def build_idea_extraction_messages(
                 "outcome. For a concept-SET question that has NO single "
                 "predictor->outcome pair -- subphenotype/phenotype clustering, "
                 "descriptive epidemiology / cohort characterization, or a "
-                "data-quality audit -- LEAVE exposure_or_predictor and outcome "
-                "empty and instead list the variables in analysis_concepts (each "
-                "a single named construct), and set analysis_family accordingly "
-                "(e.g. subphenotype_clustering, descriptive_epidemiology, "
-                "data_quality_audit)"
+                "data-quality / measurement-bias / cohort-definition / "
+                "score-policy audit -- LEAVE exposure_or_predictor and outcome "
+                "empty and instead list the variables or rule elements in "
+                "analysis_concepts (each a single named construct), and set "
+                "analysis_family accordingly (e.g. subphenotype_clustering, "
+                "descriptive_epidemiology, data_quality_audit, "
+                "measurement_bias_audit, cohort_definition_sensitivity, "
+                "score_policy_sensitivity)"
             ),
             (
                 "analysis_concepts: 2+ specific named constructs for a "
                 "clustering/phenotyping idea, or 1+ for a descriptive / "
-                "data-quality idea; omit (empty) for predictor->outcome ideas"
+                "audit / sensitivity idea; omit (empty) for predictor->outcome ideas"
+            ),
+            (
+                "for cohort_definition_sensitivity or score_policy_sensitivity, "
+                "analysis_concepts must be measurable rule elements, thresholds, "
+                "components, or source variables named or clearly implied by the "
+                "quote. Do NOT use abstract evaluation labels such as feasibility, "
+                "reliability, prognostic validity, validity, implementation, or "
+                "clinical utility as analysis_concepts. If the quote names only "
+                "those evaluation goals and not measurable rule elements, omit the "
+                "idea rather than inventing computable criteria."
             ),
             (
                 "exposure_core_concept: the SINGLE core measurable construct "
@@ -432,7 +458,7 @@ def build_idea_reflection_messages(
         "correct research SHAPE -- a predictor->outcome pair (fill "
         "exposure_or_predictor + outcome) OR a concept SET (leave the pair "
         "empty and fill analysis_concepts with 2+ named variables for "
-        "clustering/phenotyping, 1+ for descriptive/data-quality) -- and set "
+        "clustering/phenotyping, 1+ for descriptive/audit/sensitivity) -- and set "
         "analysis_family accordingly. Diversify: drop near-duplicate ideas that "
         "restate the same construct/outcome, keeping only the single sharpest "
         "version. DROP an idea entirely (omit it) if it is vague, ungrounded in "
@@ -489,6 +515,7 @@ def extract_literature_ideas(
     llm: LLMClient,
     untraceable_quote_policy: Literal["raise", "skip"] = "raise",
     dropped_untraceable: Optional[List[str]] = None,
+    dropped_invalid: Optional[List[str]] = None,
     batch_size: int = 6,
     max_tokens: int = 4096,
     reflection_rounds: int = 0,
@@ -544,6 +571,7 @@ def extract_literature_ideas(
                 adapter_level_by_key=adapter_level_by_key,
                 untraceable_quote_policy=untraceable_quote_policy,
                 dropped_untraceable=dropped_untraceable,
+                dropped_invalid=dropped_invalid,
             )
             if coerced is not None:
                 candidates.append(coerced)
@@ -567,6 +595,7 @@ def extract_literature_ideas(
             adapter_level_by_key=adapter_level_by_key,
             untraceable_quote_policy=untraceable_quote_policy,
             dropped_untraceable=dropped_untraceable,
+            dropped_invalid=dropped_invalid,
             round_idx=round_idx,
             num_rounds=rounds,
             max_tokens=max_tokens,
@@ -588,6 +617,7 @@ def _coerce_extracted_idea_item(
     adapter_level_by_key: Mapping[str, Any],
     untraceable_quote_policy: Literal["raise", "skip"],
     dropped_untraceable: Optional[List[str]],
+    dropped_invalid: Optional[List[str]] = None,
 ) -> Optional[LiteratureIdeaCandidate]:
     """Validate one raw extraction/refinement item into a candidate.
 
@@ -621,7 +651,16 @@ def _coerce_extracted_idea_item(
     # ``prior_art_titles``); the schema forbids extras, and these are not part of
     # the idea contract.
     data = {key: value for key, value in data.items() if key in _LITERATURE_IDEA_FIELDS}
-    return LiteratureIdeaCandidate.model_validate(data)
+    try:
+        return LiteratureIdeaCandidate.model_validate(data)
+    except ValidationError as exc:
+        if untraceable_quote_policy == "skip":
+            if dropped_invalid is not None:
+                dropped_invalid.append(citation_key)
+            return None
+        raise IdeaExtractionError(
+            f"invalid idea extraction item for citation_key={citation_key!r}: {exc}"
+        ) from exc
 
 
 def _reflect_and_refine_ideas(
@@ -634,6 +673,7 @@ def _reflect_and_refine_ideas(
     adapter_level_by_key: Mapping[str, Any],
     untraceable_quote_policy: Literal["raise", "skip"],
     dropped_untraceable: Optional[List[str]],
+    dropped_invalid: Optional[List[str]],
     round_idx: int,
     num_rounds: int,
     max_tokens: int,
@@ -683,6 +723,7 @@ def _reflect_and_refine_ideas(
                 adapter_level_by_key=adapter_level_by_key,
                 untraceable_quote_policy="skip",
                 dropped_untraceable=dropped_untraceable,
+                dropped_invalid=dropped_invalid,
             )
         except IdeaExtractionError:
             continue
@@ -795,6 +836,328 @@ def _fetch_reflection_prior_art(
     return per_idea
 
 
+# --- Gap A: SciMON-style novelty *optimisation* loop -------------------------
+# The prior-art screen / novelty veto-net only *labels* an idea's crowdedness;
+# it never pushes the idea toward an under-explored angle. This loop closes that
+# gap with SciMON's compare-to-prior-work-and-revise pattern: measure an idea's
+# crowdedness against PubMed, ask the model to revise it toward a gap the prior
+# art does NOT cover, then re-measure and keep the revision only if novelty
+# strictly improved. Provenance is never weakened -- every revision is
+# re-validated through the same verbatim-quote traceability gate, and any
+# search/LLM failure leaves the idea unchanged (best-effort).
+NOVELTY_OPTIMIZATION_SYSTEM_PROMPT = (
+    "You are a critical ICU research strategist sharpening a draft research idea "
+    "toward a genuinely under-explored angle. The supplied titles are work that "
+    "is ALREADY published on this direction. Revise the idea so it targets a gap "
+    "those titles do NOT already cover -- for example a more specific "
+    "subpopulation, an under-studied effect-modifier, a distinct timing window, "
+    "or a comparison the titles do not address. Keep citation_key and "
+    "source_quote EXACTLY as given (they are provenance anchors) and stay "
+    "grounded in that quote: never invent a construct the source does not "
+    "support. If you cannot find an honest, differentiated angle grounded in the "
+    "quote, return the idea unchanged. Return only JSON: a single idea object "
+    "with the same field names as the draft."
+)
+
+
+def build_novelty_optimization_messages(
+    idea: LiteratureIdeaCandidate,
+    *,
+    prior_art_titles: Sequence[str],
+    source_text: str,
+    round_idx: int,
+    num_rounds: int,
+) -> List[LLMMessage]:
+    """Build the case-neutral revise-toward-novelty prompt for one idea/round."""
+    payload = {
+        "round": f"{round_idx + 1}/{num_rounds}",
+        "draft_idea": {
+            "citation_key": idea.citation_key,
+            "source_quote": idea.source_quote,
+            "population": idea.population,
+            "exposure_or_predictor": idea.exposure_or_predictor,
+            "outcome": idea.outcome,
+            "analysis_concepts": list(idea.analysis_concepts),
+            "analysis_family": idea.analysis_family,
+            "rationale": idea.rationale,
+        },
+        "already_published_titles": [
+            str(title) for title in prior_art_titles if str(title).strip()
+        ],
+        "available_source_text": source_text,
+        "instruction": (
+            "Revise the draft idea toward an angle the already-published titles "
+            "do NOT cover, keeping citation_key and source_quote verbatim and "
+            "grounded in the quote. Return the single revised idea object."
+        ),
+        "return": "JSON object (one idea; same field names as draft_idea)",
+    }
+    return [
+        LLMMessage(role="system", content=NOVELTY_OPTIMIZATION_SYSTEM_PROMPT),
+        LLMMessage(role="user", content=_canonical_json(payload)),
+    ]
+
+
+def _measure_idea_novelty(
+    idea: LiteratureIdeaCandidate,
+    *,
+    search_client: Any,
+    max_results: int,
+) -> Tuple[int, List[str]]:
+    """Return (total prior-art hit count, top titles) as a crowdedness signal.
+
+    The hit count is the PubMed esearch total for the idea's exact-phrase
+    novelty query, so a lower count means a less-crowded direction. The search is
+    run WITHOUT the idea (no per-hit same-topic screening) so the measurement is
+    a cheap count, not a full assessment. A search error yields ``-1`` so the
+    optimiser treats the measurement as unavailable and leaves the idea
+    unchanged rather than mistaking a failure for high novelty.
+    """
+    if search_client is None or not hasattr(search_client, "search_prior_art"):
+        return -1, []
+    try:
+        queries = build_prior_art_queries(idea)
+        query = queries.get("exact") or queries.get("broad") or ""
+        if not query:
+            return -1, []
+        result = search_client.search_prior_art(query, max_results=max_results)
+    except Exception:
+        return -1, []
+    if not isinstance(result, Mapping):
+        result = {
+            "hit_count": getattr(result, "hit_count", 0),
+            "top_hits": getattr(result, "top_hits", []),
+        }
+    count = int(result.get("hit_count") or 0)
+    titles = [
+        str(hit.get("title"))
+        for hit in (result.get("top_hits") or [])
+        if isinstance(hit, Mapping) and hit.get("title")
+    ]
+    return count, titles
+
+
+def _idea_construct_label(idea: LiteratureIdeaCandidate) -> str:
+    """A short construct/outcome label for the optimisation trace."""
+    construct = idea.exposure_or_predictor.strip() or ", ".join(
+        str(concept) for concept in idea.analysis_concepts if str(concept).strip()
+    )
+    outcome = idea.outcome.strip()
+    return f"{construct} -> {outcome}" if outcome else construct
+
+
+def optimize_ideas_for_novelty(
+    ideas: Sequence[LiteratureIdeaCandidate],
+    *,
+    materials: Sequence[SourceMaterial | Mapping[str, Any]],
+    source_snapshot_id: str,
+    llm: LLMClient,
+    search_client: Any,
+    crowded_min_hits: int = 5,
+    measure_max_results: int = 5,
+    rounds: int = 1,
+    max_tokens: int = 2048,
+    trace: Optional[List[Dict[str, Any]]] = None,
+) -> List[LiteratureIdeaCandidate]:
+    """Push crowded ideas toward novelty (measure -> revise -> re-measure).
+
+    For each idea whose exact prior-art hit count is at or above
+    ``crowded_min_hits``, the model is asked to revise toward a differentiated
+    angle, the revision is re-measured, and it replaces the original ONLY if the
+    hit count strictly drops. Otherwise the original is preserved. Each revision
+    is re-validated through the same verbatim-quote provenance gate, so a revised
+    idea whose quote was tampered is dropped back to the original. Returns one
+    idea per input (revised ideas carry a freshly derived content id). When a
+    ``trace`` list is supplied each idea's before/after signal is appended.
+    """
+    if not ideas or search_client is None:
+        return list(ideas)
+    if not hasattr(search_client, "search_prior_art"):
+        return list(ideas)
+    parsed_materials = [
+        raw if isinstance(raw, SourceMaterial) else SourceMaterial.model_validate(raw)
+        for raw in materials
+    ]
+    source_text_by_key = _source_text_lookup(parsed_materials)
+    adapter_level_by_key = {
+        material.citation.key: material.source_adapter_level
+        for material in parsed_materials
+    }
+    rounds = max(1, int(rounds))
+    optimized: List[LiteratureIdeaCandidate] = []
+    for idea in ideas:
+        current = idea
+        base_count, titles = _measure_idea_novelty(
+            current, search_client=search_client, max_results=measure_max_results
+        )
+        entry: Dict[str, Any] = {
+            "citation_key": current.citation_key,
+            "initial_construct": _idea_construct_label(current),
+            "initial_exact_hits": base_count,
+            "revised": False,
+        }
+        if base_count >= max(1, int(crowded_min_hits)):
+            for round_idx in range(rounds):
+                messages = build_novelty_optimization_messages(
+                    current,
+                    prior_art_titles=titles,
+                    source_text=source_text_by_key.get(current.citation_key, ""),
+                    round_idx=round_idx,
+                    num_rounds=rounds,
+                )
+                try:
+                    raw = llm.complete(messages, max_tokens=max_tokens, temperature=0.3)
+                    payload = _parse_json_payload(raw)
+                except Exception:
+                    break
+                item = payload[0] if isinstance(payload, list) and payload else payload
+                if not isinstance(item, Mapping):
+                    break
+                try:
+                    candidate = _coerce_extracted_idea_item(
+                        item,
+                        source_snapshot_id=source_snapshot_id,
+                        source_text_by_key=source_text_by_key,
+                        adapter_level_by_key=adapter_level_by_key,
+                        untraceable_quote_policy="skip",
+                        dropped_untraceable=None,
+                        dropped_invalid=None,
+                    )
+                except IdeaExtractionError:
+                    candidate = None
+                if candidate is None:
+                    break
+                new_count, new_titles = _measure_idea_novelty(
+                    candidate,
+                    search_client=search_client,
+                    max_results=measure_max_results,
+                )
+                # Keep the revision only if it is a measured improvement.
+                if 0 <= new_count < base_count:
+                    current = candidate
+                    base_count = new_count
+                    titles = new_titles
+                    entry["revised"] = True
+                else:
+                    break
+            entry["final_construct"] = _idea_construct_label(current)
+            entry["final_exact_hits"] = base_count
+        optimized.append(current)
+        if trace is not None:
+            trace.append(entry)
+    return optimized
+
+
+# --- Gap B: ResearchAgent-style multi-criteria validator panel ---------------
+# ResearchAgent scores ideas across structured criteria with dedicated validator
+# agents; our refinement was a single prompt. This adds an advisory per-candidate
+# score (clarity / novelty / feasibility_fit / impact, 1-5) recorded in the
+# triage report and ledger. It NEVER changes the go/no-go gate -- it annotates,
+# it does not promote or demote -- so the fail-closed executability contract is
+# untouched.
+CANDIDATE_VALIDATION_SYSTEM_PROMPT = (
+    "You are a multi-criteria ICU research reviewer scoring a mined candidate "
+    "research idea. Score each criterion as an integer 1 (poor) to 5 (excellent) "
+    "and give a one-sentence justification. Be calibrated and conservative. "
+    "Criteria: clarity (is the construct and question precisely specified?), "
+    "novelty (does it go beyond what is already well studied?), feasibility_fit "
+    "(does it match what routinely collected ICU EHR data can actually measure?), "
+    "impact (would answering it matter clinically?). Judge only the information "
+    "shown; do not invent results. Return only JSON: "
+    '{"clarity": n, "novelty": n, "feasibility_fit": n, "impact": n, '
+    '"justification": "<one sentence>"}.'
+)
+
+
+def build_candidate_validation_messages(
+    record: Mapping[str, Any],
+) -> List[LLMMessage]:
+    """Build the case-neutral multi-criteria scoring prompt for one candidate."""
+    prior_art = record.get("prior_art")
+    novelty_label = (
+        prior_art.get("novelty_label") if isinstance(prior_art, Mapping) else None
+    )
+    payload = {
+        "candidate": {
+            "topic": record.get("candidate_topic"),
+            "go_no_go": record.get("go_no_go"),
+            "feasibility_route": record.get("feasibility_route"),
+            "novelty_label": novelty_label,
+            "resolved_predictor": record.get("resolved_predictor_concept"),
+            "resolved_outcome": record.get("resolved_outcome_concept"),
+            "gap_evidence_quote": record.get("gap_evidence_quote"),
+            "literature_source": record.get("literature_source"),
+        },
+        "instruction": (
+            "Score the candidate on clarity, novelty, feasibility_fit, and "
+            "impact (each 1-5) and justify in one sentence."
+        ),
+    }
+    return [
+        LLMMessage(role="system", content=CANDIDATE_VALIDATION_SYSTEM_PROMPT),
+        LLMMessage(role="user", content=_canonical_json(payload)),
+    ]
+
+
+def score_candidates_multicriteria(
+    records: Sequence[Any],
+    *,
+    llm: LLMClient,
+    max_candidates: int = 20,
+) -> List[Dict[str, Any]]:
+    """Advisory multi-criteria scores for the top candidate records.
+
+    Each record is scored 1-5 on clarity / novelty / feasibility_fit / impact
+    with a one-sentence justification. Any malformed/failed response yields a
+    score row with ``None`` values so the candidate still appears with an honest
+    'unscored' marker rather than being silently dropped. This is annotation
+    only and never feeds back into the go/no-go gate.
+    """
+    scores: List[Dict[str, Any]] = []
+    for record in list(records)[: max(0, int(max_candidates))]:
+        as_dict = (
+            record.model_dump(mode="json")
+            if hasattr(record, "model_dump")
+            else dict(record)
+        )
+        data: Mapping[str, Any] = {}
+        try:
+            raw = llm.complete(
+                build_candidate_validation_messages(as_dict),
+                max_tokens=300,
+                temperature=0.0,
+            )
+            parsed = _parse_json_payload(raw)
+            if isinstance(parsed, Mapping):
+                data = parsed
+        except Exception:
+            data = {}
+
+        def _clamp_score(key: str) -> Optional[int]:
+            try:
+                value = int(round(float(data.get(key))))  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return None
+            return min(5, max(1, value))
+
+        scores.append(
+            {
+                "candidate_topic": as_dict.get("candidate_topic"),
+                "candidate_id": (
+                    as_dict.get("executable_candidate_id")
+                    or as_dict.get("candidate_id")
+                ),
+                "go_no_go": as_dict.get("go_no_go"),
+                "clarity": _clamp_score("clarity"),
+                "novelty": _clamp_score("novelty"),
+                "feasibility_fit": _clamp_score("feasibility_fit"),
+                "impact": _clamp_score("impact"),
+                "justification": str(data.get("justification") or "").strip(),
+            }
+        )
+    return scores
+
+
 # Generic outcome umbrella phrases. An LLM mining a review's "future research"
 # sentence frequently extracts a non-specific outcome ("clinical outcomes",
 # "ICU outcomes", "patient outcomes", "poor prognosis") rather than a measurable
@@ -876,6 +1239,12 @@ def _concept_set_research_question(
         return f"Do distinct subphenotypes emerge from {joined} in {population}?"
     if family == "data_quality_audit":
         return f"What is the data quality / completeness of {joined} in {population}?"
+    if family == "measurement_bias_audit":
+        return f"Could measurement processes bias observed values of {joined} in {population}?"
+    if family == "cohort_definition_sensitivity":
+        return f"How sensitive is the cohort definition involving {joined} in {population}?"
+    if family == "score_policy_sensitivity":
+        return f"How sensitive are score or component policies involving {joined} in {population}?"
     return f"How are {joined} distributed in {population}?"
 
 
@@ -1177,8 +1546,14 @@ def fetch_source_materials_from_scope(
     query = build_pubmed_query_from_scope(scope, reference_year=reference_year)
     records = search_client.search(query, retmax=retmax)
     return [
-        SourceMaterial(citation=record, source_adapter_level="metadata_only")
-        for record in records
+        SourceMaterial(
+            citation=record,
+            source_adapter_level="metadata_only",
+            discovery_route="scope_metadata",
+            source_text_role="metadata_proxy",
+            source_rank=idx,
+        )
+        for idx, record in enumerate(records, start=1)
     ]
 
 
@@ -1211,6 +1586,9 @@ def run_idea_mining_dry_run(
     reflection_rounds: int = 0,
     reflection_search_client: Optional[Any] = None,
     novelty_judge: Optional[Callable[..., Mapping[str, Any]]] = None,
+    novelty_optimize_rounds: int = 0,
+    novelty_optimize_min_hits: int = 5,
+    validate_candidates: bool = False,
     source_item_index: Optional["SourceItemIndex"] = None,
     extended_feasibility_index: Optional[object] = None,
     cross_db_targets: Optional[Sequence[str]] = None,
@@ -1278,15 +1656,38 @@ def run_idea_mining_dry_run(
     manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
 
     dropped_untraceable: List[str] = []
+    dropped_invalid: List[str] = []
     literature_ideas = extract_literature_ideas(
         materials=parsed_materials,
         source_snapshot_id=manifest.source_snapshot_id,
         llm=llm,
         untraceable_quote_policy=untraceable_quote_policy,
         dropped_untraceable=dropped_untraceable,
+        dropped_invalid=dropped_invalid,
         reflection_rounds=reflection_rounds,
         reflection_search_client=reflection_search_client,
     )
+    # Gap A -- SciMON-style novelty optimisation. Runs BEFORE concept mapping so a
+    # crowded idea is revised toward a differentiated angle while still an idea
+    # (mapping/feasibility then re-evaluate the sharper construct). Reuses the
+    # prior-art search client as the crowdedness oracle; default rounds=0 is a
+    # no-op that preserves the exact prior behaviour.
+    novelty_optimization_trace: List[Dict[str, Any]] = []
+    if (
+        novelty_optimize_rounds > 0
+        and prior_art_search_client is not None
+        and literature_ideas
+    ):
+        literature_ideas = optimize_ideas_for_novelty(
+            literature_ideas,
+            materials=parsed_materials,
+            source_snapshot_id=manifest.source_snapshot_id,
+            llm=llm,
+            search_client=prior_art_search_client,
+            crowded_min_hits=novelty_optimize_min_hits,
+            rounds=novelty_optimize_rounds,
+            trace=novelty_optimization_trace,
+        )
     default_catalog = _default_concept_catalog_for_idea_run(available_concepts)
     effective_aliases = _merge_concept_aliases(
         default_catalog.concept_aliases,
@@ -1322,6 +1723,13 @@ def run_idea_mining_dry_run(
             f"source_quote under untraceable_quote_policy='skip' "
             f"(citation_keys: {sorted(set(dropped_untraceable))}); the provenance "
             "gate still admitted no unverbatim quote."
+        )
+    if dropped_invalid:
+        warnings.append(
+            f"Dropped {len(dropped_invalid)} malformed idea(s) under "
+            f"untraceable_quote_policy='skip' "
+            f"(citation_keys: {sorted(set(dropped_invalid))}); one malformed "
+            "LLM item did not abort the whole batch."
         )
     if parsed_materials and all(
         material.source_adapter_level == "metadata_only"
@@ -1396,6 +1804,10 @@ def run_idea_mining_dry_run(
         Path(registry_path) if registry_path else out_dir / "idea_registry.json"
     )
     registry = IdeaCandidateRegistry(registry_file)
+    # Problem 4 -- snapshot the registry BEFORE this run registers anything, so a
+    # candidate id already present is a PRIOR run/user (a homogenization
+    # collision), not this run finding itself.
+    prior_registry_ids = {entry.candidate_id for entry in registry.records}
     ranking_by_pair = _ranking_by_pair(ranked_json)
     registry_ids: Dict[str, str] = {}
     registry_id_by_key: Dict[Tuple[str, str, str, str], str] = {}
@@ -1487,6 +1899,39 @@ def run_idea_mining_dry_run(
                 }
             ),
         }
+    # Problem 4 -- homogenization signal. Any candidate whose registry id existed
+    # BEFORE this run (a shared/persistent registry_path) is a collision: a prior
+    # run/user already mined this construct. Advisory only.
+    registry_collisions: List[Dict[str, Any]] = []
+    if prior_registry_ids:
+        for candidate in unique_candidates:
+            reg_id = registry_ids.get(candidate.executable_candidate_id)
+            if reg_id and reg_id in prior_registry_ids:
+                registry_collisions.append(
+                    {
+                        "candidate_id": reg_id,
+                        "executable_candidate_id": candidate.executable_candidate_id,
+                        "predictor_label": candidate.predictor_label,
+                        "outcome_label": candidate.outcome_label,
+                        "note": (
+                            "construct already registered in a prior run/user; "
+                            "likely a homogenized direction -- differentiate or "
+                            "coordinate before pursuing"
+                        ),
+                    }
+                )
+
+    # Gap B -- ResearchAgent-style multi-criteria validator panel. Advisory
+    # scores over the final candidates (discovery rows when available, else the
+    # triage records); never feeds back into the go/no-go gate.
+    candidate_validation: List[Dict[str, Any]] = []
+    if validate_candidates:
+        validation_targets: Sequence[Any] = discovery_records or candidate_records
+        if validation_targets:
+            candidate_validation = score_candidates_multicriteria(
+                validation_targets, llm=llm
+            )
+
     triage_path = out_dir / "candidate_triage_report.json"
     triage_payload = {
         "schema_version": "easyicu.idea_mining_dry_run/1",
@@ -1507,6 +1952,10 @@ def run_idea_mining_dry_run(
         "discovery_records": [
             record.model_dump(mode="json") for record in discovery_records
         ],
+        "discovery_ledger": _discovery_ledger_rows(discovery_records),
+        "novelty_optimization": novelty_optimization_trace,
+        "candidate_validation": candidate_validation,
+        "registry_collisions": registry_collisions,
         "warnings": warnings,
     }
     triage_path.write_text(
@@ -1525,6 +1974,9 @@ def run_idea_mining_dry_run(
         ranked_candidates=ranked_json,
         candidate_records=candidate_records,
         discovery_records=discovery_records,
+        novelty_optimization=novelty_optimization_trace,
+        candidate_validation=candidate_validation,
+        registry_collisions=registry_collisions,
         registry_path=str(registry_file),
         manifest_path=str(manifest_path),
         triage_report_path=str(triage_path),
@@ -1567,6 +2019,61 @@ def _build_yield_report(
         unresolved_outcome_labels=_top_values(unresolved_outcomes),
         top_non_executable_reasons=_top_values(reasons),
     )
+
+
+def _discovery_ledger_rows(
+    records: Sequence[DiscoveryCandidateRecord],
+) -> List[Dict[str, Any]]:
+    """Flat, machine-readable discovery ledger for scripts and audits."""
+
+    rows: List[Dict[str, Any]] = []
+    for record in records:
+        prior_art = record.prior_art
+        feasibility = record.database_feasibility or {}
+        broad_hits = [
+            query.hit_count
+            for query in prior_art.query_records
+            if query.query_type == "broad"
+        ]
+        exact_hits = [
+            query.hit_count
+            for query in prior_art.query_records
+            if query.query_type == "exact"
+        ]
+        rows.append(
+            {
+                "literature_idea_id": record.literature_idea_id,
+                "executable_candidate_id": record.executable_candidate_id,
+                "citation_key": record.citation_key,
+                "literature_source": record.literature_source,
+                "gap_evidence_quote": record.gap_evidence_quote,
+                "candidate_topic": record.candidate_topic,
+                "go_no_go": record.go_no_go,
+                "go_no_go_reason": record.go_no_go_reason,
+                "feasibility_route": record.feasibility_route,
+                "feasibility_next_action": record.feasibility_next_action,
+                "requires_human_confirmation": record.requires_human_confirmation,
+                "resolved_predictor_concept": feasibility.get(
+                    "resolved_predictor_concept"
+                ),
+                "resolved_outcome_concept": feasibility.get("resolved_outcome_concept"),
+                "feature_derivation_status": feasibility.get(
+                    "feature_derivation_status"
+                ),
+                "n_joint_complete": feasibility.get("n_joint_complete"),
+                "denominator_n": feasibility.get("denominator_n"),
+                "coverage_source": feasibility.get("coverage_source"),
+                "novelty_label": prior_art.novelty_label,
+                "same_topic_screen_status": prior_art.same_topic_screen_status,
+                "broad_hit_count": max(broad_hits, default=0),
+                "exact_hit_count": max(exact_hits, default=0),
+                "direct_same_topic_pmids": list(prior_art.direct_same_topic_pmids),
+                "differentiators": list(prior_art.differentiators),
+                "evidence_map_counts": dict(prior_art.evidence_map_counts),
+                "risks": list(record.risks),
+            }
+        )
+    return rows
 
 
 def build_discovery_candidate_records(
@@ -1659,6 +2166,13 @@ def build_discovery_candidate_records(
                 }
                 for hit in tier_result.source_item_hits
             ]
+        route, next_action = _feasibility_route_and_next_action(
+            decision=decision,
+            candidate=candidate,
+            triage=triage,
+            feasibility_tier=tier,
+            extended_feasibility=extended_meta,
+        )
         records.append(
             DiscoveryCandidateRecord(
                 literature_idea_id=str(idea.literature_idea_id),
@@ -1669,10 +2183,7 @@ def build_discovery_candidate_records(
                 citation_key=idea.citation_key,
                 literature_source=_format_citation_source(source, idea.citation_key),
                 gap_evidence_quote=idea.source_quote,
-                candidate_topic=(
-                    f"{idea.exposure_or_predictor} -> {idea.outcome} "
-                    f"in {idea.population}"
-                ),
+                candidate_topic=_format_literature_candidate_topic(idea),
                 prior_art=assessment,
                 database_feasibility=feasibility,
                 go_no_go=decision,
@@ -1683,9 +2194,128 @@ def build_discovery_candidate_records(
                 feasibility_tier_note=tier_note,
                 feasibility_source_items=tier_items,
                 extended_feasibility=extended_meta,
+                feasibility_route=route,
+                feasibility_next_action=next_action,
+                requires_human_confirmation=True,
             )
         )
     return records
+
+
+def _format_literature_candidate_topic(idea: LiteratureIdeaCandidate) -> str:
+    """Human-readable topic for pairwise and concept-set idea shapes."""
+    predictor = str(idea.exposure_or_predictor or "").strip()
+    outcome = str(idea.outcome or "").strip()
+    population = str(idea.population or "").strip()
+    if predictor and outcome:
+        return f"{predictor} -> {outcome} in {population}"
+    concepts = [str(c).strip() for c in idea.analysis_concepts if str(c).strip()]
+    if concepts:
+        family = normalize_analysis_family(idea.analysis_family)
+        return f"{family}: {', '.join(concepts)} in {population}"
+    family = normalize_analysis_family(idea.analysis_family)
+    return f"{family} idea in {population}"
+
+
+def _feasibility_route_and_next_action(
+    *,
+    decision: GoNoGoDecision,
+    candidate: Optional[ExecutableHypothesisCandidate],
+    triage: Optional[IdeaMiningCandidateTriageRecord],
+    feasibility_tier: Optional[str],
+    extended_feasibility: Optional[Mapping[str, Any]],
+) -> Tuple[str, str]:
+    """Convert coarse go/no-go into an actionable human-screening route."""
+    if extended_feasibility:
+        case = str(extended_feasibility.get("case") or "")
+        if case == "icd_cohort":
+            return (
+                "icd_cohort_human_confirm",
+                "curate and confirm the ICD code set before any analysis run",
+            )
+        if case == "derived_concept":
+            return (
+                "derived_concept_human_confirm",
+                "build the construct from the listed primitives (human-confirm the "
+                "derivation rule), then rerun mapping and joint-feasibility probing",
+            )
+        if case == "raw_extraction":
+            return (
+                "raw_extraction_human_confirm",
+                "have a coding agent extract the construct from the named raw table "
+                "under human review (never auto-execute), then rerun feasibility probing",
+            )
+        if case == "reextract_current_db":
+            return (
+                "reextract_current_database",
+                "add the dictionary concept to the current export, then rerun mapping and joint-feasibility probing",
+            )
+        if case == "other_db":
+            return (
+                "other_database",
+                "rerun the idea-mining feasibility probe on the listed database(s)",
+            )
+        return (
+            "extended_feasibility_human_review",
+            "review the extended-feasibility metadata before execution",
+        )
+    if decision == "recommend":
+        return (
+            "current_export_executable",
+            "human prior-art and clinical review, then accept the registry candidate if still justified",
+        )
+    if feasibility_tier == "executable":
+        return (
+            "current_export_hold",
+            "resolve the hold reason, then rerun prior-art and pair-feasibility checks",
+        )
+    if feasibility_tier == "T1_reextract":
+        return (
+            "reextract_or_derive",
+            "derive or re-extract the matched source concept, then rerun mapping and joint-feasibility probing",
+        )
+    if feasibility_tier == "T2_new_concept":
+        return (
+            "new_concept_human_confirm",
+            "author a dictionary concept and extraction protocol before execution",
+        )
+    if feasibility_tier == "T3_not_in_db":
+        return (
+            "not_measured_in_database",
+            "do not execute in the current database unless new source evidence is found",
+        )
+    if candidate is None:
+        return (
+            "not_currently_actionable",
+            "review concept mapping; no executable candidate was produced",
+        )
+    if (
+        candidate.resolved_predictor_concept is not None
+        and candidate.resolved_outcome_concept is not None
+        and not candidate.executable
+    ):
+        return (
+            "needs_outcome_operationalization",
+            "define an explicit outcome event or normalized 0/1 endpoint, then rerun feasibility probing",
+        )
+    if (
+        triage is not None
+        and triage.coverage_source == "pair_joint_feasibility"
+        and triage.executable
+    ):
+        return (
+            "current_export_hold",
+            "complete human novelty, differentiation, and clinical-plausibility review",
+        )
+    if candidate.executable and candidate.resolved_analysis_concepts:
+        return (
+            "concept_set_human_confirm",
+            "confirm the resolved concept set and analysis protocol before execution",
+        )
+    return (
+        "not_currently_actionable",
+        "resolve unavailable constructs, derivation requirements, or prior-art screening gaps",
+    )
 
 
 def _stable_hypothesis_family_id(
@@ -2366,20 +2996,67 @@ def _token_specificity(lookup: Mapping[str, str]) -> Dict[str, float]:
     }
 
 
+def _resolve_embedded_alias(term: str, lookup: Mapping[str, str]) -> Optional[str]:
+    """Recover a first-class concept whose MULTI-WORD alias is embedded in a
+    noisy phrase (e.g. "urea-to-creatinine ratio cutoff threshold" ->
+    bun_creatinine_ratio via the "urea-to-creatinine ratio" alias).
+
+    Only alias variants with >=2 signal tokens are eligible (single tokens are
+    too generic to match by containment), and ALL of the alias's tokens must be
+    present in the term. The most specific match wins (most alias tokens, then
+    highest summed token specificity), so a 3-token "urea creatinine ratio" beats
+    any incidental 2-token overlap. Deterministic; returns None when nothing
+    multi-word is embedded.
+    """
+    term_tokens = _concept_signal_tokens(term)
+    if len(term_tokens) < 2:
+        return None
+    specificity = _token_specificity(lookup)
+    best: Optional[str] = None
+    best_score = (1, 0.0)  # require strictly >1 token to qualify
+    for key, canonical in lookup.items():
+        key_tokens = _concept_signal_tokens(key)
+        if len(key_tokens) < 2 or not key_tokens <= term_tokens:
+            continue
+        score = (
+            len(key_tokens),
+            sum(specificity.get(token, 1.0) for token in key_tokens),
+        )
+        if score > best_score:
+            best_score = score
+            best = canonical
+    return best
+
+
 def _resolve_concept(term: str, lookup: Mapping[str, str]) -> Optional[str]:
     exact = _resolve_concept_exact(term, lookup)
     if exact is not None:
         return exact
+    resolution_term = _strip_specimen_qualifiers(term) or term
+    if resolution_term != term:
+        exact = _resolve_concept_exact(resolution_term, lookup)
+        if exact is not None:
+            return exact
     # A derived ratio of distinct components ("urea-to-creatinine ratio") has no
     # unified concept; anchor it to its first real component rather than letting a
     # generic shared token ("ratio") drag the match onto an unrelated concept
     # (pafi). The downstream feature-derivation check then flags it as needing
     # both components. (Fragment resolution recurses one level and terminates: a
     # bare component carries no "ratio" token.)
-    components = _ratio_component_concepts(term, lookup)
+    components = _ratio_component_concepts(resolution_term, lookup)
     if len(components) >= 2:
+        # A noisy concept-set phrase can EMBED a genuine first-class unified
+        # concept, e.g. "urea-to-creatinine ratio cutoff threshold" contains
+        # "urea-to-creatinine ratio" -> bun_creatinine_ratio. Prefer that real
+        # concept over decomposing the ratio into bun+crea (or, worse, returning
+        # a spurious leading token like "admission" -> adm). Only fires on terms
+        # that already hit the ratio-decomposition path, so non-ratio resolution
+        # is unchanged.
+        embedded = _resolve_embedded_alias(resolution_term, lookup)
+        if embedded is not None:
+            return embedded
         return components[0]
-    term_tokens = _concept_signal_tokens(term)
+    term_tokens = _concept_signal_tokens(resolution_term)
     if not term_tokens:
         return None
     # Pick the MOST SPECIFIC subset match, not the first one encountered: rank by
@@ -2404,6 +3081,21 @@ def _resolve_concept(term: str, lookup: Mapping[str, str]) -> Optional[str]:
                 best_score = score
                 best = canonical
     return best
+
+
+_SPECIMEN_QUALIFIER_WORDS = frozenset({"serum", "plasma"})
+
+
+def _strip_specimen_qualifiers(value: str) -> str:
+    tokens = [
+        token
+        for token in re.split(r"[^a-z0-9]+", normalize_concept_name(value))
+        if token
+    ]
+    if not tokens or not any(token in _SPECIMEN_QUALIFIER_WORDS for token in tokens):
+        return ""
+    stripped = [token for token in tokens if token not in _SPECIMEN_QUALIFIER_WORDS]
+    return " ".join(stripped) if stripped and stripped != tokens else ""
 
 
 def _add_lookup_key_variants(

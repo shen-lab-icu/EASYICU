@@ -65,7 +65,8 @@ def test_web_catalog_aligns_with_merged_extraction_dictionary() -> None:
 def test_composite_output_sources_are_valid() -> None:
     dictionary = load_dictionary(include_sofa2=True)
     dict_concepts = set(dictionary.keys())
-    special_sources = {"circ_failure_loader"}
+    special_sources = {"circ_failure_loader", "comorbidity_loader",
+                       "outcomes_loader", "microbiology_loader"}
 
     for output_concept, source_concept in COMPOSITE_CONCEPT_OUTPUT_SOURCES.items():
         assert output_concept in CONCEPT_DICTIONARY

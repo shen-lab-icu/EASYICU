@@ -508,6 +508,19 @@ def _apply_callback(
             frame[val_col] = pd.to_numeric(frame[val_col], errors='coerce').round()
         return frame
 
+    # Handle transform_fun(na_below(<threshold>)) - map sentinel values below a
+    # threshold to NaN (e.g. eICU/SICdb store -1 for "score not computed"). Kept
+    # generic so any native-score concept can declare its own sentinel floor.
+    match = re.fullmatch(r"transform_fun\(na_below\(\s*(-?\d+(?:\.\d+)?)\s*\)\)", expr)
+    if match:
+        threshold = float(match.group(1))
+        frame = frame.copy()
+        val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
+        if val_col in frame.columns:
+            series = pd.to_numeric(frame[val_col], errors='coerce')
+            frame[val_col] = series.where(series >= threshold)
+        return frame
+
     # Handle aggregate_fun('sum', 'units') - aggregate by sum and set unit
     match = re.fullmatch(r"aggregate_fun\(['\"](\w+)['\"],\s*['\"](.+?)['\"]\)", expr)
     if match:

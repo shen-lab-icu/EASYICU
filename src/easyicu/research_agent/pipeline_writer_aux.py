@@ -18,6 +18,7 @@ import pandas as pd
 
 from .context import ResearchContext
 from .evidence import EvidenceStore
+from .pipeline_report import _blocked_outcome_step_ids
 from .robustness_panel import load_robustness_panel, worst_rows_by_axis
 from .scalar_utils import _first_present_scalar
 
@@ -450,6 +451,7 @@ def _render_writer_evidence_digest(
             "  " + json.dumps(digest_row, ensure_ascii=False, sort_keys=True, default=str)
         )
     primary = "\n".join(lines)
+    primary = _append_blocked_outcome_gate_block(primary, run_dir=run_dir)
     if not include_robustness_panel:
         return primary
     return _append_robustness_panel_block(primary, run_dir=run_dir)
@@ -715,6 +717,70 @@ def _append_robustness_panel_block(text: str, *, run_dir: Path | None) -> str:
     return "\n".join([text, "", "## robustness panel", *robustness_lines])
 
 
+def _append_blocked_outcome_gate_block(text: str, *, run_dir: Path | None) -> str:
+    guard_lines = _render_blocked_outcome_gate_block(run_dir=run_dir)
+    if not guard_lines:
+        return text
+    return "\n".join([text, "", "## blocked outcome gate", *guard_lines])
+
+
+def _render_blocked_outcome_gate_block(*, run_dir: Path | None) -> List[str]:
+    if run_dir is None:
+        return []
+    root = Path(run_dir)
+    blocked_steps = _blocked_outcome_step_ids(root)
+    if not blocked_steps:
+        return []
+    lines = [
+        "BLOCKED OUTCOME GATE: one or more executed steps explicitly blocked "
+        "outcome linkage/tabulation.",
+        "Writer instruction: do not report outcome associations, effects, "
+        "contrasts, near-null interpretations, or point-estimate ranges from "
+        "these blocked steps. It is acceptable to state that the outcome "
+        "analysis was blocked and why.",
+        "Any robustness or publication-figure effect estimates derived from "
+        "the blocked outcome linkage are not manuscript-facing.",
+        "blocked_steps=" + ",".join(blocked_steps),
+    ]
+    for step_id in blocked_steps:
+        note = _blocked_outcome_step_note(root, step_id)
+        if note:
+            lines.append(f"{step_id}: {note}")
+    return lines
+
+
+def _blocked_outcome_step_note(root: Path, step_id: str) -> str:
+    step_out = root / "steps" / step_id / "outputs"
+    notes: List[str] = []
+    for path in sorted(step_out.glob("*gate*.csv")):
+        try:
+            frame = pd.read_csv(path)
+        except Exception:
+            continue
+        for _, row in frame.iterrows():
+            status = str(row.get("status", "")).lower()
+            if status != "blocked":
+                continue
+            decision = str(row.get("blocking_decision", "")).strip()
+            rerun = str(row.get("future_rerun_condition", "")).strip()
+            if decision:
+                notes.append(decision)
+            if rerun:
+                notes.append("Rerun condition: " + rerun)
+            if notes:
+                return " ".join(notes)[:500]
+    summary_path = step_out / "step_summary.json"
+    if summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            summary = {}
+        policies = summary.get("named_blocking_policy")
+        if isinstance(policies, list) and policies:
+            return "Blocking policies: " + ", ".join(str(p) for p in policies[:6])
+    return ""
+
+
 def _is_hidden_robustness_row_claim(step_id: str, source_field: str) -> bool:
     """Hide row-level robustness claims from the writer digest.
 
@@ -728,6 +794,8 @@ def _is_hidden_robustness_row_claim(step_id: str, source_field: str) -> bool:
 
 def _render_robustness_panel_block(*, run_dir: Path | None) -> List[str]:
     if run_dir is None:
+        return []
+    if _blocked_outcome_step_ids(Path(run_dir)):
         return []
     panel = load_robustness_panel(Path(run_dir) / "robustness_panel.json")
     if panel is None:

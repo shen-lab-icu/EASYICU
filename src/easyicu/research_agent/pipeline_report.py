@@ -99,6 +99,109 @@ def _count_missing_evidence_markers(text: str) -> int:
     )
 
 
+_OUTCOME_ENDPOINT_RE = re.compile(
+    r"\b(?:death|mortality|survival|endpoint|event|outcome)s?\b",
+    flags=re.IGNORECASE,
+)
+_SPECIFIC_OUTCOME_RE = re.compile(
+    r"\b(?:death|mortality|survival)\b",
+    flags=re.IGNORECASE,
+)
+_OUTCOME_INFERENCE_RE = re.compile(
+    r"\b(?:association|contrast|comparison|difference|effect|estimate|"
+    r"point estimate|odds ratio|hazard ratio|risk ratio|relative risk|"
+    r"protective|harmful|near[- ]?null|equivalence|prognostic|"
+    r"separation|vary|varies|varied|ranging)\b",
+    flags=re.IGNORECASE,
+)
+_OUTCOME_GROUP_RE = re.compile(
+    r"\b(?:death|mortality|outcome|endpoint|event)s?\b.{0,80}"
+    r"\b(?:across|between|by)\b.{0,60}\b(?:group|subgroup|definition)s?\b",
+    flags=re.IGNORECASE,
+)
+_OUTCOME_SAFE_BLOCK_RE = re.compile(
+    r"\b(?:blocked|withheld|not authorized|not authorised|not performed|"
+    r"not executed|not analysed|not analyzed|not inferred|cannot be inferred|"
+    r"must not be inferred|no outcome claim|no death claim|no mortality claim|"
+    r"before any|prior to any)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _payload_mentions_outcome(payload: Any) -> bool:
+    return bool(_OUTCOME_ENDPOINT_RE.search(json.dumps(payload, ensure_ascii=False)))
+
+
+def _step_summary_blocks_outcome(payload: Dict[str, Any]) -> bool:
+    if payload.get("grouped_death_analysis_executed") is False:
+        return True
+    if payload.get("exploratory_group_death_tabulation_authorized") is False:
+        return True
+    if payload.get("primary_analysis_authorized") is False and _payload_mentions_outcome(payload):
+        return True
+    if payload.get("analysis_executed") is False:
+        dumped = json.dumps(payload, ensure_ascii=False).lower()
+        return "blocked" in dumped and _payload_mentions_outcome(payload)
+    return False
+
+
+def _blocked_outcome_step_ids(run_dir: Path) -> List[str]:
+    blocked: set[str] = set()
+    for path in sorted(run_dir.glob("steps/*/outputs/step_summary.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict) and _step_summary_blocks_outcome(payload):
+            blocked.add(path.parents[1].name)
+    for path in sorted(run_dir.glob("steps/*/outputs/*gate*.csv")):
+        try:
+            with path.open(newline="", encoding="utf-8") as fh:
+                rows = list(csv.DictReader(fh))
+        except Exception:
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_text = json.dumps(row, ensure_ascii=False).lower()
+            false_authorization = any(
+                str(value).strip().lower() == "false"
+                and any(token in str(key).lower() for token in ("author", "execut"))
+                for key, value in row.items()
+            )
+            if (
+                str(row.get("status", "")).lower() == "blocked"
+                and _OUTCOME_ENDPOINT_RE.search(row_text)
+                and (false_authorization or "blocked" in row_text)
+            ):
+                blocked.add(path.parents[1].name)
+                break
+    return sorted(blocked)
+
+
+def _blocked_outcome_manuscript_leaks(manuscript_text: str) -> List[str]:
+    leaks: List[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", manuscript_text or ""):
+        sentence = re.sub(r"\s+", " ", sentence).strip()
+        if not sentence:
+            continue
+        natural = re.sub(r"<!--.*?-->", "", sentence)
+        natural = re.sub(r"\[[^\]]+\]\([^)]+\)", "", natural)
+        natural = re.sub(r"\{\[[^\]]+\]\([^)]+\)\}", "", natural)
+        natural = re.sub(r"\s+", " ", natural).strip()
+        if _OUTCOME_SAFE_BLOCK_RE.search(natural):
+            continue
+        has_specific_endpoint = bool(_SPECIFIC_OUTCOME_RE.search(natural))
+        has_generic_endpoint = bool(_OUTCOME_ENDPOINT_RE.search(natural))
+        if not has_generic_endpoint:
+            continue
+        inference = bool(_OUTCOME_INFERENCE_RE.search(natural))
+        grouped = bool(_OUTCOME_GROUP_RE.search(natural))
+        if grouped or (has_specific_endpoint and inference):
+            leaks.append(natural[:600])
+    return leaks
+
+
 def _publication_figure_bundle_ready(
     *,
     evidence: EvidenceStore,
@@ -406,6 +509,16 @@ def _compute_readiness_gates(
             "critic_agent",
         }
     ]
+    blocked_outcome_steps = _blocked_outcome_step_ids(run_dir)
+    blocked_outcome_leaks = (
+        _blocked_outcome_manuscript_leaks(manuscript_text)
+        if blocked_outcome_steps
+        else []
+    )
+    blocked_outcome_errors = [
+        "blocked outcome gate leaked into manuscript: " + leak
+        for leak in blocked_outcome_leaks
+    ]
     manuscript_generated = (
         not writer_probe_mode
         and manuscript_path.exists()
@@ -414,7 +527,8 @@ def _compute_readiness_gates(
     )
     evidence_complete = manuscript_generated and missing_evidence_count == 0 and not evidence_errors
     numeric_verified = manuscript_generated and not numeric_errors
-    analysis_validated = execution["execution_complete"] and not non_manuscript_errors
+    analysis_errors = non_manuscript_errors + blocked_outcome_errors
+    analysis_validated = execution["execution_complete"] and not analysis_errors
     manuscript_ready = (
         execution["execution_complete"]
         and evidence_complete
@@ -440,10 +554,14 @@ def _compute_readiness_gates(
         "missing_evidence_count": missing_evidence_count,
         "numeric_error_count": len(numeric_errors),
         "evidence_error_count": len(evidence_errors),
-        "analysis_error_count": len(non_manuscript_errors),
+        "analysis_error_count": len(analysis_errors),
         "numeric_errors": numeric_errors,
         "evidence_errors": evidence_errors,
-        "analysis_errors": non_manuscript_errors,
+        "analysis_errors": analysis_errors,
+        "blocked_outcome_step_ids": blocked_outcome_steps,
+        "blocked_outcome_not_leaked": not blocked_outcome_leaks,
+        "blocked_outcome_leak_count": len(blocked_outcome_leaks),
+        "blocked_outcome_leaks": blocked_outcome_leaks,
         # Audit-trail surface for the supersession rule (see
         # _partition_findings_by_supersession). Reviewers can inspect
         # which findings the readiness gate ignored because the
@@ -703,6 +821,16 @@ def _extract_claim_ledger_rows(
                 ),
             }
         )
+    for leak in gates.get("blocked_outcome_leaks") or []:
+        rows.append(
+            {
+                "claim_id": f"claim_{len(rows) + 1:03d}",
+                "claim_text": re.sub(r"\s+", " ", str(leak))[:1000],
+                "evidence_refs": "",
+                "status": "blocked_outcome_leak",
+                "note": "Outcome linkage was blocked by a run gate, so this manuscript inference is not authorized.",
+            }
+        )
     return rows
 
 
@@ -733,6 +861,12 @@ def _render_author_review_note(
             lines.append(f"- `{item.get('step_id')}` status `{item.get('status')}`")
         for step_id in missing_steps:
             lines.append(f"- `{step_id}` missing execution record")
+    if gates.get("blocked_outcome_step_ids") or gates.get("blocked_outcome_leaks"):
+        lines.extend(["", "## Blocked outcome gate", ""])
+        for step_id in gates.get("blocked_outcome_step_ids") or []:
+            lines.append(f"- `{step_id}` blocked outcome linkage or tabulation.")
+        for leak in gates.get("blocked_outcome_leaks") or []:
+            lines.append(f"- Manuscript leak: {str(leak)[:240]}")
         lines.append("")
     error_findings = [f for f in findings if f.severity == "error"]
     if error_findings:

@@ -38,27 +38,50 @@ def lookup():
     "term",
     ["urea-to-creatinine ratio", "urea/creatinine ratio", "BUN/creatinine ratio"],
 )
-def test_urea_creatinine_ratio_is_derived_not_pafi(lookup, term):
-    # Must anchor to a REAL component (bun/crea), never the unrelated P/F-ratio.
+def test_urea_creatinine_ratio_resolves_to_unified_concept_not_pafi(lookup, term):
+    # bun_creatinine_ratio was added as a first-class derived concept
+    # (2026-06-22) with explicit "urea-to-creatinine ratio"/"UCR" synonyms, so a
+    # urea/creatinine-ratio phrase now resolves to THAT unified concept via the
+    # exact variant table — exactly like "P/F ratio" -> pafi — never to the
+    # unrelated pafi, and no longer needs on-the-fly derivation from bun+crea.
     resolved = _resolve_concept(term, lookup)
-    assert resolved in {"bun", "crea"}
-    status, requirements, _ = _feature_derivation_status(
+    assert resolved == "bun_creatinine_ratio"
+    assert resolved != "pafi"
+    status, _, _ = _feature_derivation_status(
         term, resolved_key=resolved, lookup=lookup
     )
-    assert status == "requires_derived_feature"
-    # The requirement must name BOTH component concepts (bun + crea).
-    joined = " ".join(requirements).lower()
-    assert "bun" in joined and "crea" in joined
+    assert status == "raw_concept_available"
+
+
+@pytest.mark.parametrize(
+    "term",
+    [
+        "urea-to-creatinine ratio cutoff threshold",
+        "admission urea-to-creatinine ratio",
+        "ICU admission urea-to-creatinine ratio measurement timing",
+    ],
+)
+def test_noisy_concept_set_phrase_recovers_embedded_unified_concept(lookup, term):
+    # A concept-SET / threshold idea often arrives as a noisy phrase that embeds
+    # a real first-class concept ("urea-to-creatinine ratio cutoff threshold").
+    # The embedded multi-word alias must win over decomposing the ratio into
+    # bun+crea, and must never fall through to a spurious leading token
+    # ("admission" -> adm). Regression for the 2026-06-22 embedded-alias fix.
+    resolved = _resolve_concept(term, lookup)
+    assert resolved == "bun_creatinine_ratio"
+    assert resolved not in {"adm", "bun", "crea", "pafi"}
 
 
 def test_generic_shared_token_is_down_weighted(lookup):
     # The general cure for the bug class: a token shared across many concepts
-    # ("ratio" -> pafi, safi, nlr...) must score strictly lower than a token that
-    # names a single concept ("urea"). This is what stops a generic word from
-    # tying a real clinical signal, without enumerating stop-words.
+    # ("ratio" -> pafi, safi, nlr...) must score strictly lower than a more
+    # specific token ("urea"). This is what stops a generic word from tying a
+    # real clinical signal, without enumerating stop-words. NB: since
+    # bun_creatinine_ratio was added, "urea" names two concepts (bun +
+    # bun_creatinine_ratio) so its specificity is 0.5 rather than 1.0 — but the
+    # generic "ratio" is shared far more widely and still ranks strictly below.
     spec = _token_specificity(lookup)
     assert spec["ratio"] < spec["urea"]
-    assert spec["urea"] == 1.0  # urea names exactly one concept (bun)
 
 
 @pytest.mark.parametrize(
@@ -91,3 +114,17 @@ def test_plain_concepts_unaffected(lookup, term, expected):
         term, resolved_key=expected, lookup=lookup
     )
     assert status == "raw_concept_available"
+
+
+@pytest.mark.parametrize(
+    "term,expected",
+    [
+        ("serum creatinine", "crea"),
+        ("plasma creatinine", "crea"),
+        ("serum lactate", "lact"),
+    ],
+)
+def test_specimen_qualified_lab_phrases_resolve_to_lab_concepts(
+    lookup, term, expected
+):
+    assert _resolve_concept(term, lookup) == expected

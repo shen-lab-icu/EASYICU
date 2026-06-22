@@ -35,6 +35,7 @@ from .idea_mining_pubmed import (
     _pubmed_core_recall_clause,
     _pubmed_phrase_clause,
     _pubmed_population_recall_clause,
+    _prior_art_synonym_phrases,
 )
 from .idea_mining_schema import (
     DiscoveryCandidateRecord,
@@ -59,6 +60,9 @@ _CONCEPT_SET_FAMILY_NOVELTY_TERM = {
     "trajectory_clustering": "(subphenotype OR phenotype OR cluster OR clustering)",
     "descriptive_epidemiology": "(epidemiology OR incidence OR prevalence)",
     "data_quality_audit": '("data quality" OR completeness OR missingness)',
+    "measurement_bias_audit": '("measurement bias" OR ascertainment OR "testing frequency" OR "informative measurement")',
+    "cohort_definition_sensitivity": '("cohort definition" OR "case definition" OR eligibility OR "ICD definition")',
+    "score_policy_sensitivity": '("score component" OR "component missingness" OR "imputation policy" OR "score sensitivity")',
 }
 
 
@@ -287,6 +291,11 @@ def assess_prior_art_for_idea(
         hit.pmid: hit.direct_same_topic_rationale or "direct same-topic hit"
         for hit in direct_hits
     }
+    evidence_map_counts, evidence_map_examples = _build_prior_art_evidence_map(
+        query_records,
+        idea=idea,
+        cross_db_targets=cross_db_targets,
+    )
     differentiators = _candidate_differentiators(idea)
     cross_db_diff = _cross_db_prior_art_differentiator(
         query_records, direct_hits, cross_db_targets
@@ -350,6 +359,8 @@ def assess_prior_art_for_idea(
         "query_records": [record.model_dump(mode="json") for record in query_records],
         "direct_same_topic_pmids": direct_pmids,
         "direct_same_topic_rationales": direct_rationales,
+        "evidence_map_counts": evidence_map_counts,
+        "evidence_map_examples": evidence_map_examples,
         "novelty_label": novelty_label,
         "literature_saturation_signal": saturation,
         "same_topic_screen_status": same_topic_screen_status,
@@ -371,6 +382,8 @@ def assess_prior_art_for_idea(
         query_records=query_records,
         direct_same_topic_pmids=direct_pmids,
         direct_same_topic_rationales=direct_rationales,
+        evidence_map_counts=evidence_map_counts,
+        evidence_map_examples=evidence_map_examples,
         novelty_label=novelty_label,
         literature_saturation_signal=saturation,
         novelty_statement=statement,
@@ -444,12 +457,18 @@ def render_discovery_report(
             f"`{assessment.novelty_label}`; broad n={broad.hit_count if broad else 'n/a'}, "
             f"exact n={exact.hit_count if exact else 'n/a'}; "
             f"direct PMIDs={', '.join(assessment.direct_same_topic_pmids) or 'none'}; "
+            f"evidence map={_format_evidence_map_counts(assessment.evidence_map_counts)}; "
             f"searched {assessment.searched_at}"
         )
         feasibility = _format_feasibility(record.database_feasibility)
         if getattr(record, "feasibility_tier", None):
             tier_line = _format_feasibility_tier(record)
             feasibility = f"{tier_line}\n{feasibility}" if feasibility else tier_line
+        if getattr(record, "feasibility_route", None):
+            route_line = f"route={record.feasibility_route}"
+            if getattr(record, "feasibility_next_action", None):
+                route_line += f"; next={record.feasibility_next_action}"
+            feasibility = f"{route_line}\n{feasibility}" if feasibility else route_line
         risks = "<br>".join(_escape_md_cell(risk) for risk in record.risks) or "n/a"
         lines.append(
             "| {idx} | {source} | {gap} | {topic} | {prior} | {feas} | {decision} | {risks} |".format(
@@ -686,6 +705,139 @@ def _same_topic_screen_status(
     if any(hit.same_topic_screened for hit in hits):
         return "partially screened; automated-substring fallback remains"
     return "automated-substring-only, NOT screened"
+
+
+_EVIDENCE_MAP_BUCKETS: Tuple[str, ...] = (
+    "direct_same_topic",
+    "same_topic_cross_database_or_external",
+    "same_exposure_different_outcome",
+    "same_outcome_different_exposure",
+    "adjacent_icu_background",
+    "unclear",
+)
+
+
+def _format_evidence_map_counts(counts: Mapping[str, int]) -> str:
+    rendered = [
+        f"{bucket}={int(counts.get(bucket, 0))}"
+        for bucket in _EVIDENCE_MAP_BUCKETS
+        if int(counts.get(bucket, 0)) > 0
+    ]
+    return ", ".join(rendered) if rendered else "none"
+
+
+def _build_prior_art_evidence_map(
+    records: Sequence[PriorArtQueryRecord],
+    *,
+    idea: LiteratureIdeaCandidate,
+    cross_db_targets: Optional[Sequence[str]] = None,
+    max_examples_per_bucket: int = 3,
+) -> Tuple[Dict[str, int], Dict[str, List[Dict[str, str]]]]:
+    counts: Dict[str, int] = {bucket: 0 for bucket in _EVIDENCE_MAP_BUCKETS}
+    examples: Dict[str, List[Dict[str, str]]] = {
+        bucket: [] for bucket in _EVIDENCE_MAP_BUCKETS
+    }
+    for record in records:
+        for hit in record.top_hits:
+            bucket = _evidence_map_bucket(
+                hit,
+                idea=idea,
+                cross_db_targets=cross_db_targets,
+            )
+            counts[bucket] = counts.get(bucket, 0) + 1
+            if len(examples.setdefault(bucket, [])) >= max_examples_per_bucket:
+                continue
+            examples[bucket].append(
+                {
+                    "pmid": hit.pmid,
+                    "title": hit.title,
+                    "query_type": record.query_type,
+                    "direct_same_topic": str(bool(hit.direct_same_topic)).lower(),
+                }
+            )
+    return (
+        {key: value for key, value in counts.items() if value > 0},
+        {key: value for key, value in examples.items() if value},
+    )
+
+
+def _evidence_map_bucket(
+    hit: PriorArtSearchHit,
+    *,
+    idea: LiteratureIdeaCandidate,
+    cross_db_targets: Optional[Sequence[str]] = None,
+) -> str:
+    raw_text = " ".join(
+        [
+            hit.title,
+            hit.relevance or "",
+            hit.direct_same_topic_rationale or "",
+        ]
+    )
+    text = normalize_concept_name(raw_text)
+    raw_lower = raw_text.lower()
+    predictor = idea.exposure_core_concept or idea.exposure_or_predictor
+    outcome = idea.outcome_core_concept or idea.outcome
+    has_predictor = _evidence_term_mentioned(
+        predictor, normalized_text=text, raw_text=raw_lower
+    )
+    has_outcome = _evidence_term_mentioned(
+        outcome, normalized_text=text, raw_text=raw_lower
+    )
+    if hit.direct_same_topic or (has_predictor and has_outcome):
+        if _hit_mentions_cross_database_or_external(hit, cross_db_targets):
+            return "same_topic_cross_database_or_external"
+        return "direct_same_topic"
+    if has_predictor and not has_outcome:
+        return "same_exposure_different_outcome"
+    if has_outcome and not has_predictor:
+        return "same_outcome_different_exposure"
+    if any(
+        token in text
+        for token in (
+            "icu",
+            "critical illness",
+            "critically ill",
+            "intensive care",
+            "intensive care unit",
+        )
+    ):
+        return "adjacent_icu_background"
+    return "unclear"
+
+
+def _evidence_term_mentioned(
+    term: str,
+    *,
+    normalized_text: str,
+    raw_text: str,
+) -> bool:
+    phrases = [str(term or ""), *_prior_art_synonym_phrases(str(term or ""))]
+    for phrase in phrases:
+        clean = _clean_literature_phrase(phrase).lower()
+        if clean and clean in raw_text:
+            return True
+        normalized = normalize_concept_name(phrase)
+        if normalized and normalized in normalized_text:
+            return True
+    return False
+
+
+def _hit_mentions_cross_database_or_external(
+    hit: PriorArtSearchHit,
+    cross_db_targets: Optional[Sequence[str]],
+) -> bool:
+    text = " ".join(
+        [
+            hit.title,
+            hit.relevance or "",
+            hit.direct_same_topic_rationale or "",
+        ]
+    ).lower()
+    aliases: List[str] = list(_MULTI_DB_TERMS)
+    for db in cross_db_targets or ():
+        aliases.extend(_TARGET_DB_ALIASES.get(str(db).lower(), (str(db).lower(),)))
+    return any(alias in text for alias in aliases)
 
 
 # Decorator / method-shell tokens that carry no queryable clinical construct.
@@ -951,9 +1103,16 @@ _TARGET_DB_ALIASES = {
     "sic": ("sicdb", "salzburg intensive care"),
 }
 _MULTI_DB_TERMS = (
-    "multi-database", "multidatabase", "multiple databases", "external validation",
-    "externally validated", "transportability", "cross-database", "multi-cohort",
-    "multiple cohorts", "multicenter database",
+    "multi-database",
+    "multidatabase",
+    "multiple databases",
+    "external validation",
+    "externally validated",
+    "transportability",
+    "cross-database",
+    "multi-cohort",
+    "multiple cohorts",
+    "multicenter database",
 )
 
 
@@ -990,6 +1149,16 @@ def _cross_db_prior_art_differentiator(
         f"databases (no retrieved prior art references these databases by title; "
         f"human must confirm prior art is predominantly single-database)"
     )
+
+
+# Problem 2 -- data-sufficiency floor. Co-availability is necessary but not
+# sufficient: a candidate whose joint-complete analytic units are very few (or a
+# tiny fraction of the cohort) is underpowered/selection-biased even though the
+# columns co-exist, so it must not be promoted to a clean ``recommend``. These
+# are deliberately conservative floors; a candidate that fails them is held for
+# human adequacy review, never auto-rejected.
+_MIN_JOINT_COMPLETE_FOR_RECOMMEND = 100
+_MIN_JOINT_FRACTION_FOR_RECOMMEND = 0.02
 
 
 def _go_no_go_decision(
@@ -1038,6 +1207,32 @@ def _go_no_go_decision(
         return "hold", "pair-level database feasibility not established"
     if triage.n_joint_complete is not None and triage.n_joint_complete <= 0:
         return "hold", "zero joint-complete analytic units"
+    # Problem 2: data-sufficiency / power floor. Presence of the columns is not
+    # the same as an analyzable, representative sample -- demote a thin candidate
+    # to a human-confirm hold instead of a clean recommend.
+    if (
+        triage.n_joint_complete is not None
+        and triage.n_joint_complete < _MIN_JOINT_COMPLETE_FOR_RECOMMEND
+    ):
+        return (
+            "hold",
+            f"joint-complete analytic units below the power floor "
+            f"({triage.n_joint_complete} < {_MIN_JOINT_COMPLETE_FOR_RECOMMEND}); "
+            "confirm sample adequacy and representativeness before execution",
+        )
+    if (
+        triage.n_joint_complete is not None
+        and triage.denominator_n
+        and (triage.n_joint_complete / triage.denominator_n)
+        < _MIN_JOINT_FRACTION_FOR_RECOMMEND
+    ):
+        frac = triage.n_joint_complete / triage.denominator_n
+        return (
+            "hold",
+            f"joint-complete coverage is a small fraction of the cohort "
+            f"({frac:.1%} < {_MIN_JOINT_FRACTION_FOR_RECOMMEND:.0%}); confirm "
+            "the analyzable subset is not selection-biased before execution",
+        )
     return "recommend", "sparse prior art plus executable database feasibility"
 
 

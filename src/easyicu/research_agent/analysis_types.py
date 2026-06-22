@@ -383,6 +383,91 @@ _REGISTRY: Dict[str, AnalysisTypeSpec] = {
             "Report what was audited and what was not available to audit.",
         ),
     ),
+    "measurement_bias_audit": AnalysisTypeSpec(
+        key="measurement_bias_audit",
+        name="Measurement bias / ascertainment audit",
+        description=(
+            "Audit whether measurement frequency, clinical indication, or care "
+            "processes could bias an apparent association or phenotype."
+        ),
+        trigger_terms=(
+            "measurement bias",
+            "ascertainment",
+            "testing frequency",
+            "measurement frequency",
+            "informative measurement",
+            "selective measurement",
+            "sampling bias",
+            "monitoring bias",
+            "indication bias",
+        ),
+        candidate_steps=(
+            "define measured concept and observation opportunity",
+            "measurement-frequency summary",
+            "missingness-by-risk or missingness-by-care-process audit",
+            "sensitivity analysis for informative measurement",
+        ),
+        guardrails=(
+            "Do not interpret availability of a lab or score as a neutral random sample.",
+            "Separate true physiology from who was selected to be measured.",
+        ),
+    ),
+    "cohort_definition_sensitivity": AnalysisTypeSpec(
+        key="cohort_definition_sensitivity",
+        name="Cohort definition sensitivity",
+        description=(
+            "Stress-test eligibility, timing, and diagnosis definitions to see "
+            "whether a finding depends on a brittle cohort definition."
+        ),
+        trigger_terms=(
+            "cohort definition",
+            "eligibility criteria",
+            "definition sensitivity",
+            "case definition",
+            "phenotype definition",
+            "icd definition",
+            "inclusion criteria",
+            "exclusion criteria",
+        ),
+        candidate_steps=(
+            "primary cohort definition",
+            "alternative eligibility definitions",
+            "overlap / attrition table",
+            "sensitivity comparison across cohort definitions",
+        ),
+        guardrails=(
+            "Do not hide cohort-definition changes inside post-hoc exclusions.",
+            "Report how many patients move in or out under each definition.",
+        ),
+    ),
+    "score_policy_sensitivity": AnalysisTypeSpec(
+        key="score_policy_sensitivity",
+        name="Score component / policy sensitivity",
+        description=(
+            "Evaluate how score component choices, missing-component handling, "
+            "or imputation policies change score values or downstream claims."
+        ),
+        trigger_terms=(
+            "score policy",
+            "component policy",
+            "missing component",
+            "component missingness",
+            "imputation policy",
+            "worst value",
+            "score sensitivity",
+            "component sensitivity",
+        ),
+        candidate_steps=(
+            "score component availability audit",
+            "alternative component-policy definitions",
+            "score distribution comparison",
+            "downstream sensitivity check if an outcome is declared",
+        ),
+        guardrails=(
+            "Do not treat a composite score as invariant to component handling.",
+            "Name the exact missing-component and aggregation policy used.",
+        ),
+    ),
     "cross_database_replication": AnalysisTypeSpec(
         key="cross_database_replication",
         name="Cross-database replication / transportability",
@@ -438,6 +523,19 @@ _FAMILY_ALIASES: Dict[str, str] = {
     "external_validation": "validation",
     "data_quality": "data_quality_audit",
     "data_quality_audit": "data_quality_audit",
+    "measurement_bias": "measurement_bias_audit",
+    "measurement_bias_audit": "measurement_bias_audit",
+    "ascertainment_bias": "measurement_bias_audit",
+    "measurement_drift": "measurement_bias_audit",
+    "cohort_sensitivity": "cohort_definition_sensitivity",
+    "cohort_definition": "cohort_definition_sensitivity",
+    "cohort_definition_sensitivity": "cohort_definition_sensitivity",
+    "definition_sensitivity": "cohort_definition_sensitivity",
+    "score_policy": "score_policy_sensitivity",
+    "score_policy_sensitivity": "score_policy_sensitivity",
+    "component_policy": "score_policy_sensitivity",
+    "component_sensitivity": "score_policy_sensitivity",
+    "imputation_policy": "score_policy_sensitivity",
     "cross_database_replication": "cross_database_replication",
 }
 
@@ -449,7 +547,14 @@ _FAMILY_ALIASES: Dict[str, str] = {
 # force a (predictor, outcome) tuple -- doing so is exactly what made clustering
 # ideas resolve to predictor=None and get buried as db-cannot-do.
 CONCEPT_SET_FAMILIES: frozenset[str] = frozenset(
-    {"trajectory_clustering", "descriptive_epidemiology", "data_quality_audit"}
+    {
+        "trajectory_clustering",
+        "descriptive_epidemiology",
+        "data_quality_audit",
+        "measurement_bias_audit",
+        "cohort_definition_sensitivity",
+        "score_policy_sensitivity",
+    }
 )
 
 
@@ -559,6 +664,12 @@ def infer_analysis_type(
         "prediction_model", extras=("model", "evaluation metric", "evaluation metrics")
     ):
         return _REGISTRY["prediction_model"]
+    if _has_any("measurement_bias_audit"):
+        return _REGISTRY["measurement_bias_audit"]
+    if _has_any("cohort_definition_sensitivity"):
+        return _REGISTRY["cohort_definition_sensitivity"]
+    if _has_any("score_policy_sensitivity"):
+        return _REGISTRY["score_policy_sensitivity"]
     if _has_any("data_quality_audit") and not any(
         _has_any(key)
         for key in (
@@ -567,6 +678,9 @@ def infer_analysis_type(
             "causal_inference",
             "trajectory_clustering",
             "reinforcement_learning",
+            "measurement_bias_audit",
+            "cohort_definition_sensitivity",
+            "score_policy_sensitivity",
         )
     ):
         return _REGISTRY["data_quality_audit"]
