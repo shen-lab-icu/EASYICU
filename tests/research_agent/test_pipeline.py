@@ -3886,6 +3886,81 @@ def test_readiness_artifacts_emit_manuscript_ready_only_after_gates_pass(ra, tmp
     ) == bound_path.read_text(encoding="utf-8")
 
 
+def test_readiness_artifacts_block_outcome_leak_after_blocked_gate(
+    ra,
+    tmp_path: Path,
+):
+    from easyicu.research_agent.evidence import EvidenceStore
+    from easyicu.research_agent.pipeline import _write_readiness_artifacts
+
+    context = ra.ResearchContext(
+        research_question="Audit outcome linkage after a definition-sensitivity gate.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="demo",
+            database="synthetic",
+            n_stays=10,
+            n_patients=10,
+        ),
+        variables=[],
+    )
+    plan = ra.AnalysisPlan(
+        research_question=context.research_question,
+        steps=[
+            ra.AnalysisStep(
+                step_id="04_outcome_gate",
+                intent="Check whether outcome linkage is authorized.",
+                expected_outputs=["table:outcome_gate"],
+            )
+        ],
+    )
+    step_out = tmp_path / "steps" / "04_outcome_gate" / "outputs"
+    step_out.mkdir(parents=True)
+    (step_out / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "step_id": "04_outcome_gate",
+                "primary_analysis_authorized": False,
+                "grouped_death_analysis_executed": False,
+                "target_outcome": "death",
+            }
+        ),
+        encoding="utf-8",
+    )
+    evidence = EvidenceStore(tmp_path)
+    bound_path = tmp_path / "manuscript_scaffold_bound.md"
+    bound_path.write_text(
+        "The exploratory association with death was near-null between definition "
+        "groups [outcome_gate](evidence/outcome_gate.csv).\n",
+        encoding="utf-8",
+    )
+
+    gates, artifact_paths = _write_readiness_artifacts(
+        context=context,
+        plan=plan,
+        findings=[],
+        per_step_records=[
+            {"step_id": "04_outcome_gate", "status": "ok", "step_summary": {}}
+        ],
+        evidence=evidence,
+        run_dir=tmp_path,
+        manuscript_path=bound_path,
+        stop_after_analysis=False,
+    )
+
+    assert gates["execution_complete"] is True
+    assert gates["blocked_outcome_step_ids"] == ["04_outcome_gate"]
+    assert gates["blocked_outcome_not_leaked"] is False
+    assert gates["analysis_validated"] is False
+    assert gates["manuscript_ready"] is False
+    assert gates["publication_ready"] is False
+    assert "manuscript_ready" not in artifact_paths
+    assert not (tmp_path / "manuscript_ready.md").exists()
+    claim_ledger = (tmp_path / "claim_ledger.csv").read_text(encoding="utf-8")
+    assert "blocked_outcome_leak" in claim_ledger
+    run_status = json.loads((tmp_path / "run_status.json").read_text(encoding="utf-8"))
+    assert run_status["status"] == "analysis_only"
+
+
 def test_publication_bundle_ready_groups_hash_suffixed_exports_under_one_stem(
     ra, tmp_path: Path
 ):

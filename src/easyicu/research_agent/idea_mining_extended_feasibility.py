@@ -108,6 +108,137 @@ _UNDERCODED_PATTERNS = (
 )
 
 
+# --- Problem 1: derivable composites ----------------------------------------
+# A construct can fail literal concept resolution yet be a trivial *derivation*
+# over primitives that ARE in the export (a ratio, a threshold, a length-of-stay
+# rule). The base gate marked these ``db-cannot-do`` (the obesity / UCR /
+# persistent-critical-illness false negatives found 2026-06-22). Each rule names
+# the primitives it needs; the rule only fires when ALL of them are present in
+# the export. We propose the derivation for HUMAN confirmation and route to a
+# hold -- never auto-execute, never fabricate coverage.
+
+
+@dataclass(frozen=True)
+class DerivedConstructRule:
+    name: str  # canonical construct
+    needs_all: Tuple[str, ...]  # primitive concepts that must all be in export
+    formula: str  # human-readable derivation
+    require_tokens: Tuple[Tuple[str, ...], ...]  # any of these token-sets matches
+
+
+# Ordered most-specific-first. ``require_tokens`` is a disjunction of token-sets;
+# a set matches when ALL its tokens are in the construct's content tokens.
+_DERIVATION_RULES: Tuple[DerivedConstructRule, ...] = (
+    DerivedConstructRule(
+        name="obesity",
+        needs_all=("bmi",),
+        formula="obesity := BMI >= 30 kg/m^2 (or WHO class by BMI band)",
+        require_tokens=(("obesity",), ("obese",), ("adiposity",)),
+    ),
+    DerivedConstructRule(
+        name="obesity_from_anthropometry",
+        needs_all=("weight", "height"),
+        formula="BMI := weight_kg / height_m^2; obesity := BMI >= 30",
+        require_tokens=(("obesity",), ("obese",)),
+    ),
+    DerivedConstructRule(
+        name="urea_to_creatinine_ratio",
+        needs_all=("bun", "crea"),
+        formula="UCR := blood urea nitrogen / creatinine",
+        require_tokens=(("ucr",), ("urea", "creatinine"), ("bun", "creatinine")),
+    ),
+    DerivedConstructRule(
+        name="persistent_critical_illness",
+        needs_all=("los_icu",),
+        formula="persistent critical illness := ICU length of stay >= 10 days",
+        require_tokens=(("persistent",), ("prolonged",)),
+    ),
+    DerivedConstructRule(
+        name="shock_index",
+        needs_all=("hr", "sbp"),
+        formula="shock index := heart rate / systolic blood pressure",
+        require_tokens=(("shock", "index"),),
+    ),
+)
+
+
+@dataclass(frozen=True)
+class DerivedConstructProposal:
+    term: str
+    rule: DerivedConstructRule
+
+
+# --- Problem 3: raw-table reachability --------------------------------------
+# The base gate reports "available in the EasyICU concept layer", not "available
+# in the database". Several blocked constructs are present in RAW MIMIC tables,
+# just not surfaced as concepts -- a coding agent could extract them. We map only
+# constructs we are confident exist in a documented raw source, route them to a
+# human-confirm hold ("agent could extract; never auto-run"), and DELIBERATELY do
+# NOT map constructs that are genuinely absent (post-discharge cognitive
+# follow-up, MRC strength scoring, molecular/PCR rapid panels) so those stay
+# ``db-cannot-do`` (fail-closed).
+
+
+@dataclass(frozen=True)
+class RawSourceRule:
+    name: str
+    table: str  # documented raw MIMIC source
+    require_tokens: Tuple[Tuple[str, ...], ...]
+    reliability: str  # "documented" | "sparse_or_unreliable"
+
+
+_RAW_SOURCE_RULES: Tuple[RawSourceRule, ...] = (
+    RawSourceRule(
+        name="nutrition_intake",
+        table="icu.ingredientevents / icu.inputevents",
+        require_tokens=(
+            ("nutrition",),
+            ("nutritional",),
+            ("protein",),
+            ("caloric",),
+            ("calorie",),
+            ("enteral",),
+            ("parenteral",),
+            ("feeding",),
+        ),
+        reliability="documented",
+    ),
+    RawSourceRule(
+        name="microbiology_culture",
+        table="hosp.microbiologyevents",
+        require_tokens=(
+            ("culture",),
+            ("cultures",),
+            ("organism",),
+            ("pathogen",),
+            ("susceptibility",),
+            ("antibiogram",),
+            ("bloodstream", "infection"),
+        ),
+        reliability="documented",
+    ),
+)
+
+# Constructs intentionally NOT mapped to any raw source -> they stay
+# ``db-cannot-do`` because MIMIC has no reliably-structured record for them.
+# Kept as an explicit, reviewable list so each omission is a decision, not an
+# oversight. Bedside-assessment constructs (early mobilization / physical
+# therapy activity, dysphagia / swallow screening) live here on purpose: they
+# appear only sparsely and inconsistently in chartevents/notes, so asserting an
+# agent could extract them would over-claim -- they remain fail-closed.
+_TRULY_ABSENT_NOTE = (
+    "no reliably-structured raw source in MIMIC (e.g. post-discharge cognitive "
+    "follow-up, MRC strength scoring, molecular/PCR rapid diagnostic panels, "
+    "early-mobilization / physical-therapy activity, dysphagia / swallow screening)"
+)
+
+
+@dataclass(frozen=True)
+class RawSourceProposal:
+    term: str
+    rule: RawSourceRule
+
+
 def _tokens(text: str) -> List[str]:
     return re.findall(r"[a-z0-9]+", str(text).lower())
 
@@ -278,6 +409,44 @@ class ExtendedFeasibilityIndex:
             in_current_db=self.current_db in dbs,
         )
 
+    # ---- Problem 1: derivable composite over present primitives -------
+    def propose_derived_construct(
+        self, term: str
+    ) -> Optional[DerivedConstructProposal]:
+        """A construct expressible as a derivation over present export concepts."""
+        if not term or not str(term).strip():
+            return None
+        toks = frozenset(_tokens(term))
+        if not toks:
+            return None
+        for rule in _DERIVATION_RULES:
+            matched = any(
+                all(tok in toks for tok in token_set)
+                for token_set in rule.require_tokens
+            )
+            if not matched:
+                continue
+            if all(need in self._export_concepts for need in rule.needs_all):
+                return DerivedConstructProposal(term=str(term), rule=rule)
+        return None
+
+    # ---- Problem 3: raw-table reachability ---------------------------
+    def propose_raw_source(self, term: str) -> Optional[RawSourceProposal]:
+        """A construct present in a documented raw MIMIC table (agent-extractable)."""
+        if not term or not str(term).strip():
+            return None
+        toks = frozenset(_tokens(term))
+        if not toks:
+            return None
+        for rule in _RAW_SOURCE_RULES:
+            matched = any(
+                all(tok in toks for tok in token_set)
+                for token_set in rule.require_tokens
+            )
+            if matched:
+                return RawSourceProposal(term=str(term), rule=rule)
+        return None
+
     # ---- Case 1: ICD-derivable cohort --------------------------------
     def propose_cohort_icd(self, population: str) -> Optional[IcdCohortProposal]:
         content = _content_tokens(population)
@@ -399,6 +568,60 @@ class ExtendedFeasibilityIndex:
                     ],
                 },
             )
+
+        # Problem 1: a blocking construct is a trivial DERIVATION over primitives
+        # already in the export (ratio / threshold / LOS rule). Stronger than the
+        # ICD-cohort route because the data is present -- only the derivation needs
+        # human confirmation. Checked before the cohort route so the actual
+        # construct blocker is addressed, not just the population.
+        for term in [pred, out, *analysis]:
+            derived = self.propose_derived_construct(term)
+            if derived is not None:
+                return ExtendedFeasibilityVerdict(
+                    decision="hold",
+                    reason=(
+                        f"construct '{derived.term}' is derivable from primitives "
+                        f"already in the export ({', '.join(derived.rule.needs_all)}); "
+                        f"build it for HUMAN confirmation ({derived.rule.formula}), "
+                        f"then re-probe feasibility"
+                    ),
+                    case="derived_concept",
+                    metadata={
+                        "construct": derived.rule.name,
+                        "term": derived.term,
+                        "needs": list(derived.rule.needs_all),
+                        "formula": derived.rule.formula,
+                        "requires_human_confirm": True,
+                    },
+                )
+
+        # Problem 3: a blocking construct is not a concept here but IS present in a
+        # documented RAW MIMIC table -- a coding agent could extract it under human
+        # review. Surfaced as a hold (never auto-run). Constructs with no raw
+        # source stay db-cannot-do (fail-closed); see _TRULY_ABSENT_NOTE.
+        for term in [pred, out, *analysis]:
+            raw = self.propose_raw_source(term)
+            if raw is not None:
+                note = (
+                    f"construct '{raw.term}' is not an EasyICU concept but is "
+                    f"recorded in raw {raw.rule.table}; a coding agent can extract "
+                    f"it under HUMAN review (never auto-run), then re-probe "
+                    f"feasibility"
+                )
+                if raw.rule.reliability == "sparse_or_unreliable":
+                    note += "; WARNING: raw documentation is sparse/inconsistent -- proxy unreliable"
+                return ExtendedFeasibilityVerdict(
+                    decision="hold",
+                    reason=note,
+                    case="raw_extraction",
+                    metadata={
+                        "construct": raw.rule.name,
+                        "term": raw.term,
+                        "raw_table": raw.rule.table,
+                        "reliability": raw.rule.reliability,
+                        "requires_human_confirm": True,
+                    },
+                )
 
         # Case 1: the cohort/population is ICD-derivable. Only meaningful when the
         # exposure/outcome are NOT themselves the unrecoverable blocker -- but we

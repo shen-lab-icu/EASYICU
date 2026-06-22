@@ -94,6 +94,8 @@ def test_idea_extraction_prompt_is_case_neutral() -> None:
     assert "future directions" in prompt_text
     assert "specific named constructs" in prompt_text
     assert "generic placeholders" in prompt_text
+    assert "measurable rule elements" in prompt_text
+    assert "do not use abstract evaluation labels" in prompt_text
 
 
 def test_extract_literature_ideas_from_user_excerpt_with_traceable_quote() -> None:
@@ -687,6 +689,53 @@ def test_extract_literature_ideas_skip_policy_drops_only_untraceable() -> None:
     assert len(ideas) == 1
     assert ideas[0].exposure_or_predictor == "lactate clearance"
     assert dropped == ["neutral_review_2026"]
+
+
+def test_extract_literature_ideas_skip_policy_drops_schema_invalid_item() -> None:
+    material = SourceMaterial(
+        citation=_citation(),
+        source_adapter_level="user_supplied_excerpt",
+        source_text=(
+            "Lactate clearance was associated with survival in shock. "
+            "Future work should evaluate monitoring definitions."
+        ),
+    )
+    llm = CapturingIdeaLLM(
+        [
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "adult ICU patients",
+                "exposure_or_predictor": "lactate clearance",
+                "outcome": "survival",
+                "rationale": "Grounded.",
+                "source_quote": "Lactate clearance was associated with survival",
+                "analysis_family": "association",
+            },
+            {
+                "citation_key": "neutral_review_2026",
+                "population": "",
+                "exposure_or_predictor": "",
+                "outcome": "",
+                "analysis_concepts": ["monitoring definitions"],
+                "rationale": "Missing population should not abort the batch.",
+                "source_quote": "Future work should evaluate monitoring definitions",
+                "analysis_family": "data_quality_audit",
+            },
+        ]
+    )
+
+    dropped_invalid: list[str] = []
+    ideas = extract_literature_ideas(
+        materials=[material],
+        source_snapshot_id="source-snapshot/sha256:abc123",
+        llm=llm,
+        untraceable_quote_policy="skip",
+        dropped_invalid=dropped_invalid,
+    )
+
+    assert len(ideas) == 1
+    assert ideas[0].exposure_or_predictor == "lactate clearance"
+    assert dropped_invalid == ["neutral_review_2026"]
 
 
 def test_licensed_source_snapshot_does_not_store_full_text() -> None:
@@ -1289,7 +1338,27 @@ def test_dry_run_wires_pairwise_feasibility_registry_and_stops_at_gate(
         with pytest.raises(RegistryCandidateNotExecutableError):
             registry.assert_executable(record.registry_candidate_id)
     assert (tmp_path / "dry_run" / "source_snapshot_manifest.json").exists()
-    assert (tmp_path / "dry_run" / "candidate_triage_report.json").exists()
+    triage_report_path = tmp_path / "dry_run" / "candidate_triage_report.json"
+    assert triage_report_path.exists()
+    triage_payload = json.loads(triage_report_path.read_text())
+    ledger = triage_payload["discovery_ledger"]
+    assert len(ledger) == 2
+    ledger_by_predictor = {
+        row["resolved_predictor_concept"]: row for row in ledger
+    }
+    assert ledger_by_predictor["crea"]["candidate_topic"].startswith(
+        "creatinine ->"
+    )
+    assert ledger_by_predictor["crea"]["go_no_go"] in {
+        "recommend",
+        "hold",
+        "db-cannot-do",
+    }
+    assert ledger_by_predictor["crea"]["novelty_label"] == "already_done"
+    assert ledger_by_predictor["crea"]["evidence_map_counts"][
+        "direct_same_topic"
+    ] >= 1
+    assert ledger_by_predictor["crea"]["direct_same_topic_pmids"] == ["111"]
 
     import easyicu.research_agent.idea_mining as idea_mining_module
 

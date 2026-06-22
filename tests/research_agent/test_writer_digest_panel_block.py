@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -140,6 +141,80 @@ def test_digest_panel_block_handles_zero_converged(ra, tmp_path: Path) -> None:
 
     assert "## robustness panel" in digest
     assert "no robustness variants converged" in digest
+
+
+def test_digest_contains_blocked_outcome_gate_guard(tmp_path: Path) -> None:
+    from easyicu.research_agent.pipeline_writer_aux import (
+        _render_writer_evidence_digest,
+    )
+
+    step_out = tmp_path / "steps" / "04_outcome_gate" / "outputs"
+    step_out.mkdir(parents=True)
+    (step_out / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "step_id": "04_outcome_gate",
+                "primary_analysis_authorized": False,
+                "grouped_death_analysis_executed": False,
+                "target_outcome": "death",
+                "named_blocking_policy": ["no_silent_imputation"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (step_out / "outcome_feasibility_gate.csv").write_text(
+        "status,blocking_decision,future_rerun_condition,target_outcome\n"
+        "blocked,Outcome linkage is blocked.,Supply certified status columns.,death\n",
+        encoding="utf-8",
+    )
+
+    digest = _render_writer_evidence_digest(
+        [{"step_id": "04_outcome_gate", "status": "ok", "step_summary": {}}],
+        run_dir=tmp_path,
+    )
+
+    assert "## blocked outcome gate" in digest
+    assert "do not report outcome associations" in digest
+    assert "blocked_steps=04_outcome_gate" in digest
+    assert "Outcome linkage is blocked" in digest
+
+
+def test_digest_suppresses_robustness_effect_when_outcome_gate_blocked(
+    ra,
+    tmp_path: Path,
+) -> None:
+    from easyicu.research_agent.pipeline_writer_aux import (
+        _render_writer_evidence_digest,
+    )
+    from easyicu.research_agent.robustness_panel import RobustnessPanelRow
+
+    _write_panel(
+        ra,
+        tmp_path,
+        [
+            RobustnessPanelRow("primary", "primary", 100, 1.2, 1.0, 1.4, 0.1, "e1", True),
+        ],
+    )
+    step_out = tmp_path / "steps" / "04_outcome_gate" / "outputs"
+    step_out.mkdir(parents=True)
+    (step_out / "step_summary.json").write_text(
+        json.dumps(
+            {
+                "step_id": "04_outcome_gate",
+                "primary_analysis_authorized": False,
+                "grouped_death_analysis_executed": False,
+                "target_outcome": "death",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    digest = _render_writer_evidence_digest([], run_dir=tmp_path)
+
+    assert "## blocked outcome gate" in digest
+    assert "not manuscript-facing" in digest
+    assert "CANONICAL PRIMARY EFFECT SOURCE" not in digest
+    assert "primary: spec_id=primary" not in digest
 
 
 def test_digest_panel_block_lists_worst_per_axis(ra, tmp_path: Path) -> None:

@@ -73,6 +73,55 @@ def test_build_query_top3_reviews_editorials_last_2_years() -> None:
     assert " AND " in query
 
 
+def test_broad_specialty_preset_includes_critical_care_journals() -> None:
+    scope = LiteratureScopeSpec(
+        journal_preset="critical_care_specialty_broad",
+        pub_types=["review", "editorial", "letter"],
+        last_n_years=3,
+    )
+    journals = resolve_journals(scope)
+    assert "J Crit Care" in journals
+    assert "Shock" in journals
+    assert "Crit Care Explor" in journals
+    assert "Ann Intensive Care" in journals
+    assert "Crit Care Med" in journals
+    assert "Resuscitation" in journals
+
+    query = build_pubmed_query_from_scope(scope, reference_year=2026)
+    assert '"J Crit Care"[Journal]' in query
+    assert '"Crit Care Explor"[Journal]' in query
+    assert '"Ann Intensive Care"[Journal]' in query
+    assert '"Crit Care Med"[Journal]' in query
+    assert "letter[pt]" in query
+    assert "2024:2026[dp]" in query
+    assert "sepsis" not in query.lower()
+
+
+def test_wide_specialty_preset_adds_subspecialty_critical_care_journals() -> None:
+    scope = LiteratureScopeSpec(
+        journal_preset="critical_care_specialty_wide",
+        pub_types=["review", "editorial", "letter"],
+        last_n_years=3,
+    )
+    journals = resolve_journals(scope)
+    assert "Ann Intensive Care" in journals
+    assert "Crit Care Med" in journals
+    assert "Curr Opin Crit Care" in journals
+    assert "Crit Care Clin" in journals
+    assert "Neurocrit Care" in journals
+    assert "Pediatr Crit Care Med" in journals
+    assert "J Trauma Acute Care Surg" in journals
+    assert "Acute Crit Care" in journals
+
+    query = build_pubmed_query_from_scope(scope, reference_year=2026)
+    assert '"Curr Opin Crit Care"[Journal]' in query
+    assert '"Neurocrit Care"[Journal]' in query
+    assert '"Pediatr Crit Care Med"[Journal]' in query
+    assert "letter[pt]" in query
+    assert "2024:2026[dp]" in query
+    assert "sepsis" not in query.lower()
+
+
 def test_topic_terms_are_quoted_when_multiword_and_ored() -> None:
     scope = LiteratureScopeSpec(topic_terms=["sepsis", "septic shock"])
     query = build_pubmed_query_from_scope(scope)

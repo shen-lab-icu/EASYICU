@@ -1,0 +1,221 @@
+{
+  "schema_version": "easyicu.idea_quality_eval/1",
+  "created_for_task": "DISCOVERY-STORY1",
+  "items": [
+    {
+      "item_id": "already_done_direct_same_topic",
+      "title": "Known predictor-outcome pairing with screened same-topic prior art",
+      "source_route": "review_gap",
+      "literature_idea": {
+        "population": "adult ICU patients",
+        "exposure_or_predictor": "early vasopressor initiation",
+        "outcome": "ICU mortality",
+        "analysis_family": "association"
+      },
+      "expected": {
+        "novelty_label": "already_done",
+        "go_no_go": "hold",
+        "feasibility_route": "current_export_hold"
+      },
+      "trap_tags": ["duplicate_prior_art", "false_gap_risk"],
+      "notes": "A zero exact phrase count must not override screened direct prior art."
+    },
+    {
+      "item_id": "sparse_executable_screened",
+      "title": "Sparse differentiated pair with current export coverage",
+      "source_route": "review_gap",
+      "literature_idea": {
+        "population": "adult ICU patients",
+        "exposure_or_predictor": "early cumulative medication load",
+        "outcome": "known binary ICU endpoint",
+        "analysis_family": "association",
+        "time_window_hint": "first 6 hours"
+      },
+      "expected": {
+        "novelty_label": "sparse",
+        "go_no_go": "recommend",
+        "feasibility_route": "current_export_executable"
+      },
+      "trap_tags": ["true_candidate", "requires_human_review"],
+      "notes": "Recommend still requires human prior-art and clinical-plausibility review."
+    },
+    {
+      "item_id": "crowded_cross_database_angle",
+      "title": "Crowded topic differentiated only by cross-database transportability",
+      "source_route": "platform_gap",
+      "literature_idea": {
+        "population": "adult ICU patients",
+        "exposure_or_predictor": "severity score",
+        "outcome": "mortality",
+        "analysis_family": "validation"
+      },
+      "expected": {
+        "novelty_label": "crowded_but_differentiable",
+        "go_no_go": "hold",
+        "feasibility_route": "current_export_hold"
+      },
+      "trap_tags": ["crowded_field", "cross_database_human_confirm"],
+      "notes": "Cross-database transportability is a human-review differentiator, not a novelty claim."
+    },
+    {
+      "item_id": "not_measured_in_database",
+      "title": "Construct absent from current database and dictionaries",
+      "source_route": "primary_limitation",
+      "literature_idea": {
+        "population": "adult ICU patients",
+        "exposure_or_predictor": "unavailable bedside imaging biomarker",
+        "outcome": "mortality",
+        "analysis_family": "association"
+      },
+      "expected": {
+        "novelty_label": "sparse",
+        "go_no_go": "db-cannot-do",
+        "feasibility_route": "not_measured_in_database"
+      },
+      "trap_tags": ["true_database_limit", "do_not_recommend"],
+      "notes": "A literature gap is not useful if the construct is not measured in the target data."
+    },
+    {
+      "item_id": "t1_reextract_or_derive",
+      "title": "Matched source item exists but export needs re-extraction or derivation",
+      "source_route": "platform_gap",
+      "literature_idea": {
+        "population": "adult ICU patients",
+        "exposure_or_predictor": "derived pressure trajectory",
+        "outcome": "respiratory outcome",
+        "analysis_family": "association"
+      },
+      "expected": {
+        "novelty_label": "sparse",
+        "go_no_go": "hold",
+        "feasibility_route": "reextract_or_derive"
+      },
+      "trap_tags": ["source_item_match", "engineering_before_execution"],
+      "notes": "This should not be buried as a permanent database impossibility."
+    },
+    {
+      "item_id": "t2_new_concept_authoring",
+      "title": "Concept likely authorable but not yet in the dictionary",
+      "source_route": "review_gap",
+      "literature_idea": {
+        "population": "adult ICU patients",
+        "exposure_or_predictor": "clinician-defined treatment escalation episode",
+        "outcome": "short-term clinical endpoint",
+        "analysis_family": "treatment_response"
+      },
+      "expected": {
+        "novelty_label": "apparently_gap",
+        "go_no_go": "hold",
+        "feasibility_route": "new_concept_human_confirm"
+      },
+      "trap_tags": ["new_dictionary_concept", "human_protocol_needed"],
+      "notes": "A new concept needs a definition and extraction spec before execution."
+    },
+    {
+      "item_id": "icd_cohort_human_confirm",
+      "title": "Disease cohort can only be proposed from ICD codes",
+      "source_route": "primary_limitation",
+      "literature_idea": {
+        "population": "adult ICU patients with a specific diagnosis",
+        "exposure_or_predictor": "early physiologic trajectory",
+        "outcome": "mortality",
+        "analysis_family": "association"
+      },
+      "expected": {
+        "novelty_label": "sparse",
+        "go_no_go": "hold",
+        "feasibility_route": "icd_cohort_human_confirm"
+      },
+      "trap_tags": ["icd_cohort", "human_code_set_confirmation"],
+      "notes": "ICD route is actionable only after clinical code-set review."
+    },
+    {
+      "item_id": "other_database_route",
+      "title": "Dictionary concept exists only in another supported ICU database",
+      "source_route": "platform_gap",
+      "literature_idea": {
+        "population": "adult ICU patients",
+        "exposure_or_predictor": "concept not present in current export",
+        "outcome": "mortality",
+        "analysis_family": "association"
+      },
+      "expected": {
+        "novelty_label": "sparse",
+        "go_no_go": "hold",
+        "feasibility_route": "other_database"
+      },
+      "trap_tags": ["cross_database_feasibility", "do_not_mark_current_db_executable"],
+      "notes": "The proper next step is a database switch, not an execution attempt in the current export."
+    },
+    {
+      "item_id": "needs_outcome_operationalization",
+      "title": "Predictor and outcome resolve but outcome determinability is unknown",
+      "source_route": "review_gap",
+      "literature_idea": {
+        "population": "adult ICU patients",
+        "exposure_or_predictor": "urine output trajectory",
+        "outcome": "successful therapy liberation",
+        "analysis_family": "association"
+      },
+      "expected": {
+        "novelty_label": "sparse",
+        "go_no_go": "hold",
+        "feasibility_route": "needs_outcome_operationalization"
+      },
+      "trap_tags": ["outcome_definition", "not_database_limit"],
+      "notes": "Resolvable concepts with unknown event definition should be hold, not db-cannot-do."
+    },
+    {
+      "item_id": "measurement_bias_audit_shape",
+      "title": "Measurement-frequency bias audit as a concept-set idea",
+      "source_route": "platform_gap",
+      "literature_idea": {
+        "population": "adult ICU patients",
+        "analysis_family": "measurement_bias_audit",
+        "analysis_concepts": ["laboratory measurement frequency", "severity score", "outcome ascertainment"]
+      },
+      "expected": {
+        "novelty_label": "sparse",
+        "go_no_go": "hold",
+        "feasibility_route": "current_export_hold"
+      },
+      "trap_tags": ["concept_set_shape", "do_not_force_pairwise"],
+      "notes": "The extraction shape should stay concept-set rather than inventing a predictor-outcome pair."
+    },
+    {
+      "item_id": "score_policy_sensitivity_shape",
+      "title": "Composite-score component policy sensitivity as a concept-set idea",
+      "source_route": "platform_gap",
+      "literature_idea": {
+        "population": "adult ICU patients",
+        "analysis_family": "score_policy_sensitivity",
+        "analysis_concepts": ["score component missingness", "worst-value aggregation", "imputation policy"]
+      },
+      "expected": {
+        "novelty_label": "sparse",
+        "go_no_go": "hold",
+        "feasibility_route": "current_export_hold"
+      },
+      "trap_tags": ["concept_set_shape", "composite_score_policy"],
+      "notes": "Good idea-mining should surface score-policy questions without pretending they are effect estimates."
+    },
+    {
+      "item_id": "vague_construct_not_false_gap",
+      "title": "Vague marker/outcome language must not become an apparent gap",
+      "source_route": "review_gap",
+      "literature_idea": {
+        "population": "adult ICU patients",
+        "exposure_or_predictor": "novel biomarker",
+        "outcome": "patient-centered endpoint",
+        "analysis_family": "association"
+      },
+      "expected": {
+        "novelty_label": "crowded_but_differentiable",
+        "go_no_go": "hold",
+        "feasibility_route": "not_currently_actionable"
+      },
+      "trap_tags": ["vague_construct", "false_gap_risk", "drop_or_hold"],
+      "notes": "Low hit counts for generic placeholders are query artifacts, not novelty."
+    }
+  ]
+}

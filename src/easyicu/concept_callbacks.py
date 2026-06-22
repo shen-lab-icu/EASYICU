@@ -7364,9 +7364,216 @@ def _callback_fluid_balance_cumulative(
     )
 
 
+# --- Extended derived indices (Tier 1, 2026-06-22) --------------------------
+# Pure row-wise derivations over primitives that are 6/6 across the supported
+# databases. Each only combines existing concepts, so it is feasible wherever
+# its components are -- no new source mapping, and it turns the idea-mining
+# ``derived_concept`` hold into an executable concept. All follow the
+# anion_gap idiom: inner-join components on (id[, time]), compute row-wise,
+# drop inf/NaN, clamp to a permissive physiological window.
+def _derive_rowwise(
+    tables: Dict[str, "ICUTable"],
+    ctx: "ConceptCallbackContext",
+    *,
+    value_name: str,
+    compute,
+    lo: float,
+    hi: float,
+) -> "ICUTable":
+    merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="inner")
+    keep = id_columns + ([index_column] if index_column else [])
+    if merged.empty:
+        empty = (
+            merged[keep].copy()
+            if all(c in merged.columns for c in keep)
+            else pd.DataFrame(columns=keep)
+        )
+        empty[value_name] = pd.Series(dtype="float64")
+        return _as_icutbl(
+            empty,
+            id_columns=id_columns,
+            index_column=index_column,
+            value_column=value_name,
+        )
+    out = merged[keep].copy()
+    out[value_name] = compute(merged)
+    out = out.replace([np.inf, -np.inf], np.nan).dropna(subset=[value_name])
+    out = out[(out[value_name] >= lo) & (out[value_name] <= hi)]
+    return _as_icutbl(
+        out.reset_index(drop=True),
+        id_columns=id_columns,
+        index_column=index_column,
+        value_column=value_name,
+    )
+
+
+def _safe_div(num: pd.Series, den: pd.Series) -> pd.Series:
+    den = pd.to_numeric(den, errors="coerce")
+    return pd.to_numeric(num, errors="coerce") / den.where(den > 0)
+
+
+def _callback_shock_index(tables, ctx):
+    """Shock index = heart rate / systolic blood pressure (>=0.9 = shock)."""
+    return _derive_rowwise(
+        tables, ctx, value_name="shock_index",
+        compute=lambda m: _safe_div(m["hr"], m["sbp"]), lo=0.1, hi=3.0,
+    )
+
+
+def _callback_modified_shock_index(tables, ctx):
+    """Modified shock index = heart rate / mean arterial pressure."""
+    return _derive_rowwise(
+        tables, ctx, value_name="modified_shock_index",
+        compute=lambda m: _safe_div(m["hr"], m["map"]), lo=0.1, hi=4.0,
+    )
+
+
+def _callback_diastolic_shock_index(tables, ctx):
+    """Diastolic shock index = heart rate / diastolic blood pressure."""
+    return _derive_rowwise(
+        tables, ctx, value_name="diastolic_shock_index",
+        compute=lambda m: _safe_div(m["hr"], m["dbp"]), lo=0.1, hi=5.0,
+    )
+
+
+def _callback_bun_creatinine_ratio(tables, ctx):
+    """BUN-to-creatinine ratio (mg/dL : mg/dL). Pre-renal azotemia marker."""
+    return _derive_rowwise(
+        tables, ctx, value_name="bun_creatinine_ratio",
+        compute=lambda m: _safe_div(m["bun"], m["crea"]), lo=1.0, hi=120.0,
+    )
+
+
+def _callback_nlr(tables, ctx):
+    """Neutrophil-to-lymphocyte ratio (inflammation / stress marker)."""
+    return _derive_rowwise(
+        tables, ctx, value_name="nlr",
+        compute=lambda m: _safe_div(m["neut"], m["lymph"]), lo=0.1, hi=200.0,
+    )
+
+
+def _callback_plr(tables, ctx):
+    """Platelet-to-lymphocyte ratio."""
+    return _derive_rowwise(
+        tables, ctx, value_name="plr",
+        compute=lambda m: _safe_div(m["plt"], m["lymph"]), lo=1.0, hi=2000.0,
+    )
+
+
+def _callback_corrected_calcium(tables, ctx):
+    """Albumin-corrected calcium = Ca + 0.8 * (4 - albumin) [mg/dL, g/dL]."""
+
+    def f(m):
+        ca = pd.to_numeric(m["ca"], errors="coerce")
+        alb = pd.to_numeric(m["alb"], errors="coerce")
+        return ca + 0.8 * (4.0 - alb)
+
+    return _derive_rowwise(
+        tables, ctx, value_name="corrected_calcium", compute=f, lo=4.0, hi=16.0
+    )
+
+
+def _callback_oxygenation_index(tables, ctx):
+    """Oxygenation index = (FiO2% * mean airway pressure) / PaO2 (higher worse)."""
+
+    def f(m):
+        fio2 = pd.to_numeric(m["fio2"], errors="coerce")
+        # Normalise FiO2 to a percentage whether stored as fraction or percent.
+        fio2_pct = np.where(fio2 <= 1.5, fio2 * 100.0, fio2)
+        maw = pd.to_numeric(m["mean_airway_pres"], errors="coerce")
+        po2 = pd.to_numeric(m["po2"], errors="coerce")
+        return (fio2_pct * maw) / po2.where(po2 > 0)
+
+    return _derive_rowwise(
+        tables, ctx, value_name="oxygenation_index", compute=f, lo=0.5, hi=80.0
+    )
+
+
+def _callback_egfr(tables, ctx):
+    """eGFR by the race-free CKD-EPI 2021 creatinine equation (mL/min/1.73m2).
+
+    Creatinine is a time series but age/sex are id-level demographics, so a
+    strict (id, time) inner join drops everything. Instead the id-level
+    demographics are broadcast onto each creatinine row by id.
+    """
+    crea_t = tables.get("crea")
+    age_t = tables.get("age")
+    sex_t = tables.get("sex")
+    if crea_t is None or age_t is None or sex_t is None:
+        return _derive_rowwise(
+            tables, ctx, value_name="egfr",
+            compute=lambda m: pd.Series(np.nan, index=m.index), lo=1.0, hi=200.0,
+        )
+    base = crea_t.data.copy()
+    id_cols = [c for c in crea_t.id_columns if c in base.columns]
+    idx = crea_t.index_column
+
+    def _broadcast(frame_tbl, value_col):
+        df = frame_tbl.data
+        keys = [c for c in frame_tbl.id_columns if c in df.columns and c in id_cols]
+        if not keys or value_col not in df.columns:
+            return None
+        return df[keys + [value_col]].drop_duplicates(subset=keys), keys
+
+    age_bc = _broadcast(age_t, "age")
+    sex_bc = _broadcast(sex_t, "sex")
+    if age_bc is None or sex_bc is None:
+        empty = base[id_cols + ([idx] if idx else [])].iloc[0:0].copy()
+        empty["egfr"] = pd.Series(dtype="float64")
+        return _as_icutbl(empty, id_columns=id_cols, index_column=idx, value_column="egfr")
+    base = base.merge(age_bc[0], on=age_bc[1], how="left")
+    base = base.merge(sex_bc[0], on=sex_bc[1], how="left")
+
+    crea = pd.to_numeric(base["crea"], errors="coerce")
+    age = pd.to_numeric(base["age"], errors="coerce")
+    female = base["sex"].astype(str).str.strip().str.lower().str.startswith("f")
+    kappa = np.where(female, 0.7, 0.9)
+    alpha = np.where(female, -0.241, -0.302)
+    ratio = crea / kappa
+    egfr = (
+        142.0
+        * np.minimum(ratio, 1.0) ** alpha
+        * np.maximum(ratio, 1.0) ** (-1.200)
+        * (0.9938**age)
+        * np.where(female, 1.012, 1.0)
+    )
+    keep = id_cols + ([idx] if idx else [])
+    out = base[keep].copy()
+    out["egfr"] = egfr
+    out = out.replace([np.inf, -np.inf], np.nan).dropna(subset=["egfr"])
+    out = out[(out["egfr"] >= 1.0) & (out["egfr"] <= 200.0)]
+    return _as_icutbl(
+        out.reset_index(drop=True), id_columns=id_cols, index_column=idx, value_column="egfr"
+    )
+
+
+def _callback_persistent_critical_illness(tables, ctx):
+    """Binary outcome: ICU length of stay >= 10 days (persistent critical illness).
+
+    The canonical operationalisation of persistent critical illness -- the point
+    after which the acute illness no longer predicts mortality better than
+    antecedent characteristics. ICU LOS is 6/6 across the supported databases.
+    """
+    return _derive_rowwise(
+        tables, ctx, value_name="persistent_critical_illness",
+        compute=lambda m: (pd.to_numeric(m["los_icu"], errors="coerce") >= 10).astype(float),
+        lo=0.0, hi=1.0,
+    )
+
+
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "bmi": _callback_bmi,
     "anion_gap": _callback_anion_gap,
+    "persistent_critical_illness": _callback_persistent_critical_illness,
+    "shock_index": _callback_shock_index,
+    "modified_shock_index": _callback_modified_shock_index,
+    "diastolic_shock_index": _callback_diastolic_shock_index,
+    "bun_creatinine_ratio": _callback_bun_creatinine_ratio,
+    "nlr": _callback_nlr,
+    "plr": _callback_plr,
+    "corrected_calcium": _callback_corrected_calcium,
+    "oxygenation_index": _callback_oxygenation_index,
+    "egfr": _callback_egfr,
     "pulse_pressure": _callback_pulse_pressure,
     "avpu": _callback_avpu,
     "norepi_equiv": _callback_norepi_equiv,

@@ -70,6 +70,64 @@ DERIVED_CONCEPT_HINTS: Dict[str, Tuple[List[str], bool]] = {
     "uo_rt_6hr": (["urine output rate 6 hours"], False),
     "uo_rt_12hr": (["urine output rate 12 hours"], False),
     "uo_rt_24hr": (["urine output rate 24 hours"], False),
+    # --- Tier-1 derived indices (2026-06-22): clean clinical synonyms the
+    # dict descriptions do not spell out. Conservative — no ambiguous acronyms
+    # (e.g. no bare "SI"/"OI"/"MSI") that could mis-resolve. ---
+    "bun_creatinine_ratio": (
+        [
+            "urea-to-creatinine ratio",
+            "urea to creatinine ratio",
+            "urea creatinine ratio",
+            "UCR",
+            "BUN-to-creatinine ratio",
+            "BUN to creatinine ratio",
+            "BUN/creatinine ratio",
+            "blood urea nitrogen to creatinine ratio",
+        ],
+        False,
+    ),
+    "nlr": (["NLR"], False),
+    "plr": (
+        [
+            "platelet-to-lymphocyte ratio",
+            "platelet to lymphocyte ratio",
+            "platelet lymphocyte ratio",
+            "PLR",
+        ],
+        False,
+    ),
+    "shock_index": (["shock index"], False),
+    "modified_shock_index": (["modified shock index"], False),
+    "diastolic_shock_index": (["diastolic shock index"], False),
+    "egfr": (
+        [
+            "eGFR",
+            "estimated GFR",
+            "estimated glomerular filtration rate",
+            "glomerular filtration rate",
+            "GFR",
+        ],
+        False,
+    ),
+    "corrected_calcium": (
+        [
+            "corrected calcium",
+            "albumin-corrected calcium",
+            "albumin corrected calcium",
+            "calcium corrected for albumin",
+        ],
+        False,
+    ),
+    # NB: oxygenation_index intentionally has NO synonym hint. `_expand_synonyms`
+    # treats "oxygenation index" as equivalent to "P/F ratio"/"Horowitz index"
+    # (a pre-existing conflation owned by `pafi`); adding it here cross-pollutes
+    # oxygenation_index with pafi's identity. Until that synonym group is
+    # disentangled, oxygenation_index keeps only its formula-derived alias and
+    # "oxygenation index" continues to resolve to pafi.
+    "persistent_critical_illness": (
+        ["persistent critical illness", "prolonged ICU stay"],
+        True,
+    ),
 }
 
 # Universal medical-terminology equivalences: UK/US spelling, common brand and
@@ -227,15 +285,29 @@ def _drop_ambiguous_outcome_aliases(
             continue
         for alias in key_aliases:
             owners.setdefault(_clean(alias).lower(), set()).add(key)
+    # Aliases owned by a binary outcome are outcome PHRASES ("mortality", "AKI",
+    # "sepsis"); they must bind to that outcome and not be captured by a
+    # non-outcome concept that merely mentions the word in its description (e.g.
+    # apache_iv_pred_hosp_mort = "predicted in-hospital mortality probability"
+    # must NOT own the bare "mortality" that belongs to `death`). So a phrase a
+    # binary outcome owns is stripped from every NON-guarded concept.
+    binary_owned = set(owners)
+    # Among the binary outcomes themselves, a phrase owned by >1 is ambiguous
+    # and dropped from all of them (unchanged behaviour).
     ambiguous = {alias for alias, keys in owners.items() if len(keys) > 1}
-    if not ambiguous:
+    if not binary_owned:
         return aliases
+
+    def _keep(key: str, alias: str) -> bool:
+        a = _clean(alias).lower()
+        if a == _clean(key).lower():
+            return True  # never strip a concept's own canonical name
+        if key in guarded:
+            return a not in ambiguous
+        return a not in binary_owned
+
     return {
-        key: [
-            alias
-            for alias in key_aliases
-            if key not in guarded or _clean(alias).lower() not in ambiguous
-        ]
+        key: [alias for alias in key_aliases if _keep(key, alias)]
         for key, key_aliases in aliases.items()
     }
 
@@ -368,6 +440,17 @@ def load_concept_catalog(
             derived = _expand_synonyms(
                 _aliases_from_description(concept.get("description", ""))
             )
+            # Explicit clinical synonyms from the hints registry are merged on
+            # top of description-derived aliases. A concept can be IN the dict
+            # and still need synonyms its description never spells out (e.g.
+            # bun_creatinine_ratio's description says "BUN-to-creatinine" but
+            # the literature says "urea-to-creatinine ratio"/"UCR"; egfr needs
+            # "eGFR"/"GFR"). Without this merge, hints only applied to concepts
+            # absent from the dict.
+            if key in DERIVED_CONCEPT_HINTS:
+                derived = _expand_synonyms(
+                    _dedup([*derived, *DERIVED_CONCEPT_HINTS[key][0]])
+                )
             if derived:
                 aliases[key] = derived
             if _is_binary_outcome(concept):

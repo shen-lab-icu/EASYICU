@@ -130,6 +130,14 @@ class SourceMaterial(BaseModel):
     source_adapter_level: SourceAdapterLevel = "metadata_only"
     locator: Optional[str] = None
     source_text: Optional[str] = None
+    discovery_route: Optional[str] = None
+    source_text_role: Optional[
+        Literal[
+            "metadata_proxy", "gap_excerpt", "abstract_excerpt", "fulltext_hash_only"
+        ]
+    ] = None
+    parent_citation_key: Optional[str] = None
+    source_rank: Optional[int] = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _validate_supported_text_level(self) -> "SourceMaterial":
@@ -151,6 +159,14 @@ class SourceSnapshotItem(BaseModel):
     citation: CitationRecord
     source_adapter_level: SourceAdapterLevel
     locator: Optional[str] = None
+    discovery_route: Optional[str] = None
+    source_text_role: Optional[
+        Literal[
+            "metadata_proxy", "gap_excerpt", "abstract_excerpt", "fulltext_hash_only"
+        ]
+    ] = None
+    parent_citation_key: Optional[str] = None
+    source_rank: Optional[int] = Field(default=None, ge=1)
     source_text_sha256: Optional[str] = None
     source_text_char_count: int = Field(default=0, ge=0)
     source_text_stored: bool = False
@@ -406,6 +422,8 @@ class PriorArtAssessment(BaseModel):
     query_records: List[PriorArtQueryRecord]
     direct_same_topic_pmids: List[str] = Field(default_factory=list)
     direct_same_topic_rationales: Dict[str, str] = Field(default_factory=dict)
+    evidence_map_counts: Dict[str, int] = Field(default_factory=dict)
+    evidence_map_examples: Dict[str, List[Dict[str, str]]] = Field(default_factory=dict)
     novelty_label: NoveltyLabel
     literature_saturation_signal: float = Field(ge=0.0, le=1.0)
     novelty_statement: str
@@ -448,6 +466,9 @@ class DiscoveryCandidateRecord(BaseModel):
     # dictionary/cross-DB reachable construct. Always human-confirm; never
     # promotes to executable.
     extended_feasibility: Optional[Dict[str, Any]] = None
+    feasibility_route: Optional[str] = None
+    feasibility_next_action: Optional[str] = None
+    requires_human_confirmation: bool = True
 
 
 class DiscoveryTriageResult(BaseModel):
@@ -523,6 +544,16 @@ class IdeaMiningDryRunResult(BaseModel):
         default_factory=list
     )
     discovery_records: List[DiscoveryCandidateRecord] = Field(default_factory=list)
+    # Gap A -- SciMON-style novelty optimisation trace (empty unless the
+    # measure->revise->re-measure loop ran). Advisory provenance, never a gate.
+    novelty_optimization: List[Dict[str, Any]] = Field(default_factory=list)
+    # Gap B -- ResearchAgent-style multi-criteria validator scores per candidate
+    # (empty unless the validator ran). Advisory annotation, never a gate.
+    candidate_validation: List[Dict[str, Any]] = Field(default_factory=list)
+    # Problem 4 -- homogenization signal: candidates whose construct was already
+    # registered in a PRIOR run/user against the same shared registry. Empty when
+    # the registry was fresh. Advisory; coordination/diversification cue.
+    registry_collisions: List[Dict[str, Any]] = Field(default_factory=list)
     registry_path: str
     manifest_path: str
     triage_report_path: str

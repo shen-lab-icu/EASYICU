@@ -268,6 +268,34 @@ CONCEPT_DICTIONARY = {
 
     # 微生物
     'samp': ('Body Fluid Sampling (for infection workup)', '体液采样 (用于感染检查)', 'boolean'),
+    'culture_positive': ('Any Positive Culture', '任意培养阳性', 'boolean'),
+    'bld_culture_positive': ('Positive Blood Culture', '血培养阳性', 'boolean'),
+
+    # 严重度评分 (扩展)
+    'apache_iv': ('APACHE IVa Score', 'APACHE IVa 评分', 'points'),
+    'apache_iv_pred_hosp_mort': ('APACHE IVa Predicted Hospital Mortality', 'APACHE IVa 预测院内死亡率', 'fraction'),
+    'saps3': ('SAPS-3 Score', 'SAPS-3 评分', 'points'),
+
+    # 合并症指数
+    'charlson': ('Charlson Comorbidity Index', 'Charlson 合并症指数', 'points'),
+    'elixhauser': ('Elixhauser (van Walraven) Score', 'Elixhauser (van Walraven) 评分', 'points'),
+
+    # 复合结局终点
+    'mort_28d': ('28-day Mortality', '28天死亡率', 'boolean'),
+    'mort_90d': ('90-day Mortality', '90天死亡率', 'boolean'),
+    'mort_365d': ('1-year Mortality', '1年死亡率', 'boolean'),
+    'icu_free_days_28': ('ICU-free Days (to day 28)', 'ICU-free 天数 (至第28天)', 'days'),
+    'vent_free_days_28': ('Ventilator-free Days (to day 28)', '无机械通气天数 (至第28天)', 'days'),
+    'icu_readmission': ('ICU Readmission (same hospitalisation)', 'ICU 再入 (同次住院)', 'boolean'),
+
+    # 实验室检查 (扩展)
+    'ammonia': ('Ammonia', '氨', 'umol/L'),
+    'amylase': ('Amylase', '淀粉酶', 'U/L'),
+    'd_dimer': ('D-dimer', 'D-二聚体', 'ng/mL'),
+    'ferritin': ('Ferritin', '铁蛋白', 'ng/mL'),
+    'ldh': ('Lactate Dehydrogenase', '乳酸脱氢酶', 'U/L'),
+    'lipase': ('Lipase', '脂肪酶', 'U/L'),
+    'osmolality': ('Serum Osmolality', '血清渗透压', 'mOsm/kg'),
 }
 
 # 特征详细描述（英文和中文）
@@ -400,13 +428,13 @@ CONCEPT_GROUPS_INTERNAL = {
     'sofa1_score': ['sofa', 'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal'],
     'sepsis3_sofa2': ['sep3_sofa2'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
     'sepsis3_sofa1': ['sep3_sofa1'],  # 🔧 共享概念移到单独的 sepsis_shared 模块
-    'sepsis_shared': ['susp_inf', 'infection_icd', 'samp'],  # Sepsis共享概念（已移除sep3）
-    'vitals': ['hr', 'map', 'sbp', 'dbp', 'pulse_pressure', 'temp', 'spo2', 'resp'],  # 🔧 etco2 移到 ventilator
-    'respiratory': ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp'],
+    'sepsis_shared': ['susp_inf', 'infection_icd', 'samp', 'culture_positive', 'bld_culture_positive'],  # Sepsis共享概念（已移除sep3）
+    'vitals': ['hr', 'map', 'sbp', 'dbp', 'pulse_pressure', 'temp', 'spo2', 'resp', 'shock_index', 'modified_shock_index', 'diastolic_shock_index'],  # 🔧 etco2 移到 ventilator
+    'respiratory': ['pafi', 'safi', 'fio2', 'supp_o2', 'vent_ind', 'vent_start', 'vent_end', 'o2sat', 'sao2', 'mech_vent', 'ett_gcs', 'ecmo', 'ecmo_indication', 'adv_resp', 'oxygenation_index'],
     'ventilator': ['peep', 'tidal_vol', 'tidal_vol_set', 'pip', 'plateau_pres', 'mean_airway_pres', 'minute_vol', 'vent_rate', 'etco2', 'compliance', 'driving_pres', 'ps'],
     'blood_gas': ['be', 'cai', 'hbco', 'lact', 'methb', 'pco2', 'ph', 'po2', 'tco2'],
-    'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri'],
-    'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc'],
+    'chemistry': ['alb', 'alp', 'alt', 'ast', 'anion_gap', 'bicar', 'bili', 'bili_dir', 'bun', 'ca', 'ck', 'ckmb', 'cl', 'crea', 'crp', 'glu', 'k', 'mg', 'na', 'phos', 'tnt', 'tri', 'ammonia', 'amylase', 'd_dimer', 'ferritin', 'ldh', 'lipase', 'osmolality', 'corrected_calcium'],
+    'hematology': ['bnd', 'basos', 'eos', 'esr', 'fgn', 'hba1c', 'hct', 'hgb', 'inr_pt', 'lymph', 'mch', 'mchc', 'mcv', 'neut', 'plt', 'pt', 'ptt', 'rbc', 'rdw', 'wbc', 'nlr', 'plr'],
     'vasopressors': ['norepi_rate', 'norepi_dur', 'norepi_equiv', 'norepi60', 'epi_rate', 'epi_dur', 'epi60', 'dopa_rate', 'dopa_dur', 'dopa60', 'dobu_rate', 'dobu_dur', 'dobu60', 'adh_rate', 'phn_rate', 'vaso_ind', 'other_vaso'],
     'medications': ['abx', 'albumin_iv', 'bicarbonate', 'calcium_iv', 'cort', 'dex', 'dexamethasone', 'dextrose50', 'ffp', 'ins', 'amiodarone', 'cisatracurium', 'dexmedetomidine', 'fentanyl', 'fentanyl_rate', 'furosemide', 'heparin', 'ketamine', 'levetiracetam', 'lorazepam', 'magnesium_iv', 'mannitol', 'meropenem', 'midazolam', 'midazolam_rate', 'milrinone', 'morphine', 'neostigmine', 'nitroglycerin', 'octreotide', 'packed_rbc', 'pantoprazole', 'platelets', 'potassium_iv', 'propofol', 'propofol_rate', 'rocuronium', 'vancomycin', 'vecuronium', 'apixaban', 'aspirin', 'diltiazem', 'enoxaparin', 'esmolol', 'insulin', 'labetalol', 'nicardipine', 'phenytoin', 'warfarin'],
     # 🔧 2026-02-04: 移除重复的 kdigo_aki/kdigo_creat/kdigo_uo，只保留 aki_* 规范名
@@ -414,12 +442,14 @@ CONCEPT_GROUPS_INTERNAL = {
               # 规范化后的列名（从 kdigo_* 展开列规范化而来）
               'creat_low_past_48hr', 'creat_low_past_7day', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
               # 液体平衡（入量/出量衍生）
-              'fluid_balance', 'fluid_balance_cumulative', 'total_input_ml'],
+              'fluid_balance', 'fluid_balance_cumulative', 'total_input_ml',
+              # 衍生肾功能指数 (Tier 1, 2026-06-22)
+              'bun_creatinine_ratio', 'egfr'],
     'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event'],  # 🔧 添加循环衰竭特征
     'demographics': ['age', 'bmi', 'height', 'sex', 'weight', 'adm'],
-    'other_scores': ['qsofa', 'sirs', 'mews', 'news'],
-    'outcome': ['death', 'los_icu', 'los_hosp'],
+    'other_scores': ['qsofa', 'sirs', 'mews', 'news', 'apache_iv', 'apache_iv_pred_hosp_mort', 'saps3', 'charlson', 'elixhauser'],
+    'outcome': ['death', 'los_icu', 'los_hosp', 'mort_28d', 'mort_90d', 'mort_365d', 'icu_free_days_28', 'vent_free_days_28', 'icu_readmission', 'persistent_critical_illness'],
 }
 
 # Canonical web concepts that are produced by composite loaders rather than by
@@ -441,6 +471,19 @@ COMPOSITE_CONCEPT_OUTPUT_SOURCES = {
     'circ_event': 'circ_failure_loader',
     'circ_failure': 'circ_failure_loader',
     'sep3_sofa1': 'sep3',
+    # Comorbidity indices (easyicu.comorbidity.load_comorbidity)
+    'charlson': 'comorbidity_loader',
+    'elixhauser': 'comorbidity_loader',
+    # Composite outcome endpoints (easyicu.outcomes.load_outcomes)
+    'mort_28d': 'outcomes_loader',
+    'mort_90d': 'outcomes_loader',
+    'mort_365d': 'outcomes_loader',
+    'icu_free_days_28': 'outcomes_loader',
+    'vent_free_days_28': 'outcomes_loader',
+    'icu_readmission': 'outcomes_loader',
+    # Microbiology culture positivity (easyicu.microbiology.load_microbiology)
+    'culture_positive': 'microbiology_loader',
+    'bld_culture_positive': 'microbiology_loader',
 }
 
 # Concepts present in the extraction dictionary but intentionally hidden from

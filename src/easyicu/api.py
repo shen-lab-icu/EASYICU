@@ -904,10 +904,23 @@ def load_concepts(
                       'aki_stage_rrt', 'uo_rt_6hr', 'uo_rt_12hr', 'uo_rt_24hr',
                       'creat_low_past_48hr', 'creat_low_past_7day'}
     _CIRC_OUTPUTS = {'circ_failure', 'circ_event'}
+    # Comorbidity indices live in comorbidity.py (ICD code-set matching over
+    # the diagnosis table), not concept-dict.json — route like kdigo/circ.
+    _COMORB_OUTPUTS = {'charlson', 'elixhauser'}
+    # Composite outcome endpoints (outcomes.py) — fixed-horizon mortality etc.
+    _OUTCOME_OUTPUTS = {'mort_28d', 'mort_90d', 'mort_365d',
+                        'icu_free_days_28', 'icu_readmission',
+                        'vent_free_days_28'}
+    # Microbiology culture-positivity (microbiology.py).
+    _MICRO_OUTPUTS = {'culture_positive', 'bld_culture_positive'}
     _requested = set(concepts_list)
     _need_kdigo = _requested & _KDIGO_OUTPUTS
     _need_circ = _requested & _CIRC_OUTPUTS
-    _special = _need_kdigo | _need_circ
+    _need_comorb = _requested & _COMORB_OUTPUTS
+    _need_outcome = _requested & _OUTCOME_OUTPUTS
+    _need_micro = _requested & _MICRO_OUTPUTS
+    _special = (_need_kdigo | _need_circ | _need_comorb
+                | _need_outcome | _need_micro)
     if _special:
         # Pull special concepts out of the list passed to the resolver.
         concepts_list = [c for c in concepts_list if c not in _special]
@@ -1441,6 +1454,69 @@ def load_concepts(
                             special_dict[c] = cf_df[id_time + [c]].copy()
             except Exception as e:
                 logger.warning(f"load_circ_failure failed: {e}")
+        if _need_comorb:
+            # 'charlson' -> charlson_index, 'elixhauser' -> elixhauser_vw.
+            # The full per-condition flags remain available via
+            # easyicu.comorbidity.load_comorbidity(...).
+            from .comorbidity import load_comorbidity
+            _comorb_index_col = {'charlson': 'charlson_index',
+                                 'elixhauser': 'elixhauser_vw'}
+            for c in _need_comorb:
+                try:
+                    como = load_comorbidity(
+                        database, data_path=str(data_path) if data_path else None,
+                        system=c, patient_ids=patient_ids if isinstance(patient_ids, list) else None,
+                        verbose=verbose,
+                    )
+                except Exception as e:
+                    logger.warning(f"load_comorbidity({c}) failed: {e}")
+                    continue
+                if not isinstance(como, pd.DataFrame) or como.empty:
+                    continue
+                id_cols = [col for col in ('stay_id', 'icustay_id',
+                                           'patientunitstayid', 'CaseID')
+                           if col in como.columns]
+                src_col = _comorb_index_col[c]
+                if src_col in como.columns and id_cols:
+                    col = como[id_cols + [src_col]].rename(columns={src_col: c})
+                    special_dict[c] = col.copy()
+        if _need_outcome:
+            from .outcomes import load_outcomes
+            try:
+                oc = load_outcomes(
+                    database, data_path=str(data_path) if data_path else None,
+                    patient_ids=patient_ids if isinstance(patient_ids, list) else None,
+                    verbose=verbose,
+                )
+            except Exception as e:
+                logger.warning(f"load_outcomes failed: {e}")
+                oc = None
+            if isinstance(oc, pd.DataFrame) and not oc.empty:
+                id_cols = [col for col in ('stay_id', 'icustay_id',
+                                           'patientunitstayid', 'CaseID',
+                                           'admissionid')
+                           if col in oc.columns]
+                for c in _need_outcome:
+                    if c in oc.columns and id_cols:
+                        special_dict[c] = oc[id_cols + [c]].copy()
+        if _need_micro:
+            from .microbiology import load_microbiology
+            try:
+                mic = load_microbiology(
+                    database, data_path=str(data_path) if data_path else None,
+                    patient_ids=patient_ids if isinstance(patient_ids, list) else None,
+                    verbose=verbose,
+                )
+            except Exception as e:
+                logger.warning(f"load_microbiology failed: {e}")
+                mic = None
+            if isinstance(mic, pd.DataFrame) and not mic.empty:
+                id_cols = [col for col in ('stay_id', 'icustay_id',
+                                           'patientunitstayid')
+                           if col in mic.columns]
+                for c in _need_micro:
+                    if c in mic.columns and id_cols:
+                        special_dict[c] = mic[id_cols + [c]].copy()
 
         if special_dict:
             if not merge:

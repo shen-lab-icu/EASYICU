@@ -94,7 +94,10 @@ NPJ_DM_2026_06 = SubmissionProfile(
     requires_runner="docker",
     # Locked after the 2026-06-09 concept coverage and tracker audit refresh
     # that added the SICdb ventilation mapping and SOFA-2 dictionary updates.
-    expected_concept_dict_sha="85bf8b5fd819881e41b4ba57167ca664db5ec5b83e8524e40291bb9c56a719df",
+    # Re-locked 2026-06-22: the 22 extended-feature concepts (severity scores,
+    # extra labs, comorbidity/microbiology/outcome loaders, and the 10 Tier-1
+    # derived indices) are now part of the frozen submission dictionary.
+    expected_concept_dict_sha="27abe6841ae3a3e6be14cb91635d8352e20d4343319128b8af50981354c0c611",
     expected_sofa2_dict_sha="22c4de886b6cb98ccb9145ce9e310780cb1b9b3feaf7a0c3f8b283647e4777b5",
 )
 

@@ -14687,5 +14687,654 @@
         }
       ]
     }
+  },
+  "apache_iv": {
+    "target": "id_tbl",
+    "unit": "points",
+    "min": 0,
+    "max": 286,
+    "description": "APACHE IVa severity score (eICU native, scored on first ICU day)",
+    "category": "severity",
+    "_provenance": "eICU apachePatientResult.apacheScore where apacheVersion='IVa'; -1 sentinel is dropped by the min bound. Native, not recomputed.",
+    "sources": {
+      "eicu": [
+        {
+          "table": "apachepatientresult",
+          "sub_var": "apacheversion",
+          "ids": "IVa",
+          "val_var": "apachescore",
+          "callback": "transform_fun(na_below(0))",
+          "class_name": "col_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "table": "apachepatientresult",
+          "sub_var": "apacheversion",
+          "ids": "IVa",
+          "val_var": "apachescore",
+          "callback": "transform_fun(na_below(0))",
+          "class_name": "col_itm"
+        }
+      ]
+    }
+  },
+  "apache_iv_pred_hosp_mort": {
+    "target": "id_tbl",
+    "unit": "fraction",
+    "min": 0,
+    "max": 1,
+    "description": "APACHE IVa predicted in-hospital mortality probability (eICU native)",
+    "category": "severity",
+    "_provenance": "eICU apachePatientResult.predictedHospitalMortality where apacheVersion='IVa'; -1 sentinel dropped by min bound.",
+    "sources": {
+      "eicu": [
+        {
+          "table": "apachepatientresult",
+          "sub_var": "apacheversion",
+          "ids": "IVa",
+          "val_var": "predictedhospitalmortality",
+          "callback": "transform_fun(na_below(0))",
+          "class_name": "col_itm"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "table": "apachepatientresult",
+          "sub_var": "apacheversion",
+          "ids": "IVa",
+          "val_var": "predictedhospitalmortality",
+          "callback": "transform_fun(na_below(0))",
+          "class_name": "col_itm"
+        }
+      ]
+    }
+  },
+  "saps3": {
+    "target": "id_tbl",
+    "unit": "points",
+    "min": 0,
+    "max": 217,
+    "description": "SAPS-3 admission severity score (SICdb native)",
+    "category": "severity",
+    "_provenance": "SICdb cases.saps3. Native admission score, not recomputed.",
+    "sources": {
+      "sic": [
+        {
+          "table": "cases",
+          "val_var": "saps3",
+          "class_name": "col_itm"
+        }
+      ]
+    }
+  },
+  "ammonia": {
+    "unit": "umol/L",
+    "min": 0,
+    "max": 1000,
+    "description": "ammonia (blood)",
+    "category": "chemistry",
+    "_provenance": "itemids verified against real MIMIC-III/IV d_labitems; eICU labname verified against real lab table. SICdb/AmsterdamUMC pending reference mapping.",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50866,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50866,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50866,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "ammonia",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "ammonia",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 279,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            6805,
+            10052
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ]
+    }
+  },
+  "amylase": {
+    "unit": "U/L",
+    "min": 0,
+    "max": 3000,
+    "description": "amylase (blood)",
+    "category": "chemistry",
+    "_provenance": "itemids verified against real MIMIC-III/IV d_labitems; eICU labname verified against real lab table. SICdb/AmsterdamUMC pending reference mapping.",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50867,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50867,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50867,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "amylase",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "amylase",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 608,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            6845,
+            11986
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ]
+    }
+  },
+  "d_dimer": {
+    "unit": "ng/mL",
+    "min": 0,
+    "max": 50000,
+    "description": "D-dimer (blood)",
+    "category": "chemistry",
+    "_provenance": "itemids verified against real MIMIC-III/IV d_labitems; eICU labname verified against real lab table. SICdb/AmsterdamUMC pending reference mapping. d_dimer kept MIMIC-only: SIC/AUMC report mg/L (FEU) vs MIMIC ng/mL (DDU) — not unit-comparable.",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50915,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50915,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50915,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ]
+    }
+  },
+  "ferritin": {
+    "unit": "ng/mL",
+    "min": 0,
+    "max": 100000,
+    "description": "ferritin (blood)",
+    "category": "chemistry",
+    "_provenance": "itemids verified against real MIMIC-III/IV d_labitems; eICU labname verified against real lab table. SICdb/AmsterdamUMC pending reference mapping.",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50924,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50924,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50924,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "Ferritin",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "Ferritin",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 259,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            6971,
+            10162
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ]
+    }
+  },
+  "ldh": {
+    "unit": "U/L",
+    "min": 0,
+    "max": 20000,
+    "description": "lactate dehydrogenase (blood)",
+    "category": "chemistry",
+    "_provenance": "itemids verified against real MIMIC-III/IV d_labitems; eICU labname verified against real lab table. SICdb/AmsterdamUMC pending reference mapping.",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50954,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50954,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50954,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "LDH",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "LDH",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 622,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            6838
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ]
+    }
+  },
+  "lipase": {
+    "unit": "U/L",
+    "min": 0,
+    "max": 20000,
+    "description": "lipase (blood)",
+    "category": "chemistry",
+    "_provenance": "itemids verified against real MIMIC-III/IV d_labitems; eICU labname verified against real lab table. SICdb/AmsterdamUMC pending reference mapping.",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50956,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50956,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50956,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "lipase",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "lipase",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 623,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            7810,
+            12043
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ]
+    }
+  },
+  "osmolality": {
+    "unit": "mOsm/kg",
+    "min": 100,
+    "max": 500,
+    "description": "serum osmolality, measured",
+    "category": "chemistry",
+    "_provenance": "itemids verified against real MIMIC-III/IV d_labitems; eICU labname verified against real lab table. SICdb/AmsterdamUMC pending reference mapping.",
+    "sources": {
+      "miiv": [
+        {
+          "ids": 50964,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic": [
+        {
+          "ids": 50964,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "mimic_demo": [
+        {
+          "ids": 50964,
+          "table": "labevents",
+          "sub_var": "itemid"
+        }
+      ],
+      "eicu": [
+        {
+          "ids": "serum osmolality",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "eicu_demo": [
+        {
+          "ids": "serum osmolality",
+          "table": "lab",
+          "sub_var": "labname"
+        }
+      ],
+      "sic": [
+        {
+          "ids": 476,
+          "table": "laboratory",
+          "sub_var": "LaboratoryID"
+        }
+      ],
+      "aumc": [
+        {
+          "ids": [
+            7008,
+            11918
+          ],
+          "table": "numericitems",
+          "sub_var": "itemid"
+        }
+      ]
+    }
+  },
+  "shock_index": {
+    "min": 0.1,
+    "max": 3.0,
+    "description": "shock index = heart rate / systolic blood pressure",
+    "category": "cardiovascular",
+    "concepts": [
+      "hr",
+      "sbp"
+    ],
+    "aggregate": [
+      "max"
+    ],
+    "callback": "shock_index",
+    "class_name": "rec_cncpt"
+  },
+  "modified_shock_index": {
+    "min": 0.1,
+    "max": 4.0,
+    "description": "modified shock index = heart rate / mean arterial pressure",
+    "category": "cardiovascular",
+    "concepts": [
+      "hr",
+      "map"
+    ],
+    "aggregate": [
+      "max"
+    ],
+    "callback": "modified_shock_index",
+    "class_name": "rec_cncpt"
+  },
+  "diastolic_shock_index": {
+    "min": 0.1,
+    "max": 5.0,
+    "description": "diastolic shock index = heart rate / diastolic blood pressure",
+    "category": "cardiovascular",
+    "concepts": [
+      "hr",
+      "dbp"
+    ],
+    "aggregate": [
+      "max"
+    ],
+    "callback": "diastolic_shock_index",
+    "class_name": "rec_cncpt"
+  },
+  "bun_creatinine_ratio": {
+    "unit": [
+      "ratio"
+    ],
+    "min": 1.0,
+    "max": 120.0,
+    "description": "BUN-to-creatinine ratio (pre-renal azotemia marker)",
+    "category": "renal",
+    "concepts": [
+      "bun",
+      "crea"
+    ],
+    "aggregate": [
+      "max"
+    ],
+    "callback": "bun_creatinine_ratio",
+    "class_name": "rec_cncpt"
+  },
+  "nlr": {
+    "unit": [
+      "ratio"
+    ],
+    "min": 0.1,
+    "max": 200.0,
+    "description": "neutrophil-to-lymphocyte ratio",
+    "category": "hematology",
+    "concepts": [
+      "neut",
+      "lymph"
+    ],
+    "aggregate": [
+      "max"
+    ],
+    "callback": "nlr",
+    "class_name": "rec_cncpt"
+  },
+  "plr": {
+    "unit": [
+      "ratio"
+    ],
+    "min": 1.0,
+    "max": 2000.0,
+    "description": "platelet-to-lymphocyte ratio",
+    "category": "hematology",
+    "concepts": [
+      "plt",
+      "lymph"
+    ],
+    "aggregate": [
+      "max"
+    ],
+    "callback": "plr",
+    "class_name": "rec_cncpt"
+  },
+  "corrected_calcium": {
+    "unit": [
+      "mg/dL"
+    ],
+    "min": 4.0,
+    "max": 16.0,
+    "description": "albumin-corrected calcium = Ca + 0.8*(4 - albumin)",
+    "category": "chemistry",
+    "concepts": [
+      "ca",
+      "alb"
+    ],
+    "aggregate": [
+      "min",
+      "max"
+    ],
+    "callback": "corrected_calcium",
+    "class_name": "rec_cncpt"
+  },
+  "oxygenation_index": {
+    "min": 0.5,
+    "max": 80.0,
+    "description": "oxygenation index = (FiO2% * mean airway pressure) / PaO2",
+    "category": "respiratory",
+    "concepts": [
+      "fio2",
+      "mean_airway_pres",
+      "po2"
+    ],
+    "aggregate": [
+      "max"
+    ],
+    "callback": "oxygenation_index",
+    "class_name": "rec_cncpt"
+  },
+  "egfr": {
+    "unit": [
+      "mL/min/1.73m2"
+    ],
+    "min": 1.0,
+    "max": 200.0,
+    "description": "estimated GFR, race-free CKD-EPI 2021 creatinine equation",
+    "category": "renal",
+    "concepts": [
+      "crea",
+      "age",
+      "sex"
+    ],
+    "aggregate": [
+      "min"
+    ],
+    "callback": "egfr",
+    "class_name": "rec_cncpt"
+  },
+  "persistent_critical_illness": {
+    "min": 0,
+    "max": 1,
+    "description": "persistent critical illness (ICU length of stay >= 10 days)",
+    "category": "outcome",
+    "concepts": [
+      "los_icu"
+    ],
+    "aggregate": [
+      "max"
+    ],
+    "callback": "persistent_critical_illness",
+    "class_name": "rec_cncpt"
   }
 }
