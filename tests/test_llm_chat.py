@@ -666,3 +666,71 @@ def test_compacted_history_resets_stale_summary_after_clear(monkeypatch):
     assert state[llm_chat.COPILOT_CTX_SUMMARY_COUNT_KEY] == 0
     assert state[llm_chat.COPILOT_CTX_SUMMARY_KEY] == ""
     assert payload == [{"role": "user", "content": "fresh"}]
+
+
+# ---------------------------------------------------------------------------
+# Token-aware budgeting (provider-window-derived history budget)
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_tokens_nonzero_and_scales_with_length():
+    assert llm_chat._estimate_tokens("") == 0
+    short = llm_chat._estimate_tokens("hello world")
+    long = llm_chat._estimate_tokens("hello world " * 200)
+    assert short >= 1
+    assert long > short
+
+
+def test_provider_context_window_env_override(monkeypatch):
+    monkeypatch.setattr(llm_chat, "st", SimpleNamespace(session_state=_State({})))
+    monkeypatch.setenv("EASYICU_COPILOT_CONTEXT_WINDOW", "12345")
+    assert llm_chat._provider_context_window() == 12345
+
+
+def test_provider_context_window_matches_model_substring(monkeypatch):
+    monkeypatch.delenv("EASYICU_COPILOT_CONTEXT_WINDOW", raising=False)
+    state = _State({"llm_provider": "openai", "llm_model": "gpt-4o-mini"})
+    monkeypatch.setattr(llm_chat, "st", SimpleNamespace(session_state=state))
+    assert llm_chat._provider_context_window() == llm_chat.COPILOT_MODEL_CONTEXT_WINDOWS["gpt-4o"]
+
+
+def test_provider_context_window_unknown_falls_back_to_default(monkeypatch):
+    monkeypatch.delenv("EASYICU_COPILOT_CONTEXT_WINDOW", raising=False)
+    state = _State({"llm_provider": "openai", "llm_model": "some-unlisted-model-xyz"})
+    monkeypatch.setattr(llm_chat, "st", SimpleNamespace(session_state=state))
+    assert llm_chat._provider_context_window() == llm_chat.COPILOT_CONTEXT_WINDOW_DEFAULT
+
+
+def test_history_token_budget_tracks_window(monkeypatch):
+    monkeypatch.setenv("EASYICU_COPILOT_CONTEXT_WINDOW", "8192")
+    monkeypatch.setattr(llm_chat, "st", SimpleNamespace(session_state=_State({})))
+    small = llm_chat._copilot_history_token_budget()
+    monkeypatch.setenv("EASYICU_COPILOT_CONTEXT_WINDOW", "200000")
+    large = llm_chat._copilot_history_token_budget()
+    assert large > small
+    # never below the floor
+    monkeypatch.setenv("EASYICU_COPILOT_CONTEXT_WINDOW", "100")
+    assert llm_chat._copilot_history_token_budget() == llm_chat.COPILOT_HISTORY_TOKEN_BUDGET_FLOOR
+
+
+def test_token_mode_compaction_keeps_more_history_for_larger_window(monkeypatch):
+    msgs = [{"role": "user", "content": "word " * 200} for _ in range(60)]
+
+    def run_with_window(win: int) -> int:
+        state = _State({"llm_messages": list(msgs), "language": "en"})
+        monkeypatch.setattr(llm_chat, "st", SimpleNamespace(session_state=state))
+        monkeypatch.setenv("EASYICU_COPILOT_CONTEXT_WINDOW", str(win))
+        payload = llm_chat._compacted_history_for_payload(
+            summarizer=lambda prior, block: "S",
+            budget=llm_chat._copilot_history_token_budget(),
+            size_fn=llm_chat._message_token_size,
+            summary_sizer=llm_chat._estimate_tokens,
+            min_tail=llm_chat.COPILOT_HISTORY_MIN_TAIL_TOKENS,
+            summary_cap=llm_chat.COPILOT_HISTORY_SUMMARY_MAX_TOKENS,
+        )
+        # count real (non-summary) turns retained
+        return sum(1 for m in payload if not str(m.get("content", "")).startswith(("Summary of earlier", "早先对话摘要")))
+
+    kept_small = run_with_window(8192)
+    kept_large = run_with_window(200000)
+    assert kept_large > kept_small  # bigger window -> more raw history retained
