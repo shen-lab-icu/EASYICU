@@ -3620,17 +3620,33 @@ def _extract_special_worker(
         if id_col and time_col and 'susp_inf' in merged.columns:
             susp = merged['susp_inf'].fillna(0).astype(bool)
 
+            # Sepsis-3 = a >=2-point SOFA increase WITHIN the suspected-infection
+            # window (delta rule, R ricu sep3), NOT an absolute SOFA>=2. Use the
+            # shared sep3()/sep3_sofa2() so both labels match load_sepsis3 and the
+            # module export (unified to delta 2026-06-22).
             if need_sofa1 and 'sofa' in merged.columns:
-                merged['sep3_sofa1'] = (susp & (merged['sofa'].fillna(0) >= 2)).astype(int)
-                result = merged.loc[susp, [id_col, time_col, 'sep3_sofa1']].copy()
+                from .sepsis import sep3 as _sep3
+                result = _sep3(
+                    merged[[id_col, time_col, 'sofa']],
+                    merged[[id_col, time_col, 'susp_inf']],
+                    id_cols=[id_col], index_col=time_col,
+                ).rename(columns={'sep3': 'sep3_sofa1'})
+                if 'sep3_sofa1' in result.columns:
+                    result['sep3_sofa1'] = result['sep3_sofa1'].fillna(0).astype(int)
                 if len(result) > 0:
                     path = os.path.join(output_dir, 'sep3_sofa1.parquet')
                     result.to_parquet(path, index=False, engine='pyarrow')
                     saved['sep3_sofa1'] = {'path': path, 'rows': len(result)}
 
             if need_sofa2 and 'sofa2' in merged.columns:
-                merged['sep3_sofa2'] = (susp & (merged['sofa2'].fillna(0) >= 2)).astype(int)
-                result = merged.loc[susp, [id_col, time_col, 'sep3_sofa2']].copy()
+                from .sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
+                result = _sep3_sofa2(
+                    merged[[id_col, time_col, 'sofa2']],
+                    merged[[id_col, time_col, 'susp_inf']],
+                    id_cols=[id_col], index_col=time_col,
+                )
+                if 'sep3_sofa2' in result.columns:
+                    result['sep3_sofa2'] = result['sep3_sofa2'].fillna(0).astype(int)
                 if len(result) > 0:
                     path = os.path.join(output_dir, 'sep3_sofa2.parquet')
                     result.to_parquet(path, index=False, engine='pyarrow')
