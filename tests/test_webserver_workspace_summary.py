@@ -1097,13 +1097,97 @@ def test_full_agent_external_provider_uses_adapter_after_opt_in_and_credentials(
     assert captured["url"] == "http://127.0.0.1:9999/v1/chat/completions"
     assert captured["request"]["model"] == "test-model"
     assert captured["request"]["max_tokens"] == 768
+    assert captured["request"]["response_format"] == {"type": "json_object"}
+    assert "text" not in captured["request"]
     assert captured["request"]["easyicu_policy"]["patient_rows_excluded"] is True
     assert captured["request"]["easyicu_policy"]["max_external_calls_per_run"] == 1
     assert captured["request"]["easyicu_policy"]["max_output_tokens"] == 768
+    assert captured["request"]["easyicu_policy"]["json_format_style"] == "chat"
     artifact_paths = {Path(item["path"]).name: Path(item["path"]) for item in result["artifacts"]}
     draft = json.loads(artifact_paths["manuscript_draft.json"].read_text(encoding="utf-8"))
     assert draft["status"] == "locked_until_human_signoff"
     assert "http://127.0.0.1:9999/v1" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_provider_adapter_can_use_responses_json_format_style() -> None:
+    captured = {}
+
+    def fake_transport(request, headers):
+        captured["request"] = request
+        captured["headers"] = headers
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "agent_plan": [{"id": "step_001", "title": "Review aggregate snapshot"}],
+                                "manuscript_draft": {
+                                    "claims": [
+                                        {
+                                            "id": "c1",
+                                            "text": "Bound aggregate claim.",
+                                            "evidence_ids": ["run_context.json"],
+                                        }
+                                    ],
+                                    "sentences": [
+                                        {
+                                            "id": "s1",
+                                            "text": "Bound aggregate sentence.",
+                                            "evidence_ids": ["cohort_summary.json"],
+                                        }
+                                    ],
+                                },
+                            }
+                        )
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        }
+
+    result = provider_adapter.generate_bound_provider_payload(
+        provider_meta={
+            "provider": "openai",
+            "external": True,
+            "external_calls": 0,
+            "provider_gate_order": ["credentials_loaded"],
+        },
+        run_id="run_test",
+        study_id="sepsis",
+        question="bounded draft",
+        summary={"stays": 3},
+        cohort={"survived": 2, "deceased": 1},
+        quality=[],
+        transport=fake_transport,
+        environ={
+            "OPENAI_API_KEY": "sk-test-responses-format",
+            "OPENAI_BASE_URL": "http://127.0.0.1:8787/v1",
+            "OPENAI_MODEL": "gpt-test",
+            "EASYICU_LLM_JSON_FORMAT_STYLE": "responses",
+        },
+    )
+
+    assert captured["headers"]["Authorization"] == "Bearer sk-test-responses-format"
+    format_spec = captured["request"]["text"]["format"]
+    assert format_spec["type"] == "json_schema"
+    assert format_spec["name"] == "easyicu_agent_run"
+    assert format_spec["strict"] is True
+    draft_schema = format_spec["schema"]["properties"]["manuscript_draft"]
+    claim_schema = draft_schema["properties"]["claims"]["items"]
+    assert claim_schema["required"] == ["id", "text", "evidence_ids"]
+    assert claim_schema["properties"]["evidence_ids"]["minItems"] == 1
+    assert claim_schema["properties"]["evidence_ids"]["items"]["enum"] == [
+        "run_context.json",
+        "cohort_summary.json",
+        "quality_gate.json",
+    ]
+    assert "response_format" not in captured["request"]
+    assert "agent_plan must be an object, not an array" in captured["request"]["messages"][0]["content"]
+    assert captured["request"]["easyicu_policy"]["json_format_style"] == "responses"
+    assert result["agent_plan"]["steps"][0]["id"] == "step_001"
+    assert result["provider"]["json_format_style"] == "responses"
+    assert result["provider"]["external_calls"] == 1
 
 
 def test_full_agent_external_provider_strict_gate_blocks_unbound_claims(

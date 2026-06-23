@@ -135,10 +135,15 @@ def safety_failures(summary: Dict[str, Any]) -> List[str]:
     provider = summary.get("provider") if isinstance(summary.get("provider"), dict) else {}
     gate = summary.get("gate") if isinstance(summary.get("gate"), dict) else {}
     privacy = summary.get("privacy") if isinstance(summary.get("privacy"), dict) else {}
+    strict = summary.get("strict_evidence") if isinstance(summary.get("strict_evidence"), dict) else {}
     if provider.get("external_calls") != 1:
         failures.append("expected exactly one external provider call")
     if provider.get("client_constructed") is not True:
         failures.append("provider client was not constructed")
+    if strict.get("claims_passed") is not True:
+        failures.append("strict evidence claims did not pass")
+    if strict.get("sentences_passed") is not True:
+        failures.append("strict evidence sentences did not pass")
     if gate.get("reportable") is not False:
         failures.append("gate.reportable must remain false")
     if gate.get("draft_unlocked") is not False:
