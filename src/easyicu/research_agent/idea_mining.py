@@ -1225,10 +1225,18 @@ def _default_mortality_outcome(
     return None
 
 
-# Minimum resolvable concepts a concept-set family needs to be executable.
-# Clustering/phenotyping needs >=2 variables to define a space; descriptive and
-# data-quality audits are meaningful on a single resolvable concept.
-_CONCEPT_SET_MIN_RESOLVED = {"trajectory_clustering": 2}
+# Minimum DISTINCT resolvable concepts a concept-set family needs to be
+# executable. A concept SET is a multi-variable analysis, so the default floor is
+# 2: a "set" that resolves to a single concept (or whose many named terms all
+# collapse to one concept, e.g. seven fluid terms -> fluid_balance) is NOT the
+# analysis the literature idea described and must not be flagged executable.
+# Single-variable threshold/policy families legitimately operate on one concept
+# (e.g. a UCR cutoff sensitivity), so they keep a floor of 1.
+_CONCEPT_SET_DEFAULT_MIN_RESOLVED = 2
+_CONCEPT_SET_MIN_RESOLVED = {
+    "score_policy_sensitivity": 1,
+    "cohort_definition_sensitivity": 1,
+}
 
 
 def _concept_set_research_question(
@@ -1276,7 +1284,9 @@ def _map_concept_set_candidate(
             resolved.append(key)
 
     named_count = len([c for c in candidate.analysis_concepts if str(c).strip()])
-    min_required = _CONCEPT_SET_MIN_RESOLVED.get(family, 1)
+    min_required = _CONCEPT_SET_MIN_RESOLVED.get(
+        family, _CONCEPT_SET_DEFAULT_MIN_RESOLVED
+    )
     reasons: List[str] = []
     if len(resolved) < min_required:
         reasons.append(

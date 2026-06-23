@@ -46,6 +46,9 @@ sys.path.insert(0, str(REPO / "tools"))
 
 from easyicu.research_agent.concept_catalog import load_concept_catalog  # noqa: E402
 from easyicu.research_agent.data_catalog import build_available_catalog  # noqa: E402
+from easyicu.research_agent.concept_catalog import (  # noqa: E402
+    normalize_concept_name,
+)
 from easyicu.research_agent.idea_mining import (  # noqa: E402
     OutcomeDeterminability,
     run_idea_mining_dry_run,
@@ -86,6 +89,11 @@ PROGNOSTIC_QUERY = (
 
 
 def _build_column_index() -> dict[str, str]:
+    """Map every export column to its file, PLUS a canonical alias for each so a
+    resolved concept name finds the column even when the export uses the raw name
+    (e.g. the resolver canonicalizes ``aki`` -> ``kdigo_aki`` but the renal module
+    exports the column as ``aki``). Without the canonical alias, AKI-outcome ideas
+    silently mis-probe as "absent"."""
     idx: dict[str, str] = {}
     for f in sorted(glob.glob(str(EXPORT / "*.parquet"))):
         try:
@@ -96,16 +104,30 @@ def _build_column_index() -> dict[str, str]:
             continue
         for c in names:
             idx.setdefault(c, f)  # first file that carries the column
+            canon = normalize_concept_name(c)
+            if canon and canon != c:
+                idx.setdefault(canon, f)  # e.g. 'kdigo_aki' -> the 'aki' file
     return idx
 
 
 def _present_stays(col_index: dict[str, str], concept: str) -> Optional[set]:
-    """stay_ids with >=1 non-null observation of `concept`, or None if absent."""
-    f = col_index.get(concept)
+    """stay_ids with >=1 non-null observation of `concept`, or None if absent.
+
+    Resolves the concept to its actual export column, accepting the resolver's
+    canonical form (``kdigo_aki``) for a raw export column (``aki``)."""
+    f = col_index.get(concept) or col_index.get(normalize_concept_name(concept))
     if f is None:
         return None
-    df = pd.read_parquet(f, columns=["stay_id", concept])
-    present = df.loc[df[concept].notna(), "stay_id"].dropna().unique()
+    # find the actual column physically present in that file
+    names = pq.read_schema(f).names
+    col = concept if concept in names else next(
+        (c for c in names if normalize_concept_name(c) == normalize_concept_name(concept)),
+        None,
+    )
+    if col is None:
+        return None
+    df = pd.read_parquet(f, columns=["stay_id", col])
+    present = df.loc[df[col].notna(), "stay_id"].dropna().unique()
     return set(present.tolist())
 
 
@@ -131,12 +153,20 @@ def make_export_feasibility_probe(
     ) -> Mapping[str, Any]:
         out: dict[str, Any] = {}
         present = {c: _stays(c) for c in concepts}
-        # joint = stays present for EVERY requested concept that exists in data
-        usable = [s for s in present.values() if s is not None]
-        joint = set(all_stays)
-        for s in usable:
-            joint &= s
-        n_joint = len(joint) if usable else 0
+        # A real joint requires EVERY requested concept to be present. If any is
+        # absent, there is no joint cohort -- n_joint MUST be 0, NOT the count
+        # over the present subset (which would fake feasibility: e.g. peep ->
+        # kdigo_aki reporting peep's 39403 while the outcome was missing). The
+        # absent concept is still omitted from `out` so the pair is flagged
+        # non-executable downstream.
+        any_absent = any(s is None for s in present.values())
+        if any_absent:
+            n_joint = 0
+        else:
+            joint = set(all_stays)
+            for s in present.values():
+                joint &= s
+            n_joint = len(joint)
         jf = (n_joint / denominator) if denominator else 0.0
         for c, s in present.items():
             if s is None:

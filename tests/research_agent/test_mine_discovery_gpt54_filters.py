@@ -104,3 +104,39 @@ def test_long_pubmed_query_retries_with_post(monkeypatch) -> None:
         "pmids": ["123"],
     }
     assert calls == [(query, 7)]
+
+
+def _write_parquet(path: Path, frame) -> None:
+    import pandas as pd  # local import keeps module load cheap
+    pd.DataFrame(frame).to_parquet(path, index=False)
+
+
+def test_probe_resolves_canonical_column_and_never_fakes_joint(tmp_path) -> None:
+    """Probe fixes (2026-06-22):
+    #1 a resolved canonical name (``kdigo_aki``) finds the raw export column
+       (``aki``); #2 when ANY requested concept is absent, n_joint is 0, never
+       the count over the present subset (which faked feasibility).
+    """
+    runner = _load_runner()
+    # Minimal export: 'death' (universe), 'peep' on 2 of 4 stays, 'aki' on 3 of 4.
+    _write_parquet(tmp_path / "outcome.parquet",
+                   {"stay_id": [1, 2, 3, 4], "death": [0, 1, 0, 1]})
+    _write_parquet(tmp_path / "vent.parquet",
+                   {"stay_id": [1, 2, 3, 4], "peep": [5.0, 8.0, None, None]})
+    _write_parquet(tmp_path / "renal.parquet",
+                   {"stay_id": [1, 2, 3, 4], "aki": [1, None, 1, 1]})
+    runner.EXPORT = tmp_path
+
+    col_index = runner._build_column_index()
+    all_stays = {1, 2, 3, 4}
+    probe = runner.make_export_feasibility_probe(col_index, len(all_stays), all_stays)
+
+    # #1: 'kdigo_aki' (resolver canonical) must resolve to the raw 'aki' column.
+    out = probe(concepts=["peep", "kdigo_aki"], database="miiv", data_path=None)
+    assert "peep" in out and "kdigo_aki" in out  # outcome resolved, not omitted
+    # real joint of peep{1,2} and aki{1,3,4} = {1}
+    assert out["peep"]["n_joint_complete"] == 1
+
+    # #2: a genuinely absent concept => joint is 0, NOT peep's own count (2).
+    out2 = probe(concepts=["peep", "nonexistent_xyz"], database="miiv", data_path=None)
+    assert out2["peep"]["n_joint_complete"] == 0
