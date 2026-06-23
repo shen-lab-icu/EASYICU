@@ -113,3 +113,5 @@ def test_point_fire_safety_failures_keep_draft_locked() -> None:
     }
 
     assert "gate.draft_unlocked must remain false" in safety_failures(summary)
+    assert "strict evidence claims did not pass" in safety_failures(summary)
+    assert "strict evidence sentences did not pass" in safety_failures(summary)

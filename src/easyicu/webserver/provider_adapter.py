@@ -67,6 +67,7 @@ def generate_bound_provider_payload(
     """Call an OpenAI-compatible provider and return bounded artifacts."""
     credentials = _load_external_credentials(str(provider_meta.get("provider") or ""), environ=environ)
     max_output_tokens = _max_output_tokens(environ=environ)
+    json_format_style = _json_format_style(environ=environ)
     request = _build_chat_request(
         provider=str(provider_meta.get("provider") or ""),
         run_id=run_id,
@@ -77,6 +78,7 @@ def generate_bound_provider_payload(
         quality=quality,
         model=credentials["model"],
         max_output_tokens=max_output_tokens,
+        json_format_style=json_format_style,
     )
     headers = {
         "Authorization": f"Bearer {credentials['api_key']}",
@@ -100,6 +102,7 @@ def generate_bound_provider_payload(
         "external_calls": int(provider_meta.get("external_calls") or 0) + 1,
         "max_external_calls_per_run": _MAX_EXTERNAL_CALLS_PER_RUN,
         "max_output_tokens": max_output_tokens,
+        "json_format_style": json_format_style,
         "provider_gate": "external_provider_ready",
         "provider_gate_order": [
             *list(provider_meta.get("provider_gate_order") or []),
@@ -173,6 +176,7 @@ def provider_readiness(
         "limits": {
             "max_external_calls_per_run": _MAX_EXTERNAL_CALLS_PER_RUN,
             "max_output_tokens": _max_output_tokens(environ=env),
+            "json_format_style": _json_format_style(environ=env),
         },
         "secrets_returned": False,
         "client_constructed": False,
@@ -313,6 +317,7 @@ def _build_chat_request(
     quality: List[Dict[str, Any]],
     model: str,
     max_output_tokens: int,
+    json_format_style: str,
 ) -> Dict[str, Any]:
     valid_evidence = ["run_context.json", "cohort_summary.json", "quality_gate.json"]
     bounded_context = {
@@ -327,16 +332,24 @@ def _build_chat_request(
     system = (
         "You are generating a locked EasyICU analysis-only draft scaffold. "
         "Use only the bounded aggregate context. Do not invent patient rows. "
-        "Return JSON only with keys agent_plan and manuscript_draft. Every "
-        "claim and sentence must include evidence_ids drawn only from "
+        "Return exactly one JSON object with this shape and no sectioned "
+        "manuscript keys: "
+        "{\"agent_plan\":{\"steps\":[{\"id\":\"step_001\",\"title\":\"...\","
+        "\"evidence_ids\":[\"run_context.json\"]}]},"
+        "\"manuscript_draft\":{\"claims\":[{\"id\":\"claim_001\","
+        "\"text\":\"...\",\"evidence_ids\":[\"cohort_summary.json\"]}],"
+        "\"sentences\":[{\"id\":\"sentence_001\",\"text\":\"...\","
+        "\"evidence_ids\":[\"quality_gate.json\"]}]}}. "
+        "agent_plan must be an object, not an array. Do not return title, "
+        "abstract, introduction, methods, or results sections. Every claim "
+        "and sentence must include evidence_ids drawn only from "
         "valid_evidence_ids."
     )
     user = json.dumps(bounded_context, ensure_ascii=False, sort_keys=True)
-    return {
+    request = {
         "model": model,
         "temperature": 0,
         "max_tokens": max_output_tokens,
-        "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -348,6 +361,85 @@ def _build_chat_request(
             "allowed_evidence_ids": valid_evidence,
             "max_external_calls_per_run": _MAX_EXTERNAL_CALLS_PER_RUN,
             "max_output_tokens": max_output_tokens,
+            "json_format_style": json_format_style,
+        },
+    }
+    schema = _agent_payload_json_schema(valid_evidence)
+    if json_format_style == "responses":
+        request["text"] = {
+            "format": {
+                "type": "json_schema",
+                "name": "easyicu_agent_run",
+                "schema": schema,
+                "strict": True,
+            }
+        }
+    elif json_format_style == "both":
+        request["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "easyicu_agent_run",
+                "schema": schema,
+                "strict": True,
+            },
+        }
+        request["text"] = {
+            "format": {
+                "type": "json_schema",
+                "name": "easyicu_agent_run",
+                "schema": schema,
+                "strict": True,
+            }
+        }
+    else:
+        request["response_format"] = {"type": "json_object"}
+    return request
+
+
+def _agent_payload_json_schema(valid_evidence: List[str]) -> Dict[str, Any]:
+    evidence_ids = {
+        "type": "array",
+        "minItems": 1,
+        "items": {"type": "string", "enum": valid_evidence},
+    }
+    evidence_bound_record = {
+        "type": "object",
+        "additionalProperties": True,
+        "required": ["id", "text", "evidence_ids"],
+        "properties": {
+            "id": {"type": "string"},
+            "text": {"type": "string"},
+            "evidence_ids": evidence_ids,
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["agent_plan", "manuscript_draft"],
+        "properties": {
+            "agent_plan": {
+                "type": "object",
+                "additionalProperties": True,
+                "required": ["steps"],
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": True,
+                        },
+                    }
+                },
+            },
+            "manuscript_draft": {
+                "type": "object",
+                "additionalProperties": True,
+                "required": ["claims", "sentences"],
+                "properties": {
+                    "claims": {"type": "array", "items": evidence_bound_record},
+                    "sentences": {"type": "array", "items": evidence_bound_record},
+                },
+            },
         },
     }
 
@@ -386,6 +478,8 @@ def _coerce_provider_payload(
         raise ProviderAdapterError({"error": "external_provider_payload_not_object"})
     plan = payload.get("agent_plan")
     draft = payload.get("manuscript_draft")
+    if isinstance(plan, list):
+        plan = {"steps": plan}
     if not isinstance(plan, dict) or not isinstance(draft, dict):
         raise ProviderAdapterError({"error": "external_provider_payload_missing_artifacts"})
     plan.setdefault("run_id", run_id)
@@ -467,6 +561,16 @@ def _max_output_tokens(*, environ: Optional[Mapping[str, str]] = None) -> int:
     except ValueError:
         return _DEFAULT_MAX_OUTPUT_TOKENS
     return max(_MIN_MAX_OUTPUT_TOKENS, min(_ABSOLUTE_MAX_OUTPUT_TOKENS, value))
+
+
+def _json_format_style(*, environ: Optional[Mapping[str, str]] = None) -> str:
+    env, _ = _provider_env(environ=environ)
+    value = str(env.get("EASYICU_LLM_JSON_FORMAT_STYLE") or "").strip().lower()
+    if value in {"responses", "text"}:
+        return "responses"
+    if value in {"both", "dual"}:
+        return "both"
+    return "chat"
 
 
 def _provider_env(

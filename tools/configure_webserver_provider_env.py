@@ -92,6 +92,7 @@ def collect_entries(args: argparse.Namespace) -> Dict[str, str]:
     if not model:
         model = input(f"{names['model']}: ").strip()
     max_tokens = str(args.max_tokens or "").strip()
+    json_format_style = str(args.json_format_style or "").strip()
     entries = {
         names["api_key"]: api_key,
         names["base_url"]: base_url,
@@ -99,6 +100,8 @@ def collect_entries(args: argparse.Namespace) -> Dict[str, str]:
     }
     if max_tokens:
         entries["EASYICU_LLM_MAX_TOKENS"] = max_tokens
+    if json_format_style:
+        entries["EASYICU_LLM_JSON_FORMAT_STYLE"] = json_format_style
     missing = [key for key, value in entries.items() if key != "EASYICU_LLM_MAX_TOKENS" and not value]
     if missing:
         raise ValueError(f"missing required values for: {', '.join(missing)}")
@@ -118,6 +121,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--base-url", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--max-tokens", default="")
+    parser.add_argument("--json-format-style", choices=["chat", "responses", "both"], default="")
     parser.add_argument("--force", action="store_true")
     return parser.parse_args(argv)
 
