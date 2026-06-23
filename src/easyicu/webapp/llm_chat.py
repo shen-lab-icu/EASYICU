@@ -356,6 +356,17 @@ COPILOT_ROUTE_MAX_TOKENS = 360
 COPILOT_SESSION_MESSAGE_SAVE_LIMIT = 80
 COPILOT_RENDER_MESSAGE_LIMIT = 5
 COPILOT_RECENT_SESSION_RENDER_LIMIT = 6
+# Char budget for the *conversation history* portion sent to the chat model.
+# `_compose_agent_messages` previously appended the entire in-session
+# `llm_messages` list with no trim — only persistence (SAVE_LIMIT=80) and UI
+# render (RENDER_LIMIT=5) were capped, never the LLM payload. A long study
+# session (assistant turns embed code snapshots + Sources, so they are not
+# small) therefore grew the prompt linearly until the provider rejected it on
+# context length. We keep the most recent turns within this budget; system
+# messages and the current user prompt are always preserved untrimmed.
+# ~60k chars ≈ 15k tokens, comfortably inside the windows of the external
+# providers Copilot targets while still carrying many turns of real context.
+COPILOT_HISTORY_CHAR_BUDGET = 60000
 COPILOT_BRANCH_CONFIG = {
     "predict": {
         "chip": "Model ICU outcomes",
@@ -1370,6 +1381,205 @@ def _append_copilot_workflow_step_action(step_id: str, lang: str) -> None:
         if lang == "en" else
         f"Workflow 卡已切到{label}。"
     )
+
+
+def _copilot_depth_intro_messages(depth: str, lang: str) -> tuple[str, str]:
+    """Return the design-script bot copy for a chosen guided finish line."""
+    depth = _copilot_engine.normalize_depth(depth)
+    if lang == "en":
+        if depth == "extract":
+            return (
+                "Got it — an <strong>extract-only</strong> run. I’ll stop once your cohort is resolved and packaged, and you leave with analysis-ready frames plus a reproducible manifest.",
+                "Now — what would you like to study? Pick a direction below, or describe your own.",
+            )
+        if depth == "review":
+            return (
+                "Good — <strong>extract &amp; review</strong>. I’ll pull the data and prepare a quick visual review, then hand you a populated workspace. No agent run unless you ask.",
+                "Now — what would you like to study? Pick a direction below, or describe your own.",
+            )
+        return (
+            "The full ride — <strong>extract → review → analyse → gated draft</strong>. Everything runs locally and the draft stays locked until checks pass.",
+            "Now — what would you like to study? Pick a direction below, or describe your own.",
+        )
+    if depth == "extract":
+        return (
+            "已记录——<strong>只做提取</strong>。我会在队列解析并打包后停下，留下可分析数据框和可复现清单。",
+            "现在想研究什么？请选择一个方向，或直接描述你的问题。",
+        )
+    if depth == "review":
+        return (
+            "好的——<strong>提取 + 审阅</strong>。我会拉取数据并准备快速可视化审阅；除非你要求，不会进入 Agent 运行。",
+            "现在想研究什么？请选择一个方向，或直接描述你的问题。",
+        )
+    return (
+        "完整流程——<strong>提取 → 审阅 → 分析 → 带闸门草稿</strong>。所有流程保持本地执行，草稿会锁定到检查通过后。",
+        "现在想研究什么？请选择一个方向，或直接描述你的问题。",
+    )
+
+
+def _copilot_depth_display_label(depth: str, lang: str) -> str:
+    depth = _copilot_engine.normalize_depth(depth)
+    if lang == "en":
+        return {
+            "extract": "Extract only",
+            "review": "Extract + review",
+            "full": "Full study",
+        }.get(depth, "Full study")
+    return {
+        "extract": "只做提取",
+        "review": "提取 + 审阅",
+        "full": "全流程研究",
+    }.get(depth, "全流程研究")
+
+
+def _copilot_guided_question_chip_actions(depth: str, lang: str) -> list[dict[str, object]]:
+    """Design-reference bottom chips for the first guided question choice."""
+    actions: list[dict[str, object]] = [
+        {
+            "id": "choice_question_outcome_model",
+            "kind": "copilot_prompt",
+            "label": "Model an ICU outcome" if lang == "en" else "建模 ICU 结局",
+            "prompt": "question type: outcome prediction",
+        },
+        {
+            "id": "choice_question_crossdb",
+            "kind": "copilot_prompt",
+            "label": "Compare databases" if lang == "en" else "比较数据库",
+            "prompt": "question type: cross-database comparison",
+        },
+        {
+            "id": "choice_question_quality",
+            "kind": "copilot_prompt",
+            "label": "Audit data quality" if lang == "en" else "审计数据质量",
+            "prompt": "question type: data quality audit",
+        },
+        {
+            "id": "choice_question_custom",
+            "kind": "copilot_prompt",
+            "label": "Type my own question" if lang == "en" else "输入我的问题",
+            "prompt": "I want to describe my own research question.",
+        },
+    ]
+    actions.append({
+        "id": "study_regoal",
+        "kind": "workflow",
+        "label": (
+            f"Change goal (now: {_copilot_depth_display_label(depth, lang)})"
+            if lang == "en" else
+            f"更改目标（当前：{_copilot_depth_display_label(depth, lang)}）"
+        ),
+        "workflow": "study_regoal",
+    })
+    return actions
+
+
+def _append_copilot_regoal_action(label: str, lang: str) -> None:
+    """Append the design-script goal gate again without leaving guided Copilot."""
+    state = st.session_state
+    study = _ensure_copilot_study_state(state)
+    actions = [
+        {
+            "id": "study_depth_extract",
+            "kind": "workflow",
+            "label": "Just a cohort & data" if lang == "en" else "只做队列与数据",
+            "workflow": "study_depth_extract",
+        },
+        {
+            "id": "study_depth_review",
+            "kind": "workflow",
+            "label": "Data, then a visual review" if lang == "en" else "数据 + 可视化审阅",
+            "workflow": "study_depth_review",
+        },
+        {
+            "id": "study_depth_full",
+            "kind": "workflow",
+            "label": "All the way to a gated draft" if lang == "en" else "推进到带闸门草稿",
+            "workflow": "study_depth_full",
+        },
+    ]
+    messages = state.setdefault("llm_messages", [])
+    if isinstance(messages, list):
+        messages.append(_copilot_user_message(label or (
+            "Change goal" if lang == "en" else "更改目标"
+        )))
+        messages.append({
+            "role": "assistant",
+            "content": (
+                "First, <strong>how far do you want to go today?</strong> This just sets where I stop — you can always extend later."
+                if lang == "en" else
+                "先选<strong>今天要推进到哪里</strong>。这只决定我在哪里停下，后续可以随时扩展。"
+            ),
+            "actions": actions,
+            "workflow_snapshot": _copilot_workflow_snapshot(state, lang),
+        })
+    study["step"] = "question"
+    state["_copilot_guided_study"] = study
+    state["_active_main_page"] = "assistant"
+    _request_copilot_scroll_to_latest(state)
+
+
+def _append_copilot_typemine_action(label: str, lang: str) -> None:
+    """Match the design @typemine action: prompt the user to type, no hidden submit."""
+    state = st.session_state
+    study = _ensure_copilot_study_state(state)
+    messages = state.setdefault("llm_messages", [])
+    if isinstance(messages, list):
+        messages.append(_copilot_user_message(label or (
+            "Type my own question" if lang == "en" else "输入我的问题"
+        )))
+        messages.append({
+            "role": "assistant",
+            "content": (
+                "Of course — type your research question in the box below and I’ll frame it with you."
+                if lang == "en" else
+                "当然——请在下方输入你的研究问题，我会和你一起把它整理成可研究表述。"
+            ),
+            "actions": [],
+            "workflow_snapshot": _copilot_workflow_snapshot(state, lang),
+        })
+    study["step"] = "question"
+    state["_copilot_guided_study"] = study
+    state["_active_main_page"] = "assistant"
+    state["_copilot_focus_composer"] = True
+    _request_copilot_scroll_to_latest(state)
+    _touch_current_copilot_study_session(state, lang)
+
+
+def _append_copilot_depth_choice_action(workflow: str, label: str, lang: str) -> bool:
+    """Apply a welcome-state study depth choice and continue the guided chat."""
+    workflow = (workflow or "").strip()
+    if workflow not in {"study_depth_extract", "study_depth_review", "study_depth_full"}:
+        return False
+
+    state = st.session_state
+    _apply_chat_workflow_action(workflow)
+    study = _ensure_copilot_study_state(state)
+    depth = _copilot_engine.normalize_depth(study.get("depth"))
+    intro_content, ask_content = _copilot_depth_intro_messages(depth, lang)
+
+    messages = state.setdefault("llm_messages", [])
+    if isinstance(messages, list):
+        messages.append(_copilot_user_message(label or _copilot_depth_display_label(depth, lang)))
+        messages.append({
+            "role": "assistant",
+            "content": intro_content,
+            "actions": [],
+        })
+        messages.append({
+            "role": "assistant",
+            "content": ask_content,
+            "actions": _copilot_guided_question_chip_actions(depth, lang),
+            "workflow_snapshot": _copilot_workflow_snapshot(state, lang),
+        })
+    _request_copilot_scroll_to_latest(state)
+    state["llm_last_tool_events"] = []
+    state["llm_last_verification"] = {
+        "status": "pass",
+        "issues": [],
+    }
+    state["_active_main_page"] = "assistant"
+    _touch_current_copilot_study_session(state, lang)
+    return True
 
 
 def _render_copilot_workflow_step_controls(
@@ -4211,6 +4421,32 @@ def _apply_chat_workflow_action(workflow: str) -> None:
     state.pop("_ai_pending_question", None)
 
 
+def _trim_history_for_budget(
+    history: list[dict[str, object]], char_budget: int = COPILOT_HISTORY_CHAR_BUDGET
+) -> list[dict[str, object]]:
+    """Keep the most recent conversation turns within ``char_budget``.
+
+    Whole messages are kept (never clipped mid-message) so role coherence is
+    preserved; the iteration walks from the newest message backwards. The most
+    recent message (the current user prompt) is always kept even if it alone
+    exceeds the budget, so the user's question is never dropped. Returns the
+    kept tail in original chronological order. This only shapes the LLM payload;
+    the full ``llm_messages`` list in session/persistence is untouched.
+    """
+    if not history:
+        return []
+    kept: list[dict[str, object]] = []
+    used = 0
+    for message in reversed(history):
+        size = len(str(message.get("content") or ""))
+        if kept and used + size > char_budget:
+            break
+        kept.append(message)
+        used += size
+    kept.reverse()
+    return kept
+
+
 def _compose_agent_messages(prompt: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Assemble system/context messages and return tool activity log."""
     tool_events: list[dict[str, str]] = []
@@ -4246,7 +4482,7 @@ def _compose_agent_messages(prompt: str) -> tuple[list[dict[str, str]], list[dic
         if pubmed_context:
             messages.append({"role": "system", "content": pubmed_context})
 
-    messages.extend(st.session_state.llm_messages)
+    messages.extend(_trim_history_for_budget(st.session_state.llm_messages))
     return messages, tool_events
 
 
@@ -4732,12 +4968,23 @@ def _submit_prompt(
         and not str(st.session_state.get("_copilot_current_session_id") or "").strip()
     ):
         _start_new_copilot_study_session(st.session_state, lang)
+    render_inline = not (
+        key_prefix.startswith("_llm_ai_page_workspace")
+        and bool(st.session_state.get("_eu_guided_fullscreen"))
+    )
+
+    def finish_submit() -> None:
+        _request_copilot_scroll_to_latest(st.session_state)
+        _touch_current_copilot_study_session(st.session_state, lang)
+        if not render_inline:
+            st.rerun()
 
     visible_prompt = (display_prompt or prompt).strip()
     st.session_state.llm_messages.append(_copilot_user_message(prompt, visible_prompt))
-    with history_container:
-        with st.chat_message("user"):
-            st.markdown(visible_prompt)
+    if render_inline:
+        with history_container:
+            with st.chat_message("user"):
+                st.markdown(visible_prompt)
 
     guided_reply = _handle_copilot_guided_prompt(prompt, lang)
     if guided_reply is not None:
@@ -4757,19 +5004,19 @@ def _submit_prompt(
         if workflow_snapshot is not None:
             message["workflow_snapshot"] = workflow_snapshot
         st.session_state.llm_messages.append(message)
-        with history_container:
-            with st.chat_message("assistant"):
-                st.markdown(reply_content)
-                _render_nav_actions(guided_actions, key_prefix=f"{key_prefix}_guided")
-                _render_copilot_inline_step_controls(lang, key_prefix)
-                if workflow_snapshot is not None:
-                    _render_copilot_workflow_snapshot(
-                        workflow_snapshot,
-                        lang,
-                        key_prefix=f"{key_prefix}_guided",
-                    )
-        _request_copilot_scroll_to_latest(st.session_state)
-        _touch_current_copilot_study_session(st.session_state, lang)
+        if render_inline:
+            with history_container:
+                with st.chat_message("assistant"):
+                    st.markdown(reply_content)
+                    _render_nav_actions(guided_actions, key_prefix=f"{key_prefix}_guided")
+                    _render_copilot_inline_step_controls(lang, key_prefix)
+                    if workflow_snapshot is not None:
+                        _render_copilot_workflow_snapshot(
+                            workflow_snapshot,
+                            lang,
+                            key_prefix=f"{key_prefix}_guided",
+                        )
+        finish_submit()
         return
 
     instant_reply = _get_instant_reply(prompt, lang)
@@ -4787,12 +5034,12 @@ def _submit_prompt(
                 "actions": instant_actions,
             }
         )
-        with history_container:
-            with st.chat_message("assistant"):
-                st.markdown(instant_reply)
-                _render_nav_actions(instant_actions, key_prefix=f"{key_prefix}_instant")
-        _request_copilot_scroll_to_latest(st.session_state)
-        _touch_current_copilot_study_session(st.session_state, lang)
+        if render_inline:
+            with history_container:
+                with st.chat_message("assistant"):
+                    st.markdown(instant_reply)
+                    _render_nav_actions(instant_actions, key_prefix=f"{key_prefix}_instant")
+        finish_submit()
         return
 
     try:
@@ -4813,12 +5060,32 @@ def _submit_prompt(
         st.session_state.llm_messages.append(
             {"role": "assistant", "content": fallback_reply, "actions": fallback_actions}
         )
-        with history_container:
-            with st.chat_message("assistant"):
-                st.markdown(fallback_reply)
-                _render_nav_actions(fallback_actions, key_prefix=f"{key_prefix}_fallback")
-        _request_copilot_scroll_to_latest(st.session_state)
-        _touch_current_copilot_study_session(st.session_state, lang)
+        if render_inline:
+            with history_container:
+                with st.chat_message("assistant"):
+                    st.markdown(fallback_reply)
+                    _render_nav_actions(fallback_actions, key_prefix=f"{key_prefix}_fallback")
+        finish_submit()
+        return
+
+    if not render_inline:
+        session_id = _start_bg_response(prompt, lang)
+        if session_id:
+            st.session_state["_ai_bg_session_id"] = session_id
+            st.session_state["_ai_bg_responding"] = True
+            st.session_state["_ai_bg_response_ready"] = False
+            st.session_state["_ai_bg_unread_count"] = 0
+        else:
+            st.session_state.llm_messages.append({
+                "role": "assistant",
+                "content": (
+                    "I could not start the assistant response. Check the AI provider settings, then try again."
+                    if lang == "en" else
+                    "无法启动助手回答。请检查 AI 服务商设置后重试。"
+                ),
+                "actions": [],
+            })
+        finish_submit()
         return
 
     prep_placeholder = st.empty()
@@ -4833,20 +5100,20 @@ def _submit_prompt(
         st.session_state.llm_messages.append(
             {"role": "assistant", "content": error_message, "actions": []}
         )
-        with history_container:
-            with st.chat_message("assistant"):
-                st.markdown(error_message)
-        _request_copilot_scroll_to_latest(st.session_state)
-        _touch_current_copilot_study_session(st.session_state, lang)
+        if render_inline:
+            with history_container:
+                with st.chat_message("assistant"):
+                    st.markdown(error_message)
+        finish_submit()
         return
     st.session_state.llm_last_tool_events = tool_events
     prep_placeholder.empty()
 
-    with history_container:
-        with st.chat_message("assistant"):
-            _stream_response(messages, lang)
-    _request_copilot_scroll_to_latest(st.session_state)
-    _touch_current_copilot_study_session(st.session_state, lang)
+    if render_inline:
+        with history_container:
+            with st.chat_message("assistant"):
+                _stream_response(messages, lang)
+        finish_submit()
 
 
 def _submit_prompt_background(
@@ -5251,8 +5518,10 @@ def render_inline_ai_panel(*, force_open: bool = False, allow_close: bool = True
         st.session_state["_inline_ai_panel_open"] = True
     if pending_prompt:
         st.session_state["_inline_ai_panel_open"] = True
-        st.session_state["llm_enabled"] = True
-        st.session_state["_llm_toggle"] = True
+        outbound_enabled = bool(st.session_state.get("llm_enabled", False))
+        st.session_state["_llm_toggle"] = outbound_enabled
+        st.session_state["_eu_settings_allow_outbound_model_calls"] = outbound_enabled
+        st.session_state["_llm_toggle_sync_pending"] = True
     if not st.session_state.get("_inline_ai_panel_open", False):
         return
 
@@ -5737,12 +6006,12 @@ def _render_ai_assistant_workspace_page(lang: str, *, pending_prompt: bool) -> N
         with st.container(key="eu_copilot_guided_top"):
             brand_col, exit_col, classic_col = st.columns([1, 0.16, 0.28], gap="small")
             with brand_col:
-                brand_icon = icon("spark") or icon("flask")
+                brand_icon = icon("spark", size=16, stroke=1.6) or icon("flask")
                 st.markdown(
                     '<div class="eu-copilot-topbrand">'
                     f'<span class="brand-mark">{brand_icon}</span>'
                     '<span><b>Research Copilot</b>'
-                    f'<em>{html.escape("EasyICU · real-data first" if is_en else "EasyICU · 真实数据优先")}</em></span>'
+                    f'<em>{html.escape("EasyICU · research copilot" if is_en else "EasyICU · 研究 Copilot")}</em></span>'
                     '</div>',
                     unsafe_allow_html=True,
                 )
@@ -5752,11 +6021,16 @@ def _render_ai_assistant_workspace_page(lang: str, *, pending_prompt: bool) -> N
                     key="_copilot_top_exit",
                     use_container_width=True,
                 ):
-                    st.session_state["entry_mode"] = "none"
-                    st.session_state["_active_main_page"] = "entry"
+                    return_page = str(st.session_state.get("_assistant_return_page") or "entry")
+                    if return_page in {"assistant", ""}:
+                        return_page = "entry"
+                    if return_page == "entry":
+                        st.session_state["entry_mode"] = "none"
+                    st.session_state["_active_main_page"] = return_page
                     st.session_state["_scroll_to_top"] = True
                     st.session_state["_inline_ai_panel_open"] = False
                     st.session_state["_floating_ai_open"] = False
+                    st.session_state.pop("_assistant_return_page", None)
                     st.session_state.pop("_eu_guided_fullscreen", None)
                     st.session_state.pop("_ai_pending_question", None)
                     st.rerun()
@@ -6070,6 +6344,7 @@ def _render_copilot_session_rail(lang: str) -> None:
     state = st.session_state
     study = _ensure_copilot_study_state(state)
     snapshot = build_study_workspace_snapshot(state, study, lang=lang)
+    guided_fullscreen = bool(state.get("_eu_guided_fullscreen"))
 
     if st.button(
         "New study" if is_en else "新研究",
@@ -6079,10 +6354,11 @@ def _render_copilot_session_rail(lang: str) -> None:
         _start_new_copilot_study_session(state, lang)
         st.rerun()
 
-    st.markdown(
-        _copilot_active_study_context_html(state, study, snapshot, lang),
-        unsafe_allow_html=True,
-    )
+    if not guided_fullscreen:
+        st.markdown(
+            _copilot_active_study_context_html(state, study, snapshot, lang),
+            unsafe_allow_html=True,
+        )
 
     sessions = _copilot_list_study_sessions(state)
     current_session_id = str(state.get("_copilot_current_session_id") or "")
@@ -6093,53 +6369,73 @@ def _render_copilot_session_rail(lang: str) -> None:
         unsafe_allow_html=True,
     )
     if not sessions:
+        title = _copilot_contract_text(
+            str(study.get("question") or state.get("_copilot_last_question") or "").strip()
+            or ("No question framed yet" if is_en else "尚未确定研究问题"),
+            max_len=40,
+        )
+        sessions = [{
+            "id": "__current__",
+            "title": title,
+            "workdir": "not saved yet" if is_en else "尚未保存",
+            "updated_at": "",
+            "_current": True,
+        }]
+        current_session_id = "__current__"
+    has_active_session = any(
+        str(session.get("id") or "") == current_session_id
+        for session in sessions[:COPILOT_RECENT_SESSION_RENDER_LIMIT]
+    )
+    for idx, session in enumerate(sessions[:COPILOT_RECENT_SESSION_RENDER_LIMIT]):
+        session_id = str(session.get("id") or "")
+        title = str(session.get("title") or _copilot_session_fallback_title(lang)).strip()
+        title = " ".join(title.split())
+        if len(title) > 40:
+            title = title[:39].rstrip() + "…"
+        active = session_id == current_session_id or (idx == 0 and not has_active_session)
+        rel = ("active now" if is_en else "进行中") if active else _copilot_relative_time(
+            str(session.get("updated_at") or ""), lang
+        )
+        folder = Path(str(session.get("workdir") or session_id)).name
+        meta = " · ".join(part for part in (folder, rel) if part)
+        # Clean session row: design folder glyph + live Streamlit button callback.
+        with st.container(key=f"eu_copilot_session_{'active' if active else 'idle'}_{idx}"):
+            st.markdown(
+                f'<span class="ss-fold">{icon("folder", size=15, stroke=1.6)}</span>',
+                unsafe_allow_html=True,
+            )
+            meta_html = (
+                f'<span class="eu-copilot-session-meta ss-m mono">'
+                f'{html.escape(meta)}</span>'
+                if meta else ""
+            )
+            st.markdown(
+                '<span class="ss-copy">'
+                f'<span class="eu-copilot-session-title ss-t">{html.escape(title)}</span>'
+                f'{meta_html}'
+                '</span>',
+                unsafe_allow_html=True,
+            )
+            if st.button(
+                title,
+                key=f"_copilot_session_open_{session_id}_{idx}",
+                use_container_width=True,
+                help=rel or None,
+            ):
+                if session_id and session_id != "__current__":
+                    _open_copilot_study_session(state, session_id, lang)
+                st.rerun()
+
+    st.markdown('<div class="eu-copilot-left-spacer"></div>', unsafe_allow_html=True)
+    if not guided_fullscreen:
         st.markdown(
-            '<div class="eu-copilot-session-empty">'
-            f'<b>{html.escape("No studies yet" if is_en else "还没有研究")}</b>'
-            f'<p>{html.escape("Create a study to make a local workspace and start the first conversation." if is_en else "点击新研究，创建本地研究工作目录后再开始第一段对话。")}</p>'
+            '<div class="eu-copilot-rail-context">'
+            f'<span>{html.escape("Evidence discipline" if is_en else "证据纪律")}</span>'
+            f'<b>{html.escape("Local state, review first" if is_en else "本地状态，先审阅")}</b>'
+            f'<p>{html.escape("Study folders, paths, and handoff packets stay on this machine; drafts remain gated until evidence checks pass." if is_en else "研究目录、路径和交接包保留在本机；证据检查通过前不释放草稿。")}</p>'
             '</div>',
             unsafe_allow_html=True,
         )
-    else:
-        for idx, session in enumerate(sessions[:COPILOT_RECENT_SESSION_RENDER_LIMIT]):
-            session_id = str(session.get("id") or "")
-            title = str(session.get("title") or _copilot_session_fallback_title(lang)).strip()
-            title = " ".join(title.split())
-            if len(title) > 40:
-                title = title[:39].rstrip() + "…"
-            active = session_id == current_session_id
-            rel = ("active now" if is_en else "进行中") if active else _copilot_relative_time(
-                str(session.get("updated_at") or ""), lang
-            )
-            folder = Path(str(session.get("workdir") or session_id)).name
-            meta = " · ".join(part for part in (folder, rel) if part)
-            # Clean session row: small dot + title + inline relative time (design parity).
-            with st.container(key=f"eu_copilot_session_{'active' if active else 'idle'}_{idx}"):
-                if st.button(
-                    title,
-                    key=f"_copilot_session_open_{session_id}_{idx}",
-                    use_container_width=True,
-                    help=rel or None,
-                ):
-                    if session_id:
-                        _open_copilot_study_session(state, session_id, lang)
-                    st.rerun()
-                if meta:
-                    st.markdown(
-                        f'<div class="eu-copilot-session-meta{" active" if active else ""}">'
-                        f'{html.escape(meta)}</div>',
-                        unsafe_allow_html=True,
-                    )
-
-    st.markdown('<div class="eu-copilot-left-spacer"></div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="eu-copilot-rail-context">'
-        f'<span>{html.escape("Evidence discipline" if is_en else "证据纪律")}</span>'
-        f'<b>{html.escape("Local state, review first" if is_en else "本地状态，先审阅")}</b>'
-        f'<p>{html.escape("Study folders, paths, and handoff packets stay on this machine; drafts remain gated until evidence checks pass." if is_en else "研究目录、路径和交接包保留在本机；证据检查通过前不释放草稿。")}</p>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
 
     if st.button(
         "Classic workspace" if is_en else "经典工作区",
@@ -6423,9 +6719,12 @@ def _render_copilot_stage_workspace(lang: str) -> None:
                 display_detail = detail if status != "locked" else ""
                 button_label = str(item["label"])
                 with st.container(key=f"eu_study_step_row_{idx}_{status}_{step_id}"):
+                    dot_name = "check" if status == "done" else str(item.get("icon") or "grid")
+                    dot_size = 11 if status == "done" else 12
+                    dot_stroke = 3 if status == "done" else 1.6
                     st.markdown(
                         '<span class="si-dot">{}</span>'.format(
-                            icon(str(item.get("icon") or "grid"))
+                            icon(dot_name, size=dot_size, stroke=dot_stroke)
                         ),
                         unsafe_allow_html=True,
                     )
@@ -6448,29 +6747,33 @@ def _render_copilot_stage_workspace(lang: str) -> None:
                             unsafe_allow_html=True,
                         )
                 # Finish-line after the depth goal step (prototype .study-finishline).
-                if bool(item.get("is_goal")):
-                    depth_label = _copilot_engine.normalize_depth(study.get("depth"))
+                depth_key = _copilot_engine.normalize_depth(study.get("depth"))
+                if bool(item.get("is_goal")) and depth_key != "full":
+                    depth_label = {
+                        "extract": "Extract only" if is_en else "只提取",
+                        "review": "Extract + review" if is_en else "提取 + 审阅",
+                        "full": "Full study" if is_en else "全流程研究",
+                    }.get(depth_key, depth_key)
                     st.markdown(
                         '<div class="study-finishline">'
-                        f'<span class="fl-flag">{icon("check")}</span>'
+                        f'<span class="fl-flag">{icon("check", size=10, stroke=3)}</span>'
                         f'<span class="fl-t">{html.escape(("Finish line" if is_en else "终点线") + " · " + depth_label)}</span>'
                         '</div>',
                         unsafe_allow_html=True,
                     )
-                    if str(study.get("depth") or "full") != "full":
-                        if st.button(
-                            "Take it further →" if is_en else "继续深入 →",
-                            key="_copilot_take_further",
-                            use_container_width=True,
-                            help=("Extend the study one stage deeper"
-                                  if is_en else "把研究再向后推进一档"),
-                        ):
-                            _apply_chat_workflow_action("study_take_further")
-                            st.rerun()
+                    if st.button(
+                        "Take it further →" if is_en else "继续深入 →",
+                        key="_copilot_take_further",
+                        use_container_width=True,
+                        help=("Extend the study one stage deeper"
+                              if is_en else "把研究再向后推进一档"),
+                    ):
+                        _apply_chat_workflow_action("study_take_further")
+                        st.rerun()
         _render_copilot_step_escape_hatch(study, lang)
         st.markdown(
             '<div class="eu-copilot-evidence-note">'
-            f'<span>{icon("check")}</span>'
+            f'<span>{icon("shield", size=14, stroke=1.6)}</span>'
             '<div>'
             f'<b>{html.escape(note_title)}</b>'
             f'<p>{html.escape(note_body)}</p>'
@@ -6695,26 +6998,26 @@ def _render_chat_welcome(
     welcome_variant: str = "rich",
 ) -> None:
     if welcome_variant == "codex":
+        bot_icon = icon("spark", size=14, stroke=1.6)
         intro = (
-            "Hi - I'm the EasyICU <strong>Research Copilot</strong>. I'll walk a whole study through by chat: "
-            "framing the question, pulling data, running the analysis, and preparing a gated draft. Everything runs locally."
+            "Hi — I’m the EasyICU <strong>Research Copilot</strong>. I’ll drive the workspace by chat, and you can stop at any point."
             if lang == "en" else
-            "你好，我是 EasyICU <strong>Research Copilot</strong>。我会用聊天带你走完整研究：框定问题、拉取数据、运行分析，并准备带证据闸门的草稿。所有流程都在本机运行。"
+            "你好，我是 EasyICU <strong>Research Copilot</strong>。我会用聊天驱动工作区，你可以随时停下。"
         )
-        ask = (
-            "What would you like to study? Pick a starting point or just describe it."
+        ask_html = (
+            "First, <strong>how far do you want to go today?</strong> This just sets where I stop — you can always extend later."
             if lang == "en" else
-            "你想研究什么？可以点一个起点，也可以直接描述。"
+            "先选<strong>今天要推进到哪里</strong>。这只决定我在哪里停下，后续可以随时扩展。"
         )
         st.markdown(
             '<div class="eu-copilot-welcome-thread">'
-            '<div class="eu-copilot-msg bot">'
-            '<span class="m-ava">AI</span>'
+            '<div class="msg bot eu-copilot-msg">'
+            f'<span class="m-ava">{bot_icon}</span>'
             f'<div class="m-bubble">{intro}</div>'
             '</div>'
-            '<div class="eu-copilot-msg bot">'
-            '<span class="m-ava">AI</span>'
-            f'<div class="m-bubble compact">{html.escape(ask)}</div>'
+            '<div class="msg bot eu-copilot-msg">'
+            f'<span class="m-ava">{bot_icon}</span>'
+            f'<div class="m-bubble compact">{ask_html}</div>'
             '</div>'
             f'{_copilot_welcome_workbench_html(lang)}'
             '</div>',
@@ -6780,7 +7083,73 @@ def _render_chat_welcome(
                 use_container_width=True,
             ):
                 _submit_prompt(starter, lang, history_container, key_prefix=f"{panel_key}_starter")
-                st.rerun()
+        st.rerun()
+
+
+def _copilot_guided_inline_html(content: str) -> str:
+    """Render chat copy inside the design bubble without allowing arbitrary HTML."""
+    raw = html.unescape(str(content or ""))
+    escaped = html.escape(raw, quote=False)
+    for tag in ("strong", "em", "code"):
+        escaped = escaped.replace(f"&lt;{tag}&gt;", f"<{tag}>")
+        escaped = escaped.replace(f"&lt;/{tag}&gt;", f"</{tag}>")
+    escaped = escaped.replace("&lt;br&gt;", "<br>")
+    escaped = escaped.replace("&lt;br/&gt;", "<br>")
+    escaped = escaped.replace("&lt;br /&gt;", "<br>")
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
+    return escaped.replace("\n", "<br>")
+
+
+def _copilot_guided_message_html(msg: Mapping[str, object], lang: str) -> str:
+    """Render a guided fullscreen chat turn using the prototype .msg/.m-bubble DOM."""
+    role = str(msg.get("role") or "assistant")
+    role = "user" if role == "user" else "assistant"
+    content = str(msg.get("content") or "")
+    if role == "user" and not content.strip():
+        content = str(msg.get("display_content") or msg.get("label") or "").strip()
+        if not content:
+            content = "Selected option" if lang == "en" else "已选择一个选项"
+    if role == "assistant":
+        content = _normalized_copilot_message_content(content, lang)
+
+    bubble = _copilot_guided_inline_html(content)
+    if role == "user":
+        return (
+            '<div class="msg user eu-copilot-msg">'
+            '<div class="m-ava">LK</div>'
+            f'<div class="m-body"><div class="m-bubble">{bubble}</div></div>'
+            '</div>'
+        )
+    bot_icon = icon("spark", size=14, stroke=1.6)
+    return (
+        '<div class="msg bot eu-copilot-msg">'
+        f'<div class="m-ava">{bot_icon}</div>'
+        f'<div class="m-body"><div class="m-bubble">{bubble}</div></div>'
+        '</div>'
+    )
+
+
+def _copilot_guided_welcome_turns(lang: str) -> list[dict[str, object]]:
+    """Static opening bot turns that remain in the guided prototype thread."""
+    return [
+        {
+            "role": "assistant",
+            "content": (
+                "Hi — I’m the EasyICU <strong>Research Copilot</strong>. I’ll drive the workspace by chat, and you can stop at any point."
+                if lang == "en" else
+                "你好，我是 EasyICU <strong>Research Copilot</strong>。我会用聊天驱动工作区，你可以随时停下。"
+            ),
+        },
+        {
+            "role": "assistant",
+            "content": (
+                "First, <strong>how far do you want to go today?</strong> This just sets where I stop — you can always extend later."
+                if lang == "en" else
+                "先选<strong>今天要推进到哪里</strong>。这只决定我在哪里停下，后续可以随时扩展。"
+            ),
+        },
+    ]
 
 
 def _render_copilot_primary_chips(lang: str, panel_key: str) -> None:
@@ -6796,24 +7165,95 @@ def _render_copilot_primary_chips(lang: str, panel_key: str) -> None:
         return
     raw_study = st.session_state.get("_copilot_guided_study")
     study: Mapping[str, object] = raw_study if isinstance(raw_study, Mapping) else {}
-    if _copilot_started_in_chat(st.session_state, study):
+    guided_fullscreen = bool(st.session_state.get("_eu_guided_fullscreen"))
+    if _copilot_started_in_chat(st.session_state, study) and not guided_fullscreen:
         return
     actions = _copilot_primary_actions_for_state(st.session_state, lang)
+    if guided_fullscreen and _copilot_started_in_chat(st.session_state, study):
+        actions = []
+        messages = st.session_state.get("llm_messages")
+        if isinstance(messages, list):
+            for msg in reversed(messages):
+                if str(msg.get("role") or "") != "assistant":
+                    continue
+                raw_actions = msg.get("actions")
+                normalized_actions = _normalized_copilot_message_actions(raw_actions, lang)
+                if any(
+                    str(action.get("workflow") or "").startswith("study_depth_")
+                    for action in normalized_actions
+                ):
+                    actions = normalized_actions
+                else:
+                    actions = _copilot_message_actions_for_current_step(
+                        raw_actions if isinstance(raw_actions, list) else [],
+                        lang,
+                        st.session_state,
+                        is_latest=True,
+                    )
+                break
+        current_depth = _copilot_engine.normalize_depth(study.get("depth"))
+        if any(str(action.get("id") or "").startswith("choice_question_") for action in actions):
+            actions = [
+                action for action in actions
+                if str(action.get("id") or "") != "choice_question_treatment_exposure"
+            ]
+            for action in actions:
+                if str(action.get("id") or "") == "choice_question_custom":
+                    action["label"] = "Type my own question" if lang == "en" else "输入我的问题"
+            if not any(str(action.get("id") or "") == "study_regoal" for action in actions):
+                actions.append(_copilot_guided_question_chip_actions(current_depth, lang)[-1])
+    elif guided_fullscreen and not _copilot_started_in_chat(st.session_state, study):
+        actions = [
+            {
+                "id": "study_depth_extract",
+                "kind": "workflow",
+                "label": "Just a cohort & data" if lang == "en" else "只做队列与数据",
+                "workflow": "study_depth_extract",
+            },
+            {
+                "id": "study_depth_review",
+                "kind": "workflow",
+                "label": "Data, then a visual review" if lang == "en" else "数据 + 可视化审阅",
+                "workflow": "study_depth_review",
+            },
+            {
+                "id": "study_depth_full",
+                "kind": "workflow",
+                "label": "All the way to a gated draft" if lang == "en" else "推进到带闸门草稿",
+                "workflow": "study_depth_full",
+            },
+        ]
     if not actions:
         return
     with st.container(key=f"{panel_key}_guided_intents"):
-        cols = st.columns(len(actions), gap="small")
-        for idx, action in enumerate(actions):
-            with cols[idx]:
-                if st.button(
-                    str(action["label"]),
-                    key=f"{panel_key}_guided_intent_{idx}_{action['id']}",
-                    type="secondary",
-                ):
-                    label = str(action.get("label") or "").strip()
-                    st.session_state["_ai_pending_question"] = str(action.get("prompt") or label)
-                    st.session_state["_ai_pending_question_display"] = label
-                    st.rerun()
+        rows: list[list[dict[str, object]]] = [actions]
+        if guided_fullscreen and len(actions) > 1 and str(actions[-1].get("id") or "") == "study_regoal":
+            rows = [actions[:-1], [actions[-1]]]
+        for row_idx, row_actions in enumerate(rows):
+            if not row_actions:
+                continue
+            cols = st.columns(len(row_actions), gap="small")
+            for idx, action in enumerate(row_actions):
+                with cols[idx]:
+                    if st.button(
+                        str(action["label"]),
+                        key=f"{panel_key}_guided_intent_{row_idx}_{idx}_{action['id']}",
+                        type="secondary",
+                    ):
+                        label = str(action.get("label") or "").strip()
+                        action_id = str(action.get("id") or "").strip()
+                        workflow = str(action.get("workflow") or "").strip()
+                        if action_id == "choice_question_custom" and guided_fullscreen:
+                            _append_copilot_typemine_action(label, lang)
+                        elif workflow == "study_regoal":
+                            _append_copilot_regoal_action(label, lang)
+                        elif workflow:
+                            if not _append_copilot_depth_choice_action(workflow, label, lang):
+                                _apply_chat_workflow_action(workflow)
+                        else:
+                            st.session_state["_ai_pending_question"] = str(action.get("prompt") or label)
+                            st.session_state["_ai_pending_question_display"] = label
+                        st.rerun()
 
 
 def _render_copilot_hint_chips(lang: str, panel_key: str) -> None:
@@ -7327,7 +7767,7 @@ def _render_copilot_scroll_to_latest_once(panel_key: str) -> None:
 
           function scrollLatest() {{
             const history = doc.querySelector('div[class*="st-key-' + panelKey + '_history"]');
-            const messages = Array.from(doc.querySelectorAll('[data-testid="stChatMessage"]'));
+            const messages = Array.from(doc.querySelectorAll('[data-testid="stChatMessage"], .eu-copilot-dynamic-thread .msg'));
             const latest = messages.length ? messages[messages.length - 1] : null;
             const candidates = [];
 
@@ -7411,6 +7851,7 @@ def _render_compact_chat_panel(
 
     if is_codex_workspace:
         st.markdown('<div class="eu-copilot-gd-conv-marker"></div>', unsafe_allow_html=True)
+    guided_fullscreen = bool(is_codex_workspace and st.session_state.get("_eu_guided_fullscreen"))
 
     history_container = st.container(
         height=history_height,
@@ -7442,40 +7883,51 @@ def _render_compact_chat_panel(
                 welcome_variant=welcome_variant,
             )
         else:
-            for msg_idx, msg in enumerate(recent_messages):
-                role = str(msg.get("role") or "assistant")
-                avatar = ":material/person:" if role == "user" else ":material/smart_toy:"
-                with st.chat_message(role, avatar=avatar):
-                    content = str(msg.get("content") or "")
-                    if role == "user" and not content.strip() and is_codex_workspace:
-                        content = str(msg.get("display_content") or msg.get("label") or "").strip()
-                        if not content:
-                            content = "Selected option" if lang == "en" else "已选择一个选项"
-                    if role == "assistant" and is_codex_workspace:
-                        content = _normalized_copilot_message_content(content, lang)
-                    st.markdown(content)
-                    rendered_actions = False
-                    if role == "assistant" and is_codex_workspace:
-                        actions = _copilot_message_actions_for_current_step(
-                            msg.get("actions"),
-                            lang,
-                            st.session_state,
-                            is_latest=msg_idx == latest_assistant_idx,
-                        )
-                        _render_nav_actions(actions, key_prefix=f"{panel_key}_{msg_idx}")
-                        rendered_actions = True
-                    elif role == "assistant" and msg.get("actions"):
-                        actions = msg["actions"]
-                    if role == "assistant" and is_codex_workspace:
-                        if msg_idx == latest_assistant_idx:
-                            _render_copilot_inline_step_controls(lang, panel_key)
-                            _render_copilot_workflow_snapshot(
-                                msg.get("workflow_snapshot"),
+            if guided_fullscreen:
+                guided_turns = [*_copilot_guided_welcome_turns(lang), *recent_messages]
+                turns_html = "".join(
+                    _copilot_guided_message_html(msg, lang)
+                    for msg in guided_turns
+                )
+                st.markdown(
+                    f'<div class="eu-copilot-dynamic-thread">{turns_html}</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                for msg_idx, msg in enumerate(recent_messages):
+                    role = str(msg.get("role") or "assistant")
+                    avatar = ":material/person:" if role == "user" else ":material/smart_toy:"
+                    with st.chat_message(role, avatar=avatar):
+                        content = str(msg.get("content") or "")
+                        if role == "user" and not content.strip() and is_codex_workspace:
+                            content = str(msg.get("display_content") or msg.get("label") or "").strip()
+                            if not content:
+                                content = "Selected option" if lang == "en" else "已选择一个选项"
+                        if role == "assistant" and is_codex_workspace:
+                            content = _normalized_copilot_message_content(content, lang)
+                        st.markdown(content)
+                        rendered_actions = False
+                        if role == "assistant" and is_codex_workspace:
+                            actions = _copilot_message_actions_for_current_step(
+                                msg.get("actions"),
                                 lang,
-                                key_prefix=f"{panel_key}_{msg_idx}",
+                                st.session_state,
+                                is_latest=msg_idx == latest_assistant_idx,
                             )
-                    if role == "assistant" and msg.get("actions") and not rendered_actions:
-                        _render_nav_actions(actions, key_prefix=f"{panel_key}_{msg_idx}")
+                            _render_nav_actions(actions, key_prefix=f"{panel_key}_{msg_idx}")
+                            rendered_actions = True
+                        elif role == "assistant" and msg.get("actions"):
+                            actions = msg["actions"]
+                        if role == "assistant" and is_codex_workspace:
+                            if msg_idx == latest_assistant_idx:
+                                _render_copilot_inline_step_controls(lang, panel_key)
+                                _render_copilot_workflow_snapshot(
+                                    msg.get("workflow_snapshot"),
+                                    lang,
+                                    key_prefix=f"{panel_key}_{msg_idx}",
+                                )
+                        if role == "assistant" and msg.get("actions") and not rendered_actions:
+                            _render_nav_actions(actions, key_prefix=f"{panel_key}_{msg_idx}")
             if queued_prompt:
                 status_text = (
                     "Using page context to ask the assistant..."
@@ -7513,17 +7965,22 @@ def _render_compact_chat_panel(
                     unsafe_allow_html=True,
                 )
 
+    if show_hint_chips and guided_fullscreen:
+        _render_copilot_primary_chips(lang, panel_key)
+
     composer_host = st.container(key=f"{panel_key}_composer_wrap") if is_codex_workspace else contextlib.nullcontext()
     with composer_host:
-        if show_hint_chips and is_codex_workspace:
+        if show_hint_chips and is_codex_workspace and not guided_fullscreen:
             _render_copilot_primary_chips(lang, panel_key)
-        if show_hint_chips:
+        if show_hint_chips and not guided_fullscreen:
             _render_copilot_hint_chips(lang, panel_key)
 
         with st.form(f"{panel_key}_form", clear_on_submit=True):
             input_col, send_col = st.columns([1, 0.065], gap="small")
             with input_col:
                 placeholder = (
+                    "Reply, or tap an option above to continue..."
+                    if is_codex_workspace and st.session_state.get("_eu_guided_fullscreen") and lang == "en" else
                     'Reply, ask “why?”, choose cohort, or ask about the data path...'
                     if is_codex_workspace and lang == "en" else
                     "Ask about the current workflow..."
@@ -7539,12 +7996,14 @@ def _render_compact_chat_panel(
                 )
             with send_col:
                 send_clicked = st.form_submit_button(
-                    "Send" if lang == "en" else "发送",
+                    " " if guided_fullscreen else ("Send" if lang == "en" else "发送"),
                     type="primary",
                     use_container_width=True,
                 )
         if is_codex_workspace:
             foot_note = (
+                "Research Copilot · reproducible · nothing leaves your machine"
+                if st.session_state.get("_eu_guided_fullscreen") and lang == "en" else
                 "Real-data first · reproducible · nothing leaves your machine"
                 if lang == "en" else
                 "真实数据优先 · 可复现 · 数据不离开本机"
@@ -7560,6 +8019,25 @@ def _render_compact_chat_panel(
 
     if is_codex_workspace:
         _render_copilot_scroll_to_latest_once(panel_key)
+        if guided_fullscreen and st.session_state.pop("_copilot_focus_composer", False):
+            panel_key_json = json.dumps(panel_key)
+            st.components.v1.html(
+                f"""
+                <script>
+                (function() {{
+                  const panelKey = {panel_key_json};
+                  const doc = window.parent && window.parent.document;
+                  if (!doc) return;
+                  function focusComposer() {{
+                    const input = doc.querySelector('div[class*="st-key-' + panelKey + '_composer_wrap"] input');
+                    if (input) input.focus();
+                  }}
+                  [60, 180, 360].forEach((delay) => window.setTimeout(focusComposer, delay));
+                }})();
+                </script>
+                """,
+                height=0,
+            )
 
     if st.session_state.llm_messages and not is_codex_workspace:
         action_cols = st.columns(2)
@@ -7974,8 +8452,10 @@ def _render_floating_copilot_context_actions(lang: str) -> None:
             key="_floating_ai_full_copilot",
             use_container_width=True,
         ):
-            st.session_state["llm_enabled"] = True
-            st.session_state["_llm_toggle"] = True
+            outbound_enabled = bool(st.session_state.get("llm_enabled", False))
+            st.session_state["_llm_toggle"] = outbound_enabled
+            st.session_state["_eu_settings_allow_outbound_model_calls"] = outbound_enabled
+            st.session_state["_llm_toggle_sync_pending"] = True
             st.session_state["_active_main_page"] = "assistant"
             st.session_state["_floating_ai_open"] = False
             st.session_state["_scroll_to_top"] = True
@@ -8090,10 +8570,21 @@ def render_floating_chat_dock(app_context: dict | None = None):
         }
 
         div.st-key-floating_ai_launcher {
-            right: clamp(12px, 1.25vw, 20px);
-            bottom: clamp(12px, 1.25vw, 20px);
-            width: calc(var(--easyicu-ai-launcher-size) + 12px);
+            right: 16px;
+            bottom: 18px;
+            width: 94px;
+            height: 36px;
             animation: easyicuLauncherPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+        }
+
+        /* Floating launcher - component-owned pill treatment.
+           Shell navigation only adjusts mobile bottom-nav clearance. */
+        div.st-key-floating_ai_launcher .stButton,
+        div.st-key-floating_ai_launcher [data-testid="stButton"] {
+            width: 94px !important;
+            height: 36px !important;
+            margin: 0 !important;
+            padding: 0 !important;
         }
 
         /* Notification badge on the launcher button — design token bad. */
@@ -8117,17 +8608,72 @@ def render_floating_chat_dock(app_context: dict | None = None):
             animation: easyicuBadgePulse 1.5s ease-in-out infinite;
         }
 
-        div.st-key-floating_ai_launcher .stButton > button {
-            width: var(--easyicu-ai-launcher-size);
-            min-width: var(--easyicu-ai-launcher-size);
-            height: var(--easyicu-ai-launcher-size);
-            border-radius: 999px;
-            border: 1px solid var(--ink);
-            background: var(--ink) !important;
-            color: #ffffff !important;
-            -webkit-text-fill-color: #ffffff !important;
-            font-size: clamp(1.05rem, 0.8vw + 0.9rem, 1.35rem);
-            box-shadow: var(--sh-3, 0 18px 44px rgba(14,17,22,0.18));
+        div.st-key-floating_ai_launcher .stButton > button,
+        div.st-key-floating_ai_launcher button {
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            position: relative !important;
+            width: 94px !important;
+            min-width: 94px !important;
+            height: 36px !important;
+            min-height: 36px !important;
+            padding: 0 12px 0 36px !important;
+            border: 1px solid var(--hair-2) !important;
+            border-radius: var(--r-pill) !important;
+            background: var(--surface) !important;
+            color: transparent !important;
+            -webkit-text-fill-color: transparent !important;
+            box-shadow: var(--sh-2) !important;
+            font-size: 0 !important;
+            line-height: 1 !important;
+            white-space: nowrap !important;
+        }
+
+        div.st-key-floating_ai_launcher button [data-testid="stMarkdownContainer"],
+        div.st-key-floating_ai_launcher button [data-testid="stMarkdownContainer"] p {
+            display: inline !important;
+            width: 0 !important;
+            max-width: 0 !important;
+            height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: hidden !important;
+            color: transparent !important;
+            -webkit-text-fill-color: transparent !important;
+            font-size: 0 !important;
+            line-height: 1 !important;
+            white-space: nowrap !important;
+        }
+
+        div.st-key-floating_ai_launcher button::before {
+            content: "✦" !important;
+            position: absolute !important;
+            left: 8px !important;
+            top: 50% !important;
+            transform: translateY(-50%) !important;
+            display: grid !important;
+            place-items: center !important;
+            width: 22px !important;
+            height: 22px !important;
+            border-radius: var(--r-pill) !important;
+            background: var(--accent) !important;
+            color: #fff !important;
+            -webkit-text-fill-color: #fff !important;
+            font-size: 11px !important;
+            font-weight: 700 !important;
+        }
+
+        div.st-key-floating_ai_launcher button::after {
+            content: "Copilot" !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            color: var(--accent-ink) !important;
+            -webkit-text-fill-color: var(--accent-ink) !important;
+            font-family: var(--font) !important;
+            font-size: 12px !important;
+            font-weight: 600 !important;
+            line-height: 1 !important;
         }
 
 
@@ -8402,8 +8948,9 @@ def render_floating_chat_dock(app_context: dict | None = None):
             fill: #ffffff !important;
         }
 
-        div.st-key-floating_ai_launcher .stButton > button:hover {
-            filter: brightness(1.02);
+        div.st-key-floating_ai_launcher .stButton > button:hover,
+        div.st-key-floating_ai_launcher button:hover {
+            filter: brightness(1.02) !important;
         }
 
         div.st-key-floating_ai_panel .stChatInput {

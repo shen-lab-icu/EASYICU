@@ -544,3 +544,47 @@ def test_copilot_real_data_path_help_uses_local_data_step(monkeypatch) -> None:
     assert study["data_source_choice"] == "prepared_path"
     assert "path field below this conversation" in body
     assert any(action["id"] == "choice_data_prepared_path" for action in actions)
+
+
+# ---------------------------------------------------------------------------
+# Copilot history context-budget guard
+# ---------------------------------------------------------------------------
+#
+# `_compose_agent_messages` appends the in-session conversation history to the
+# LLM payload. The persistence cap (SAVE_LIMIT) and UI render cap never bounded
+# that payload, so a long study session grew the prompt linearly until the
+# provider rejected it. `_trim_history_for_budget` keeps only the most recent
+# turns within COPILOT_HISTORY_CHAR_BUDGET.
+
+
+def test_trim_history_empty_returns_empty():
+    assert llm_chat._trim_history_for_budget([]) == []
+
+
+def test_trim_history_under_budget_is_unchanged_and_ordered():
+    history = [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": "b"},
+        {"role": "user", "content": "c"},
+    ]
+    assert llm_chat._trim_history_for_budget(history, 1000) == history
+
+
+def test_trim_history_keeps_most_recent_tail_within_budget():
+    history = [{"role": "user", "content": "X" * 100} for _ in range(10)]
+    # 100 + 100 = 200 <= 250; adding a third (300) exceeds -> keep 2 newest
+    kept = llm_chat._trim_history_for_budget(history, 250)
+    assert kept == history[-2:]
+
+
+def test_trim_history_always_keeps_current_prompt_even_if_oversized():
+    history = [
+        {"role": "user", "content": "old"},
+        {"role": "user", "content": "Z" * 5000},
+    ]
+    assert llm_chat._trim_history_for_budget(history, 100) == [history[-1]]
+
+
+def test_trim_history_tolerates_non_string_content():
+    history = [{"role": "user", "content": None}]
+    assert llm_chat._trim_history_for_budget(history, 10) == history
