@@ -367,6 +367,17 @@ COPILOT_RECENT_SESSION_RENDER_LIMIT = 6
 # ~60k chars ≈ 15k tokens, comfortably inside the windows of the external
 # providers Copilot targets while still carrying many turns of real context.
 COPILOT_HISTORY_CHAR_BUDGET = 60000
+# Auto-compaction: when the recent-tail history overflows the budget, the older
+# turns that would otherwise be *dropped* are first folded into a rolling
+# summary via one LLM call (the standard auto-compact pattern, cf. Claude Code /
+# OpenHands condenser), so early research intent / cohort / decisions survive
+# instead of silently vanishing. The summary is capped and rewritten in place so
+# it cannot itself grow unbounded; a minimum recent-tail budget is always kept.
+COPILOT_HISTORY_SUMMARY_MAX_CHARS = 4000
+COPILOT_HISTORY_MIN_TAIL_CHAR_BUDGET = 8000
+COPILOT_HISTORY_FOLD_MSG_CHAR_CAP = 2000
+COPILOT_CTX_SUMMARY_KEY = "_copilot_ctx_summary"
+COPILOT_CTX_SUMMARY_COUNT_KEY = "_copilot_ctx_summary_count"
 COPILOT_BRANCH_CONFIG = {
     "predict": {
         "chip": "Model ICU outcomes",
@@ -4447,6 +4458,162 @@ def _trim_history_for_budget(
     return kept
 
 
+def _plan_history_compaction(
+    history: list[dict[str, object]],
+    summarized_count: int,
+    summary: str,
+    *,
+    budget: int = COPILOT_HISTORY_CHAR_BUDGET,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Pure split of the live (un-summarized) history into (fold_block, kept_tail).
+
+    ``summarized_count`` leading messages are already folded into ``summary`` and
+    are excluded from the payload. Of the remaining live tail, the most recent
+    turns that fit ``budget`` (less the room the summary itself occupies, but
+    never below a recent-tail floor) are kept; the older live turns are returned
+    as ``fold_block`` so the caller can summarize them. No I/O, no LLM — testable
+    in isolation.
+    """
+    live = history[summarized_count:]
+    reserve = min(len(summary), COPILOT_HISTORY_SUMMARY_MAX_CHARS)
+    tail_budget = max(COPILOT_HISTORY_MIN_TAIL_CHAR_BUDGET, budget - reserve)
+    kept_tail = _trim_history_for_budget(live, tail_budget)
+    fold_block = live[: len(live) - len(kept_tail)]
+    return fold_block, kept_tail
+
+
+def _summarize_history_block(
+    client,
+    model: str,
+    prior_summary: str,
+    block: list[dict[str, object]],
+    lang: str,
+) -> str | None:
+    """One non-streaming LLM call folding ``block`` into an updated running summary.
+
+    Returns ``None`` on any failure so the caller falls back to pure truncation
+    — we never fabricate a summary we did not actually produce.
+    """
+    if not block:
+        return prior_summary or None
+    transcript = "\n".join(
+        f"{m.get('role', '?')}: {str(m.get('content') or '')[:COPILOT_HISTORY_FOLD_MSG_CHAR_CAP]}"
+        for m in block
+    )
+    system = (
+        "You compact older turns of a research-assistant conversation into a "
+        "concise factual running summary. Preserve: the user's research "
+        "intent/question, chosen cohort / concepts / databases / time windows, "
+        "decisions made, constraints, and any unresolved questions. Drop "
+        "pleasantries and redundant restatement. Rewrite the prior summary in "
+        f"place; keep the whole summary under {COPILOT_HISTORY_SUMMARY_MAX_CHARS} "
+        "characters. Output only the updated summary, no preamble."
+        if lang == "en"
+        else (
+            "你负责把研究助手对话中较早的轮次压缩成简洁、忠实的滚动摘要。需保留："
+            "用户的研究意图/问题、所选队列/概念/数据库/时间窗、已做的决定、约束、"
+            "以及尚未解决的问题。去掉客套与重复复述。在原摘要基础上原地重写，整个摘要"
+            f"控制在 {COPILOT_HISTORY_SUMMARY_MAX_CHARS} 字符以内。只输出更新后的摘要，不要前言。"
+        )
+    )
+    user = (
+        f"PRIOR SUMMARY:\n{prior_summary or '(none)'}\n\n"
+        f"OLDER TURNS TO FOLD IN:\n{transcript}\n\n"
+        "Return the UPDATED running summary only."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_tokens=700,
+            temperature=0.1,
+            stream=False,
+        )
+        text = resp.choices[0].message.content
+    except Exception:
+        return None
+    text = _strip_llm_reasoning(text or "").strip()
+    return text or None
+
+
+def _default_history_summarizer(lang: str):
+    """Resolve a summarizer callable through the same gate the chat uses, or None.
+
+    Honors the external-LLM opt-in (raises -> caught -> None) and provider
+    configuration, so offline / Mock / not-opted-in sessions transparently skip
+    summarization and fall back to truncation.
+    """
+    try:
+        if not _external_llm_ready(lang):
+            return None
+    except AIOptInError:
+        return None
+    client = _get_client()
+    if client is None:
+        return None
+    provider = coerce_public_provider(
+        st.session_state.get("llm_provider", public_default_provider_key())
+    )
+    p_info = public_provider_defaults(provider)
+    model = (st.session_state.get("llm_model", "").strip() or p_info[2])
+
+    def _summ(prior: str, block: list[dict[str, object]]) -> str | None:
+        return _summarize_history_block(client, model, prior, block, lang)
+
+    return _summ
+
+
+def _compacted_history_for_payload(summarizer=None) -> list[dict[str, object]]:
+    """Build the history portion of the LLM payload with rolling-summary compaction.
+
+    Reads/writes the rolling-summary state in ``st.session_state``. When the live
+    tail overflows the budget, the older turns are folded into the summary via
+    ``summarizer`` (resolved through :func:`_default_history_summarizer` when not
+    injected). If no summarizer is available or it fails, falls back to pure
+    truncation of the tail — the conversation never breaks. Only shapes the LLM
+    payload; the full ``llm_messages`` list is left untouched.
+    """
+    history = list(st.session_state.get("llm_messages") or [])
+    if not history:
+        return []
+    summarized_count = int(st.session_state.get(COPILOT_CTX_SUMMARY_COUNT_KEY, 0) or 0)
+    summary = str(st.session_state.get(COPILOT_CTX_SUMMARY_KEY, "") or "")
+    # A cleared / restarted session shrinks llm_messages — drop stale summary.
+    if summarized_count > len(history):
+        summarized_count = 0
+        summary = ""
+        st.session_state[COPILOT_CTX_SUMMARY_COUNT_KEY] = 0
+        st.session_state[COPILOT_CTX_SUMMARY_KEY] = ""
+
+    fold_block, kept_tail = _plan_history_compaction(history, summarized_count, summary)
+
+    if fold_block:
+        if summarizer is None:
+            lang = str(st.session_state.get("language", "en"))
+            summarizer = _default_history_summarizer(lang)
+        if summarizer is not None:
+            new_summary = summarizer(summary, fold_block)
+            if new_summary:
+                summary = new_summary[:COPILOT_HISTORY_SUMMARY_MAX_CHARS]
+                summarized_count += len(fold_block)
+                st.session_state[COPILOT_CTX_SUMMARY_KEY] = summary
+                st.session_state[COPILOT_CTX_SUMMARY_COUNT_KEY] = summarized_count
+
+    payload: list[dict[str, object]] = []
+    if summary:
+        prefix = (
+            "Summary of earlier conversation (older turns compacted to fit context):\n"
+            if str(st.session_state.get("language", "en")) == "en"
+            else "早先对话摘要（为适配上下文，较早轮次已压缩）：\n"
+        )
+        payload.append({"role": "system", "content": prefix + summary})
+    payload.extend(kept_tail)
+    return payload
+
+
 def _compose_agent_messages(prompt: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Assemble system/context messages and return tool activity log."""
     tool_events: list[dict[str, str]] = []
@@ -4482,7 +4649,7 @@ def _compose_agent_messages(prompt: str) -> tuple[list[dict[str, str]], list[dic
         if pubmed_context:
             messages.append({"role": "system", "content": pubmed_context})
 
-    messages.extend(_trim_history_for_budget(st.session_state.llm_messages))
+    messages.extend(_compacted_history_for_payload())
     return messages, tool_events
 
 
