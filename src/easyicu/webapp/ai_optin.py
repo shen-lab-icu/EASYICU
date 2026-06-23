@@ -23,8 +23,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-import streamlit as st
-
 
 class AIOptInError(RuntimeError):
     """Raised when an external LLM call is attempted without sidebar opt-in."""
@@ -48,7 +46,46 @@ def _is_offline_choice(llm_choice: Optional[str]) -> bool:
 
 def is_ai_enabled() -> bool:
     """Return the canonical sidebar opt-in flag."""
+    import streamlit as st
+
     return bool(st.session_state.get("llm_enabled", False))
+
+
+def is_offline_llm_choice(llm_choice: Optional[str]) -> bool:
+    """Return True when a selected LLM is local/offline and needs no opt-in."""
+    return _is_offline_choice(llm_choice)
+
+
+def check_external_llm_opt_in(
+    llm_choice: Optional[str] = None,
+    *,
+    ai_enabled: bool,
+    language: str = "zh",
+) -> None:
+    """Pure opt-in check reusable outside Streamlit-rendered pages.
+
+    ``enforce_external_llm_opt_in`` remains the Streamlit sidebar gate. Native
+    server paths pass their persisted ``ai_enabled`` mirror here so provider
+    gating has one shared classification and error semantics without needing
+    to read ``st.session_state``.
+    """
+    if _is_offline_choice(llm_choice):
+        return
+    if bool(ai_enabled):
+        return
+
+    resolved_language = language or "zh"
+    if resolved_language == "en":
+        raise AIOptInError(
+            "AI features are disabled. Enable AI assistant in the sidebar, "
+            "or tick the per-run external LLM opt-in before launching this "
+            "run. You can also pick the offline MockLLMClient option."
+        )
+    raise AIOptInError(
+        "AI 功能当前处于关闭状态。请先在侧边栏的 Copilot 设置中启用, "
+        "或勾选本次运行的外部 LLM 调用授权后再启动。也可以选择离线的 "
+        "MockLLMClient。"
+    )
 
 
 def enforce_external_llm_opt_in(
@@ -75,27 +112,23 @@ def enforce_external_llm_opt_in(
         When ``llm_choice`` requires an external call and the sidebar
         ``llm_enabled`` flag is False.
     """
-    if _is_offline_choice(llm_choice):
-        return
-    if is_ai_enabled():
-        return
+    if language:
+        resolved_language = language
+    else:
+        import streamlit as st
 
-    resolved_language = language or st.session_state.get("language", "zh")
-    if resolved_language == "en":
-        raise AIOptInError(
-            "AI features are disabled. Enable AI assistant in the sidebar, "
-            "or tick the per-run external LLM opt-in before launching this "
-            "run. You can also pick the offline MockLLMClient option."
-        )
-    raise AIOptInError(
-        "AI 功能当前处于关闭状态。请先在侧边栏的 Copilot 设置中启用, "
-        "或勾选本次运行的外部 LLM 调用授权后再启动。也可以选择离线的 "
-        "MockLLMClient。"
+        resolved_language = st.session_state.get("language", "zh")
+    check_external_llm_opt_in(
+        llm_choice,
+        ai_enabled=is_ai_enabled(),
+        language=resolved_language,
     )
 
 
 __all__ = [
     "AIOptInError",
+    "check_external_llm_opt_in",
     "enforce_external_llm_opt_in",
     "is_ai_enabled",
+    "is_offline_llm_choice",
 ]

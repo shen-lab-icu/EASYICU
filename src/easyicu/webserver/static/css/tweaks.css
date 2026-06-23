@@ -1,0 +1,91 @@
+/* ============================================================
+   EasyICU — Tweaks panel (vanilla)
+   Hidden when Tweaks is off. Matches the app's clinical aesthetic.
+   ============================================================ */
+.tw-panel{
+  position: fixed; right: 18px; bottom: 18px; z-index: 9999;
+  width: 288px;
+  background: var(--surface);
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-3);
+  box-shadow: var(--sh-3);
+  font-family: var(--font-sans);
+  color: var(--ink);
+  overflow: hidden;
+}
+.tw-panel[hidden]{ display: none; }
+
+.tw-head{
+  display: flex; align-items: center; gap: 9px;
+  padding: 11px 12px; border-bottom: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
+  cursor: grab; user-select: none;
+}
+.tw-head.grabbing{ cursor: grabbing; }
+.tw-mark{
+  width: 24px; height: 24px; border-radius: var(--r-1); flex: none;
+  background: var(--ink); color: #fff; display: grid; place-items: center;
+}
+.tw-title{ font-size: 12.75px; font-weight: 600; letter-spacing: -0.01em; }
+.tw-sub{ font-size: 10px; color: var(--ink-4); font-family: var(--font-mono); }
+.tw-x{
+  margin-left: auto; width: 24px; height: 24px; border: 0; background: transparent;
+  border-radius: var(--r-1); color: var(--ink-4); cursor: pointer;
+  display: grid; place-items: center;
+}
+.tw-x:hover{ background: var(--surface-2); color: var(--ink); }
+
+.tw-body{ padding: 13px 12px; display: flex; flex-direction: column; gap: 15px; max-height: 70vh; overflow: auto; }
+.tw-sec .tw-lbl{
+  font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-4); margin-bottom: 9px;
+}
+
+.tw-swatches{ display: flex; gap: 9px; }
+.tw-sw{
+  width: 30px; height: 30px; border-radius: 50%; cursor: pointer; padding: 0;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--hair-2);
+  transition: box-shadow .12s;
+}
+.tw-sw:hover{ box-shadow: 0 0 0 1px var(--hair-3); }
+.tw-sw.on{ box-shadow: 0 0 0 2px var(--ink); }
+
+.tw-seg{
+  display: flex; gap: 3px; padding: 3px;
+  background: var(--surface-2); border: 1px solid var(--hair); border-radius: var(--r-2);
+}
+.tw-seg button{
+  flex: 1; height: 28px; border: 0; background: transparent;
+  font: inherit; font-size: 11.5px; font-weight: 500; color: var(--ink-3);
+  border-radius: var(--r-1); cursor: pointer; white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.tw-seg button:hover{ color: var(--ink); }
+.tw-seg button.on{ background: var(--surface); color: var(--ink); box-shadow: var(--sh-1); font-weight: 600; }
+
+.tw-foot{
+  padding: 9px 12px; border-top: 1px solid var(--hair);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.tw-foot .tw-note{ font-size: 10.5px; color: var(--ink-4); }
+.tw-reset{ font-size: 11.5px; font-weight: 500; color: var(--ink-3); background: transparent; border: 0; cursor: pointer; }
+.tw-reset:hover{ color: var(--ink); }
+
+@media (max-width: 480px){
+  .tw-panel{ right: 10px; left: 10px; bottom: 10px; width: auto; }
+}
+
+/* ---------- Compact density overrides ---------- */
+body[data-density="compact"] .content{ padding: 18px 20px; }
+body[data-density="compact"] .card.pad{ padding: 13px 15px; }
+body[data-density="compact"] .page-head{ margin-bottom: 14px; }
+body[data-density="compact"] .sec-stack{ margin: 18px 0 9px; }
+body[data-density="compact"] .sec{ margin: 18px 0 9px; }
+body[data-density="compact"] .eu-table tbody td{ padding: 6px 12px; }
+body[data-density="compact"] .eu-table thead th{ padding: 7px 12px; }
+body[data-density="compact"] .nav-item{ height: 32px; }
+body[data-density="compact"] .set-row{ padding: 10px 0; }
+body[data-density="compact"] .stat{ padding: 10px 13px; }
+body[data-density="compact"] .topbar{ height: 50px; }
+body[data-density="compact"] .plan-item{ padding: 8px 4px; }

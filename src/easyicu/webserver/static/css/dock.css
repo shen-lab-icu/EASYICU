@@ -1,0 +1,82 @@
+/* ============================================================
+   EasyICU — Copilot dock
+   A persistent, context-aware companion that lives alongside the
+   classic workspace. Slides in from the right; chat drives the GUI,
+   the current page feeds the chat. Body-level so it survives route
+   re-renders (like the Tweaks panel). Reuses chat bubble styles.
+   ============================================================ */
+
+/* floating launcher */
+#cpFab{
+  position: fixed; right: 20px; bottom: 20px; z-index: 60;
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 46px; padding: 0 16px 0 14px;
+  border: 1px solid var(--accent-border); border-radius: var(--r-pill);
+  background: var(--surface); color: var(--accent-ink);
+  box-shadow: var(--sh-3); cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600;
+  transition: transform .14s, box-shadow .14s;
+}
+#cpFab:hover{ transform: translateY(-1px); box-shadow: var(--sh-4, 0 14px 40px rgba(14,17,22,.2)); }
+#cpFab .fab-mk{ width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; flex: none; }
+#cpFab[hidden]{ display: none; }
+
+/* dock panel */
+#cpDock{
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 61;
+  width: 392px; max-width: 100vw;
+  display: flex; flex-direction: column;
+  background: var(--surface); border-left: 1px solid var(--hair);
+  box-shadow: -18px 0 50px rgba(14,17,22,.12);
+  transform: translateX(100%);
+  transition: transform .28s cubic-bezier(.2,.8,.2,1);
+  font-family: var(--font-sans); color: var(--ink);
+}
+#cpDock.open{ transform: none; }
+#cpBackdrop{ position: fixed; inset: 0; z-index: 60; background: rgba(14,17,22,.18); opacity: 0; pointer-events: none; transition: opacity .2s; }
+#cpBackdrop.open{ opacity: 1; pointer-events: auto; }
+@media (min-width: 980px){ #cpBackdrop{ display: none; } }
+@media (prefers-reduced-motion: reduce){ #cpDock{ transition: none; } }
+
+.cp-head{
+  display: flex; align-items: center; gap: 11px; flex: none;
+  padding: 13px 14px; border-bottom: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
+}
+.cp-head .cp-mk{ width: 30px; height: 30px; border-radius: var(--r-2); flex: none; background: var(--accent-soft); color: var(--accent-ink); border: 1px solid var(--accent-border); display: grid; place-items: center; }
+.cp-head .cp-name{ font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.cp-head .cp-ctx{ font-size: 10.5px; color: var(--ink-4); font-family: var(--font-mono); margin-top: 1px; }
+.cp-head .grow{ flex: 1; }
+.cp-iconbtn{ width: 30px; height: 30px; border: 0; background: transparent; border-radius: var(--r-1); color: var(--ink-4); cursor: pointer; display: grid; place-items: center; }
+.cp-iconbtn:hover{ background: var(--surface-2); color: var(--ink); }
+
+.cp-scroll{ flex: 1; overflow-y: auto; padding: 18px 14px; display: flex; flex-direction: column; gap: 14px; }
+.cp-scroll .msg{ max-width: 100%; }
+.cp-scroll .msg.bot .m-bubble{ background: var(--surface-2); font-size: 12.75px; }
+.cp-scroll .msg.user .m-bubble{ font-size: 12.75px; }
+.cp-scroll .m-bubble .mb-list{ margin: 7px 0 0; padding-left: 17px; display: flex; flex-direction: column; gap: 4px; }
+.cp-scroll .m-bubble .mb-list li{ font-size: 12px; }
+
+/* a context "you're on X" chip line */
+.cp-ctxline{ display: flex; align-items: center; gap: 7px; font-size: 10.5px; color: var(--ink-4); font-family: var(--font-mono); padding: 2px 2px; }
+.cp-ctxline .dotline{ flex: 1; height: 1px; background: var(--hair); }
+
+.cp-suggest{ flex: none; padding: 0 14px 10px; display: flex; flex-wrap: wrap; gap: 7px; }
+.cp-suggest .suggest-chip{ font-size: 11.75px; }
+.cp-suggest .suggest-chip.act{ border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-ink); }
+
+.cp-composer{ flex: none; display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-top: 1px solid var(--hair); }
+.cp-composer .c-in{ flex: 1; height: 38px; padding: 0 12px; border-radius: var(--r-2); border: 1px solid var(--hair-2); background: var(--surface-2); font: inherit; font-size: 12.75px; color: var(--ink); outline: none; }
+.cp-composer .c-in:focus{ border-color: var(--accent-border); background: var(--surface); }
+.cp-composer .c-go{ width: 38px; height: 38px; border-radius: var(--r-2); flex: none; background: var(--ink); color: #fff; border: 0; cursor: pointer; display: grid; place-items: center; }
+.cp-foot{ flex: none; padding: 0 14px 11px; font-size: 10px; color: var(--ink-4); text-align: center; }
+
+/* GUI-driven flash: briefly highlight the workspace when chat changes it */
+.eu-flash{ animation: eu-flash 1.1s ease-out; }
+@keyframes eu-flash{ 0%{ box-shadow: inset 0 0 0 2px var(--accent); } 100%{ box-shadow: inset 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce){ .eu-flash{ animation: none; } }
+
+@media (max-width: 600px){
+  #cpDock{ width: 100vw; }
+  #cpFab{ right: 14px; bottom: 14px; }
+}
