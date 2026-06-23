@@ -378,6 +378,41 @@ COPILOT_HISTORY_MIN_TAIL_CHAR_BUDGET = 8000
 COPILOT_HISTORY_FOLD_MSG_CHAR_CAP = 2000
 COPILOT_CTX_SUMMARY_KEY = "_copilot_ctx_summary"
 COPILOT_CTX_SUMMARY_COUNT_KEY = "_copilot_ctx_summary_count"
+# Token-aware budgeting. The fixed char budget above is a safe but provider-blind
+# floor: it under-uses a 200k-token model and could still overflow a tiny local
+# one. In production `_compose_agent_messages` derives the history budget from the
+# *selected provider's* context window (best-effort token estimate via tiktoken
+# when available, else a chars/4 heuristic) so the same code adapts to an 8k local
+# model and a 200k Claude alike. The char constants remain the unit-test default
+# and the fallback when no window can be resolved.
+COPILOT_CONTEXT_WINDOW_DEFAULT = 32768
+COPILOT_RESPONSE_TOKEN_RESERVE = 2048
+COPILOT_NONHISTORY_TOKEN_RESERVE = 4096
+COPILOT_HISTORY_TOKEN_BUDGET_FLOOR = 2000
+COPILOT_HISTORY_SUMMARY_MAX_TOKENS = 1000
+COPILOT_HISTORY_MIN_TAIL_TOKENS = 1500
+COPILOT_PER_MESSAGE_TOKEN_OVERHEAD = 4
+# Best-effort context windows by model-name substring. Conservative — when a
+# model is unmatched we fall back to COPILOT_CONTEXT_WINDOW_DEFAULT, and
+# EASYICU_COPILOT_CONTEXT_WINDOW overrides everything for power users.
+COPILOT_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    "gpt-4o": 128000,
+    "gpt-4.1": 128000,
+    "gpt-4-turbo": 128000,
+    "gpt-4": 8192,
+    "gpt-3.5": 16385,
+    "o1": 128000,
+    "o3": 128000,
+    "o4": 128000,
+    "claude": 200000,
+    "deepseek": 65536,
+    "qwen": 32768,
+    "glm": 128000,
+    "gemini": 1000000,
+    "llama": 128000,
+    "mistral": 32768,
+    "mixtral": 32768,
+}
 COPILOT_BRANCH_CONFIG = {
     "predict": {
         "chip": "Model ICU outcomes",
@@ -4432,8 +4467,84 @@ def _apply_chat_workflow_action(workflow: str) -> None:
     state.pop("_ai_pending_question", None)
 
 
+_TOKEN_ENCODER: object | None = None
+_TOKEN_ENCODER_TRIED = False
+
+
+def _get_token_encoder():
+    """Lazily import a tiktoken encoder; cache the (possibly None) result."""
+    global _TOKEN_ENCODER, _TOKEN_ENCODER_TRIED
+    if _TOKEN_ENCODER_TRIED:
+        return _TOKEN_ENCODER
+    _TOKEN_ENCODER_TRIED = True
+    try:
+        import tiktoken
+
+        _TOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        _TOKEN_ENCODER = None
+    return _TOKEN_ENCODER
+
+
+def _estimate_tokens(text: str) -> int:
+    """Best-effort token count: tiktoken when available, else a chars/4 heuristic."""
+    if not text:
+        return 0
+    encoder = _get_token_encoder()
+    if encoder is not None:
+        try:
+            return len(encoder.encode(text))
+        except Exception:
+            pass
+    return max(1, len(text) // 4)
+
+
+def _message_token_size(message: dict[str, object]) -> int:
+    """Estimated tokens for one chat message, with per-message framing overhead."""
+    return _estimate_tokens(str(message.get("content") or "")) + COPILOT_PER_MESSAGE_TOKEN_OVERHEAD
+
+
+def _provider_context_window() -> int:
+    """Best-effort context window (tokens) for the selected provider/model.
+
+    Order: ``EASYICU_COPILOT_CONTEXT_WINDOW`` env override → model-name substring
+    match → conservative default. Never raises.
+    """
+    override = os.getenv("EASYICU_COPILOT_CONTEXT_WINDOW", "").strip()
+    if override:
+        try:
+            value = int(override)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    try:
+        provider = coerce_public_provider(
+            st.session_state.get("llm_provider", public_default_provider_key())
+        )
+        model = (st.session_state.get("llm_model", "") or "").strip().lower()
+        if not model:
+            model = str(public_provider_defaults(provider)[2] or "").lower()
+    except Exception:
+        model = ""
+    for key, window in COPILOT_MODEL_CONTEXT_WINDOWS.items():
+        if key in model:
+            return window
+    return COPILOT_CONTEXT_WINDOW_DEFAULT
+
+
+def _copilot_history_token_budget() -> int:
+    """History token budget = context window minus response + non-history reserves."""
+    window = _provider_context_window()
+    budget = window - COPILOT_RESPONSE_TOKEN_RESERVE - COPILOT_NONHISTORY_TOKEN_RESERVE
+    return max(COPILOT_HISTORY_TOKEN_BUDGET_FLOOR, budget)
+
+
 def _trim_history_for_budget(
-    history: list[dict[str, object]], char_budget: int = COPILOT_HISTORY_CHAR_BUDGET
+    history: list[dict[str, object]],
+    char_budget: int = COPILOT_HISTORY_CHAR_BUDGET,
+    *,
+    size_fn=None,
 ) -> list[dict[str, object]]:
     """Keep the most recent conversation turns within ``char_budget``.
 
@@ -4443,13 +4554,19 @@ def _trim_history_for_budget(
     exceeds the budget, so the user's question is never dropped. Returns the
     kept tail in original chronological order. This only shapes the LLM payload;
     the full ``llm_messages`` list in session/persistence is untouched.
+
+    ``size_fn`` measures one message; it defaults to its content char length, so
+    ``char_budget`` is in chars. Pass :func:`_message_token_size` (and a token
+    budget) to operate in estimated tokens instead.
     """
     if not history:
         return []
+    if size_fn is None:
+        size_fn = lambda message: len(str(message.get("content") or ""))  # noqa: E731
     kept: list[dict[str, object]] = []
     used = 0
     for message in reversed(history):
-        size = len(str(message.get("content") or ""))
+        size = size_fn(message)
         if kept and used + size > char_budget:
             break
         kept.append(message)
@@ -4464,6 +4581,10 @@ def _plan_history_compaction(
     summary: str,
     *,
     budget: int = COPILOT_HISTORY_CHAR_BUDGET,
+    size_fn=None,
+    summary_sizer=None,
+    min_tail: int = COPILOT_HISTORY_MIN_TAIL_CHAR_BUDGET,
+    summary_cap: int = COPILOT_HISTORY_SUMMARY_MAX_CHARS,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Pure split of the live (un-summarized) history into (fold_block, kept_tail).
 
@@ -4473,11 +4594,17 @@ def _plan_history_compaction(
     never below a recent-tail floor) are kept; the older live turns are returned
     as ``fold_block`` so the caller can summarize them. No I/O, no LLM — testable
     in isolation.
+
+    All sizes are in one unit chosen by the caller: the defaults measure chars,
+    while passing ``size_fn=_message_token_size`` / ``summary_sizer=_estimate_tokens``
+    (plus token ``budget`` / ``min_tail`` / ``summary_cap``) operates in tokens.
     """
+    if summary_sizer is None:
+        summary_sizer = len
     live = history[summarized_count:]
-    reserve = min(len(summary), COPILOT_HISTORY_SUMMARY_MAX_CHARS)
-    tail_budget = max(COPILOT_HISTORY_MIN_TAIL_CHAR_BUDGET, budget - reserve)
-    kept_tail = _trim_history_for_budget(live, tail_budget)
+    reserve = min(summary_sizer(summary), summary_cap)
+    tail_budget = max(min_tail, budget - reserve)
+    kept_tail = _trim_history_for_budget(live, tail_budget, size_fn=size_fn)
     fold_block = live[: len(live) - len(kept_tail)]
     return fold_block, kept_tail
 
@@ -4566,7 +4693,15 @@ def _default_history_summarizer(lang: str):
     return _summ
 
 
-def _compacted_history_for_payload(summarizer=None) -> list[dict[str, object]]:
+def _compacted_history_for_payload(
+    summarizer=None,
+    *,
+    budget: int = COPILOT_HISTORY_CHAR_BUDGET,
+    size_fn=None,
+    summary_sizer=None,
+    min_tail: int = COPILOT_HISTORY_MIN_TAIL_CHAR_BUDGET,
+    summary_cap: int = COPILOT_HISTORY_SUMMARY_MAX_CHARS,
+) -> list[dict[str, object]]:
     """Build the history portion of the LLM payload with rolling-summary compaction.
 
     Reads/writes the rolling-summary state in ``st.session_state``. When the live
@@ -4575,6 +4710,11 @@ def _compacted_history_for_payload(summarizer=None) -> list[dict[str, object]]:
     injected). If no summarizer is available or it fails, falls back to pure
     truncation of the tail — the conversation never breaks. Only shapes the LLM
     payload; the full ``llm_messages`` list is left untouched.
+
+    Sizing defaults to chars; production (:func:`_compose_agent_messages`) passes
+    the token-aware budget + sizers so compaction tracks the provider's window.
+    The stored summary string is always clipped in chars (a storage guard),
+    independent of the budgeting unit.
     """
     history = list(st.session_state.get("llm_messages") or [])
     if not history:
@@ -4588,7 +4728,16 @@ def _compacted_history_for_payload(summarizer=None) -> list[dict[str, object]]:
         st.session_state[COPILOT_CTX_SUMMARY_COUNT_KEY] = 0
         st.session_state[COPILOT_CTX_SUMMARY_KEY] = ""
 
-    fold_block, kept_tail = _plan_history_compaction(history, summarized_count, summary)
+    fold_block, kept_tail = _plan_history_compaction(
+        history,
+        summarized_count,
+        summary,
+        budget=budget,
+        size_fn=size_fn,
+        summary_sizer=summary_sizer,
+        min_tail=min_tail,
+        summary_cap=summary_cap,
+    )
 
     if fold_block:
         if summarizer is None:
@@ -4649,7 +4798,15 @@ def _compose_agent_messages(prompt: str) -> tuple[list[dict[str, str]], list[dic
         if pubmed_context:
             messages.append({"role": "system", "content": pubmed_context})
 
-    messages.extend(_compacted_history_for_payload())
+    messages.extend(
+        _compacted_history_for_payload(
+            budget=_copilot_history_token_budget(),
+            size_fn=_message_token_size,
+            summary_sizer=_estimate_tokens,
+            min_tail=COPILOT_HISTORY_MIN_TAIL_TOKENS,
+            summary_cap=COPILOT_HISTORY_SUMMARY_MAX_TOKENS,
+        )
+    )
     return messages, tool_events
 
 
