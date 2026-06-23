@@ -560,6 +560,128 @@ class PlannerAgent:
         return AnalysisPlan.model_validate(data)
 
 
+# ---------------------------------------------------------------------------
+# Replanner prompt context-budget guards
+# ---------------------------------------------------------------------------
+#
+# The replanner prompt embeds every completed step's record (incl. its full
+# ``step_summary.json``) plus the probe summary. Both are written by step code
+# and are NOT byte-capped at the source — a single step that dumps a wide
+# interaction matrix or per-subgroup table into its summary (the exact failure
+# class noted in CLAUDE.md: pilot-1's 295-leaf interaction dump) would otherwise
+# inflate the prompt without bound, multiplied by up to ``max_total_steps`` (12).
+# Small-context local engines (glm / qwen / deepseek, see ``llm.py``) overflow
+# well before a frontier model would.
+#
+# These guards slim ONLY the prompt projection. The full records keep flowing to
+# the in-run validators (``_step_contract_findings`` et al.) and to disk/evidence
+# untouched, so auditability and replay are unaffected.
+_REPLANNER_STEP_SUMMARY_CHAR_BUDGET = 3000
+_REPLANNER_TOTAL_RECORDS_CHAR_BUDGET = 24000
+_REPLANNER_PROBE_CHAR_BUDGET = 6000
+_REPLANNER_FINDING_KEYS = ("validator", "severity", "message")
+_REPLANNER_MAX_FINDINGS_PER_LIST = 8
+_REPLANNER_FINDING_MESSAGE_CHARS = 240
+# Top-level record keys the replanner actually reasons over (status, intent,
+# observed artefacts, validation findings). Inputs the replanner already has via
+# CURRENT PLAN (e.g. analysis_request / visualization_request) are dropped.
+_REPLANNER_RECORD_KEEP_KEYS = (
+    "step_id",
+    "intent",
+    "status",
+    "semantics_family",
+    "returncode",
+    "timed_out",
+    "deterministic_code_fallback",
+    "concept_audit_error_count",
+    "concept_repair_attempts",
+    "code_repair_attempts",
+    "isolation_degraded",
+    "dependency_step_id",
+)
+_REPLANNER_RECORD_FINDING_KEYS = ("usage_findings", "visual_findings")
+
+
+def _clip_json(value: Any, *, char_budget: int) -> str:
+    """Serialize ``value`` to JSON, clipping to ``char_budget`` deterministically."""
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) <= char_budget:
+        return text
+    head = text[: max(0, char_budget)]
+    return f"{head}…[truncated {len(text) - len(head)} chars for replanner context budget]"
+
+
+def _compact_findings(raw: Any) -> List[Dict[str, Any]]:
+    """Project a findings list down to validator / severity / clipped message."""
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for item in raw[:_REPLANNER_MAX_FINDINGS_PER_LIST]:
+        if not isinstance(item, dict):
+            continue
+        compact: Dict[str, Any] = {}
+        for key in _REPLANNER_FINDING_KEYS:
+            if key not in item:
+                continue
+            val = item[key]
+            if key == "message" and isinstance(val, str):
+                val = val[:_REPLANNER_FINDING_MESSAGE_CHARS]
+            compact[key] = val
+        if compact:
+            out.append(compact)
+    return out
+
+
+def _slim_record_for_replanner(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Project one completed-step record to the compact view the replanner needs."""
+    slim: Dict[str, Any] = {}
+    for key in _REPLANNER_RECORD_KEEP_KEYS:
+        if key in record:
+            slim[key] = record[key]
+    summary = record.get("step_summary")
+    if summary is not None:
+        summary_text = json.dumps(summary, ensure_ascii=False, default=str)
+        if len(summary_text) > _REPLANNER_STEP_SUMMARY_CHAR_BUDGET:
+            slim["step_summary"] = _clip_json(
+                summary, char_budget=_REPLANNER_STEP_SUMMARY_CHAR_BUDGET
+            )
+        else:
+            slim["step_summary"] = summary
+    for key in _REPLANNER_RECORD_FINDING_KEYS:
+        compact = _compact_findings(record.get(key))
+        if compact:
+            slim[key] = compact
+    return slim
+
+
+def _slim_completed_records_for_prompt(
+    records: Sequence[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Slim every record, then enforce a global budget by collapsing oldest first.
+
+    Records are slimmed independently, then — if the serialized blob still
+    exceeds :data:`_REPLANNER_TOTAL_RECORDS_CHAR_BUDGET` — the oldest records are
+    collapsed to an identity stub (newest steps carry the freshest signal the
+    replanner needs), keeping the projection deterministic and order-stable.
+    """
+    slimmed = [_slim_record_for_replanner(r) for r in records]
+    if len(json.dumps(slimmed, ensure_ascii=False, default=str)) <= (
+        _REPLANNER_TOTAL_RECORDS_CHAR_BUDGET
+    ):
+        return slimmed
+    for idx in range(len(slimmed)):
+        blob = json.dumps(slimmed, ensure_ascii=False, default=str)
+        if len(blob) <= _REPLANNER_TOTAL_RECORDS_CHAR_BUDGET:
+            break
+        rec = slimmed[idx]
+        slimmed[idx] = {
+            "step_id": rec.get("step_id"),
+            "status": rec.get("status"),
+            "collapsed": "older step elided to fit replanner context budget",
+        }
+    return slimmed
+
+
 class ReplannerAgent(PlannerAgent):
     """Revise an existing plan after probe outputs or executed steps."""
 
@@ -572,7 +694,9 @@ class ReplannerAgent(PlannerAgent):
         completed_step_records: Optional[Sequence[Dict[str, Any]]] = None,
         directive: Optional[str] = None,
     ) -> AnalysisPlan:
-        completed = list(completed_step_records or [])
+        completed = _slim_completed_records_for_prompt(
+            list(completed_step_records or [])
+        )
         # A ``directive`` is a high-priority, runtime-issued instruction (e.g. a
         # self-inflicted-block override on a task-viable cohort). It is surfaced
         # first so the replanner cannot bury it under the routine revise prose.
@@ -595,7 +719,7 @@ class ReplannerAgent(PlannerAgent):
                     "revise only the remaining steps when the probe summary or "
                     "completed step outputs justify it.\n\n"
                     f"CURRENT PLAN:\n{current_plan.model_dump_json(indent=2)}\n\n"
-                    f"PROBE SUMMARY:\n{json.dumps(probe_summary or {}, ensure_ascii=False, default=str)}\n\n"
+                    f"PROBE SUMMARY:\n{_clip_json(probe_summary or {}, char_budget=_REPLANNER_PROBE_CHAR_BUDGET)}\n\n"
                     f"COMPLETED STEP RECORDS:\n{json.dumps(completed, ensure_ascii=False, default=str)}\n\n"
                     "RESEARCH CONTEXT:\n" + _format_context(context)
                 ),
