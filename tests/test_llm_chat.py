@@ -588,3 +588,81 @@ def test_trim_history_always_keeps_current_prompt_even_if_oversized():
 def test_trim_history_tolerates_non_string_content():
     history = [{"role": "user", "content": None}]
     assert llm_chat._trim_history_for_budget(history, 10) == history
+
+
+# ---------------------------------------------------------------------------
+# Copilot rolling-summary auto-compaction
+# ---------------------------------------------------------------------------
+
+
+def test_plan_history_compaction_keeps_recent_tail_and_yields_fold_block():
+    history = [{"role": "user", "content": "X" * 1000} for _ in range(40)]
+    fold, kept = llm_chat._plan_history_compaction(
+        history, summarized_count=0, summary="", budget=10000
+    )
+    # tail budget floor is 8000 chars -> ~8 of the 1000-char messages kept
+    assert kept == history[-len(kept):]
+    assert fold == history[: len(history) - len(kept)]
+    assert fold and kept  # genuinely split
+
+
+def test_plan_history_compaction_excludes_already_summarized_prefix():
+    history = [{"role": "user", "content": f"m{i}"} for i in range(10)]
+    fold, kept = llm_chat._plan_history_compaction(
+        history, summarized_count=4, summary="prior", budget=10_000_000
+    )
+    # everything after the summarized prefix fits -> nothing to fold
+    assert fold == []
+    assert kept == history[4:]
+
+
+def test_compacted_history_folds_oldest_into_summary(monkeypatch):
+    state = _State({"llm_messages": [{"role": "user", "content": "Z" * 1000} for _ in range(80)],
+                    "language": "en"})
+    monkeypatch.setattr(llm_chat, "st", SimpleNamespace(session_state=state))
+    calls = []
+
+    def fake_summarizer(prior, block):
+        calls.append((prior, len(block)))
+        return "ROLLING SUMMARY"
+
+    payload = llm_chat._compacted_history_for_payload(summarizer=fake_summarizer)
+
+    assert calls and calls[0][0] == ""  # first fold sees empty prior summary
+    assert payload[0] == {"role": "system",
+                          "content": "Summary of earlier conversation (older turns compacted to fit context):\nROLLING SUMMARY"}
+    # state advanced so the same turns are not re-summarized next time
+    assert state[llm_chat.COPILOT_CTX_SUMMARY_KEY] == "ROLLING SUMMARY"
+    assert state[llm_chat.COPILOT_CTX_SUMMARY_COUNT_KEY] == calls[0][1]
+    # the kept tail is the most recent messages, in order
+    assert payload[-1] == state["llm_messages"][-1]
+
+
+def test_compacted_history_falls_back_to_truncation_when_summarizer_unavailable(monkeypatch):
+    msgs = [{"role": "user", "content": "Z" * 1000} for _ in range(80)]
+    state = _State({"llm_messages": msgs, "language": "en"})
+    monkeypatch.setattr(llm_chat, "st", SimpleNamespace(session_state=state))
+
+    # summarizer returns None (e.g. offline / failed call) -> no summary message,
+    # tail is still truncated and the count is NOT advanced (no fabricated summary)
+    payload = llm_chat._compacted_history_for_payload(summarizer=lambda prior, block: None)
+
+    assert all(m.get("content", "").startswith("Summary of earlier") is False for m in payload)
+    assert state.get(llm_chat.COPILOT_CTX_SUMMARY_COUNT_KEY, 0) == 0
+    assert payload[-1] == msgs[-1]
+    assert len(payload) < len(msgs)  # truncated
+
+
+def test_compacted_history_resets_stale_summary_after_clear(monkeypatch):
+    state = _State({
+        "llm_messages": [{"role": "user", "content": "fresh"}],
+        "language": "en",
+        llm_chat.COPILOT_CTX_SUMMARY_KEY: "OLD SESSION SUMMARY",
+        llm_chat.COPILOT_CTX_SUMMARY_COUNT_KEY: 99,  # > len(history) -> stale
+    })
+    monkeypatch.setattr(llm_chat, "st", SimpleNamespace(session_state=state))
+    payload = llm_chat._compacted_history_for_payload(summarizer=lambda p, b: "SHOULD NOT FIRE")
+
+    assert state[llm_chat.COPILOT_CTX_SUMMARY_COUNT_KEY] == 0
+    assert state[llm_chat.COPILOT_CTX_SUMMARY_KEY] == ""
+    assert payload == [{"role": "user", "content": "fresh"}]
