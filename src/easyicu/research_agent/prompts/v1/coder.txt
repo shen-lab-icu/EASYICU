@@ -211,6 +211,16 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   and missingness before modelling. If treatment timing is unavailable,
   describe the analysis as an observed association or selection
   diagnostic only, never as a treatment effect.
+- Exposure/event TIMING is available in the wide cohort: alongside the
+  magnitude summaries (`<c>_max/_min/_mean/_first/_n/_measured`), a
+  time-series concept also carries `<c>_first_time` and `<c>_last_time`
+  — the `charttime` in hours from ICU admission of the FIRST and LAST
+  recorded value. `<c>_first_time` is the initiation/onset time (e.g.
+  `norepi_rate_first_time` is the vasopressor start hour), so
+  early-vs-delayed or time-to-event exposures CAN be constructed when
+  these columns are present. Check for them before concluding that
+  row-level timing is unavailable; a NaN means the concept was never
+  recorded for that stay (no onset), not that timing is unknown.
 - If a missingness or component-completeness QC check finds that interpretation is
   unsafe, write the QC artefacts and stop cleanly with null primary
   estimates. Do not repair by silently changing the clinical estimand

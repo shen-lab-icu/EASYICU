@@ -18,7 +18,13 @@ Two sources, auto-detected:
 
 For every time-series concept it emits a wide per-stay summary
 (``<c>_max/_min/_mean/_first/_n/_measured``) over a window, matching the
-data-quality-gate input contract (see ``docs/qc_eligibility_gate_design_v1``).
+data-quality-gate input contract (see ``docs/qc_eligibility_gate_design_v1``),
+plus timing columns ``<c>_first_time/_last_time`` carrying the ``charttime``
+(hours from ICU admission) of the first/last recorded value. The timing
+columns are what make exposure-timing questions answerable — e.g. the first
+``charttime`` where ``norepi_rate`` is recorded is the vasopressor initiation
+time, so "early vs delayed" exposure groups can be constructed from the wide
+cohort without re-reading the raw event stream.
 For every concept named by a CTAS cohort predicate it additionally emits a
 bare ``<concept_id>`` column carrying the predicate's declared aggregation, so
 :func:`easyicu.research_agent.cohort_schema.build_cohort` can apply the
@@ -176,11 +182,51 @@ def _resolve_source(
     return "converted", root
 
 
+def _timing_columns(w: pd.DataFrame, concept: str) -> pd.DataFrame:
+    """Per-stay ``<c>_first_time`` / ``<c>_last_time`` for one concept.
+
+    The time index (``charttime``, hours from ICU admission) of the FIRST and
+    LAST *recorded* (non-null) value of ``concept`` inside the window. Computed
+    on the raw column **before** any presence-coercion, so a categorical event's
+    ``_first_time`` is its true onset, not the window start.
+
+    This is what makes timing-dependent questions answerable: e.g. the first
+    ``charttime`` where ``norepi_rate`` is recorded IS the vasopressor
+    initiation time, so "early vs delayed" exposure can be constructed. Without
+    it the wide summary only exposes magnitude (``_max/_min/_mean/_first``) and
+    an agent wrongly concludes no row-level timing exists and BLOCKs the study.
+
+    A stay with no recorded value is absent here -> the column is NaN after the
+    left-merge, which honestly reads as "never measured / event never occurred",
+    i.e. no onset time.
+    """
+    if TIME_COL not in w.columns:
+        return pd.DataFrame(columns=[ID_COL])
+    recorded = w.loc[w[concept].notna(), [ID_COL, TIME_COL]]
+    if recorded.empty:
+        return pd.DataFrame(columns=[ID_COL])
+    recorded = recorded.sort_values([ID_COL, TIME_COL])
+    g = recorded.groupby(ID_COL)[TIME_COL]
+    first_t = g.first()
+    last_t = g.last()
+    return pd.DataFrame(
+        {
+            ID_COL: first_t.index,
+            f"{concept}_first_time": first_t.to_numpy(),
+            f"{concept}_last_time": last_t.to_numpy(),
+        }
+    )
+
+
 def _summarize_timeseries(df: pd.DataFrame, concept: str, window: Window) -> pd.DataFrame:
     """Per-stay summary columns for one time-series concept over ``window``."""
     w = _window(df, window[0], window[1])
     if w.empty or concept not in w.columns:
         return pd.DataFrame(columns=[ID_COL])
+    # Timing (onset/last-record time) is taken from the RAW non-null values
+    # before the presence-coercion below, so a categorical event keeps its true
+    # onset charttime rather than the window start.
+    timing = _timing_columns(w, concept)
     # The wide summary emits numeric _max/_min/_mean. A concept stored as object
     # (e.g. a ventilation status or a vasopressor drug name) cannot be reduced
     # with max/mean and would raise. Coerce: if any value parses as a number the
@@ -207,6 +253,8 @@ def _summarize_timeseries(df: pd.DataFrame, concept: str, window: Window) -> pd.
     first.columns = [ID_COL, f"{concept}_first"]
     out = out.merge(first, on=ID_COL, how="left")
     out[f"{concept}_measured"] = (out[f"{concept}_n"].fillna(0) > 0).astype(int)
+    if not timing.empty:
+        out = out.merge(timing, on=ID_COL, how="left")
     return out
 
 
