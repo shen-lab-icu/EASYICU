@@ -10,10 +10,20 @@ Code contract:
   charttime where concept=="map" and value_num<65 = hypotension onset), an
   incident-after-exposure endpoint (e.g. first "aki" event whose charttime
   exceeds the first "peep" charttime, among stays AKI-free at baseline), or
-  a landmark / time-varying exposure design. Prefer building these from the
-  trajectory rather than blocking for lack of a pre-built onset/status
-  field; still apply the usual confounding/immortal-time caveats and only
-  block if the components for a defensible definition are themselves absent.
+  a landmark / time-varying exposure design.
+  MANDATORY when a timing/onset/incident question is being gated: if
+  TRAJECTORY_PARQUET is set and contains the concept(s) the endpoint needs,
+  you MUST construct the onset / incident endpoint FROM THE TRAJECTORY
+  (threshold crossing per the rule below) before deciding feasibility. Do
+  NOT block citing "no certified row-level onset/status field" or that a
+  wide column like `<c>_first_time` is only a first-recorded time — the
+  trajectory IS the row-level source you are expected to derive the onset
+  from. Auditing only the wide summary columns and then blocking is a
+  failure of the step, not an honest block. Only block if a required
+  component concept is itself ABSENT from the trajectory, or after building
+  the endpoint the design is still indefensible for a stated reason (then
+  say exactly which component is missing). Always still apply the usual
+  confounding / immortal-time caveats.
 - When defining an ONSET from an ordinal/staged concept (where 0 means
   measured-but-event-absent, e.g. a KDIGO 0-3 stage or a 0/1 indicator),
   the onset is the first charttime where value_num crosses the clinical
