@@ -1,6 +1,19 @@
 Code contract:
 - Read the cohort from os.environ["COHORT_PARQUET"].
 - Write any artefact (CSV, PNG, SVG, JSON) to os.environ["STEP_OUT_DIR"].
+- OPTIONAL trajectory: if os.environ.get("TRAJECTORY_PARQUET") is set, it
+  is a LONG per-timepoint table with columns
+  (stay_id, charttime, concept, value_num, value_str) — charttime is
+  hours from ICU admission, value_num the numeric view. Use it (joined to
+  the cohort on stay_id) when the wide cohort's per-stay summaries cannot
+  express what the step needs: a threshold-crossing onset (e.g. first
+  charttime where concept=="map" and value_num<65 = hypotension onset), an
+  incident-after-exposure endpoint (e.g. first "aki" event whose charttime
+  exceeds the first "peep" charttime, among stays AKI-free at baseline), or
+  a landmark / time-varying exposure design. Prefer building these from the
+  trajectory rather than blocking for lack of a pre-built onset/status
+  field; still apply the usual confounding/immortal-time caveats and only
+  block if the components for a defensible definition are themselves absent.
 - Use matplotlib's "Agg" backend; do not call plt.show().
 - For every manuscript-style PNG figure, also save an SVG with the
   same stem and editable text (`plt.rcParams["svg.fonttype"] = "none"`).

@@ -66,6 +66,46 @@ def test_pipeline_runner_receives_target_outcome_env(ra, tmp_path: Path):
     assert runner.extra_env["OUTCOME_COL"] == "endpoint_x"
 
 
+def test_pipeline_runner_auto_discovers_trajectory_sibling(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+    universe_path = tmp_path / "universe.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(universe_path, index=False)
+    # sibling trajectory next to the universe
+    (tmp_path / "universe_trajectory.parquet").write_bytes(b"x")
+
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path / "work", enable_memory=False)
+    runner = pipeline._build_runner(
+        run_dir=tmp_path / "run",
+        cohort_path=cohort_path,
+        target_outcome="endpoint_x",
+        universe_path=universe_path,
+    )
+    assert runner.extra_env["TRAJECTORY_PARQUET"] == str(
+        tmp_path / "universe_trajectory.parquet"
+    )
+
+
+def test_pipeline_runner_no_trajectory_env_when_sibling_absent(ra, tmp_path: Path):
+    cohort_path = tmp_path / "cohort.parquet"
+    pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
+        cohort_path, index=False
+    )
+    universe_path = tmp_path / "universe.parquet"
+    pd.DataFrame({"stay_id": [1]}).to_parquet(universe_path, index=False)
+
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path / "work", enable_memory=False)
+    runner = pipeline._build_runner(
+        run_dir=tmp_path / "run",
+        cohort_path=cohort_path,
+        target_outcome="endpoint_x",
+        universe_path=universe_path,
+    )
+    assert "TRAJECTORY_PARQUET" not in runner.extra_env
+
+
 def test_pipeline_runner_preserves_explicit_outcome_env_override(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
