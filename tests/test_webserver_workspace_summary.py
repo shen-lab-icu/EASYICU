@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from easyicu.webserver.app import app
 from easyicu.webserver import agent_runs
+from easyicu.webserver import numeric_evidence_audit
 from easyicu.webserver.agent_runs import _scan_artifact_payloads
 from easyicu.webserver import dataio
 from easyicu.webserver import provider_adapter
@@ -230,6 +231,444 @@ def test_workspace_summary_endpoint_returns_snapshot_and_rejects_bad_paths(tmp_p
     assert bad.json()["detail"]["error"] == "not_a_directory"
 
 
+def test_patient_review_drilldown_uses_active_source_without_row_payload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    demographics = pd.read_csv(export_dir / "demographics.csv")
+    demographics["subject_id"] = [101, 102, 103]
+    demographics["hadm_id"] = [201, 202, 203]
+    demographics.to_csv(export_dir / "demographics.csv", index=False)
+    source_store.register_source(str(export_dir), label="Review fixture", active=True, crossdb=True)
+    client = TestClient(app)
+
+    response = client.post("/api/patient-review/drilldown", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "real"
+    assert payload["demo"] is False
+    assert payload["source"]["label"] == "Review fixture"
+    assert len(payload["source"]["path_hash"]) == 12
+    assert "path" not in payload["source"]
+    assert payload["summary"]["entities"] == 3
+    assert payload["summary"]["modules"] == 5
+    assert payload["summary"]["mortality"] == 33.3
+    assert payload["summary"]["median_sofa2"] == 6.5
+    assert len(payload["entities"]) == 3
+    assert payload["entities"][0]["ref"].startswith("ent_")
+    assert payload["selected"]["label"] == "Entity 1"
+    assert payload["selected"]["demographics"] == {"age": 50.0, "sex": "F"}
+    assert payload["selected"]["scores"] == {"sofa2_max": 5.0, "sepsis3_sofa2": True}
+    assert payload["selected"]["outcomes"] == {"status": "Survived", "icu_los_days": 2.0}
+    signals = {row["key"]: row for row in payload["selected"]["signals"]}
+    assert signals["hr"]["values"] == [90.0, 95.0]
+    assert signals["hr"]["bounded"] is True
+    assert signals["hr"]["max_points"] == 12
+    assert any(item["id"] == "raw_identifier_table" for item in payload["blocked_features"])
+    serialized = json.dumps(payload)
+    for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
+        assert marker not in serialized
+
+
+def test_patient_review_drilldown_selects_pseudonymous_entity_ref(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+    client = TestClient(app)
+
+    first = client.post("/api/patient-review/drilldown", json={})
+    assert first.status_code == 200
+    second_ref = first.json()["entities"][1]["ref"]
+    selected = client.post("/api/patient-review/drilldown", json={"entity_ref": second_ref})
+
+    assert selected.status_code == 200
+    payload = selected.json()
+    assert payload["selected"]["ref"] == second_ref
+    assert payload["selected"]["label"] == "Entity 2"
+    assert payload["selected"]["demographics"] == {"age": 70.0, "sex": "M"}
+    assert payload["selected"]["outcomes"]["status"] == "Deceased"
+
+
+def test_patient_review_drilldown_fails_closed_without_registered_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    client = TestClient(app)
+
+    no_active = client.post("/api/patient-review/drilldown", json={})
+    unregistered = client.post(
+        "/api/patient-review/drilldown",
+        json={"source_path": str(tmp_path / "missing")},
+    )
+
+    assert no_active.status_code == 400
+    assert no_active.json()["detail"]["error"] == "no_active_export"
+    assert unregistered.status_code == 400
+    assert unregistered.json()["detail"]["error"] == "source_not_registered"
+    assert "path_hash" in unregistered.json()["detail"]
+    assert "path" not in unregistered.json()["detail"]
+
+
+def test_patient_review_drilldown_does_not_read_full_export_tables(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+    original_read_csv = pd.read_csv
+
+    def guarded_read_csv(*args, **kwargs):
+        if "nrows" not in kwargs and "usecols" not in kwargs:
+            raise AssertionError(f"unexpected full CSV read: {args[0]}")
+        return original_read_csv(*args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_csv", guarded_read_csv)
+    client = TestClient(app)
+
+    response = client.post("/api/patient-review/drilldown", json={})
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["entities"] == 3
+
+
+def test_cohort_review_summary_uses_active_source_without_row_payload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    demographics = pd.read_csv(export_dir / "demographics.csv")
+    demographics["subject_id"] = [101, 102, 103]
+    demographics["hadm_id"] = [201, 202, 203]
+    demographics.to_csv(export_dir / "demographics.csv", index=False)
+    source_store.register_source(str(export_dir), label="Cohort fixture", active=True, crossdb=True)
+    client = TestClient(app)
+
+    response = client.post("/api/cohort-review/summary", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "real"
+    assert payload["demo"] is False
+    assert payload["source"]["label"] == "Cohort fixture"
+    assert len(payload["source"]["path_hash"]) == 12
+    assert "path" not in payload["source"]
+    summary = payload["summary"]
+    assert summary["cohort_size"] == 3
+    assert summary["modules"] == 5
+    assert summary["mortality"]["deceased_count"] == 1
+    assert summary["mortality"]["survived_count"] == 2
+    assert summary["mortality_pct"] == 33.3
+    assert summary["age"] == {"count": 3, "mean": 60.0, "median": 60.0, "min": 50.0, "max": 70.0}
+    assert summary["sex"]["female_pct"] == 66.7
+    assert summary["sofa2"]["median"] == 6.5
+    assert summary["los_icu_days"]["median"] == 2.0
+    assert summary["sepsis3"]["positive_count"] == 1
+    assert summary["sepsis_pct"] == 33.3
+    modules = {row["module"]: row for row in payload["coverage"]}
+    assert modules["demographics"]["coverage_pct"] == 100.0
+    assert modules["vitals"]["coverage_pct"] == 66.7
+    assert modules["sepsis3_sofa2"]["quality_status"] == "neutral"
+    assert payload["quality"]["watchlist_count"] == 2
+    assert payload["groups"]["comparison_mode"] == "descriptive_only"
+    assert payload["groups"]["inferential_statistics_allowed"] is False
+    assert {row["id"] for row in payload["groups"]["supported"]} >= {"survival", "age", "sex", "los", "sepsis"}
+    assert payload["table_one"]["status"] == "blocked"
+    assert payload["sofa_reclassification"]["status"] == "blocked"
+    serialized = json.dumps(payload)
+    for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
+        assert marker not in serialized
+
+
+def test_cohort_review_summary_fails_closed_without_registered_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    client = TestClient(app)
+
+    no_active = client.post("/api/cohort-review/summary", json={})
+    unregistered = client.post(
+        "/api/cohort-review/summary",
+        json={"source_path": str(tmp_path / "missing")},
+    )
+
+    assert no_active.status_code == 400
+    assert no_active.json()["detail"]["error"] == "no_active_export"
+    assert unregistered.status_code == 400
+    assert unregistered.json()["detail"]["error"] == "source_not_registered"
+    assert "path_hash" in unregistered.json()["detail"]
+    assert "path" not in unregistered.json()["detail"]
+
+
+def test_cohort_review_summary_rejects_unsupported_filters_and_statistics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+    client = TestClient(app)
+
+    row_filter = client.post(
+        "/api/cohort-review/summary",
+        json={"filters": {"age_at_admission": {"min": 18}}},
+    )
+    p_value = client.post(
+        "/api/cohort-review/summary",
+        json={"statistics": ["p_value"]},
+    )
+
+    assert row_filter.status_code == 400
+    assert row_filter.json()["detail"]["error"] == "unsupported_filter"
+    assert row_filter.json()["detail"]["unsupported"][0]["id"] == "age_at_admission"
+    assert "summary" not in row_filter.json()["detail"]
+    assert p_value.status_code == 400
+    assert p_value.json()["detail"]["error"] == "unsupported_statistic"
+    assert p_value.json()["detail"]["unsupported"][0]["id"] == "p_value"
+    assert "summary" not in p_value.json()["detail"]
+
+
+def test_cohort_review_summary_does_not_read_full_export_tables(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+
+    def fail_read_frame(path: Path):
+        raise AssertionError(f"cohort review must not read full frame: {path}")
+
+    original_read_csv = pd.read_csv
+
+    def guarded_read_csv(*args, **kwargs):
+        if "nrows" not in kwargs and "usecols" not in kwargs:
+            raise AssertionError(f"unexpected full CSV read: {args[0]}")
+        return original_read_csv(*args, **kwargs)
+
+    monkeypatch.setattr(dataio, "_read_export_frame", fail_read_frame)
+    monkeypatch.setattr(pd, "read_csv", guarded_read_csv)
+    client = TestClient(app)
+
+    response = client.post("/api/cohort-review/summary", json={})
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["cohort_size"] == 3
+
+
+def test_data_scan_recognizes_native_manifest_export_as_module_source(tmp_path: Path) -> None:
+    export_dir = _write_csv_export(tmp_path / "export")
+
+    result = dataio.scan_path(str(export_dir), source_hint="module")
+
+    assert result["ok"] is True
+    assert result["source"] == "module"
+    assert result["ready"] is True
+    assert result["layout"][0] == "EasyICU module export"
+
+
+def test_extraction_filter_options_use_active_source_without_row_level_payload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+    client = TestClient(app)
+
+    response = client.post("/api/extraction/filter-options", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "real"
+    assert payload["demo"] is False
+    assert payload["source"]["id"].startswith("src_")
+    assert payload["source"]["label"] == "MIIV"
+    assert len(payload["source"]["path_hash"]) == 12
+    assert "path" not in payload["source"]
+    assert payload["summary"]["cohort_size"] == 3
+    assert payload["summary"]["modules"] == 5
+    assert "source_registry" in payload["provenance"]["computed_from"]
+    modules = {row["module"]: row for row in payload["options"]["modules"]}
+    assert modules["demographics"]["row_count"] == 3
+    assert modules["demographics"]["coverage_pct"] == 100.0
+    assert modules["demographics"]["quality_status"] == "ok"
+    assert modules["sepsis3_sofa2"]["quality_status"] == "neutral"
+    assert "age" in modules["demographics"]["columns"]
+    assert modules["demographics"]["hidden_identifier_columns"] == 1
+    serialized = json.dumps(payload)
+    for marker in ["stay_id", "subject_id", "hadm_id", "tableRows", '"series"']:
+        assert marker not in serialized
+
+
+def test_extraction_filter_preview_applies_supported_metadata_filters(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/extraction/filter-preview",
+        json={"filters": {"min_coverage_pct": 80, "required_columns": ["age"]}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["match_count"] == 1
+    assert payload["matched_modules"][0]["module"] == "demographics"
+    assert payload["aggregate"]["cohort_size"] == 3
+    assert payload["aggregate"]["matched_rows"] == 3
+    serialized = json.dumps(payload)
+    for marker in ["stay_id", "subject_id", "hadm_id", "tableRows", '"series"']:
+        assert marker not in serialized
+
+
+def test_extraction_advanced_filters_fixture_e2e_register_options_and_preview(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    client = TestClient(app)
+
+    registered = client.post(
+        "/api/workspaces/register",
+        json={"path": str(export_dir), "label": "Fixture MIIV", "active": True},
+    )
+    options = client.post("/api/extraction/filter-options", json={})
+    preview = client.post(
+        "/api/extraction/filter-preview",
+        json={"filters": {"quality_statuses": ["warn"], "min_coverage_pct": 50}},
+    )
+
+    assert registered.status_code == 200
+    assert registered.json()["active_path"] == str(export_dir)
+    assert options.status_code == 200
+    assert options.json()["source"]["label"] == "Fixture MIIV"
+    assert preview.status_code == 200
+    payload = preview.json()
+    assert payload["source"]["id"] == options.json()["source"]["id"]
+    assert payload["match_count"] == 2
+    assert {row["module"] for row in payload["matched_modules"]} == {"sofa2_score", "vitals"}
+    assert payload["aggregate"]["cohort_size"] == 3
+    serialized = json.dumps(payload)
+    for marker in ["stay_id", "subject_id", "hadm_id", "tableRows", '"series"']:
+        assert marker not in serialized
+
+
+def test_extraction_filter_preview_rejects_unsupported_filters(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/extraction/filter-preview",
+        json={"filters": {"age_at_admission": {"min": 18}}},
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error"] == "unsupported_filter"
+    assert detail["unsupported"][0]["id"] == "age_at_admission"
+    assert "matched_modules" not in detail
+
+
+def test_extraction_filter_options_fail_closed_without_registered_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    client = TestClient(app)
+
+    no_active = client.post("/api/extraction/filter-options", json={})
+    unregistered = client.post(
+        "/api/extraction/filter-options",
+        json={"source_path": str(tmp_path / "missing")},
+    )
+
+    assert no_active.status_code == 400
+    assert no_active.json()["detail"]["error"] == "no_active_export"
+    assert unregistered.status_code == 400
+    assert unregistered.json()["detail"]["error"] == "source_not_registered"
+    assert "path_hash" in unregistered.json()["detail"]
+
+
+def test_extraction_filter_options_do_not_read_full_export_tables(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+
+    def fail_read_frame(path: Path):
+        raise AssertionError(f"filter metadata must not read full frame: {path}")
+
+    original_read_csv = pd.read_csv
+
+    def guarded_read_csv(*args, **kwargs):
+        if "nrows" not in kwargs and "usecols" not in kwargs:
+            raise AssertionError(f"unexpected full CSV read: {args[0]}")
+        return original_read_csv(*args, **kwargs)
+
+    monkeypatch.setattr(dataio, "_read_export_frame", fail_read_frame)
+    monkeypatch.setattr(pd, "read_csv", guarded_read_csv)
+    client = TestClient(app)
+
+    response = client.post("/api/extraction/filter-options", json={})
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["cohort_size"] == 3
+
+
 def test_crossdb_summary_requires_two_valid_exports_and_compares_metrics(tmp_path: Path) -> None:
     miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
     eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
@@ -296,6 +735,183 @@ def test_crossdb_summary_endpoint_is_fail_closed_until_two_exports(tmp_path: Pat
     assert incompatible.status_code == 400
     assert incompatible.json()["detail"]["error"] == "crossdb_incompatible"
     assert incompatible.json()["detail"]["compatibility_gate"]["status"] == "incompatible"
+
+
+def test_crossdb_review_summary_uses_registered_sources_without_row_payload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
+    eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
+    for export_dir in (miiv, eicu):
+        demographics = pd.read_csv(export_dir / "demographics.csv")
+        demographics["subject_id"] = [101, 102, 103]
+        demographics["hadm_id"] = [201, 202, 203]
+        demographics.to_csv(export_dir / "demographics.csv", index=False)
+    source_store.register_source(str(miiv), label="Primary MIIV", active=True, crossdb=True)
+    source_store.register_source(str(eicu), label="Comparator eICU", active=False, crossdb=True)
+    client = TestClient(app)
+
+    response = client.post("/api/crossdb-review/summary", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "real"
+    assert payload["demo"] is False
+    assert payload["source_count"] == 2
+    assert [source["label"] for source in payload["sources"]] == ["Primary MIIV", "Comparator eICU"]
+    assert all("path" not in source for source in payload["sources"])
+    assert all(len(source["path_hash"]) == 12 for source in payload["sources"])
+    assert payload["shared_modules"] == ["demographics", "outcome", "sepsis3_sofa2", "sofa2_score", "vitals"]
+    gate = payload["compatibility_gate"]
+    assert gate["status"] == "compatible"
+    assert gate["comparison_mode"] == "descriptive_only"
+    assert gate["matched_cohort"] is False
+    assert gate["inferential_statistics_allowed"] is False
+    rows = {row["key"]: row for row in payload["rows"]}
+    assert rows["cohort_size"]["values"] == [3, 3]
+    assert rows["mortality_pct"]["values"] == [33.3, 33.3]
+    assert rows["age_mean"]["values"] == [60.0, 60.0]
+    availability = {row["module"]: row for row in payload["availability"]}
+    assert availability["demographics"]["shared"] is True
+    assert availability["demographics"]["values"][0]["coverage_pct"] == 100.0
+    assert payload["provenance"]["payload_scope"] == "cross_database_aggregate_only"
+    assert payload["privacy"]["raw_rows_returned"] is False
+    assert any(item["id"] == "matched_cohort" for item in payload["blocked_features"])
+    serialized = json.dumps(payload)
+    for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
+        assert marker not in serialized
+
+
+def test_crossdb_review_summary_fails_closed_until_two_registered_sources(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    client = TestClient(app)
+
+    none = client.post("/api/crossdb-review/summary", json={})
+    miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(miiv), active=True, crossdb=True)
+    one = client.post("/api/crossdb-review/summary", json={})
+    unregistered = client.post(
+        "/api/crossdb-review/summary",
+        json={"paths": [str(miiv), str(tmp_path / "missing")]},
+    )
+
+    assert none.status_code == 400
+    assert none.json()["detail"]["error"] == "need_two_exports"
+    assert one.status_code == 400
+    assert one.json()["detail"]["error"] == "need_two_exports"
+    assert one.json()["detail"]["source_count"] == 1
+    assert unregistered.status_code == 400
+    assert unregistered.json()["detail"]["error"] == "source_not_registered"
+    assert "path_hash" in unregistered.json()["detail"]
+    assert "path" not in unregistered.json()["detail"]
+
+
+def test_crossdb_review_summary_rejects_incompatible_missing_core_modules(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
+    eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
+    _drop_export_module(eicu, "outcome")
+    source_store.register_source(str(miiv), active=True, crossdb=True)
+    source_store.register_source(str(eicu), active=False, crossdb=True)
+    client = TestClient(app)
+
+    response = client.post("/api/crossdb-review/summary", json={})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error"] == "crossdb_incompatible"
+    assert detail["compatibility_gate"]["status"] == "incompatible"
+    core_check = next(check for check in detail["compatibility_gate"]["checks"] if check["id"] == "core_modules_shared")
+    assert core_check["missing_modules"] == ["outcome"]
+    serialized = json.dumps(detail)
+    for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
+        assert marker not in serialized
+
+
+def test_crossdb_review_summary_rejects_unsupported_filters_and_statistics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
+    eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
+    source_store.register_source(str(miiv), active=True, crossdb=True)
+    source_store.register_source(str(eicu), active=False, crossdb=True)
+    client = TestClient(app)
+
+    row_filter = client.post(
+        "/api/crossdb-review/summary",
+        json={"filters": {"row_level_filters": {"age": [18, 80]}}},
+    )
+    p_value = client.post(
+        "/api/crossdb-review/summary",
+        json={"statistics": ["p_value"]},
+    )
+    matched = client.post(
+        "/api/crossdb-review/summary",
+        json={"matched_cohort": True},
+    )
+
+    assert row_filter.status_code == 400
+    assert row_filter.json()["detail"]["error"] == "unsupported_filter"
+    assert row_filter.json()["detail"]["unsupported"][0]["id"] == "row_level_filters"
+    assert "rows" not in row_filter.json()["detail"]
+    assert p_value.status_code == 400
+    assert p_value.json()["detail"]["error"] == "unsupported_statistic"
+    assert p_value.json()["detail"]["unsupported"][0]["id"] == "p_value"
+    assert "rows" not in p_value.json()["detail"]
+    assert matched.status_code == 400
+    assert matched.json()["detail"]["error"] == "unsupported_filter"
+    assert matched.json()["detail"]["unsupported"][0]["id"] == "matched_cohort"
+
+
+def test_crossdb_review_summary_does_not_read_full_export_tables(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
+    eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
+    source_store.register_source(str(miiv), active=True, crossdb=True)
+    source_store.register_source(str(eicu), active=False, crossdb=True)
+
+    def fail_read_frame(path: Path):
+        raise AssertionError(f"crossdb review must not read full frame: {path}")
+
+    original_read_csv = pd.read_csv
+
+    def guarded_read_csv(*args, **kwargs):
+        if "nrows" not in kwargs and "usecols" not in kwargs:
+            raise AssertionError(f"unexpected full CSV read: {args[0]}")
+        return original_read_csv(*args, **kwargs)
+
+    monkeypatch.setattr(dataio, "_read_export_frame", fail_read_frame)
+    monkeypatch.setattr(pd, "read_csv", guarded_read_csv)
+    client = TestClient(app)
+
+    response = client.post("/api/crossdb-review/summary", json={})
+
+    assert response.status_code == 200
+    assert response.json()["source_count"] == 2
 
 
 def test_export_source_registry_describes_and_persists_sources(tmp_path: Path, monkeypatch) -> None:
@@ -669,6 +1285,93 @@ def test_agent_artifact_privacy_scan_flags_row_level_payloads() -> None:
     assert ("run_context.json.tableRows[0].stay_id", "stay_id") in markers
 
 
+def test_numeric_evidence_audit_passes_bound_percent_rounding_range_and_delta() -> None:
+    audit = numeric_evidence_audit.audit_numeric_evidence(
+        {
+            "cohort_summary.json": {
+                "summary": {
+                    "mortality_pct": 12.2,
+                    "mean_age": 62.95,
+                    "age": {"min": 50, "max": 70},
+                    "mortality_delta_pct": 16.7,
+                }
+            },
+            "manuscript_draft.json": {
+                "claims": [
+                    {
+                        "id": "c1",
+                        "text": "Mortality was 12.2%, mean age was 63, age range was 50-70, and mortality delta was 16.7%.",
+                        "evidence_ids": ["cohort_summary.json"],
+                    }
+                ],
+                "sentences": [],
+            },
+        }
+    )
+
+    assert audit["passed"] is True
+    assert audit["numeric_claim_count"] == 1
+    assert audit["numeric_mention_count"] == 5
+    assert audit["match_count"] == 5
+    assert audit["matches"][1]["number"] == "63"
+    assert audit["matches"][1]["evidence_value"] == 62.95
+    assert audit["matches"][1]["tolerance"] == 0.5
+
+
+def test_numeric_evidence_audit_fails_mismatch_ghost_and_missing_evidence() -> None:
+    mismatch = numeric_evidence_audit.audit_numeric_evidence(
+        {
+            "cohort_summary.json": {"summary": {"mortality_pct": 12.2}},
+            "manuscript_draft.json": {
+                "claims": [
+                    {
+                        "id": "c1",
+                        "text": "Mortality was 13.2%.",
+                        "evidence_ids": ["cohort_summary.json"],
+                    }
+                ],
+                "sentences": [],
+            },
+        }
+    )
+    ghost = numeric_evidence_audit.audit_numeric_evidence(
+        {
+            "cohort_summary.json": {"summary": {"mortality_pct": 12.2}},
+            "manuscript_draft.json": {
+                "claims": [
+                    {
+                        "id": "c2",
+                        "text": "Mortality was 12.2%.",
+                        "evidence_ids": ["ghost.json"],
+                    }
+                ],
+                "sentences": [],
+            },
+        }
+    )
+    missing = numeric_evidence_audit.audit_numeric_evidence(
+        {
+            "cohort_summary.json": {"summary": {"mortality_pct": 12.2}},
+            "manuscript_draft.json": {
+                "claims": [],
+                "sentences": [{"id": "s1", "text": "Mortality was 12.2%."}],
+            },
+        }
+    )
+
+    assert mismatch["passed"] is False
+    assert mismatch["failures"][0]["reason"] == "numeric_value_not_bound"
+    assert ghost["passed"] is False
+    assert {failure["reason"] for failure in ghost["failures"]} >= {"missing_evidence", "numeric_value_not_bound"}
+    assert missing["passed"] is False
+    assert missing["failures"][0]["reason"] == "numeric_claim_missing_evidence_id"
+    assert missing["sentences_passed"] is False
+    for payload in (mismatch, ghost, missing):
+        serialized = json.dumps(payload)
+        for marker in ["stay_id", "subject_id", "hadm_id", "tableRows", '"series"']:
+            assert marker not in serialized
+
+
 def test_full_agent_mock_run_writes_locked_strict_evidence_artifacts(
     tmp_path: Path,
     monkeypatch,
@@ -722,6 +1425,8 @@ def test_full_agent_mock_run_writes_locked_strict_evidence_artifacts(
     assert checks["provider_opt_in"]["passed"] is True
     assert checks["strict_evidence_bound_claims"]["passed"] is True
     assert checks["strict_evidence_bound_sentences"]["passed"] is True
+    assert checks["numeric_evidence_value_binding"]["passed"] is True
+    assert checks["numeric_evidence_value_binding"]["numeric_mention_count"] == 4
     assert checks["human_signoff"]["passed"] is False
     assert checks["no_patient_rows_persisted"]["scanned_artifacts"] == 6
 
@@ -740,7 +1445,62 @@ def test_full_agent_mock_run_writes_locked_strict_evidence_artifacts(
     assert all(row.get("evidence_ids") for row in draft["sentences"])
     ledger = json.loads(artifact_paths["evidence_ledger.json"].read_text(encoding="utf-8"))
     assert ledger["strict_evidence_audit"]["claims_passed"] is True
+    assert ledger["numeric_evidence_audit"]["passed"] is True
+    assert ledger["numeric_evidence_audit"]["numeric_mention_count"] == 4
     assert ledger["privacy"]["artifact_scan"]["scanned_artifacts"] == 6
+
+
+def test_full_agent_numeric_evidence_gate_blocks_mismatched_mock_claim(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    monkeypatch.setattr(settings_store, "load_settings", lambda: {"ai_enabled": False})
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+    original_payload = agent_runs._mock_full_agent_payload
+
+    def mismatched_payload(**kwargs):
+        payload = original_payload(**kwargs)
+        payload["manuscript_draft"]["claims"][0]["text"] = "Mortality was 13.2% in the active export."
+        payload["manuscript_draft"]["claims"][0]["evidence_ids"] = ["cohort_summary.json"]
+        return payload
+
+    monkeypatch.setattr(agent_runs, "_mock_full_agent_payload", mismatched_payload)
+    client = TestClient(app)
+
+    start = client.post(
+        "/api/jobs/agent-run",
+        json={
+            "run_type": "full",
+            "llm_provider": "mock",
+            "project_root": str(tmp_path / "projects"),
+        },
+    )
+
+    assert start.status_code == 200
+    snapshot = _wait_for_job(client, start.json()["job_id"])
+    assert snapshot["status"] == "done"
+    result = snapshot["result"]
+    gate = result["gate"]
+    assert gate["status"] == "blocked"
+    assert gate["reason"] == "numeric_evidence_gate_failed"
+    assert gate["reportable"] is False
+    assert gate["draft_unlocked"] is False
+    checks = {check["id"]: check for check in gate["checks"]}
+    assert checks["strict_evidence_bound_claims"]["passed"] is True
+    assert checks["strict_evidence_bound_sentences"]["passed"] is True
+    assert checks["numeric_evidence_value_binding"]["passed"] is False
+    assert checks["numeric_evidence_value_binding"]["failure_count"] == 1
+    assert result["numeric_evidence_audit"]["failures"][0]["number"] == "13.2%"
+    serialized = json.dumps({
+        "numeric_evidence_audit": result["numeric_evidence_audit"],
+        "numeric_gate_check": checks["numeric_evidence_value_binding"],
+    })
+    for marker in ["stay_id", "subject_id", "hadm_id", "tableRows", '"series"']:
+        assert marker not in serialized
 
 
 def test_full_agent_external_provider_requires_explicit_opt_in(

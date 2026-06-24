@@ -203,6 +203,12 @@
   let exSource = null;      // 'prepared' | 'module' | 'raw' — what the user pointed at
   let exScanResult = null;  // live /api/data/scan payload for exPath (null until scanned)
   let exScanError = null;   // scan failure message, if any
+  let exFilterOptions = null;   // real-source advanced filter metadata
+  let exFilterPreview = null;   // current metadata-filter preview
+  let exFilterLoading = false;
+  let exFilterError = null;
+  let exMinCoveragePct = 0;
+  let exQualityStatus = 'all';
   let convFail = false;     // demo: conversion hit a recoverable error
 
   // Feature modules — aligned to the real concept catalog (concept_catalog.py:
@@ -246,6 +252,9 @@
   function conceptN() { return selMods().reduce((a, m) => a + m[2], 0); }
   function modKeys() { return selMods().map(m => EX_KEYS[m[0]] || m[0].toLowerCase()); }
   function repaint() { if (window.__euRender) window.__euRender(); }
+  function escHtml(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  }
   function rememberExportPath(path, opts) {
     if (!path) return;
     try { localStorage.setItem('easyicu_last_export_dir', path); } catch (e) {}
@@ -750,6 +759,12 @@
           <div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:14px;">
             ${window.EUIcd ? window.EUIcd.block() : ''}
           </div>
+          <div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:14px;">
+            <div class="row" style="justify-content:space-between;gap:12px;align-items:flex-start;">
+              <div><div style="font-size:12.5px;font-weight:600;color:var(--ink-2);">${t('Real-source filter audit', '真实来源筛选审计')}</div><div style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('Metadata-only checks from the active registered export; unsupported cohort filters fail closed.', '从当前注册导出的元数据计算;未支持的队列筛选保持 fail-closed。')}</div></div>
+            </div>
+            <div class="ex-filter-card">${filterSourceBody()}</div>
+          </div>
         </div>
       </div>
     </div>`;
@@ -758,6 +773,106 @@
     return `<div class="row" style="justify-content:space-between;gap:14px;"><span style="font-size:12.5px;color:var(--ink-2);font-weight:500;">${label}</span><span style="flex:none;">${ctl}</span></div>`;
   }
   function switchEl(on) { return `<span class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" tabindex="0"></span>`; }
+
+  function filterSourceBody() {
+    if (dataMode() !== 'real') {
+      return `
+        <div class="note info mt-16" style="padding:10px 12px;">
+          <div class="ico">${icon('shield', 14)}</div>
+          <div class="body"><div class="t" style="font-size:12px;">${t('Seeded demo filters', '种子演示筛选')}</div><div class="d" style="font-size:11px;margin:0;">${t('This is seeded demo metadata, not a real export source. Switch to Real and register an EasyICU export to compute filter provenance.', '这是种子演示元数据,不是真实导出源。切换到真实模式并注册 EasyICU 导出后才会计算筛选来源。')}</div></div>
+        </div>`;
+    }
+    if (exFilterLoading) {
+      return `
+        <div class="note info mt-16" style="padding:10px 12px;">
+          <div class="ico"><span class="spin sm" style="width:14px;height:14px;"></span></div>
+          <div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Reading registered export metadata…', '正在读取已注册导出的元数据…')}</div></div>
+        </div>`;
+    }
+    if (exFilterError) {
+      return `
+        <div class="note mt-16" style="padding:10px 12px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);">
+          <div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 14)}</div>
+          <div class="body"><div class="t" style="font-size:12px;">${t('Advanced filters failed closed', '高级筛选已 fail-closed')}</div><div class="d mono" style="font-size:11px;margin:0;">${escHtml(exFilterError)}</div></div>
+        </div>
+        <button class="btn sm ghost mt-12" data-ex-filter-load>${icon('refresh', 13)} ${t('Retry metadata check', '重试元数据检查')}</button>`;
+    }
+    if (!exFilterOptions) {
+      return `
+        <div class="note info mt-16" style="padding:10px 12px;">
+          <div class="ico">${icon('shield', 14)}</div>
+          <div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Advanced filters are computed from the active registered EasyICU export. Unsupported cohort-row filters stay blocked rather than being guessed.', '高级筛选从当前注册的 EasyICU 导出计算。未支持的队列行级筛选会保持阻断,不会猜测。')}</div></div>
+        </div>
+        <button class="btn sm mt-12" data-ex-filter-load>${icon('refresh', 13)} ${t('Load real filter options', '加载真实筛选选项')}</button>`;
+    }
+    const src = exFilterOptions.source || {};
+    const mods = (exFilterPreview && exFilterPreview.matched_modules) || ((exFilterOptions.options || {}).modules || []);
+    const unsupported = (((exFilterOptions.filters || {}).unsupported) || []).slice(0, 5);
+    const qualitySeg = `<div class="seg" data-ex-filter-quality>
+      ${['all', 'ok', 'warn', 'bad', 'neutral', 'unknown'].map(q => `<button class="${exQualityStatus === q ? 'active' : ''}" data-val="${q}">${q}</button>`).join('')}
+    </div>`;
+    const coverageSeg = `<div class="seg" data-ex-filter-coverage>
+      ${[0, 50, 80].map(v => `<button class="${exMinCoveragePct === v ? 'active' : ''}" data-val="${v}">≥ ${v}%</button>`).join('')}
+    </div>`;
+    return `
+      <div class="note ok mt-16" style="padding:10px 12px;">
+        <div class="ico">${icon('check', 14, 2.6)}</div>
+        <div class="body">
+          <div class="t" style="font-size:12px;">${t('Real filter provenance', '真实筛选来源')}</div>
+          <div class="d" style="font-size:11px;margin:0;">${escHtml(src.label || 'local')} · ${escHtml(src.database || 'unknown')} · <span class="mono">${escHtml(src.id || src.path_hash || '')}</span> · ${t('hash', '哈希')} <span class="mono">${escHtml(src.path_hash || '')}</span></div>
+        </div>
+      </div>
+      <div class="col gap-10 mt-12">
+        ${advRow(t('Minimum module coverage', '最低模块覆盖度'), coverageSeg)}
+        ${advRow(t('Quality status', '质量状态'), qualitySeg)}
+      </div>
+      <div class="cols-2 mt-12" style="gap:8px;">
+        ${mods.slice(0, 6).map(m => `
+          <div class="ledger-row">
+            <span class="ledger-ico">${icon(m.quality_status === 'ok' ? 'check' : 'shield', 14)}</span>
+            <div><div class="mono" style="font-weight:600;font-size:12px;">${escHtml(m.module)}</div><div style="font-size:11px;color:var(--ink-4);">${Number(m.row_count || 0).toLocaleString()} ${t('rows', '行')} · ${m.coverage_pct == null ? 'coverage n/a' : m.coverage_pct + '%'} · ${escHtml(m.quality_status)}</div></div>
+          </div>`).join('')}
+      </div>
+      <div class="row gap-8 mt-12">
+        <button class="btn sm" data-ex-filter-apply>${icon('refresh', 13)} ${t('Preview supported filters', '预览支持的筛选')}</button>
+        <button class="btn sm ghost" data-ex-filter-usemods ${mods.length ? '' : 'disabled'}>${icon('layers', 13)} ${t('Use matched modules', '使用匹配模块')}</button>
+      </div>
+      <div class="note info mt-12" style="padding:10px 12px;">
+        <div class="ico">${icon('alert', 14)}</div>
+        <div class="body"><div class="t" style="font-size:12px;">${t('Unsupported filters stay blocked', '未支持筛选保持阻断')}</div><div class="d" style="font-size:11px;margin:0;">${unsupported.map(u => escHtml(u.id)).join(', ')}</div></div>
+      </div>`;
+  }
+
+  function loadExtractionFilters() {
+    if (!(window.EU_API && window.EU_API.loadExtractionFilterOptions)) return;
+    exFilterLoading = true; exFilterError = null; repaint();
+    window.EU_API.loadExtractionFilterOptions({})
+      .then(r => { exFilterOptions = r; exFilterPreview = null; exFilterError = null; })
+      .catch(err => { exFilterError = String(err && err.message || err); exFilterOptions = null; exFilterPreview = null; })
+      .finally(() => { exFilterLoading = false; repaint(); });
+  }
+
+  function previewExtractionFilters() {
+    if (!(window.EU_API && window.EU_API.previewExtractionFilters)) return;
+    exFilterLoading = true; exFilterError = null; repaint();
+    const filters = { min_coverage_pct: exMinCoveragePct };
+    if (exQualityStatus !== 'all') filters.quality_statuses = [exQualityStatus];
+    window.EU_API.previewExtractionFilters({ filters })
+      .then(r => { exFilterPreview = r; exFilterError = null; })
+      .catch(err => { exFilterError = String(err && err.message || err); exFilterPreview = null; })
+      .finally(() => { exFilterLoading = false; repaint(); });
+  }
+
+  function useMatchedFilterModules() {
+    const mods = exFilterPreview && Array.isArray(exFilterPreview.matched_modules)
+      ? exFilterPreview.matched_modules
+      : (exFilterOptions && exFilterOptions.options && exFilterOptions.options.modules) || [];
+    const keys = new Set(mods.map(m => m.module));
+    if (!keys.size) return;
+    MODS.forEach(m => { m[3] = keys.has(EX_KEYS[m[0]] || m[0].toLowerCase()); });
+    window.EU_STALE = true;
+    repaint();
+  }
 
   /* ---- modules cfg ---- */
   function modCard(m, i) {
@@ -978,6 +1093,22 @@
       const advc = root.querySelector('[data-ex-advc]'); if (advc) advc.addEventListener('click', () => { exAdvCohort = !exAdvCohort; repaint(); });
       const adve = root.querySelector('[data-ex-adve]'); if (adve) adve.addEventListener('click', () => { exAdvExport = !exAdvExport; repaint(); });
       const allm = root.querySelector('[data-ex-allmods]'); if (allm) allm.addEventListener('click', () => { exShowAllMods = !exShowAllMods; repaint(); });
+      root.querySelectorAll('[data-ex-filter-load]').forEach(b => b.addEventListener('click', loadExtractionFilters));
+      const coverage = root.querySelector('[data-ex-filter-coverage]'); if (coverage) coverage.addEventListener('click', e => {
+        const b = e.target.closest('button'); if (!b) return;
+        exMinCoveragePct = Number(b.dataset.val || 0);
+        previewExtractionFilters();
+      });
+      const quality = root.querySelector('[data-ex-filter-quality]'); if (quality) quality.addEventListener('click', e => {
+        const b = e.target.closest('button'); if (!b) return;
+        exQualityStatus = b.dataset.val || 'all';
+        previewExtractionFilters();
+      });
+      root.querySelectorAll('[data-ex-filter-apply]').forEach(b => b.addEventListener('click', previewExtractionFilters));
+      root.querySelectorAll('[data-ex-filter-usemods]').forEach(b => b.addEventListener('click', useMatchedFilterModules));
+      if (dataMode() === 'real' && exAdvCohort && !exFilterOptions && !exFilterLoading && !exFilterError) {
+        setTimeout(loadExtractionFilters, 0);
+      }
       // reset to core
       const core = root.querySelector('[data-ex-core]'); if (core) core.addEventListener('click', () => { resetToCore(); repaint(); });
       // module toggle

@@ -270,6 +270,7 @@ a{ color: inherit; text-decoration: none; }
 }
 .chip .x{ opacity:.5; cursor:pointer; }
 .chip.solid{ background: var(--surface); }
+button.chip{ appearance:none; cursor:pointer; line-height:1; }
 
 /* ---------- Cards / panels ---------- */
 .card{

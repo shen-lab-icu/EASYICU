@@ -54,6 +54,38 @@
 
 .set-nav{ display: flex; flex-wrap: wrap; gap: 4px; }
 
+@media (max-width: 640px){
+  .settings-page .sr-ctl{
+    flex-wrap: wrap;
+  }
+  .settings-page .sr-ctl .btn,
+  .settings-page .sr-ctl .seg,
+  .settings-page .sr-ctl .path-field{
+    max-width: 100%;
+  }
+  .settings-page .set-about-actions{
+    flex-wrap: wrap;
+  }
+  .settings-page .set-about-actions .btn{
+    flex: 1 1 148px;
+    min-width: 0;
+  }
+  .settings-page .setup-row{
+    gap: 12px;
+    min-width: 0;
+  }
+  .settings-page .setup-row .k{
+    flex: none;
+  }
+  .settings-page .setup-row .vv{
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+  }
+}
+
 /* ---------- AI Assistant ---------- */
 .chat-shell{
   display: grid; grid-template-columns: 1fr 300px; gap: 16px;

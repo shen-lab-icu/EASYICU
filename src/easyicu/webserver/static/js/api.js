@@ -153,8 +153,23 @@
   function scanPath(path, source) {
     return postJSON('/api/data/scan', { path: path, source: source || null });
   }
+  function loadExtractionFilterOptions(body) {
+    return postJSON('/api/extraction/filter-options', body || {});
+  }
+  function previewExtractionFilters(body) {
+    return postJSON('/api/extraction/filter-preview', body || {});
+  }
   function loadWorkspaceSummary(path) {
     return postJSON('/api/workspace/summary', { path: path });
+  }
+  function loadPatientReviewDrilldown(body) {
+    return postJSON('/api/patient-review/drilldown', body || {});
+  }
+  function loadCohortReviewSummary(body) {
+    return postJSON('/api/cohort-review/summary', body || {});
+  }
+  function loadCrossdbReviewSummary(body) {
+    return postJSON('/api/crossdb-review/summary', body || {});
   }
   function loadCrossdbSummary(paths) {
     return postJSON('/api/workspaces/crossdb-summary', { paths: paths || [] });
@@ -213,7 +228,12 @@
   window.EU_API.removeWorkspaceSource = removeWorkspaceSource;
   window.EU_API.listDir = listDir;
   window.EU_API.scanPath = scanPath;
+  window.EU_API.loadExtractionFilterOptions = loadExtractionFilterOptions;
+  window.EU_API.previewExtractionFilters = previewExtractionFilters;
   window.EU_API.loadWorkspaceSummary = loadWorkspaceSummary;
+  window.EU_API.loadPatientReviewDrilldown = loadPatientReviewDrilldown;
+  window.EU_API.loadCohortReviewSummary = loadCohortReviewSummary;
+  window.EU_API.loadCrossdbReviewSummary = loadCrossdbReviewSummary;
   window.EU_API.loadCrossdbSummary = loadCrossdbSummary;
   window.EU_API.loadAgentProviderStatus = loadAgentProviderStatus;
   window.EU_API.startAgentRun = startAgentRun;

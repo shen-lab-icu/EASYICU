@@ -5,17 +5,19 @@
   function vizRail(active) {
     const real = window.EU_DATA === 'real';
     const xdb = active === 'crossdb' ? window.EU_CROSSDB_WORKSPACE : null;
+    const drill = active === 'patient' ? patientDrilldown() : null;
+    const cohort = active === 'cohort' ? cohortReview() : null;
     const ws = window.EU_VIZ_WORKSPACE;
     const label = real ? 'Real' : 'Demo';
-    const dataset = xdb ? `${fmtInt(xdb.source_count)} exports` : (ws ? (ws.path || '').split('/').filter(Boolean).slice(-2).join('/') : (real ? 'No export loaded' : 'Demo · 10 patients'));
-    const cohort = xdb ? 'matched exports required' : (ws ? `${fmtInt(ws.summary && ws.summary.stays)} stays` : (real ? 'load exported tables' : 'demo defaults'));
-    const variables = xdb ? `${fmtInt((xdb.shared_modules || []).length)} shared modules` : (ws ? `${fmtInt(ws.summary && ws.summary.modules)} modules` : (real ? 'from export manifest' : 'demo defaults'));
+    const dataset = xdb ? `${fmtInt(xdb.source_count)} exports` : (drill ? ((drill.source || {}).label || 'Local export') : (cohort ? ((cohort.source || {}).label || 'Local export') : (ws ? ((ws.path || '').split('/').filter(Boolean).slice(-2).join('/') || 'Local export') : (real ? 'No export loaded' : 'Demo · 10 patients'))));
+    const cohortLine = xdb ? 'matched exports required' : (drill ? `${fmtInt(drill.summary && drill.summary.entities)} entities` : (cohort ? `${fmtInt(cohort.summary && cohort.summary.cohort_size)} entities` : (ws ? `${fmtInt(ws.summary && ws.summary.stays)} stays` : (real ? 'load exported tables' : 'demo defaults'))));
+    const variables = xdb ? `${fmtInt((xdb.shared_modules || []).length)} shared modules` : (drill ? `${fmtInt(drill.summary && drill.summary.modules)} modules` : (cohort ? `${fmtInt(cohort.summary && cohort.summary.modules)} modules` : (ws ? `${fmtInt(ws.summary && ws.summary.modules)} modules` : (real ? 'from export manifest' : 'demo defaults'))));
     return `
     <div class="rail-sep"></div>
     <div class="rail-block">
       <div class="rail-head"><span class="t">Current setup</span><span class="pill ${real ? 'ok' : 'demo'}" style="height:20px;"><span class="dot"></span>${label}</span></div>
       <div class="setup-row"><span class="k">Dataset</span><span class="vv">${esc(dataset)}</span></div>
-      <div class="setup-row"><span class="k">Cohort</span><span class="vv">${cohort}</span></div>
+      <div class="setup-row"><span class="k">Cohort</span><span class="vv">${cohortLine}</span></div>
       <div class="setup-row"><span class="k">Variables</span><span class="vv">${variables}</span></div>
       <button class="btn sm block" data-viz-reset style="margin-top:12px;">${icon('sliders', 13)} Edit setup</button>
     </div>`;
@@ -76,6 +78,53 @@
     if (last) paths.push(last);
     return Array.from(new Set(paths.map(p => p.trim()).filter(Boolean)));
   }
+  function patientDrilldown() {
+    return window.EU_PATIENT_DRILLDOWN || null;
+  }
+  function cohortReview() {
+    return window.EU_COHORT_REVIEW || null;
+  }
+  function patientWorkspaceFromDrilldown(payload) {
+    const s = payload && payload.summary ? payload.summary : {};
+    return {
+      ok: true,
+      mode: 'real',
+      database: payload && payload.source ? payload.source.database : null,
+      summary: {
+        stays: s.entities,
+        modules: s.modules,
+        file_count: s.file_count,
+        total_rows: s.total_rows,
+        mean_age: s.mean_age,
+        female_pct: s.female_pct,
+        mortality: s.mortality,
+        median_los_icu: s.median_los_icu,
+        median_sofa2: s.median_sofa2,
+        sepsis_pct: s.sepsis_pct,
+      },
+    };
+  }
+  function cohortWorkspaceFromReview(payload) {
+    const s = payload && payload.summary ? payload.summary : {};
+    return {
+      ok: true,
+      mode: 'real',
+      database: payload && payload.source ? payload.source.database : null,
+      cohortReview: payload,
+      summary: {
+        stays: s.cohort_size,
+        modules: s.modules,
+        file_count: s.file_count,
+        total_rows: s.total_records,
+        mean_age: s.age && s.age.mean,
+        female_pct: s.sex && s.sex.female_pct,
+        mortality: s.mortality_pct,
+        median_los_icu: s.los_icu_days && s.los_icu_days.median,
+        median_sofa2: s.sofa2 && s.sofa2.median,
+        sepsis_pct: s.sepsis_pct,
+      },
+    };
+  }
   function sourceLine(s) {
     const sum = s.summary || {};
     const parts = [];
@@ -130,7 +179,7 @@
       if (!path || !(window.EU_API && window.EU_API.saveWorkspaceRegistry)) return;
       window.EU_API.saveWorkspaceRegistry({ active_path: path }).then(() => {
         try { localStorage.setItem('easyicu_last_export_dir', path); } catch (e) {}
-        window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_STALE = true;
+        window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; window.EU_COHORT_REVIEW = null; window.EU_STALE = true;
         patientView = 'idle'; crossView = 'idle'; repaintScreen(screenId);
       }).catch(err => { vizErr = String(err && err.message || err); repaintScreen(screenId); });
     }));
@@ -141,7 +190,7 @@
       const next = cur.includes(path) ? cur.filter(p => p !== path) : cur.concat([path]);
       if (!(window.EU_API && window.EU_API.saveWorkspaceRegistry)) return;
       window.EU_API.saveWorkspaceRegistry({ crossdb_paths: next }).then(() => {
-        window.EU_CROSSDB_WORKSPACE = null; crossView = 'idle'; repaintScreen(screenId);
+        window.EU_CROSSDB_WORKSPACE = null; window.EU_COHORT_REVIEW = null; crossView = 'idle'; repaintScreen(screenId);
       }).catch(err => { vizErr = String(err && err.message || err); repaintScreen(screenId); });
     }));
     root.querySelectorAll('[data-src-add]').forEach(b => b.addEventListener('click', () => {
@@ -150,7 +199,7 @@
       if (!path || !(window.EU_API && window.EU_API.registerWorkspaceSource)) return;
       const multi = !!root.querySelector('[data-src-cross]');
       window.EU_API.registerWorkspaceSource(path, { active: !multi, crossdb: true }).then(() => {
-        vizErr = null; window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; crossView = 'idle'; patientView = 'idle'; repaintScreen(screenId);
+        vizErr = null; window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; window.EU_COHORT_REVIEW = null; crossView = 'idle'; patientView = 'idle'; repaintScreen(screenId);
       }).catch(err => { vizErr = String(err && err.message || err); repaintScreen(screenId); });
     }));
     root.querySelectorAll('[data-src-rename]').forEach(b => b.addEventListener('click', e => {
@@ -170,7 +219,7 @@
       if (!path || !(window.EU_API && window.EU_API.removeWorkspaceSource)) return;
       if (!window.confirm('Remove this source from the registry? Export files stay on disk.')) return;
       window.EU_API.removeWorkspaceSource(path).then(() => {
-        vizErr = null; window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; crossView = 'idle'; patientView = 'idle'; repaintScreen(screenId);
+        vizErr = null; window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; window.EU_COHORT_REVIEW = null; crossView = 'idle'; patientView = 'idle'; repaintScreen(screenId);
       }).catch(err => { vizErr = String(err && err.message || err); repaintScreen(screenId); });
     }));
     root.querySelectorAll('[data-src-refresh]').forEach(b => b.addEventListener('click', () => {
@@ -199,14 +248,63 @@
       done && done(false);
     });
   }
+  function loadRealPatient(done, entityRef) {
+    if (!(window.EU_API && window.EU_API.loadPatientReviewDrilldown)) {
+      vizErr = 'Patient Review API is unavailable.';
+      done && done(false);
+      return;
+    }
+    const active = registryActivePath();
+    const body = {};
+    if (active) body.source_path = active;
+    if (entityRef) body.entity_ref = entityRef;
+    window.EU_API.loadPatientReviewDrilldown(body).then(payload => {
+      window.EU_PATIENT_DRILLDOWN = payload;
+      window.EU_VIZ_WORKSPACE = patientWorkspaceFromDrilldown(payload);
+      vizErr = null;
+      window.EU_HASWORK = true;
+      done && done(true);
+    }).catch(err => {
+      window.EU_PATIENT_DRILLDOWN = null;
+      window.EU_VIZ_WORKSPACE = null;
+      vizErr = String(err && err.message || err);
+      done && done(false);
+    });
+  }
+  function loadRealCohort(done) {
+    if (!(window.EU_API && window.EU_API.loadCohortReviewSummary)) {
+      vizErr = 'Cohort Review API is unavailable.';
+      done && done(false);
+      return;
+    }
+    const active = registryActivePath();
+    const body = {};
+    if (active) body.source_path = active;
+    window.EU_API.loadCohortReviewSummary(body).then(payload => {
+      window.EU_COHORT_REVIEW = payload;
+      window.EU_VIZ_WORKSPACE = cohortWorkspaceFromReview(payload);
+      vizErr = null;
+      window.EU_HASWORK = true;
+      done && done(true);
+    }).catch(err => {
+      window.EU_COHORT_REVIEW = null;
+      window.EU_VIZ_WORKSPACE = null;
+      vizErr = String(err && err.message || err);
+      done && done(false);
+    });
+  }
   function loadRealCrossdb(done) {
     window.EU_CROSSDB_WORKSPACE = null;
+    window.EU_COHORT_REVIEW = null;
     const paths = defaultCrossdbPaths();
-    if (paths.length >= 2 && window.EU_API && window.EU_API.loadCrossdbSummary) {
-      window.EU_API.loadCrossdbSummary(paths).then(xdb => {
+    if (paths.length >= 2 && window.EU_API && (window.EU_API.loadCrossdbReviewSummary || window.EU_API.loadCrossdbSummary)) {
+      const loader = window.EU_API.loadCrossdbReviewSummary
+        ? window.EU_API.loadCrossdbReviewSummary({ paths: paths })
+        : window.EU_API.loadCrossdbSummary(paths);
+      loader.then(xdb => {
         window.EU_CROSSDB_WORKSPACE = xdb;
         const first = xdb.sources && xdb.sources[0];
-        if (first) window.EU_VIZ_WORKSPACE = { path: first.path, database: first.database, summary: first.summary };
+        if (first) window.EU_VIZ_WORKSPACE = { database: first.database, summary: first.summary };
         vizErr = null;
         window.EU_HASWORK = true;
         done && done(true);
@@ -276,6 +374,39 @@
   }
 
   function ptTables() {
+    const drill = patientDrilldown();
+    if (drill && drill.summary) {
+      const s = drill.summary || {};
+      const rows = [
+        ['Entities', fmtInt(s.entities), 'cohort denominator from active export'],
+        ['Mean age', fmtNum(s.mean_age, 1), 'demographics aggregate'],
+        ['Female', fmtPct(s.female_pct), 'demographics aggregate'],
+        ['Mortality', fmtPct(s.mortality), 'outcome aggregate'],
+        ['Median SOFA-2', fmtNum(s.median_sofa2, 1), 'score aggregate'],
+        ['Sepsis-3 positive', fmtPct(s.sepsis_pct), 'event aggregate'],
+      ];
+      return `
+      <div class="st-stats mt-16">
+        ${[
+          ['Entities', fmtInt(s.entities), 'ok'],
+          ['Mean age', fmtNum(s.mean_age, 1), 'accent'],
+          ['Mortality', fmtPct(s.mortality), 'accent'],
+          ['Median SOFA-2', fmtNum(s.median_sofa2, 1), 'accent'],
+        ].map(([l, v, c]) => `<div class="stat ${c}"><div class="label">${l}</div><div class="val">${v}</div></div>`).join('')}
+      </div>
+      <div class="table-wrap table-scroll mt-16">
+        <table class="eu-table">
+          <thead><tr><th>Aggregate</th><th class="num">Value</th><th>Basis</th></tr></thead>
+          <tbody>
+            ${rows.map(r => `<tr><td class="key">${esc(r[0])}</td><td class="num">${esc(r[1])}</td><td>${esc(r[2])}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="note info mt-16">
+        <div class="ico">${icon('shield', 16)}</div>
+        <div class="body"><span class="t">Row table blocked</span> <span class="d" style="display:inline;">— native Patient Review exposes cohort aggregates and one pseudonymous entity drilldown. Direct identifier tables stay out of the browser payload.</span></div>
+      </div>`;
+    }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && ws.tableRows) {
       const s = ws.summary || {};
@@ -323,6 +454,26 @@
   }
 
   function ptSeries() {
+    const drill = patientDrilldown();
+    const signals = drill && drill.selected ? (drill.selected.signals || []) : [];
+    if (drill && signals.length) {
+      const palette = ['var(--accent)', 'var(--accent)', 'var(--ok)', 'var(--warn)'];
+      return `
+      <div class="cols-2 mt-16">
+        ${signals.map((s, i) => `
+          <div class="mini-chart">
+            <div class="mc-head">
+              <div><div style="font-weight:600;font-size:13px;">${esc(s.name)}</div><div class="mono" style="font-size:10.5px;color:var(--ink-4);">${esc((drill.selected || {}).label || 'Selected entity')} · capped local signal</div></div>
+              <div style="text-align:right;"><div class="mono" style="font-size:18px;font-weight:500;">${fmtNum(s.current, 1)}</div><div class="mono" style="font-size:10px;color:var(--ink-4);">${esc(s.unit || '')}</div></div>
+            </div>
+            <div style="height:36px;">${spark(s.values || [], 520, 36, palette[i % palette.length])}</div>
+          </div>`).join('')}
+      </div>
+      <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">Signal arrays are capped at ${fmtInt((drill.privacy || {}).max_points_per_signal)} points for browser review.</p>`;
+    }
+    if (drill) {
+      return `<div class="empty mt-16"><div class="glyph">${icon('viz', 22)}</div><div class="t">No bounded signals in this export</div><div class="d">The active export did not include supported vitals columns for the selected entity.</div></div>`;
+    }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && Array.isArray(ws.series) && ws.series.length) {
       const palette = ['var(--accent)', 'var(--accent)', 'var(--ok)', 'var(--warn)'];
@@ -361,6 +512,44 @@
   }
 
   function ptPatient() {
+    const drill = patientDrilldown();
+    if (drill && drill.selected) {
+      const selected = drill.selected || {};
+      const demo = selected.demographics || {};
+      const scores = selected.scores || {};
+      const outcomes = selected.outcomes || {};
+      const signals = selected.signals || [];
+      const entities = drill.entities || [];
+      return `
+      <div class="row wrap gap-6 mt-16">
+        <span class="eyebrow" style="align-self:center;margin-right:4px;">Select entity</span>
+        ${entities.map(item => `<button type="button" class="chip ${item.ref === selected.ref ? 'solid' : ''}" data-patient-entity="${esc(item.ref)}" style="${item.ref === selected.ref ? 'border-color:var(--ink);color:var(--ink);' : ''}">${esc(item.label || item.ref)}</button>`).join('')}
+      </div>
+      <div class="split-320 mt-16" style="grid-template-columns:300px 1fr;">
+        <div class="card pad">
+          <div class="eyebrow">Patient summary</div>
+          <div style="font-weight:600;font-size:15px;margin-top:6px;">${esc(selected.label || 'Selected entity')}</div>
+          <div class="col gap-6 mt-12" style="font-size:12.5px;">
+            <div class="setup-row"><span class="k">Age · sex</span><span class="vv">${fmtNum(demo.age, 0)} · ${esc(demo.sex || '—')}</span></div>
+            <div class="setup-row"><span class="k">SOFA-2 (max)</span><span class="vv">${fmtNum(scores.sofa2_max, 1)}</span></div>
+            <div class="setup-row"><span class="k">Sepsis-3</span><span class="vv">${scores.sepsis3_sofa2 == null ? '—' : (scores.sepsis3_sofa2 ? 'Positive' : 'Negative')}</span></div>
+            <div class="setup-row"><span class="k">ICU LOS</span><span class="vv">${fmtNum(outcomes.icu_los_days, 1)} d</span></div>
+            <div class="setup-row"><span class="k">Outcome</span><span class="vv">${esc(outcomes.status || 'Unknown')}</span></div>
+          </div>
+        </div>
+        <div class="mini-chart">
+          <div class="mc-head"><div style="font-weight:600;font-size:13px;">Vitals · ${esc(selected.label || 'selected entity')}</div><span class="mono" style="font-size:10.5px;color:var(--ink-4);">local export · bounded</span></div>
+          <div class="col gap-12 mt-8">
+            ${signals.slice(0, 4).map((s, i) => `
+              <div class="row gap-12" style="align-items:center;"><span class="mono" style="font-size:11px;color:var(--ink-3);width:42px;">${esc(s.key || s.name)}</span><div style="flex:1;height:30px;">${spark(s.values || [], 440, 30, ['var(--accent)', 'var(--accent)', 'var(--ok)', 'var(--warn)'][i % 4])}</div></div>`).join('') || '<div style="font-size:12px;color:var(--ink-4);">No vitals trend available in this export.</div>'}
+          </div>
+        </div>
+      </div>
+      <div class="note info mt-16">
+        <div class="ico">${icon('shield', 16)}</div>
+        <div class="body"><span class="t">Pseudonymous drilldown</span> <span class="d" style="display:inline;">— entity refs are one-way browser tokens for the active local export; direct clinical identifiers are not returned.</span></div>
+      </div>`;
+    }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && ws.patient) {
       const p = ws.patient;
@@ -421,6 +610,24 @@
   }
 
   function ptQuality() {
+    const drill = patientDrilldown();
+    if (drill && Array.isArray(drill.quality)) {
+      return `
+      <div class="card pad mt-16">
+        <div class="eyebrow" style="margin-bottom:6px;">Per-module entity coverage</div>
+        ${drill.quality.map(q => `
+          <div class="qrow"><span>${esc(q.module)}</span><div class="qbar ${q.quality_status === 'ok' ? '' : q.quality_status}"><span style="width:${q.coverage_pct == null ? 0 : Math.max(0, Math.min(100, q.coverage_pct))}%"></span></div><span class="qv">${q.coverage_pct == null ? fmtInt(q.rows) : fmtPct(q.coverage_pct)}</span></div>`).join('')}
+      </div>
+      <div class="note info mt-16">
+        <div class="ico">${icon('shield', 16)}</div>
+        <div class="body"><div class="t">Local export bounded review</div><div class="d">Coverage uses module entity presence over the active export denominator. Formal denominators and claims remain locked to the evidence-bound agent path.</div></div>
+      </div>
+      ${(drill.blocked_features || []).map(item => `
+        <div class="note warn mt-12">
+          <div class="ico">${icon('lock', 14)}</div>
+          <div class="body"><span class="t">${esc(item.id)}</span> <span class="d" style="display:inline;">— ${esc(item.reason || 'blocked')}</span></div>
+        </div>`).join('')}`;
+    }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && Array.isArray(ws.quality)) {
       return `
@@ -455,6 +662,15 @@
       case 'quality': return ptQuality();
     }
   }
+  function bindPatientEntitySelection(root) {
+    root.querySelectorAll('[data-patient-entity]').forEach(b => b.addEventListener('click', () => {
+      const ref = b.dataset.patientEntity;
+      if (!ref || !(window.EU_DATA === 'real')) return;
+      patientView = 'loading';
+      repaintScreen('patient');
+      loadRealPatient(ok => { patientView = ok ? 'loaded' : 'idle'; repaintScreen('patient'); }, ref);
+    }));
+  }
 
   S.patient = {
     section: 'viz', nav: 'viz', sub: 'patient',
@@ -470,12 +686,17 @@
         return `<div class="card pad">${skeletonWorkspace()}</div>`;
       }
       if (patientView === 'loaded') {
+        const drill = patientDrilldown();
         const ws = window.EU_VIZ_WORKSPACE;
-        const s = ws && ws.summary;
+        const s = drill ? drill.summary : (ws && ws.summary);
+        const readyTitle = drill ? 'Local export patient drilldown ready' : (ws ? 'Local export workspace ready' : 'Demo review workspace ready');
+        const readyStats = s
+          ? `${fmtInt(s.entities != null ? s.entities : s.stays)} ${drill ? 'entities' : 'stays'} · ${fmtInt(s.modules)} modules · ${fmtInt(s.total_rows)} rows`
+          : '10 stays · 19 modules · 0 errors';
         return `
         <div class="loaded-bar">
           <span class="pill ok"><span class="dot"></span>Loaded</span>
-          <div class="grow"><span style="font-weight:600;font-size:13px;">${ws ? 'Local export workspace ready' : 'Demo review workspace ready'}</span> <span class="mono" style="font-size:11px;color:var(--ink-4);">${s ? `${fmtInt(s.stays)} stays · ${fmtInt(s.modules)} modules · ${fmtInt(s.total_rows)} rows` : '10 stays · 19 modules · 0 errors'}</span></div>
+          <div class="grow"><span style="font-weight:600;font-size:13px;">${readyTitle}</span> <span class="mono" style="font-size:11px;color:var(--ink-4);">${readyStats}</span></div>
           <button class="btn sm" data-viz-reset>${icon('sliders', 13)} Edit setup</button>
           <button class="btn sm">${icon('download', 13)} Export</button>
         </div>
@@ -544,13 +765,13 @@
         patientView = 'loading';
         repaintScreen('patient');
         if (window.EU_DATA === 'real') {
-          loadRealWorkspace(ok => { patientView = ok ? 'loaded' : 'idle'; repaintScreen('patient'); });
+          loadRealPatient(ok => { patientView = ok ? 'loaded' : 'idle'; repaintScreen('patient'); });
         } else {
           setTimeout(() => { patientView = 'loaded'; window.EU_HASWORK = true; repaintScreen('patient'); }, 1400);
         }
       }));
       root.querySelectorAll('[data-viz-reset]').forEach(b => b.addEventListener('click', () => {
-        patientView = 'idle'; window.EU_VIZ_WORKSPACE = null; repaintScreen('patient');
+        patientView = 'idle'; window.EU_VIZ_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; repaintScreen('patient');
       }));
       const tabsEl = root.querySelector('#ptabs');
       if (tabsEl) tabsEl.addEventListener('click', e => {
@@ -558,7 +779,9 @@
         patientTab = b.dataset.ptab;
         tabsEl.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.ptab === patientTab));
         root.querySelector('#ptbody').innerHTML = patientTabBody();
+        bindPatientEntitySelection(root);
       });
+      bindPatientEntitySelection(root);
     },
   };
 
@@ -579,15 +802,115 @@
   }
 
   function cohortPanelBody() {
+    const review = cohortReview();
     switch (cohortPanel) {
-      case 'coverage': return window.EUAudit ? window.EUAudit.panel() : '';
-      case 'sofa':     return window.EUSofa ? window.EUSofa.panel() : '';
+      case 'coverage': return review ? cohortCoverageBody(review) : (window.EUAudit ? window.EUAudit.panel() : '');
+      case 'sofa':     return review ? cohortSofaBody(review) : (window.EUSofa ? window.EUSofa.panel() : '');
       case 'snapshot': return cohortSnapshotBody();
       default:         return cohortGroupsBody();
     }
   }
 
+  function cohortCoverageBody(review) {
+    const rows = review.coverage || [];
+    const q = review.quality || {};
+    return `
+      <div class="sec-stack"><div class="lbl">Coverage audit</div><h2>Real module coverage and quality</h2></div>
+      <div class="audit-cards">
+        ${[
+          ['Modules OK', fmtInt(q.modules_ok)],
+          ['Watchlist', fmtInt(q.watchlist_count)],
+          ['Median coverage', fmtPct(q.median_coverage_pct)],
+          ['Neutral event modules', fmtInt(q.modules_neutral)],
+          ['Unknown coverage', fmtInt(q.modules_unknown)],
+        ].map(([k, v]) => `<div class="audit-card"><div class="ac-k">${k}</div><div class="ac-v mono">${v}</div></div>`).join('')}
+      </div>
+      <div class="table-wrap table-scroll mt-16">
+        <table class="eu-table">
+          <thead><tr><th>Module</th><th class="num">Records</th><th class="num">Fields</th><th class="num">Covered entities</th><th class="num">Coverage</th><th>Status</th></tr></thead>
+          <tbody>
+            ${rows.map(row => `<tr>
+              <td class="key">${esc(row.module)}</td>
+              <td class="num">${fmtInt(row.rows)}</td>
+              <td class="num">${fmtInt(row.column_count)}</td>
+              <td class="num">${fmtInt(row.covered_entities)}</td>
+              <td class="num">${fmtPct(row.coverage_pct)}</td>
+              <td><span class="pill ${row.quality_status === 'ok' || row.quality_status === 'neutral' ? 'ok' : 'warn'}" style="height:20px;">${esc(row.quality_status || 'unknown')}</span></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">Fail-closed scope</div><div class="d">Coverage is aggregate-only. Row-level filtering, subgroup missingness, and eligibility waterfalls remain blocked until a bounded cohort-builder backend exists.</div></div></div>`;
+  }
+
+  function cohortSofaBody(review) {
+    const s = review.summary || {};
+    const sofa = s.sofa2 || {};
+    const blocked = review.sofa_reclassification || {};
+    const bins = sofa.bins || [];
+    const maxBin = Math.max(1, ...bins.map(b => b.count || 0));
+    return `
+      <div class="sec-stack"><div class="lbl">SOFA reclassification</div><h2>SOFA-2 aggregate review</h2></div>
+      <div class="rc-kpis">
+        ${[
+          [fmtNum(sofa.median, 1), 'Median SOFA-2', `${fmtInt(sofa.count)} entities with score`, 'delta'],
+          [fmtNum(sofa.mean, 1), 'Mean SOFA-2', 'registered export aggregate', 'n'],
+          [fmtNum(sofa.min, 1), 'Min', 'bounded column read', 'down'],
+          [fmtNum(sofa.max, 1), 'Max', 'bounded column read', 'up'],
+        ].map(([v, label, hint, kind]) => `
+          <div class="rc-kpi rc-${kind}">
+            <div class="rk-top"><span class="rk-ico">${icon(kind === 'up' ? 'arrow' : kind === 'down' ? 'arrow' : 'layers', 13)}</span><span class="rk-label">${label}</span></div>
+            <div class="rk-val mono">${v}</div>
+            <div class="rk-hint">${hint}</div>
+          </div>`).join('')}
+      </div>
+      <div class="card pad mt-16">
+        <div class="rc-sec-t">SOFA-2 severity bins</div>
+        <div class="rc-groups">
+          ${bins.map(bin => `
+            <div class="rc-grow">
+              <div class="rg-head"><span class="rg-name">${esc(bin.label)}</span><span class="rg-pct mono">${fmtPct(bin.pct)}</span></div>
+              <div class="rg-bar"><div class="rg-fill same" style="width:${((bin.count || 0) / maxBin * 100).toFixed(0)}%;"></div></div>
+              <div class="rg-meta"><span>${fmtInt(bin.count)} entities</span></div>
+            </div>`).join('')}
+        </div>
+      </div>
+      <div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">Paired reclassification blocked</div><div class="d">${esc(blocked.reason || 'Paired SOFA-1/SOFA-2 reclassification is not available in Stage17.')}</div></div></div>`;
+  }
+
   function cohortSnapshotBody() {
+    const review = cohortReview();
+    if (review && review.summary) {
+      const s = review.summary;
+      return `
+      <div class="sec-stack"><div class="lbl">Cohort profile</div><h2>Real cohort aggregate</h2></div>
+      <div class="stat-grid">
+        <div class="stat accent"><div class="label">Cohort size</div><div class="val">${fmtInt(s.cohort_size)}</div></div>
+        <div class="stat"><div class="label">Median age</div><div class="val">${fmtNum(s.age && s.age.median, 1)}</div></div>
+        <div class="stat"><div class="label">Female</div><div class="val">${fmtPct(s.sex && s.sex.female_pct)}</div></div>
+        <div class="stat"><div class="label">Sepsis-3 +</div><div class="val">${fmtPct(s.sepsis_pct)}</div></div>
+        <div class="stat"><div class="label">Median SOFA-2</div><div class="val">${fmtNum(s.sofa2 && s.sofa2.median, 1)}</div></div>
+        <div class="stat accent"><div class="label">Mortality</div><div class="val">${fmtPct(s.mortality_pct)}</div></div>
+      </div>
+      <div class="cols-2 mt-16">
+        <div class="card pad">
+          <div class="eyebrow" style="margin-bottom:8px;">Aggregate ranges</div>
+          ${[
+            ['Age', s.age],
+            ['SOFA-2', s.sofa2],
+            ['ICU LOS days', s.los_icu_days],
+          ].map(([label, item]) => `<div class="setup-row"><span class="k">${label}</span><span class="vv">median ${fmtNum(item && item.median, 1)} · range ${fmtNum(item && item.min, 1)}-${fmtNum(item && item.max, 1)}</span></div>`).join('')}
+        </div>
+        <div class="card pad">
+          <div class="eyebrow" style="margin-bottom:8px;">Source provenance</div>
+          <div class="setup-row"><span class="k">Source</span><span class="vv">${esc((review.source || {}).label || 'Local export')}</span></div>
+          <div class="setup-row"><span class="k">Database</span><span class="vv">${esc((review.source || {}).database || 'unknown')}</span></div>
+          <div class="setup-row"><span class="k">Path hash</span><span class="vv mono">${esc((review.source || {}).path_hash || '')}</span></div>
+          <div class="setup-row"><span class="k">Scope</span><span class="vv">${esc((review.provenance || {}).payload_scope || 'cohort_aggregate_only')}</span></div>
+        </div>
+      </div>
+      <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">Real registered export aggregate. Row-level filters, p-values, matched cohorts, and paired SOFA reclassification remain blocked.</p>`;
+    }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && ws.summary) {
       const s = ws.summary;
@@ -646,6 +969,56 @@
   }
 
   function cohortGroupsBody() {
+    const review = cohortReview();
+    if (review && review.summary) {
+      const s = review.summary || {};
+      const source = review.source || {};
+      const supported = (review.groups || {}).supported || [];
+      const blocked = (review.groups || {}).blocked || [];
+      return `
+      <div class="coh-jump">
+        <button class="cj-card" data-cohgo="coverage">
+          <span class="cj-ico">${icon('shield', 16)}</span>
+          <span class="cj-tx"><span class="cj-t">Coverage audit</span><span class="cj-d">Review module coverage before analysis</span></span>
+          <span class="cj-go">${icon('arrow', 13)}</span>
+        </button>
+        <button class="cj-card" data-cohgo="snapshot">
+          <span class="cj-ico">${icon('cohort', 16)}</span>
+          <span class="cj-tx"><span class="cj-t">Cohort profile</span><span class="cj-d">Inspect real registered export aggregates</span></span>
+          <span class="cj-go">${icon('arrow', 13)}</span>
+        </button>
+      </div>
+      <div class="sec-stack"><div class="lbl">Analysis table</div><h2>Real cohort aggregate</h2></div>
+      <div class="stat-grid">
+        <div class="stat accent"><div class="label">Cohort size</div><div class="val">${fmtInt(s.cohort_size)}</div></div>
+        <div class="stat accent"><div class="label">Mortality</div><div class="val">${fmtPct(s.mortality_pct)}</div></div>
+        <div class="stat accent"><div class="label">Median age</div><div class="val">${fmtNum(s.age && s.age.median, 1)}</div></div>
+        <div class="stat accent"><div class="label">Median SOFA-2</div><div class="val">${fmtNum(s.sofa2 && s.sofa2.median, 1)}</div></div>
+      </div>
+      <div class="note mt-12"><div class="ico">${icon('folder', 14)}</div><div class="body"><div class="t">Local export cohort review ready</div><div class="d">Source ${esc(source.label || 'Local export')} · ${esc(source.database || 'unknown')} · path hash <span class="mono">${esc(source.path_hash || '')}</span> · aggregate-only payload.</div></div></div>
+
+      <div class="sec-stack"><div class="lbl">Summary</div><h2>Descriptive group splits</h2></div>
+      <div class="table-wrap table-scroll">
+        <table class="eu-table">
+          <thead><tr><th>Comparison</th><th>Group</th><th class="num">Count</th><th class="num">Percent</th><th>Status</th></tr></thead>
+          <tbody>
+            ${supported.flatMap(row => (row.groups || []).map(g => `<tr>
+              <td class="key">${esc(row.label)}</td>
+              <td>${esc(g.label)}</td>
+              <td class="num">${fmtInt(g.count)}</td>
+              <td class="num">${fmtPct(g.pct)}</td>
+              <td><span class="pill ok" style="height:20px;">descriptive</span></td>
+            </tr>`)).join('')}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="sec-stack"><div class="lbl">Fail-closed</div><h2>Blocked cohort functions</h2></div>
+      <div class="cols-3">
+        ${blocked.map(item => `<div class="stat"><div class="label">${esc(item.id)}</div><div class="val" style="font-size:13px;line-height:1.35;font-family:var(--font-body);font-weight:600;">${esc(item.status)}</div><div style="font-size:11px;color:var(--ink-4);margin-top:6px;">${esc(item.reason)}</div></div>`).join('')}
+      </div>
+      <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">No row-level filters, p-values, SMDs, matched cohort, or paired SOFA reclassification are exposed by Stage17.</p>`;
+    }
     const ws = window.EU_VIZ_WORKSPACE;
     if (ws && ws.cohort) {
       const s = ws.summary || {};
@@ -771,7 +1144,7 @@
         if (cohortView === 'loading') return;
         cohortView = 'loading'; repaintScreen('cohort');
         if (window.EU_DATA === 'real') {
-          loadRealWorkspace(ok => { cohortView = 'loaded'; if (!ok) cohortView = 'loaded'; repaintScreen('cohort'); });
+          loadRealCohort(ok => { cohortView = 'loaded'; if (!ok) cohortView = 'loaded'; repaintScreen('cohort'); });
         } else {
           setTimeout(() => { cohortView = 'loaded'; window.EU_HASWORK = true; repaintScreen('cohort'); }, 1300);
         }
@@ -868,30 +1241,47 @@
   }
   function crossFmt(key, value) {
     if (value == null) return '—';
-    if (key === 'stays' || key === 'modules' || key === 'total_rows') return fmtInt(value);
-    if (key === 'female_pct' || key === 'mortality' || key === 'sepsis_pct') return fmtPct(value);
+    if (key === 'stays' || key === 'cohort_size' || key === 'modules' || key === 'total_rows' || key === 'total_records') return fmtInt(value);
+    if (key === 'female_pct' || key === 'mortality' || key === 'mortality_pct' || key === 'sepsis_pct' || key === 'coverage_median_pct') return fmtPct(value);
     return fmtNum(value, 1);
   }
   function crossRealLoaded(xdb) {
     const sources = xdb.sources || [];
     const labels = sources.map(s => s.label || s.database || 'local');
     const shared = xdb.shared_modules || [];
+    const availability = xdb.availability || [];
+    const provenance = xdb.provenance || {};
+    const privacy = xdb.privacy || {};
+    const blocked = xdb.blocked_features || [];
     const gate = xdb.compatibility_gate || {};
     const gateStatus = gate.status || 'compatible';
     const mode = gate.comparison_mode || 'descriptive_only';
     return `
       <div class="loaded-bar">
         <span class="pill ok"><span class="dot"></span>Loaded</span>
-        <div class="grow"><span style="font-weight:600;font-size:13px;">Real export benchmark assembled</span> <span class="mono" style="font-size:11px;color:var(--ink-4);">${fmtInt(sources.length)} exports · ${fmtInt(shared.length)} shared modules</span></div>
+        <div class="grow"><span style="font-weight:600;font-size:13px;">Real cross-database benchmark ready</span> <span class="mono" style="font-size:11px;color:var(--ink-4);">${fmtInt(sources.length)} exports · ${fmtInt(shared.length)} shared modules</span></div>
         <button class="btn sm" data-viz-reset>${icon('sliders', 13)} Change selection</button>
       </div>
       <div class="note info mt-16">
         <div class="ico">${icon('benchmark', 16)}</div>
-        <div class="body"><span class="t">Local export comparison</span> <span class="d" style="display:inline;">— descriptive preview only. Matched cohort definitions and formal claims still require the evidence-bound agent path.</span></div>
+        <div class="body"><span class="t">Registered export comparison</span> <span class="d" style="display:inline;">— Cross-DB aggregate-only payload from the local source registry. Matched cohort definitions and formal claims still require the evidence-bound agent path.</span></div>
       </div>
       <div class="note ok mt-16">
         <div class="ico">${icon('shield', 16)}</div>
         <div class="body"><span class="t">Compatibility gate: ${esc(gateStatus)}</span> <span class="d" style="display:inline;">— ${esc(mode)} · matched_cohort=false · inferential_statistics=false.</span></div>
+      </div>
+      <div class="sec-stack"><div class="lbl">Source provenance</div></div>
+      <div class="src-grid">
+        ${sources.map(source => `
+          <div class="src-card">
+            <div class="row gap-8" style="min-width:0;">
+              <span style="color:var(--accent-ink);">${icon('db', 15)}</span>
+              <div style="min-width:0;">
+                <div style="font-weight:650;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(source.label || 'Local export')}</div>
+                <div class="mono" style="font-size:10.5px;color:var(--ink-4);">${esc((source.database || 'local').toUpperCase())} · path hash ${esc(source.path_hash || '—')}</div>
+              </div>
+            </div>
+          </div>`).join('')}
       </div>
       <div class="sec-stack"><div class="lbl">Loaded cross-database export summary</div></div>
       <div class="table-wrap table-scroll">
@@ -902,9 +1292,22 @@
           </tbody>
         </table>
       </div>
+      <div class="sec-stack"><div class="lbl">Module availability matrix</div></div>
+      <div class="table-wrap table-scroll">
+        <table class="eu-table">
+          <thead><tr><th>Module</th>${labels.map(c => `<th class="num">${esc(c)}</th>`).join('')}<th class="num">Shared</th></tr></thead>
+          <tbody>
+            ${availability.map(row => `<tr><td class="key">${esc(row.module)}</td>${(row.values || []).map(v => `<td class="num">${v.present ? fmtPct(v.coverage_pct) : 'Missing'}</td>`).join('')}<td class="num">${row.shared ? 'Yes' : 'No'}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
       <div class="sec-stack"><div class="lbl">Shared exported modules</div></div>
       <div class="row wrap gap-6">
         ${shared.length ? shared.map(m => `<span class="chip solid">${esc(m)}</span>`).join('') : '<span class="pill warn">No shared modules detected</span>'}
+      </div>
+      <div class="note warn mt-16">
+        <div class="ico">${icon('lock', 16)}</div>
+        <div class="body"><span class="t">Fail-closed scope</span> <span class="d" style="display:inline;">— ${(blocked.map(item => item.id).join(', ') || 'unsupported analyses')} remain blocked. Raw rows returned=${privacy.raw_rows_returned === true ? 'true' : 'false'}; inference=${esc(provenance.inference || 'blocked_until_numeric_evidence_gate')}.</span></div>
       </div>`;
   }
 

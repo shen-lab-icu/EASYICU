@@ -43,6 +43,7 @@
     },
     render() {
       return `
+      <div class="settings-page">
       <div class="page-head" style="margin-bottom:18px;">
         <div class="eyebrow">Workspace · 设置</div>
         <h1 style="margin-top:6px;">Settings</h1>
@@ -103,11 +104,12 @@
         <div class="setup-row"><span class="k">Python</span><span class="vv mono">${(S0().about || {}).python || '—'}</span></div>
         <div class="setup-row"><span class="k">Databases detected</span><span class="vv mono">MIMIC-IV · eICU · AUMC · HiRID · MIMIC-III · SICdb</span></div>
         <div class="setup-row"><span class="k">Workspace</span><span class="vv mono">${S0().working_dir || '~/easyicu/workspace'}</span></div>
-        <div class="row gap-8 mt-16">
+        <div class="set-about-actions row gap-8 mt-16">
           <button class="btn sm">${icon('file', 13)} Release notes</button>
           <button class="btn sm">${icon('help', 13)} Documentation</button>
           <button class="btn sm">${icon('download', 13)} Export diagnostics</button>
         </div>
+      </div>
       </div>`;
     },
     afterRender(root) {

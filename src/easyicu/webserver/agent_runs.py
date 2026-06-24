@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from easyicu.webserver import dataio
+from easyicu.webserver import numeric_evidence_audit
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import provider_gate
 
@@ -144,6 +145,7 @@ def make_agent_run_runner(
             },
         }
         strict_audit = None
+        numeric_audit = None
         if resolved_run_type == "full":
             if provider.get("external"):
                 provider_result = provider_adapter.generate_bound_provider_payload(
@@ -185,7 +187,7 @@ def make_agent_run_runner(
                 "provider": dict(provider),
             })
 
-        gate, privacy_scan, strict_audit = _evaluate_gate_with_ledger(
+        gate, privacy_scan, strict_audit, numeric_audit = _evaluate_gate_with_ledger(
             run_id=run_id,
             run_dir=run_dir,
             artifacts=artifacts,
@@ -195,6 +197,7 @@ def make_agent_run_runner(
             run_type=resolved_run_type,
             provider=provider,
             strict_audit=strict_audit,
+            numeric_audit=numeric_audit,
         )
 
         job.emit({
@@ -220,6 +223,7 @@ def make_agent_run_runner(
             resolved_run_type,
             provider,
             strict_audit,
+            numeric_audit,
         )
         ledger_path = run_dir / "evidence_ledger.json"
         _write_json(ledger_path, ledger)
@@ -252,6 +256,7 @@ def make_agent_run_runner(
             "gate": gate,
             "provider": provider,
             "strict_evidence_audit": strict_audit,
+            "numeric_evidence_audit": numeric_audit,
             "artifacts": written,
             "duration_sec": round(time.time() - started, 2),
             "uploads": 0,
@@ -591,6 +596,7 @@ def _gate(
     run_type: str = "preflight",
     provider: Optional[Dict[str, Any]] = None,
     strict_audit: Optional[Dict[str, Any]] = None,
+    numeric_audit: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     bad_modules = [
         str(q.get("module") or q.get("file"))
@@ -670,6 +676,17 @@ def _gate(
                 "unbound_sentences": (strict_audit or {}).get("unbound_sentences", []),
                 "missing_evidence": (strict_audit or {}).get("missing_evidence", []),
             },
+            {
+                "id": "numeric_evidence_value_binding",
+                "label": "All numeric manuscript claims match artifact values",
+                "passed": bool(numeric_audit and numeric_audit.get("passed")),
+                "numeric_claim_count": (numeric_audit or {}).get("numeric_claim_count", 0),
+                "numeric_sentence_count": (numeric_audit or {}).get("numeric_sentence_count", 0),
+                "numeric_mention_count": (numeric_audit or {}).get("numeric_mention_count", 0),
+                "failure_count": (numeric_audit or {}).get("failure_count", 0),
+                "failures": (numeric_audit or {}).get("failures", []),
+                "tolerance_policy": (numeric_audit or {}).get("tolerance_policy", {}),
+            },
         ])
     checks.append({
         "id": "human_signoff",
@@ -692,6 +709,8 @@ def _gate_reason(checks: List[Dict[str, Any]], hard_fail: bool, run_type: str) -
             return "full_agent_complete_human_signoff_required"
         return "preflight_complete_human_signoff_required"
     failed = {str(c.get("id")) for c in checks if not c.get("passed")}
+    if "numeric_evidence_value_binding" in failed:
+        return "numeric_evidence_gate_failed"
     if any(item.startswith("strict_evidence") for item in failed):
         return "strict_evidence_gate_failed"
     if "no_patient_rows_persisted" in failed:
@@ -927,6 +946,7 @@ def _public_review_payloads(payloads: Dict[str, Dict[str, Any]]) -> Dict[str, Di
             "artifacts": row.get("artifacts", []),
             "provider": row.get("provider", {}),
             "strict_evidence_audit": row.get("strict_evidence_audit"),
+            "numeric_evidence_audit": row.get("numeric_evidence_audit"),
             "privacy": row.get("privacy", {}),
         }
     if "human_signoff.json" in payloads:
@@ -957,6 +977,7 @@ def _ledger_payload(
     run_type: str = "preflight",
     provider: Optional[Dict[str, Any]] = None,
     strict_audit: Optional[Dict[str, Any]] = None,
+    numeric_audit: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return {
         "run_id": run_id,
@@ -965,6 +986,7 @@ def _ledger_payload(
         "artifacts": artifacts,
         "provider": provider or {},
         "strict_evidence_audit": strict_audit,
+        "numeric_evidence_audit": numeric_audit,
         "privacy": {
             "patient_rows_persisted": False,
             "ui_preview_payload_excluded": True,
@@ -986,11 +1008,13 @@ def _evaluate_gate_with_ledger(
     run_type: str,
     provider: Dict[str, Any],
     strict_audit: Optional[Dict[str, Any]],
-) -> tuple[Dict[str, Any], Dict[str, Any], Optional[Dict[str, Any]]]:
+    numeric_audit: Optional[Dict[str, Any]],
+) -> tuple[Dict[str, Any], Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     if normalize_run_type(run_type) == "full":
         strict_audit = _strict_evidence_audit(artifacts)
+        numeric_audit = numeric_evidence_audit.audit_numeric_evidence(artifacts)
     privacy_scan = _scan_artifact_payloads(artifacts)
-    gate = _gate(source, summary, quality, privacy_scan, run_type, provider, strict_audit)
+    gate = _gate(source, summary, quality, privacy_scan, run_type, provider, strict_audit, numeric_audit)
     artifacts["quality_gate.json"]["gate"] = gate
     # Gate metadata is itself persisted inside quality_gate.json and mirrored
     # inside the ledger, so rescan a bounded fixed point before writing.
@@ -1007,11 +1031,12 @@ def _evaluate_gate_with_ledger(
             run_type,
             provider,
             strict_audit,
+            numeric_audit,
         )
         privacy_scan = _scan_artifact_payloads({**artifacts, "evidence_ledger.json": ledger})
-        gate = _gate(source, summary, quality, privacy_scan, run_type, provider, strict_audit)
+        gate = _gate(source, summary, quality, privacy_scan, run_type, provider, strict_audit, numeric_audit)
         artifacts["quality_gate.json"]["gate"] = gate
-    return gate, privacy_scan, strict_audit
+    return gate, privacy_scan, strict_audit, numeric_audit
 
 
 def _mock_full_agent_payload(

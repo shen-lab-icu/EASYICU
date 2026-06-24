@@ -197,6 +197,55 @@
   .icd-inputs, .icd-cards { grid-template-columns: 1fr; }
 }
 
+@media (max-width: 640px) {
+  .dict-search {
+    max-width: 100%;
+  }
+  .dict-table {
+    overflow: visible;
+  }
+  .dict-head {
+    display: none;
+  }
+  .dict-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+    align-items: start;
+    padding: 12px 14px;
+  }
+  .dict-row .dc-code,
+  .dict-row .dc-unit,
+  .dict-row .dc-cov,
+  .dict-row .dc-cat {
+    min-width: 0;
+  }
+  .dict-row .dc-code {
+    font-size: 11px;
+  }
+  .dict-row .dc-name {
+    min-width: 0;
+  }
+  .dict-row .dn-d {
+    overflow-wrap: anywhere;
+  }
+  .dict-row .dc-unit,
+  .dict-row .dc-cat {
+    color: var(--ink-4);
+  }
+  .dict-row .dc-unit::before {
+    content: "Unit · ";
+    font-family: var(--font-sans);
+    color: var(--ink-4);
+  }
+  .dict-row .dc-cov {
+    display: flex;
+    justify-content: flex-start;
+  }
+  .dict-row .cov-badge {
+    max-width: 100%;
+  }
+}
+
 /* ============================================================
    ICD COHORT FILTER
    ============================================================ */

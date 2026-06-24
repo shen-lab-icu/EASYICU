@@ -5,15 +5,31 @@
      Coverage Audit / SOFA Reclassification are now tabs inside Cohort Statistics;
      ICD Cohort Filter is folded into the extraction cohort filter. Old deep
      links still resolve to the right place. */
+  const FALLBACK_ROUTE = 'entry';
+
   function normRoute(r) {
+    if (r === 'help') return 'tutorial';
     if (r === 'assistant') return 'guided';
     if (r === 'audit')       { window.__euCohortPanel = 'coverage'; window.__euAlias = true; return 'cohort'; }
     if (r === 'sofareclass') { window.__euCohortPanel = 'sofa';     window.__euAlias = true; return 'cohort'; }
     if (r === 'icd')         { window.__euExtractFocusICD = true;   window.__euAlias = true; return 'extraction'; }
     return r;
   }
-  let route = normRoute((location.hash || '#entry').slice(1));
-  if (!window.SCREENS[route]) route = 'entry';
+  function rawRouteFromHash() {
+    return (location.hash || `#${FALLBACK_ROUTE}`).slice(1).trim();
+  }
+  function replaceHash(id) {
+    const next = `${location.pathname}${location.search}#${id}`;
+    if (location.hash !== `#${id}`) history.replaceState(null, '', next);
+  }
+  function resolveRoute(raw, opts = {}) {
+    const id = normRoute(raw || FALLBACK_ROUTE);
+    if (window.SCREENS[id]) return { id, fallback: false };
+    const fallback = window.SCREENS[FALLBACK_ROUTE] ? FALLBACK_ROUTE : Object.keys(window.SCREENS)[0];
+    if (opts.rewrite && fallback) replaceHash(fallback);
+    return { id: fallback, fallback: true };
+  }
+  let route = resolveRoute(rawRouteFromHash(), { rewrite: true }).id;
 
   /* The classic workspace pipeline. Copilot is a SEPARATE, parallel system that
      can complete the same flow conversationally — it is not a step in here. */
@@ -223,9 +239,10 @@
   });
 
   window.addEventListener('hashchange', () => {
-    let r = normRoute((location.hash || '#entry').slice(1));
+    const resolved = resolveRoute(rawRouteFromHash(), { rewrite: true });
+    let r = resolved.id;
     const alias = window.__euAlias; window.__euAlias = false;
-    if (window.SCREENS[r] && (r !== route || alias)) { route = r; render(); }
+    if (window.SCREENS[r] && (r !== route || alias || resolved.fallback)) { route = r; render(); }
   });
 
   /* ---- global keyboard shortcuts (advertised on Get Started) ---- */
