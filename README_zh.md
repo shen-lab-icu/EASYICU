@@ -135,7 +135,7 @@ easyicu-webapp
 - **准备完成的数据是统一契约**：原始 CSV / CSV.GZ / tar.gz 数据需先转换，再供 Web 界面和 Python API 共用。
 - **AI 助手默认关闭**：只有在用户显式启用后才会工作。
 - **始终保留人工确认**：队列、特征、数据转换与导出等关键操作仍需用户确认。
-- **仓库已包含自动化检查**：GitHub Actions 在 Python 3.10、3.11 和 3.12 上运行 `ruff check src tests` 与 `pytest -q`，覆盖基础仓库契约、公共 API 与界面渲染检查。
+- **仓库已包含自动化检查**：GitHub Actions 在 Python 3.10、3.11 和 3.12 上运行 `ruff check src tests` 与 `pytest -q`，覆盖基础仓库契约与公共 API。已废弃的 Streamlit UI 测试不在默认 gate 内，需显式 legacy 测试开关。
 
 ## 论文、引用与可复现
 
@@ -247,7 +247,7 @@ pip install -e ".[dev,webapp]"
 pytest -q
 ```
 
-仓库中的 GitHub Actions 会在 push 和 pull request 时对 Python 3.10、3.11 和 3.12 运行 `ruff check src tests` 与 `pytest -q`。提交改动前可先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+仓库中的 GitHub Actions 会在 push 和 pull request 时对 Python 3.10、3.11 和 3.12 运行 `ruff check src tests` 与 `pytest -q`。已废弃的 Streamlit UI 测试默认不收集；如需归档复核，请安装 `easyicu[webapp-legacy]` 后显式运行 `pytest --run-legacy-streamlit ...`。提交改动前可先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 💻 Python API
 

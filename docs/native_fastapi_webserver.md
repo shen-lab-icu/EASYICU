@@ -87,6 +87,28 @@ python -m uvicorn easyicu.webserver.app:app --host 127.0.0.1 --port 8765
 Do not run a real external provider call unless the operator explicitly enables
 global AI opt-in and grants per-run consent.
 
+## Default Test Gate
+
+The maintained WebApp test gate is FastAPI/native plus core package checks:
+
+```bash
+pytest -q
+```
+
+Deprecated Streamlit UI tests are not collected by that default command. They
+remain available only for archive forensics and require the legacy dependency
+extra plus an explicit flag:
+
+```bash
+pip install -e ".[webapp-legacy]"
+pytest --run-legacy-streamlit tests/test_webapp_launch.py
+pytest --run-legacy-streamlit tests/webapp
+```
+
+Do not treat passing legacy Streamlit tests as a requirement for native FastAPI
+development, and do not repair native FastAPI issues by editing legacy
+Streamlit UI files.
+
 ## Fallback-Only Readiness
 
 As of 2026-06-24, the native FastAPI frontend is the active migration target for
