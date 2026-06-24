@@ -22,5 +22,5 @@ pip install -e ".[dev,webapp]"
 
 - Explain the user-facing motivation for the change.
 - Call out any database-specific assumptions or limitations.
-- The legacy Streamlit UI is deprecated. If archive work must touch it, install `easyicu[webapp-legacy]`, run the affected tests with `pytest --run-legacy-streamlit ...`, and include screenshots only for that explicit legacy scope.
+- The maintained Web UI is the native FastAPI app. The legacy Streamlit package was removed from the active package boundary; recover it from git history only for archive forensics.
 - Mention any follow-up work that remains intentionally out of scope.

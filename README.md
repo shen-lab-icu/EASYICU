@@ -52,7 +52,6 @@ This README is the front door. Each major layer keeps a focused README next to i
 |-----------|-----|
 | [`src/easyicu/README.md`](src/easyicu/README.md) | Package module map — how the ~75 modules layer (concept abstraction → convert → API → scores). Start here as a code contributor. |
 | [`docs/native_fastapi_webserver.md`](docs/native_fastapi_webserver.md) | The maintained native FastAPI WebApp path and local route/API QA commands. |
-| [`src/easyicu/webapp/README.md`](src/easyicu/webapp/README.md) | Deprecated legacy Streamlit package notes kept for archive and compatibility shims. |
 | [`src/easyicu/research_agent/README.md`](src/easyicu/research_agent/README.md) | The evidence-bound research-agent layer: four-layer design, readiness gates, replication protocol. |
 | [`src/easyicu/data/README.md`](src/easyicu/data/README.md) | The concept dictionaries (`concept-dict.json`, the SOFA-2 overlay) that drive cross-database extraction. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | The expected workflow for proposing changes. |
@@ -100,7 +99,6 @@ Swap the extra in brackets for what you actually need:
 |--------------|---------|
 | Python API — extract concepts, SOFA / SOFA-2, sepsis-3, scores | `easyicu` |
 | Native FastAPI web app (+ dormant-by-default provider status tooling) | `easyicu[webapp]` |
-| Deprecated legacy Streamlit web app | `easyicu[webapp-legacy]` |
 | Plotly / Kaleido figure export | `easyicu[viz]` |
 | Host the LLM proxy for the research-agent | `easyicu[llmserver]` |
 | Opt-in LangGraph agent graph | `easyicu[agentic]` |
@@ -128,16 +126,16 @@ Launch the native Web app manually if needed:
 easyicu-webapp
 ```
 
-The old Streamlit package is deprecated and no longer the default Web UI. If
-archive forensics require it, install `easyicu[webapp-legacy]` and run
-`easyicu-webapp-legacy`; visual parity is not maintained.
+The legacy Streamlit package has been removed from the active package boundary.
+If archive forensics require it, restore it from git history before Stage27 or
+from the local Stage27 archive patch.
 
 ## Reproducibility & Safety
 
 - **Prepared data is the shared contract**: raw CSV / CSV.GZ / tar.gz dumps should be converted first, then reused by both the web interface and Python APIs.
 - **AI assistant is opt-in**: the assistant starts disabled until a user explicitly enables it in the sidebar.
 - **Human confirmation stays in the loop**: cohort, feature, conversion, and export actions still require explicit confirmation.
-- **Automated checks are included**: `pytest` and GitHub Actions provide baseline repository checks for the packaged workflows. Deprecated Streamlit UI tests are outside the default gate and require an explicit legacy test flag.
+- **Automated checks are included**: `pytest` and GitHub Actions provide baseline repository checks for the packaged workflows. The maintained Web UI test gate is the native FastAPI path.
 
 ## Paper, Citation & Reproducibility
 
@@ -281,7 +279,7 @@ pip install -e ".[dev,webapp]"
 pytest -q
 ```
 
-GitHub Actions runs `ruff check src tests` and `pytest -q` on Python 3.10, 3.11, and 3.12 for pushes and pull requests. Deprecated Streamlit UI tests are not collected by the default test gate; for archive forensics, install `easyicu[webapp-legacy]` and run them explicitly with `pytest --run-legacy-streamlit ...`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected workflow when proposing changes.
+GitHub Actions runs `ruff check src tests` and `pytest -q` on Python 3.10, 3.11, and 3.12 for pushes and pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected workflow when proposing changes.
 
 ## 💻 Python API
 

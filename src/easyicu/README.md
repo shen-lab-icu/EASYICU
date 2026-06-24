@@ -43,7 +43,7 @@ dictionary plus its callbacks, not adding a code path per database.
 ## 2. Convert step (raw → prepared)
 
 - `data_converter.py`, `setup_data.py` — `DataConverter` is the **single
-  converter engine**; both the extraction API and the webapp call
+  converter engine**; both the extraction API and the native WebApp call
   `DataConverter.convert_all()`. It turns raw CSV / CSV.GZ / tar.gz dumps
   into the prepared, ricu-style sharded Parquet layout (end-to-end
   pyarrow by default, zstd compression). **Every extraction API assumes
@@ -68,14 +68,12 @@ dictionary plus its callbacks, not adding a code path per database.
 
 - [`webserver/`](webserver/) — the maintained native FastAPI WebApp path
   used by the default `easyicu-webapp` launcher.
-- [`webapp/`](webapp/README.md) — deprecated legacy Streamlit UI package,
-  retained for archive forensics and compatibility shims until deletion.
 - [`research_agent/`](research_agent/README.md) — the optional,
   evidence-bound analysis-agent layer (question + cohort → auditable
   manuscript scaffold).
 - [`data/`](data/README.md) — the JSON concept dictionaries that drive
   the concept layer.
-- `visualization/` — plotting helpers used by the webapp and notebooks.
+- `visualization/` — plotting helpers used by the native WebApp and notebooks.
 
 ## Invariants the package relies on
 
