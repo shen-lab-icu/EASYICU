@@ -2400,6 +2400,17 @@ class ResearchAgentPipeline:
                 if src.resolve() != target.resolve():
                     df = pd.read_parquet(src)
                     df.to_parquet(target, index=False)
+                # Carry the optional long-format trajectory written next to the
+                # source universe (``<src_stem>_trajectory.parquet``) alongside
+                # the staged cohort as ``cohort_trajectory.parquet`` so the
+                # runner's sibling auto-discovery exposes TRAJECTORY_PARQUET.
+                # Without this the trajectory is stranded in the universe dir and
+                # timing/onset/incident steps cannot reach the row-level series.
+                src_trajectory = src.with_name(f"{src.stem}_trajectory.parquet")
+                if src_trajectory.exists():
+                    traj_target = run_dir / "cohort_trajectory.parquet"
+                    if src_trajectory.resolve() != traj_target.resolve():
+                        shutil.copy2(src_trajectory, traj_target)
             elif src.suffix.lower() in {".csv", ".tsv"}:
                 sep = "\t" if src.suffix.lower() == ".tsv" else ","
                 df = pd.read_csv(src, sep=sep)

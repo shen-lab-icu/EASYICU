@@ -88,6 +88,37 @@ def test_pipeline_runner_auto_discovers_trajectory_sibling(ra, tmp_path: Path):
     )
 
 
+def test_materialise_cohort_carries_trajectory_sibling_then_runner_exposes_it(
+    ra, tmp_path: Path
+):
+    # End-to-end of the staging fix: a universe parquet with a sibling
+    # trajectory, staged into the run_dir, must carry the trajectory so the
+    # runner's auto-discovery exposes TRAJECTORY_PARQUET.
+    universe_dir = tmp_path / "universe"
+    universe_dir.mkdir()
+    src = universe_dir / "discovery_universe.parquet"
+    pd.DataFrame({"stay_id": [1, 2]}).to_parquet(src, index=False)
+    pd.DataFrame(
+        {"stay_id": [1], "charttime": [3.0], "concept": ["map"], "value_num": [60.0]}
+    ).to_parquet(universe_dir / "discovery_universe_trajectory.parquet", index=False)
+
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path / "work", enable_memory=False)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    cohort_path = pipeline._materialise_cohort(src, run_dir)
+
+    assert (run_dir / "cohort_trajectory.parquet").exists()
+    runner = pipeline._build_runner(
+        run_dir=run_dir,
+        cohort_path=cohort_path,
+        target_outcome="aki",
+        universe_path=cohort_path,  # how pipeline_execute wires it
+    )
+    assert runner.extra_env["TRAJECTORY_PARQUET"] == str(
+        run_dir / "cohort_trajectory.parquet"
+    )
+
+
 def test_pipeline_runner_no_trajectory_env_when_sibling_absent(ra, tmp_path: Path):
     cohort_path = tmp_path / "cohort.parquet"
     pd.DataFrame({"stay_id": [1], "endpoint_x": [0]}).to_parquet(
