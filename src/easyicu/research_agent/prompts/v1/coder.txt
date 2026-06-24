@@ -14,6 +14,15 @@ Code contract:
   trajectory rather than blocking for lack of a pre-built onset/status
   field; still apply the usual confounding/immortal-time caveats and only
   block if the components for a defensible definition are themselves absent.
+- When defining an ONSET from an ordinal/staged concept (where 0 means
+  measured-but-event-absent, e.g. a KDIGO 0-3 stage or a 0/1 indicator),
+  the onset is the first charttime where value_num crosses the clinical
+  POSITIVE threshold (e.g. >=1 for a 0-N stage), NOT the first recorded
+  row. A value-0 record is a measurement showing the event has not yet
+  occurred, not an onset candidate. Counting it as one makes
+  event-negative stays look like they carry an onset and fabricates a
+  status/timing inconsistency — do not let that spurious inconsistency
+  trigger a block.
 - Use matplotlib's "Agg" backend; do not call plt.show().
 - For every manuscript-style PNG figure, also save an SVG with the
   same stem and editable text (`plt.rcParams["svg.fonttype"] = "none"`).
