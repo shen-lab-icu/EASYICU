@@ -57,7 +57,6 @@ def list_dir(raw_path: Optional[str]) -> Dict[str, Any]:
     mounted volumes (macOS ``/Volumes``) so external drives are reachable —
     that is where ICU dumps usually live on this machine.
     """
-    roots: List[Dict[str, str]] = []
     home = Path.home()
 
     if not raw_path:
@@ -329,7 +328,7 @@ def make_export_runner(
         # trips the low-mem path; force the fast in-process path (see CLAUDE.md).
         os.environ.setdefault("EASYICU_FORCE_INPROCESS_BATCH", "1")
         import easyicu.api as api
-        from easyicu.webapp.concept_catalog import CONCEPT_GROUPS_INTERNAL
+        from easyicu.concept_catalog import CONCEPT_GROUPS_INTERNAL
 
         sel = [m for m in (modules or list(CONCEPT_GROUPS_INTERNAL.keys()))
                if CONCEPT_GROUPS_INTERNAL.get(m)]
@@ -409,8 +408,6 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
     disk and returns summary tables, not raw full frames.
     """
     import json
-    import pandas as pd
-
     path = Path(raw_path).expanduser()
     try:
         path = path.resolve()
@@ -1134,7 +1131,7 @@ def _check_data_status(path: Path, db_key: str) -> Dict[str, Any]:
 def _mappable_modules() -> int:
     """Number of feature-module groups EasyICU can map (the 19 catalog groups)."""
     try:
-        from easyicu.webapp.concept_catalog import CONCEPT_GROUPS_INTERNAL
+        from easyicu.concept_catalog import CONCEPT_GROUPS_INTERNAL
 
         return len(CONCEPT_GROUPS_INTERNAL)
     except Exception:

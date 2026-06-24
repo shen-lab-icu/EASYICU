@@ -145,7 +145,7 @@ def test_registered_in_window_concepts():
 
 
 def test_registered_in_webapp_catalog():
-    from easyicu.webapp.concept_catalog import (
+    from easyicu.concept_catalog import (
         CONCEPT_DB_COVERAGE,
         CONCEPT_DICTIONARY,
     )

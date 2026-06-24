@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from easyicu.webapp.ai_optin import (
+from easyicu.ai_optin import (
     AIOptInError,
     check_external_llm_opt_in,
     is_offline_llm_choice,
 )
 
-CANONICAL_OPT_IN_SOURCE = "easyicu.webapp.ai_optin.check_external_llm_opt_in"
+CANONICAL_OPT_IN_SOURCE = "easyicu.ai_optin.check_external_llm_opt_in"
 
 
 class ProviderGateError(ValueError):

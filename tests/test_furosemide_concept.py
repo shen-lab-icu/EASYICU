@@ -134,7 +134,7 @@ def test_furosemide_registered_as_point_event_concept():
 
 
 def test_furosemide_in_webapp_concept_catalog():
-    from easyicu.webapp.concept_catalog import (
+    from easyicu.concept_catalog import (
         CONCEPT_DB_COVERAGE,
         CONCEPT_DICTIONARY,
     )

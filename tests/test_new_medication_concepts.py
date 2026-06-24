@@ -75,7 +75,7 @@ def test_all_registered_as_point_events():
 
 # ── webapp catalog ──
 def test_all_in_webapp_catalog():
-    from easyicu.webapp.concept_catalog import CONCEPT_DICTIONARY, CONCEPT_DB_COVERAGE
+    from easyicu.concept_catalog import CONCEPT_DICTIONARY, CONCEPT_DB_COVERAGE
     for name, expected_count, _ in MEDICATIONS:
         assert name in CONCEPT_DICTIONARY, f"{name} not in CONCEPT_DICTIONARY"
         assert name in CONCEPT_DB_COVERAGE, f"{name} not in CONCEPT_DB_COVERAGE"

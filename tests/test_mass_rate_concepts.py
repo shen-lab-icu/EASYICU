@@ -212,7 +212,7 @@ def test_registered_as_window_concept(name, _iid, _u1, _u2, _max):
 @pytest.mark.parametrize("name,_iid,unit_primary,_u2,_max",
                          RATE_CONCEPTS, ids=[c[0] for c in RATE_CONCEPTS])
 def test_registered_in_webapp_catalog(name, _iid, unit_primary, _u2, _max):
-    from easyicu.webapp.concept_catalog import (
+    from easyicu.concept_catalog import (
         CONCEPT_DB_COVERAGE,
         CONCEPT_DICTIONARY,
     )

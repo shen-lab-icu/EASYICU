@@ -1,5 +1,5 @@
 /* EasyICU — real concept catalog, transcribed from
-   src/easyicu/webapp/concept_catalog.py (CONCEPT_DICTIONARY,
+   src/easyicu/concept_catalog.py (CONCEPT_DICTIONARY,
    CONCEPT_GROUPS_INTERNAL, CONCEPT_GROUP_NAMES, CONCEPT_DB_COVERAGE).
    Used by the Data Dictionary + Coverage Audit screens so the UI reflects
    the actual feature set rather than invented placeholders. */

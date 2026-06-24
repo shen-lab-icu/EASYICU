@@ -6,7 +6,7 @@ The frontend (``static/js/screens-dict.js`` and friends) reads a global
     { groups, groupConcepts, dict, cov, desc, totalConcepts }
 
 All of that data already exists, hand-curated for the UI, in
-``easyicu.webapp.concept_catalog``. This module is the single source of
+``easyicu.concept_catalog``. This module is the single source of
 truth for the migration's first read-only endpoint — it just reshapes
 those dicts; it does not recompute anything.
 """
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from easyicu.webapp import concept_catalog as cc
+from easyicu import concept_catalog as cc
 
 
 def build_catalog() -> Dict[str, Any]:

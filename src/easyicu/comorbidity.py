@@ -538,7 +538,7 @@ def _build_datasource(database: str, data_path: object):
         root = os.environ.get("EASYICU_DATA_PATH", "")
         if root:
             try:
-                from .webapp.data_paths import find_database_path
+                from .data_paths import find_database_path
 
                 data_path = find_database_path(root, database)
             except Exception:
