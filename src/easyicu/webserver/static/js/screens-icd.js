@@ -1,5 +1,5 @@
 /* Screen: ICD Cohort Filter — disease-cohort definition by ICD code.
-   Mirrors src/easyicu/webapp/icd_preview.py + sidebar.py demo estimator:
+   Native preview of the historical ICD estimator behavior:
    include/exclude token matching, matched %, top matching codes, and the
    net cohort after filters. Supported on MIMIC-IV / MIMIC-III / eICU. */
 (function () {

@@ -1,5 +1,5 @@
 /* Screen: Data Dictionary — the real concept catalog, searchable.
-   Mirrors src/easyicu/webapp/data_dictionary_page.py (search + category
+   Native catalog browser with search + category
    browser over the 19 concept groups, with units and per-database coverage). */
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});
