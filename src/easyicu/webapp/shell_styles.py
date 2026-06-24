@@ -1,8 +1,9 @@
 """Shell A · EasyICU design-system layer.
 
 This module injects the EasyICU shell-A design tokens (``tokens.css``)
-plus all the Streamlit-specific overrides needed to land the redesign on
-top of the existing app:
+and the minimal Streamlit reset still kept for the deprecated legacy app.
+The historical route split CSS is no longer part of the default runtime path;
+set ``EASYICU_ENABLE_LEGACY_STREAMLIT_CSS=1`` to re-enable it temporarily:
 
 * IBM Plex font stack
 * Override the older :root tokens from ``styles.py`` so accent / surface
@@ -21,10 +22,12 @@ so it wins the CSS cascade.
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+LEGACY_STREAMLIT_CSS_ENV = "EASYICU_ENABLE_LEGACY_STREAMLIT_CSS"
 _TOKENS_PATH = Path(__file__).with_name("tokens.css")
 
 
@@ -188,6 +191,11 @@ _ALIGNMENT_PATH = Path(__file__).with_name("alignment.css")
 def _load_alignment_css() -> str:
     """Read the minimal alignment compatibility marker."""
     return _load_css_file(str(_ALIGNMENT_PATH), _css_mtime_ns(_ALIGNMENT_PATH))
+
+
+def _legacy_streamlit_css_enabled() -> bool:
+    """Return True only for the explicit temporary legacy CSS opt-in."""
+    return os.environ.get(LEGACY_STREAMLIT_CSS_ENV) == "1"
 
 
 _GUIDED_ROUTE_TOKENS = {"assistant", "copilot", "guided"}
@@ -538,6 +546,8 @@ def render_shell_styles(st: Any) -> None:
     overrides = _load_shell_overrides_css()
     if overrides:
         st.markdown(f"<style>{overrides}</style>", unsafe_allow_html=True)
+    if not _legacy_streamlit_css_enabled():
+        return
     # alignment.css is now a tiny compatibility marker. Shared shell chrome
     # follows it so migrated sidebar/topbar/mobile locks keep their former
     # cascade strength; route-specific CSS then wins over both shared layers.
