@@ -1,9 +1,7 @@
 # Native FastAPI Webserver
 
-This is the local-first native frontend/server path for the EasyICU WebApp
-migration. As of Stage26B, this is the default `easyicu-webapp` launcher path.
-The old Streamlit package is deprecated and retained only behind the explicit
-`easyicu-webapp-legacy` command.
+This is the local-first native frontend/server path for the EasyICU WebApp.
+It is the only maintained Web UI and the default `easyicu-webapp` launcher path.
 
 ## Start Locally
 
@@ -95,26 +93,16 @@ The maintained WebApp test gate is FastAPI/native plus core package checks:
 pytest -q
 ```
 
-Deprecated Streamlit UI tests are not collected by that default command. They
-remain available only for archive forensics and require the legacy dependency
-extra plus an explicit flag:
-
-```bash
-pip install -e ".[webapp-legacy]"
-pytest --run-legacy-streamlit tests/test_webapp_launch.py
-pytest --run-legacy-streamlit tests/webapp
-```
-
-Do not treat passing legacy Streamlit tests as a requirement for native FastAPI
-development, and do not repair native FastAPI issues by editing legacy
-Streamlit UI files.
+The old Streamlit package and its UI tests have been removed from the active
+package boundary. Archive forensics must recover them from git history or the
+local Stage27 patch; they are not part of the maintained gate.
 
 ## Fallback-Only Readiness
 
-As of 2026-06-24, the native FastAPI frontend is the active migration target for
-low-risk WebApp replacement work. The legacy Streamlit UI and its CSS are frozen
-as fallback/reference material; do not continue resolving native frontend issues
-by editing Streamlit route files or Streamlit override CSS.
+As of 2026-06-24, the native FastAPI frontend is the active WebApp path. The
+legacy Streamlit package and route CSS have been removed from the active package
+boundary; do not resolve native frontend issues by restoring or editing the old
+Streamlit code.
 
 Current FastAPI fallback-only blockers addressed:
 
@@ -190,14 +178,10 @@ Cleanup boundary:
   cohorts, Cross-DB matched analyses, and paired SOFA-1/SOFA-2
   reclassification remain explicitly blocked or fail-closed; they are not
   reportable native features.
-- The old Streamlit app can now be treated as frozen fallback/reference for the
-  audited paths, and a separate legacy CSS cleanup/archive task may start next.
-- This document still does not authorize deleting the whole Streamlit stack or
-  historical CSS in the same change. Cleanup must be separately staged, with a
-  fallback snapshot and focused QA after each cleanup slice.
+- The old Streamlit stack is not a runtime fallback. Restore it from git history
+  only for archive forensics.
 
 This state is enough to treat the native FastAPI UI as the maintained WebApp
-path. Stage24B has already removed the inactive legacy Streamlit split CSS;
-Stage26B changes the default package entrypoint and repository launchers to the
-native server. The remaining Streamlit package is legacy code pending tests and
-package archive decisions; it is not the default UI path.
+path. Stage24B removed the inactive split CSS, Stage26B moved the default
+entrypoint and launchers to the native server, and Stage27 removed the legacy
+Streamlit package/tests from the active package boundary.

@@ -52,7 +52,6 @@ EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 
 |------|------|
 | [`src/easyicu/README.md`](src/easyicu/README.md) | 包级模块地图——~75 个模块如何分层(概念抽象 → 转换 → API → 评分)。代码贡献者从这里开始。 |
 | [`docs/native_fastapi_webserver.md`](docs/native_fastapi_webserver.md) | 当前维护的 FastAPI 原生 WebApp 路径与本地 route/API QA 命令。 |
-| [`src/easyicu/webapp/README.md`](src/easyicu/webapp/README.md) | 已废弃的 legacy Streamlit 包说明，仅保留归档和兼容 shim 语义。 |
 | [`src/easyicu/research_agent/README.md`](src/easyicu/research_agent/README.md) | 证据绑定的 research-agent 层:四层设计、就绪门控、跨库复现协议。 |
 | [`src/easyicu/data/README.md`](src/easyicu/data/README.md) | 驱动跨库提取的概念字典(`concept-dict.json` 与 SOFA-2 overlay)。 |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 提交改动时的预期工作流。 |
@@ -99,7 +98,6 @@ pip install "easyicu[webapp] @ git+https://github.com/shen-lab-icu/easyicu.git"
 |----------|------|
 | Python API —— 提取概念、SOFA / SOFA-2、sepsis-3、各类评分 | `easyicu` |
 | FastAPI 原生 Web 应用（provider 状态工具默认休眠） | `easyicu[webapp]` |
-| 已废弃的 legacy Streamlit Web 应用 | `easyicu[webapp-legacy]` |
 | Plotly / Kaleido 图表导出 | `easyicu[viz]` |
 | 托管 research-agent 的 LLM 代理 | `easyicu[llmserver]` |
 | 可选的 LangGraph agent graph | `easyicu[agentic]` |
@@ -126,16 +124,15 @@ pip install -e ".[all]"
 easyicu-webapp
 ```
 
-旧 Streamlit 包已经废弃，不再是默认 Web UI。如需归档复核，可安装
-`easyicu[webapp-legacy]` 并运行 `easyicu-webapp-legacy`；其视觉 parity
-不再维护。
+旧 Streamlit 包已经从 active package boundary 删除。如需归档复核，只能从
+Stage27 之前的 git 历史或本地 Stage27 archive patch 恢复。
 
 ## 可复现性与安全说明
 
 - **准备完成的数据是统一契约**：原始 CSV / CSV.GZ / tar.gz 数据需先转换，再供 Web 界面和 Python API 共用。
 - **AI 助手默认关闭**：只有在用户显式启用后才会工作。
 - **始终保留人工确认**：队列、特征、数据转换与导出等关键操作仍需用户确认。
-- **仓库已包含自动化检查**：GitHub Actions 在 Python 3.10、3.11 和 3.12 上运行 `ruff check src tests` 与 `pytest -q`，覆盖基础仓库契约与公共 API。已废弃的 Streamlit UI 测试不在默认 gate 内，需显式 legacy 测试开关。
+- **仓库已包含自动化检查**：GitHub Actions 在 Python 3.10、3.11 和 3.12 上运行 `ruff check src tests` 与 `pytest -q`，覆盖基础仓库契约与公共 API；当前维护的 Web UI gate 是 FastAPI 原生路径。
 
 ## 论文、引用与可复现
 
@@ -247,7 +244,7 @@ pip install -e ".[dev,webapp]"
 pytest -q
 ```
 
-仓库中的 GitHub Actions 会在 push 和 pull request 时对 Python 3.10、3.11 和 3.12 运行 `ruff check src tests` 与 `pytest -q`。已废弃的 Streamlit UI 测试默认不收集；如需归档复核，请安装 `easyicu[webapp-legacy]` 后显式运行 `pytest --run-legacy-streamlit ...`。提交改动前可先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+仓库中的 GitHub Actions 会在 push 和 pull request 时对 Python 3.10、3.11 和 3.12 运行 `ruff check src tests` 与 `pytest -q`。提交改动前可先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 💻 Python API
 

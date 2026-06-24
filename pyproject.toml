@@ -44,18 +44,6 @@ webapp = [
   "psutil>=5.9",
   "openai>=1.0"
 ]
-webapp-legacy = [
-  "streamlit>=1.54,<1.55",
-  "streamlit-shadcn-ui>=0.1.18",
-  "streamlit-echarts>=0.4.0",
-  "plotly>=5.15",
-  "kaleido>=0.2.1",
-  "openpyxl>=3.1",
-  "psutil>=5.9",
-  "duckdb>=0.9.0",
-  "scipy>=1.10",
-  "openai>=1.0"
-]
 llmserver = [
   "fastapi>=0.115",
   "uvicorn>=0.30"
@@ -70,7 +58,6 @@ all = [
 [project.scripts]
 easyicu = "easyicu.scripts.extract_features:main"
 easyicu-webapp = "easyicu.webserver.__main__:main"
-easyicu-webapp-legacy = "easyicu.webapp.__main__:main"
 easyicu-llm-server = "easyicu.hosted_llm_server:main"
 easyicu-research-agent = "easyicu.research_agent.cli:main"
 easyicu-research-replication = "easyicu.research_agent.replication_cli:main"
@@ -92,9 +79,6 @@ easyicu = ["data/*.json"]
 
 [tool.ruff]
 target-version = "py310"
-extend-exclude = [
-  "src/easyicu/webapp",
-]
 
 [tool.ruff.lint]
 # Keep the first project-wide gate conservative while the historical lint
