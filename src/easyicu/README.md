@@ -66,8 +66,10 @@ dictionary plus its callbacks, not adding a code path per database.
 
 ## 5. Sub-packages (each has its own README)
 
-- [`webapp/`](webapp/README.md) — the Streamlit web layer; clinician /
-  reviewer no-code entry point. Owns the AI opt-in gate invariant.
+- [`webserver/`](webserver/) — the maintained native FastAPI WebApp path
+  used by the default `easyicu-webapp` launcher.
+- [`webapp/`](webapp/README.md) — deprecated legacy Streamlit UI package,
+  retained for archive forensics and compatibility shims until deletion.
 - [`research_agent/`](research_agent/README.md) — the optional,
   evidence-bound analysis-agent layer (question + cohort → auditable
   manuscript scaffold).

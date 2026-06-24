@@ -1,17 +1,17 @@
 # `easyicu.webapp`
 
-The Streamlit web layer — EasyICU's no-code entry point for clinicians
-and reviewers. It lets a user validate a data path, convert raw dumps,
-define cohorts, inspect features and time series, run cohort statistics,
-compare databases, and (optionally) drive the research agent, all without
-writing Python.
+Deprecated legacy Streamlit WebApp package.
 
-Launch it with the `easyicu-webapp` console script (or the root
-`start_easyicu.sh` / `start_easyicu.command` / `start_easyicu.bat`
-launchers). Entry point: `easyicu-webapp` → `easyicu.webapp.__main__:main`
-→ `run_app()`, which boots `app.py` under Streamlit on port 8501.
+The maintained no-code Web UI is now the native FastAPI implementation under
+`easyicu.webserver`, launched with `easyicu-webapp` or the root
+`start_easyicu.*` launchers. This package remains only for archive forensics,
+compatibility shims, and tests that have not yet been retired.
 
-## Invariants this layer must preserve
+If the legacy UI must be inspected, install `easyicu[webapp-legacy]` and run
+`easyicu-webapp-legacy`. It boots `app.py` under Streamlit on port 8501, but
+visual parity and route-specific CSS polish are no longer maintained.
+
+## Legacy invariants this layer must preserve while it exists
 
 These are load-bearing — breaking them changes the safety posture of the
 whole tool, so they are enforced in code and called out here:
