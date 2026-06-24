@@ -175,6 +175,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     if acquisition.blocked or acquisition.universe_path is None:
         raise SystemExit(f"data foundation blocked: {acquisition.note}")
 
+    # Make the long-format trajectory reachable inside the analysis sandbox.
+    # The bench loads the cohort parquet into a DataFrame (the original universe
+    # dir path is lost), so the runner's sibling auto-discovery cannot find the
+    # trajectory. Export it in the environment instead: the bench subprocess
+    # inherits it, and the runner's os.environ.copy() carries it through to the
+    # sandbox, where the coder reads os.environ["TRAJECTORY_PARQUET"]. Keyed by
+    # stay_id, so it stays valid through any cohort 纳排 re-pointing.
+    trajectory_path = Path(acquisition.universe_path).with_name(
+        f"{Path(acquisition.universe_path).stem}_trajectory.parquet"
+    )
+    if trajectory_path.exists():
+        for traj_alias in (
+            "TRAJECTORY_PARQUET",
+            "EASYICU_TRAJECTORY_PARQUET",
+            "COHORT_TRAJECTORY_PARQUET",
+        ):
+            os.environ[traj_alias] = str(trajectory_path)
+        print(f"[discovery] trajectory: {trajectory_path}")
+
     jsonl_path = _write_ehrflowbench_row(
         out_root=out_root,
         handoff=handoff,
