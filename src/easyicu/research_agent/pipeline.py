@@ -657,6 +657,23 @@ class ResearchAgentPipeline:
             extra_env.setdefault("OUTCOME_COL", target_outcome)
         if universe_path is not None:
             extra_env.setdefault("EASYICU_UNIVERSE_PARQUET", str(universe_path))
+            # Auto-discover the optional long-format trajectory written next to
+            # the universe (``<universe_stem>_trajectory.parquet``). When present
+            # it is exposed as ``TRAJECTORY_PARQUET`` so a step can construct
+            # threshold-crossing onsets, incident-after-exposure endpoints, and
+            # landmark / time-varying designs that the wide per-stay summary
+            # cannot express. Keyed by stay_id, so it is valid regardless of any
+            # later cohort 纳排 re-pointing of COHORT_PARQUET.
+            trajectory_path = Path(universe_path).with_name(
+                f"{Path(universe_path).stem}_trajectory.parquet"
+            )
+            if trajectory_path.exists():
+                for traj_alias in (
+                    "TRAJECTORY_PARQUET",
+                    "EASYICU_TRAJECTORY_PARQUET",
+                    "COHORT_TRAJECTORY_PARQUET",
+                ):
+                    extra_env.setdefault(traj_alias, str(trajectory_path))
         if self._runner_factory is not None:
             # A user-supplied factory (OpenHands, firecracker, ...) also needs
             # the run's outcome column so deterministic repairs resolve it from

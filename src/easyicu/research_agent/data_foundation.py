@@ -209,6 +209,8 @@ def acquire_universe_for_question(
     cohort_window: tuple = (0.0, 24.0),
     database: str = "miiv",
     require_outcome: bool = True,
+    emit_trajectory: bool = True,
+    trajectory_window: Optional[tuple] = (-24.0, 168.0),
 ) -> AcquisitionResult:
     """Agent selects concepts, we check coverage, then materialise the universe.
 
@@ -270,6 +272,14 @@ def acquire_universe_for_question(
         static_concepts=list(static_concepts),
         cohort_window=cohort_window,
         # no cohort_definition => wide universe; agent does 纳排 in-sandbox
+        # Also emit the long-format trajectory for the analysis concepts so the
+        # agent can build threshold-crossing onsets / incident-after-exposure
+        # endpoints / landmark designs the wide summary cannot express. Written
+        # as <stem>_trajectory.parquet next to the universe; the runner
+        # auto-discovers it and exposes TRAJECTORY_PARQUET.
+        emit_trajectory=emit_trajectory,
+        trajectory_concepts=[*feature_concepts, *outcome_concepts],
+        trajectory_window=trajectory_window,
     )
     note = ""
     if not coverage.sufficient:
