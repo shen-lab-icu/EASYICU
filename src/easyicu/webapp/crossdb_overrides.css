@@ -97,9 +97,6 @@
   background: oklch(96% 0.03 30) !important;
   color: oklch(40% 0.10 30) !important;
 }
-.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-provenance-pill {
-  display: none !important;
-}
 .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_change_selection"],
 .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_export_summary"] {
   margin: 0 !important;
@@ -511,14 +508,6 @@
 }
 .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] [data-testid="column"] {
   padding: 0 !important;
-}
-.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-gate-pill-wrap {
-  position: absolute !important;
-  top: 5px !important;
-  left: 0 !important;
-  display: flex !important;
-  align-items: center !important;
-  min-height: 34px !important;
 }
 .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] [class*="st-key-eu_crossdb_gate_open_loader"] {
   position: absolute !important;
@@ -2367,54 +2356,6 @@ html body .stApp:has(.eu-crossdb-page-marker)
   font-size: 12.5px;
   line-height: 1.4;
 }
-.eu-cohort-readiness-row.ok .eu-cohort-readiness-node {
-  border-color: color-mix(in oklab, var(--ok) 35%, var(--hair));
-  background: color-mix(in oklab, var(--ok-soft) 60%, var(--surface));
-  color: var(--ok);
-}
-.eu-cohort-readiness-row.warn .eu-cohort-readiness-node {
-  border-color: color-mix(in oklab, var(--warn) 35%, var(--hair));
-  background: color-mix(in oklab, var(--warn-soft) 66%, var(--surface));
-  color: color-mix(in oklab, var(--warn) 80%, var(--ink));
-}
-.eu-cohort-readiness-row.bad .eu-cohort-readiness-node {
-  border-color: color-mix(in oklab, var(--bad) 35%, var(--hair));
-  background: color-mix(in oklab, var(--bad-soft) 66%, var(--surface));
-  color: var(--bad);
-}
-.eu-readiness-strip .eu-gate-card {
-  position: relative;
-  border: 0;
-  border-left: 0;
-  border-radius: 0;
-  background: var(--surface);
-  padding: 10px 12px;
-}
-.eu-readiness-strip .eu-gate-card + .eu-gate-card {
-  border-left: 1px solid var(--hair);
-}
-.eu-readiness-strip .eu-gate-card .k {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.eu-readiness-strip .eu-gate-card .k::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 999px;
-  background: var(--ink-3);
-}
-.eu-readiness-strip .eu-gate-card.ok .k::before {
-  background: var(--ok);
-}
-.eu-readiness-strip .eu-gate-card.warn .k::before {
-  background: var(--warn);
-}
-.eu-readiness-strip .eu-gate-card.bad .k::before {
-  background: var(--bad);
-}
 .eu-gate-card {
   border: 1px solid var(--hair);
   border-left: 2px solid var(--ink-3);
@@ -2782,8 +2723,7 @@ html body .stApp:has(.eu-crossdb-page-marker)
   line-height: 1.4;
 }
 .stApp .eu-patient-mini-heading span,
-.stApp .eu-crossdb-micro-heading span,
-.stApp .eu-crossdb-empty-copy span {
+.stApp .eu-crossdb-micro-heading span {
   display: block;
   color: var(--ink-4);
   font-family: var(--font-mono);
@@ -3335,8 +3275,6 @@ html body .stApp:has(.eu-crossdb-page-marker)
   color: var(--accent-ink) !important;
   -webkit-text-fill-color: var(--accent-ink) !important;
 }
-.stApp .eu-crossdb-summary-ledger,
-.stApp .eu-crossdb-availability-board,
 .stApp .eu-crossdb-availability-empty {
   margin: 14px 0 0;
   overflow: hidden;
@@ -3345,8 +3283,6 @@ html body .stApp:has(.eu-crossdb-page-marker)
   background: var(--surface);
   box-shadow: 0 1px 2px rgba(16, 24, 40, .035);
 }
-.stApp .eu-crossdb-summary-head span,
-.stApp .eu-crossdb-availability-head span,
 .stApp .eu-crossdb-availability-empty span {
   display: block;
   color: var(--ink-4);
@@ -3357,8 +3293,6 @@ html body .stApp:has(.eu-crossdb-page-marker)
   line-height: 1.1;
   text-transform: uppercase;
 }
-.stApp .eu-crossdb-summary-head b,
-.stApp .eu-crossdb-availability-head b,
 .stApp .eu-crossdb-availability-empty b {
   display: block;
   margin-top: 5px;
@@ -3367,25 +3301,11 @@ html body .stApp:has(.eu-crossdb-page-marker)
   font-weight: 720;
   line-height: 1.22;
 }
-.stApp .eu-crossdb-summary-head p,
-.stApp .eu-crossdb-availability-head p,
 .stApp .eu-crossdb-availability-empty p {
   margin: 5px 0 0;
   color: var(--ink-3);
   font-size: 12px;
   line-height: 1.4;
-}
-.stApp .eu-crossdb-availability-cell.ok span,
-.stApp .eu-crossdb-availability-legend span.ok {
-  border-color: color-mix(in srgb, var(--ok) 34%, var(--hair));
-  background: color-mix(in srgb, var(--ok) 13%, var(--surface));
-  color: var(--ok);
-}
-.stApp .eu-crossdb-availability-cell.missing span,
-.stApp .eu-crossdb-availability-legend span.missing {
-  border-color: var(--hair-2);
-  background: color-mix(in srgb, var(--surface-2) 70%, var(--surface));
-  color: var(--ink-4);
 }
 .stApp .eu-crossdb-availability-empty {
   padding: 14px;
@@ -3554,8 +3474,7 @@ html body .stApp:has(.eu-crossdb-page-marker)
     border-left: 0;
     border-top: 1px solid var(--hair);
   }
-  .stApp .eu-crossdb-metric-grid,
-  .stApp .eu-crossdb-empty-steps {
+  .stApp .eu-crossdb-metric-grid {
     grid-template-columns: 1fr;
   }
 }
