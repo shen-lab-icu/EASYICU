@@ -24,6 +24,54 @@ def test_summarize_timeseries_basic():
     assert r1.lact_measured == 1
 
 
+def test_summarize_timeseries_emits_first_and_last_event_time():
+    # The wide summary must carry the charttime of the first/last RECORDED
+    # value so exposure-timing (early-vs-delayed) is constructible. NaN rows
+    # (drug not running) must not count as the onset.
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1, 1, 2],
+            "charttime": [1, 2, 6, 9, 4],
+            # stay 1 starts the drug at hour 6; stay 2 at hour 4
+            "norepi_rate": [None, None, 0.04, 0.06, 0.10],
+        }
+    )
+    out = M._summarize_timeseries(df, "norepi_rate", (0.0, 24.0))
+    r1 = out[out.stay_id == 1].iloc[0]
+    assert r1.norepi_rate_first_time == 6.0  # onset, not the first NaN row
+    assert r1.norepi_rate_last_time == 9.0
+    r2 = out[out.stay_id == 2].iloc[0]
+    assert r2.norepi_rate_first_time == 4.0
+
+
+def test_first_time_uses_true_onset_for_categorical_event_concept():
+    # For a categorical/event concept the onset time must be the first RECORDED
+    # event, not the window start (regression: presence-coercion to 0/1 must not
+    # back-date the onset).
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 1],
+            "charttime": [2, 5, 8],
+            "vent": ["invasive", "invasive", "invasive"],
+        }
+    )
+    out = M._summarize_timeseries(df, "vent", (0.0, 24.0))
+    r1 = out[out.stay_id == 1].iloc[0]
+    assert r1.vent_first_time == 2.0
+    assert r1.vent_last_time == 8.0
+
+
+def test_first_time_absent_when_concept_never_recorded():
+    # A stay with only NaN values for the concept gets no onset time (NaN after
+    # the left-merge in materialize_cohort), never a spurious 0.
+    df = pd.DataFrame(
+        {"stay_id": [1, 1], "charttime": [1, 2], "norepi_rate": [None, None]}
+    )
+    out = M._summarize_timeseries(df, "norepi_rate", (0.0, 24.0))
+    # no recorded value -> no timing row for this stay
+    assert "norepi_rate_first_time" not in out.columns or out["norepi_rate_first_time"].isna().all()
+
+
 def test_summarize_timeseries_categorical_concept_becomes_presence():
     # A concept stored as object/text (e.g. a ventilation status or a
     # vasopressor name) cannot be reduced with max/mean and used to raise
