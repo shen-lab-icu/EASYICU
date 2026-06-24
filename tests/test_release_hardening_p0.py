@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 import subprocess
 import sys
@@ -69,13 +70,6 @@ def test_known_duplicate_top_level_functions_are_collapsed() -> None:
         )
         == 1
     )
-    assert (
-        _module_function_count(
-            REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py",
-            "_has_any_source_recursive",
-        )
-        == 1
-    )
 
 
 def test_project_config_import_does_not_create_project_dirs(tmp_path: Path) -> None:
@@ -105,10 +99,14 @@ def test_project_config_import_does_not_create_project_dirs(tmp_path: Path) -> N
     assert not (project_root / "logs").exists()
 
 
-def test_publication_figure_path_uses_env_or_repo_relative_candidates() -> None:
-    source = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
+def test_native_webapp_metadata_does_not_reference_legacy_streamlit_paths() -> None:
+    metadata = json.loads(
+        (REPO_ROOT / "src" / "easyicu" / "visualization_design.json").read_text(encoding="utf-8")
+    )
+    serialized = json.dumps(metadata, ensure_ascii=False)
 
-    assert "EASYICU_PUBLICATION_FIGURE_DIR" in source
-    assert "/Users/haibo/Documents/GitHub" not in source
-    assert "image2_generated_review" in source
-
+    assert metadata["modules"]["webapp"]["path"] == "src/easyicu/webserver/"
+    assert metadata["modules"]["webapp"]["deployment"]["command"] == "easyicu-webapp"
+    assert "easyicu.webapp" not in serialized
+    assert "streamlit" not in serialized.lower()
+    assert "/Users/haibo/Documents/GitHub" not in serialized

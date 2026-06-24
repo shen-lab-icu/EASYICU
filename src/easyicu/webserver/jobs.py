@@ -1,10 +1,10 @@
 """In-process long-task framework for the web server (Stage 3b).
 
-Streamlit hid long tasks behind ``session_state`` + reruns; the native UI needs
-an explicit job model instead. A job runs on a daemon thread, appends progress
-events to an in-memory history, and flips to a terminal status. The SSE endpoint
-in ``app.py`` replays the history then tails live events, so a subscriber that
-connects late (or reconnects) still sees every event.
+The native UI needs an explicit job model for long tasks. A job runs on a
+daemon thread, appends progress events to an in-memory history, and flips to a
+terminal status. The SSE endpoint in ``app.py`` replays the history then tails
+live events, so a subscriber that connects late (or reconnects) still sees
+every event.
 
 This is the reusable foundation: the convert job (3b) is the first user; the
 extract/export job (3c) and the research-agent run (Stage 5) drive the same

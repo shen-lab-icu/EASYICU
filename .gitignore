@@ -47,6 +47,8 @@ htmlcov/
 .mypy_cache/
 .tmp/
 .playwright-cli/
+# Generated browser/test artifacts accidentally written under the importable package.
+src/easyicu/test-results/
 
 # Root-level ad hoc test/benchmark scripts and outputs
 test_*
@@ -67,6 +69,8 @@ path_to_your_export/
 # output/
 demo_easy_output.txt
 src/easyicu/data/*.bak_before_*
+# Local scratch concept dictionaries are not package data.
+src/easyicu/data/concept-dict2.json
 
 # Demo、示例和工具 - 不上传示例代码
 demo.py

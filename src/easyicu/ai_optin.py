@@ -1,8 +1,8 @@
 """Pure AI / LLM opt-in policy shared by EasyICU runtimes.
 
-This module deliberately avoids Streamlit imports so FastAPI and CLI paths can
-enforce the same external-provider policy without pulling in the legacy webapp
-package.
+This module deliberately avoids UI-framework imports so FastAPI and CLI paths
+can enforce the same external-provider policy without pulling in UI
+dependencies.
 """
 
 from __future__ import annotations

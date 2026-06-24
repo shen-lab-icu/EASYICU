@@ -1,12 +1,11 @@
 """Local settings store for the native web server.
 
-Streamlit kept settings in ``st.session_state``; the native server has no
-session, so settings persist to a local JSON file under the user's home
-directory. **Local-first**: nothing leaves the machine.
+The native server has no browser-session state, so settings persist to a local
+JSON file under the user's home directory. **Local-first**: nothing leaves the
+machine.
 
-Invariant preserved from the Streamlit app: ``ai_enabled`` (the external-LLM
-opt-in gate) defaults to **False**. Any code path about to make an external
-LLM call must check it (see ``ai_optin`` parity in WEBAPP_MIGRATION_PLAN.md).
+Invariant: ``ai_enabled`` (the external-LLM opt-in gate) defaults to
+**False**. Any code path about to make an external LLM call must check it.
 """
 from __future__ import annotations
 

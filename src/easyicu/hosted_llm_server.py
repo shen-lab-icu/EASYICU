@@ -1,8 +1,8 @@
 """Hosted EasyICU LLM relay service.
 
 This module exposes an OpenAI-compatible `/v1/chat/completions` endpoint so
-the Streamlit webapp can talk to a project-owned backend instead of requiring
-each end user to bring an API key.
+EasyICU clients can talk to a project-owned backend instead of requiring each
+end user to bring an API key.
 
 The relay is intentionally minimal:
 - Accept OpenAI-style chat completion requests
