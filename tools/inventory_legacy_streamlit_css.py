@@ -958,6 +958,12 @@ def inventory() -> dict[str, Any]:
     loaded_set = set(shell_loaded)
     default_loaded_set = set(default_loaded_css)
     legacy_enabled_loaded_set = set(legacy_enabled_loaded_css)
+    missing_required_default_css = [
+        name for name in DEFAULT_LOADED_CSS if name not in set(present_css_names)
+    ]
+    removed_legacy_split_css = [
+        name for name in LEGACY_SPLIT_CSS if name not in set(present_css_names)
+    ]
     files = []
     totals = {
         "files": 0,
@@ -1059,9 +1065,9 @@ def inventory() -> dict[str, Any]:
             "default_loaded_css": default_loaded_css,
             "legacy_enabled_loaded_css": legacy_enabled_loaded_css,
             "loaded_css": shell_loaded,
-            "missing_expected_css": [
-                name for name in EXPECTED_RENDER_ORDER if name not in set(present_css_names)
-            ],
+            "missing_expected_css": missing_required_default_css,
+            "missing_required_default_css": missing_required_default_css,
+            "stage24b_removed_legacy_split_css": removed_legacy_split_css,
             "inactive_by_default_legacy_css": inactive_by_default,
         },
         "totals": totals,
@@ -1070,10 +1076,11 @@ def inventory() -> dict[str, Any]:
         "first_slice_decision": {
             "delete_now": [],
             "archive_only": inactive_by_default,
+            "deleted_in_stage24b": removed_legacy_split_css,
             "reason": (
-                "Stage24A hard-decommissions legacy Streamlit route CSS from the default runtime "
-                "without deleting files. The legacy split CSS remains present and can be temporarily "
-                f"re-enabled with {LEGACY_STREAMLIT_CSS_ENV}=1 until Stage24B removes the files."
+                "Stage24B removes legacy Streamlit split CSS after Stage24A made it inactive "
+                "by default. Missing split CSS is intentional; only missing default CSS is a "
+                "runtime inventory issue."
             ),
         },
     }
@@ -1094,6 +1101,10 @@ def baseline_staging_plan(report: dict[str, Any]) -> dict[str, Any]:
         for item in legacy_enabled_files
         if item["inactive_by_default_legacy_css"]
     ]
+    removed_legacy_files = [
+        str(WEBAPP_DIR / name)
+        for name in report["shell_styles"]["stage24b_removed_legacy_split_css"]
+    ]
     dirty_webapp_python = sorted(
         entry["path"]
         for entry in status_entries
@@ -1111,11 +1122,12 @@ def baseline_staging_plan(report: dict[str, Any]) -> dict[str, Any]:
         *default_loaded_css_paths,
     ]
     return {
-        "purpose": "stage24a_reversible_legacy_streamlit_css_decommission",
-        "do_not_delete_css_files_in_stage24a": True,
+        "purpose": "stage24b_remove_inactive_legacy_streamlit_split_css",
+        "split_css_removed_in_stage24b": True,
         "must_stage_for_default_runtime_boundary": runnable_required,
         "default_loaded_css_snapshot": default_loaded_css_paths,
-        "inactive_by_default_legacy_css_kept_for_env_opt_in": inactive_legacy_files,
+        "inactive_by_default_legacy_css_remaining": inactive_legacy_files,
+        "removed_legacy_split_css": removed_legacy_files,
         "stage24b_delete_candidates_after_validation": inactive_legacy_files,
         "already_tracked_css_no_new_stage_needed_if_unchanged": default_loaded_css_paths,
         "recommended_auxiliary_baseline_files": [
@@ -1143,8 +1155,8 @@ def baseline_staging_plan(report: dict[str, Any]) -> dict[str, Any]:
             "tokens.css and shell_overrides.css unless EASYICU_ENABLE_LEGACY_STREAMLIT_CSS=1."
         ),
         "why_no_css_file_delete": (
-            "Stage24A is reversible. The split CSS files stay present for one commit "
-            "as an opt-in rollback path; Stage24B can git-rm them after validation."
+            "Stage24B has deleted the split CSS files. Restore them from git history "
+            "at 63bba1c or earlier only for archive forensics."
         ),
     }
 
@@ -1184,6 +1196,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Legacy-env loaded CSS lines: `{report['totals']['legacy_enabled_loaded_lines']}`",
         f"- Legacy CSS inactive by default: `{report['totals']['inactive_by_default_legacy_files']}`",
         f"- Legacy inactive lines: `{report['totals']['inactive_by_default_legacy_lines']}`",
+        f"- Stage24B removed legacy split CSS files: `{len(report['shell_styles']['stage24b_removed_legacy_split_css'])}`",
+        f"- Missing required default CSS files: `{len(report['shell_styles']['missing_required_default_css'])}`",
         f"- Legacy env: `{report['legacy_streamlit_css_env']['name']}={report['legacy_streamlit_css_env']['required_value']}`",
         f"- Legacy env currently enabled: `{report['legacy_streamlit_css_env']['enabled']}`",
         f"- Untracked imported CSS files: `{report['totals']['untracked_files']}`",
@@ -1246,6 +1260,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             f"- Delete now: `{len(decision['delete_now'])}` files",
             f"- Kept for legacy env opt-in: `{len(decision['archive_only'])}` files",
+            f"- Deleted in Stage24B: `{len(decision['deleted_in_stage24b'])}` files",
             f"- Reason: {decision['reason']}",
             "",
         ]
@@ -1284,7 +1299,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         [
             "",
             f"Reason shell loader is required: {plan['why_shell_styles_is_required']}",
-            f"Reason no CSS file is deleted in Stage24A: {plan['why_no_css_file_delete']}",
+            f"Legacy split CSS recovery path: {plan['why_no_css_file_delete']}",
             "",
         ]
     )
@@ -1353,6 +1368,12 @@ def main() -> int:
                 "legacy_env_enabled": report["legacy_streamlit_css_env"]["enabled"],
                 "legacy_env_loaded_files": report["totals"]["legacy_enabled_loaded_files"],
                 "legacy_env_loaded_lines": report["totals"]["legacy_enabled_loaded_lines"],
+                "stage24b_removed_legacy_split_files": len(
+                    report["shell_styles"]["stage24b_removed_legacy_split_css"]
+                ),
+                "missing_required_default_css": report["shell_styles"][
+                    "missing_required_default_css"
+                ],
                 "inactive_by_default_legacy_files": report["totals"][
                     "inactive_by_default_legacy_files"
                 ],

@@ -8,23 +8,21 @@ under `src/easyicu/webserver/`.
 
 - Streamlit is no longer an active visual fallback.
 - Streamlit CSS visual parity is no longer maintained.
-- The legacy route split CSS files remain in the repository during Stage24A,
-  but they are not loaded by default.
 - Only `tokens.css` and `shell_overrides.css` stay in the default Streamlit CSS
   path as a minimal base layer.
-- Stage24B may remove the inactive split CSS files after default-runtime
-  validation.
+- Stage24B removed the legacy route split CSS files after Stage24A made them
+  inactive by default.
 
-## Temporary opt-in
+## Recovery
 
-To temporarily restore the old Streamlit route CSS while it still exists:
+The old route split CSS is no longer present in the working tree. If archive
+forensics require it, recover the files from Git history at `63bba1c` or an
+earlier commit before Stage24B, then run with
+`EASYICU_ENABLE_LEGACY_STREAMLIT_CSS=1`.
 
-```bash
-EASYICU_ENABLE_LEGACY_STREAMLIT_CSS=1 easyicu-webapp
-```
-
-This opt-in is a rollback/debug aid only. Do not add new selector-level fixes to
-the legacy split CSS. FastAPI native remains the main WebApp path.
+The environment switch is a historical rollback/debug aid only. Do not add new
+selector-level fixes to the legacy split CSS. FastAPI native remains the main
+WebApp path.
 
 ## Do not use for new work
 
