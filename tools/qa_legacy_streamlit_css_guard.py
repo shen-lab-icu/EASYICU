@@ -31,23 +31,143 @@ VIEWPORTS = [
     ("mobile", 393, 852),
 ]
 
+EXTRACT_SELECTORS = [
+    "[data-testid='stMain']",
+    "[data-testid='stSidebar']",
+    ".eu-topbar",
+    ".eu-topbar-ref-controls",
+    ".eu-source-header.page-head",
+    ".eu-extract-session-console",
+    ".eu-extract-console-cards",
+    ".eu-extract-console-steps",
+    ".eu-step2-design-marker",
+    ".eu-step3-design-marker",
+    ".eu-step4-design-marker",
+    ".eu-export-progress-shell",
+    ".eu-demo-ex2-left",
+    ".eu-step3-modules-cfg",
+    ".eu-step4-run-link",
+]
+
+PATIENT_SELECTORS = [
+    "[data-testid='stMain']",
+    "[data-testid='stSidebar']",
+    ".eu-topbar",
+    ".eu-topbar-ref-controls",
+    ".eu-qv-design-root",
+    ".eu-qv-loaded-root",
+    ".eu-qv-idle-root",
+    ".eu-qv-panel-root",
+    ".eu-qv-reference-table",
+    ".eu-qv-reference-stats",
+    ".eu-qv-series-grid",
+    ".eu-qv-patient-chip-row",
+    ".eu-qv-patient-split",
+    ".eu-qv-quality-card",
+    ".eu-qv-quality-note",
+    ".eu-qv-nextbar-root",
+]
+
+GUIDED_SELECTORS = [
+    "[data-testid='stMain']",
+    ".eu-guided-fullscreen-marker",
+    ".eu-copilot-page-marker",
+    "div.st-key-ai_assistant_page_panel",
+    "div.st-key-eu_copilot_guided_top",
+    ".eu-copilot-topbrand",
+    "div.st-key-eu_copilot_guided_shell",
+    "div.st-key-eu_copilot_left_rail",
+    ".eu-copilot-rail-body",
+    "div.st-key-eu_copilot_session_active_0",
+    "div.st-key-eu_copilot_conversation_shell",
+    "div.st-key-_llm_ai_page_workspace_history",
+    ".eu-copilot-welcome-thread",
+    ".eu-copilot-dynamic-thread",
+    ".eu-copilot-msg",
+    ".eu-copilot-gd-conv-marker",
+    "div.st-key-_llm_ai_page_workspace_guided_intents",
+    "div.st-key-_llm_ai_page_workspace_guided_hints",
+    "div.st-key-_llm_ai_page_workspace_composer_wrap",
+    ".eu-copilot-composer-foot",
+    "div.st-key-eu_copilot_right_rail",
+    "div.st-key-eu_copilot_study_rail",
+    ".eu-copilot-study-rail-head",
+    "div.st-key-eu_study_step_list",
+    "div.st-key-eu_study_step_row_0_pending_question",
+    ".eu-copilot-evidence-note",
+]
+
+SHELL_SELECTORS = [
+    "[data-testid='stMain']",
+    "[data-testid='stSidebar']",
+    "[data-testid='stSidebarUserContent']",
+    ".eu-topbar",
+    ".eu-topbar-ref-controls",
+    ".eu-sidebar-footer-rule",
+    "div.st-key-eu_sidebar_nav_area",
+    "div.st-key-eu_sidebar_dock",
+    "div.st-key-eu_sidebar_footer",
+    ".wsnav",
+    ".wsgroup-head",
+    ".wsg-children",
+    ".wsitem",
+    "[class*='st-key-eunavrow_classic_workspace']",
+    "[class*='st-key-euonav_extract']",
+    "[class*='st-key-euonav_quick_viz']",
+    "[class*='st-key-euonav_cohort']",
+    "[class*='st-key-euonav_cross_db']",
+    "div.st-key-floating_ai_launcher",
+    "div.st-key-floating_ai_panel",
+    ".eu-settings-page-marker",
+]
+
 ROUTES: dict[str, dict[str, Any]] = {
     "extract": {
         "path": "?page=extract&mode=demo",
         "required_any": [
             [".eu-source-header.page-head"],
         ],
-        "selectors": [
-            "[data-testid='stMain']",
-            "[data-testid='stSidebar']",
-            ".eu-topbar",
-            ".eu-topbar-ref-controls",
-            ".eu-source-header.page-head",
-            ".eu-step2-design-marker",
-            ".eu-step3-design-marker",
-            ".eu-step4-design-marker",
-            ".eu-export-progress-shell",
+        "selectors": EXTRACT_SELECTORS,
+    },
+    "extract_idle": {
+        "path": "?page=extract&mode=demo",
+        "required_any": [
+            [".eu-source-header.page-head"],
         ],
+        "state_required_any": [
+            [".eu-extract-session-console", ".eu-demo-ex2-left", ".eu-source-header.page-head"],
+        ],
+        "selectors": EXTRACT_SELECTORS,
+    },
+    "extract_step2": {
+        "path": "?page=extract&mode=demo&ex_step=2&ex_custom=1&ex_adv_cohort=1",
+        "required_any": [
+            [".eu-source-header.page-head"],
+        ],
+        "state_required_any": [
+            [".eu-step2-design-marker", ".eu-demo-ex2-left"],
+        ],
+        "selectors": EXTRACT_SELECTORS,
+    },
+    "extract_step3": {
+        "path": "?page=extract&mode=demo&ex_step=3&ex_show_all=1",
+        "required_any": [
+            [".eu-source-header.page-head"],
+        ],
+        "state_required_any": [
+            [".eu-step3-design-marker", ".eu-step3-modules-cfg"],
+        ],
+        "selectors": EXTRACT_SELECTORS,
+    },
+    "extract_step4": {
+        "path": "?page=extract&mode=demo&ex_step=4&ex_adv_export=1&ex_format=csv&ex_merge=separate",
+        "required_any": [
+            [".eu-source-header.page-head"],
+        ],
+        "state_required_any": [
+            [".eu-step4-design-marker", ".eu-step4-run-link"],
+        ],
+        "selectors": EXTRACT_SELECTORS,
     },
     "patient": {
         "path": "?page=patient&mode=demo",
@@ -55,48 +175,106 @@ ROUTES: dict[str, dict[str, Any]] = {
             [".eu-qv-design-root"],
             [".eu-qv-loaded-root", ".eu-qv-idle-root", ".eu-qv-panel-root"],
         ],
-        "selectors": [
-            "[data-testid='stMain']",
-            "[data-testid='stSidebar']",
-            ".eu-topbar",
-            ".eu-topbar-ref-controls",
-            ".eu-qv-design-root",
-            ".eu-qv-loaded-root",
-            ".eu-qv-idle-root",
-            ".eu-qv-reference-table",
-            ".eu-qv-nextbar-root",
+        "selectors": PATIENT_SELECTORS,
+    },
+    "patient_idle": {
+        "path": "?page=patient&mode=demo",
+        "required_any": [
+            [".eu-qv-design-root"],
         ],
+        "state_required_any": [
+            [".eu-qv-idle-root", ".eu-qv-loaded-root"],
+        ],
+        "selectors": PATIENT_SELECTORS,
+    },
+    "patient_loaded_tables": {
+        "path": "?page=patient&mode=demo&qv_action=panel&qv_source=demo&qv_panel=data_tables&qv_patients=10&qv_hours=24",
+        "required_any": [
+            [".eu-qv-design-root"],
+        ],
+        "state_required_any": [
+            [".eu-qv-loaded-root"],
+            [".eu-qv-reference-table", ".eu-qv-reference-stats"],
+        ],
+        "selectors": PATIENT_SELECTORS,
+    },
+    "patient_loaded_time_series": {
+        "path": "?page=patient&mode=demo&qv_action=panel&qv_source=demo&qv_panel=time_series&qv_patients=10&qv_hours=24",
+        "required_any": [
+            [".eu-qv-design-root"],
+        ],
+        "state_required_any": [
+            [".eu-qv-loaded-root"],
+            [".eu-qv-series-grid"],
+        ],
+        "selectors": PATIENT_SELECTORS,
+    },
+    "patient_loaded_overview": {
+        "path": "?page=patient&mode=demo&qv_action=panel&qv_source=demo&qv_panel=patient_overview&qv_patients=10&qv_hours=24",
+        "required_any": [
+            [".eu-qv-design-root"],
+        ],
+        "state_required_any": [
+            [".eu-qv-loaded-root"],
+            [".eu-qv-patient-chip-row", ".eu-qv-patient-split"],
+        ],
+        "selectors": PATIENT_SELECTORS,
+    },
+    "patient_loaded_quality": {
+        "path": "?page=patient&mode=demo&qv_action=panel&qv_source=demo&qv_panel=data_quality&qv_patients=10&qv_hours=24",
+        "required_any": [
+            [".eu-qv-design-root"],
+        ],
+        "state_required_any": [
+            [".eu-qv-loaded-root"],
+            [".eu-qv-quality-card", ".eu-qv-quality-note"],
+        ],
+        "selectors": PATIENT_SELECTORS,
     },
     "guided": {
         "path": "?page=guided",
         "required_any": [
             [".eu-guided-fullscreen-marker", ".eu-copilot-page-marker"],
         ],
-        "selectors": [
-            "[data-testid='stMain']",
-            ".eu-guided-fullscreen-marker",
-            ".eu-copilot-page-marker",
-            "div.st-key-ai_assistant_page_panel",
-            "div.st-key-eu_copilot_guided_top",
-            ".eu-copilot-topbrand",
-            "div.st-key-eu_copilot_guided_shell",
-            "div.st-key-eu_copilot_left_rail",
-            ".eu-copilot-rail-body",
-            "div.st-key-eu_copilot_session_active_0",
-            "div.st-key-eu_copilot_conversation_shell",
-            "div.st-key-_llm_ai_page_workspace_history",
-            ".eu-copilot-welcome-thread",
-            ".eu-copilot-msg",
-            "div.st-key-_llm_ai_page_workspace_guided_intents",
-            "div.st-key-_llm_ai_page_workspace_composer_wrap",
-            ".eu-copilot-composer-foot",
-            "div.st-key-eu_copilot_right_rail",
-            "div.st-key-eu_copilot_study_rail",
-            ".eu-copilot-study-rail-head",
-            "div.st-key-eu_study_step_list",
-            "div.st-key-eu_study_step_row_0_pending_question",
-            ".eu-copilot-evidence-note",
+        "selectors": GUIDED_SELECTORS,
+    },
+    "guided_welcome": {
+        "path": "?page=guided",
+        "required_any": [
+            [".eu-guided-fullscreen-marker", ".eu-copilot-page-marker"],
         ],
+        "state_required_any": [
+            [".eu-copilot-welcome-thread", "div.st-key-_llm_ai_page_workspace_guided_intents"],
+            ["div.st-key-_llm_ai_page_workspace_composer_wrap"],
+            ["div.st-key-eu_copilot_left_rail"],
+            ["div.st-key-eu_copilot_right_rail"],
+        ],
+        "selectors": GUIDED_SELECTORS,
+    },
+    "guided_study_workspace": {
+        "path": "?page=guided",
+        "required_any": [
+            [".eu-guided-fullscreen-marker", ".eu-copilot-page-marker"],
+        ],
+        "state_required_any": [
+            [".eu-copilot-dynamic-thread", ".eu-copilot-msg"],
+            [".eu-copilot-study-rail-head", "div.st-key-eu_study_step_list"],
+            ["div.st-key-_llm_ai_page_workspace_composer_wrap"],
+        ],
+        "interactions": [
+            {
+                "type": "click_role",
+                "role": "button",
+                "name_any": [
+                    "All the way to a gated draft",
+                    "Data, then a visual review",
+                    "Just a cohort & data",
+                ],
+                "optional": True,
+                "wait_ms": 1200,
+            }
+        ],
+        "selectors": GUIDED_SELECTORS,
     },
     "agent": {
         "path": "?page=agent&mode=demo",
@@ -200,16 +378,21 @@ ROUTES: dict[str, dict[str, Any]] = {
             ["[data-testid='stSidebar']"],
             [".eu-topbar", ".eu-topbar-ref-controls"],
         ],
-        "selectors": [
-            "[data-testid='stMain']",
-            "[data-testid='stSidebar']",
-            "[data-testid='stSidebarUserContent']",
-            ".eu-topbar",
-            ".eu-topbar-ref-controls",
-            ".eu-sidebar-footer-rule",
-            ".wsitem",
-            ".eu-settings-page-marker",
+        "selectors": SHELL_SELECTORS,
+    },
+    "shell_navigation": {
+        "path": "?page=settings&mode=demo",
+        "required_any": [
+            ["[data-testid='stMain']"],
+            ["[data-testid='stSidebar']"],
+            [".eu-topbar", ".eu-topbar-ref-controls"],
         ],
+        "state_required_any": [
+            ["div.st-key-eu_sidebar_nav_area", ".wsnav", ".wsitem"],
+            [".eu-topbar-ref-controls", ".eu-topbar"],
+            ["div.st-key-floating_ai_launcher"],
+        ],
+        "selectors": SHELL_SELECTORS,
     },
 }
 
@@ -315,6 +498,11 @@ QA_JS = """
     present: group.some((selector) => document.querySelectorAll(selector).length > 0),
     visible: group.some((selector) => Array.from(document.querySelectorAll(selector)).some(visible)),
   }));
+  const stateRequired = (routeConfig.state_required_any || []).map((group) => ({
+    anyOf: group,
+    present: group.some((selector) => document.querySelectorAll(selector).length > 0),
+    visible: group.some((selector) => Array.from(document.querySelectorAll(selector)).some(visible)),
+  }));
   const computed = {};
   for (const selector of routeConfig.selectors) computed[selector] = styleFor(selector);
     const keyCounts = {
@@ -335,6 +523,10 @@ QA_JS = """
       overflowY: Math.max(doc.scrollHeight, body.scrollHeight) - vh,
     },
     required,
+    stateRequired,
+    guardBlockers: stateRequired
+      .filter((group) => !group.visible)
+      .map((group) => `state not visible: ${group.anyOf.join(' OR ')}`),
     computed,
     keyCounts,
     offscreenCount: offscreen.length,
@@ -344,6 +536,47 @@ QA_JS = """
   };
 }
 """
+
+
+def _apply_interactions(page: Any, route_config: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    for idx, action in enumerate(route_config.get("interactions", []), start=1):
+        action_type = str(action.get("type") or "")
+        optional = bool(action.get("optional", False))
+        wait_ms = int(action.get("wait_ms") or 700)
+        try:
+            if action_type == "click_role":
+                role = str(action.get("role") or "button")
+                names = action.get("name_any") or [action.get("name")]
+                clicked = False
+                for raw_name in names:
+                    name = str(raw_name or "").strip()
+                    if not name:
+                        continue
+                    try:
+                        page.get_by_role(role, name=re.compile(re.escape(name), re.I)).first.click(
+                            timeout=2500
+                        )
+                        clicked = True
+                        break
+                    except PlaywrightTimeoutError:
+                        continue
+                if not clicked:
+                    raise PlaywrightTimeoutError(f"no matching {role} for {names}")
+            else:
+                raise ValueError(f"unsupported interaction type: {action_type}")
+            try:
+                page.wait_for_load_state("networkidle", timeout=8_000)
+            except PlaywrightTimeoutError:
+                pass
+            page.wait_for_timeout(wait_ms)
+        except Exception as exc:
+            message = f"interaction {idx} {action_type} failed: {exc}"
+            if optional:
+                blockers.append(message)
+                continue
+            raise
+    return blockers
 
 
 def parse_args() -> argparse.Namespace:
@@ -397,7 +630,10 @@ def collect_one(
     except PlaywrightTimeoutError:
         pass
     page.wait_for_timeout(900)
+    interaction_blockers = _apply_interactions(page, ROUTES[route])
     result = page.evaluate(QA_JS, {"routeConfig": ROUTES[route], "styleKeys": STYLE_KEYS})
+    if interaction_blockers:
+        result["guardBlockers"] = [*result.get("guardBlockers", []), *interaction_blockers]
     result.update(
         {
             "route": route,

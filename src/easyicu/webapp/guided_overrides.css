@@ -746,40 +746,6 @@
   color: var(--accent-ink) !important;
   -webkit-text-fill-color: var(--accent-ink) !important;
   font-weight: 750 !important;
-}/* Non-blocking fallback prompt actions (route_fallback_*) render outside the
-   guided_intents wrapper, so they showed up as full-width stacked bars. Give them
-   the same compact chip-row treatment. */
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stHorizontalBlock"]:has([class*="route_fallback"]) {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: flex-start !important;
-  flex-wrap: wrap !important;
-  gap: 8px !important;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [data-testid="stColumn"]:has([class*="route_fallback"]) {
-  flex: 0 0 auto !important;
-  width: auto !important;
-  max-width: none !important;
-  min-width: 0 !important;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="route_fallback"] button {
-  min-height: 32px !important;
-  height: 32px !important;
-  width: auto !important;
-  padding: 0 17px !important;
-  border-radius: 999px !important;
-  border: 1px solid var(--hair-2) !important;
-  background: color-mix(in srgb, var(--surface) 96%, var(--surface-2)) !important;
-  color: var(--ink-2) !important;
-  -webkit-text-fill-color: var(--ink-2) !important;
-  box-shadow: none !important;
-  font-size: 12.5px !important;
-  font-weight: 560 !important;
-  white-space: nowrap !important;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="route_fallback"] button:hover {
-  border-color: var(--accent-border) !important;
-  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface)) !important;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="guided_hints"] {
   width: min(calc(100% - 52px), var(--copilot-content-max)) !important;
@@ -2665,7 +2631,7 @@
    max-width:980px breakpoint, so it would otherwise re-assert 3 columns at
    very narrow widths and squeeze the chat into the first track. Re-assert the
    single-column collapse here, after the default, so it keeps winning. */
-@media (max-width: 980px) {}.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_new_study"] button,
+.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_new_study"] button,
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_copilot_rail_classic_workspace"] button {
   border: 1px solid var(--gd-card-border) !important;
   border-radius: 8px !important;
@@ -2834,7 +2800,7 @@
   border-color: #b9e3c2 !important;
   border-radius: 8px !important;
   background: #e9faed !important;
-}@media (max-width: 1320px) and (min-width: 981px) {}
+}
 
 /* Research Copilot final layout guardrails.
    Prevent Streamlit's column wrappers from reflowing the guided composer and
@@ -2964,10 +2930,6 @@
     max-width: 290px !important;
   }
 }
-
-@media (max-width: 1499px) and (min-width: 1181px) {}
-
-@media (max-width: 1320px) and (min-width: 1181px) {}
 
 /* Research Copilot composer polish.
    Match the supplied guided prototype more closely: compact 42px composer,
@@ -3599,7 +3561,6 @@
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-evidence-note > span {
   display: none !important;
 }
-@media (max-width: 1080px) {}
 
 /* Guided/Copilot design-source lock.
    Values here are copied from EasyICU/css/tokens.css, app.css, and guided.css. */

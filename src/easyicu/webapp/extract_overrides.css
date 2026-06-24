@@ -818,12 +818,6 @@ html body .stApp:has(.eu-source-header.page-head) .ex2-summary .sum-row:nth-of-t
   width: 29.734375px !important;
   min-width: 29.734375px !important;
   max-width: 29.734375px !important;
-}/* Keep this at the actual end of the file: the real-source Streamlit button
-   shell is otherwise recolored by earlier compatibility rules. */
-html body .stApp:has(.eu-source-header.page-head) [class*="st-key-eu_source_real_gate_card"] [class*="st-key-eu_real_source_kind_button_"] button,
-html body .stApp:has(.eu-source-header.page-head) [class*="st-key-eu_source_real_gate_card"] [class*="st-key-eu_real_source_kind_button_"] button[data-testid^="stBaseButton"] {
-  color: #000 !important;
-  -webkit-text-fill-color: #000 !important;
 }
 
 /* DATA EXTRACTION · export running/conflict states.
