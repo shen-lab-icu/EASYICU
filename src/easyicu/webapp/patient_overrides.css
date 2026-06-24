@@ -146,11 +146,7 @@
   color: var(--ink-4) !important;
   line-height: 1.35 !important;
 }
-@media (max-width: 760px) {
-  .stApp .quality-summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-  .stApp .quality-issue-grid {
+@media (max-width: 760px) {  .stApp .quality-issue-grid {
     grid-template-columns: 1fr !important;
   }
   .stApp .quality-issue-head {
@@ -167,94 +163,7 @@
 /* EOF final: Patient Review loaded mobile topbar current page #3.
    Keep this after every mobile navigation override so the current page title
    wins over the older breadcrumb pruning rules. */
-@media (max-width: 600px) {
-  html body .stApp:has(.eu-qv-loaded-root)
-    [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_page_breadcrumb_nav_quick_viz"]) {
-    height: 52px !important;
-    min-height: 52px !important;
-    max-height: 52px !important;
-    margin: 0 0 16px -12px !important;
-    padding: 0 12px !important;
-    overflow: hidden !important;
-  }
-
-  html body .stApp:has(.eu-qv-loaded-root)
-    [class*="st-key-eu_page_breadcrumb_nav_quick_viz"],
-  html body .stApp:has(.eu-qv-loaded-root)
-    [class*="st-key-eu_page_breadcrumb_nav_quick_viz"]
-    [data-testid="stHorizontalBlock"] {
-    width: 124px !important;
-    min-width: 124px !important;
-    max-width: 124px !important;
-    height: 52px !important;
-    min-height: 52px !important;
-  }
-
-  html body .stApp:has(.eu-qv-loaded-root)
-    [class*="st-key-eu_page_breadcrumb_nav_quick_viz"]
-    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:not(:has(.eu-bc-current)) {
-    display: none !important;
-  }
-
-  html body .stApp:has(.eu-qv-loaded-root)
-    [class*="st-key-eu_page_breadcrumb_nav_quick_viz"]
-    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:has(.eu-bc-current) {
-    display: flex !important;
-    flex: 0 0 72px !important;
-    align-items: center !important;
-    width: 72px !important;
-    min-width: 72px !important;
-    max-width: 72px !important;
-    height: 52px !important;
-    min-height: 52px !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    overflow: hidden !important;
-  }
-
-  html body .stApp:has(.eu-qv-loaded-root)
-    [class*="st-key-eu_page_breadcrumb_nav_quick_viz"] .eu-bc-current {
-    display: block !important;
-    width: 72px !important;
-    min-width: 72px !important;
-    max-width: 72px !important;
-    color: var(--ink) !important;
-    -webkit-text-fill-color: var(--ink) !important;
-    font-size: 13px !important;
-    font-weight: 650 !important;
-    line-height: 16px !important;
-    letter-spacing: 0 !important;
-    white-space: normal !important;
-  }
-
-  html body .stApp:has(.eu-qv-loaded-root)
-    [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_topbar_controls_quick_viz"])
-    [class*="st-key-_eu_topbar_run"],
-  html body .stApp:has(.eu-qv-loaded-root) .eu-topbar-qv-run-visual {
-    top: 9px !important;
-    right: 16px !important;
-    width: 90.922px !important;
-    min-width: 90.922px !important;
-    max-width: 90.922px !important;
-    height: 34px !important;
-    min-height: 34px !important;
-    transform: none !important;
-  }
-
-  html body .stApp:has(.eu-qv-loaded-root)
-    [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_topbar_controls_quick_viz"])
-    [class*="st-key-_eu_topbar_quick_viz_edit_setup"],
-  html body .stApp:has(.eu-qv-loaded-root) .eu-topbar-qv-edit-visual {
-    top: 9px !important;
-    right: 117px !important;
-    width: 110.156px !important;
-    min-width: 110.156px !important;
-    max-width: 110.156px !important;
-    height: 34px !important;
-    min-height: 34px !important;
-    transform: none !important;
-  }
-}
+@media (max-width: 600px) {}
 
 /* EOF final: Patient Review real Time Series / Data Quality mobile rhythm.
    Keep the real renderers and data-backed charts, but make their native
@@ -1368,13 +1277,7 @@
   font-size: 13px !important;
   font-weight: 600 !important;
   line-height: 1.5 !important;
-}
-.stApp .eu-qv-mc-sub {
-  color: var(--ink-4) !important;
-  font-size: 10.5px !important;
-  line-height: 1.5 !important;
-}
-.stApp .eu-qv-mc-value {
+}.stApp .eu-qv-mc-value {
   text-align: right !important;
 }
 .stApp .eu-qv-mc-value > div {
@@ -1383,12 +1286,6 @@
   font-weight: 500 !important;
   line-height: 1.5 !important;
 }
-.stApp .eu-qv-mc-value > span {
-  color: var(--ink-4) !important;
-  font-size: 10px !important;
-  line-height: 1.5 !important;
-}
-
 /* Patient Review final font-family and pill numeric alignment. */
 .stApp [class*="st-key-eu_qv_loaded_bar"] .eu-qv-loaded-copy-line,
 .stApp [class*="st-key-eu_qv_loaded_bar"] .eu-qv-loaded-title,
@@ -1419,20 +1316,7 @@
   color: var(--ink-4) !important;
   font-size: 10.5px !important;
   line-height: 15.75px !important;
-}
-.stApp .cols-2.eu-qv-series-grid .mini-chart .eu-qv-mc-value > div.mono {
-  color: var(--ink) !important;
-  font-size: 18px !important;
-  font-weight: 500 !important;
-  line-height: 27px !important;
-}
-.stApp .cols-2.eu-qv-series-grid .mini-chart .eu-qv-mc-value > span.mono {
-  color: var(--ink-4) !important;
-  font-size: 10px !important;
-  line-height: 15px !important;
-}
-
-/* Patient Review: override the global readable-min mono guard in mini charts. */
+}/* Patient Review: override the global readable-min mono guard in mini charts. */
 .stApp .cols-2.eu-qv-series-grid .mini-chart .eu-qv-mc-sub.mono,
 .stApp .eu-qv-patient-split .mini-chart .eu-qv-mc-sub.mono {
   color: var(--ink-4) !important;
@@ -1530,16 +1414,6 @@
 
 @media (max-width: 600px) {
   html body .stApp:has(.eu-qv-loaded-root)
-    [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_page_breadcrumb_nav_quick_viz"]) {
-    height: 52px !important;
-    min-height: 52px !important;
-    max-height: 52px !important;
-    margin: 0 0 16px -12px !important;
-    padding: 0 12px !important;
-    overflow: hidden !important;
-  }
-
-  html body .stApp:has(.eu-qv-loaded-root)
     [class*="st-key-eu_page_breadcrumb_nav_quick_viz"],
   html body .stApp:has(.eu-qv-loaded-root)
     [class*="st-key-eu_page_breadcrumb_nav_quick_viz"]
@@ -1572,22 +1446,6 @@
     padding: 0 !important;
     overflow: hidden !important;
   }
-
-  html body .stApp:has(.eu-qv-loaded-root)
-    [class*="st-key-eu_page_breadcrumb_nav_quick_viz"] .eu-bc-current {
-    display: block !important;
-    width: 72px !important;
-    min-width: 72px !important;
-    max-width: 72px !important;
-    color: var(--ink) !important;
-    -webkit-text-fill-color: var(--ink) !important;
-    font-size: 13px !important;
-    font-weight: 650 !important;
-    line-height: 16px !important;
-    letter-spacing: 0 !important;
-    white-space: normal !important;
-  }
-
   html body .stApp:has(.eu-qv-loaded-root)
     [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_topbar_controls_quick_viz"])
     [class*="st-key-_eu_topbar_run"],
@@ -1809,16 +1667,6 @@
   font-size: 12px !important;
   line-height: 20.25px !important;
 }
-
-[data-testid="stSidebar"] .eu-qv-rail .setup-row .k {
-  color: #9CA3AF !important;
-  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace !important;
-  font-size: 10.5px !important;
-  line-height: 15.75px !important;
-  letter-spacing: 0.84px !important;
-  text-transform: uppercase !important;
-}
-
 [data-testid="stSidebar"] .eu-qv-rail .setup-row .vv {
   color: #2E3338 !important;
   font-size: 12px !important;
@@ -1889,11 +1737,6 @@
   line-height: 20.25px !important;
   transform: translate(-6px, -7.672px) !important;
 }
-
-[data-testid="stSidebar"] .eu-qv-rail {
-  transform: translate(-6px, -7.672px) !important;
-}
-
 /* Patient Review loaded Data Tables numeric migration. */
 .stApp:has([class*="st-key-eu_qv_loaded_bar"]) [class*="st-key-eu_qv_loaded_bar"],
 .stApp:has([class*="st-key-eu_qv_loaded_bar"]) [class*="st-key-eu_qv_reference_tabs"],
@@ -2087,11 +1930,6 @@
 .stApp:has([class*="st-key-eu_qv_loaded_bar"]) [class*="st-key-_eu_qv_next_cohort"] button {
   width: 148.594px !important;
 }
-
-.stApp:has([class*="st-key-eu_qv_loaded_bar"]) [class*="st-key-_eu_qv_next_agent"] button {
-  width: 149.031px !important;
-}
-
 /* Patient Review loaded Data Tables cleanup #2. */
 .stApp:has([class*="st-key-eu_qv_loaded_bar"]) [class*="st-key-eu_qv_loaded_bar"] .pill,
 .stApp:has([class*="st-key-eu_qv_loaded_bar"]) [class*="st-key-eu_qv_loaded_bar"] .pill *,
@@ -2331,11 +2169,6 @@ html body .stApp:has([class*="st-key-eu_qv_loaded_bar"]) .eu-qv-series-grid .mc-
 html body .stApp:has([class*="st-key-eu_qv_loaded_bar"]) .eu-qv-series-grid .eu-qv-mc-title {
   letter-spacing: -0.0675px !important;
 }
-
-html body .stApp:has([class*="st-key-eu_qv_loaded_bar"]) .eu-qv-series-grid .spark {
-  transform: translateY(5.922px) !important;
-}
-
 html body .stApp:has([class*="st-key-eu_qv_loaded_bar"]) .eu-qv-patient-chip-row .chip.solid {
   border-color: #0E1116 !important;
   color: #0E1116 !important;
@@ -2806,9 +2639,7 @@ html body .stApp:has([class*="st-key-eu_qv_loaded_bar"]) .eu-qv-quality-note .d 
 
 @media (max-width: 1040px) { .stApp .eu-qv-design-root .cols-2 { grid-template-columns: 1fr !important; } }
 
-@media (max-width: 860px) {
-  .stApp .eu-qv-design-root .st-stats { grid-template-columns: repeat(2, 1fr) !important; }
-  .stApp .eu-qv-design-root .split-320 { grid-template-columns: 1fr !important; }
+@media (max-width: 860px) {  .stApp .eu-qv-design-root .split-320 { grid-template-columns: 1fr !important; }
 }
 
 @media (max-width: 460px) { .stApp .eu-qv-design-root .st-stats { grid-template-columns: 1fr !important; } }
@@ -5017,11 +4848,7 @@ html body .stApp:has([class*="st-key-eu_qv_loaded_bar"]) .eu-qv-quality-note .d 
 @media (max-width: 920px) {
   .stApp .eu-patient-overview-split {
     grid-template-columns: 1fr;
-  }
-  .stApp .eu-patient-signal-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
+  }}
 
 @media (max-width: 640px) {
   .stApp .eu-directory-guide-row {
@@ -5067,11 +4894,7 @@ html body .stApp:has([class*="st-key-eu_qv_loaded_bar"]) .eu-qv-quality-note .d 
   line-height: 1.45 !important;
 }
 
-@media (max-width: 1100px) {
-  .stApp .patient-feature-snapshot-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-  }
-}
+@media (max-width: 1100px) {}
 
 @media (max-width: 640px) {
   .stApp .patient-feature-snapshot-grid {
