@@ -50,6 +50,27 @@ def test_manifest_does_not_reference_missing_optional_payloads() -> None:
     assert "src/easyicu/extdata" not in manifest
 
 
+def test_native_webserver_static_assets_are_packaged() -> None:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    manifest = (REPO_ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+
+    package_data = pyproject["tool"]["setuptools"]["package-data"]
+    assert package_data["easyicu.webserver"] == [
+        "static/index.html",
+        "static/css/*.css",
+        "static/js/*.js",
+    ]
+    assert "recursive-include src/easyicu/webserver/static *.html *.css *.js" in manifest
+
+    required_assets = [
+        "src/easyicu/webserver/static/index.html",
+        "src/easyicu/webserver/static/js/app.js",
+        "src/easyicu/webserver/static/css/app.css",
+    ]
+    missing = [path for path in required_assets if not (REPO_ROOT / path).exists()]
+    assert not missing, f"Native FastAPI static assets are missing from source tree: {missing}"
+
+
 def test_python39_compatible_union_annotations_use_future_import() -> None:
     files_requiring_future = [
         "src/easyicu/attach.py",

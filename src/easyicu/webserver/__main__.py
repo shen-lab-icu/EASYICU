@@ -145,7 +145,10 @@ def run_app(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, background: b
         print(f"Log file: {log_path}")
         return 0
 
-    return subprocess.run(cmd, env=_runtime_env()).returncode
+    try:
+        return subprocess.run(cmd, env=_runtime_env()).returncode
+    except KeyboardInterrupt:
+        return 130
 
 
 def stop_app(port: int = DEFAULT_PORT) -> int:

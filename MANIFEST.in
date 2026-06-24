@@ -23,6 +23,7 @@ include src/easyicu/research_agent/README.md
 
 # Include data files
 recursive-include src/easyicu/data *.json
+recursive-include src/easyicu/webserver/static *.html *.css *.js
 
 # Exclude unwanted files
 global-exclude __pycache__

@@ -34,7 +34,7 @@ def _contains_debris(path: str) -> bool:
 
 
 def test_release_archives_preserve_reviewer_contract_and_package_data(tmp_path: Path) -> None:
-    pytest.importorskip("build")
+    pytest.importorskip("build.__main__")
 
     out_dir = tmp_path / "dist"
     env = os.environ.copy()
@@ -84,6 +84,9 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(tmp_path: 
             "src/easyicu/data/concept-dict.json",
             "src/easyicu/data/data-sources.json",
             "src/easyicu/research_agent/README.md",
+            "src/easyicu/webserver/static/index.html",
+            "src/easyicu/webserver/static/css/app.css",
+            "src/easyicu/webserver/static/js/app.js",
             "tests/test_release_archive_contract.py",
             "tests/test_release_hardening_p0.py",
             "tests/test_repository_contract.py",
@@ -94,6 +97,9 @@ def test_release_archives_preserve_reviewer_contract_and_package_data(tmp_path: 
         assert "easyicu/__init__.py" in wheel_names
         assert "easyicu/data/concept-dict.json" in wheel_names
         assert "easyicu/data/data-sources.json" in wheel_names
+        assert "easyicu/webserver/static/index.html" in wheel_names
+        assert "easyicu/webserver/static/css/app.css" in wheel_names
+        assert "easyicu/webserver/static/js/app.js" in wheel_names
         assert any(name.endswith(".dist-info/entry_points.txt") for name in wheel_names)
 
         assert not any(name.startswith(("tests/", "examples/", "docs/")) for name in wheel_names)
