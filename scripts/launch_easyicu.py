@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Cross-platform bootstrap launcher for EasyICU.
+"""Cross-platform bootstrap launcher for the native EasyICU WebApp.
 
 This script is intended for source checkouts or GitHub ZIP downloads. It
-creates a local virtual environment inside the repository, installs the webapp
-dependencies on first run, and starts the EasyICU Streamlit service.
+creates a local virtual environment inside the repository, installs the native
+web dependencies on first run, and starts the EasyICU FastAPI service.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ VENV_DIR = RUNTIME_DIR / "venv"
 STAMP_FILE = RUNTIME_DIR / "install-stamp.json"
 PYPROJECT_FILE = PROJECT_ROOT / "pyproject.toml"
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8501
+DEFAULT_PORT = 8765
 DEFAULT_PYPI_INDEX = "https://pypi.org/simple"
 MIN_PYTHON = (3, 10)
 
@@ -116,11 +116,11 @@ def _run_capture(
 
 def _is_easyicu_cmdline(cmdline: str) -> bool:
     normalized = (cmdline or "").replace("\\", "/").lower()
-    return "streamlit" in normalized or "easyicu" in normalized
+    return "easyicu.webserver.app:app" in normalized or "easyicu.webserver" in normalized
 
 
 def _health_url(port: int) -> str:
-    return f"http://127.0.0.1:{port}/_stcore/health"
+    return f"http://127.0.0.1:{port}/api/catalog"
 
 
 def _wait_for_health(port: int, timeout: int = 60) -> bool:
@@ -278,8 +278,8 @@ def _stop_with_source_tree(port: int) -> int:
     stopper = (
         "import sys; "
         f"sys.path.insert(0, {str(PROJECT_ROOT / 'src')!r}); "
-        "from easyicu.webapp import stop_app; "
-        f"stop_app(port={port})"
+        "from easyicu.webserver.__main__ import main; "
+        f"sys.exit(main(['stop', '--port', {str(port)!r}]))"
     )
     return subprocess.run([sys.executable, "-c", stopper], env=_runtime_env(), check=False).returncode
 
@@ -487,7 +487,7 @@ def install_easyicu(force: bool = False) -> None:
         return
 
     python_bin = str(_venv_python())
-    print("Installing EasyICU webapp dependencies...")
+    print("Installing EasyICU native web dependencies...")
     _print_pip_source_hint(python_bin)
 
     configured_index, configured_source = _configured_pip_index(python_bin)
@@ -523,7 +523,7 @@ def _runtime_package_is_usable() -> bool:
         [
             str(python_path),
             "-c",
-            "import easyicu; import easyicu.webapp; print('ok')",
+            "import easyicu; import easyicu.webserver.app; print('ok')",
         ],
         env=_runtime_env(),
         stdout=subprocess.DEVNULL,
@@ -562,7 +562,7 @@ def start_easyicu(
     cmd = [
         python_bin,
         "-m",
-        "easyicu.webapp",
+        "easyicu.webserver",
         "run",
         "--host",
         host,
@@ -571,15 +571,15 @@ def start_easyicu(
     ]
 
     if foreground:
-        print("Starting EasyICU in the foreground...")
+        print("Starting EasyICU native WebApp in the foreground...")
         return subprocess.run(cmd, env=_runtime_env()).returncode
 
     cmd.append("--background")
-    print("Starting EasyICU in the background...")
+    print("Starting EasyICU native WebApp in the background...")
     _run(cmd)
 
     if not _wait_for_health(resolved_port, timeout=60):
-        log_path = RUNTIME_DIR / "easyicu_webapp.log"
+        log_path = RUNTIME_DIR / "easyicu_webserver.log"
         print(f"EasyICU did not become ready in time. Check {log_path}.", file=sys.stderr)
         return 1
 
@@ -599,7 +599,7 @@ def stop_easyicu(port: int = DEFAULT_PORT) -> int:
     if not _venv_python().exists():
         return _stop_with_source_tree(port)
     return subprocess.run(
-        [str(_venv_python()), "-m", "easyicu.webapp", "stop", "--port", str(port)],
+        [str(_venv_python()), "-m", "easyicu.webserver", "stop", "--port", str(port)],
         env=_runtime_env(),
     ).returncode
 
@@ -609,7 +609,7 @@ def status_easyicu(port: int) -> int:
         print("EasyICU runtime is not installed yet.")
         return 1
     return subprocess.run(
-        [str(_venv_python()), "-m", "easyicu.webapp", "status", "--port", str(port)],
+        [str(_venv_python()), "-m", "easyicu.webserver", "status", "--port", str(port)],
         env=_runtime_env(),
     ).returncode
 
@@ -630,7 +630,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--foreground",
         action="store_true",
-        help="Keep the Streamlit process attached to the current terminal.",
+        help="Keep the FastAPI process attached to the current terminal.",
     )
     parser.add_argument(
         "--no-browser",

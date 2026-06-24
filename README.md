@@ -34,7 +34,7 @@ EasyICU has two layers that answer the two halves of one question — *how trust
 
 | Goal | Entry point |
 |------|-------------|
-| Validate data / define cohorts / export features without writing Python | **Web app** — `easyicu-webapp` *(or `./start_easyicu.sh` / `start_easyicu.command`)* — see **Path A** |
+| Validate data / define cohorts / export features without writing Python | **Native FastAPI Web app** — `easyicu-webapp` *(or `./start_easyicu.sh` / `start_easyicu.command`)* — see **Path A** |
 | Build a reproducible extraction or feature pipeline in Python | **Python API** — `import easyicu` — see **Path B** |
 | Extract features via CLI (scripted, no UI) | `easyicu` (the `extract_features` console script) |
 | Run the research-agent on a question + cohort | `easyicu-research-agent` |
@@ -51,12 +51,13 @@ This README is the front door. Each major layer keeps a focused README next to i
 | Read this | For |
 |-----------|-----|
 | [`src/easyicu/README.md`](src/easyicu/README.md) | Package module map — how the ~75 modules layer (concept abstraction → convert → API → scores). Start here as a code contributor. |
-| [`src/easyicu/webapp/README.md`](src/easyicu/webapp/README.md) | The Streamlit web layer: tabs, the AI opt-in gate invariant, and where to add a page. |
+| [`docs/native_fastapi_webserver.md`](docs/native_fastapi_webserver.md) | The maintained native FastAPI WebApp path and local route/API QA commands. |
+| [`src/easyicu/webapp/README.md`](src/easyicu/webapp/README.md) | Deprecated legacy Streamlit package notes kept for archive and compatibility shims. |
 | [`src/easyicu/research_agent/README.md`](src/easyicu/research_agent/README.md) | The evidence-bound research-agent layer: four-layer design, readiness gates, replication protocol. |
 | [`src/easyicu/data/README.md`](src/easyicu/data/README.md) | The concept dictionaries (`concept-dict.json`, the SOFA-2 overlay) that drive cross-database extraction. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | The expected workflow for proposing changes. |
 
-### Path A: Web Interface
+### Path A: Native FastAPI Web Interface
 
 Choose this path if you want to:
 - launch EasyICU quickly
@@ -75,7 +76,7 @@ path.
 Default local URL:
 
 ```text
-http://127.0.0.1:8501
+http://127.0.0.1:8765
 ```
 
 ### Path B: Python API
@@ -98,11 +99,12 @@ Swap the extra in brackets for what you actually need:
 | You want to… | Install |
 |--------------|---------|
 | Python API — extract concepts, SOFA / SOFA-2, sepsis-3, scores | `easyicu` |
-| Streamlit web app (+ the opt-in AI assistant) | `easyicu[webapp]` |
+| Native FastAPI web app (+ dormant-by-default provider status tooling) | `easyicu[webapp]` |
+| Deprecated legacy Streamlit web app | `easyicu[webapp-legacy]` |
 | Plotly / Kaleido figure export | `easyicu[viz]` |
 | Host the LLM proxy for the research-agent | `easyicu[llmserver]` |
 | Opt-in LangGraph agent graph | `easyicu[agentic]` |
-| Everything above | `easyicu[all]` |
+| Current active extras above | `easyicu[all]` |
 
 The **core install (`easyicu`) already bundles the research-agent's analytical
 stack** (`scikit-learn`, `statsmodels`), so the Python API and the deterministic
@@ -120,11 +122,15 @@ python -m pip install --upgrade pip
 pip install -e ".[all]"
 ```
 
-Launch the web app manually if needed:
+Launch the native Web app manually if needed:
 
 ```bash
 easyicu-webapp
 ```
+
+The old Streamlit package is deprecated and no longer the default Web UI. If
+archive forensics require it, install `easyicu[webapp-legacy]` and run
+`easyicu-webapp-legacy`; visual parity is not maintained.
 
 ## Reproducibility & Safety
 

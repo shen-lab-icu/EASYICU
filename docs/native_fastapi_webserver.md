@@ -1,8 +1,9 @@
 # Native FastAPI Webserver
 
 This is the local-first native frontend/server path for the EasyICU WebApp
-migration. It is separate from the legacy Streamlit launcher and does not
-change `easyicu-webapp`.
+migration. As of Stage26B, this is the default `easyicu-webapp` launcher path.
+The old Streamlit package is deprecated and retained only behind the explicit
+`easyicu-webapp-legacy` command.
 
 ## Start Locally
 
@@ -10,6 +11,12 @@ From `EASYICU/`:
 
 ```bash
 source .venv/bin/activate
+easyicu-webapp
+```
+
+Equivalent direct server command:
+
+```bash
 python -m uvicorn easyicu.webserver.app:app --host 127.0.0.1 --port 8765
 ```
 
@@ -22,6 +29,7 @@ http://127.0.0.1:8765/
 If port `8765` is already in use, pick another local port:
 
 ```bash
+easyicu-webapp --port 8766
 python -m uvicorn easyicu.webserver.app:app --host 127.0.0.1 --port 8766
 ```
 
@@ -166,6 +174,8 @@ Cleanup boundary:
   historical CSS in the same change. Cleanup must be separately staged, with a
   fallback snapshot and focused QA after each cleanup slice.
 
-This state is enough to treat Streamlit as fallback-only for the validated
-native routes above. It is evidence to begin legacy CSS cleanup planning, not a
-blanket deletion order.
+This state is enough to treat the native FastAPI UI as the maintained WebApp
+path. Stage24B has already removed the inactive legacy Streamlit split CSS;
+Stage26B changes the default package entrypoint and repository launchers to the
+native server. The remaining Streamlit package is legacy code pending tests and
+package archive decisions; it is not the default UI path.

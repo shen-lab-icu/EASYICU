@@ -12,6 +12,9 @@ under `src/easyicu/webserver/`.
   path as a minimal base layer.
 - Stage24B removed the legacy route split CSS files after Stage24A made them
   inactive by default.
+- Stage26B moved the default `easyicu-webapp` command and one-click launchers to
+  the native FastAPI server. The Streamlit command is now
+  `easyicu-webapp-legacy` and requires the `easyicu[webapp-legacy]` extra.
 
 ## Recovery
 

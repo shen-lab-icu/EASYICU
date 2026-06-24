@@ -34,7 +34,7 @@ EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 
 
 | 目标 | 入口 |
 |------|------|
-| 不写 Python,可视化校验数据 / 定义队列 / 导出特征 | **Web 应用** — `easyicu-webapp` *(或 `./start_easyicu.sh` / `start_easyicu.command`)* —— 见 **路线 A** |
+| 不写 Python,可视化校验数据 / 定义队列 / 导出特征 | **FastAPI 原生 Web 应用** — `easyicu-webapp` *(或 `./start_easyicu.sh` / `start_easyicu.command`)* —— 见 **路线 A** |
 | 用 Python 构建可复现的特征/队列流水线 | **Python API** — `import easyicu` —— 见 **路线 B** |
 | 用 CLI 跑特征提取(脚本化、无 UI) | `easyicu`(对应 `extract_features` 控制台脚本) |
 | 让 research-agent 跑一个研究问题 + 队列 | `easyicu-research-agent` |
@@ -51,12 +51,13 @@ EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 
 | 阅读 | 用于 |
 |------|------|
 | [`src/easyicu/README.md`](src/easyicu/README.md) | 包级模块地图——~75 个模块如何分层(概念抽象 → 转换 → API → 评分)。代码贡献者从这里开始。 |
-| [`src/easyicu/webapp/README.md`](src/easyicu/webapp/README.md) | Streamlit Web 层:标签页、AI opt-in 门控不变量,以及如何新增页面。 |
+| [`docs/native_fastapi_webserver.md`](docs/native_fastapi_webserver.md) | 当前维护的 FastAPI 原生 WebApp 路径与本地 route/API QA 命令。 |
+| [`src/easyicu/webapp/README.md`](src/easyicu/webapp/README.md) | 已废弃的 legacy Streamlit 包说明，仅保留归档和兼容 shim 语义。 |
 | [`src/easyicu/research_agent/README.md`](src/easyicu/research_agent/README.md) | 证据绑定的 research-agent 层:四层设计、就绪门控、跨库复现协议。 |
 | [`src/easyicu/data/README.md`](src/easyicu/data/README.md) | 驱动跨库提取的概念字典(`concept-dict.json` 与 SOFA-2 overlay)。 |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 提交改动时的预期工作流。 |
 
-### 路线 A：Web 界面
+### 路线 A：FastAPI 原生 Web 界面
 
 如果你想：
 - 快速启动 EasyICU
@@ -74,7 +75,7 @@ EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 
 默认本地地址：
 
 ```text
-http://127.0.0.1:8501
+http://127.0.0.1:8765
 ```
 
 ### 路线 B：Python API
@@ -97,11 +98,12 @@ pip install "easyicu[webapp] @ git+https://github.com/shen-lab-icu/easyicu.git"
 | 你想要…… | 安装 |
 |----------|------|
 | Python API —— 提取概念、SOFA / SOFA-2、sepsis-3、各类评分 | `easyicu` |
-| Streamlit Web 应用（含可选 AI 助手） | `easyicu[webapp]` |
+| FastAPI 原生 Web 应用（provider 状态工具默认休眠） | `easyicu[webapp]` |
+| 已废弃的 legacy Streamlit Web 应用 | `easyicu[webapp-legacy]` |
 | Plotly / Kaleido 图表导出 | `easyicu[viz]` |
 | 托管 research-agent 的 LLM 代理 | `easyicu[llmserver]` |
 | 可选的 LangGraph agent graph | `easyicu[agentic]` |
-| 以上全部 | `easyicu[all]` |
+| 当前 active extras | `easyicu[all]` |
 
 **核心安装（`easyicu`）已内置 research-agent 的分析栈**（`scikit-learn`、`statsmodels`），
 所以 Python API 和确定性 agent 路径开箱即用。research-agent CLI 另需一个 LLM 客户端
@@ -118,11 +120,15 @@ python -m pip install --upgrade pip
 pip install -e ".[all]"
 ```
 
-如需手动启动 Web 应用：
+如需手动启动原生 Web 应用：
 
 ```bash
 easyicu-webapp
 ```
+
+旧 Streamlit 包已经废弃，不再是默认 Web UI。如需归档复核，可安装
+`easyicu[webapp-legacy]` 并运行 `easyicu-webapp-legacy`；其视觉 parity
+不再维护。
 
 ## 可复现性与安全说明
 
