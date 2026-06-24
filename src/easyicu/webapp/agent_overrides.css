@@ -676,81 +676,6 @@ html body .stApp:has(.eu-agent-page-marker)
 .stApp:has(.eu-agent-page-marker) .eu-agent-project-contract-node {
   font-family: var(--eu-agent-ref-mono) !important;
 }
-.stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] {
-  margin: -2px 0 18px !important;
-  border-bottom: 1px solid var(--hair) !important;
-}
-.stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [data-testid="stHorizontalBlock"] {
-  display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
-  align-items: center !important;
-  gap: 10px !important;
-}
-.stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [data-testid="stColumn"] {
-  flex: 0 0 auto !important;
-  width: auto !important;
-  min-width: 0 !important;
-}
-.stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [data-testid="stColumn"]:nth-child(5) {
-  flex: 1 1 auto !important;
-  min-width: 0 !important;
-  display: flex !important;
-  justify-content: flex-end !important;
-}
-.stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] {
-  display: flex !important;
-  justify-content: flex-end !important;
-}
-.stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] .stButton > button,
-.stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] button {
-  min-height: 34px !important;
-  height: 34px !important;
-  padding: 0 16px !important;
-  border: 1px solid var(--ink) !important;
-  border-radius: 7px !important;
-  background: var(--ink) !important;
-  background-color: var(--ink) !important;
-  box-shadow: none !important;
-  color: var(--surface) !important;
-  -webkit-text-fill-color: var(--surface) !important;
-  font-size: 12.5px !important;
-  font-weight: 650 !important;
-}
-.stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] .stButton > button:hover,
-.stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] button:hover {
-  background: #20242a !important;
-  background-color: #20242a !important;
-  border-color: #20242a !important;
-  color: var(--surface) !important;
-  -webkit-text-fill-color: var(--surface) !important;
-}
-.stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [class*="st-key-_eu_ra_header_rerun"] button * {
-  color: inherit !important;
-  -webkit-text-fill-color: inherit !important;
-}
-@media (max-width: 900px) {
-  .stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [data-testid="stColumn"]:nth-child(5) {
-    justify-content: flex-start !important;
-  }
-}
-@media (max-width: 640px) {
-  .stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] {
-    overflow-x: auto !important;
-    -webkit-overflow-scrolling: touch;
-  }
-  .stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [data-testid="stHorizontalBlock"] {
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: nowrap !important;
-    min-width: max-content !important;
-  }
-  .stApp:has(.eu-agent-page-marker) [class*="st-key-_eu_ra_tabs"] [data-testid="stColumn"] {
-    flex: 0 0 auto !important;
-    min-width: 96px !important;
-    width: auto !important;
-  }
-}
 .stApp:has(.eu-agent-page-marker) .eu-agent-reference-head {
   width: 100% !important;
   margin: 0 0 16px !important;
@@ -1548,12 +1473,6 @@ html body .stApp:has(.eu-agent-page-marker)
   gap: 16px !important;
   flex-wrap: wrap !important;
 }
-
-.stApp:has(.eu-agent-page-marker) .eu-agent-reference-shell .eu-agent-project-title-stack {
-  flex: 0 0 583.406px !important;
-  max-width: 583.406px !important;
-}
-
 .stApp:has(.eu-agent-page-marker) .eu-agent-reference-shell .ag-title {
   display: flex !important;
   align-items: center !important;
@@ -2862,11 +2781,7 @@ html body .stApp:has(.eu-agent-page-marker)
   flex: none !important;
 }
 
-@media (max-width: 1120px) {
-  .stApp:has(.eu-agent-page-marker) .eu-agent-reference-shell .split-320 {
-    grid-template-columns: 1fr !important;
-  }
-}
+@media (max-width: 1120px) {}
 
 /* Agent Projects final font pass: shell_overrides rewrites the global
    font tokens, so pin the reference stacks after all Agent component rules. */
@@ -3640,11 +3555,7 @@ html body .stApp:has(.eu-agent-page-marker) .eu-agent-reference-shell .eu-agent-
   .eu-ref-split,
   .eu-ref-split {
     grid-template-columns: 1fr;
-  }
-  .eu-wb-results-head {
-    align-items: flex-start;
-  }
-  .eu-wb-snapshot-list {
+  }  .eu-wb-snapshot-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -5822,11 +5733,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
 .stApp [class*="st-key-research_agent_idea_actions"] [data-testid="stHorizontalBlock"] {
   align-items: center !important;
   gap: 8px !important;
-}
-.stApp [class*="st-key-research_agent_idea_actions"] [data-testid="stColumn"] {
-  min-width: 0 !important;
-}
-.stApp [class*="st-key-research_agent_idea_actions"] [data-testid="stButton"] button,
+}.stApp [class*="st-key-research_agent_idea_actions"] [data-testid="stButton"] button,
 .stApp [class*="st-key-research_agent_idea_actions"] [data-testid="stDownloadButton"] button {
   display: inline-flex !important;
   align-items: center !important;
@@ -11994,11 +11901,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   border: 1px solid var(--hair) !important;
   border-radius: 6px !important;
   background: var(--surface) !important;
-}
-.stApp [class*="st-key-_eu_wb_inspector_gate"] [data-testid="stColumn"] {
-  min-width: 0 !important;
-}
-.eu-wb-inspector-copy.open em {
+}.eu-wb-inspector-copy.open em {
   border-color: color-mix(in oklab, var(--accent) 30%, var(--hair));
   background: var(--accent-soft);
   color: var(--accent-ink);
@@ -13827,11 +13730,7 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   .eu-wb-evidence-side {
     grid-column: 2;
     align-items: flex-start;
-  }
-  .eu-wb-artifact-grid {
-    grid-template-columns: 1fr;
-  }
-  .eu-wb-step-check > span,
+  }  .eu-wb-step-check > span,
   .eu-wb-step-check em,
   .eu-wb-step-artifact > span,
   .eu-wb-step-note-node {
@@ -13900,99 +13799,6 @@ div[class*="st-key-_eu_summary_review_panel_"] button {
   display: flex;
   align-items: center;
   min-height: 32px;
-}
-
-/* -------------------------------------------------------------------------- */
-
-/* Final Agent tab override.
-   This lives at the end of the file because Streamlit's primary/secondary
-   button rules are injected after many of our component rules. Desktop follows
-   the latest Claude handoff screen: title card first, then icon tabs with an
-   underline selected state. */
-.stApp .stElementContainer[class*="st-key-_eu_ra_view_"] .stButton > button,
-.stApp .stElementContainer[class*="st-key-_eu_ra_view_"] button {
-  min-height: 38px !important;
-  height: 38px !important;
-  padding: 0 13px !important;
-  border: 0 !important;
-  border-bottom: 2px solid transparent !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  background-color: transparent !important;
-  box-shadow: none !important;
-  color: var(--ink-3) !important;
-  -webkit-text-fill-color: var(--ink-3) !important;
-  font-size: 12.75px !important;
-  font-weight: 500 !important;
-  justify-content: flex-start !important;
-}
-.stApp .stElementContainer[class*="st-key-_eu_ra_view_"] .stButton > button:hover,
-.stApp .stElementContainer[class*="st-key-_eu_ra_view_"] button:hover {
-  border-bottom-color: var(--hair-3) !important;
-  background: transparent !important;
-  background-color: transparent !important;
-  color: var(--ink) !important;
-  -webkit-text-fill-color: var(--ink) !important;
-}
-.stApp .stElementContainer[class*="st-key-_eu_ra_view_"] .stButton > button[data-testid="stBaseButton-primary"],
-.stApp .stElementContainer[class*="st-key-_eu_ra_view_"] button[data-testid="stBaseButton-primary"] {
-  border-bottom-color: var(--ink) !important;
-  background: transparent !important;
-  background-color: transparent !important;
-  color: var(--ink) !important;
-  -webkit-text-fill-color: var(--ink) !important;
-  font-weight: 600 !important;
-}
-.stApp .stElementContainer[class*="st-key-_eu_ra_view_"] .stButton > button *,
-.stApp .stElementContainer[class*="st-key-_eu_ra_view_"] button * {
-  color: inherit !important;
-  -webkit-text-fill-color: inherit !important;
-}
-
-@media (max-width: 640px) {
-  .stApp [class*="st-key-_eu_ra_tabs"] {
-    overflow-x: visible !important;
-    border-bottom: 0 !important;
-  }
-  .stApp [class*="st-key-_eu_ra_tabs"] [data-testid="stHorizontalBlock"] {
-    flex-direction: column !important;
-    align-items: stretch !important;
-    gap: 10px !important;
-    min-width: 0 !important;
-    width: 100% !important;
-  }
-  .stApp [class*="st-key-_eu_ra_tabs"] [data-testid="stColumn"]:nth-child(-n + 4) {
-    flex: 0 0 auto !important;
-    min-width: 0 !important;
-    width: 100% !important;
-    padding: 0 !important;
-  }
-  .stApp [class*="st-key-_eu_ra_tabs"] [data-testid="stColumn"]:nth-child(5) {
-    display: none !important;
-  }
-  .stApp .stElementContainer[class*="st-key-_eu_ra_view_"] .stButton > button,
-  .stApp .stElementContainer[class*="st-key-_eu_ra_view_"] button {
-    width: 100% !important;
-    min-height: 36px !important;
-    height: 36px !important;
-    padding: 0 12px !important;
-    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--hair)) !important;
-    border-radius: 9px !important;
-    background: var(--surface) !important;
-    background-color: var(--surface) !important;
-    box-shadow: none !important;
-    color: var(--ink) !important;
-    -webkit-text-fill-color: var(--ink) !important;
-    font-size: 12px !important;
-  }
-  .stApp .stElementContainer[class*="st-key-_eu_ra_view_"] .stButton > button[data-testid="stBaseButton-primary"],
-  .stApp .stElementContainer[class*="st-key-_eu_ra_view_"] button[data-testid="stBaseButton-primary"] {
-    border-color: var(--ink) !important;
-    background: var(--ink) !important;
-    background-color: var(--ink) !important;
-    color: #fff !important;
-    -webkit-text-fill-color: #fff !important;
-  }
 }
 
 .stApp .ra-copilot-handoff {

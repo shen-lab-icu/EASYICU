@@ -636,12 +636,6 @@ html body .stApp:has(.eu-source-header.page-head) .eu-demo-ex2-left .seg a.activ
 html body .stApp:has(.eu-source-header.page-head) .eu-demo-ex2-left .path-field {
   font-family: var(--font-sans), var(--font-cn) !important;
 }
-
-html body .stApp:has(.eu-source-header.page-head) .eu-demo-ex2-left .path-field .pf-ico svg {
-  display: inline !important;
-  font-family: var(--font-sans), var(--font-cn) !important;
-}
-
 html body .stApp:has(.eu-source-header.page-head) .eu-demo-ex2-left .path-field .pf-path,
 html body .stApp:has(.eu-source-header.page-head) .ex2-summary .sum-row .v,
 html body .stApp:has(.eu-source-header.page-head) .express .express-meta b {
@@ -824,23 +818,7 @@ html body .stApp:has(.eu-source-header.page-head) .ex2-summary .sum-row:nth-of-t
   width: 29.734375px !important;
   min-width: 29.734375px !important;
   max-width: 29.734375px !important;
-}
-
-html body .stApp:has(.eu-source-header.page-head) .handoff.eu-demo-handoff .ho-body {
-  flex: 0 0 717.078125px !important;
-  width: 717.078125px !important;
-  min-width: 717.078125px !important;
-  max-width: 717.078125px !important;
-}
-
-html body .stApp:has(.eu-source-header.page-head) .handoff.eu-demo-handoff .btn {
-  flex: 0 0 166.921875px !important;
-  width: 166.921875px !important;
-  min-width: 166.921875px !important;
-  max-width: 166.921875px !important;
-}
-
-/* Keep this at the actual end of the file: the real-source Streamlit button
+}/* Keep this at the actual end of the file: the real-source Streamlit button
    shell is otherwise recolored by earlier compatibility rules. */
 html body .stApp:has(.eu-source-header.page-head) [class*="st-key-eu_source_real_gate_card"] [class*="st-key-eu_real_source_kind_button_"] button,
 html body .stApp:has(.eu-source-header.page-head) [class*="st-key-eu_source_real_gate_card"] [class*="st-key-eu_real_source_kind_button_"] button[data-testid^="stBaseButton"] {
@@ -1381,12 +1359,6 @@ html body .stApp:has(.eu-source-header.page-head) [class*="st-key-eu_source_real
   font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
   color: #0E1116 !important;
 }
-
-html body .stApp:has(.eu-source-header.page-head) [class*="st-key-eu_source_real_gate_card"] [class*="st-key-eu_real_source_kind_button_"] button {
-  color: #000 !important;
-  -webkit-text-fill-color: #000 !important;
-}
-
 html body .stApp [class*="st-key-eu_real_source_kind_button_"] button,
 html body .stApp [class*="st-key-eu_real_source_kind_button_"] button * {
   color: #000 !important;
@@ -2603,17 +2575,7 @@ html body .stApp:has(.eu-source-header.page-head) [class*="st-key-eu_source_real
 .stApp .eu-demo-ex2-left .eu-export-format-row,
 .stApp .eu-demo-ex2-left .path-field {
   letter-spacing: -0.0675px !important;
-}
-.stApp .eu-demo-ex2-left .modcard {
-  height: 40px !important;
-  min-height: 40px !important;
-  max-height: 40px !important;
-  color: #000 !important;
-  font-size: 13.3333px !important;
-  line-height: normal !important;
-  letter-spacing: normal !important;
-}
-.stApp .eu-demo-ex2-left .modcard .mk {
+}.stApp .eu-demo-ex2-left .modcard .mk {
   line-height: normal !important;
   background: var(--accent) !important;
   border-color: var(--accent) !important;
@@ -2624,11 +2586,7 @@ html body .stApp:has(.eu-source-header.page-head) [class*="st-key-eu_source_real
   color: #000 !important;
   line-height: normal !important;
   letter-spacing: normal !important;
-}
-.stApp .eu-demo-ex2-left .modcard .ct {
-  font-weight: 400 !important;
-}
-.stApp .eu-demo-ex2-left .cfg-ico svg {
+}.stApp .eu-demo-ex2-left .cfg-ico svg {
   width: 17px !important;
   height: 17px !important;
 }
@@ -2643,11 +2601,7 @@ html body .stApp:has(.eu-source-header.page-head) [class*="st-key-eu_source_real
 }
 .stApp .eu-demo-handoff .ho-body {
   line-height: 18.125px !important;
-}
-.stApp .eu-demo-handoff .btn {
-  letter-spacing: -0.0675px !important;
-}
-.stApp .eu-demo-ex2-left .modcard:not(.on) .mk {
+}.stApp .eu-demo-ex2-left .modcard:not(.on) .mk {
   background: transparent !important;
   border-color: var(--hair-3) !important;
 }
@@ -2679,24 +2633,14 @@ html body .stApp:has(.eu-source-header.page-head) [class*="st-key-eu_source_real
 .stApp .handoff.eu-demo-handoff .btn {
   color: var(--ink) !important;
   letter-spacing: normal !important;
-}
-.stApp .eu-source-header.page-head .lead {
-  margin: 7px 0 13.5px !important;
-}
-.stApp .express {
+}.stApp .express {
   margin-top: 0 !important;
 }
 .stApp .chip,
 .stApp .chip.solid {
   color: #2E3338 !important;
   -webkit-text-fill-color: #2E3338 !important;
-}
-.stApp .eu-demo-ex2-left .modcard {
-  height: auto !important;
-  min-height: auto !important;
-  max-height: none !important;
-}
-.stApp .eu-demo-ex2-left .modcard .nm {
+}.stApp .eu-demo-ex2-left .modcard .nm {
   color: #000 !important;
 }
 .stApp .handoff.eu-demo-handoff .ho-body {
@@ -3814,19 +3758,7 @@ html body .stApp:has(.eu-step4-design-marker) [class*="st-key-sanity_back_btn"] 
   color: var(--ink-3);
   font-size: 12px;
   padding-top: 6px;
-}
-.stApp [class*="st-key-eu_source_real_gate_card"] {
-  padding: 18px 20px 16px !important;
-  border: 1px solid var(--hair) !important;
-  border-radius: var(--r-4) !important;
-  background: var(--surface) !important;
-  box-shadow: var(--sh-1) !important;
-}
-.stApp [class*="st-key-eu_source_real_gate_card"] > [data-testid="stVerticalBlock"],
-.stApp [class*="st-key-eu_source_real_gate_card"] > div > [data-testid="stVerticalBlock"] {
-  gap: 0.95rem !important;
-}
-.eu-card-head {
+}.eu-card-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -3834,13 +3766,7 @@ html body .stApp:has(.eu-step4-design-marker) [class*="st-key-sanity_back_btn"] 
   margin: 0 0 12px;
   padding: 0 0 11px;
   border-bottom: 1px solid var(--hair);
-}
-.eu-card-head span {
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 700;
-}
-.eu-card-head small {
+}.eu-card-head small {
   color: var(--ink-4);
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -4905,12 +4831,7 @@ html body .stApp:has(.eu-step4-design-marker) [class*="st-key-sanity_back_btn"] 
   overflow-wrap: anywhere;
   text-overflow: ellipsis;
 }
-@media (max-width: 980px) {
-  .stApp .eu-extract-console-cards,
-  .stApp .eu-extract-console-steps {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .stApp .eu-extract-console-step:nth-child(2) {
+@media (max-width: 980px) {  .stApp .eu-extract-console-step:nth-child(2) {
     border-right: 0;
   }
   .stApp .eu-extract-console-step:nth-child(-n+2) {
@@ -5309,13 +5230,6 @@ html body .stApp:has(.eu-step4-design-marker) [class*="st-key-sanity_back_btn"] 
   max-height: 228.25px !important;
   transform: translateY(-13.672px) !important;
 }
-
-.stApp [data-testid="stSidebar"] .eu-extraction-rail .eyebrow {
-  display: block !important;
-  margin-top: 27px !important;
-  margin-bottom: 8px !important;
-}
-
 /* DATA EXTRACTION · after-audit parity corrections. */
 .stApp .eu-demo-ex2-left .cfg:first-of-type .pill,
 .stApp .eu-demo-ex2-left .cfg:first-child .pill {

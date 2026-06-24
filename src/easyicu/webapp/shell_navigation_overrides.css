@@ -677,12 +677,6 @@
   line-height: 14px !important;
   margin: 0 !important;
 }
-.stApp [class*="st-key-_eu_topbar_run"] button[data-testid^="stBaseButton"]:has([data-testid="stIconMaterial"])::before,
-.stApp [class*="st-key-_eu_topbar_start_demo"] button[data-testid^="stBaseButton"]:has([data-testid="stIconMaterial"])::before {
-  content: none !important;
-  display: none !important;
-}
-
 /* Sidebar brand (design .brand): logo + copy is the only visible surface.
    The real Home button remains as an invisible overlay so the brand block
    is clickable without adding a second text row. */
