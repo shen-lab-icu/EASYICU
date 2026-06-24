@@ -56,6 +56,8 @@
       window.EU_DATA = m;
       window.EU_VIZ_WORKSPACE = null;
       window.EU_CROSSDB_WORKSPACE = null;
+      window.EU_PATIENT_DRILLDOWN = null;
+      window.EU_COHORT_REVIEW = null;
       try { localStorage.setItem('easyicu_home_data', m); } catch (e) {}
       if (window.__euExtractReset) window.__euExtractReset();  // prev extraction belonged to the old source
       if (window.__euRender) window.__euRender();

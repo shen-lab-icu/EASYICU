@@ -226,6 +226,84 @@
 }
 @media (max-width: 920px){ .gd-thread .msg.bot .m-ava{ display: none; } .gd-thread .msg.bot .m-body{ margin-left: 0; } }
 
+@media (max-width: 520px){
+  .gd-shell{
+    min-width: 0;
+  }
+  .gd-top{
+    padding: 0 12px;
+    gap: 8px;
+  }
+  .gd-top .gd-mode{
+    display: none;
+  }
+  .gd-main{
+    overflow: hidden;
+  }
+  .gd-aside{
+    align-items: stretch;
+    overflow-x: hidden;
+    padding: 8px 10px;
+  }
+  .gd-aside-body{
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    overflow: visible;
+  }
+  .study-item{
+    min-width: 0;
+    width: 100%;
+    padding: 4px 2px;
+  }
+  .study-item .si-dot{
+    width: 21px;
+    height: 21px;
+  }
+  .study-item .si-txt{
+    min-width: 0;
+    width: 100%;
+  }
+  .study-item .si-t{
+    white-space: normal;
+    overflow-wrap: anywhere;
+    font-size: 8.6px;
+    line-height: 1.1;
+  }
+  .gd-scroll{
+    padding-top: 16px;
+  }
+  .gd-thread,
+  .gd-suggest,
+  .gd-composer,
+  .gd-foot-note,
+  .gd-hint{
+    max-width: 100%;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .gd-card,
+  .gd-diff,
+  .gd-collapsed{
+    max-width: 100%;
+    margin-left: 0;
+  }
+  .gd-card .gc-head,
+  .gd-cardfoot,
+  .gd-diff .df-head,
+  .gd-diff .df-foot{
+    flex-wrap: wrap;
+  }
+  .gd-composer{
+    gap: 8px;
+  }
+  .gd-input{
+    min-width: 0;
+  }
+}
+
 /* ============================================================
    Agent texture (Codex / Claude-Code style): left session rail,
    file-diff artifact card, outputs panel, real-data connect flow.

@@ -40,7 +40,7 @@ _DB_LABELS = {
     "miii": "MIMIC-III",
 }
 
-_MODULE_MANIFEST = "easyicu_export_manifest.json"
+_MODULE_MANIFESTS = ("easyicu_export_manifest.json", "_manifest.json")
 
 
 def _safe_dir(path: Path) -> bool:
@@ -190,7 +190,7 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     ready = status["ready"]
     missing_tables = status["missing_tables"]
 
-    is_module = (path / _MODULE_MANIFEST).exists()
+    is_module = any((path / name).exists() for name in _MODULE_MANIFESTS)
 
     if is_module:
         source = "module"

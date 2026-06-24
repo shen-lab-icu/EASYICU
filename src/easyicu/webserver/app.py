@@ -21,7 +21,11 @@ from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from easyicu.webserver import agent_runs
+from easyicu.webserver import cohort_review
+from easyicu.webserver import crossdb_review
 from easyicu.webserver import dataio
+from easyicu.webserver import extraction_filters
+from easyicu.webserver import patient_drilldown
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import sources as source_store
@@ -75,6 +79,54 @@ def workspace_summary(body: Dict[str, Any]) -> dict:
     if not path:
         raise HTTPException(status_code=400, detail="path is required")
     result = dataio.summarize_export_workspace(path)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.post("/api/patient-review/drilldown")
+def patient_review_drilldown(body: Dict[str, Any]) -> dict:
+    """Return bounded real Patient Review aggregates plus one entity drilldown."""
+    try:
+        return patient_drilldown.patient_review_drilldown(body)
+    except patient_drilldown.PatientReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/cohort-review/summary")
+def cohort_review_summary(body: Dict[str, Any]) -> dict:
+    """Return bounded real Cohort Review aggregates for the active export."""
+    try:
+        return cohort_review.cohort_review_summary(body)
+    except cohort_review.CohortReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/crossdb-review/summary")
+def crossdb_review_summary(body: Dict[str, Any]) -> dict:
+    """Return bounded real Cross-DB descriptive aggregates for registered exports."""
+    try:
+        return crossdb_review.crossdb_review_summary(body)
+    except crossdb_review.CrossdbReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/extraction/filter-options")
+def extraction_filter_options(body: Dict[str, Any]) -> dict:
+    """Return bounded real-source filter metadata for Data Extraction."""
+    try:
+        return extraction_filters.filter_options(body)
+    except extraction_filters.ExtractionFilterError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/extraction/filter-preview")
+def extraction_filter_preview(body: Dict[str, Any]) -> dict:
+    """Apply supported extraction metadata filters; unsupported filters fail closed."""
+    try:
+        result = extraction_filters.filter_preview(body)
+    except extraction_filters.ExtractionFilterError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result)
     return result
