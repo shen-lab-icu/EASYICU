@@ -44,7 +44,7 @@ def _raw_table(database: str, data_path: object, table: str) -> pd.DataFrame:
     if root is None:
         root = os.environ.get("EASYICU_DATA_PATH", "")
         try:
-            from .webapp.data_paths import find_database_path
+            from .data_paths import find_database_path
 
             root = find_database_path(root, database)
         except Exception:

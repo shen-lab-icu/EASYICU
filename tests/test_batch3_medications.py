@@ -84,7 +84,7 @@ def test_registered_as_point_event(name, _dbs, _cov):
 
 @pytest.mark.parametrize("name,_dbs,expected_cov", BATCH3, ids=[m[0] for m in BATCH3])
 def test_registered_in_webapp_catalog(name, _dbs, expected_cov):
-    from easyicu.webapp.concept_catalog import (
+    from easyicu.concept_catalog import (
         CONCEPT_DB_COVERAGE,
         CONCEPT_DICTIONARY,
     )

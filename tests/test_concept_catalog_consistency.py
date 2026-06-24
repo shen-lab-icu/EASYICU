@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from easyicu.resources import load_dictionary
-from easyicu.webapp.concept_catalog import (
+from easyicu.concept_catalog import (
     COMPOSITE_CONCEPT_OUTPUT_SOURCES,
     CONCEPT_DICTIONARY,
     CONCEPT_GROUPS_INTERNAL,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from easyicu.webapp.concept_catalog import CONCEPT_DICTIONARY
+from easyicu.concept_catalog import CONCEPT_DICTIONARY
 from easyicu.webapp.mock_data import generate_mock_data
 
 

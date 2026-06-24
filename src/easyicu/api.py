@@ -3429,7 +3429,7 @@ def _get_default_db_path(database: str) -> Optional[str]:
     if not _root:
         return None
     try:
-        from easyicu.webapp.data_paths import find_database_path
+        from easyicu.data_paths import find_database_path
         path = find_database_path(_root, database)
     except ImportError:
         path = os.path.join(_root, database)

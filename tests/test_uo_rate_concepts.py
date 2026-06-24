@@ -70,7 +70,7 @@ def test_callback_is_dispatchable(name, _w):
 
 @pytest.mark.parametrize("name,_w", UO_CONCEPTS, ids=[c[0] for c in UO_CONCEPTS])
 def test_registered_in_webapp_catalog(name, _w):
-    from easyicu.webapp.concept_catalog import (
+    from easyicu.concept_catalog import (
         CONCEPT_DB_COVERAGE,
         CONCEPT_DICTIONARY,
     )
