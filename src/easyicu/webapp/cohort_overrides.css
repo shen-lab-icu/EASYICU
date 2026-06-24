@@ -1,0 +1,4086 @@
+/* Cohort Statistics route-specific Streamlit overrides.
+   Split from classic_viz_overrides.css on 2026-06-22.
+   Loaded only for its route after shared shell/alignment CSS. */
+
+/* Loaded workspace summaries stay live, but their containers should read like
+   the reference neutral preflight cards instead of green success banners. */
+.stApp [class*="st-key-eu_cohort_loaded_bar"] {
+  border-color: var(--hair) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp .eu-cohort-loaded-strip {
+  background: var(--surface) !important;
+}
+.stApp .eu-cohort-loaded-kpis {
+  border-color: var(--hair) !important;
+  background: var(--surface) !important;
+}
+
+/* Cohort Statistics cleanup must stay after Patient Review's final
+   specificity rules because both pages share token and typography guards. */
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell *:not(.eyebrow):not(.eyebrow *) {
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .eyebrow,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .eyebrow * {
+  font-family: var(--font-mono) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab * {
+  letter-spacing: -0.005em !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab.tab {
+  letter-spacing: -0.005em !important;
+}
+
+/* Cohort Statistics final overrides: keep this at EOF so older migration
+   rules above cannot override design-reference values. */
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-header-gap {
+  display: block !important;
+  height: 16px !important;
+  min-height: 16px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head.page-head {
+  display: block !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell {
+  min-height: 88px !important;
+  padding: 13px 16px !important;
+  border-left: 0 !important;
+  border-right: 1px solid var(--hair) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell:last-child {
+  border-right: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .eyebrow {
+  font-weight: 500 !important;
+  line-height: 15.75px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-detail {
+  line-height: 18.75px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-sub {
+  line-height: 16.5px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-ok,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-warn,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-bad {
+  width: 7px !important;
+  height: 7px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] {
+  position: relative !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+  overflow: hidden !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stHorizontalBlock"] {
+  height: 38px !important;
+  min-height: 38px !important;
+  gap: 4px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab.tab {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  height: 38px !important;
+  margin: 0 0 -1px !important;
+  padding: 0 16px !important;
+  border: 0 !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 19.5px !important;
+  letter-spacing: 0 !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab.tab.active {
+  color: var(--ink) !important;
+  border-bottom-color: var(--ink) !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab.tab .ico,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab.tab svg {
+  width: 14px !important;
+  height: 14px !important;
+  color: currentColor !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .stButton,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [class*="st-key-_eu_cohort_reference_tab_"] {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3 !important;
+  height: 38px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] button {
+  height: 38px !important;
+  min-height: 38px !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  box-shadow: none !important;
+  opacity: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .sec-stack h2 {
+  padding: 0 !important;
+  line-height: 24px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .sec-stack .lbl {
+  line-height: 15.75px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat {
+  min-height: 76.296875px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat .label {
+  line-height: 15px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat .val {
+  line-height: 27.3px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label {
+  min-height: 37.125px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label p {
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.005em !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-grp_feature_modules"] {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-grp_feature_modules"] [data-baseweb="select"] > div {
+  min-height: 52px !important;
+  padding: 14px 16px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table thead th,
+.stApp:has(.eu-cohort-page-marker) .eu-table tbody td {
+  border-left: 0 !important;
+  border-right: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table thead th {
+  line-height: 15px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table tbody td {
+  line-height: 19.125px !important;
+}
+
+/* Cohort Statistics: high-specificity lock against later injected legacy
+   Cohort rules in existing sessions. */
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight.eu-cohort-ref-preflight .pf-cell {
+  padding: 13px 16px !important;
+  border-left: 0 !important;
+  border-right: 1px solid var(--hair) !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight.eu-cohort-ref-preflight .pf-cell:last-child {
+  border-right: 0 !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight.eu-cohort-ref-preflight .pf-cell .eyebrow {
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 15.75px !important;
+  letter-spacing: 0.08em !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .sec-stack.sec-stack .lbl {
+  line-height: 15.75px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .sec-stack.sec-stack h2 {
+  padding: 0 !important;
+  line-height: 24px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .stat.stat {
+  min-height: 76.296875px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .stat.stat .label {
+  line-height: 15px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .stat.stat .val {
+  line-height: 27.3px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label {
+  height: 37.125px !important;
+  min-height: 37.125px !important;
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label p {
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .eu-table.eu-table thead th {
+  line-height: 15px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .eu-table.eu-table tbody td {
+  line-height: 19.125px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [data-testid="stElementContainer"]:has(.eu-cohort-ref-preflight) {
+  margin-top: 28.7px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] {
+  margin-top: 12.5px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] {
+  margin-bottom: 0 !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [data-testid="stElementContainer"]:has(.stat-grid) {
+  margin-top: 13.5px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .audit-cards {
+  margin: 0 0 18px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] {
+  margin: 0 0 16px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .cols-2 {
+  display: grid !important;
+  grid-template-columns: repeat(2, 1fr) !important;
+  gap: 14px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .cols-2.mt-16 {
+  margin-top: 16px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .card.card.pad {
+  padding: 18px 20px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+}
+
+/* ============================================================
+   COHORT STATISTICS · final reference parity overrides
+   Targets css/app.css + css/pages.css values from EasyICU design.
+   ============================================================ */
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-crumb,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-crumb * {
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 400 !important;
+  line-height: 1.45 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head {
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 18px !important;
+  margin: 0 0 16px !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head h1 {
+  margin: 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-size: 25px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em !important;
+  line-height: 1.15 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head .lead {
+  margin-top: 7px !important;
+  margin-bottom: 0 !important;
+  max-width: 70ch !important;
+  color: var(--ink-3) !important;
+  font-size: 13.5px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-terms,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-terms * {
+  color: var(--ink-4) !important;
+  font-size: 11.5px !important;
+  line-height: 1.4 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-terms {
+  margin-top: 9px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight {
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head {
+  min-height: auto !important;
+  padding: 11px 16px !important;
+  border-bottom: 1px solid var(--hair) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head span {
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  line-height: 1.2 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head em {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-style: normal !important;
+  line-height: 1.2 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-grid {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell {
+  min-height: 88px !important;
+  padding: 13px 16px !important;
+  border-right: 1px solid var(--hair) !important;
+  border-left: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell:last-child {
+  border-right: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .eyebrow {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.08em !important;
+  line-height: 1.2 !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-detail {
+  margin-top: 6px !important;
+  color: var(--ink-2) !important;
+  font-size: 12.5px !important;
+  line-height: 1.35 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-sub {
+  margin-top: 4px !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-ok,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-warn,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-bad {
+  display: inline-block !important;
+  width: 7px !important;
+  height: 7px !important;
+  flex: none !important;
+  border-radius: 50% !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] {
+  display: block !important;
+  position: relative !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+  gap: normal !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stHorizontalBlock"] {
+  gap: 4px !important;
+  min-height: 38px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stColumn"] {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stElementContainer"],
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stMarkdown"] {
+  position: relative !important;
+  min-height: 38px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  height: 38px !important;
+  margin: 0 0 -1px !important;
+  padding: 0 16px !important;
+  border: 0 !important;
+  border-bottom: 2px solid transparent !important;
+  background: transparent !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.005em !important;
+  line-height: 1.45 !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab .ico,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab .ico svg {
+  width: 14px !important;
+  height: 14px !important;
+  color: currentColor !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab.active {
+  border-bottom-color: var(--ink) !important;
+  color: var(--ink) !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .stButton,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [class*="st-key-_eu_cohort_reference_tab_"] {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3 !important;
+  width: 100% !important;
+  height: 38px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] button[data-testid^="stBaseButton"] {
+  width: 100% !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  box-shadow: none !important;
+  opacity: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] {
+  margin: 0 0 22px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] [data-testid="stHorizontalBlock"] {
+  gap: 12px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-card {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  min-height: 62px !important;
+  padding: 13px 14px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  text-align: left !important;
+}
+.stApp:has(.eu-cohort-page-marker) .cj-ico {
+  width: 34px !important;
+  height: 34px !important;
+  border: 1px solid var(--accent-border) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .cj-t {
+  font-size: 12.75px !important;
+  font-weight: 600 !important;
+  line-height: 1.25 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .cj-d {
+  margin-top: 2px !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  line-height: 1.3 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .sec-stack {
+  margin: 26px 0 12px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .sec-stack .lbl {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.08em !important;
+  line-height: 1.2 !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) .sec-stack h2 {
+  margin: 3px 0 0 !important;
+  color: var(--ink) !important;
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
+  line-height: 1.2 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat-grid,
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)) !important;
+  gap: 12px !important;
+  margin: 0 !important;
+  transform: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat,
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card {
+  min-height: 0 !important;
+  padding: 13px 15px !important;
+  border: 1px solid var(--hair) !important;
+  border-left: 3px solid var(--hair-3) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat.accent,
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card.accent {
+  border-left-color: var(--accent) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat.ok,
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card.ok {
+  border-left-color: var(--ok) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat.warn,
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card.warn {
+  border-left-color: var(--warn) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat.bad,
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card.bad {
+  border-left-color: var(--bad) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat .label,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-metric-card span {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.07em !important;
+  line-height: 1.2 !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat .val,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-metric-card b {
+  margin-top: 6px !important;
+  color: var(--ink) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 26px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.02em !important;
+  line-height: 1.05 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat .hint,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-metric-card em {
+  margin-top: 5px !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+}
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) [class*="st-key-group_comp_mode"],
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) [class*="st-key-grp_feature_modules"],
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) [data-testid="stExpander"] {
+  position: relative !important;
+  z-index: auto !important;
+  transform: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  flex-wrap: wrap !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  width: auto !important;
+  min-height: 33px !important;
+  margin: 0 !important;
+  padding: 8px 14px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label:has(input:checked) {
+  border-color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+  color: var(--ink) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label > div:first-child {
+  width: 15px !important;
+  height: 15px !important;
+  margin: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label p {
+  margin: 0 !important;
+  color: inherit !important;
+  font-size: 12.75px !important;
+  font-weight: 500 !important;
+  line-height: 1.2 !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-grp_feature_modules"] {
+  margin: 0 !important;
+  padding: 14px 16px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-grp_feature_modules"] [data-baseweb="tag"],
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-grp_feature_modules"] [data-baseweb="tag"] span {
+  min-height: 24px !important;
+  border-radius: var(--r-pill) !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11.5px !important;
+  line-height: 1.2 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .table-wrap {
+  height: auto !important;
+  max-height: none !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  overflow: hidden !important;
+  background: var(--surface) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .table-scroll {
+  height: auto !important;
+  max-height: none !important;
+  overflow: hidden !important;
+}
+.stApp:has(.eu-cohort-page-marker) table.eu-table {
+  margin: 0 !important;
+  width: 100% !important;
+  border-collapse: collapse !important;
+  font-size: 12.75px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table thead th {
+  padding: 10px 14px !important;
+  border-top: 0 !important;
+  border-right: 0 !important;
+  border-bottom: 1px solid var(--hair-2) !important;
+  border-left: 0 !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.06em !important;
+  line-height: 1.2 !important;
+  text-align: left !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table thead th.num,
+.stApp:has(.eu-cohort-page-marker) .eu-table tbody td.num {
+  text-align: right !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table tbody td {
+  padding: 9px 14px !important;
+  border-top: 0 !important;
+  border-right: 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+  border-left: 0 !important;
+  color: var(--ink-2) !important;
+  font-size: 12.75px !important;
+  line-height: 1.45 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table tbody tr:last-child td {
+  border-bottom: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table td.key {
+  color: var(--ink) !important;
+  font-weight: 500 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table td.num,
+.stApp:has(.eu-cohort-page-marker) .eu-table .num {
+  color: var(--ink) !important;
+  font-family: var(--font-mono) !important;
+  font-feature-settings: "tnum" !important;
+  text-align: right !important;
+}
+
+/* Cohort Statistics final cleanup must stay after Patient Review's final
+   specificity rules because both pages share token and typography guards. */
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell *:not(.eyebrow):not(.eyebrow *) {
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .eyebrow,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .eyebrow * {
+  font-family: var(--font-mono) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab * {
+  letter-spacing: -0.005em !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab.tab {
+  letter-spacing: -0.005em !important;
+}
+
+/* Cohort Statistics: design-DOM anchors, exact header/tab/jump/preflight values. */
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head.page-head {
+  display: block !important;
+  margin: 0 0 16px !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  background: transparent !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head h1 {
+  margin: 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 25px !important;
+  font-weight: 600 !important;
+  line-height: 28.75px !important;
+  letter-spacing: -0.02em !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head .lead {
+  display: block !important;
+  max-width: 70ch !important;
+  margin: 7px 0 0 !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-header-gap {
+  display: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight {
+  margin: 0 0 14px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight a.pf-cell,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight a.pf-cell:visited {
+  display: block !important;
+  color: inherit !important;
+  text-decoration: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-arrow {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 12px !important;
+  height: 12px !important;
+  margin-left: auto !important;
+  color: var(--ink-4) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-arrow svg {
+  width: 12px !important;
+  height: 12px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] {
+  display: block !important;
+  position: relative !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  margin: 0 0 22px !important;
+  padding: 0 !important;
+  overflow: visible !important;
+  border-bottom: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .tabs {
+  display: flex !important;
+  align-items: stretch !important;
+  gap: 4px !important;
+  height: 38px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab:visited {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  margin: 0 0 -1px !important;
+  padding: 0 16px !important;
+  border: 0 !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--ink-3) !important;
+  -webkit-text-fill-color: var(--ink-3) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 19.5px !important;
+  letter-spacing: 0 !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+  cursor: pointer !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab:hover {
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab.active {
+  border-bottom-color: var(--ink) !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab .ico,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab .ico svg {
+  display: inline-flex !important;
+  width: 14px !important;
+  height: 14px !important;
+  flex: none !important;
+  color: currentColor !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] {
+  margin: 0 0 22px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .coh-jump {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 12px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-card,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-card:visited {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  min-height: 62px !important;
+  padding: 13px 14px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  box-shadow: none !important;
+  text-align: left !important;
+  text-decoration: none !important;
+  cursor: pointer !important;
+  transition: border-color .12s, box-shadow .12s, background .12s !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-card:hover {
+  border-color: var(--accent-border) !important;
+  background: var(--surface-2) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-ico {
+  display: grid !important;
+  place-items: center !important;
+  width: 34px !important;
+  height: 34px !important;
+  flex: none !important;
+  border: 1px solid var(--accent-border) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-ico svg {
+  width: 16px !important;
+  height: 16px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-tx {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-t {
+  display: block !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12.75px !important;
+  font-weight: 600 !important;
+  line-height: 15.9375px !important;
+  letter-spacing: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-d {
+  display: block !important;
+  margin-top: 2px !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  line-height: 14.3px !important;
+  letter-spacing: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-go {
+  display: inline-flex !important;
+  width: 13px !important;
+  height: 13px !important;
+  flex: none !important;
+  margin-left: auto !important;
+  color: var(--ink-4) !important;
+  opacity: .45 !important;
+  transition: opacity .12s, transform .12s !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-card:hover .cj-go {
+  opacity: 1 !important;
+  transform: translateX(2px) !important;
+  color: var(--accent-ink) !important;
+}
+
+@media (max-width: 720px) {
+  .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .coh-jump {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Cohort Statistics: second numeric parity pass for inherited tokens. */
+.stApp:has(.eu-cohort-page-marker) {
+  --font-sans: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif !important;
+  --font-cn: "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head.page-head {
+  align-items: normal !important;
+  justify-content: normal !important;
+  gap: normal !important;
+  row-gap: normal !important;
+  column-gap: normal !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head .lead {
+  letter-spacing: -0.0675px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-terms,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-terms * {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 17.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight {
+  margin: 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head {
+  height: auto !important;
+  min-height: 0 !important;
+  gap: 10px !important;
+  line-height: 18.75px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head span {
+  line-height: 18.75px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell {
+  min-height: auto !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-detail {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 18.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] {
+  margin: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .tabs {
+  align-items: normal !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab:visited {
+  min-height: auto !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  letter-spacing: normal !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab .ico svg {
+  display: block !important;
+  letter-spacing: normal !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .coh-jump {
+  margin: 0 0 22px !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-card,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-card:visited {
+  min-height: auto !important;
+  color: rgb(0, 0, 0) !important;
+  font-family: Arial !important;
+  font-size: 13.3333px !important;
+  line-height: normal !important;
+  letter-spacing: normal !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-ico,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-go {
+  font-family: Arial !important;
+  font-size: 13.3333px !important;
+  line-height: normal !important;
+  letter-spacing: normal !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-t {
+  font-family: Arial !important;
+  letter-spacing: normal !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-d {
+  font-family: Arial !important;
+  letter-spacing: normal !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat-grid,
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-grid {
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat,
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card {
+  min-height: auto !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat .hint,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-metric-card em {
+  display: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] {
+  min-height: 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label {
+  min-height: auto !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  letter-spacing: -0.0675px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label p {
+  letter-spacing: -0.0675px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .table-wrap,
+.stApp:has(.eu-cohort-page-marker) table.eu-table {
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+/* Cohort Statistics: override older high-specificity compatibility locks. */
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head.eu-cohort-ref-preflight-head {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-grid.preflight {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  min-height: 88px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab.tab {
+  letter-spacing: normal !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-tab.tab svg {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  letter-spacing: normal !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-go {
+  display: block !important;
+  height: 16px !important;
+  line-height: normal !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .stat.stat,
+html body .stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card {
+  min-height: auto !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label {
+  min-height: auto !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .table-wrap {
+  line-height: 20.25px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) table.eu-table {
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .eu-table tbody td {
+  letter-spacing: -0.0675px !important;
+}
+
+/* Cohort Group contrast: Streamlit adds a 13.5px top margin before
+   Markdown/HTML element containers. The design DOM relies only on the
+   components' own margins (sec-stack 26/12, card/table 0), so remove that
+   wrapper gap for the rendered design blocks. */
+html body .stApp:has(.eu-cohort-page-marker)
+  [data-testid="stElementContainer"]:has(.eu-cohort-metric-grid),
+html body .stApp:has(.eu-cohort-page-marker)
+  [data-testid="stElementContainer"]:has(.eu-cohort-compare-row),
+html body .stApp:has(.eu-cohort-page-marker)
+  [data-testid="stElementContainer"]:has(.eu-cohort-feature-card),
+html body .stApp:has(.eu-cohort-page-marker)
+  [data-testid="stElementContainer"]:has(.eu-cohort-summary-grid),
+html body .stApp:has(.eu-cohort-page-marker)
+  [data-testid="stElementContainer"]:has(.table-wrap.table-scroll) {
+  margin-top: 0 !important;
+}
+
+/* Cohort profile subpanel: inherited snapshot geometry/typography. */
+html body .stApp:has(.eu-cohort-page-marker) .sec-stack,
+html body .stApp:has(.eu-cohort-page-marker) .cols-2,
+html body .stApp:has(.eu-cohort-page-marker) .cols-2.mt-16,
+html body .stApp:has(.eu-cohort-page-marker) .card.pad {
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .qrow,
+html body .stApp:has(.eu-cohort-page-marker) .qbar {
+  color: var(--ink) !important;
+  line-height: 18.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .qrow .qv {
+  letter-spacing: -0.0675px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-note {
+  margin: 8px 0 11px !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  letter-spacing: -0.0675px !important;
+}
+
+/* Cohort coverage audit subpanel: reference shell around real Plotly/data logic. */
+html body .stApp:has(.eu-cohort-page-marker) .audit-cards,
+html body .stApp:has(.eu-cohort-page-marker) .audit-card,
+html body .stApp:has(.eu-cohort-page-marker) .elig-flow,
+html body .stApp:has(.eu-cohort-page-marker) .elig-step,
+html body .stApp:has(.eu-cohort-page-marker) .audit-note {
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .audit-card {
+  min-height: auto !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .audit-card .ac-k,
+html body .stApp:has(.eu-cohort-page-marker) .cov-title,
+html body .stApp:has(.eu-cohort-page-marker) .elig-step .es-label {
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_coverage_card"],
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_elig_card"] {
+  display: block !important;
+  gap: normal !important;
+  row-gap: normal !important;
+  column-gap: normal !important;
+  min-height: auto !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .cov-letter {
+  line-height: 16.5px !important;
+  letter-spacing: -0.13px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .elig-step {
+  min-height: auto !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .elig-step .es-label {
+  line-height: 18px !important;
+  letter-spacing: -0.0675px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .elig-step .es-count {
+  line-height: 19.5px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .audit-note {
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) div.stVerticalBlock[class*="st-key-eu_audit_coverage_card"],
+html body .stApp:has(.eu-cohort-page-marker) div.stVerticalBlock[class*="st-key-eu_audit_elig_card"] {
+  min-height: auto !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .audit-note {
+  color: var(--ink-4) !important;
+  line-height: 16.5px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_cols"] [data-testid="stHorizontalBlock"] {
+  display: grid !important;
+  grid-template-columns: 1.5fr 0.9fr !important;
+  gap: 16px !important;
+  row-gap: 16px !important;
+  column-gap: 16px !important;
+  align-items: start !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_cols"] [data-testid="stColumn"] {
+  width: auto !important;
+  max-width: none !important;
+  flex: initial !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_coverage_card"] {
+  height: 476.5px !important;
+  min-height: auto !important;
+  overflow: visible !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_elig_card"] {
+  height: 436.5px !important;
+  min-height: auto !important;
+  overflow: visible !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .elig-step .es-note {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 15.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+/* Cohort SOFA reclassification subpanel: exact design typography and geometry. */
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] {
+  gap: 10px !important;
+  row-gap: 10px !important;
+  column-gap: 10px !important;
+  min-height: 0 !important;
+  align-items: center !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] [data-testid="stWidgetLabel"] {
+  width: 91.5px !important;
+  flex: 0 0 91.5px !important;
+  min-height: auto !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] [data-testid="stWidgetLabel"] [data-testid="stMarkdownContainer"] p {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  height: 16.5px !important;
+  min-height: auto !important;
+  white-space: nowrap !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] {
+  min-height: auto !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  color: var(--ink) !important;
+  align-items: normal !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label {
+  display: block !important;
+  align-items: normal !important;
+  padding: 6px 13px !important;
+  height: auto !important;
+  min-height: auto !important;
+  border-top-color: var(--ink-3) !important;
+  border-bottom-color: var(--ink-3) !important;
+  border-left-color: var(--ink-3) !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  line-height: 18px !important;
+  letter-spacing: normal !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label:has(input:checked) {
+  color: #fff !important;
+  border-top-color: #fff !important;
+  border-bottom-color: #fff !important;
+  border-left-color: #fff !important;
+  align-items: normal !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label:not(:has(input:checked)) {
+  align-items: normal !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label p {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  letter-spacing: normal !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] .rc-mode-desc {
+  display: block !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  letter-spacing: -0.0675px !important;
+  min-height: auto !important;
+  width: 629.5px !important;
+  align-items: normal !important;
+}
+html body .stApp:has(.eu-cohort-page-marker) .rc-kpis,
+html body .stApp:has(.eu-cohort-page-marker) .rc-kpi,
+html body .stApp:has(.eu-cohort-page-marker) .rk-top,
+html body .stApp:has(.eu-cohort-page-marker) .rk-label,
+html body .stApp:has(.eu-cohort-page-marker) .rk-hint,
+html body .stApp:has(.eu-cohort-page-marker) .rc-cols,
+html body .stApp:has(.eu-cohort-page-marker) .rc-sec-t,
+html body .stApp:has(.eu-cohort-page-marker) .rc-groups,
+html body .stApp:has(.eu-cohort-page-marker) .rc-grow,
+html body .stApp:has(.eu-cohort-page-marker) .rg-head,
+html body .stApp:has(.eu-cohort-page-marker) .rg-name,
+html body .stApp:has(.eu-cohort-page-marker) .rg-bar,
+html body .stApp:has(.eu-cohort-page-marker) .rg-meta,
+html body .stApp:has(.eu-cohort-page-marker) .rc-organs,
+html body .stApp:has(.eu-cohort-page-marker) .ro-row,
+html body .stApp:has(.eu-cohort-page-marker) .rc-matrix-wrap,
+html body .stApp:has(.eu-cohort-page-marker) .rc-axis-y,
+html body .stApp:has(.eu-cohort-page-marker) .rc-axis-x,
+html body .stApp:has(.eu-cohort-page-marker) .rc-matrix,
+html body .stApp:has(.eu-cohort-page-marker) .rc-matrix-legend,
+html body .stApp:has(.eu-cohort-page-marker) .rc-matrix-legend .rml {
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-kpi.rc-kpi {
+  min-height: auto !important;
+  color: var(--ink) !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-kpi .rk-label {
+  line-height: 16.5px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-kpi .rk-hint {
+  line-height: 15.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-grow .rg-name {
+  line-height: 18.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-grow .rg-pct {
+  line-height: 18.75px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-grow .rg-meta {
+  line-height: 16.5px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-matrix .rm-cell {
+  line-height: 17.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-matrix-legend,
+html body .stApp:has(.eu-cohort-page-marker) .rc-matrix-legend .rml {
+  color: var(--ink-4) !important;
+  line-height: 15.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-kpis,
+html body .stApp:has(.eu-cohort-page-marker) .rc-cols {
+  color: var(--ink) !important;
+  line-height: 20.25px !important;
+  border-color: var(--ink) !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-matrix .rm-corner {
+  line-height: 15px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-matrix .rm-colh,
+html body .stApp:has(.eu-cohort-page-marker) .rc-matrix .rm-rowh {
+  line-height: 15.75px !important;
+}
+
+/* Cohort Statistics · final group-contrast wrapper lock.
+   Streamlit's stElementContainer contributes a 13.5px pre-block margin that
+   does not exist in the design prototype; the reference components below carry
+   their own margins exactly as app.css defines them. */
+html body .stApp:has(.eu-cohort-page-marker)
+  div[data-testid="stElementContainer"].stElementContainer:has(.stat-grid),
+html body .stApp:has(.eu-cohort-page-marker)
+  div[data-testid="stElementContainer"].stElementContainer:has(.radio-row),
+html body .stApp:has(.eu-cohort-page-marker)
+  div[data-testid="stElementContainer"].stElementContainer:has(.card.pad),
+html body .stApp:has(.eu-cohort-page-marker)
+  div[data-testid="stElementContainer"].stElementContainer:has(.cols-3),
+html body .stApp:has(.eu-cohort-page-marker)
+  div[data-testid="stElementContainer"].stElementContainer:has(.table-wrap) {
+  margin-top: 0 !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-result-table {
+  height: 227.625px !important;
+  max-height: 227.625px !important;
+  overflow: auto !important;
+}
+
+/* Cohort Statistics · numeric closure against screens-viz.js cohort groups. */
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-grid,
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-grid.preflight {
+  height: 88px !important;
+  min-height: 0 !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell {
+  height: 88px !important;
+  min-height: auto !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-compare-row .radio,
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-compare-row .radio:visited,
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-compare-row .radio.on {
+  min-height: auto !important;
+}
+
+/* Cohort Coverage · match screens-audit.js .audit-cols 600px / 360px shell. */
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_cols"] [data-testid="stHorizontalBlock"] {
+  gap: 16px !important;
+  align-items: flex-start !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_cols"] [data-testid="stColumn"]:nth-child(1) {
+  flex: 0 0 600px !important;
+  width: 600px !important;
+  max-width: 600px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_cols"] [data-testid="stColumn"]:nth-child(2) {
+  flex: 0 0 360px !important;
+  width: 360px !important;
+  max-width: 360px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_coverage_card"],
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_elig_card"] {
+  min-height: auto !important;
+}
+
+/* Cohort SOFA · close Streamlit radio against deepdive.css rc-seg values. */
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] {
+  gap: normal !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label {
+  justify-content: normal !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label:has(input:checked) {
+  border-right-color: var(--hair-2) !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] .rc-mode-desc {
+  width: 469.5px !important;
+}
+
+/* EOF final: Cohort embedded Coverage Audit / SOFA panels against deepdive.css. */
+html body .stApp:has(.eu-cohort-page-marker) #cohtabs .tab {
+  text-align: center !important;
+  white-space: normal !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .audit-cards {
+  margin: 0 0 18px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker)
+  [class*="st-key-eu_audit_cols"]
+  [data-testid="stHorizontalBlock"] {
+  display: grid !important;
+  grid-template-columns: 1.5fr 0.9fr !important;
+  gap: 16px !important;
+  align-items: start !important;
+  flex-wrap: nowrap !important;
+  min-height: 0 !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker)
+  [class*="st-key-eu_audit_cols"]
+  [data-testid="stColumn"]:nth-child(1),
+html body .stApp:has(.eu-cohort-page-marker)
+  [class*="st-key-eu_audit_cols"]
+  [data-testid="stColumn"]:nth-child(2) {
+  flex: initial !important;
+  width: auto !important;
+  max-width: none !important;
+  min-width: 0 !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) div.stVerticalBlock[class*="st-key-eu_audit_coverage_card"],
+html body .stApp:has(.eu-cohort-page-marker) div.stVerticalBlock[class*="st-key-eu_audit_elig_card"] {
+  width: 100% !important;
+  position: static !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .elig-step .es-meta,
+html body .stApp:has(.eu-cohort-page-marker) .elig-step .es-note {
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .elig-step .es-count,
+html body .stApp:has(.eu-cohort-page-marker) .elig-step .es-excl {
+  font-family: var(--font-mono) !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] {
+  height: auto !important;
+  min-height: 0 !important;
+  margin: -28px 0 16px !important;
+  overflow: visible !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker)
+  [class*="st-key-eu_sofa_modes"]
+  [data-testid="stElementContainer"]:has(.rc-modes) {
+  position: static !important;
+  inset: auto !important;
+  width: auto !important;
+  height: auto !important;
+  pointer-events: auto !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-modes {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: wrap !important;
+  gap: 10px !important;
+  margin: 0 0 16px !important;
+  min-height: 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-modes-lbl {
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 16.5px !important;
+  letter-spacing: .04em !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-seg {
+  display: inline-flex !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-2) !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-seg a,
+html body .stApp:has(.eu-cohort-page-marker) .rc-seg a:visited {
+  display: flow-root !important;
+  margin: 0 !important;
+  padding: 6px 13px !important;
+  border: 0 !important;
+  border-right: 1px solid var(--hair-2) !important;
+  border-radius: 0 !important;
+  background: var(--surface) !important;
+  color: var(--ink-3) !important;
+  -webkit-text-fill-color: var(--ink-3) !important;
+  box-shadow: none !important;
+  cursor: pointer !important;
+  font: inherit !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  line-height: normal !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-seg a:last-child {
+  border-right: 0 !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-seg a.active,
+html body .stApp:has(.eu-cohort-page-marker) .rc-seg a.active:visited {
+  background: var(--ink) !important;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rc-mode-desc {
+  display: block !important;
+  position: static !important;
+  top: auto !important;
+  left: auto !important;
+  flex: 1 1 0 !important;
+  min-width: 180px !important;
+  width: auto !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 11.5px !important;
+  font-weight: 400 !important;
+  line-height: 17.25px !important;
+  letter-spacing: normal !important;
+}
+
+/* EOF final: Cohort embedded panel y-flow and rc-seg exact closure. */
+html body .stApp:has(.eu-cohort-page-marker) #cohtabs {
+  margin-top: 0 !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-compare-row .radio,
+html body .stApp:has(.eu-cohort-page-marker) .eu-cohort-compare-row .radio:visited {
+  white-space: normal !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) table.eu-table thead th {
+  height: 35.5px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_cols"] {
+  margin-top: 13.5px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) div.stVerticalBlock[class*="st-key-eu_audit_coverage_card"],
+html body .stApp:has(.eu-cohort-page-marker) div.stVerticalBlock[class*="st-key-eu_audit_elig_card"] {
+  min-height: auto !important;
+  max-width: none !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .elig-step .es-bar {
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] {
+  width: 100% !important;
+  margin: 0 !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker)
+  [class*="st-key-eu_sofa_modes"]
+  [data-testid="stElementContainer"]:has(.rc-modes),
+html body .stApp:has(.eu-cohort-page-marker)
+  [class*="st-key-eu_sofa_modes"]
+  [data-testid="stMarkdownContainer"] {
+  width: 100% !important;
+  max-width: none !important;
+  position: static !important;
+  inset: auto !important;
+  pointer-events: auto !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] .rc-modes {
+  width: 100% !important;
+  height: 32px !important;
+  margin: 0 0 16px !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] .rc-modes-lbl {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  white-space: normal !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] .rc-seg {
+  height: 32px !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] .rc-seg a,
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] .rc-seg a:visited {
+  display: block !important;
+  height: 30px !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 18px !important;
+  letter-spacing: normal !important;
+  text-align: center !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] .rc-mode-desc {
+  position: static !important;
+  top: auto !important;
+  left: auto !important;
+  flex: 1 1 0 !important;
+  min-height: auto !important;
+  width: auto !important;
+  min-width: 180px !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rk-ico,
+html body .stApp:has(.eu-cohort-page-marker) .rk-ico svg {
+  color: var(--ink-4) !important;
+  stroke: currentColor !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rm-cell {
+  grid-template-rows: 34px !important;
+}
+
+/* EOF final: Streamlit markdown wrappers around embedded Cohort panel sections. */
+html body .stApp:has(.eu-cohort-page-marker)
+  div.stVerticalBlock[class*="st-key-eu_audit_elig_card"]
+  [data-testid="stElementContainer"]:has(.cov-title) {
+  margin-bottom: 13.5px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker)
+  div.stVerticalBlock[class*="st-key-eu_audit_elig_card"]
+  [data-testid="stMarkdownContainer"]:has(.cov-title) {
+  margin-bottom: 0 !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .elig-step .es-excl {
+  line-height: 15.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] {
+  margin: 0 0 13.5px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker) .rk-ico,
+html body .stApp:has(.eu-cohort-page-marker) .rk-ico svg {
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+/* EOF final: Cohort Statistics preflight y parity against screens-viz.js.
+   Earlier compatibility locks overcompensated the Streamlit wrapper by
+   14.0469px on the groups panel. This changes only the outer wrapper offset;
+   the card colors, borders, radius, typography, and grid tokens stay matched. */
+html body .stApp:has(.eu-cohort-page-marker)
+  [data-testid="stElementContainer"]:has(.eu-cohort-ref-preflight) {
+  margin-top: 14.6531px !important;
+}
+
+html body .stApp:has(.eu-cohort-page-marker)
+  [class*="st-key-eu_cohort_reference_tabs"] {
+  margin-top: 13.5px !important;
+}
+
+/* EOF final: Cohort Statistics loaded group-contrast desktop/tablet rhythm.
+   The Claude reference keeps the Cohort page free of the narrow-view warning
+   and lets tablet preflight/summary grids follow their source breakpoints.
+   Preserve the real Cohort renderers and data surfaces; only release the
+   Streamlit wrappers that were locked to the desktop measurement pass. */
+
+@media (min-width: 981px) {
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    [data-testid="stElementContainer"]:has(.eu-cohort-reference-head) {
+    margin-top: 14px !important;
+  }
+}
+
+@media (max-width: 860px) {
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    .eu-cohort-reference-head.page-head h1 {
+    font-size: 21px !important;
+    font-weight: 600 !important;
+    line-height: 24.15px !important;
+    letter-spacing: 0 !important;
+  }
+}
+
+@media (min-width: 601px) and (max-width: 980px) {
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    .eu-narrow-view-note {
+    display: none !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    .eu-cohort-ref-preflight-grid,
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    .eu-cohort-ref-preflight-grid.preflight {
+    grid-template-columns: 1fr !important;
+    height: 223px !important;
+    min-height: 223px !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    .eu-cohort-ref-preflight .pf-cell {
+    height: 74.333px !important;
+    min-height: 74.333px !important;
+    border-left: 0 !important;
+    border-bottom: 1px solid var(--hair) !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    .eu-cohort-ref-preflight .pf-cell:last-child {
+    border-bottom: 0 !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    [class*="st-key-eu_cohort_jump_cards"],
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    [class*="st-key-eu_cohort_jump_cards"] .coh-jump {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    height: 74.531px !important;
+    min-height: 74.531px !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    [class*="st-key-eu_cohort_jump_cards"] .cj-card,
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    [class*="st-key-eu_cohort_jump_cards"] .cj-card:visited,
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    [class*="st-key-eu_cohort_jump_cards"] button {
+    height: 74.531px !important;
+    min-height: 74.531px !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    .eu-cohort-metric-grid,
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    .stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp.stApp:has(.eu-cohort-page-marker)
+    .eu-cohort-summary-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+.eu-cohort-readiness-row.ok .eu-cohort-readiness-node {
+  border-color: color-mix(in oklab, var(--ok) 35%, var(--hair));
+  background: color-mix(in oklab, var(--ok-soft) 60%, var(--surface));
+  color: var(--ok);
+}
+.eu-cohort-readiness-row.warn .eu-cohort-readiness-node {
+  border-color: color-mix(in oklab, var(--warn) 35%, var(--hair));
+  background: color-mix(in oklab, var(--warn-soft) 66%, var(--surface));
+  color: color-mix(in oklab, var(--warn) 80%, var(--ink));
+}
+.eu-cohort-readiness-row.bad .eu-cohort-readiness-node {
+  border-color: color-mix(in oklab, var(--bad) 35%, var(--hair));
+  background: color-mix(in oklab, var(--bad-soft) 66%, var(--surface));
+  color: var(--bad);
+}
+.eu-readiness-strip .eu-gate-card {
+  position: relative;
+  border: 0;
+  border-left: 0;
+  border-radius: 0;
+  background: var(--surface);
+  padding: 10px 12px;
+}
+.eu-readiness-strip .eu-gate-card + .eu-gate-card {
+  border-left: 1px solid var(--hair);
+}
+.eu-readiness-strip .eu-gate-card .k {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.eu-readiness-strip .eu-gate-card .k::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--ink-3);
+}
+.eu-readiness-strip .eu-gate-card.ok .k::before {
+  background: var(--ok);
+}
+.eu-readiness-strip .eu-gate-card.warn .k::before {
+  background: var(--warn);
+}
+.eu-readiness-strip .eu-gate-card.bad .k::before {
+  background: var(--bad);
+}
+.eu-gate-card {
+  border: 1px solid var(--hair);
+  border-left: 2px solid var(--ink-3);
+  border-radius: 2px;
+  background: var(--surface-2);
+  padding: 8px 10px;
+  min-width: 0;
+}
+.eu-gate-card.ok {
+  border-left-color: var(--ok);
+}
+.eu-gate-card.warn {
+  border-left-color: var(--warn);
+}
+.eu-gate-card.bad {
+  border-left-color: var(--bad);
+}
+.eu-gate-card .k {
+  font-size: 10px;
+  color: var(--ink-4);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.eu-gate-card .v {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stApp .eu-cohort-loader-notice {
+  margin: 8px 0 12px !important;
+  padding: 12px 13px !important;
+  border: 1px solid var(--hair) !important;
+  border-left: 3px solid var(--ink-4) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp .eu-cohort-loader-notice.pending {
+  border-left-color: var(--accent) !important;
+  background: color-mix(in srgb, var(--accent-soft) 30%, var(--surface)) !important;
+}
+.stApp .eu-cohort-loader-notice.info {
+  border-left-color: var(--accent) !important;
+}
+.stApp .eu-cohort-loader-notice.ready {
+  border-color: var(--accent-border) !important;
+  border-left-color: var(--ok) !important;
+  background: color-mix(in srgb, var(--ok-soft) 38%, var(--surface)) !important;
+}
+.stApp .eu-cohort-loader-notice.warning {
+  border-color: oklch(86% 0.06 80) !important;
+  border-left-color: var(--warn) !important;
+  background: color-mix(in srgb, var(--warn-soft) 46%, var(--surface)) !important;
+}
+.stApp .eu-cohort-loader-notice.danger {
+  border-color: oklch(84% 0.07 25) !important;
+  border-left-color: var(--bad) !important;
+  background: color-mix(in srgb, var(--bad-soft) 44%, var(--surface)) !important;
+}
+.stApp .eu-cohort-loader-notice span {
+  display: block !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  letter-spacing: .08em !important;
+  line-height: 1.1 !important;
+  text-transform: uppercase !important;
+}
+.stApp .eu-cohort-loader-notice b {
+  display: block !important;
+  margin-top: 5px !important;
+  color: var(--ink) !important;
+  font-size: 13px !important;
+  font-weight: 720 !important;
+  line-height: 1.25 !important;
+}
+.stApp .eu-cohort-loader-notice p {
+  margin: 5px 0 0 !important;
+  color: var(--ink-3) !important;
+  font-size: 12.2px !important;
+  line-height: 1.42 !important;
+}
+.stApp .eu-cohort-loader-notice em {
+  display: block !important;
+  margin-top: 8px !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-style: normal !important;
+  line-height: 1.35 !important;
+  overflow-wrap: anywhere !important;
+}
+.stApp [class*="st-key-eu_qv_loaded_bar"] {
+  margin: 12px 0 14px !important;
+  padding: 12px 14px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp [class*="st-key-eu_qv_loaded_bar"] [data-testid="stVerticalBlock"] {
+  gap: 9px !important;
+}
+.stApp [class*="st-key-quick_viz_edit_setup"] button,
+.stApp [class*="st-key-quick_viz_export_summary"] button {
+  min-height: 34px !important;
+  border-radius: var(--r-2) !important;
+  font-size: 12.5px !important;
+  font-weight: 700 !important;
+}
+.stApp [class*="st-key-eu_cohort_loaded_bar"] {
+  margin: 12px 0 12px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid color-mix(in srgb, var(--ok) 22%, var(--hair)) !important;
+  border-radius: var(--r-2) !important;
+  background: color-mix(in srgb, var(--ok-soft) 42%, var(--surface)) !important;
+  box-shadow: none !important;
+}
+.stApp [class*="st-key-eu_cohort_loaded_bar"] [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+.stApp .eu-cohort-loaded-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+}
+.stApp .eu-cohort-loaded-main {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+.stApp .eu-cohort-loaded-main b {
+  display: block;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 740;
+  line-height: 1.2;
+}
+.stApp .eu-cohort-loaded-main p {
+  margin: 3px 0 0;
+  color: var(--ink-3) !important;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.stApp .eu-cohort-loaded-pill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--ok) 34%, var(--hair));
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--ok) 12%, var(--surface));
+  color: var(--ok);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.stApp .eu-cohort-loaded-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(72px, 1fr));
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ok) 18%, var(--hair));
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--surface) 74%, transparent);
+}
+
+/* Long-run Claude Design migration: remaining workspace pages */
+.stApp .eu-page-marker {
+  display: none !important;
+}
+
+.stApp .eu-patient-empty-state {
+  margin: 18px 0 0;
+  padding: 34px 18px;
+  border: 1px dashed var(--hair-2);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  text-align: center;
+}
+.stApp .eu-patient-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 12px;
+  border-radius: var(--r-2);
+  background: var(--ink);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+.stApp .eu-patient-empty-state b {
+  display: block;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 650;
+}
+.stApp .eu-patient-empty-state p {
+  max-width: 520px;
+  margin: 6px auto 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.stApp .eu-patient-summary-card {
+  width: min(300px, 100%) !important;
+  margin: 10px 0 14px !important;
+  padding: 14px 16px !important;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+}
+.stApp .eu-patient-overview-split {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  margin: 16px 0 14px;
+}
+.stApp .eu-patient-overview-split > * {
+  min-width: 0;
+}
+.stApp .eu-patient-overview-split .eu-patient-summary-card {
+  width: 100% !important;
+  margin: 0 !important;
+}
+.stApp .eu-patient-summary-title {
+  margin-top: 6px;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.stApp .eu-patient-summary-rows {
+  font-size: 12.5px;
+}
+.stApp .eu-patient-summary-rows .setup-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--hair);
+}
+.stApp .eu-patient-summary-rows .setup-row:last-child {
+  border-bottom: 0;
+}
+.stApp .eu-patient-summary-rows .k {
+  color: var(--ink-3);
+}
+.stApp .eu-patient-summary-rows .vv {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_rail"] {
+  margin: 16px 0 0 !important;
+}
+.stApp [class*="st-key-_eu_patient_nav_chip_rail"] {
+  margin: 6px 0 10px !important;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_rail"] [data-testid="stHorizontalBlock"],
+.stApp [class*="st-key-_eu_patient_nav_chip_rail"] [data-testid="stHorizontalBlock"] {
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 6px !important;
+  flex-wrap: wrap !important;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_rail"] [data-testid="stColumn"],
+.stApp [class*="st-key-_eu_patient_nav_chip_rail"] [data-testid="stColumn"] {
+  flex: 0 0 auto !important;
+  min-width: 0 !important;
+  width: auto !important;
+}
+.stApp .eu-patient-chip-label {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  margin-right: 4px;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_idle_"] .stButton > button,
+.stApp [class*="st-key-_eu_patient_stay_chip_active_"] .stButton > button,
+.stApp [class*="st-key-_eu_patient_nav_chip_"] .stButton > button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  min-width: 0 !important;
+  height: 24px !important;
+  min-height: 24px !important;
+  padding: 0 9px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-pill) !important;
+  background: var(--surface-2) !important;
+  box-shadow: none !important;
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_idle_"] .stButton > button:hover,
+.stApp [class*="st-key-_eu_patient_nav_chip_"] .stButton > button:hover {
+  border-color: var(--hair-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_active_"] .stButton > button {
+  border-color: var(--ink) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_idle_"] .stButton > button p,
+.stApp [class*="st-key-_eu_patient_stay_chip_active_"] .stButton > button p,
+.stApp [class*="st-key-_eu_patient_nav_chip_"] .stButton > button p {
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11.5px !important;
+  line-height: 1 !important;
+  margin: 0 !important;
+  white-space: nowrap !important;
+}
+.stApp .eu-patient-vitals-mini {
+  padding: 14px 16px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+}
+.stApp .eu-patient-vitals-mini .mc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.stApp .eu-patient-vitals-mini .mc-head div {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.stApp .eu-patient-vitals-mini .mc-head span {
+  flex: none;
+  color: var(--ink-4);
+  font-size: 10.5px;
+}
+.stApp .eu-patient-vitals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+.stApp .eu-patient-vitals-row {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+.stApp .eu-patient-vitals-row > span {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+.stApp .eu-patient-vitals-spark {
+  display: block;
+  width: 100%;
+  height: 30px;
+}
+.stApp .eu-patient-vitals-spark polyline {
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.stApp .eu-patient-vitals-spark polyline.accent {
+  stroke: var(--accent);
+}
+.stApp .eu-patient-vitals-spark polyline.ok {
+  stroke: var(--ok);
+}
+.stApp .eu-patient-vitals-empty {
+  padding: 12px 0;
+  color: var(--ink-4);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.stApp .eu-patient-nav-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  white-space: nowrap;
+}
+.stApp .eu-patient-nav-count span {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.stApp .eu-patient-nav-count b {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+}
+.stApp .eu-cohort-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 9px;
+  margin: 8px 0 14px;
+}
+.stApp .eu-cohort-metric-card.accent {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 36%, var(--surface));
+}
+.stApp .eu-cohort-metric-card.ok {
+  border-left-color: var(--ok);
+}
+.stApp .eu-cohort-metric-card.warn {
+  border-left-color: var(--warn);
+}
+.stApp .eu-directory-guide {
+  min-width: min(560px, 80vw);
+}
+.stApp .eu-directory-guide-head {
+  margin-bottom: 10px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--hair);
+}
+.stApp .eu-directory-guide-head span {
+  display: block;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.stApp .eu-directory-guide-head p {
+  margin: 5px 0 0;
+  color: var(--ink-3);
+  font-size: 12.2px;
+  line-height: 1.42;
+}
+.stApp .eu-directory-guide-tree {
+  display: grid;
+  gap: 6px;
+}
+.stApp .eu-directory-guide-row {
+  display: grid;
+  grid-template-columns: minmax(90px, .7fr) minmax(130px, 1fr) minmax(110px, .8fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+.stApp .eu-directory-guide-row span {
+  overflow: hidden;
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-directory-guide-row b {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-directory-guide-row em {
+  overflow: hidden;
+  color: var(--ink-4);
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-directory-guide-tips {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.stApp:has(.eu-cohort-page-marker) .stSelectbox label,
+.stApp:has(.eu-cohort-page-marker) .stNumberInput label {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 650 !important;
+  letter-spacing: .08em !important;
+  text-transform: uppercase !important;
+}
+
+@media (max-width: 920px) {
+  .stApp .eu-patient-overview-split {
+    grid-template-columns: 1fr;
+  }
+  .stApp .eu-cohort-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .stApp .eu-directory-guide-row b,
+  .stApp .eu-directory-guide-row em {
+    white-space: normal;
+  }
+}
+
+@media (max-width: 760px) {
+  .stApp [class*="st-key-eu_qv_loaded_bar"] {
+    padding: 12px !important;
+  }
+}
+
+/* Moved from alignment.css: Cohort Statistics route-gated page contract. */
+
+/* ============================================================
+   COHORT STATISTICS · reference header, preflight, and tabs
+   Reference: screens-viz.js cohort page.
+   ============================================================ */
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head {
+  display: flex !important;
+  align-items: flex-end !important;
+  justify-content: space-between !important;
+  gap: 18px !important;
+  margin: 0 !important;
+  padding-bottom: 35px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head h1 {
+  margin: 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-size: 25px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em !important;
+  line-height: 1.15 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head .lead {
+  margin-top: 7px !important;
+  color: var(--ink-3) !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-terms {
+  margin-top: 9px !important;
+  color: var(--ink-4) !important;
+  font-size: 11.5px !important;
+  line-height: 1.4 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-terms span {
+  text-decoration: underline !important;
+  text-decoration-color: var(--hair-2) !important;
+  text-underline-offset: 2px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight {
+  margin: 0 0 14px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  min-height: 42px !important;
+  padding: 11px 16px !important;
+  border-bottom: 1px solid var(--hair) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head span {
+  color: var(--ink) !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  line-height: 1.2 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head em {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-style: normal !important;
+  line-height: 1.2 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-grid {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell {
+  min-height: 88px !important;
+  padding: 14px 16px !important;
+  border-left: 1px solid var(--hair) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell:first-child {
+  border-left: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .eyebrow {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: .08em !important;
+  line-height: 1.2 !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-detail {
+  margin-top: 6px !important;
+  color: var(--ink-2) !important;
+  font-size: 12.5px !important;
+  line-height: 1.35 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-sub {
+  margin-top: 4px !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-arrow {
+  margin-left: auto !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-sans) !important;
+  font-size: 12px !important;
+  letter-spacing: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-ok,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-warn,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-bad {
+  width: 6px !important;
+  height: 6px !important;
+  flex: none !important;
+  border-radius: 50% !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-ok { background: var(--ok) !important; }
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-warn { background: var(--warn) !important; }
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-bad { background: var(--bad) !important; }
+.stApp:has(.eu-cohort-page-marker) .inline-control-label {
+  display: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] {
+  width: 100% !important;
+  margin: -5px 0 18px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  width: 100% !important;
+  border-bottom: 1px solid var(--hair) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label {
+  width: auto !important;
+  min-width: 0 !important;
+  min-height: 38px !important;
+  height: 38px !important;
+  margin: 0 0 -1px !important;
+  padding: 0 10px !important;
+  border: 0 !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--ink-3) !important;
+  -webkit-text-fill-color: var(--ink-3) !important;
+  justify-content: center !important;
+  transition: color .12s, border-color .12s !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label::before {
+  content: "" !important;
+  width: 14px !important;
+  height: 14px !important;
+  flex: none !important;
+  margin-right: 7px !important;
+  background: currentColor !important;
+  opacity: .78 !important;
+  -webkit-mask: var(--eu-cohort-tab-icon) center / 14px 14px no-repeat !important;
+  mask: var(--eu-cohort-tab-icon) center / 14px 14px no-repeat !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label:nth-of-type(1) {
+  --eu-cohort-tab-icon: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='m12 3 9 5-9 5-9-5 9-5Z'/%3E%3Cpath d='m3 13 9 5 9-5'/%3E%3Cpath d='m3 18 9 5 9-5'/%3E%3C/svg%3E");
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label:nth-of-type(2) {
+  --eu-cohort-tab-icon: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 2.8 19 6v5.2c0 4.3-3 7.4-7 8.9-4-1.5-7-4.6-7-8.9V6l7-3.2Z'/%3E%3C/svg%3E");
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label:nth-of-type(3) {
+  --eu-cohort-tab-icon: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' xmlns='http://www.w3.org/2000/svg'%3E%3Crect x='4' y='5' width='16' height='14' rx='2'/%3E%3Cpath d='M8 10h8'/%3E%3Cpath d='M8 14h4'/%3E%3C/svg%3E");
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label:nth-of-type(4) {
+  --eu-cohort-tab-icon: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M20 12a8 8 0 1 1-2.34-5.66'/%3E%3Cpath d='M20 4v6h-6'/%3E%3C/svg%3E");
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label:hover {
+  border-color: transparent !important;
+  border-bottom-color: var(--hair-3) !important;
+  background: transparent !important;
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label:has(input:checked) {
+  border-color: transparent !important;
+  border-bottom-color: var(--ink) !important;
+  background: transparent !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label > div:first-child {
+  display: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label p {
+  margin: 0 !important;
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 1.2 !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label:has(input:checked) p {
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] {
+  margin: -28px 0 22px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] [data-testid="stHorizontalBlock"] {
+  gap: 12px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .stButton {
+  margin: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button {
+  min-height: 62px !important;
+  height: 62px !important;
+  justify-content: flex-start !important;
+  gap: 12px !important;
+  padding: 13px 14px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+  color: var(--ink) !important;
+  text-align: left !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button:hover {
+  border-color: var(--accent-border) !important;
+  background: var(--surface-2) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button::after {
+  content: "›" !important;
+  margin-left: auto !important;
+  color: var(--ink-4) !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+  opacity: .55 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button > div,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button > div > span {
+  width: 100% !important;
+  min-width: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button [data-testid="stIconMaterial"],
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button .material-symbols-rounded,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button .material-icons,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button > div > span > span:first-child {
+  width: 34px !important;
+  height: 34px !important;
+  flex: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid var(--accent-border) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+  font-size: 16px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button [data-testid="stMarkdownContainer"] {
+  min-width: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button p {
+  margin: 0 !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  line-height: 1.3 !important;
+  white-space: pre-line !important;
+  text-align: left !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button p::first-line {
+  color: var(--ink) !important;
+  font-size: 12.75px !important;
+  font-weight: 600 !important;
+  line-height: 1.25 !important;
+}
+
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card {
+  min-height: 76px !important;
+  padding: 12px 13px !important;
+}
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card em {
+  display: none !important;
+}
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-grid {
+  transform: translateY(-23px) !important;
+}
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) [class*="st-key-group_comp_mode"] {
+  position: relative !important;
+  z-index: 1 !important;
+  transform: translateY(-17px) !important;
+}
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) [class*="st-key-grp_feature_modules"],
+.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) [data-testid="stExpander"] {
+  position: relative !important;
+  z-index: 1 !important;
+  transform: translateY(-22px) !important;
+}
+
+/* Cohort Statistics · Coverage audit tab
+   Reference shell, while the heatmap and eligibility counts remain real. */
+.stApp:has(.eu-cohort-page-marker) .audit-cards {
+  display: grid !important;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+  width: 100% !important;
+  margin: -28px 0 31px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .audit-card {
+  min-height: 75px !important;
+  padding: 13px 15px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) .audit-card .ac-k {
+  color: var(--ink-4) !important;
+  font-size: 10.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: .04em !important;
+  line-height: 1.5 !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) .audit-card .ac-v {
+  margin-top: 6px !important;
+  color: var(--ink) !important;
+  font-size: 23px !important;
+  font-weight: 500 !important;
+  line-height: 1.1 !important;
+  letter-spacing: -0.01em !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_cols"] {
+  margin: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_cols"] [data-testid="stHorizontalBlock"] {
+  gap: 16px !important;
+  align-items: flex-start !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_cols"] [data-testid="stColumn"] {
+  min-width: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_cols"] [data-testid="stColumn"]:nth-child(1) {
+  flex: 0 0 700px !important;
+  width: 700px !important;
+  max-width: 700px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_cols"] [data-testid="stColumn"]:nth-child(2) {
+  flex: 0 0 420px !important;
+  width: 420px !important;
+  max-width: 420px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_coverage_card"],
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_elig_card"] {
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: rgba(14, 17, 22, 0.04) 0 1px 0 0, rgba(14, 17, 22, 0.04) 0 1px 2px 0 !important;
+  padding: 18px 20px !important;
+  overflow: hidden !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_coverage_card"] {
+  min-height: 477px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_elig_card"] {
+  min-height: 437px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .cov-title {
+  display: flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  margin: 0 0 14px !important;
+  color: var(--ink) !important;
+  font-size: 13px !important;
+  font-weight: 650 !important;
+  line-height: 19.5px !important;
+  letter-spacing: -0.01em !important;
+}
+.stApp:has(.eu-cohort-page-marker) .cov-letter {
+  display: inline-grid !important;
+  place-items: center !important;
+  width: 20px !important;
+  height: 20px !important;
+  flex: none !important;
+  border: 0 !important;
+  border-radius: 5px !important;
+  background: var(--ink) !important;
+  color: #fff !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_audit_coverage_card"] [data-testid="stPlotlyChart"] {
+  margin: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .elig-flow {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .elig-step {
+  position: relative !important;
+  min-height: 52px !important;
+  padding: 9px 12px !important;
+  overflow: hidden !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface-2) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .elig-step .es-bar {
+  position: absolute !important;
+  inset: 0 auto 0 0 !important;
+  z-index: 0 !important;
+  background: var(--accent-soft) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .elig-step.final .es-bar {
+  background: var(--ok-soft) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .elig-step .es-body {
+  position: relative !important;
+  z-index: 1 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .elig-step .es-label {
+  color: var(--ink) !important;
+  font-size: 12px !important;
+  font-weight: 550 !important;
+  line-height: 1.35 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .elig-step .es-meta {
+  display: flex !important;
+  align-items: baseline !important;
+  gap: 8px !important;
+  margin-top: 2px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .elig-step .es-count {
+  color: var(--ink) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .elig-step .es-excl {
+  color: var(--bad) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .elig-step .es-note {
+  color: var(--ink-4) !important;
+  font-size: 10.5px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .audit-note {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 8px !important;
+  margin-top: 16px !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .audit-note-ico {
+  flex: none !important;
+  width: 13px !important;
+  height: 13px !important;
+  margin-top: 1px !important;
+  color: var(--ink-4) !important;
+  line-height: 13px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-cohort_active_panel"][class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label {
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+
+/* Cohort Statistics · SOFA reclassification tab
+   Real reclassification data, rendered through the reference rc-* shell. */
+.stApp .viz-demo-load-card {
+  margin: 16px 0 0 !important;
+  padding: 18px 20px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface-2) !important;
+  box-shadow: none !important;
+}
+.stApp .viz-demo-load-kicker {
+  margin-bottom: 4px !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.08em !important;
+  line-height: 1.5 !important;
+  text-transform: uppercase !important;
+}
+.stApp .viz-demo-load-title {
+  color: var(--ink) !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  line-height: 1.5 !important;
+}
+.stApp .viz-demo-load-subtitle {
+  margin-top: 2px !important;
+  color: var(--ink-3) !important;
+  font-size: 12.25px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] {
+  position: relative !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  margin: -28px 0 16px !important;
+  overflow: visible !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] > [data-testid="stVerticalBlock"] {
+  display: block !important;
+  position: relative !important;
+  min-height: 32px !important;
+  height: 32px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] [data-testid="stElementContainer"] {
+  width: auto !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] [data-testid="stRadio"] {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  height: 32px !important;
+  margin: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] [data-testid="stWidgetLabel"] {
+  display: flex !important;
+  align-items: center !important;
+  flex: 0 0 91px !important;
+  width: 91px !important;
+  height: 32px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] [data-testid="stWidgetLabel"] [data-testid="stMarkdownContainer"] p {
+  margin: 0 !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 16.5px !important;
+  letter-spacing: .04em !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] [data-testid="stTooltipIcon"] {
+  display: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] {
+  display: inline-flex !important;
+  width: auto !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  gap: 0 !important;
+  align-items: stretch !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-2) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  min-width: 0 !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  margin: 0 !important;
+  padding: 0 10.5px !important;
+  border: 0 !important;
+  border-right: 1px solid var(--hair-2) !important;
+  border-radius: 0 !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+  color: var(--ink-3) !important;
+  -webkit-text-fill-color: var(--ink-3) !important;
+  cursor: pointer !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label:last-child {
+  border-right: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label > div:first-child {
+  display: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label > div:not(:first-child),
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label [data-testid="stMarkdownContainer"] {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label:has(input:checked) {
+  background: var(--ink) !important;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] div[role="radiogroup"] > label p {
+  margin: 0 !important;
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  line-height: 18px !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] .rc-mode-desc {
+  display: inline-flex !important;
+  position: absolute !important;
+  top: 7px !important;
+  left: 506px !important;
+  align-items: center !important;
+  min-width: 180px !important;
+  width: calc(100% - 506px) !important;
+  color: var(--ink-4) !important;
+  font-size: 11.5px !important;
+  line-height: 17.25px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_sofa_modes"] [data-testid="stElementContainer"]:has(.rc-mode-desc) {
+  position: absolute !important;
+  inset: 0 auto auto 0 !important;
+  width: 100% !important;
+  height: 32px !important;
+  pointer-events: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-kpis {
+  display: grid !important;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+  width: 100% !important;
+  margin: 0 0 18px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-kpi {
+  min-height: 98px !important;
+  padding: 13px 14px !important;
+  border: 1px solid var(--hair) !important;
+  border-top: 2px solid var(--hair-3) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-kpi.rc-swap { border-top-color: oklch(62% 0.13 40) !important; }
+.stApp:has(.eu-cohort-page-marker) .rc-kpi.rc-up { border-top-color: var(--bad) !important; }
+.stApp:has(.eu-cohort-page-marker) .rc-kpi.rc-down { border-top-color: var(--ok) !important; }
+.stApp:has(.eu-cohort-page-marker) .rc-kpi.rc-delta { border-top-color: var(--ink-3) !important; }
+.stApp:has(.eu-cohort-page-marker) .rc-kpi.rc-n { border-top-color: var(--accent) !important; }
+.stApp:has(.eu-cohort-page-marker) .rc-kpi .rk-top {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  overflow: hidden !important;
+  color: var(--ink-4) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-kpi .rk-ico {
+  display: inline-flex !important;
+  flex: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-kpi.rc-up .rk-ico {
+  color: var(--bad) !important;
+  transform: rotate(-90deg) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-kpi.rc-down .rk-ico {
+  color: var(--ok) !important;
+  transform: rotate(90deg) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-kpi .rk-label {
+  overflow: hidden !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 16.5px !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-kpi .rk-val {
+  margin-top: 7px !important;
+  color: var(--ink) !important;
+  font-size: 24px !important;
+  font-weight: 500 !important;
+  line-height: 1.1 !important;
+  letter-spacing: -0.01em !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-kpi .rk-hint {
+  margin-top: 3px !important;
+  color: var(--ink-4) !important;
+  font-size: 10.5px !important;
+  line-height: 15.75px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-cols {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 16px !important;
+  align-items: start !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-cols .card.pad {
+  padding: 18px 20px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: rgba(14, 17, 22, 0.04) 0 1px 0 0, rgba(14, 17, 22, 0.04) 0 1px 2px 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-sec-t {
+  display: flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  margin-bottom: 14px !important;
+  color: var(--ink) !important;
+  font-size: 13px !important;
+  font-weight: 650 !important;
+  line-height: 19.5px !important;
+  letter-spacing: -0.01em !important;
+}
+.stApp:has(.eu-cohort-page-marker) .mt-20 {
+  margin-top: 20px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-groups {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 13px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-grow .rg-head {
+  display: flex !important;
+  align-items: baseline !important;
+  justify-content: space-between !important;
+  margin-bottom: 5px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-grow .rg-name {
+  color: var(--ink) !important;
+  font-size: 12.5px !important;
+  font-weight: 550 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-grow .rg-pct {
+  color: var(--ink-2) !important;
+  font-size: 12.5px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-grow .rg-bar {
+  height: 8px !important;
+  overflow: hidden !important;
+  border-radius: 4px !important;
+  background: var(--surface-3) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-grow .rg-fill {
+  height: 100% !important;
+  border-radius: 4px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-grow .rg-fill.up { background: var(--bad) !important; }
+.stApp:has(.eu-cohort-page-marker) .rc-grow .rg-fill.down { background: var(--ok) !important; }
+.stApp:has(.eu-cohort-page-marker) .rc-grow .rg-fill.same { background: var(--ink-3) !important; }
+.stApp:has(.eu-cohort-page-marker) .rc-grow .rg-meta {
+  display: flex !important;
+  gap: 14px !important;
+  margin-top: 5px !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  line-height: 16.5px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-grow .rg-meta b {
+  color: var(--ink-2) !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-organs {
+  display: flex !important;
+  flex-direction: column !important;
+}
+.stApp:has(.eu-cohort-page-marker) .ro-row {
+  display: grid !important;
+  grid-template-columns: 1.4fr 0.8fr 0.7fr 0.6fr 0.7fr !important;
+  gap: 8px !important;
+  align-items: center !important;
+  padding: 7px 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+  font-size: 12px !important;
+  line-height: 18px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .ro-row:last-child { border-bottom: 0 !important; }
+.stApp:has(.eu-cohort-page-marker) .ro-row.ro-head {
+  color: var(--ink-4) !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  letter-spacing: .04em !important;
+  line-height: 15px !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) .ro-row .ro-name {
+  color: var(--ink-2) !important;
+  font-weight: 500 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .ro-row .pos,
+.stApp:has(.eu-cohort-page-marker) .ro-row .ro-up {
+  color: var(--bad) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .ro-row .neg,
+.stApp:has(.eu-cohort-page-marker) .ro-row .ro-down {
+  color: var(--ok) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-matrix-wrap {
+  display: flex !important;
+  gap: 8px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-axis-y {
+  padding: 8px 0 !important;
+  color: var(--ink-4) !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  letter-spacing: .04em !important;
+  line-height: 15px !important;
+  text-align: center !important;
+  text-transform: uppercase !important;
+  transform: rotate(180deg) !important;
+  writing-mode: vertical-rl !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-axis-x {
+  margin-top: 6px !important;
+  color: var(--ink-4) !important;
+  font-size: 10px !important;
+  font-weight: 600 !important;
+  letter-spacing: .04em !important;
+  line-height: 15px !important;
+  text-align: center !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-matrix {
+  display: grid !important;
+  gap: 3px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-matrix .rm-corner {
+  display: grid !important;
+  place-items: center !important;
+  color: var(--ink-4) !important;
+  font-size: 10px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-matrix .rm-colh,
+.stApp:has(.eu-cohort-page-marker) .rc-matrix .rm-rowh {
+  display: grid !important;
+  place-items: center !important;
+  padding: 4px 0 !important;
+  border-radius: 4px !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-3) !important;
+  font-size: 10.5px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-matrix .rm-cell {
+  display: grid !important;
+  place-items: center !important;
+  height: 34px !important;
+  border-radius: 4px !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-matrix .rm-cell.diag {
+  outline: 1px solid var(--accent-border) !important;
+  outline-offset: -1px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-matrix-legend {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 14px !important;
+  margin-top: 12px !important;
+  color: var(--ink-4) !important;
+  font-size: 10.5px !important;
+  line-height: 15.75px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-matrix-legend .rml {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-matrix-legend .rml::before {
+  content: "" !important;
+  width: 9px !important;
+  height: 9px !important;
+  border-radius: 2px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .rc-matrix-legend .rml.up::before { background: oklch(70% 0.09 25) !important; }
+.stApp:has(.eu-cohort-page-marker) .rc-matrix-legend .rml.diag::before { background: oklch(70% 0.09 255) !important; }
+.stApp:has(.eu-cohort-page-marker) .rc-matrix-legend .rml.down::before { background: oklch(70% 0.09 150) !important; }
+
+/* ============================================================
+   COHORT STATISTICS · reference DOM parity pass
+   Target: EasyICU/js/screens-viz.js cohort render + app/deepdive CSS.
+   ============================================================ */
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-crumb {
+  display: flex !important;
+  align-items: center !important;
+  gap: 2px 8px !important;
+  margin: 0 0 6px !important;
+  padding: 0 !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 400 !important;
+  line-height: 15.75px !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+  flex-wrap: wrap !important;
+  row-gap: 2px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head.page-head {
+  display: block !important;
+  margin: 0 0 16px !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  background: transparent !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head.page-head h1 {
+  margin: 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 25px !important;
+  font-weight: 600 !important;
+  line-height: 28.75px !important;
+  letter-spacing: -0.02em !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head.page-head .lead {
+  display: block !important;
+  max-width: 70ch !important;
+  margin: 7px 0 13.5px !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.005em !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-terms {
+  margin-top: 9px !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 11.5px !important;
+  font-weight: 400 !important;
+  line-height: 17.25px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight {
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  height: 42.75px !important;
+  min-height: 42.75px !important;
+  padding: 11px 16px !important;
+  border-bottom: 1px solid var(--hair) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head span {
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  line-height: 18.75px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-head em {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-style: normal !important;
+  font-weight: 400 !important;
+  line-height: 16.5px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight-grid {
+  display: grid !important;
+  grid-template-columns: repeat(3, 1fr) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell {
+  min-height: 88px !important;
+  padding: 13px 16px !important;
+  border-right: 1px solid var(--hair) !important;
+  border-left: 0 !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-cell:last-child {
+  border-right: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .eyebrow {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  margin: 0 !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 15.75px !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-detail {
+  margin-top: 6px !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12.5px !important;
+  font-weight: 400 !important;
+  line-height: 18.75px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .pf-sub {
+  margin-top: 4px !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  line-height: 16.5px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-ok,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-warn,
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight .dot-bad {
+  width: 7px !important;
+  height: 7px !important;
+  flex: none !important;
+  border-radius: 50% !important;
+}
+
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] {
+  position: relative !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .tabs {
+  display: flex !important;
+  gap: 4px !important;
+  height: 38px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .tab {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  height: 38px !important;
+  margin: 0 0 -1px !important;
+  padding: 0 16px !important;
+  border: 0 !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 19.5px !important;
+  letter-spacing: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .tab.active {
+  color: var(--ink) !important;
+  border-bottom-color: var(--ink) !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .tab .ico,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .tab svg {
+  display: inline-flex !important;
+  width: 14px !important;
+  height: 14px !important;
+  flex: none !important;
+  color: currentColor !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stHorizontalBlock"] {
+  position: absolute !important;
+  inset: 0 auto auto 0 !important;
+  z-index: 3 !important;
+  display: flex !important;
+  gap: 4px !important;
+  width: auto !important;
+  height: 38px !important;
+  min-height: 38px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stColumn"] {
+  flex: 0 0 156px !important;
+  width: 156px !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stColumn"]:nth-child(1) {
+  flex-basis: 143px !important;
+  width: 143px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stColumn"]:nth-child(2) {
+  flex-basis: 146px !important;
+  width: 146px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stColumn"]:nth-child(3) {
+  flex-basis: 142px !important;
+  width: 142px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stColumn"]:nth-child(4) {
+  flex-basis: 206px !important;
+  width: 206px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .stButton,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] [data-testid="stButton"],
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] button {
+  width: 100% !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] button * {
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+}
+
+/* Cohort mobile ownership QA: keep route-local tabs and selected feature chips
+   visible on narrow screens without moving these controls to shared CSS. */
+@media (max-width: 640px) {
+  .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] {
+    height: auto !important;
+    min-height: 38px !important;
+    overflow: visible !important;
+  }
+  .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .tabs {
+    flex-wrap: wrap !important;
+    height: auto !important;
+    min-height: 38px !important;
+    padding-bottom: 4px !important;
+  }
+  .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_reference_tabs"] .tab {
+    flex: 0 1 auto !important;
+    max-width: 100% !important;
+    white-space: normal !important;
+  }
+  .stApp:has(.eu-cohort-page-marker) .eu-cohort-feature-card .row.wrap.gap-6 {
+    align-items: center !important;
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+  }
+  .stApp:has(.eu-cohort-page-marker) .eu-cohort-feature-card .row.wrap.gap-6 .grow {
+    display: none !important;
+  }
+  .stApp:has(.eu-cohort-page-marker) .eu-cohort-feature-card .chip.solid {
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: 24px !important;
+    white-space: normal !important;
+    line-height: 15px !important;
+  }
+}
+
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] {
+  position: relative !important;
+  height: 62px !important;
+  min-height: 62px !important;
+  margin: 0 0 22px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .coh-jump {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 12px !important;
+  height: 62px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-card {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  height: 62px !important;
+  padding: 13px 14px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  box-shadow: none !important;
+  text-align: left !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-ico {
+  display: grid !important;
+  place-items: center !important;
+  width: 34px !important;
+  height: 34px !important;
+  flex: none !important;
+  border: 1px solid var(--accent-border) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-t {
+  display: block !important;
+  color: var(--ink) !important;
+  font-size: 12.75px !important;
+  font-weight: 600 !important;
+  line-height: 1.25 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-d {
+  display: block !important;
+  margin-top: 2px !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  line-height: 1.3 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .cj-go {
+  flex: none !important;
+  margin-left: auto !important;
+  color: var(--ink-4) !important;
+  opacity: .45 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3 !important;
+  gap: 12px !important;
+  height: 62px !important;
+  min-height: 62px !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] .stButton,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] [data-testid="stButton"],
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button {
+  width: 100% !important;
+  height: 62px !important;
+  min-height: 62px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: var(--r-3) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button *,
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_cards"] button::after {
+  content: none !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+}
+
+.stApp:has(.eu-cohort-page-marker) .eu-compact-divider {
+  display: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) .sec-stack {
+  display: block !important;
+  margin: 26px 0 12px !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .sec-stack .lbl {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 15.75px !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) .sec-stack h2 {
+  margin: 3px 0 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  line-height: 24px !important;
+  letter-spacing: -0.01em !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat-grid.eu-cohort-metric-grid,
+.stApp:has(.eu-cohort-page-marker) .stat-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)) !important;
+  gap: 12px !important;
+  width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  transform: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat {
+  min-height: 76px !important;
+  padding: 13px 15px !important;
+  border: 1px solid var(--hair) !important;
+  border-left: 3px solid var(--hair-3) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat.accent { border-left-color: var(--accent) !important; }
+.stApp:has(.eu-cohort-page-marker) .stat.ok { border-left-color: var(--ok) !important; }
+.stApp:has(.eu-cohort-page-marker) .stat.warn { border-left-color: var(--warn) !important; }
+.stApp:has(.eu-cohort-page-marker) .stat.bad { border-left-color: var(--bad) !important; }
+.stApp:has(.eu-cohort-page-marker) .stat .label {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 15px !important;
+  letter-spacing: 0.07em !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat .val {
+  margin-top: 6px !important;
+  color: var(--ink) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 26px !important;
+  font-weight: 500 !important;
+  line-height: 27.3px !important;
+  letter-spacing: -0.02em !important;
+}
+.stApp:has(.eu-cohort-page-marker) .stat .hint {
+  display: none !important;
+}
+
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] {
+  margin: 0 !important;
+  transform: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  flex-wrap: wrap !important;
+  width: 100% !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  width: auto !important;
+  min-width: 0 !important;
+  min-height: 37.125px !important;
+  margin: 0 !important;
+  padding: 8px 14px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label:has(input:checked) {
+  border-color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label p {
+  margin: 0 !important;
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12.75px !important;
+  font-weight: 500 !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.005em !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label > div:first-child {
+  width: 15px !important;
+  height: 15px !important;
+  margin: 0 !important;
+  flex: none !important;
+}
+
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-grp_feature_modules"] {
+  margin: 0 !important;
+  transform: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-grp_feature_modules"] [data-baseweb="select"],
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-grp_feature_modules"] > div {
+  border-radius: var(--r-3) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-grp_feature_modules"] [data-baseweb="select"] > div {
+  min-height: 52px !important;
+  padding: 14px 16px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp:has(.eu-cohort-page-marker) [class*="st-key-grp_feature_modules"] [data-baseweb="tag"] {
+  height: 24px !important;
+  margin: 0 6px 0 0 !important;
+  padding: 0 9px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-pill) !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11.5px !important;
+  font-weight: 400 !important;
+}
+.stApp:has(.eu-cohort-page-marker) [data-testid="stExpander"] {
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+  transform: none !important;
+}
+
+.stApp:has(.eu-cohort-page-marker) .table-wrap {
+  width: 100% !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+}
+.stApp:has(.eu-cohort-page-marker) .table-scroll {
+  max-height: 520px !important;
+  overflow: auto !important;
+}
+.stApp:has(.eu-cohort-page-marker) table.eu-table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  font-size: 12.75px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table thead th {
+  padding: 10px 14px !important;
+  border-bottom: 1px solid var(--hair-2) !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 15px !important;
+  letter-spacing: 0.06em !important;
+  text-align: left !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table thead th.num {
+  text-align: right !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table tbody td {
+  padding: 9px 14px !important;
+  border-bottom: 1px solid var(--hair) !important;
+  color: var(--ink-2) !important;
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table tbody tr:last-child td {
+  border-bottom: 0 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table td.key {
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-weight: 500 !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-table td.num,
+.stApp:has(.eu-cohort-page-marker) .eu-table .num {
+  color: var(--ink) !important;
+  font-family: var(--font-mono) !important;
+  font-weight: 400 !important;
+  text-align: right !important;
+  font-feature-settings: "tnum" !important;
+}
+.stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-note {
+  margin: 8px 0 0 !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  line-height: 16.5px !important;
+}
+
+/* Moved from shell_overrides.css: legacy Cohort Statistics tab controls. */
+.stApp [class*="st-key-cohort_active_panel"] div[role="radiogroup"] {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+  align-items: stretch !important;
+}
+.stApp [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label {
+  min-width: 0 !important;
+  min-height: 38px !important;
+  margin: 0 !important;
+  padding: 8px 10px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink-3) !important;
+  box-shadow: none !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease !important;
+}
+.stApp [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label:hover {
+  border-color: var(--hair-3) !important;
+  background: var(--surface-2) !important;
+  color: var(--ink) !important;
+}
+.stApp [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label:has(input:checked) {
+  border-color: rgba(29, 116, 117, 0.34) !important;
+  background: var(--accent-soft) !important;
+  color: var(--ink) !important;
+}
+.stApp [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label > div:first-child {
+  display: flex !important;
+  flex: 0 0 auto !important;
+}
+.stApp [class*="st-key-cohort_active_panel"] div[role="radiogroup"] > label p {
+  margin: 0 !important;
+  font-size: 12px !important;
+  line-height: 1.25 !important;
+  font-weight: 600 !important;
+  color: inherit !important;
+  text-align: center !important;
+  white-space: normal !important;
+}
+
+@media (max-width: 900px) {
+  .stApp [class*="st-key-cohort_active_panel"] div[role="radiogroup"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* Moved from shell_overrides.css: Cohort Statistics KPI cards. */
+.stApp .eu-cohort-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(152px, 1fr));
+  gap: 10px;
+  margin: 10px 0 24px;
+}
+.stApp .eu-cohort-kpi {
+  --accent: var(--accent);
+  min-height: 92px;
+  border: 1px solid var(--hair-2);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(15,31,68,.045);
+  padding: 11px 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.stApp .eu-cohort-kpi .kpi-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  min-width: 0;
+}
+.stApp .eu-cohort-kpi .kpi-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 800;
+}
+.stApp .eu-cohort-kpi .kpi-label {
+  color: var(--ink-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  white-space: normal;
+  line-height: 1.2;
+}
+.stApp .eu-cohort-kpi .kpi-value {
+  color: var(--ink);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.05;
+  letter-spacing: 0;
+}
+.stApp .eu-cohort-kpi .kpi-value.accent {
+  color: var(--accent);
+}
+.stApp .eu-cohort-kpi .kpi-hint {
+  color: var(--ink-4);
+  font-size: 11px;
+  font-weight: 500;
+  margin-top: 5px;
+  line-height: 1.25;
+}
+
+/* Moved from alignment.css: Cohort Statistics topbar controls. */
+.stApp [class*="st-key-eu_topbar_controls_cohort"] [data-testid="stMarkdown"],
+.stApp [class*="st-key-eu_topbar_controls_cohort"] [data-testid="stHorizontalBlock"] {
+  transform: translate(96px, -50%) !important;
+}
+
+@media (min-width: 901px) {
+  .stApp [class*="st-key-eu_topbar_controls_cohort"] [data-testid="stMarkdown"],
+  .stApp [class*="st-key-eu_topbar_controls_cohort"] [data-testid="stHorizontalBlock"] {
+    transform: translate(50px, -50%) !important;
+  }
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_topbar_controls_cohort"])
+    [class*="st-key-_eu_topbar_run"] button[data-testid^="stBaseButton"]::before {
+    content: "↻" !important;
+    display: inline-grid !important;
+    place-items: center !important;
+    width: 11px !important;
+    height: 11px !important;
+    border: 0 !important;
+    margin: 0 !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    clip-path: none !important;
+    color: currentColor !important;
+    -webkit-text-fill-color: currentColor !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    line-height: 11px !important;
+    text-align: center !important;
+  }
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_topbar_controls_cohort"])
+    [class*="st-key-_eu_topbar_run"] button[data-testid^="stBaseButton"] {
+    width: 91px !important;
+    box-sizing: border-box !important;
+  }
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_topbar_controls_cohort"])
+    [class*="st-key-_eu_topbar_run"] button[data-testid^="stBaseButton"]:has([data-testid="stIconMaterial"])::before {
+    content: none !important;
+    display: none !important;
+  }
+}

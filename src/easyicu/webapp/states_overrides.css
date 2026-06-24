@@ -1,0 +1,3808 @@
+/* Workspace States route-specific Streamlit overrides.
+   Loaded by shell_styles.py only on states/workspace-states routes.
+   Do not move page-specific rules back to shell_overrides.css or alignment.css. */
+/* Moved from shell_overrides.css: Workspace States page head */
+.stApp .eu-states-head {
+  margin: 0 0 22px;
+  max-width: 760px;
+}
+.stApp .eu-states-head h1 {
+  margin: 8px 0 8px;
+  color: var(--ink);
+  font-size: 27px;
+  font-weight: 650;
+  line-height: 1.16;
+  letter-spacing: 0;
+}
+.stApp .eu-states-head p {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+/* Moved from shell_overrides.css: Workspace States route controls and stage primitives */
+.stApp .eu-states-controls,
+.stApp .eu-state-preview-card {
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.stApp .eu-states-control-row button.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--hair);
+}
+.stApp .eu-state-preview-card {
+  overflow: hidden;
+}
+.stApp .eu-workspace-status-shell {
+  display: grid;
+  gap: 16px;
+  margin: 2px 0 18px;
+}
+.stApp .eu-workspace-session-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 18px 15px 20px;
+  border: 1px solid var(--hair-2);
+  border-left: 4px solid var(--ink);
+  border-radius: var(--r-3);
+  background:
+    linear-gradient(90deg, color-mix(in oklab, var(--surface) 86%, white), var(--surface));
+  box-shadow: var(--shadow-1);
+}
+.stApp .eu-workspace-session-strip span {
+  display: block;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: .1em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+.stApp .eu-workspace-session-strip b {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 720;
+  line-height: 1.25;
+}
+.stApp .eu-workspace-session-strip em {
+  max-width: 58%;
+  color: var(--ink-3);
+  font-size: 13px;
+  font-style: normal;
+  line-height: 1.45;
+  text-align: right;
+}
+.stApp .eu-workspace-state-ledger {
+  overflow: hidden;
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-3);
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--accent-soft) 24%, transparent), transparent 54%),
+    var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.stApp .eu-workspace-state-ledger-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--hair);
+}
+.stApp .eu-workspace-state-ledger-head span {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: .1em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+.stApp .eu-workspace-state-ledger-head b {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 720;
+  line-height: 1.2;
+}
+.stApp .eu-workspace-state-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+}
+.stApp .eu-workspace-state-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  min-height: 116px;
+  padding: 16px 15px;
+  border-right: 1px solid var(--hair);
+}
+.stApp .eu-workspace-state-row:last-child {
+  border-right: 0;
+}
+.stApp .eu-workspace-state-node {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--hair-2);
+  border-radius: 999px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 760;
+  line-height: 1;
+}
+.stApp .eu-workspace-state-row.ok .eu-workspace-state-node {
+  border-color: color-mix(in oklab, var(--ok) 36%, white);
+  background: color-mix(in oklab, var(--ok-soft) 76%, white);
+  color: var(--ok);
+}
+.stApp .eu-workspace-state-row.accent .eu-workspace-state-node {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.stApp .eu-workspace-state-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.stApp .eu-workspace-state-copy b,
+.stApp .eu-workspace-card-head span,
+.stApp .eu-workspace-handoff span {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.stApp .eu-workspace-state-copy strong {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 720;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-workspace-state-copy em {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.38;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.stApp .eu-workspace-overview-card {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.stApp .eu-workspace-overview-card.compact {
+  margin-bottom: 0;
+}
+.stApp .eu-workspace-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--hair);
+}
+.stApp .eu-workspace-card-head h2 {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+.stApp .eu-workspace-card-head em {
+  max-width: 560px;
+  color: var(--ink-3);
+  font-size: 13px;
+  font-style: normal;
+  line-height: 1.5;
+}
+.stApp .eu-workspace-flow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  padding: 18px;
+}
+.stApp .eu-workspace-flow-step {
+  min-height: 108px;
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--hair);
+  border-right: 0;
+  background: var(--surface-2);
+}
+.stApp .eu-workspace-flow-step:first-child {
+  border-radius: var(--r-2) 0 0 var(--r-2);
+}
+.stApp .eu-workspace-flow-step:last-child {
+  border-right: 1px solid var(--hair);
+  border-radius: 0 var(--r-2) var(--r-2) 0;
+}
+.stApp .eu-workspace-flow-step i {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--hair-2);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 760;
+}
+.stApp .eu-workspace-flow-step.done i {
+  border-color: color-mix(in oklab, var(--ok) 42%, white);
+  background: color-mix(in oklab, var(--ok-soft) 70%, white);
+  color: var(--ok);
+}
+.stApp .eu-workspace-flow-step.active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.stApp .eu-workspace-flow-step.active i {
+  border-color: var(--accent-border);
+  background: var(--surface);
+  color: var(--accent);
+}
+.stApp .eu-workspace-flow-step b {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.stApp .eu-workspace-flow-step span {
+  display: block;
+  margin-top: 7px;
+  color: var(--ink-4);
+  font-size: 12px;
+  line-height: 1.42;
+}
+.stApp .eu-workspace-handoff {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  padding: 0;
+}
+.stApp .eu-workspace-handoff > div {
+  min-height: 74px;
+  padding: 16px 20px;
+  border-right: 1px solid var(--hair);
+  border-bottom: 1px solid var(--hair);
+  background: color-mix(in oklab, var(--surface) 92%, white);
+}
+.stApp .eu-workspace-handoff > div:nth-child(2n) {
+  border-right: 0;
+}
+.stApp .eu-workspace-handoff > div:nth-last-child(-n+2) {
+  border-bottom: 0;
+}
+.stApp .eu-workspace-handoff b {
+  display: block;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.stApp [class*="st-key-eu_workspace_status_actions"] {
+  margin: 8px 0 28px !important;
+}
+.stApp [class*="st-key-eu_workspace_status_actions"] .stButton > button {
+  min-height: 42px;
+  border-radius: var(--r-2);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.stApp .eu-state-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--hair);
+}
+.stApp .eu-state-preview-icon {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+  color: var(--ink-3);
+}
+.stApp .eu-state-preview-head h2 {
+  margin: 0 0 3px;
+  font-size: 15px !important;
+  font-weight: 650 !important;
+}
+.stApp .eu-state-preview-head p {
+  margin: 0;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.stApp [class*="st-key-eu_states_controls"] {
+  margin: 0 0 22px !important;
+  padding: 16px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--shadow-1) !important;
+}
+.stApp [class*="st-key-eu_states_controls"] .eu-states-control-label {
+  margin: 6px 0 8px;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.stApp [class*="st-key-eu_states_controls"] .stButton > button {
+  min-height: 40px;
+  border-radius: var(--r-2);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+.stApp [class*="st-key-eu_states_controls"] .stButton > button:not([kind="primary"]) {
+  border-color: var(--hair);
+  background: var(--surface-2);
+  color: var(--ink-3);
+}
+.stApp [class*="st-key-eu_states_controls"] .stButton > button[kind="primary"] {
+  background: var(--ink);
+  color: white;
+}
+.stApp .eu-state-hero {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  padding: 34px 28px;
+  border: 1px dashed var(--hair-2);
+  border-radius: var(--r-3);
+  background: var(--surface-2);
+  text-align: center;
+}
+.stApp .eu-state-hero.solid {
+  border-style: solid;
+}
+.stApp .eu-state-hero .glyph {
+  width: 50px;
+  height: 50px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-2);
+  background:
+    linear-gradient(90deg, transparent 46%, color-mix(in oklab, var(--accent) 32%, transparent) 47% 53%, transparent 54%),
+    linear-gradient(0deg, transparent 46%, color-mix(in oklab, var(--accent) 32%, transparent) 47% 53%, transparent 54%),
+    var(--accent-soft);
+  box-shadow: inset 0 0 0 8px color-mix(in oklab, var(--accent-soft) 58%, white);
+}
+.stApp .eu-state-hero.error .glyph {
+  border-color: color-mix(in oklab, var(--bad) 38%, white);
+  background:
+    linear-gradient(45deg, transparent 45%, color-mix(in oklab, var(--bad) 62%, transparent) 46% 54%, transparent 55%),
+    linear-gradient(-45deg, transparent 45%, color-mix(in oklab, var(--bad) 62%, transparent) 46% 54%, transparent 55%),
+    color-mix(in oklab, var(--bad-soft) 78%, white);
+}
+.stApp .eu-state-hero.nodata .glyph {
+  border-color: color-mix(in oklab, var(--warn) 38%, white);
+  background:
+    radial-gradient(circle at 50% 50%, color-mix(in oklab, var(--warn) 58%, transparent) 0 4px, transparent 5px),
+    color-mix(in oklab, var(--warn-soft) 78%, white);
+}
+.stApp .eu-state-hero .st-t {
+  max-width: 620px;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.stApp .eu-state-hero .st-d {
+  max-width: 680px;
+  color: var(--ink-3);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.stApp .filter-recap {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.stApp .eu-state-chip {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+.stApp .eu-state-chip.solid {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.stApp .detail-box {
+  width: min(100%, 720px);
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: color-mix(in oklab, var(--ink) 92%, white);
+  color: rgba(255, 255, 255, .86);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  text-align: left;
+}
+.stApp .detail-box span {
+  display: block;
+}
+.stApp .detail-box .ln-key {
+  color: #b8ecdd;
+}
+.stApp .detail-box .ln-bad {
+  color: #ffc8c5;
+}
+.stApp .gate-block {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface-2);
+}
+.stApp .eu-state-callout.warn {
+  border-color: color-mix(in oklab, var(--warn) 34%, white);
+  background: color-mix(in oklab, var(--warn-soft) 76%, white);
+  color: #7b560f;
+}
+.stApp .checks {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+.stApp .check-row {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--hair);
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.stApp .check-row:last-child {
+  border-bottom: 0;
+}
+.stApp .check-row .grow {
+  flex: 1;
+}
+.stApp .check-row em {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+.stApp .check-mk {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--hair-2);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.stApp .check-row.ok .check-mk {
+  border-color: color-mix(in oklab, var(--ok) 48%, white);
+  background:
+    radial-gradient(circle at 50% 50%, var(--ok) 0 4px, transparent 5px),
+    color-mix(in oklab, var(--ok-soft) 76%, white);
+}
+.stApp .check-row.pending .check-mk {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--warn) 48%, white);
+}
+.stApp .ok-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in oklab, var(--ok) 34%, white);
+  border-radius: var(--r-2);
+  background: color-mix(in oklab, var(--ok-soft) 76%, white);
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.stApp .ok-banner strong {
+  color: var(--ink);
+}
+.stApp .ok-banner .mk {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 50%, var(--ok) 0 5px, transparent 6px),
+    white;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ok) 38%, white);
+}
+.stApp .st-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+.stApp .st-stats .stat {
+  min-height: 88px;
+  padding: 16px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+.stApp .st-stats .stat.ok {
+  border-color: color-mix(in oklab, var(--ok) 30%, white);
+  background: color-mix(in oklab, var(--ok-soft) 78%, white);
+}
+.stApp .st-stats .stat.accent {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.stApp .st-stats .label {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+.stApp .st-stats .val {
+  margin-top: 8px;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+}
+.stApp .eu-state-spinner {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border: 2px solid var(--hair-2);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+}
+.stApp .eu-state-progress {
+  height: 4px;
+  margin: 0 28px 20px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--hair);
+}
+.stApp .eu-state-progress span {
+  display: block;
+  width: 38%;
+  height: 100%;
+  margin-left: 56%;
+  border-radius: inherit;
+  background: var(--ink);
+}
+.stApp .eu-state-primitive-head {
+  margin-top: 34px;
+}
+.stApp .eu-state-primitive-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0 0 28px;
+}
+.stApp .eu-state-primitive-card {
+  min-height: 142px;
+  display: grid;
+  align-content: center;
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+.stApp .eu-state-primitive-card > span {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.stApp .eu-state-primitive-inline,
+.stApp .eu-state-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.stApp .eu-state-primitive-inline b {
+  color: var(--ink-3);
+  font-size: 14px;
+  font-weight: 500;
+}
+.stApp .eu-state-spinner.ghost {
+  border-top-color: var(--hair-2);
+}
+.stApp .eu-state-progress.primitive {
+  margin: 0;
+}
+.stApp .eu-state-skel-lines {
+  display: grid;
+  gap: 10px;
+}
+.stApp .eu-state-skel-lines i {
+  display: block;
+  height: 13px;
+  border-radius: 999px;
+  background: var(--hair);
+}
+.stApp .eu-state-skel-lines i:nth-child(1) {
+  width: 78%;
+}
+.stApp .eu-state-skel-lines i:nth-child(2) {
+  width: 58%;
+}
+.stApp .eu-state-skel-lines i:nth-child(3) {
+  width: 44%;
+}
+.stApp .eu-state-status-row b {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--hair-2);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 650;
+}
+.stApp .eu-state-status-row b::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.stApp .eu-state-status-row .passed {
+  border-color: color-mix(in oklab, var(--ok) 46%, white);
+  background: color-mix(in oklab, var(--ok-soft) 70%, white);
+  color: #3d8858;
+}
+.stApp .eu-state-status-row .blocked {
+  border-color: color-mix(in oklab, var(--warn) 42%, white);
+  background: color-mix(in oklab, var(--warn-soft) 72%, white);
+  color: #8f5f10;
+}
+.stApp .eu-state-status-row .error {
+  border-color: color-mix(in oklab, var(--bad) 42%, white);
+  background: color-mix(in oklab, var(--bad-soft) 76%, white);
+  color: #b34a47;
+}
+.stApp .eu-state-status-row .queued {
+  border-style: dashed;
+  color: var(--ink-4);
+}
+.stApp .eu-state-callout.ok {
+  border-color: color-mix(in oklab, var(--ok) 34%, white);
+  background: color-mix(in oklab, var(--ok-soft) 75%, white);
+}
+.stApp .eu-state-callout.bad {
+  border-color: color-mix(in oklab, var(--bad) 34%, white);
+  background: color-mix(in oklab, var(--bad-soft) 78%, white);
+}
+
+/* Moved from shell_overrides.css: Workspace States mobile rules split from mixed media block */
+@media (max-width: 780px) {
+  .stApp .eu-state-preview-head,
+  .stApp .eu-state-loading-row,
+  .stApp .eu-state-pills {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .stApp .eu-state-primitive-grid {
+    grid-template-columns: 1fr;
+  }
+  .stApp .eu-workspace-session-strip {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+  }
+  .stApp .eu-workspace-session-strip em {
+    max-width: 100%;
+    text-align: left;
+  }
+  .stApp .eu-workspace-state-list,
+  .stApp .eu-workspace-flow,
+  .stApp .eu-workspace-handoff {
+    grid-template-columns: 1fr;
+  }
+  .stApp .eu-workspace-state-ledger-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .stApp .eu-workspace-state-row {
+    min-height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--hair);
+  }
+  .stApp .eu-workspace-state-row:last-child {
+    border-bottom: 0;
+  }
+  .stApp .eu-workspace-flow {
+    gap: 8px;
+    padding: 12px;
+  }
+  .stApp .eu-workspace-flow-step,
+  .stApp .eu-workspace-flow-step:first-child,
+  .stApp .eu-workspace-flow-step:last-child {
+    min-height: auto;
+    border: 1px solid var(--hair);
+    border-radius: var(--r-2);
+  }
+  .stApp .eu-workspace-card-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .stApp .eu-workspace-handoff > div,
+  .stApp .eu-workspace-handoff > div:nth-child(2n),
+  .stApp .eu-workspace-handoff > div:nth-last-child(-n+2) {
+    border-right: 0;
+    border-bottom: 1px solid var(--hair);
+  }
+  .stApp .eu-workspace-handoff > div:last-child {
+    border-bottom: 0;
+  }
+}
+
+/* Moved from alignment.css: Workspace States reference route parity */
+/* Workspace States · reference route parity. */
+[data-testid="stSidebar"] .eu-states-rail,
+[data-testid="stSidebar"] .eu-states-rail * {
+  box-sizing: border-box !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail {
+  width: 247px !important;
+  margin-left: -6px !important;
+  padding: 2px 16px 8px !important;
+  transform: translateY(3.125px) !important;
+}
+[data-testid="stSidebar"] .eu-states-rail-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  margin: 10px 0 8px !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: .08em !important;
+  text-transform: uppercase !important;
+}
+[data-testid="stSidebar"] .eu-states-rail-head b {
+  min-width: 24px !important;
+  height: 20px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: 999px !important;
+  background: var(--surface) !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+}
+[data-testid="stSidebar"] .eu-states-rail-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  min-height: 17.25px !important;
+  color: var(--ink-3) !important;
+  font-size: 11.5px !important;
+  line-height: 17.25px !important;
+}
+[data-testid="stSidebar"] .eu-states-rail-row .ico {
+  width: 14px !important;
+  height: 14px !important;
+  flex: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: currentColor !important;
+}
+[data-testid="stSidebar"] .eu-states-rail-row .ico svg {
+  width: 13px !important;
+  height: 13px !important;
+}
+[data-testid="stSidebar"] .eu-states-rail-row.bad {
+  color: var(--bad) !important;
+}
+[data-testid="stSidebar"] .eu-states-rail-row.warn {
+  color: oklch(50% 0.11 70) !important;
+}
+[data-testid="stSidebar"] .eu-states-rail-row.ok {
+  color: var(--ok) !important;
+}
+[data-testid="stSidebar"] .eu-states-rail-principles {
+  margin: 16px 0 8px !important;
+  padding: 0 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 0 18px !important;
+  padding: 0 !important;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: wrap !important;
+  gap: 14px !important;
+  width: 100% !important;
+  height: 116px !important;
+  margin: 0 !important;
+  padding: 12px 14px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+  color: var(--ink) !important;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-group {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-lbl {
+  margin-right: -6px !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.08em !important;
+  line-height: 15px !important;
+  text-transform: uppercase !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .st-divider {
+  width: 1px !important;
+  align-self: stretch !important;
+  margin: -4px 2px !important;
+  background: var(--hair) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .grow {
+  flex: 1 1 auto !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg {
+  display: inline-flex !important;
+  gap: 3px !important;
+  padding: 3px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface-2) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  height: 30px !important;
+  padding: 0 16px !important;
+  border: 0 !important;
+  border-radius: var(--r-1) !important;
+  background: transparent !important;
+  color: var(--ink-3) !important;
+  font: inherit !important;
+  font-size: 12.75px !important;
+  font-weight: 500 !important;
+  line-height: 19.125px !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a.active {
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  box-shadow: var(--sh-1) !important;
+  font-weight: 600 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a svg {
+  width: 14px !important;
+  height: 14px !important;
+  flex: none !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg.state a svg {
+  width: 13px !important;
+  height: 13px !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] {
+  margin: 7px 0 0 !important;
+  padding: 12px 14px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  gap: 0 !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head .eyebrow {
+  margin-bottom: 0 !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: .08em !important;
+  text-transform: uppercase !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head h1 {
+  margin: 8px 0 0 !important;
+  padding: 0 !important;
+  font-size: 25px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em !important;
+  line-height: 1.15 !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head p {
+  max-width: 70ch !important;
+  margin: 7px 0 18px !important;
+  color: var(--ink-3) !important;
+  font-size: 13.5px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] > [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .eu-states-control-label {
+  margin: 0 !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  letter-spacing: .08em !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] [data-testid="stHorizontalBlock"] {
+  gap: 3px !important;
+  min-height: 38px !important;
+  padding: 3px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface-2) !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] > [data-testid="stHorizontalBlock"]:first-child {
+  min-height: 52px !important;
+  height: 52px !important;
+  align-items: flex-start !important;
+  gap: 14px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] > [data-testid="stHorizontalBlock"]:first-child [data-testid="stVerticalBlock"] {
+  gap: 6px !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] [data-testid="stHorizontalBlock"]:has(.eu-states-control-divider) {
+  align-items: flex-end !important;
+  gap: 14px !important;
+  min-height: 52px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .eu-states-control-divider {
+  width: 1px !important;
+  align-self: stretch !important;
+  height: auto !important;
+  min-height: 38px !important;
+  margin: -4px 2px !important;
+  background: var(--hair) !important;
+  border-left: 0 !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] [data-testid="stHorizontalBlock"]:has([class*="st-key-_eu_states_ctx_"]),
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] [data-testid="stHorizontalBlock"]:has([class*="st-key-_eu_states_mode_"]),
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] [data-testid="stHorizontalBlock"]:has([class*="st-key-_eu_states_state_"]) {
+  gap: 3px !important;
+  min-height: 38px !important;
+  padding: 3px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface-2) !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] [data-testid="stColumn"] {
+  padding: 0 !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .stButton {
+  margin: 0 !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .stButton > button {
+  height: 30px !important;
+  min-height: 30px !important;
+  padding: 0 16px !important;
+  border: 0 !important;
+  border-radius: var(--r-1) !important;
+  background: transparent !important;
+  color: var(--ink-3) !important;
+  -webkit-text-fill-color: var(--ink-3) !important;
+  box-shadow: none !important;
+  font: inherit !important;
+  font-size: 12.75px !important;
+  font-weight: 500 !important;
+  line-height: 1.5 !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .stButton > button[kind="primary"] {
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+  box-shadow: var(--sh-1) !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .stButton > button p {
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
+  font: inherit !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .stButton > button[kind="primary"] [data-testid="stMarkdownContainer"] p,
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .stButton > button[kind="primary"] p {
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .stButton > button[kind="secondary"] [data-testid="stMarkdownContainer"] p,
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .stButton > button[kind="secondary"] p {
+  color: var(--ink-3) !important;
+  -webkit-text-fill-color: var(--ink-3) !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-preview-card {
+  margin-top: 16px !important;
+  border-radius: var(--r-4) !important;
+  box-shadow: var(--sh-1) !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 1.5 !important;
+  position: relative !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-preview-head {
+  min-height: 66.8px !important;
+  padding: 14px 18px !important;
+  gap: 12px !important;
+  background: color-mix(in srgb, var(--surface-2) 45%, var(--surface)) !important;
+  color: var(--ink) !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-preview-icon {
+  width: 30px !important;
+  height: 30px !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface-3) !important;
+  color: var(--ink-3) !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-preview-icon svg {
+  width: 14px !important;
+  height: 14px !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-preview-head h2 {
+  margin: 0 !important;
+  padding: 0 !important;
+  font-size: 13.5px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
+  line-height: 1.2 !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-preview-head p {
+  margin-top: 1px !important;
+  padding: 0 !important;
+  font-size: 11px !important;
+  color: var(--ink-4) !important;
+  line-height: 1.25 !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-pills {
+  gap: 7px !important;
+  margin-left: auto !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-pills .eu-pill {
+  height: 22px !important;
+  padding: 1px 8px !important;
+  font-size: 11px !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad {
+  padding: 22px !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-preview-card:has(.ok-banner) .eu-state-body-pad {
+  padding-bottom: 22px !important;
+}
+.stApp:has(.eu-states-reference-head) .ok-banner {
+  margin-bottom: 14px !important;
+  padding: 11px 14px !important;
+  font-size: 12px !important;
+  line-height: 1.45 !important;
+  align-items: center !important;
+}
+.stApp:has(.eu-states-reference-head) .ok-banner .mk {
+  width: 22px !important;
+  height: 22px !important;
+}
+.stApp:has(.eu-states-reference-head) .st-stats {
+  gap: 12px !important;
+  margin: 0 0 16px !important;
+}
+.stApp:has(.eu-states-reference-head) .st-stats .stat,
+.stApp:has(.eu-states-reference-head) .st-stats .stat.ok,
+.stApp:has(.eu-states-reference-head) .st-stats .stat.accent {
+  min-height: 80px !important;
+  padding: 13px 16px !important;
+  border: 1px solid var(--hair) !important;
+  border-left: 3px solid var(--accent) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-states-reference-head) .st-stats .stat.ok {
+  border-left-color: var(--ok) !important;
+}
+.stApp:has(.eu-states-reference-head) .st-stats .label {
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  letter-spacing: .07em !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-states-reference-head) .st-stats .val {
+  margin-top: 6px !important;
+  font-size: 26px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.02em !important;
+  line-height: 1.05 !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap {
+  width: 100% !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap .eu-table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  table-layout: auto !important;
+  font-size: 12.75px !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th {
+  padding: 10px 14px !important;
+  border-bottom: 1px solid var(--hair-2) !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  letter-spacing: .06em !important;
+  text-align: left !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th.num {
+  text-align: right !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td {
+  height: auto !important;
+  padding: 9px 14px !important;
+  border-bottom: 1px solid var(--hair) !important;
+  color: var(--ink-2) !important;
+  font-size: 12.75px !important;
+  line-height: 1.5 !important;
+  letter-spacing: -0.005em !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td.key {
+  color: var(--ink) !important;
+  font-weight: 500 !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td.num {
+  color: var(--ink) !important;
+  font-family: var(--font-mono) !important;
+  text-align: right !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap tr:last-child td {
+  border-bottom: 0 !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-state-action-slot {
+  height: 34px !important;
+  margin-top: 0 !important;
+}
+.stApp:has(.eu-states-reference-head) .st-toast {
+  position: absolute !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  z-index: 2 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 11px !important;
+  max-width: 320px !important;
+  width: 240px !important;
+  min-height: 58px !important;
+  padding: 11px 14px 11px 12px !important;
+  border-radius: var(--r-2) !important;
+  background: var(--ink) !important;
+  color: #fff !important;
+  box-shadow: var(--sh-3) !important;
+}
+.stApp:has(.eu-states-reference-head) .st-toast .mk {
+  width: 22px !important;
+  height: 22px !important;
+  border-radius: 999px !important;
+  flex: none !important;
+  background: rgba(255,255,255,.14) !important;
+  color: oklch(78% 0.13 150) !important;
+}
+.stApp:has(.eu-states-reference-head) .st-toast .tt {
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  line-height: 1.2 !important;
+}
+.stApp:has(.eu-states-reference-head) .st-toast .td {
+  margin-top: 1px !important;
+  color: rgba(255,255,255,.6) !important;
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+}
+.stApp:has(.eu-states-reference-head) .st-toast .x {
+  color: rgba(255,255,255,.5) !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) {
+  position: relative !important;
+  z-index: 4 !important;
+  width: calc(100% - 44px) !important;
+  margin: -56px 22px 6px !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) .eu-states-preview-actions-success {
+  display: none !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) [data-testid="stHorizontalBlock"] {
+  gap: 8px !important;
+  align-items: center !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) .stButton > button,
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) [data-testid="stDownloadButton"] > button {
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 0 14px !important;
+  border-radius: var(--r-2) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) .stButton > button[kind="primary"] {
+  background: var(--ink) !important;
+  border-color: var(--ink) !important;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-states-overview-head {
+  margin-top: 28px !important;
+}
+.stApp:has(.eu-states-reference-head) .eu-states-overview-head,
+.stApp:has(.eu-states-reference-head) .eu-workspace-status-shell,
+.stApp:has(.eu-states-reference-head) [class*="st-key-eu_workspace_status_actions"],
+.stApp:has(.eu-states-reference-head) .eu-state-primitive-head,
+.stApp:has(.eu-states-reference-head) .eu-state-primitive-grid {
+  display: none !important;
+}
+
+/* Moved from alignment.css: Workspace States EOF detail/table residuals */
+/* EOF final: detail-box mono spacing matches states.css/app.css rendering. */
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box {
+  letter-spacing: -0.0675px !important;
+}
+
+/* EOF final: detail-box children inherit the design mono stack. */
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box > span {
+  display: inline !important;
+  width: auto !important;
+  height: auto !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+  letter-spacing: inherit !important;
+}
+
+/* EOF final: remaining Workspace States inherited primitives. */
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .chip {
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .note.warn {
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .check-row {
+  color: #0E1116 !important;
+  border-top: 0 none #0E1116 !important;
+  font-size: 13.5px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table thead,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table tbody,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table tr {
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table tr {
+  border-top: 0 none #0E1116 !important;
+}
+
+/* Moved from alignment.css: Workspace States EOF stat/loading residuals */
+/* EOF final: Workspace States stat tiles inherit the design grid-item min-height. */
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-stats .stat.stat,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-stats .stat.stat.ok,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-stats .stat.stat.accent {
+  min-height: auto !important;
+}
+
+/* EOF final: Workspace States loading/blocked primitives beat shared app rules. */
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .spin {
+  color: var(--ink) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .note.warn .ico {
+  height: 21.125px !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .note.warn .t,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .note.warn .d {
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .checks .check-row.check-row {
+  min-height: auto !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.empty-state .st-d,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.nodata .st-d,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.error .st-d {
+  height: 39.5px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.empty-state,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.nodata,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.error {
+  box-sizing: border-box !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .checks.checks > .check-row.check-row {
+  min-height: auto !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .checks .check-row .check-mk {
+  width: 20px !important;
+  height: 20px !important;
+  border: 0 none currentColor !important;
+  border-color: currentColor !important;
+  grid-template-columns: 20px !important;
+}
+
+/* EOF final: Workspace States exact residual closure against states.css/app.css. */
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .st-divider {
+  min-height: auto !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .grow,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host {
+  color: #0E1116 !important;
+  border-color: #0E1116 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host {
+  font-size: 13.5px !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .ok-banner strong {
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head)
+  .eu-states-stage-host
+  .st-body
+  > .row.gap-8.mt-16
+  > span.mono:last-child {
+  width: auto !important;
+  height: 15.75px !important;
+  color: #9CA3AF !important;
+  border-color: #9CA3AF !important;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 10.5px !important;
+  font-weight: 400 !important;
+  line-height: 15.75px !important;
+  letter-spacing: -0.105px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) [data-testid="stSidebar"] .eu-states-rail-sep {
+  margin: 12px 16px !important;
+  transform: translate(0, -12.796875px) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) [data-testid="stSidebar"] div.rail-block.eu-states-rail {
+  min-height: auto !important;
+  margin-left: 0 !important;
+  transform: translate(0, -12.796875px) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .gate-block > .note,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .gate-block > .checks,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .gate-block > .gate-strip {
+  max-width: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .note.warn,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .gate-strip {
+  max-width: none !important;
+}
+
+/* Moved from classic_viz_overrides.css: Workspace States numeric parity pass */
+/* Final Workspace States numeric parity pass. */
+.stApp:has(.eu-states-reference-head) {
+  --eu-states-ref-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --eu-states-ref-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ink: #0E1116;
+  --ink-2: #2E3338;
+  --ink-3: #6B7280;
+  --ink-4: #9CA3AF;
+  --hair: #E7E5DF;
+  --hair-2: #DCDAD2;
+  --hair-3: #C8C6BD;
+  --surface: #FFFFFF;
+  --surface-2: #F4F4F0;
+  --surface-3: #EEEEE8;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head,
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference,
+.stApp:has(.eu-states-reference-head) .eu-state-preview-card,
+.stApp:has(.eu-states-reference-head) .eu-state-preview-card *,
+[data-testid="stSidebar"] .eu-states-rail,
+[data-testid="stSidebar"] .eu-states-rail *,
+[data-testid="stSidebar"] .eu-states-rail-sep {
+  font-family: var(--eu-states-ref-sans) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head {
+  height: 98px !important;
+  margin: 0 0 18px !important;
+  color: var(--ink) !important;
+  line-height: 20.25px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head h1 {
+  margin: 6px 0 0 !important;
+  font-family: var(--eu-states-ref-sans) !important;
+  line-height: 28.75px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head .lead,
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head p {
+  margin: 7px 0 13.5px !important;
+  font-family: var(--eu-states-ref-sans) !important;
+  line-height: 20.25px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head .eyebrow,
+.stApp:has(.eu-states-reference-head) .mono,
+.stApp:has(.eu-states-reference-head) .eu-state-preview-head .st-sub,
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th,
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td.num,
+[data-testid="stSidebar"] .eu-states-rail-head .t,
+[data-testid="stSidebar"] .eu-states-rail .eyebrow {
+  font-family: var(--eu-states-ref-mono) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference {
+  line-height: 20.25px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-preview-card {
+  height: 468.422px !important;
+  line-height: 20.25px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-preview-head {
+  height: 66.75px !important;
+  min-height: 66.75px !important;
+  font-family: var(--eu-states-ref-sans) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad {
+  height: 399.672px !important;
+  font-family: var(--eu-states-ref-sans) !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail-sep {
+  width: 215px !important;
+  height: 1px !important;
+  margin: 12px 0 12px 4px !important;
+  background: var(--hair) !important;
+  color: var(--ink) !important;
+  line-height: 20.25px !important;
+  transform: translate(-6px, -8.391px) !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail {
+  width: 247px !important;
+  margin-left: -6px !important;
+  padding: 2px 16px 8px !important;
+  color: var(--ink) !important;
+  line-height: 20.25px !important;
+  transform: translateY(-8.391px) !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail-head {
+  margin: 0 0 10px !important;
+  color: var(--ink) !important;
+  font-family: var(--eu-states-ref-sans) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  letter-spacing: -0.0675px !important;
+  line-height: 20.25px !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail-head .t {
+  color: var(--ink-4) !important;
+  font-family: var(--eu-states-ref-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.84px !important;
+  line-height: 15.75px !important;
+  text-transform: uppercase !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail-list {
+  color: var(--ink-3) !important;
+  font-size: 11.5px !important;
+  letter-spacing: -0.0675px !important;
+  line-height: 17.25px !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail-principles-list,
+[data-testid="stSidebar"] .eu-states-rail-principles-list .eu-states-rail-row {
+  color: var(--ink-3) !important;
+  font-size: 11px !important;
+  letter-spacing: -0.0675px !important;
+  line-height: 16.5px !important;
+  min-height: 16.5px !important;
+}
+
+/* Moved from classic_viz_overrides.css: Workspace States final parity/native route CSS */
+/* Workspace States final parity pass: values copied from EasyICU/css/tokens.css,
+   app.css and states.css. Kept at EOF to override the older Streamlit-control
+   adaptation above after the page moved to the reference DOM. */
+.stApp:has(.eu-states-reference-head) {
+  --eu-states-ref-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --eu-states-ref-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head,
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference,
+.stApp:has(.eu-states-reference-head) .eu-state-preview-card,
+.stApp:has(.eu-states-reference-head) .eu-state-preview-card *,
+[data-testid="stSidebar"] .eu-states-rail,
+[data-testid="stSidebar"] .eu-states-rail * {
+  box-sizing: border-box !important;
+  font-family: var(--eu-states-ref-sans) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .mono,
+.stApp:has(.eu-states-reference-head) .ctl-lbl,
+.stApp:has(.eu-states-reference-head) .st-sub,
+.stApp:has(.eu-states-reference-head) .st-stats .label,
+.stApp:has(.eu-states-reference-head) .st-stats .val,
+.stApp:has(.eu-states-reference-head) .eu-table th,
+.stApp:has(.eu-states-reference-head) .eu-table td.num,
+.stApp:has(.eu-states-reference-head) .eu-table .num,
+[data-testid="stSidebar"] .eu-states-rail .rail-head .t,
+[data-testid="stSidebar"] .eu-states-rail .eyebrow {
+  font-family: var(--eu-states-ref-mono) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 0 18px !important;
+  padding: 0 !important;
+  color: #0E1116 !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head .eyebrow {
+  margin: 0 !important;
+  color: #9CA3AF !important;
+  font-family: var(--eu-states-ref-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 15.75px !important;
+  letter-spacing: 0.84px !important;
+  text-transform: uppercase !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head h1 {
+  display: block !important;
+  width: 100% !important;
+  margin: 6px 0 0 !important;
+  padding: 0 !important;
+  color: #0E1116 !important;
+  font-size: 25px !important;
+  font-weight: 600 !important;
+  line-height: 28.75px !important;
+  letter-spacing: -0.5px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-reference-head .lead {
+  display: block !important;
+  width: 567px !important;
+  max-width: 70ch !important;
+  margin: 7px 0 13.5px !important;
+  padding: 0 !important;
+  color: #6B7280 !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: wrap !important;
+  gap: 14px !important;
+  width: 100% !important;
+  height: 116px !important;
+  margin: 0 !important;
+  padding: 12px 14px !important;
+  border: 1px solid #E7E5DF !important;
+  border-radius: 10px !important;
+  background: #FFFFFF !important;
+  color: #0E1116 !important;
+  box-shadow: 0 1px 0 rgba(14,17,22,0.04), 0 1px 2px rgba(14,17,22,0.04) !important;
+  font-size: 13.5px !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-group {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-lbl {
+  margin: 0 -6px 0 0 !important;
+  color: #9CA3AF !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 15px !important;
+  letter-spacing: 0.8px !important;
+  text-transform: uppercase !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .st-divider {
+  width: 1px !important;
+  align-self: stretch !important;
+  margin: -4px 2px !important;
+  background: #E7E5DF !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .grow {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg {
+  display: inline-flex !important;
+  gap: 3px !important;
+  height: 38px !important;
+  margin: 0 !important;
+  padding: 3px !important;
+  border: 1px solid #E7E5DF !important;
+  border-radius: 6px !important;
+  background: #F4F4F0 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  height: 30px !important;
+  margin: 0 !important;
+  padding: 0 16px !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  color: #6B7280 !important;
+  box-shadow: none !important;
+  font: inherit !important;
+  font-size: 12.75px !important;
+  font-weight: 500 !important;
+  line-height: 19.125px !important;
+  letter-spacing: normal !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a.active {
+  background: #FFFFFF !important;
+  color: #0E1116 !important;
+  box-shadow: 0 1px 0 rgba(14,17,22,0.04), 0 1px 2px rgba(14,17,22,0.04) !important;
+  font-weight: 600 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a svg {
+  width: 14px !important;
+  height: 14px !important;
+  flex: none !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg.state a svg {
+  width: 13px !important;
+  height: 13px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-preview-card {
+  position: relative !important;
+  margin: 16px 0 0 !important;
+  border: 1px solid #E7E5DF !important;
+  border-radius: 14px !important;
+  background: #FFFFFF !important;
+  color: #0E1116 !important;
+  box-shadow: 0 1px 0 rgba(14,17,22,0.04), 0 1px 2px rgba(14,17,22,0.04) !important;
+  overflow: hidden !important;
+  font-size: 13.5px !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-preview-head {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 14px 18px !important;
+  border-bottom: 1px solid #E7E5DF !important;
+  background: color-mix(in srgb, #F4F4F0 45%, #FFFFFF) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-preview-icon {
+  display: grid !important;
+  place-items: center !important;
+  width: 30px !important;
+  height: 30px !important;
+  flex: none !important;
+  border-radius: 6px !important;
+  background: #EEEEE8 !important;
+  color: #6B7280 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-preview-icon svg {
+  width: 17px !important;
+  height: 17px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-preview-head .grow {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-preview-head .st-title {
+  display: block !important;
+  width: 100% !important;
+  height: 20.25px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  color: #0E1116 !important;
+  font-size: 13.5px !important;
+  font-weight: 600 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.135px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-preview-head .st-sub {
+  display: block !important;
+  width: 100% !important;
+  height: 16.5px !important;
+  margin: 1px 0 0 !important;
+  padding: 0 !important;
+  color: #9CA3AF !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  line-height: 16.5px !important;
+  letter-spacing: -0.11px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-pills {
+  display: flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  margin-left: auto !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-pills .pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  height: 23px !important;
+  padding: 0 9px !important;
+  border: 1px solid #DCDAD2 !important;
+  border-radius: 999px !important;
+  background: #FFFFFF !important;
+  color: #2E3338 !important;
+  font-size: 11.25px !important;
+  font-weight: 500 !important;
+  line-height: 16.875px !important;
+  letter-spacing: -0.0675px !important;
+  white-space: nowrap !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-pills .pill .dot {
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 50% !important;
+  background: #6B7280 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-pills .pill.demo {
+  color: oklch(38% 0.06 205) !important;
+  background: oklch(96% 0.02 205) !important;
+  border-color: oklch(86% 0.04 205) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-pills .pill.demo .dot {
+  background: oklch(55% 0.07 205) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-pills .pill.ok {
+  color: oklch(58% 0.10 150) !important;
+  background: oklch(96% 0.03 150) !important;
+  border-color: oklch(86% 0.05 150) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-pills .pill.ok .dot {
+  background: oklch(58% 0.10 150) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad {
+  padding: 22px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .ok-banner {
+  display: flex !important;
+  align-items: center !important;
+  gap: 11px !important;
+  margin: 0 !important;
+  padding: 11px 14px !important;
+  border: 1px solid oklch(88% 0.05 150) !important;
+  border-radius: 6px !important;
+  background: oklch(96% 0.03 150) !important;
+  color: #2E3338 !important;
+  font-size: 12.5px !important;
+  font-weight: 400 !important;
+  line-height: 18.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .ok-banner .mk {
+  display: grid !important;
+  place-items: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  flex: none !important;
+  border-radius: 50% !important;
+  background: #FFFFFF !important;
+  color: oklch(58% 0.10 150) !important;
+  box-shadow: none !important;
+}
+
+.stApp:has(.eu-states-reference-head) .ok-banner .mk svg {
+  width: 13px !important;
+  height: 13px !important;
+  stroke-width: 2.8px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .ok-banner strong {
+  color: #2E3338 !important;
+  font-weight: 600 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .ok-banner span:not(.mk) {
+  color: #6B7280 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-stats {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 12px !important;
+  margin: 16px 0 0 !important;
+  padding: 0 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-stats .stat,
+.stApp:has(.eu-states-reference-head) .st-stats .stat.ok,
+.stApp:has(.eu-states-reference-head) .st-stats .stat.accent {
+  min-height: 0 !important;
+  height: auto !important;
+  padding: 13px 15px !important;
+  border: 1px solid #E7E5DF !important;
+  border-left: 3px solid oklch(55% 0.07 205) !important;
+  border-radius: 6px !important;
+  background: #FFFFFF !important;
+  box-shadow: none !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-stats .stat.ok {
+  border-left-color: oklch(58% 0.10 150) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-stats .label {
+  color: #9CA3AF !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 15px !important;
+  letter-spacing: 0.7px !important;
+  text-transform: uppercase !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-stats .val {
+  margin: 6px 0 0 !important;
+  color: #0E1116 !important;
+  font-size: 26px !important;
+  font-weight: 500 !important;
+  line-height: 27.3px !important;
+  letter-spacing: -0.52px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap {
+  width: 100% !important;
+  margin: 16px 0 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid #E7E5DF !important;
+  border-radius: 10px !important;
+  background: #FFFFFF !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap .eu-table {
+  width: 100% !important;
+  margin: 0 !important;
+  border-collapse: collapse !important;
+  table-layout: auto !important;
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th,
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td {
+  border-top: 0 !important;
+  border-right: 0 !important;
+  border-left: 0 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th {
+  padding: 10px 14px !important;
+  border-bottom: 1px solid #DCDAD2 !important;
+  background: #F4F4F0 !important;
+  color: #9CA3AF !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 15px !important;
+  letter-spacing: 0.6px !important;
+  text-align: left !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th.num {
+  text-align: right !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td {
+  padding: 9px 14px !important;
+  border-bottom: 1px solid #E7E5DF !important;
+  color: #2E3338 !important;
+  font-size: 12.75px !important;
+  font-weight: 400 !important;
+  line-height: 19.125px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td.key {
+  color: #0E1116 !important;
+  font-weight: 500 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td.num {
+  color: #0E1116 !important;
+  text-align: right !important;
+  font-feature-settings: "tnum" !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap tr:last-child td {
+  border-bottom: 0 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-action-slot {
+  height: 34px !important;
+  margin-top: 16px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-toast {
+  position: absolute !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  z-index: 5 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 11px !important;
+  width: auto !important;
+  max-width: 320px !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 11px 14px 11px 12px !important;
+  border-radius: 6px !important;
+  background: #0E1116 !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 12px 32px rgba(14,17,22,0.10) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-toast .mk {
+  display: grid !important;
+  place-items: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  flex: none !important;
+  border-radius: 50% !important;
+  background: rgba(255,255,255,.14) !important;
+  color: oklch(78% 0.13 150) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-toast .mk svg {
+  width: 13px !important;
+  height: 13px !important;
+  stroke-width: 2.8px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-toast .tt {
+  color: #FFFFFF !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  line-height: 15px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-toast .td {
+  margin-top: 1px !important;
+  color: rgba(255,255,255,.6) !important;
+  font-size: 11px !important;
+  line-height: 13.75px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-toast .x {
+  display: grid !important;
+  place-items: center !important;
+  margin-left: 4px !important;
+  color: rgba(255,255,255,.5) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-toast .x svg {
+  width: 12px !important;
+  height: 12px !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail-sep {
+  height: 1px !important;
+  margin: 12px 16px !important;
+  background: #E7E5DF !important;
+}
+
+[data-testid="stSidebar"] .rail-block.eu-states-rail {
+  width: 247px !important;
+  margin: 0 0 0 -6px !important;
+  padding: 2px 16px 8px !important;
+  color: #0E1116 !important;
+  background: transparent !important;
+  font-size: 13.5px !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .rail-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  margin: 0 0 10px !important;
+  padding: 0 !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .rail-head .t,
+[data-testid="stSidebar"] .eu-states-rail .eyebrow {
+  color: #9CA3AF !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 15.75px !important;
+  letter-spacing: 0.84px !important;
+  text-transform: uppercase !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .rail-head .pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  height: 20px !important;
+  padding: 0 9px !important;
+  border: 1px solid #DCDAD2 !important;
+  border-radius: 999px !important;
+  background: #FFFFFF !important;
+  color: #2E3338 !important;
+  font-size: 11.25px !important;
+  font-weight: 500 !important;
+  line-height: 16.875px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .col {
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .gap-6 {
+  gap: 6px !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .row {
+  display: flex !important;
+  align-items: center !important;
+  color: #6B7280 !important;
+  font-size: 11.5px !important;
+  font-weight: 400 !important;
+  line-height: 17.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .row svg {
+  width: 13px !important;
+  height: 13px !important;
+  flex: none !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .row.bad {
+  color: oklch(56% 0.13 25) !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .row.warn {
+  color: oklch(50% 0.11 70) !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .row.ok {
+  color: oklch(58% 0.10 150) !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .mt-16 {
+  margin-top: 16px !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .eu-states-rail-principles {
+  margin-bottom: 8px !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .eu-states-rail-principles-list .row {
+  font-size: 11px !important;
+  line-height: 16.5px !important;
+}
+
+/* Workspace States numeric cleanup after Playwright computed-style audit. */
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference *,
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-group,
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg,
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a {
+  font-family: var(--eu-states-ref-sans) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-lbl {
+  font-family: var(--eu-states-ref-mono) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-preview-icon {
+  grid-template-columns: 30px !important;
+  justify-content: normal !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-pills {
+  gap: 12px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-pills .pill.demo {
+  color: oklch(40% 0.07 205) !important;
+  border-color: oklch(86% 0.045 205) !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap tr {
+  border-top: 0 !important;
+  border-bottom: 0 !important;
+}
+
+.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td {
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-toast {
+  width: 240.344px !important;
+  height: 58.25px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-toast .tt {
+  line-height: 18.75px !important;
+}
+
+.stApp:has(.eu-states-reference-head) .st-toast .td {
+  line-height: 16.5px !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail-sep {
+  color: #0E1116 !important;
+  line-height: 20.25px !important;
+  transform: translate(-6px, -11.265625px) !important;
+}
+
+[data-testid="stSidebar"] .rail-block.eu-states-rail {
+  margin-left: 0 !important;
+  transform: translate(-6px, -11.265625px) !important;
+}
+
+[data-testid="stSidebar"] .eu-states-rail .rail-head {
+  text-transform: none !important;
+}
+
+.stApp:has(.eu-states-reference-head) .ok-banner .mk {
+  letter-spacing: -0.0675px !important;
+}
+
+/* Moved from classic_viz_overrides.css: Workspace States exact-value overrides */
+/* EOF: Workspace States exact-value overrides. */
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.empty-state > .glyph {
+  color: oklch(40% 0.07 205) !important;
+  border: 1px solid oklch(86% 0.045 205) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .spin.accent {
+  border-top-color: oklch(55% 0.075 205) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .load-strip > .grow > div:first-child {
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .load-strip > .grow > .mono {
+  font-size: 11px !important;
+  line-height: 16.5px !important;
+  letter-spacing: -0.11px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box span {
+  display: inline !important;
+  width: auto !important;
+  height: auto !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box span:not(.ln-key):not(.ln-bad) {
+  color: #6B7280 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row > span:nth-child(2) {
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.ok > span:nth-child(2) {
+  color: #0E1116 !important;
+  font-weight: 500 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.pending > span:nth-child(2) {
+  color: #6B7280 !important;
+  font-weight: 400 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row > span:last-child {
+  font-size: 10.5px !important;
+  line-height: 15.75px !important;
+  letter-spacing: -0.105px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.ok > span:last-child {
+  color: oklch(58% 0.10 150) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.pending > span:last-child {
+  color: #9CA3AF !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .gate-strip > .grow > div:first-child {
+  font-size: 13px !important;
+  line-height: 19.5px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .gate-strip > .grow > div:last-child {
+  font-size: 11.5px !important;
+  line-height: 17.25px !important;
+  letter-spacing: -0.0675px !important;
+  color: #6B7280 !important;
+}
+
+/* Moved from extract_overrides.css: Workspace States exact-value/stage CSS */
+/* EOF: Workspace States exact-value overrides. These must stay after the
+   source-page cleanup above because shell_overrides.css also has generic
+   .detail-box/.check-row/.mono rules. */
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.empty-state > .glyph {
+  color: oklch(40% 0.07 205) !important;
+  border: 1px solid oklch(86% 0.045 205) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .spin.accent {
+  border-top-color: oklch(55% 0.075 205) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .load-strip > .grow > div:first-child {
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .load-strip > .grow > .mono {
+  font-size: 11px !important;
+  line-height: 16.5px !important;
+  letter-spacing: -0.11px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box span {
+  display: inline !important;
+  width: auto !important;
+  height: auto !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+  letter-spacing: inherit !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box span:not(.ln-key):not(.ln-bad) {
+  color: #6B7280 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block {
+  display: block !important;
+  width: 620px !important;
+  max-width: 620px !important;
+  margin: 0 auto !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  gap: normal !important;
+  text-align: left !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .note.warn {
+  width: 620px !important;
+  max-width: 620px !important;
+  margin: 0 !important;
+  padding: 13px 15px !important;
+  border: 1px solid oklch(87% 0.06 75) !important;
+  border-radius: 10px !important;
+  background: oklch(96% 0.04 80) !important;
+  box-shadow: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 620px !important;
+  max-width: 620px !important;
+  margin-top: 16px !important;
+  border: 1px solid #E7E5DF !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+  overflow: hidden !important;
+  box-shadow: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row {
+  min-height: 0 !important;
+  height: auto !important;
+  padding: 11px 14px !important;
+  gap: 11px !important;
+  border-bottom: 1px solid #E7E5DF !important;
+  background: transparent !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row:last-child {
+  border-bottom: 0 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row > span:nth-child(2) {
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.ok > span:nth-child(2) {
+  color: #0E1116 !important;
+  font-weight: 500 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.pending > span:nth-child(2) {
+  color: #6B7280 !important;
+  font-weight: 400 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row > span:last-child {
+  font-size: 10.5px !important;
+  line-height: 15.75px !important;
+  letter-spacing: -0.105px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.ok > span:last-child {
+  color: oklch(58% 0.10 150) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.pending > span:last-child {
+  color: #9CA3AF !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .gate-strip {
+  display: flex !important;
+  align-items: center !important;
+  width: 620px !important;
+  max-width: 620px !important;
+  margin-top: 16px !important;
+  padding: 14px 16px !important;
+  gap: 14px !important;
+  border: 1px solid #DCDAD2 !important;
+  border-radius: 10px !important;
+  background: #F4F4F0 !important;
+  box-shadow: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .gate-strip > .grow > div:first-child {
+  font-size: 13px !important;
+  line-height: 19.5px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .gate-strip > .grow > div:last-child {
+  font-size: 11.5px !important;
+  line-height: 17.25px !important;
+  letter-spacing: -0.0675px !important;
+  color: #6B7280 !important;
+}
+
+/* Keep this at the actual end of the file: Workspace States must use the
+   design-state primitives instead of older card/gate compatibility rules. */
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.empty-state .glyph {
+  color: oklch(40% 0.07 205) !important;
+  border: 1px solid oklch(86% 0.045 205) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .spin.accent {
+  border-top-color: oklch(55% 0.075 205) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .load-strip > .grow > div:first-child {
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .load-strip > .grow > .mono {
+  font-size: 11px !important;
+  line-height: 16.5px !important;
+  letter-spacing: -0.11px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box span {
+  display: inline !important;
+  width: auto !important;
+  height: auto !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box span:not(.ln-key):not(.ln-bad) {
+  color: #6B7280 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block {
+  display: block !important;
+  width: 620px !important;
+  max-width: 620px !important;
+  margin: 0 auto !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  gap: normal !important;
+  text-align: left !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .note.warn {
+  width: 620px !important;
+  max-width: 620px !important;
+  margin: 0 !important;
+  padding: 13px 15px !important;
+  border: 1px solid oklch(87% 0.06 75) !important;
+  border-radius: 10px !important;
+  background: oklch(96% 0.04 80) !important;
+  box-shadow: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 620px !important;
+  max-width: 620px !important;
+  margin-top: 16px !important;
+  border: 1px solid #E7E5DF !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+  overflow: hidden !important;
+  box-shadow: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row {
+  min-height: 0 !important;
+  height: auto !important;
+  padding: 11px 14px !important;
+  gap: 11px !important;
+  border-bottom: 1px solid #E7E5DF !important;
+  background: transparent !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row > span:nth-child(2) {
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.ok > span:nth-child(2) {
+  color: #0E1116 !important;
+  font-weight: 500 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.pending > span:nth-child(2) {
+  color: #6B7280 !important;
+  font-weight: 400 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row > span:last-child {
+  font-size: 10.5px !important;
+  line-height: 15.75px !important;
+  letter-spacing: -0.105px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.ok > span:last-child {
+  color: oklch(58% 0.10 150) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row.pending > span:last-child {
+  color: #9CA3AF !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .checks > .check-row:last-child {
+  border-bottom: 0 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .gate-strip {
+  display: flex !important;
+  align-items: center !important;
+  width: 620px !important;
+  max-width: 620px !important;
+  margin-top: 16px !important;
+  padding: 14px 16px !important;
+  gap: 14px !important;
+  border: 1px solid #DCDAD2 !important;
+  border-radius: 10px !important;
+  background: #F4F4F0 !important;
+  box-shadow: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .gate-strip > .grow > div:first-child {
+  font-size: 13px !important;
+  line-height: 19.5px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body > .gate-block > .gate-strip > .grow > div:last-child {
+  font-size: 11.5px !important;
+  line-height: 17.25px !important;
+  letter-spacing: -0.0675px !important;
+  color: #6B7280 !important;
+}
+
+/* Workspace States native-action parity: values copied from
+   EasyICU/css/tokens.css, app.css, states.css, and screens.css after
+   moving the Streamlit page to the design stage DOM. */
+html body .stApp:has(.eu-states-reference-head) {
+  --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-cn: "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --bg: #FAFAF7;
+  --surface: #FFFFFF;
+  --surface-2: #F4F4F0;
+  --surface-3: #EEEEE8;
+  --ink: #0E1116;
+  --ink-2: #2E3338;
+  --ink-3: #6B7280;
+  --ink-4: #9CA3AF;
+  --hair: #E7E5DF;
+  --hair-2: #DCDAD2;
+  --hair-3: #C8C6BD;
+  --accent: oklch(55% 0.07 205);
+  --accent-ink: oklch(38% 0.06 205);
+  --accent-soft: oklch(96% 0.02 205);
+  --accent-border: oklch(86% 0.04 205);
+  --ok: oklch(58% 0.10 150);
+  --ok-soft: oklch(96% 0.03 150);
+  --warn: oklch(66% 0.12 75);
+  --warn-soft: oklch(96% 0.04 80);
+  --bad: oklch(56% 0.13 25);
+  --bad-soft: oklch(96% 0.03 25);
+  --info: oklch(55% 0.08 240);
+  --info-soft: oklch(96% 0.02 240);
+  --r-1: 4px;
+  --r-2: 6px;
+  --r-3: 10px;
+  --r-4: 14px;
+  --r-pill: 999px;
+  --sh-1: 0 1px 0 rgba(14,17,22,0.04), 0 1px 2px rgba(14,17,22,0.04);
+  --sh-2: 0 4px 12px rgba(14,17,22,0.06), 0 1px 0 rgba(14,17,22,0.04);
+  --sh-3: 0 12px 32px rgba(14,17,22,0.10);
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-reference-head,
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host *,
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference * {
+  box-sizing: border-box !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .mono,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .mono,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-sub,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .stat .label,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .stat .val,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .chip,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table th,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table td.num,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table .num,
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-lbl {
+  font-family: var(--font-mono) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-reference-head {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 0 18px !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-reference-head .eyebrow {
+  margin: 0 !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 15.75px !important;
+  letter-spacing: 0.84px !important;
+  text-transform: uppercase !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-reference-head h1 {
+  display: block !important;
+  margin: 6px 0 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-size: 25px !important;
+  font-weight: 600 !important;
+  line-height: 28.75px !important;
+  letter-spacing: -0.5px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-reference-head .lead {
+  display: block !important;
+  width: 567px !important;
+  max-width: 70ch !important;
+  margin: 7px 0 13.5px !important;
+  padding: 0 !important;
+  color: var(--ink-3) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: wrap !important;
+  gap: 14px !important;
+  width: 100% !important;
+  min-height: 0 !important;
+  height: auto !important;
+  margin: 0 !important;
+  padding: 12px 14px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  box-shadow: var(--sh-1) !important;
+  font-size: 13.5px !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-group {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-lbl {
+  margin: 0 -6px 0 0 !important;
+  color: var(--ink-4) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 15px !important;
+  letter-spacing: 0.8px !important;
+  text-transform: uppercase !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .st-divider {
+  width: 1px !important;
+  align-self: stretch !important;
+  min-height: 38px !important;
+  margin: -4px 2px !important;
+  background: var(--hair) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .grow,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .grow {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg {
+  display: inline-flex !important;
+  gap: 3px !important;
+  min-height: auto !important;
+  margin: 0 !important;
+  padding: 3px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface-2) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: normal !important;
+  gap: 7px !important;
+  height: 30px !important;
+  margin: 0 !important;
+  padding: 0 16px !important;
+  border: 0 !important;
+  border-radius: var(--r-1) !important;
+  background: transparent !important;
+  color: var(--ink-3) !important;
+  box-shadow: none !important;
+  font-size: 12.75px !important;
+  font-weight: 500 !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+  text-decoration: none !important;
+  text-align: center !important;
+  white-space: nowrap !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a.active {
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  box-shadow: var(--sh-1) !important;
+  font-weight: 600 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg.state a.active[data-state="error"] {
+  color: var(--bad) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg.state a.active[data-state="blocked"] {
+  color: oklch(48% 0.11 70) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg.state a.active[data-state="success"] {
+  color: var(--ok) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a svg {
+  width: 14px !important;
+  height: 14px !important;
+  flex: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg.state a svg {
+  width: 13px !important;
+  height: 13px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host {
+  display: block !important;
+  width: 100% !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-stage {
+  position: relative !important;
+  height: auto !important;
+  min-height: 0 !important;
+  margin: 16px 0 0 !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-4) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  box-shadow: var(--sh-1) !important;
+  overflow: hidden !important;
+  font-size: 13.5px !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-head {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  min-height: 0 !important;
+  height: auto !important;
+  margin: 0 !important;
+  padding: 14px 18px !important;
+  border-bottom: 1px solid var(--hair) !important;
+  background: color-mix(in srgb, var(--surface-2) 45%, var(--surface)) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-mark {
+  display: grid !important;
+  place-items: center !important;
+  width: 30px !important;
+  height: 30px !important;
+  flex: none !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface-3) !important;
+  color: var(--ink-3) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-mark svg {
+  width: 17px !important;
+  height: 17px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-title {
+  display: block !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-size: 13.5px !important;
+  font-weight: 600 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.135px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-sub {
+  display: block !important;
+  margin: 1px 0 0 !important;
+  padding: 0 !important;
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  line-height: 16.5px !important;
+  letter-spacing: -0.11px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body {
+  padding: 22px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .row {
+  display: flex !important;
+  align-items: center !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .wrap {
+  flex-wrap: wrap !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .gap-6 { gap: 6px !important; }
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .gap-8 { gap: 8px !important; }
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .mt-12 { margin-top: 12px !important; }
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .mt-16 { margin-top: 16px !important; }
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eyebrow {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 15.75px !important;
+  letter-spacing: 0.84px !important;
+  text-transform: uppercase !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  height: 34px !important;
+  margin: 0 !important;
+  padding: 0 14px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  box-shadow: none !important;
+  cursor: pointer !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 19.5px !important;
+  letter-spacing: -0.0675px !important;
+  text-decoration: none !important;
+  text-align: center !important;
+  white-space: nowrap !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .btn.primary {
+  border-color: var(--ink) !important;
+  background: var(--ink) !important;
+  color: #FFFFFF !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .btn.ghost {
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .btn.sm {
+  height: 28px !important;
+  padding: 0 10px !important;
+  font-size: 12.25px !important;
+  line-height: 18.375px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .btn.lg {
+  height: 44px !important;
+  padding: 0 20px !important;
+  font-size: 13.5px !important;
+  line-height: 20.25px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .btn[aria-disabled="true"] {
+  background: var(--surface-2) !important;
+  border-color: var(--hair) !important;
+  color: var(--ink-4) !important;
+  cursor: not-allowed !important;
+  pointer-events: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .btn svg {
+  flex: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  height: 23px !important;
+  margin: 0 !important;
+  padding: 0 9px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-pill) !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  font-size: 11.25px !important;
+  font-weight: 500 !important;
+  line-height: 16.875px !important;
+  letter-spacing: -0.0675px !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill .dot {
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 50% !important;
+  background: var(--ink-3) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.demo {
+  color: var(--accent-ink) !important;
+  background: var(--accent-soft) !important;
+  border-color: var(--accent-border) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.demo .dot {
+  background: var(--accent) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.real {
+  color: oklch(40% 0.10 30) !important;
+  background: oklch(96% 0.03 30) !important;
+  border-color: oklch(86% 0.06 30) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.real .dot {
+  background: oklch(58% 0.13 30) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.ok {
+  color: var(--ok) !important;
+  background: var(--ok-soft) !important;
+  border-color: oklch(86% 0.05 150) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.ok .dot {
+  background: var(--ok) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.warn {
+  color: oklch(48% 0.10 70) !important;
+  background: var(--warn-soft) !important;
+  border-color: oklch(86% 0.06 75) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.warn .dot {
+  background: var(--warn) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.bad {
+  color: var(--bad) !important;
+  background: var(--bad-soft) !important;
+  border-color: oklch(86% 0.06 25) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.bad .dot {
+  background: var(--bad) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.dashed {
+  border-style: dashed !important;
+  background: transparent !important;
+  color: var(--ink-3) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .chip {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  height: 24px !important;
+  padding: 0 9px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-pill) !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-2) !important;
+  font-size: 11.5px !important;
+  font-weight: 400 !important;
+  line-height: 17.25px !important;
+  letter-spacing: -0.115px !important;
+  white-space: nowrap !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .chip.solid {
+  background: var(--surface) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .sk {
+  background: var(--surface-2) !important;
+  background-image: linear-gradient(90deg, rgba(255,255,255,0) 0%, color-mix(in srgb, var(--hair) 70%, transparent) 50%, rgba(255,255,255,0) 100%) !important;
+  background-size: 200% 100% !important;
+  background-repeat: no-repeat !important;
+  border-radius: 5px !important;
+  animation: sk 1.5s linear infinite !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .sk-line { height: 11px !important; }
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .sk-line.sm { height: 9px !important; }
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .sk-stat {
+  padding: 13px 15px !important;
+  border: 1px solid var(--hair) !important;
+  border-left: 3px solid var(--hair-2) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .sk-table {
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .sk-trow {
+  display: grid !important;
+  grid-template-columns: 1.6fr 1fr 1fr 1fr 1fr !important;
+  align-items: center !important;
+  gap: 14px !important;
+  padding: 11px 14px !important;
+  border-bottom: 1px solid var(--hair) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .sk-trow:last-child {
+  border-bottom: 0 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .sk-trow.head {
+  background: var(--surface-2) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .indet {
+  position: relative !important;
+  height: 3px !important;
+  overflow: hidden !important;
+  border-radius: 2px !important;
+  background: var(--surface-3) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .indet::after {
+  content: "" !important;
+  position: absolute !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  width: 38% !important;
+  border-radius: 2px !important;
+  background: var(--ink) !important;
+  animation: indet 1.25s cubic-bezier(.5,0,.2,1) infinite !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .spin {
+  width: 16px !important;
+  height: 16px !important;
+  flex: none !important;
+  border: 2px solid var(--hair-2) !important;
+  border-top-color: var(--ink) !important;
+  border-radius: 50% !important;
+  animation: spin .7s linear infinite !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .spin.accent {
+  border-top-color: var(--accent) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .load-strip {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  padding: 12px 14px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface-2) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero {
+  padding: 48px 28px !important;
+  border: 1px dashed var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: color-mix(in srgb, var(--surface-2) 45%, var(--surface)) !important;
+  text-align: center !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.solid {
+  border-style: solid !important;
+  border-color: var(--hair) !important;
+  background: var(--surface) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero .glyph {
+  display: grid !important;
+  place-items: center !important;
+  width: 54px !important;
+  height: 54px !important;
+  margin: 0 auto 18px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface-3) !important;
+  color: var(--ink-3) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.empty-state .glyph {
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+  border-color: var(--accent-border) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.error .glyph {
+  background: var(--bad-soft) !important;
+  color: var(--bad) !important;
+  border-color: oklch(88% 0.05 25) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.blocked .glyph {
+  background: var(--warn-soft) !important;
+  color: oklch(50% 0.11 70) !important;
+  border-color: oklch(88% 0.06 75) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.success .glyph {
+  background: var(--ok-soft) !important;
+  color: var(--ok) !important;
+  border-color: oklch(88% 0.05 150) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero.nodata .glyph {
+  background: var(--surface-3) !important;
+  color: var(--ink-3) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero .st-t {
+  color: var(--ink) !important;
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  line-height: 24px !important;
+  letter-spacing: -0.16px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero .st-d {
+  max-width: 50ch !important;
+  margin: 7px auto 0 !important;
+  color: var(--ink-3) !important;
+  font-size: 12.75px !important;
+  line-height: 19.7625px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero .st-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-wrap: wrap !important;
+  gap: 10px !important;
+  margin-top: 22px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .state-hero .st-meta {
+  margin-top: 18px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .filter-recap {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  max-width: 560px !important;
+  margin: 16px auto 0 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box {
+  max-width: 540px !important;
+  margin: 18px auto 0 !important;
+  padding: 11px 13px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-3) !important;
+  font-size: 11px !important;
+  line-height: 17.6px !important;
+  text-align: left !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box .ln-bad {
+  color: var(--bad) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box .ln-key {
+  color: var(--ink-2) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .gate-block {
+  max-width: 620px !important;
+  margin: 0 auto !important;
+  text-align: left !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .note {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 12px !important;
+  padding: 13px 15px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .note.warn {
+  background: var(--warn-soft) !important;
+  border-color: oklch(87% 0.06 75) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .note .ico {
+  flex: none !important;
+  margin-top: 1px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .note.warn .ico {
+  color: oklch(50% 0.11 70) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .note .body {
+  flex: 1 !important;
+  min-width: 0 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .note .t {
+  color: var(--ink) !important;
+  font-weight: 600 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .note .d {
+  margin-top: 2px !important;
+  color: var(--ink-3) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .checks {
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .check-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 11px !important;
+  padding: 11px 14px !important;
+  border-bottom: 1px solid var(--hair) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .check-row:last-child {
+  border-bottom: 0 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .check-mk {
+  display: grid !important;
+  place-items: center !important;
+  width: 20px !important;
+  height: 20px !important;
+  flex: none !important;
+  border-radius: 50% !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .check-row.ok .check-mk {
+  background: var(--ok-soft) !important;
+  color: var(--ok) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .check-row.pending .check-mk {
+  background: var(--surface-2) !important;
+  color: var(--ink-4) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .gate-strip {
+  display: flex !important;
+  align-items: center !important;
+  gap: 14px !important;
+  padding: 14px 16px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .ok-banner {
+  display: flex !important;
+  align-items: center !important;
+  gap: 11px !important;
+  margin: 0 !important;
+  padding: 11px 14px !important;
+  border: 1px solid oklch(88% 0.05 150) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--ok-soft) !important;
+  color: var(--ink-2) !important;
+  font-size: 12.5px !important;
+  font-weight: 400 !important;
+  line-height: 18.75px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .ok-banner .mk {
+  display: grid !important;
+  place-items: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  flex: none !important;
+  border-radius: 50% !important;
+  background: var(--surface) !important;
+  color: var(--ok) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-stats {
+  display: grid !important;
+  grid-template-columns: repeat(4, 1fr) !important;
+  gap: 12px !important;
+  padding: 0 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .stat {
+  min-height: auto !important;
+  padding: 13px 15px !important;
+  border: 1px solid var(--hair) !important;
+  border-left: 3px solid var(--hair-3) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .stat.accent {
+  border-left-color: var(--accent) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .stat.ok {
+  border-left-color: var(--ok) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .stat .label {
+  color: var(--ink-4) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 15px !important;
+  letter-spacing: 0.7px !important;
+  text-transform: uppercase !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .stat .val {
+  margin: 6px 0 0 !important;
+  color: var(--ink) !important;
+  font-size: 26px !important;
+  font-weight: 500 !important;
+  line-height: 27.3px !important;
+  letter-spacing: -0.52px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .table-wrap {
+  overflow: hidden !important;
+  width: 100% !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table {
+  width: 100% !important;
+  margin: 0 !important;
+  border-collapse: collapse !important;
+  table-layout: auto !important;
+  font-size: 12.75px !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table th {
+  padding: 10px 14px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--hair-2) !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-4) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 15px !important;
+  letter-spacing: 0.6px !important;
+  text-align: left !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table th.num {
+  text-align: right !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table td {
+  padding: 9px 14px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+  color: var(--ink-2) !important;
+  font-size: 12.75px !important;
+  font-weight: 400 !important;
+  line-height: 19.125px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table td.key {
+  color: var(--ink) !important;
+  font-weight: 500 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table td.num {
+  color: var(--ink) !important;
+  text-align: right !important;
+  font-feature-settings: "tnum" !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table tr:last-child td {
+  border-bottom: 0 !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-toast {
+  position: absolute !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  z-index: 5 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 11px !important;
+  width: 240.344px !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 11px 14px 11px 12px !important;
+  border-radius: var(--r-2) !important;
+  background: var(--ink) !important;
+  color: #FFFFFF !important;
+  box-shadow: var(--sh-3) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-toast .mk {
+  display: grid !important;
+  place-items: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  flex: none !important;
+  border-radius: 50% !important;
+  background: rgba(255,255,255,.14) !important;
+  color: oklch(78% 0.13 150) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-toast .tt {
+  color: #FFFFFF !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  line-height: 18.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-toast .td {
+  margin-top: 1px !important;
+  color: rgba(255,255,255,.6) !important;
+  font-size: 11px !important;
+  line-height: 16.5px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-toast .x {
+  display: grid !important;
+  place-items: center !important;
+  margin-left: 4px !important;
+  color: rgba(255,255,255,.5) !important;
+  text-decoration: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .sk,
+  html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .indet::after,
+  html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .spin {
+    animation: none !important;
+  }
+}
+
+@keyframes sk {
+  from { background-position: 180% 0; }
+  to { background-position: -180% 0; }
+}
+
+@keyframes indet {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-reference-head,
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference,
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference *,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host * {
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .mono,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .mono,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-sub,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .stat .label,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .stat .val,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .chip,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .detail-box,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table th,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table td.num,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table .num,
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-lbl {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a,
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .btn {
+  letter-spacing: normal !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .pill.demo {
+  color: oklch(40% 0.07 205) !important;
+  border-color: oklch(86% 0.045 205) !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table td {
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .table-wrap {
+  height: 151.375px !important;
+  min-height: 0 !important;
+  max-height: none !important;
+}
+
+html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .eu-table {
+  height: 149.375px !important;
+  min-height: 0 !important;
+  max-height: none !important;
+}
+
+/* Workspace States mobile controls containment.
+   The reference control strip is a single desktop row; at phone width the
+   route and state segment groups must wrap inside the Streamlit column. */
+@media (max-width: 900px) {
+  html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference {
+    align-items: flex-start !important;
+    gap: 10px !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-width: 100% !important;
+    overflow: visible !important;
+  }
+
+  html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-group {
+    display: flex !important;
+    flex: 1 1 100% !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 6px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .ctl-lbl {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+  }
+
+  html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg {
+    display: flex !important;
+    flex: 1 1 100% !important;
+    flex-wrap: wrap !important;
+    gap: 3px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg a {
+    flex: 1 1 calc(50% - 3px) !important;
+    justify-content: center !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    padding: 0 10px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .seg.state a {
+    flex-basis: calc(33.333% - 3px) !important;
+  }
+
+  html body .stApp:has(.eu-states-reference-head) .eu-states-controls-reference .st-divider {
+    display: none !important;
+  }
+}

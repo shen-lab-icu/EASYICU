@@ -1,0 +1,3583 @@
+/* Cross-DB route-specific Streamlit overrides.
+   Split from classic_viz_overrides.css on 2026-06-22.
+   Loaded only for its route after shared shell/alignment CSS. */
+
+/* Loaded workspace summaries stay live, but their containers should read like
+   the reference neutral preflight cards instead of green success banners. */
+.stApp [class*="st-key-eu_crossdb_loaded_bar"] {
+  border-color: var(--hair) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+}
+
+/* Cross-DB benchmark · reference loaded state
+   The live page keeps real Cross-DB calculations and actions, but its
+   first-screen chrome mirrors easyicu_ui/EasyICU's loaded-bar, note,
+   section label, table, and availability matrix primitives. */
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] {
+  display: block !important;
+  margin: 0 !important;
+  padding: 12px 16px !important;
+  overflow: visible !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: color-mix(in srgb, var(--ok-soft) 40%, var(--surface)) !important;
+  box-shadow: none !important;
+  transform: translateY(-4px) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] [data-testid="stVerticalBlock"],
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] [data-testid="stHorizontalBlock"] {
+  gap: 12px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] [data-testid="stHorizontalBlock"] {
+  align-items: center !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] [data-testid="column"] {
+  padding: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-copy {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  min-width: 0 !important;
+  min-height: 28px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-copy .grow {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-title {
+  color: var(--ink) !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  line-height: 1.25 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-meta {
+  color: var(--ink-4) !important;
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  min-height: 22px !important;
+  padding: 0 8px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-pill) !important;
+  background: var(--surface) !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 20px !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .pill .dot {
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 50% !important;
+  background: var(--ink-3) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .pill.ok {
+  border-color: oklch(86% 0.05 150) !important;
+  background: var(--ok-soft) !important;
+  color: var(--ok) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .pill.ok .dot {
+  background: var(--ok) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .pill.demo {
+  border-color: var(--accent-border) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .pill.real {
+  border-color: oklch(86% 0.06 30) !important;
+  background: oklch(96% 0.03 30) !important;
+  color: oklch(40% 0.10 30) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-provenance-pill {
+  display: none !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_change_selection"],
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_export_summary"] {
+  margin: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_change_selection"] button,
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_export_summary"] button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  margin: 0 !important;
+  padding: 0 10px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  box-shadow: none !important;
+  font-size: 12.25px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  box-sizing: border-box !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_change_selection"] button {
+  width: 138px !important;
+  transform: translateX(-11px) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_export_summary"] button {
+  width: 79px !important;
+  transform: translateX(-6px) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_change_selection"] button [data-testid="stIconMaterial"],
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_export_summary"] button [data-testid="stIconMaterial"] {
+  width: 13px !important;
+  height: 13px !important;
+  font-size: 13px !important;
+  line-height: 13px !important;
+  margin: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_change_selection"] button:hover,
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_export_summary"] button:hover {
+  border-color: var(--hair-3) !important;
+  background: var(--surface-2) !important;
+  color: var(--ink) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note,
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-availability-empty {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 12px !important;
+  margin: 16px 0 0 !important;
+  padding: 13px 15px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  font-size: 12.75px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note {
+  transform: translateY(-4px) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note.info {
+  border-color: oklch(88% 0.04 240) !important;
+  background: var(--info-soft) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note.warn,
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-availability-empty.warn {
+  border-color: oklch(87% 0.06 75) !important;
+  background: var(--warn-soft) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note .ico {
+  display: inline-flex !important;
+  flex: none !important;
+  margin-top: 1px !important;
+  color: var(--info) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.warn .ico {
+  color: oklch(50% 0.11 70) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note .ico svg {
+  width: 16px !important;
+  height: 16px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note .body {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note .t {
+  color: var(--ink) !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note .d {
+  color: var(--ink-3) !important;
+  margin-top: 2px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .sec-stack.eu-crossdb-section-label {
+  margin: 26px 0 12px !important;
+  padding-top: 26.5px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .sec-stack.eu-crossdb-section-label .lbl {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.08em !important;
+  line-height: 1.5 !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .table-wrap {
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .table-scroll {
+  overflow-x: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+.stApp:has(.eu-crossdb-page-marker) table.eu-table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  font-size: 12.75px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table thead th {
+  padding: 10px 14px !important;
+  border-bottom: 1px solid var(--hair-2) !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.06em !important;
+  line-height: 1.2 !important;
+  text-align: left !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table thead th.num {
+  text-align: right !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table tbody td {
+  padding: 9px 14px !important;
+  border-bottom: 1px solid var(--hair) !important;
+  color: var(--ink-2) !important;
+  font-size: 12.75px !important;
+  line-height: 1.45 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table tbody tr:last-child td {
+  border-bottom: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table td.key {
+  color: var(--ink) !important;
+  font-weight: 500 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table td.num,
+.stApp:has(.eu-crossdb-page-marker) .eu-table .num {
+  color: var(--ink) !important;
+  font-family: var(--font-mono) !important;
+  font-feature-settings: "tnum" !important;
+  text-align: right !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-availability-table {
+  padding: 14px 16px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-grid {
+  display: grid !important;
+  gap: 4px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-h {
+  padding-bottom: 4px !important;
+  color: var(--ink-4) !important;
+  font-size: 9.5px !important;
+  letter-spacing: 0.04em !important;
+  line-height: 1.25 !important;
+  text-align: center !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-row {
+  display: flex !important;
+  align-items: center !important;
+  color: var(--ink-2) !important;
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-cell {
+  display: grid !important;
+  place-items: center !important;
+  height: 26px !important;
+  border-radius: var(--r-1) !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-cell.ok {
+  background: var(--ok-soft) !important;
+  color: var(--ok) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-cell.partial {
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-cell.sparse {
+  background: var(--warn-soft) !important;
+  color: var(--warn) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-cell.missing {
+  background: var(--surface-2) !important;
+  color: var(--ink-4) !important;
+}
+
+/* Cross-DB benchmark · reference idle selector
+   Mirrors S.crossdb's note + db-grid + gate-strip first screen while the
+   real Streamlit loader stays behind the overlaid Run benchmark action. */
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 12px !important;
+  margin: 0 !important;
+  padding: 13px 15px !important;
+  border: 1px solid oklch(88% 0.04 240) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--info-soft) !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12.75px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .ico {
+  flex: none !important;
+  margin-top: 1px !important;
+  color: var(--info) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .ico svg {
+  width: 16px !important;
+  height: 16px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .body {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .t {
+  color: var(--ink) !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .d {
+  color: var(--ink-3) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .sec-stack.eu-crossdb-db-section {
+  margin: 26px 0 12px !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .sec-stack.eu-crossdb-db-section .lbl {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.08em !important;
+  line-height: 1.5 !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .db-grid.eu-crossdb-reference-db-grid {
+  display: grid !important;
+  grid-template-columns: repeat(3, 1fr) !important;
+  gap: 10px !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .db-card {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  min-height: 64px !important;
+  padding: 12px 14px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+  box-sizing: border-box !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .db-card.sel {
+  border-color: var(--ink) !important;
+  box-shadow: 0 0 0 1px var(--ink) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .db-card .row.gap-8 {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-db-name {
+  overflow: hidden !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  line-height: 1.25 !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-db-note {
+  color: var(--ink-4) !important;
+  font-size: 10.5px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .pill.dashed {
+  border-style: dashed !important;
+  background: transparent !important;
+  color: var(--ink-3) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .db-mk.pill {
+  min-height: 20px !important;
+  height: 20px !important;
+  line-height: 18px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .gate-strip.eu-crossdb-gate-strip-visual {
+  display: flex !important;
+  align-items: center !important;
+  gap: 14px !important;
+  margin: 20px 0 0 !important;
+  padding: 14px 16px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .gate-strip.eu-crossdb-gate-strip-visual .grow {
+  flex: 1 1 auto !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .gate-strip.eu-crossdb-gate-strip-visual .btn.primary {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  height: 34px !important;
+  padding: 0 14px !important;
+  border: 1px solid var(--ink) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--ink) !important;
+  color: #fff !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_action"] {
+  position: relative !important;
+  z-index: 3 !important;
+  display: flex !important;
+  justify-content: flex-end !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 16px 0 0 !important;
+  overflow: visible !important;
+  pointer-events: none !important;
+  transform: none !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_action"] [data-testid="stVerticalBlock"],
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_action"] [data-testid="stElementContainer"] {
+  width: auto !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_open_loader"] {
+  flex: 0 0 144px !important;
+  width: 144px !important;
+  margin: 0 0 0 auto !important;
+  pointer-events: auto !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_open_loader"] button {
+  width: 144px !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  margin: 0 !important;
+  padding: 0 14px !important;
+  border: 0 !important;
+  border-radius: var(--r-2) !important;
+  opacity: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] {
+  position: relative !important;
+  display: block !important;
+  height: 64px !important;
+  min-height: 64px !important;
+  margin: 33.5px 0 0 !important;
+  padding: 14px 16px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  box-sizing: border-box !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] > [data-testid="stVerticalBlock"],
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] [data-testid="stHorizontalBlock"] {
+  position: static !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] [data-testid="stVerticalBlock"],
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] [data-testid="stHorizontalBlock"] {
+  gap: 14px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] [data-testid="stHorizontalBlock"] {
+  align-items: center !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] [data-testid="column"] {
+  padding: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-gate-pill-wrap {
+  position: absolute !important;
+  top: 5px !important;
+  left: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  min-height: 34px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] [class*="st-key-eu_crossdb_gate_open_loader"] {
+  position: absolute !important;
+  top: 0 !important;
+  right: 0 !important;
+  display: flex !important;
+  justify-content: flex-end !important;
+  width: 146px !important;
+  height: 34px !important;
+  margin: 0 !important;
+  pointer-events: auto !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] [class*="st-key-eu_crossdb_gate_open_loader"] [data-testid="stButton"] {
+  display: flex !important;
+  justify-content: flex-end !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] [class*="st-key-eu_crossdb_gate_open_loader"] button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  width: 146px !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  margin: 0 !important;
+  padding: 0 14px !important;
+  border: 1px solid var(--ink) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--ink) !important;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_strip"] [class*="st-key-eu_crossdb_gate_open_loader"] button [data-testid="stIconMaterial"] {
+  width: 13px !important;
+  height: 13px !important;
+  margin: 0 !important;
+  color: inherit !important;
+  font-size: 13px !important;
+  line-height: 13px !important;
+}
+
+@media (max-width: 1100px) {
+  .stApp:has(.eu-crossdb-page-marker) .db-grid.eu-crossdb-reference-db-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .stApp:has(.eu-crossdb-page-marker) .db-grid.eu-crossdb-reference-db-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Cross-DB Benchmark final reference parity overrides.
+   Targets EasyICU/css/app.css, pages.css, and screens-viz.js Cross-DB
+   loaded state. Keep after Patient Review/Cohort cleanup because this page
+   reuses eu-cohort-reference-* header class names. */
+.stApp:has(.eu-crossdb-page-marker) .eu-cohort-reference-crumb {
+  display: flex !important;
+  align-items: center !important;
+  gap: 2px 8px !important;
+  margin: 0 0 6px !important;
+  padding: 0 !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 400 !important;
+  line-height: 1.5 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+  flex-wrap: wrap !important;
+  row-gap: 2px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-cohort-reference-crumb * {
+  font-family: inherit !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+  line-height: inherit !important;
+  letter-spacing: inherit !important;
+  text-transform: inherit !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-cohort-reference-head.page-head {
+  display: block !important;
+  margin: 0 0 14px !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  background: transparent !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-cohort-reference-head.page-head h1 {
+  margin: 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 25px !important;
+  font-weight: 600 !important;
+  line-height: 1.15 !important;
+  letter-spacing: -0.02em !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-cohort-reference-head.page-head .lead {
+  display: block !important;
+  max-width: 70ch !important;
+  margin: 7px 0 0 !important;
+  padding: 0 !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 1.5 !important;
+  letter-spacing: -0.005em !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] {
+  height: auto !important;
+  min-height: 54px !important;
+  margin: 0 !important;
+  padding: 12px 16px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: color-mix(in srgb, var(--ok-soft) 40%, var(--surface)) !important;
+  box-shadow: none !important;
+  transform: none !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13.5px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-copy,
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-copy .grow {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  letter-spacing: -0.005em !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-title {
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  line-height: 1.5 !important;
+  letter-spacing: -0.005em !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-meta {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  line-height: 1.5 !important;
+  letter-spacing: -0.01em !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .pill {
+  height: 23px !important;
+  min-height: 23px !important;
+  padding: 0 9px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-pill) !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 11.25px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  letter-spacing: -0.005em !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_change_selection"] button,
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_export_summary"] button {
+  transform: none !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note,
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-availability-empty {
+  margin: 16px 0 0 !important;
+  padding: 13px 15px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  transform: none !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12.75px !important;
+  font-weight: 400 !important;
+  line-height: 1.5 !important;
+  letter-spacing: -0.005em !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note.info {
+  border-color: oklch(88% 0.04 240) !important;
+  background: var(--info-soft) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note .ico {
+  color: var(--info) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note .t,
+.stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note .d {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12.75px !important;
+  line-height: 1.5 !important;
+  letter-spacing: -0.005em !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .sec-stack.eu-crossdb-section-label {
+  margin: 26px 0 12px !important;
+  padding: 13.5px 0 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .sec-stack.eu-crossdb-section-label .lbl {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 1.5 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .table-wrap {
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  overflow: hidden !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) table.eu-table {
+  width: 100% !important;
+  margin: 0 !important;
+  border-collapse: collapse !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12.75px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table thead th {
+  padding: 10px 14px !important;
+  border-top: 0 !important;
+  border-right: 0 !important;
+  border-bottom: 1px solid var(--hair-2) !important;
+  border-left: 0 !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 1.5 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table tbody td {
+  padding: 9px 14px !important;
+  border-top: 0 !important;
+  border-right: 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+  border-left: 0 !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12.75px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table tbody tr:last-child td {
+  border-bottom: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table td.key {
+  color: var(--ink) !important;
+  font-weight: 500 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-table td.num,
+.stApp:has(.eu-crossdb-page-marker) .eu-table .num {
+  color: var(--ink) !important;
+  font-family: var(--font-mono) !important;
+  font-feature-settings: "tnum" !important;
+  text-align: right !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-availability-table {
+  padding: 14px 16px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-grid {
+  display: grid !important;
+  gap: 4px !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-h {
+  padding-bottom: 4px !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 9.5px !important;
+  font-weight: 400 !important;
+  line-height: 1.5 !important;
+  letter-spacing: 0.04em !important;
+  text-align: center !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-row {
+  display: flex !important;
+  align-items: center !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  line-height: 1.5 !important;
+  letter-spacing: -0.01em !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-cell {
+  display: grid !important;
+  place-items: center !important;
+  height: 26px !important;
+  border-radius: var(--r-1) !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-4) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .avail-cell.ok {
+  background: var(--ok-soft) !important;
+  color: var(--ok) !important;
+}
+
+/* Cross-DB Benchmark tail-order corrections after all shared table/card rules. */
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  flex-wrap: wrap !important;
+  color: var(--ink) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] > [data-testid="stHorizontalBlock"] {
+  width: 100% !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .table-wrap.table-scroll,
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-summary-table.table-scroll,
+.stApp:has(.eu-crossdb-page-marker) .eu-crossdb-availability-table.table-scroll {
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+/* Cross-DB Benchmark: idle-state design DOM and exact token inheritance. */
+html body .stApp:has(.eu-crossdb-page-marker) {
+  --font-sans: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif !important;
+  --font-cn: "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  --accent: oklch(55% 0.075 205) !important;
+  --accent-ink: oklch(40% 0.07 205) !important;
+  --accent-soft: oklch(96% 0.02 205) !important;
+  --accent-border: oklch(86% 0.045 205) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker),
+html body .stApp:has(.eu-crossdb-page-marker) * {
+  box-sizing: border-box !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-cohort-reference-head.page-head {
+  line-height: 20.25px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-cohort-reference-head.page-head .lead {
+  margin: 7px 0 13.5px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker)
+  [data-testid="stElementContainer"]:has(.eu-cohort-reference-head.page-head) {
+  margin-bottom: 13.5px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker)
+  [data-testid="stElementContainer"]:has(.gate-strip.eu-crossdb-gate-strip-visual) {
+  margin-top: 13.5px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker)
+  [data-testid="stElementContainer"]:has(.note.eu-crossdb-source-note) {
+  margin-top: 13.5px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker)
+  [data-testid="stElementContainer"]:has(.sec-stack.eu-crossdb-section-label) {
+  margin-top: 13.5px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note,
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .body,
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .t,
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .d,
+html body .stApp:has(.eu-crossdb-page-marker) .sec-stack.eu-crossdb-db-section,
+html body .stApp:has(.eu-crossdb-page-marker) .db-grid.eu-crossdb-reference-db-grid,
+html body .stApp:has(.eu-crossdb-page-marker) .db-card,
+html body .stApp:has(.eu-crossdb-page-marker) .db-card .row.gap-8,
+html body .stApp:has(.eu-crossdb-page-marker) .gate-strip.eu-crossdb-gate-strip-visual {
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note {
+  min-height: auto !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .ico {
+  display: block !important;
+  height: 21.125px !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .body,
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .t,
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .d {
+  line-height: 19.125px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-select-note .d {
+  color: var(--ink-3) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .sec-stack.eu-crossdb-db-section {
+  line-height: 20.25px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .db-card,
+html body .stApp:has(.eu-crossdb-page-marker) .db-card:visited,
+html body .stApp:has(.eu-crossdb-page-marker) .db-card:hover {
+  min-height: auto !important;
+  color: var(--ink) !important;
+  text-decoration: none !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .db-card > .row.gap-8 > span:first-child {
+  color: var(--ink-4) !important;
+  -webkit-text-fill-color: var(--ink-4) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .db-card.sel > .row.gap-8 > span:first-child {
+  color: var(--accent-ink) !important;
+  -webkit-text-fill-color: var(--accent-ink) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .db-card > .row.gap-8 > span:first-child svg {
+  color: inherit !important;
+  stroke: currentColor !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-db-name {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 18.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-db-note {
+  line-height: 15.75px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .db-mk.pill,
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-gate-strip-visual .pill {
+  min-height: auto !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 16.875px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-gate-strip-visual .pill {
+  width: auto !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-gate-strip-visual > .pill > span {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-gate-strip-visual > .pill > span:first-child {
+  color: var(--ink-3) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-gate-strip-visual > .pill > span:not(:first-child) {
+  color: var(--ink-2) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .gate-strip.eu-crossdb-gate-strip-visual {
+  display: flex !important;
+  align-items: center !important;
+  gap: 14px !important;
+  margin: 20px 0 0 !important;
+  min-height: 0 !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .gate-strip.eu-crossdb-gate-strip-visual .btn.primary {
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 19.5px !important;
+  letter-spacing: normal !important;
+  text-align: center !important;
+  text-decoration: none !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .gate-strip.eu-crossdb-gate-strip-visual .btn.primary:visited {
+  color: #fff !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_action"] {
+  position: relative !important;
+  z-index: 5 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: -49px 0 49px !important;
+  padding: 0 16px 0 0 !important;
+  pointer-events: none !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_action"] [class*="st-key-eu_crossdb_gate_open_loader"] {
+  margin-left: auto !important;
+  width: 146px !important;
+  pointer-events: auto !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_gate_action"] [class*="st-key-eu_crossdb_gate_open_loader"] button {
+  opacity: 0 !important;
+  width: 146px !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  cursor: pointer !important;
+}
+
+/* Cross-DB Benchmark: loaded-state numeric parity around real benchmark data. */
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] {
+  min-height: 0 !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  border: 0 !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] [data-testid="stElementContainer"],
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] [data-testid="stMarkdown"],
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loaded_bar"] [data-testid="stMarkdownContainer"] {
+  width: 100% !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-copy .grow {
+  width: auto !important;
+  flex: 1 1 0% !important;
+  color: var(--ink) !important;
+  line-height: 20.25px !important;
+  border-color: var(--ink) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .loaded-bar.eu-crossdb-loaded-copy {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  flex-wrap: wrap !important;
+  width: 100% !important;
+  padding: 12px 16px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: color-mix(in srgb, var(--ok-soft) 40%, var(--surface)) !important;
+  min-height: 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-copy .pill.ok {
+  width: 69.313px !important;
+  min-height: auto !important;
+  line-height: 16.875px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-copy .pill.ok .dot {
+  width: 6px !important;
+  height: 6px !important;
+  flex: 0 0 6px !important;
+  border-color: var(--ok) !important;
+  background: var(--ok) !important;
+  color: var(--ok) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-title {
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_change_selection"] button {
+  display: flex !important;
+  width: 143.999px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_export_summary"] button {
+  display: flex !important;
+  width: 80.6094px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_change_selection"] button,
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_export_summary"] button {
+  min-height: auto !important;
+  color: var(--ink) !important;
+  line-height: 18.375px !important;
+  letter-spacing: normal !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .loaded-bar.eu-crossdb-loaded-copy .btn.sm {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  height: 28px !important;
+  min-height: auto !important;
+  width: auto !important;
+  padding: 0 10px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 12.25px !important;
+  font-weight: 500 !important;
+  line-height: 18.375px !important;
+  letter-spacing: normal !important;
+  text-align: center !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .loaded-bar.eu-crossdb-loaded-copy .btn.sm.eu-crossdb-change-link {
+  width: 137.984px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .loaded-bar.eu-crossdb-loaded-copy .btn.sm.eu-crossdb-export-link {
+  width: 79.094px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .loaded-bar.eu-crossdb-loaded-copy .btn.sm svg {
+  width: 13px !important;
+  height: 13px !important;
+  flex: 0 0 13px !important;
+  stroke-width: 1.6 !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note {
+  height: auto !important;
+  color: var(--ink) !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note .ico {
+  display: block !important;
+  height: 21.125px !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note .t,
+html body .stApp:has(.eu-crossdb-page-marker) .note.eu-crossdb-source-note .d {
+  line-height: 19.125px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .sec-stack.eu-crossdb-section-label {
+  padding-top: 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  line-height: 20.25px !important;
+  border-color: var(--ink) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .table-wrap,
+html body .stApp:has(.eu-crossdb-page-marker) table.eu-table,
+html body .stApp:has(.eu-crossdb-page-marker) .avail-grid {
+  color: var(--ink) !important;
+  line-height: 20.25px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) table.eu-table,
+html body .stApp:has(.eu-crossdb-page-marker) .eu-table tbody td {
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .table-wrap {
+  border-color: var(--hair) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) table.eu-table {
+  line-height: 19.125px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_change_selection"] button[data-testid^="stBaseButton"],
+html body .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_export_summary"] button[data-testid^="stBaseButton"] {
+  min-height: unset !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-summary-table {
+  height: auto !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-summary-table table.eu-table {
+  height: auto !important;
+  border-collapse: collapse !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-summary-table .eu-table thead th {
+  height: 35.5px !important;
+  padding-top: 10px !important;
+  padding-bottom: 10px !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .table-wrap.table-scroll,
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-summary-table.table-scroll,
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-availability-table.table-scroll {
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  overscroll-behavior-x: contain !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-summary-table table.eu-table {
+  min-width: min(560px, 100%) !important;
+}
+
+html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-availability-table .avail-grid {
+  min-width: min(260px, 100%) !important;
+}
+
+@media (max-width: 600px) {
+  html body .stApp:has(.eu-crossdb-page-marker) .loaded-bar.eu-crossdb-loaded-copy {
+    align-items: center !important;
+    gap: 12px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-copy .pill.ok {
+    order: 0 !important;
+    width: 69.313px !important;
+    flex: 0 1 auto !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-copy .grow {
+    order: 0 !important;
+    flex: 1 1 92px !important;
+    width: auto !important;
+    min-width: 92px !important;
+    max-width: 102px !important;
+    display: block !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-title,
+  html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-meta {
+    display: inline !important;
+    white-space: normal !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-loaded-meta {
+    margin-top: 0 !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker) .loaded-bar.eu-crossdb-loaded-copy .btn.sm.eu-crossdb-change-link {
+    order: 0 !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker) .loaded-bar.eu-crossdb-loaded-copy .btn.sm.eu-crossdb-export-link {
+    order: 0 !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker) .table-wrap.table-scroll,
+  html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-summary-table.table-scroll,
+  html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-availability-table.table-scroll {
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-summary-table table.eu-table {
+    min-width: 100% !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker) .eu-crossdb-availability-table .avail-grid {
+    min-width: 260px !important;
+  }
+}
+
+/* Cross-DB loaded mobile spacing: the fixed bottom rail and floating Copilot
+   button sit above Streamlit's scroll container. Reserve enough real scroll
+   space for the final action button, and make the optional detail launcher
+   read as a separate reference panel instead of touching the availability
+   matrix. */
+
+@media (max-width: 900px) {
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [data-testid="stMainBlockContainer"] {
+    padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}
+
+@media (max-width: 600px) {
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [data-testid="stElementContainer"]:has(.eu-crossdb-availability-table),
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    .eu-crossdb-availability-table {
+    margin-bottom: 14px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    .eu-crossdb-detail-callout {
+    margin-top: 0 !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-detail-callout.open)
+    .eu-crossdb-distribution-boundary {
+    height: 8px !important;
+    min-height: 8px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-detail-callout.open)
+    .eu-crossdb-distribution-heading {
+    margin: 16px 0 12px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-eu_crossdb_loader_collapsed_settings"] {
+    min-height: 42px !important;
+    padding: 8px 10px 8px 178px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-eu_crossdb_loader_collapsed_settings"] .eu-crossdb-micro-heading p {
+    display: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-eu_crossdb_loader_collapsed_settings"] [class*="st-key-multidb_show_loader_setup"] {
+    top: 8px !important;
+    right: auto !important;
+    left: 10px !important;
+    width: 160px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-eu_crossdb_loader_collapsed_settings"] [class*="st-key-multidb_show_loader_setup"] button {
+    width: 160px !important;
+    height: 24px !important;
+    min-height: 24px !important;
+    padding: 0 7px !important;
+    font-size: 10.75px !important;
+    line-height: 15px !important;
+  }
+}
+
+/* Cross-DB Benchmark · final idle-state wrapper lock.
+   The prototype places the selector note 14px after the page header. Streamlit's
+   main vertical block adds one extra 13.5px row gap before this reference
+   Markdown bundle, so pull the selector bundle and its gate strip back to the
+   design coordinates without changing their internal spacing. */
+html body .stApp:has(.eu-crossdb-page-marker)
+  [data-testid="stElementContainer"]:has(.eu-crossdb-select-note),
+html body .stApp:has(.eu-crossdb-page-marker)
+  [data-testid="stElementContainer"]:has(.loaded-bar.eu-crossdb-loaded-copy) {
+  margin-top: -13.5px !important;
+}
+
+/* Cross-DB loaded mobile topbar: the real Change selection button is wider
+   than its Streamlit column on 390px screens. Keep it clickable and visible
+   without changing the reset/query-action logic. */
+
+@media (max-width: 600px) {
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-_eu_topbar_crossdb_change"] {
+    position: fixed !important;
+    top: 49px !important;
+    left: 28px !important;
+    z-index: 82 !important;
+    width: 166px !important;
+    min-width: 166px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-_eu_topbar_run"] {
+    position: fixed !important;
+    top: 49px !important;
+    right: 42px !important;
+    z-index: 82 !important;
+    width: 90.922px !important;
+    min-width: 90.922px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-_eu_topbar_crossdb_change"] .stButton,
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-_eu_topbar_crossdb_change"] [data-testid="stButton"],
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-_eu_topbar_crossdb_change"] button[data-testid^="stBaseButton"] {
+    width: 166px !important;
+    min-width: 166px !important;
+    max-width: 166px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 14px !important;
+    transform: none !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_topbar_controls_cross_db"])
+    [class*="st-key-_eu_topbar_crossdb_change"] button[data-testid^="stBaseButton"] {
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-_eu_topbar_run"] .stButton,
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-_eu_topbar_run"] [data-testid="stButton"],
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-_eu_topbar_run"] button[data-testid^="stBaseButton"] {
+    width: 90.922px !important;
+    min-width: 90.922px !important;
+    max-width: 90.922px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 14px !important;
+    transform: none !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+  }
+}
+
+/* Cross-DB idle mobile shell chrome: mirror the reference .mtopbar for the
+   selector state while leaving loaded Change selection/Re-run geometry alone. */
+
+@media (max-width: 860px) {
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_page_breadcrumb_nav_cross_db"]) {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 82 !important;
+    display: flex !important;
+    align-items: center !important;
+    width: calc(100% + 24px) !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    margin: 0 0 18px -12px !important;
+    padding: 0 16px !important;
+    overflow: hidden !important;
+    border-bottom: 1px solid var(--hair) !important;
+    background: var(--rail) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    filter: none !important;
+    contain: none !important;
+    box-sizing: border-box !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"] {
+    position: fixed !important;
+    top: 0 !important;
+    right: auto !important;
+    left: 16px !important;
+    z-index: 84 !important;
+    display: flex !important;
+    align-items: center !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 122px) !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"]
+    [data-testid="stHorizontalBlock"] {
+    display: flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"]
+    [data-testid="stHorizontalBlock"]::before {
+    content: "science" !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex: 0 0 28px !important;
+    width: 28px !important;
+    height: 28px !important;
+    border-radius: 7px !important;
+    background: var(--ink) !important;
+    color: #fff !important;
+    font-family: "Material Symbols Rounded" !important;
+    font-size: 16px !important;
+    font-weight: 400 !important;
+    font-style: normal !important;
+    line-height: 1 !important;
+    letter-spacing: normal !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"]
+    [data-testid="stColumn"]:not(:has(.eu-bc-current)) {
+    display: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"]
+    [data-testid="stColumn"]:has(.eu-bc-current) {
+    display: flex !important;
+    flex: 0 1 auto !important;
+    align-items: center !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 166px) !important;
+    height: 52px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"] .eu-bc-current {
+    display: block !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: 52px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    color: var(--ink) !important;
+    -webkit-text-fill-color: var(--ink) !important;
+    font-family: var(--font-sans), var(--font-cn) !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    line-height: 52px !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_topbar_controls_cross_db"] {
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    z-index: 83 !important;
+    display: block !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    opacity: 1 !important;
+    color: transparent !important;
+    -webkit-text-fill-color: transparent !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_topbar_controls_cross_db"] [data-testid="stMarkdown"],
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_topbar_controls_cross_db"] [data-testid="stHorizontalBlock"] {
+    display: block !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_topbar_controls_cross_db"] .mode-seg,
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_topbar_controls_cross_db"] .lang-seg {
+    display: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_controls_cross_db_mode_"],
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_controls_cross_db_lang_"] {
+    display: none !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_topbar_controls_cross_db"] .eu-topbar-copilot-visual {
+    position: fixed !important;
+    top: 11.5px !important;
+    right: 100px !important;
+    z-index: 83 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 1px solid var(--hair-2) !important;
+    border-radius: 6px !important;
+    background: var(--surface) !important;
+    box-shadow: none !important;
+    color: var(--ink) !important;
+    font-size: 0 !important;
+    gap: 0 !important;
+    pointer-events: none !important;
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-eu_topbar_controls_cross_db"] .eu-topbar-copilot-visual svg {
+    width: 16px !important;
+    height: 16px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] {
+    position: fixed !important;
+    top: 11.5px !important;
+    right: 100px !important;
+    z-index: 84 !important;
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] .stButton,
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] [data-testid="stButton"],
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] button[data-testid^="stBaseButton"] {
+    position: absolute !important;
+    inset: 0 !important;
+    display: inline-flex !important;
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border-color: transparent !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    color: transparent !important;
+    -webkit-text-fill-color: transparent !important;
+    font-size: 0 !important;
+    transform: none !important;
+    overflow: visible !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] button[data-testid^="stBaseButton"] {
+    position: relative !important;
+    inset: auto !important;
+    flex: 0 0 28px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] button[data-testid^="stBaseButton"] *,
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] [data-testid="stMarkdownContainer"] {
+    color: transparent !important;
+    -webkit-text-fill-color: transparent !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_run"] {
+    position: fixed !important;
+    top: 9px !important;
+    right: 16px !important;
+    bottom: auto !important;
+    left: auto !important;
+    z-index: 83 !important;
+    width: 74px !important;
+    min-width: 74px !important;
+    max-width: 74px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_run"] .stButton,
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_run"] [data-testid="stButton"] {
+    position: absolute !important;
+    inset: 0 !important;
+    display: flex !important;
+    width: 74px !important;
+    min-width: 74px !important;
+    max-width: 74px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    transform: none !important;
+    overflow: visible !important;
+    white-space: nowrap !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-reference-db-grid)
+    [class*="st-key-_eu_topbar_run"] button[data-testid^="stBaseButton"] {
+    position: absolute !important;
+    inset: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 74px !important;
+    min-width: 74px !important;
+    max-width: 74px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 12px !important;
+    transform: none !important;
+    overflow: visible !important;
+    font-size: 13px !important;
+    line-height: 19.5px !important;
+    white-space: nowrap !important;
+  }
+}
+
+/* Cross-DB loaded/detail mobile shell chrome: the reference uses the same
+   52px .mtopbar after load. Keep the real Change selection/Re-run callbacks,
+   but pull their hit targets into the title bar instead of a second row. */
+
+@media (max-width: 860px) {
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_page_breadcrumb_nav_cross_db"]) {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 82 !important;
+    display: flex !important;
+    align-items: center !important;
+    width: calc(100% + 24px) !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    margin: 0 0 18px -12px !important;
+    padding: 0 16px !important;
+    overflow: hidden !important;
+    border-bottom: 1px solid var(--hair) !important;
+    background: var(--rail) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    filter: none !important;
+    contain: none !important;
+    box-sizing: border-box !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"],
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"] [data-testid="stHorizontalBlock"] {
+    display: flex !important;
+    align-items: center !important;
+    width: 136px !important;
+    min-width: 0 !important;
+    max-width: 136px !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"] {
+    position: fixed !important;
+    top: 0 !important;
+    left: 16px !important;
+    z-index: 84 !important;
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"] [data-testid="stHorizontalBlock"] {
+    gap: 10px !important;
+    max-width: 136px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"]
+    [data-testid="stHorizontalBlock"]::before {
+    content: "science" !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex: 0 0 28px !important;
+    width: 28px !important;
+    height: 28px !important;
+    border-radius: 7px !important;
+    background: var(--ink) !important;
+    color: #fff !important;
+    font-family: "Material Symbols Rounded" !important;
+    font-size: 16px !important;
+    font-weight: 400 !important;
+    font-style: normal !important;
+    line-height: 1 !important;
+    letter-spacing: normal !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"]
+    [data-testid="stColumn"]:not(:has(.eu-bc-current)) {
+    display: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"]
+    [data-testid="stColumn"]:has(.eu-bc-current) {
+    display: flex !important;
+    flex: 0 1 82px !important;
+    align-items: center !important;
+    width: 82px !important;
+    min-width: 0 !important;
+    max-width: 82px !important;
+    height: 52px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_page_breadcrumb_nav_cross_db"] .eu-bc-current {
+    display: block !important;
+    width: 82px !important;
+    min-width: 0 !important;
+    max-width: 82px !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    color: var(--ink) !important;
+    -webkit-text-fill-color: var(--ink) !important;
+    font-family: var(--font-sans), var(--font-cn) !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    line-height: 16px !important;
+    text-overflow: clip !important;
+    white-space: normal !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_topbar_controls_cross_db"] {
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    z-index: 83 !important;
+    display: block !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    opacity: 1 !important;
+    color: transparent !important;
+    -webkit-text-fill-color: transparent !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_topbar_controls_cross_db"] [data-testid="stMarkdown"],
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_topbar_controls_cross_db"] [data-testid="stHorizontalBlock"] {
+    display: block !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_topbar_controls_cross_db"] .mode-seg,
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_topbar_controls_cross_db"] .lang-seg {
+    display: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_controls_cross_db_mode_"],
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_controls_cross_db_lang_"] {
+    display: none !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_topbar_controls_cross_db"] .eu-topbar-copilot-visual {
+    position: fixed !important;
+    top: 11.5px !important;
+    right: auto !important;
+    left: 138px !important;
+    z-index: 83 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 1px solid var(--hair-2) !important;
+    border-radius: 6px !important;
+    background: var(--surface) !important;
+    box-shadow: none !important;
+    color: var(--ink) !important;
+    font-size: 0 !important;
+    gap: 0 !important;
+    pointer-events: none !important;
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-eu_topbar_controls_cross_db"] .eu-topbar-copilot-visual svg {
+    width: 16px !important;
+    height: 16px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] {
+    position: fixed !important;
+    top: 11.5px !important;
+    right: auto !important;
+    left: 138px !important;
+    z-index: 84 !important;
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] .stButton,
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] [data-testid="stButton"],
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] button[data-testid^="stBaseButton"] {
+    position: absolute !important;
+    inset: 0 !important;
+    display: inline-flex !important;
+    width: 28px !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border-color: transparent !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    color: transparent !important;
+    -webkit-text-fill-color: transparent !important;
+    font-size: 0 !important;
+    transform: none !important;
+    overflow: visible !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_controls_cross_db_copilot"] button[data-testid^="stBaseButton"] * {
+    color: transparent !important;
+    -webkit-text-fill-color: transparent !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+  }
+}
+
+@media (max-width: 600px) {
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_crossdb_change"] {
+    position: fixed !important;
+    top: 9px !important;
+    right: auto !important;
+    left: 168px !important;
+    z-index: 84 !important;
+    width: 142px !important;
+    min-width: 142px !important;
+    max-width: 142px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_crossdb_change"] .stButton,
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_crossdb_change"] [data-testid="stButton"] {
+    position: absolute !important;
+    inset: 0 !important;
+    display: flex !important;
+    width: 142px !important;
+    min-width: 142px !important;
+    max-width: 142px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    transform: none !important;
+    overflow: visible !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_crossdb_change"] button[data-testid^="stBaseButton"] {
+    position: absolute !important;
+    inset: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 142px !important;
+    min-width: 142px !important;
+    max-width: 142px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 5px !important;
+    transform: none !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    font-size: 11.75px !important;
+    line-height: 18px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_run"] {
+    position: fixed !important;
+    top: 9px !important;
+    right: auto !important;
+    bottom: auto !important;
+    left: 318px !important;
+    z-index: 84 !important;
+    width: 70px !important;
+    min-width: 70px !important;
+    max-width: 70px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    transform: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_run"] .stButton,
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_run"] [data-testid="stButton"] {
+    position: absolute !important;
+    inset: 0 !important;
+    display: flex !important;
+    width: 70px !important;
+    min-width: 70px !important;
+    max-width: 70px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    transform: none !important;
+    overflow: visible !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [class*="st-key-_eu_topbar_run"] button[data-testid^="stBaseButton"] {
+    position: absolute !important;
+    inset: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 70px !important;
+    min-width: 70px !important;
+    max-width: 70px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 5px !important;
+    transform: none !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    font-size: 12px !important;
+    line-height: 18px !important;
+  }
+}
+
+/* Cross-DB mobile page head: match the Claude reference title scale while
+   preserving the real loaded/detail data blocks and Streamlit callbacks. */
+
+@media (max-width: 860px) {
+  html body .stApp:has(.eu-crossdb-page-marker)
+    .eu-cohort-reference-head.page-head h1 {
+    font-size: 21px !important;
+    font-weight: 600 !important;
+    line-height: 24.15px !important;
+    letter-spacing: 0 !important;
+  }
+}
+
+/* EOF final: Cross-DB loaded mobile bottom spacing. Keep this after the
+   mobile navigation block so it wins the late Streamlit/alignment cascade. */
+
+@media (max-width: 900px) {
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [data-testid="stMainBlockContainer"] {
+    padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}
+
+@media (max-width: 600px) {
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    [data-testid="stElementContainer"]:has(.eu-crossdb-availability-table),
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    .eu-crossdb-availability-table {
+    margin-bottom: 14px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.loaded-bar.eu-crossdb-loaded-copy)
+    .eu-crossdb-detail-callout {
+    margin-top: 0 !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-detail-callout.open)
+    .eu-crossdb-distribution-boundary {
+    height: 8px !important;
+    min-height: 8px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker):has(.eu-crossdb-detail-callout.open)
+    .eu-crossdb-distribution-heading {
+    margin: 16px 0 12px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-eu_crossdb_loader_collapsed_settings"] {
+    min-height: 42px !important;
+    padding: 8px 10px 8px 178px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-eu_crossdb_loader_collapsed_settings"] .eu-crossdb-micro-heading p {
+    display: none !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-eu_crossdb_loader_collapsed_settings"] [class*="st-key-multidb_show_loader_setup"] {
+    top: 8px !important;
+    right: auto !important;
+    left: 10px !important;
+    width: 160px !important;
+  }
+
+  html body .stApp:has(.eu-crossdb-page-marker)
+    [class*="st-key-eu_crossdb_loader_collapsed_settings"] [class*="st-key-multidb_show_loader_setup"] button {
+    width: 160px !important;
+    height: 24px !important;
+    min-height: 24px !important;
+    padding: 0 7px !important;
+    font-size: 10.75px !important;
+    line-height: 15px !important;
+  }
+}
+
+/* Moved from shell_overrides.css. */
+
+.stApp .eu-crossdb-detail-callout {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface);
+}
+
+.stApp .eu-crossdb-detail-callout.open {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-soft) 34%, var(--surface));
+}
+
+.stApp .eu-crossdb-detail-callout .ico {
+  width: 22px;
+  height: 22px;
+  color: var(--accent-ink);
+  line-height: 22px;
+}
+
+.stApp .eu-crossdb-detail-callout .body {
+  min-width: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.stApp .eu-crossdb-detail-callout .t {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.stApp .eu-crossdb-detail-callout .d {
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.stApp .eu-crossdb-detail-status {
+  flex: 0 0 auto;
+  border: 1px solid var(--hair-2);
+  border-radius: 999px;
+  padding: 3px 9px;
+  color: var(--ink-3);
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.stApp .eu-crossdb-detail-callout.open .eu-crossdb-detail-status {
+  border-color: var(--accent-border);
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.stApp .eu-crossdb-detail-callout.open .ico {
+  color: var(--accent);
+}
+.stApp [class*="st-key-eu_crossdb_distribution_toggle"] button {
+  min-height: 36px !important;
+  margin-top: 8px !important;
+}
+
+.stApp .eu-crossdb-distribution-boundary {
+  display: block;
+  clear: both;
+  height: 24px;
+  min-height: 24px;
+}
+.stApp .eu-crossdb-distribution-heading {
+  display: block;
+  clear: both;
+  margin: 32px 0 14px !important;
+  padding-top: 10px;
+  border-top: 1px solid var(--hair);
+  position: relative;
+  z-index: 1;
+}
+.stApp .eu-crossdb-distribution-title {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.stApp .eu-crossdb-distribution-subtitle {
+  margin-top: 3px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.eu-cohort-readiness-row.ok .eu-cohort-readiness-node {
+  border-color: color-mix(in oklab, var(--ok) 35%, var(--hair));
+  background: color-mix(in oklab, var(--ok-soft) 60%, var(--surface));
+  color: var(--ok);
+}
+.eu-cohort-readiness-row.warn .eu-cohort-readiness-node {
+  border-color: color-mix(in oklab, var(--warn) 35%, var(--hair));
+  background: color-mix(in oklab, var(--warn-soft) 66%, var(--surface));
+  color: color-mix(in oklab, var(--warn) 80%, var(--ink));
+}
+.eu-cohort-readiness-row.bad .eu-cohort-readiness-node {
+  border-color: color-mix(in oklab, var(--bad) 35%, var(--hair));
+  background: color-mix(in oklab, var(--bad-soft) 66%, var(--surface));
+  color: var(--bad);
+}
+.eu-readiness-strip .eu-gate-card {
+  position: relative;
+  border: 0;
+  border-left: 0;
+  border-radius: 0;
+  background: var(--surface);
+  padding: 10px 12px;
+}
+.eu-readiness-strip .eu-gate-card + .eu-gate-card {
+  border-left: 1px solid var(--hair);
+}
+.eu-readiness-strip .eu-gate-card .k {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.eu-readiness-strip .eu-gate-card .k::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--ink-3);
+}
+.eu-readiness-strip .eu-gate-card.ok .k::before {
+  background: var(--ok);
+}
+.eu-readiness-strip .eu-gate-card.warn .k::before {
+  background: var(--warn);
+}
+.eu-readiness-strip .eu-gate-card.bad .k::before {
+  background: var(--bad);
+}
+.eu-gate-card {
+  border: 1px solid var(--hair);
+  border-left: 2px solid var(--ink-3);
+  border-radius: 2px;
+  background: var(--surface-2);
+  padding: 8px 10px;
+  min-width: 0;
+}
+.eu-gate-card.ok {
+  border-left-color: var(--ok);
+}
+.eu-gate-card.warn {
+  border-left-color: var(--warn);
+}
+.eu-gate-card.bad {
+  border-left-color: var(--bad);
+}
+.eu-gate-card .k {
+  font-size: 10px;
+  color: var(--ink-4);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.eu-gate-card .v {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stApp .eu-crossdb-loader-notice {
+  margin: 8px 0 12px !important;
+  padding: 12px 13px !important;
+  border: 1px solid var(--hair) !important;
+  border-left: 3px solid var(--ink-4) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp .eu-crossdb-loader-notice.pending {
+  border-left-color: var(--accent) !important;
+  background: color-mix(in srgb, var(--accent-soft) 30%, var(--surface)) !important;
+}
+.stApp .eu-crossdb-loader-notice.info {
+  border-left-color: var(--accent) !important;
+}
+.stApp .eu-crossdb-loader-notice.ready {
+  border-color: var(--accent-border) !important;
+  border-left-color: var(--ok) !important;
+  background: color-mix(in srgb, var(--ok-soft) 38%, var(--surface)) !important;
+}
+.stApp .eu-crossdb-loader-notice.warning {
+  border-color: oklch(86% 0.06 80) !important;
+  border-left-color: var(--warn) !important;
+  background: color-mix(in srgb, var(--warn-soft) 46%, var(--surface)) !important;
+}
+.stApp .eu-crossdb-loader-notice.danger {
+  border-color: oklch(84% 0.07 25) !important;
+  border-left-color: var(--bad) !important;
+  background: color-mix(in srgb, var(--bad-soft) 44%, var(--surface)) !important;
+}
+.stApp .eu-crossdb-loader-notice span {
+  display: block !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  letter-spacing: .08em !important;
+  line-height: 1.1 !important;
+  text-transform: uppercase !important;
+}
+.stApp .eu-crossdb-loader-notice b {
+  display: block !important;
+  margin-top: 5px !important;
+  color: var(--ink) !important;
+  font-size: 13px !important;
+  font-weight: 720 !important;
+  line-height: 1.25 !important;
+}
+.stApp .eu-crossdb-loader-notice p {
+  margin: 5px 0 0 !important;
+  color: var(--ink-3) !important;
+  font-size: 12.2px !important;
+  line-height: 1.42 !important;
+}
+.stApp .eu-crossdb-loader-notice em {
+  display: block !important;
+  margin-top: 8px !important;
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-style: normal !important;
+  line-height: 1.35 !important;
+  overflow-wrap: anywhere !important;
+}
+.stApp [class*="st-key-eu_qv_loaded_bar"] {
+  margin: 12px 0 14px !important;
+  padding: 12px 14px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp [class*="st-key-eu_qv_loaded_bar"] [data-testid="stVerticalBlock"] {
+  gap: 9px !important;
+}
+.stApp [class*="st-key-quick_viz_edit_setup"] button,
+.stApp [class*="st-key-quick_viz_export_summary"] button {
+  min-height: 34px !important;
+  border-radius: var(--r-2) !important;
+  font-size: 12.5px !important;
+  font-weight: 700 !important;
+}
+.stApp [class*="st-key-eu_crossdb_loaded_bar"] {
+  margin: 12px 0 12px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid color-mix(in srgb, var(--ok) 22%, var(--hair)) !important;
+  border-radius: var(--r-2) !important;
+  background: color-mix(in srgb, var(--ok-soft) 42%, var(--surface)) !important;
+  box-shadow: none !important;
+}
+.stApp [class*="st-key-eu_crossdb_loaded_bar"] [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+
+/* Long-run Claude Design migration: remaining workspace pages */
+.stApp .eu-page-marker {
+  display: none !important;
+}
+
+.stApp .eu-patient-empty-state {
+  margin: 18px 0 0;
+  padding: 34px 18px;
+  border: 1px dashed var(--hair-2);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  text-align: center;
+}
+.stApp .eu-patient-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 12px;
+  border-radius: var(--r-2);
+  background: var(--ink);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+.stApp .eu-patient-empty-state b {
+  display: block;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 650;
+}
+.stApp .eu-patient-empty-state p {
+  max-width: 520px;
+  margin: 6px auto 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.stApp .eu-patient-summary-card {
+  width: min(300px, 100%) !important;
+  margin: 10px 0 14px !important;
+  padding: 14px 16px !important;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+}
+.stApp .eu-patient-overview-split {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 16px;
+  margin: 16px 0 14px;
+}
+.stApp .eu-patient-overview-split > * {
+  min-width: 0;
+}
+.stApp .eu-patient-overview-split .eu-patient-summary-card {
+  width: 100% !important;
+  margin: 0 !important;
+}
+.stApp .eu-patient-summary-title {
+  margin-top: 6px;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.stApp .eu-patient-summary-rows {
+  font-size: 12.5px;
+}
+.stApp .eu-patient-summary-rows .setup-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--hair);
+}
+.stApp .eu-patient-summary-rows .setup-row:last-child {
+  border-bottom: 0;
+}
+.stApp .eu-patient-summary-rows .k {
+  color: var(--ink-3);
+}
+.stApp .eu-patient-summary-rows .vv {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_rail"] {
+  margin: 16px 0 0 !important;
+}
+.stApp [class*="st-key-_eu_patient_nav_chip_rail"] {
+  margin: 6px 0 10px !important;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_rail"] [data-testid="stHorizontalBlock"],
+.stApp [class*="st-key-_eu_patient_nav_chip_rail"] [data-testid="stHorizontalBlock"] {
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 6px !important;
+  flex-wrap: wrap !important;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_rail"] [data-testid="stColumn"],
+.stApp [class*="st-key-_eu_patient_nav_chip_rail"] [data-testid="stColumn"] {
+  flex: 0 0 auto !important;
+  min-width: 0 !important;
+  width: auto !important;
+}
+.stApp .eu-patient-chip-label {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  margin-right: 4px;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_idle_"] .stButton > button,
+.stApp [class*="st-key-_eu_patient_stay_chip_active_"] .stButton > button,
+.stApp [class*="st-key-_eu_patient_nav_chip_"] .stButton > button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  min-width: 0 !important;
+  height: 24px !important;
+  min-height: 24px !important;
+  padding: 0 9px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-pill) !important;
+  background: var(--surface-2) !important;
+  box-shadow: none !important;
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_idle_"] .stButton > button:hover,
+.stApp [class*="st-key-_eu_patient_nav_chip_"] .stButton > button:hover {
+  border-color: var(--hair-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_active_"] .stButton > button {
+  border-color: var(--ink) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+}
+.stApp [class*="st-key-_eu_patient_stay_chip_idle_"] .stButton > button p,
+.stApp [class*="st-key-_eu_patient_stay_chip_active_"] .stButton > button p,
+.stApp [class*="st-key-_eu_patient_nav_chip_"] .stButton > button p {
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11.5px !important;
+  line-height: 1 !important;
+  margin: 0 !important;
+  white-space: nowrap !important;
+}
+.stApp .eu-patient-vitals-mini {
+  padding: 14px 16px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--sh-1);
+}
+.stApp .eu-patient-vitals-mini .mc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.stApp .eu-patient-vitals-mini .mc-head div {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.stApp .eu-patient-vitals-mini .mc-head span {
+  flex: none;
+  color: var(--ink-4);
+  font-size: 10.5px;
+}
+.stApp .eu-patient-vitals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+.stApp .eu-patient-vitals-row {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+.stApp .eu-patient-vitals-row > span {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+.stApp .eu-patient-vitals-spark {
+  display: block;
+  width: 100%;
+  height: 30px;
+}
+.stApp .eu-patient-vitals-spark polyline {
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.stApp .eu-patient-vitals-spark polyline.accent {
+  stroke: var(--accent);
+}
+.stApp .eu-patient-vitals-spark polyline.ok {
+  stroke: var(--ok);
+}
+.stApp .eu-patient-vitals-empty {
+  padding: 12px 0;
+  color: var(--ink-4);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.stApp .eu-patient-mini-heading span,
+.stApp .eu-crossdb-micro-heading span,
+.stApp .eu-crossdb-empty-copy span {
+  display: block;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .10em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+.stApp .eu-patient-mini-heading b,
+.stApp .eu-crossdb-micro-heading b {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 720;
+  line-height: 1.22;
+}
+.stApp .eu-patient-mini-heading p,
+.stApp .eu-crossdb-micro-heading p {
+  max-width: 720px;
+  margin: 4px 0 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.stApp .eu-patient-nav-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  white-space: nowrap;
+}
+.stApp .eu-patient-nav-count span {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.stApp .eu-patient-nav-count b {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+}
+.stApp .eu-crossdb-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 9px;
+  margin: 8px 0 14px;
+}
+.stApp .eu-crossdb-metric-card {
+  min-width: 0;
+  min-height: 72px;
+  padding: 10px 11px;
+  border: 1px solid var(--hair);
+  border-left: 2px solid var(--ink-3);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  box-shadow: none;
+}
+.stApp .eu-crossdb-metric-card.accent {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 36%, var(--surface));
+}
+.stApp .eu-crossdb-metric-card.ok {
+  border-left-color: var(--ok);
+}
+.stApp .eu-crossdb-metric-card.warn {
+  border-left-color: var(--warn);
+}
+.stApp .eu-crossdb-metric-card.danger {
+  border-left-color: var(--bad);
+}
+.stApp .eu-crossdb-metric-card span {
+  display: block;
+  overflow: hidden;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.stApp .eu-crossdb-metric-card b {
+  display: block;
+  margin-top: 7px;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 720;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-crossdb-metric-card em {
+  display: block;
+  margin-top: 7px;
+  overflow: hidden;
+  color: var(--ink-4);
+  font-size: 11.5px;
+  font-style: normal;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp:has(.eu-crossdb-page-marker) [data-testid="stPlotlyChart"] {
+  max-width: 100% !important;
+  overflow: hidden !important;
+  margin: 8px 0 14px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .035) !important;
+}
+.stApp .eu-crossdb-micro-heading {
+  margin: 16px 0 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hair);
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loader_collapsed_settings"] {
+  position: relative;
+  margin: 10px 0 8px !important;
+  padding: 10px 150px 10px 12px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface-2) !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loader_collapsed_settings"] .eu-crossdb-micro-heading {
+  margin: 0 !important;
+  padding-top: 0 !important;
+  border-top: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loader_collapsed_settings"] .eu-crossdb-micro-heading span {
+  font-size: 9.5px !important;
+  letter-spacing: .08em !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loader_collapsed_settings"] .eu-crossdb-micro-heading b {
+  margin-top: 4px !important;
+  font-size: 13px !important;
+  line-height: 1.25 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loader_collapsed_settings"] .eu-crossdb-micro-heading p {
+  margin-top: 3px !important;
+  max-width: 34ch !important;
+  font-size: 11.75px !important;
+  line-height: 1.35 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loader_collapsed_settings"] [class*="st-key-multidb_show_loader_setup"] {
+  position: absolute !important;
+  top: 10px !important;
+  right: 12px !important;
+  width: 128px !important;
+  margin: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_loader_collapsed_settings"] [class*="st-key-multidb_show_loader_setup"] button {
+  width: 128px !important;
+  min-height: 30px !important;
+  height: 30px !important;
+  padding: 0 9px !important;
+  border-radius: var(--r-2) !important;
+  font-size: 11.75px !important;
+  line-height: 17px !important;
+  white-space: nowrap !important;
+}
+.stApp .eu-directory-guide {
+  min-width: min(560px, 80vw);
+}
+.stApp .eu-directory-guide-head {
+  margin-bottom: 10px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--hair);
+}
+.stApp .eu-directory-guide-head span {
+  display: block;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.stApp .eu-directory-guide-head p {
+  margin: 5px 0 0;
+  color: var(--ink-3);
+  font-size: 12.2px;
+  line-height: 1.42;
+}
+.stApp .eu-directory-guide-tree {
+  display: grid;
+  gap: 6px;
+}
+.stApp .eu-directory-guide-row {
+  display: grid;
+  grid-template-columns: minmax(90px, .7fr) minmax(130px, 1fr) minmax(110px, .8fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+.stApp .eu-directory-guide-row span {
+  overflow: hidden;
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-directory-guide-row b {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-directory-guide-row em {
+  overflow: hidden;
+  color: var(--ink-4);
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-directory-guide-tips {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.stApp .eu-crossdb-stats-table-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--hair);
+  color: var(--ink);
+  line-height: 1.25;
+}
+.stApp .eu-crossdb-stats-table-title span {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 730;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.stApp .eu-crossdb-stats-table-title b {
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 740;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-crossdb-stats-reference-table {
+  display: none;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] {
+  margin: 8px 0 14px !important;
+  padding: 12px !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .035) !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stVerticalBlock"],
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stHorizontalBlock"],
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stColumn"] {
+  min-width: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stHorizontalBlock"] {
+  align-items: stretch !important;
+  gap: 12px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stSelectbox"] {
+  margin-bottom: 10px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stSelectbox"] div[role="combobox"] {
+  min-height: 34px !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface-2) !important;
+  box-shadow: none !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11.5px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stPlotlyChart"],
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stDataFrame"] {
+  max-width: 100% !important;
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stDataFrame"] {
+  min-height: 0 !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stDataFrame"] canvas {
+  max-width: 100% !important;
+}
+
+@media (max-width: 760px) {
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] {
+    padding: 10px !important;
+  }
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stHorizontalBlock"] {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stColumn"] {
+    width: 100% !important;
+    flex: 1 1 auto !important;
+  }
+  .stApp .eu-crossdb-stats-table-title {
+    display: block;
+  }
+  .stApp .eu-crossdb-stats-table-title b {
+    display: block;
+    margin-top: 4px;
+  }
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] .eu-crossdb-stats-reference-table {
+    display: block;
+    max-width: 100%;
+    margin: 0;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] .eu-crossdb-stats-reference-table table.eu-table {
+    min-width: 520px;
+  }
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] .eu-crossdb-stats-reference-table .eu-table th,
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] .eu-crossdb-stats-reference-table .eu-table td {
+    padding: 9px 10px;
+    font-size: 11.5px;
+    line-height: 1.35;
+    white-space: nowrap;
+  }
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_focused_review_panel"] [data-testid="stDataFrame"] {
+    display: none !important;
+  }
+}
+.stApp .eu-crossdb-db-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 8px;
+}
+.stApp .eu-crossdb-db-card {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+.stApp .eu-crossdb-db-card.selected {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-soft) 34%, var(--surface));
+}
+.stApp .eu-crossdb-db-card span {
+  display: block;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.stApp .eu-crossdb-db-card b {
+  display: block;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12.3px;
+  font-weight: 720;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-crossdb-db-card em {
+  display: inline-flex;
+  margin-top: 7px;
+  padding: 2px 7px;
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-pill);
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.stApp .eu-crossdb-db-card.selected em {
+  border-color: var(--accent-border);
+  color: var(--accent-ink);
+}
+.stApp .eu-crossdb-setup-contract {
+  margin: 12px 0 14px;
+  overflow: hidden;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+.stApp .eu-crossdb-setup-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--surface-2) 56%, var(--surface));
+}
+.stApp .eu-crossdb-setup-head span {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.stApp .eu-crossdb-setup-head b {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 720;
+}
+.stApp .eu-crossdb-setup-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.stApp .eu-crossdb-setup-node {
+  display: flex;
+  gap: 9px;
+  min-width: 0;
+  padding: 12px;
+}
+.stApp .eu-crossdb-setup-node + .eu-crossdb-setup-node {
+  border-left: 1px solid var(--hair);
+}
+.stApp .eu-crossdb-setup-node > span {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-1);
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 750;
+}
+.stApp .eu-crossdb-setup-node.ready > span {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.stApp .eu-crossdb-setup-node.warning > span {
+  border-color: oklch(86% 0.06 80);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.stApp .eu-crossdb-setup-node b {
+  display: block;
+  color: var(--ink);
+  font-size: 12.2px;
+  font-weight: 720;
+  line-height: 1.22;
+}
+.stApp .eu-crossdb-setup-node p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--ink-3);
+  font-size: 11.3px;
+  line-height: 1.35;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-multidb_data_root_browse"] {
+  min-width: 76px !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-multidb_data_root_browse"] button {
+  min-width: 76px !important;
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-multidb_data_root_browse"] button *,
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-multidb_data_root_browse"] p {
+  white-space: nowrap !important;
+}
+.stApp:has(.eu-crossdb-page-marker) .stSelectbox label,
+.stApp:has(.eu-crossdb-page-marker) .stMultiSelect label,
+.stApp:has(.eu-crossdb-page-marker) .stNumberInput label {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 650 !important;
+  letter-spacing: .08em !important;
+  text-transform: uppercase !important;
+}
+
+.stApp:has(.eu-cohort-page-marker) [data-testid="stExpander"],
+.stApp:has(.eu-crossdb-page-marker) [data-testid="stExpander"] {
+  overflow: hidden !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+}
+.stApp:has(.eu-cohort-page-marker) [data-testid="stExpander"] details,
+.stApp:has(.eu-crossdb-page-marker) [data-testid="stExpander"] details {
+  background: transparent !important;
+}
+.stApp:has(.eu-cohort-page-marker) div[role="radiogroup"] > label,
+.stApp:has(.eu-crossdb-page-marker) div[role="radiogroup"] > label {
+  min-height: 34px !important;
+  padding: 7px 10px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+}
+.stApp:has(.eu-cohort-page-marker) div[role="radiogroup"] > label:has(input:checked),
+.stApp:has(.eu-crossdb-page-marker) div[role="radiogroup"] > label:has(input:checked) {
+  border-color: var(--accent-border) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+  -webkit-text-fill-color: var(--accent-ink) !important;
+}
+.stApp .eu-crossdb-summary-ledger,
+.stApp .eu-crossdb-availability-board,
+.stApp .eu-crossdb-availability-empty {
+  margin: 14px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .035);
+}
+.stApp .eu-crossdb-summary-head span,
+.stApp .eu-crossdb-availability-head span,
+.stApp .eu-crossdb-availability-empty span {
+  display: block;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+.stApp .eu-crossdb-summary-head b,
+.stApp .eu-crossdb-availability-head b,
+.stApp .eu-crossdb-availability-empty b {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 720;
+  line-height: 1.22;
+}
+.stApp .eu-crossdb-summary-head p,
+.stApp .eu-crossdb-availability-head p,
+.stApp .eu-crossdb-availability-empty p {
+  margin: 5px 0 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.stApp .eu-crossdb-availability-cell.ok span,
+.stApp .eu-crossdb-availability-legend span.ok {
+  border-color: color-mix(in srgb, var(--ok) 34%, var(--hair));
+  background: color-mix(in srgb, var(--ok) 13%, var(--surface));
+  color: var(--ok);
+}
+.stApp .eu-crossdb-availability-cell.missing span,
+.stApp .eu-crossdb-availability-legend span.missing {
+  border-color: var(--hair-2);
+  background: color-mix(in srgb, var(--surface-2) 70%, var(--surface));
+  color: var(--ink-4);
+}
+.stApp .eu-crossdb-availability-empty {
+  padding: 14px;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 26%, var(--surface));
+}
+.stApp .eu-crossdb-active-rail {
+  margin: 10px 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+}
+.stApp .eu-crossdb-active-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--surface-2) 48%, var(--surface));
+}
+.stApp .eu-crossdb-active-head span {
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: .08em;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.stApp .eu-crossdb-active-head em {
+  flex: none;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.stApp .eu-crossdb-active-track {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.stApp .eu-crossdb-active-node.primary {
+  box-shadow: inset 2px 0 0 var(--ink);
+}
+.stApp .eu-crossdb-active-node.ready {
+  background: color-mix(in srgb, var(--ok-soft) 18%, var(--surface));
+}
+.stApp .eu-crossdb-active-node.missing {
+  background: color-mix(in srgb, var(--warn-soft) 24%, var(--surface));
+}
+.stApp .eu-crossdb-active-node.primary > span {
+  border-color: var(--ink);
+  background: var(--surface);
+  color: var(--ink);
+}
+.stApp .eu-crossdb-active-node.missing em {
+  border-color: oklch(86% 0.06 80);
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_distribution_toggle"] {
+  display: flex !important;
+  justify-content: flex-end !important;
+  width: 100% !important;
+  margin-top: 8px !important;
+  padding-top: 8px !important;
+  min-height: 40px !important;
+}
+
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_distribution_toggle"] .stButton,
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_distribution_toggle"] [data-testid="stButton"] {
+  width: auto !important;
+  min-width: 0 !important;
+}
+
+.stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_distribution_toggle"] button {
+  width: auto !important;
+  min-width: 204px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  margin-top: 0 !important;
+  padding: 0 12px !important;
+  border-color: var(--hair-2) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+  box-shadow: none !important;
+  font-size: 12.25px !important;
+  font-weight: 500 !important;
+  white-space: nowrap !important;
+}
+
+@media (max-width: 600px) {
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_distribution_toggle"] {
+    justify-content: stretch !important;
+  }
+
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_distribution_toggle"] .stButton,
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_distribution_toggle"] [data-testid="stButton"] {
+    width: 100% !important;
+  }
+
+  .stApp:has(.eu-crossdb-page-marker) [class*="st-key-eu_crossdb_distribution_toggle"] button {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 36px !important;
+    min-height: 36px !important;
+  }
+}
+
+@media (max-width: 920px) {
+  .stApp .eu-patient-overview-split {
+    grid-template-columns: 1fr;
+  }
+  .stApp .eu-crossdb-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stApp .eu-crossdb-setup-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stApp .eu-crossdb-setup-node:nth-child(3) {
+    border-left: 0;
+    border-top: 1px solid var(--hair);
+  }
+  .stApp .eu-crossdb-setup-node:nth-child(4) {
+    border-top: 1px solid var(--hair);
+  }
+}
+
+@media (max-width: 640px) {
+  .stApp .eu-directory-guide-row,
+  .stApp .eu-crossdb-db-grid,
+  .stApp .eu-crossdb-setup-grid {
+    grid-template-columns: 1fr;
+  }
+  .stApp .eu-directory-guide-row b,
+  .stApp .eu-directory-guide-row em {
+    white-space: normal;
+  }
+  .stApp .eu-crossdb-setup-head {
+    display: block;
+  }
+  .stApp .eu-crossdb-setup-head b {
+    display: block;
+    margin-top: 4px;
+  }
+  .stApp .eu-crossdb-active-head {
+    display: block;
+  }
+  .stApp .eu-crossdb-active-head em {
+    display: block;
+    margin-top: 4px;
+  }
+  .stApp .eu-crossdb-active-track {
+    grid-template-columns: 1fr;
+  }
+  .stApp .eu-crossdb-setup-node + .eu-crossdb-setup-node {
+    border-left: 0;
+    border-top: 1px solid var(--hair);
+  }
+  .stApp .eu-crossdb-metric-grid,
+  .stApp .eu-crossdb-empty-steps {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .stApp [class*="st-key-eu_qv_loaded_bar"] {
+    padding: 12px !important;
+  }
+  .stApp [class*="st-key-eu_crossdb_loaded_bar"] {
+    padding: 0 !important;
+  }
+}
+
+/* Moved from shell_overrides.css: Cross-DB detail callout mobile layout. */
+
+@media (max-width: 760px) {
+  .stApp .eu-crossdb-detail-callout {
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 8px 10px;
+  }
+  .stApp .eu-crossdb-detail-status {
+    grid-column: 2;
+    width: fit-content;
+  }
+}

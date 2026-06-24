@@ -1,0 +1,2536 @@
+/* Tutorial/Get Started route-specific Streamlit overrides.
+   Loaded by shell_styles.py only on tutorial/get-started routes.
+   Do not move page-specific rules back to shell_overrides.css or alignment.css. */
+
+/* Moved from alignment.css: Tutorial topbar control offset base. */
+.stApp [class*="st-key-eu_topbar_controls_tutorial"] [data-testid="stMarkdown"],
+.stApp [class*="st-key-eu_topbar_controls_tutorial"] [data-testid="stHorizontalBlock"] {
+  transform: translate(7px, -50%) !important;
+}
+.stApp .eu-start-card,
+.stApp .eu-rail-card {
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  box-shadow: none;
+}
+.stApp .eu-start-card.primary {
+  min-height: 206px;
+  padding: 22px;
+  border-color: var(--accent-border);
+  background: linear-gradient(180deg, var(--accent-soft), var(--surface));
+}
+.stApp .eu-start-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.stApp .eu-start-kicker {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-transform: none;
+}
+.stApp .eu-start-card.primary .eu-start-kicker {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--accent-ink);
+  font-size: 17px;
+  font-weight: 760;
+  line-height: 1.2;
+  text-transform: none;
+}
+.stApp .eu-start-head h3 {
+  margin: 6px 0 0;
+  color: var(--ink);
+  font-size: 18px !important;
+  font-weight: 620 !important;
+  line-height: 1.2 !important;
+}
+.stApp .eu-start-card.primary .eu-start-head h3 {
+  color: var(--accent-ink);
+  font-size: 21px !important;
+}
+.stApp .eu-start-desc {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13.4px;
+  line-height: 1.52;
+}
+.stApp .eu-start-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.stApp .eu-start-card.primary .eu-start-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.stApp .eu-start-list li {
+  display: flex;
+  gap: 7px;
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.stApp .eu-start-list li > span {
+  width: 5px;
+  height: 5px;
+  margin-top: 6px;
+  flex: 0 0 auto;
+  border-radius: 99px;
+  background: var(--accent);
+}
+.stApp .eu-start-list p {
+  margin: 0;
+  min-width: 0;
+}
+.stApp [class*="st-key-eu_tutorial_secondary_starts"] [class*="st-key-_eu_tutorial_real"],
+.stApp [class*="st-key-eu_tutorial_secondary_starts"] [class*="st-key-_eu_tutorial_nodata"] {
+  margin-top: auto !important;
+}
+.stApp [class*="st-key-eu_tutorial_dictionary_panel"] {
+  margin-top: 24px;
+  padding: 18px;
+  min-height: clamp(520px, 56vh, 720px);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  box-sizing: border-box;
+}
+.stApp [class*="st-key-eu_tutorial_dictionary_panel"] [data-testid="stVerticalBlock"] {
+  gap: 10px !important;
+}
+.stApp .eu-dict-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 0.42fr);
+  gap: 18px;
+  align-items: start;
+}
+.stApp .eu-dict-kicker {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 720;
+  line-height: 1.25;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.stApp .eu-dict-head h3 {
+  margin: 7px 0 8px;
+  color: var(--ink);
+  font-size: 20px !important;
+  font-weight: 650 !important;
+  line-height: 1.24 !important;
+  letter-spacing: 0 !important;
+}
+.stApp .eu-dict-head p {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 13.2px;
+  line-height: 1.52;
+}
+.stApp .eu-dict-source {
+  padding: 10px 11px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+}
+.stApp .eu-dict-source span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink-4);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.stApp .eu-dict-source code {
+  display: block;
+  white-space: normal;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 10.8px;
+  line-height: 1.35;
+}
+.stApp .eu-dict-source strong {
+  display: block;
+  margin-top: 9px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.stApp [class*="st-key-eu_tutorial_dictionary_panel"] [data-testid="stSelectbox"] label {
+  color: var(--ink-4);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.stApp [class*="st-key-eu_tutorial_dictionary_panel"] [data-testid="stSelectbox"] {
+  max-width: 380px;
+  position: relative;
+}
+.stApp [class*="st-key-eu_tutorial_dictionary_panel"] [data-testid="stSelectbox"] [data-baseweb="select"] {
+  position: relative;
+  min-height: 38px;
+  border-radius: var(--r-2);
+  box-shadow: none;
+}
+.stApp [class*="st-key-eu_tutorial_dictionary_panel"] [data-testid="stSelectbox"] [data-baseweb="select"] svg {
+  opacity: 0 !important;
+}
+.stApp [class*="st-key-eu_tutorial_dictionary_panel"] [data-testid="stSelectbox"] [data-baseweb="select"]::after {
+  content: "⌄";
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid var(--hair);
+  border-radius: 0 var(--r-2) var(--r-2) 0;
+  color: var(--ink);
+  font-size: 22px;
+  line-height: 1;
+  pointer-events: none;
+}
+.stApp [class*="st-key-eu_tutorial_dictionary_panel"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+  padding-right: 44px !important;
+}
+.stApp .eu-dict-module-block[data-active="true"] .eu-dict-module-heading {
+  background: var(--surface);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.stApp .eu-dict-module-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--hair);
+  background: var(--surface-2);
+}
+.stApp .eu-dict-module-heading b {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stApp .eu-dict-module-heading span {
+  flex: none;
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.stApp .eu-dict-list-row {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.25fr) minmax(0, 1fr) minmax(72px, 0.2fr);
+  gap: 11px;
+  align-items: start;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--hair);
+  color: var(--ink-2);
+  font-size: 12px;
+  background: var(--surface);
+}
+.stApp .eu-dict-list-row code {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.stApp .eu-dict-list-row b {
+  display: block;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.stApp .eu-dict-list-row p {
+  margin: 3px 0 0;
+  color: var(--ink-3);
+  font-size: 11.4px;
+  line-height: 1.38;
+}
+.stApp .eu-dict-list-row em {
+  color: var(--ink-4);
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 10.8px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.stApp [class*="st-key-_eu_tutorial_dictionary"] button {
+  margin-top: 8px !important;
+  min-height: 34px !important;
+}
+.stApp .eu-rail-card {
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.stApp .eu-rail-title {
+  margin-bottom: 10px;
+  color: var(--ink);
+  font-size: 14.5px;
+  font-weight: 700;
+}
+.stApp .eu-flow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.stApp .eu-flow-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+}
+.stApp .eu-flow-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.stApp .eu-flow-title {
+  color: var(--ink);
+  font-size: 13.8px;
+  font-weight: 700;
+}
+.stApp .eu-flow-desc {
+  margin-top: 2px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.38;
+}
+.stApp .eu-flow-tag {
+  color: var(--ink-4);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.stApp .eu-agent-mini p {
+  margin: 0 0 10px;
+  color: var(--ink-3);
+  font-size: 12.8px;
+  line-height: 1.45;
+}
+.stApp .eu-agent-mini-row {
+  display: flex;
+  gap: 8px;
+  padding: 7px 0;
+  border-top: 1px solid var(--hair);
+}
+.stApp .eu-agent-mini-row > span {
+  width: 7px;
+  height: 7px;
+  margin-top: 6px;
+  border-radius: 99px;
+  background: var(--accent);
+}
+.stApp .eu-agent-mini-row b,
+.stApp .eu-agent-mini-row small {
+  display: block;
+}
+.stApp .eu-agent-mini-row b {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+.stApp .eu-agent-mini-row small {
+  color: var(--ink-4);
+  font-size: 11.8px;
+}
+.stApp [class*="st-key-eu_tutorial_resources_card"] {
+  padding: 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  box-shadow: none;
+}
+.stApp [class*="st-key-eu_tutorial_resources_card"] [data-testid="stVerticalBlock"] {
+  gap: 7px !important;
+}
+.stApp [class*="st-key-_eu_tutorial_resource_"] button {
+  justify-content: space-between !important;
+  min-height: 38px !important;
+  padding: 8px 10px !important;
+  border-color: var(--hair) !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-2) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  text-align: left !important;
+}
+.stApp [class*="st-key-_eu_tutorial_resource_"] button:hover,
+.stApp [class*="st-key-_eu_tutorial_resource_"] button:focus-visible {
+  border-color: var(--accent-border) !important;
+  background: var(--accent-soft) !important;
+  color: var(--ink) !important;
+}
+.stApp [class*="st-key-_eu_tutorial_resource_"] button [data-testid="stMarkdownContainer"],
+.stApp [class*="st-key-_eu_tutorial_resource_"] button [data-testid="stMarkdownContainer"] p {
+  width: 100%;
+  text-align: left;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 1.25 !important;
+}
+.stApp [class*="st-key-_eu_tutorial_demo"] button,
+.stApp [class*="st-key-_eu_tutorial_real"] button,
+.stApp [class*="st-key-_eu_tutorial_nodata"] button {
+  margin-top: 8px !important;
+  margin-bottom: 14px !important;
+}
+@media (max-width: 960px) {
+  .stApp .eu-start-card.primary .eu-start-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Moved from shell_overrides.css: Get Started page head */
+.stApp .eu-getstarted-head {
+  margin: 0 0 22px;
+  max-width: 760px;
+}
+.stApp .eu-getstarted-head h1 {
+  margin: 8px 0 8px;
+  color: var(--ink);
+  font-size: 27px;
+  font-weight: 650;
+  line-height: 1.16;
+  letter-spacing: 0;
+}
+.stApp .eu-getstarted-head p {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+/* Moved from shell_overrides.css: Get Started route controls and FAQ */
+.stApp [class*="st-key-eu_getstarted_demo_tour"] {
+  margin: 0 0 32px !important;
+  padding: 28px 32px !important;
+  border: 1px solid var(--accent-border) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--accent-soft) !important;
+  box-shadow: var(--shadow-1) !important;
+}
+.stApp [class*="st-key-eu_getstarted_demo_tour"] [data-testid="column"] {
+  display: flex !important;
+  align-items: center !important;
+}
+.stApp [class*="st-key-eu_getstarted_demo_tour"] .stButton > button {
+  min-height: 54px !important;
+  font-size: 16px !important;
+}
+.stApp .eu-guide-section {
+  margin: 30px 0 16px;
+}
+.stApp .eu-guide-section h2 {
+  margin: 8px 0 0;
+  color: var(--ink);
+  font-size: 21px !important;
+  font-weight: 650 !important;
+  line-height: 1.24 !important;
+  letter-spacing: 0 !important;
+}
+.stApp [class*="st-key-eu_getstarted_steps"] {
+  padding: 26px 26px 12px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--shadow-1) !important;
+}
+.stApp [class*="st-key-eu_getstarted_steps"] [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+.stApp .eu-guide-step-copy {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.stApp .eu-guide-step-num {
+  width: 46px;
+  height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--hair-2);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+}
+.stApp .eu-guide-step-title {
+  margin: 0 0 8px;
+  color: var(--ink);
+  font-size: 19px !important;
+  font-weight: 650 !important;
+  line-height: 1.24 !important;
+  letter-spacing: 0 !important;
+}
+.stApp .eu-guide-step-body p {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 15px;
+  line-height: 1.55;
+}
+.stApp [class*="st-key-_eu_getstarted_step_"] button {
+  width: fit-content !important;
+  min-width: 150px !important;
+  min-height: 36px !important;
+  padding: 8px 14px !important;
+  font-size: 14px !important;
+}
+.stApp .eu-guide-faq-head {
+  margin-top: 34px;
+}
+.stApp [class*="st-key-eu_getstarted_faq_card"] {
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--shadow-1) !important;
+  overflow: hidden !important;
+}
+.stApp [class*="st-key-eu_getstarted_faq_card"] > [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+.stApp [class*="st-key-eu_getstarted_faq_"] {
+  border-bottom: 1px solid var(--hair) !important;
+}
+.stApp [class*="st-key-_eu_getstarted_faq_q_"] .stButton > button {
+  min-height: 56px !important;
+  justify-content: flex-start !important;
+  padding: 0 20px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--ink) !important;
+  text-align: left !important;
+}
+.stApp [class*="st-key-_eu_getstarted_faq_q_"] .stButton > button:hover {
+  background: color-mix(in oklab, var(--accent-soft) 45%, transparent) !important;
+}
+.stApp [class*="st-key-_eu_getstarted_faq_q_"] .stButton > button p {
+  width: 100% !important;
+  display: flex !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+  font-size: 16px !important;
+  font-weight: 650 !important;
+  line-height: 1.3 !important;
+}
+.stApp .eu-faq-answer {
+  margin: -4px 54px 22px 54px;
+  color: var(--ink-3);
+  font-size: 15px;
+  line-height: 1.58;
+}
+.stApp .eu-faq-item {
+  border-bottom: 1px solid var(--hair);
+}
+.stApp .eu-faq-item:last-child {
+  border-bottom: 0;
+}
+.stApp .eu-faq-question {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 650;
+}
+.stApp .eu-faq-question span {
+  color: var(--ink-4);
+  font-size: 20px;
+}
+.stApp .eu-faq-item.open .eu-faq-question span {
+  transform: rotate(90deg);
+}
+.stApp .eu-faq-item p {
+  margin: -4px 54px 22px 54px;
+  color: var(--ink-3);
+  font-size: 15px;
+  line-height: 1.58;
+}
+
+/* Moved from shell_overrides.css: Get Started mobile rules split from mixed media block */
+@media (max-width: 780px) {
+  .stApp [class*="st-key-eu_getstarted_demo_tour"] {
+    padding: 20px !important;
+  }
+  .stApp .eu-guide-hero-copy,
+  .stApp .eu-guide-step-copy {
+    grid-template-columns: 1fr;
+  }
+  .stApp .eu-guide-step-num {
+    width: 38px;
+    height: 38px;
+  }
+  .stApp [class*="st-key-_eu_getstarted_step_"] button {
+    width: 100% !important;
+  }
+  .stApp .eu-faq-item p {
+    margin: -2px 20px 20px;
+  }
+}
+
+/* Moved from alignment.css: Get Started reference layout */
+/* ============================================================
+   GET STARTED · match screens-help.js reference
+   ============================================================ */
+.stApp .eu-getstarted-head {
+  margin: 0 0 26px !important;
+  max-width: 760px !important;
+}
+.stApp .eu-getstarted-head .eyebrow,
+.stApp .eu-guide-section .eyebrow {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  letter-spacing: .18em !important;
+  line-height: 1.2 !important;
+  text-transform: uppercase !important;
+}
+.stApp .eu-getstarted-head h1 {
+  margin: 15px 0 8px !important;
+  padding: 0 !important;
+  font-size: 24px !important;
+  font-weight: 650 !important;
+  line-height: 1.18 !important;
+  letter-spacing: 0 !important;
+}
+.stApp .eu-getstarted-head p {
+  max-width: 76ch !important;
+  color: var(--ink-3) !important;
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+}
+.stApp [class*="st-key-eu_getstarted_demo_tour"] {
+  margin: 0 0 18px !important;
+  padding: 28px 26px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-4) !important;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-soft) 60%, var(--surface)),
+    var(--surface)
+  ) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp [class*="st-key-eu_getstarted_demo_tour"] .stButton > button {
+  min-height: 44px !important;
+  padding: 0 20px !important;
+  font-size: 13px !important;
+  font-weight: 650 !important;
+}
+.stApp .eu-guide-section {
+  margin: 12px 0 14px !important;
+}
+.stApp .eu-guide-section h2 {
+  margin: 6px 0 0 !important;
+  font-size: 16px !important;
+  font-weight: 650 !important;
+  line-height: 1.25 !important;
+  letter-spacing: 0 !important;
+}
+.stApp [class*="st-key-eu_getstarted_steps"] {
+  padding: 20px 20px 0 !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp .eu-guide-step-copy {
+  grid-template-columns: 44px minmax(0, 1fr) !important;
+  gap: 16px !important;
+}
+.stApp .eu-guide-step-num {
+  width: 38px !important;
+  height: 38px !important;
+  border: 1.5px solid var(--hair-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  font-size: 14px !important;
+  font-weight: 650 !important;
+}
+.stApp [class*="st-key-eu_getstarted_step_1"] .eu-guide-step-num {
+  border-color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+}
+.stApp .eu-guide-step-title {
+  margin: 0 0 4px !important;
+  font-size: 15px !important;
+  font-weight: 650 !important;
+  line-height: 1.25 !important;
+  letter-spacing: 0 !important;
+}
+.stApp .eu-guide-step-body p {
+  max-width: 64ch !important;
+  color: var(--ink-3) !important;
+  font-size: 12.75px !important;
+  line-height: 1.55 !important;
+}
+.stApp [class*="st-key-_eu_getstarted_step_"] button {
+  width: fit-content !important;
+  min-width: 0 !important;
+  min-height: 29px !important;
+  padding: 0 12px !important;
+  border-radius: var(--r-2) !important;
+  font-size: 12px !important;
+  font-weight: 650 !important;
+}
+
+/* Tutorial exact reference values from screens-help.js + app.css/pages.css. */
+.stApp:has(.eu-getstarted-head) .eu-getstarted-head,
+.stApp:has(.eu-getstarted-head) .eu-getstarted-head *,
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_demo_tour"],
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_demo_tour"] *,
+.stApp:has(.eu-getstarted-head) .eu-guide-section,
+.stApp:has(.eu-getstarted-head) .eu-guide-section *,
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_steps"],
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_steps"] *,
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_faq_card"],
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_faq_card"] * {
+  font-family: var(--font-sans), var(--font-cn), sans-serif !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-getstarted-head .eyebrow,
+.stApp:has(.eu-getstarted-head) .eu-guide-section .eyebrow {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.08em !important;
+  line-height: 1.5 !important;
+  text-transform: uppercase !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-getstarted-head {
+  max-width: none !important;
+  margin: 0 0 22px !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-getstarted-head h1 {
+  margin: 6px 0 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-size: 25px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em !important;
+  line-height: 1.15 !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-getstarted-head p {
+  max-width: 70ch !important;
+  margin: 7px 0 0 !important;
+  color: var(--ink-3) !important;
+  font-size: 13.5px !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_demo_tour"] {
+  margin: 0 0 18px !important;
+  padding: 28px 26px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-4) !important;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 60%, var(--surface)), var(--surface)) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_demo_tour"] [data-testid="stHorizontalBlock"] {
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 20px !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-guide-hero-copy {
+  display: block !important;
+  max-width: 60ch !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-guide-hero-title-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-guide-mark {
+  width: 34px !important;
+  height: 34px !important;
+  border-radius: var(--r-2) !important;
+  flex: none !important;
+  display: grid !important;
+  place-items: center !important;
+  background: var(--accent) !important;
+  color: #fff !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-guide-hero-title {
+  color: var(--ink) !important;
+  font-size: 17px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-guide-hero-copy p {
+  max-width: none !important;
+  margin: 12px 0 0 !important;
+  color: var(--ink-3) !important;
+  font-size: 12.75px !important;
+  line-height: 1.6 !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-_eu_getstarted_start_demo"] button {
+  height: 44px !important;
+  min-height: 44px !important;
+  padding: 0 20px !important;
+  border-radius: var(--r-2) !important;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-guide-section {
+  margin: 26px 0 12px !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-guide-section h2 {
+  margin: 3px 0 0 !important;
+  color: var(--ink) !important;
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_steps"] {
+  padding: 18px 20px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_steps"] > [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_step_"] {
+  padding: 18px 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_step_4"] {
+  border-bottom: 0 !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-guide-step-copy.guide-step {
+  display: grid !important;
+  grid-template-columns: 44px 1fr !important;
+  gap: 16px !important;
+  align-items: start !important;
+  padding: 0 !important;
+  border: 0 !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-guide-step-num.gs-num {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 50% !important;
+  border: 1.5px solid var(--hair-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_step_1"] .eu-guide-step-num.gs-num {
+  border-color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-guide-step-title.gs-t {
+  margin: 0 !important;
+  color: var(--ink) !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
+  line-height: 1.5 !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-guide-step-body p.gs-d {
+  max-width: 64ch !important;
+  margin: 4px 0 0 !important;
+  color: var(--ink-3) !important;
+  font-size: 12.75px !important;
+  line-height: 1.55 !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_step_"] [data-testid="stHorizontalBlock"] {
+  margin-top: 12px !important;
+  gap: 8px !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-_eu_getstarted_step_"] button {
+  width: fit-content !important;
+  min-width: 0 !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 10px !important;
+  border-radius: var(--r-2) !important;
+  font-size: 12.25px !important;
+  font-weight: 500 !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_faq_card"] {
+  padding: 0 !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  overflow: hidden !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_faq_card"] > [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_faq_"] {
+  position: relative !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-faq-item {
+  border-bottom: 1px solid var(--hair) !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-eu_getstarted_faq_4"] .eu-faq-item {
+  border-bottom: 0 !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-faq-question.faq-q {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  width: 100% !important;
+  padding: 14px 16px !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--ink) !important;
+  font-size: 13.25px !important;
+  font-weight: 600 !important;
+  line-height: 1.5 !important;
+  text-align: left !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-faq-question .fq-chev {
+  margin-left: auto !important;
+  color: var(--ink-4) !important;
+  transition: transform .15s !important;
+  flex: none !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-faq-item.open .fq-chev {
+  transform: rotate(90deg) !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-faq-answer.faq-a {
+  padding: 0 16px 16px 44px !important;
+  color: var(--ink-3) !important;
+  font-size: 12.75px !important;
+  line-height: 1.6 !important;
+}
+.stApp:has(.eu-getstarted-head) .eu-faq-item:not(.open) .eu-faq-answer {
+  display: none !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-_eu_getstarted_faq_q_"] {
+  position: absolute !important;
+  inset: 0 auto auto 0 !important;
+  z-index: 2 !important;
+  width: 100% !important;
+  height: 50px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp:has(.eu-getstarted-head) [class*="st-key-_eu_getstarted_faq_q_"] .stButton,
+.stApp:has(.eu-getstarted-head) [class*="st-key-_eu_getstarted_faq_q_"] button {
+  width: 100% !important;
+  height: 50px !important;
+  min-height: 50px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  box-shadow: none !important;
+  opacity: 0 !important;
+}
+
+/* Moved from alignment.css: Get Started sidebar dock */
+/* Get Started sidebar dock (reference screens-help.js rail). */
+[data-testid="stSidebar"] .eu-tutorial-rail,
+[data-testid="stSidebar"] .eu-tutorial-shortcuts {
+  padding: 0 16px !important;
+}
+[data-testid="stSidebar"] .eu-tutorial-rail .design-section,
+[data-testid="stSidebar"] .eu-tutorial-shortcuts .design-section {
+  padding: 0 !important;
+  margin: 10px 0 8px !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_"] {
+  position: relative !important;
+  min-height: 28px !important;
+  margin: 0 16px 6px !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_"] [data-testid="stMarkdown"],
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_"] [data-testid="stMarkdownContainer"] {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_"] [data-testid="stElementContainer"]:has(.stButton) {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3 !important;
+  height: 28px !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+[data-testid="stSidebar"] .eu-tutorial-rail-link {
+  display: flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  height: 28px !important;
+  color: var(--ink-2) !important;
+  font-size: 12.5px !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+}
+[data-testid="stSidebar"] .eu-tutorial-rail-link .ico {
+  width: 17px !important;
+  height: 17px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: var(--ink-4) !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_"] .stButton {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3 !important;
+  margin: 0 !important;
+  opacity: 0 !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_"] .stButton > button {
+  width: 100% !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 !important;
+}
+[data-testid="stSidebar"] .eu-tutorial-shortcuts {
+  margin-top: -28px !important;
+}
+[data-testid="stSidebar"] .eu-shortcut-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  min-height: 30px !important;
+  border-bottom: 1px solid var(--hair) !important;
+  color: var(--ink-3) !important;
+  font-size: 12px !important;
+}
+[data-testid="stSidebar"] .eu-shortcut-row:last-child {
+  border-bottom: 0 !important;
+}
+[data-testid="stSidebar"] .eu-shortcut-row b {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  font-weight: 500 !important;
+}
+[data-testid="stSidebar"] .eu-shortcut-row i {
+  min-width: 18px !important;
+  height: 18px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: 4px !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  font-style: normal !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  line-height: 1 !important;
+}
+[data-testid="stSidebar"] .eu-shortcut-row em {
+  color: var(--ink-4) !important;
+  font-style: normal !important;
+}
+
+/* Moved from alignment.css: Tutorial EOF action-row residuals */
+/* EOF final: Tutorial action rows follow screens-help.js layout. */
+html body .stApp:has(.eu-tutorial-page-marker) .gs-actions {
+  width: 874px !important;
+  max-width: none !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .eu-getstarted-head .lead {
+  max-width: 567px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .eu-guide-hero-left {
+  max-width: 486px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .eu-guide-hero-action {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .eu-guide-hero-title {
+  width: 309.375px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-step .gs-d {
+  max-width: 489.6px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail {
+  transform: translate(0, 2.812px) !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail .nav-item {
+  position: relative !important;
+}
+
+/* Moved from classic_viz_overrides.css: Tutorial numeric/sidebar lock */
+/* Tutorial numeric lock: visible DOM follows easyicu_ui/EasyICU/js/screens-help.js. */
+.stApp:has(.eu-tutorial-page-marker) {
+  --eu-tutorial-ref-sans: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --eu-tutorial-ref-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-tutorial-page-marker {
+  width: 976px !important;
+  max-width: none !important;
+  height: 98px !important;
+  margin: 0 0 18px !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--eu-tutorial-ref-sans) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-tutorial-page-marker .eyebrow,
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-section .eyebrow,
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-section .lbl {
+  display: block !important;
+  height: 15.75px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  color: var(--ink-4) !important;
+  font-family: var(--eu-tutorial-ref-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 15.75px !important;
+  letter-spacing: 0.84px !important;
+  text-transform: uppercase !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-tutorial-page-marker h1 {
+  height: 28.75px !important;
+  margin: 6px 0 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-family: var(--eu-tutorial-ref-sans) !important;
+  font-size: 25px !important;
+  font-weight: 600 !important;
+  line-height: 28.75px !important;
+  letter-spacing: -0.5px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-tutorial-page-marker .lead {
+  width: 567px !important;
+  max-width: 70ch !important;
+  height: 40.5px !important;
+  margin: 7px 0 13.5px !important;
+  padding: 0 !important;
+  color: var(--ink-3) !important;
+  font-family: var(--eu-tutorial-ref-sans) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_demo_tour"],
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_steps"],
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] {
+  position: relative !important;
+  width: 976px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_demo_tour"] > [data-testid="stVerticalBlock"],
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_steps"] > [data-testid="stVerticalBlock"],
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] > [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stElementContainer"]:has([data-testid="stMarkdown"] .eu-tutorial-page-marker),
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stElementContainer"]:has([data-testid="stMarkdown"] .guide-hero),
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stElementContainer"]:has([data-testid="stMarkdown"] .eu-guide-section),
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stElementContainer"]:has([data-testid="stMarkdown"] .eu-guide-steps-card) {
+  margin-bottom: 13.5px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-hero {
+  box-sizing: border-box !important;
+  display: block !important;
+  width: 976px !important;
+  height: 144.781px !important;
+  margin: 0 !important;
+  padding: 28px 26px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-4) !important;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 60%, var(--surface)), var(--surface)) !important;
+  box-shadow: var(--sh-1) !important;
+  color: var(--ink) !important;
+  font-family: var(--eu-tutorial-ref-sans) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-hero > .row {
+  display: flex !important;
+  width: 922px !important;
+  height: 86.781px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 20px !important;
+  justify-content: space-between !important;
+  align-items: flex-start !important;
+  flex-wrap: wrap !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-hero-left {
+  display: block !important;
+  width: 486px !important;
+  max-width: 60ch !important;
+  height: 86.781px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-hero-title-row {
+  display: flex !important;
+  width: 486px !important;
+  height: 34px !important;
+  gap: 10px !important;
+  align-items: center !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-hero .mode-mark {
+  display: grid !important;
+  place-items: center !important;
+  width: 34px !important;
+  height: 34px !important;
+  border: 0 !important;
+  border-radius: 10px !important;
+  background: oklch(0.55 0.075 205) !important;
+  color: #fff !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-hero .mode-mark svg {
+  display: block !important;
+  width: 17px !important;
+  height: 17px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-hero-title {
+  display: block !important;
+  height: 25.5px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-size: 17px !important;
+  font-weight: 600 !important;
+  line-height: 25.5px !important;
+  letter-spacing: -0.17px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-hero p {
+  display: block !important;
+  width: 486px !important;
+  height: 40.781px !important;
+  max-width: none !important;
+  margin: 12px 0 0 !important;
+  padding: 0 !important;
+  color: var(--ink-3) !important;
+  font-size: 12.75px !important;
+  font-weight: 400 !important;
+  line-height: 20.4px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-hero .btn {
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  width: 132.703px !important;
+  height: 44px !important;
+  margin: 0 !important;
+  padding: 0 20px !important;
+  border: 1px solid var(--ink) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--ink) !important;
+  color: #fff !important;
+  font-family: var(--eu-tutorial-ref-sans) !important;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+  line-height: 20.25px !important;
+  letter-spacing: normal !important;
+  white-space: nowrap !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-hero .btn svg {
+  width: 15px !important;
+  height: 15px !important;
+  flex: none !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-section {
+  width: 976px !important;
+  height: 42.75px !important;
+  margin: 26px 0 12px !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  border-top-color: var(--ink) !important;
+  font-family: var(--eu-tutorial-ref-sans) !important;
+  line-height: 20.25px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-section h2 {
+  height: 24px !important;
+  margin: 3px 0 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  line-height: 24px !important;
+  letter-spacing: -0.16px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-steps-card {
+  box-sizing: border-box !important;
+  width: 976px !important;
+  height: 668.25px !important;
+  margin: 0 !important;
+  padding: 18px 20px !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+  color: var(--ink) !important;
+  font-family: var(--eu-tutorial-ref-sans) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-steps {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-step {
+  box-sizing: border-box !important;
+  display: grid !important;
+  grid-template-columns: 44px 874px !important;
+  gap: 16px !important;
+  width: 934px !important;
+  margin: 0 !important;
+  padding: 18px 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+  align-items: start !important;
+  color: var(--ink) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-step-copy.guide-step {
+  padding: 18px 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-step:last-child {
+  height: 142px !important;
+  border-bottom: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-step:not(:last-child) {
+  height: 162.75px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .gs-num {
+  box-sizing: border-box !important;
+  display: grid !important;
+  place-items: center !important;
+  grid-template-columns: none !important;
+  justify-content: normal !important;
+  justify-items: center !important;
+  align-items: center !important;
+  width: 38px !important;
+  height: 38px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 1.5px solid var(--hair-2) !important;
+  border-radius: 50% !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  font-family: var(--eu-tutorial-ref-mono) !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  line-height: 21px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-step.accent .gs-num {
+  border-color: oklch(0.55 0.075 205) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-ink) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .gs-t {
+  height: 22.5px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  color: var(--ink) !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  line-height: 22.5px !important;
+  letter-spacing: -0.15px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .gs-d {
+  display: block !important;
+  width: 489.594px !important;
+  max-width: 64ch !important;
+  margin: 4px 0 0 !important;
+  padding: 0 !important;
+  color: var(--ink-3) !important;
+  font-size: 12.75px !important;
+  font-weight: 400 !important;
+  line-height: 19.7625px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-step:not(:last-child) .gs-d {
+  height: 59.25px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-step:last-child .gs-d {
+  height: 39.5px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .gs-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  width: 874px !important;
+  height: 28px !important;
+  margin: 12px 0 0 !important;
+  padding: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-step .btn {
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  height: 28px !important;
+  margin: 0 !important;
+  padding: 0 10px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  font-family: var(--eu-tutorial-ref-sans) !important;
+  font-size: 12.25px !important;
+  font-weight: 500 !important;
+  line-height: 18.375px !important;
+  letter-spacing: normal !important;
+  white-space: nowrap !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-step .btn.primary {
+  border-color: var(--ink) !important;
+  background: var(--ink) !important;
+  color: #fff !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-step .btn svg {
+  width: 13px !important;
+  height: 13px !important;
+  flex: none !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(1) .btn:nth-child(1) { width: 136.703px !important; }
+.stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(1) .btn:nth-child(2) { width: 122.531px !important; }
+.stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(2) .btn:nth-child(1) { width: 131.578px !important; }
+.stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(3) .btn:nth-child(1) { width: 125.766px !important; }
+.stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(3) .btn:nth-child(2) { width: 134.906px !important; }
+.stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(3) .btn:nth-child(3) { width: 161.719px !important; }
+.stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(4) .btn:nth-child(1) { width: 162.781px !important; }
+.stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(4) .btn:nth-child(2) { width: 126.969px !important; }
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_start_demo"],
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_"],
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] {
+  position: absolute !important;
+  z-index: 4 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_start_demo"] {
+  top: 29px !important;
+  right: 27px !important;
+  width: 132.703px !important;
+  height: 44px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_1_0"] { left: 81px !important; top: 134.75px !important; width: 136.703px !important; height: 28px !important; }
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_1_1"] { left: 225.703px !important; top: 134.75px !important; width: 122.531px !important; height: 28px !important; }
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_2_0"] { left: 81px !important; top: 297.5px !important; width: 131.578px !important; height: 28px !important; }
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_3_0"] { left: 81px !important; top: 460.25px !important; width: 125.766px !important; height: 28px !important; }
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_3_1"] { left: 214.766px !important; top: 460.25px !important; width: 134.906px !important; height: 28px !important; }
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_3_2"] { left: 357.672px !important; top: 460.25px !important; width: 161.719px !important; height: 28px !important; }
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_4_0"] { left: 81px !important; top: 603.25px !important; width: 162.781px !important; height: 28px !important; }
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_4_1"] { left: 251.781px !important; top: 603.25px !important; width: 126.969px !important; height: 28px !important; }
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_start_demo"] button,
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_"] button,
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] button {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  opacity: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_start_demo"] .stButton,
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_"] .stButton,
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] .stButton,
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_start_demo"] [data-testid="stTooltipHoverTarget"],
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_"] [data-testid="stTooltipHoverTarget"],
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] [data-testid="stTooltipHoverTarget"] {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] {
+  display: block !important;
+  gap: normal !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+  overflow: hidden !important;
+  color: var(--ink) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_"] {
+  position: relative !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_"]:not([class*="st-key-eu_getstarted_faq_card"]) {
+  gap: 0 !important;
+  row-gap: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_0"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlockBorderWrapper"]:has([data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_0"]) {
+  height: 105.656px !important;
+  min-height: 105.656px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_1"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_2"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_3"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlockBorderWrapper"]:has([data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_1"]),
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlockBorderWrapper"]:has([data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_2"]),
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlockBorderWrapper"]:has([data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_3"]) {
+  height: 48.875px !important;
+  min-height: 48.875px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_4"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlockBorderWrapper"]:has([data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_4"]) {
+  height: 47.875px !important;
+  min-height: 47.875px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_"] [data-testid="stMarkdown"],
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_"] [data-testid="stMarkdownContainer"],
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_"] [data-testid="stElementContainer"]:has(.eu-faq-item) {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-faq-item {
+  box-sizing: border-box !important;
+  display: block !important;
+  width: 974px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-bottom: 1px solid var(--hair) !important;
+  background: transparent !important;
+  color: var(--ink) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_4"] .eu-faq-item {
+  border-bottom: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-faq-question {
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  width: 974px !important;
+  height: 47.875px !important;
+  margin: 0 !important;
+  padding: 14px 16px !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--ink) !important;
+  justify-content: normal !important;
+  font-family: var(--eu-tutorial-ref-sans) !important;
+  font-size: 13.25px !important;
+  font-weight: 600 !important;
+  line-height: 19.875px !important;
+  letter-spacing: normal !important;
+  text-align: left !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-faq-question .fq-chev {
+  margin-left: auto !important;
+  color: var(--ink-4) !important;
+  flex: none !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-faq-item.open .eu-faq-question .fq-chev {
+  transform: rotate(90deg) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-faq-answer {
+  display: none !important;
+  box-sizing: border-box !important;
+  width: 974px !important;
+  margin: 0 !important;
+  padding: 0 16px 16px 44px !important;
+  color: var(--ink-3) !important;
+  font-family: var(--eu-tutorial-ref-sans) !important;
+  font-size: 12.75px !important;
+  font-weight: 400 !important;
+  line-height: 20.4px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-faq-item.open .eu-faq-answer {
+  display: block !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] {
+  top: 0 !important;
+  left: 0 !important;
+  width: 974px !important;
+  height: 47.875px !important;
+}
+
+/* Get Started topbar hit targets:
+   keep Streamlit callbacks on top of the exact visual controls. */
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_topbar_controls_tutorial"] [data-testid="stMarkdown"] {
+  transform: translate(167.984px, calc(-50% + 2px)) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_topbar_controls_tutorial"] > [data-testid="stHorizontalBlock"] {
+  transform: translate(35.14px, -50%) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-topbar-ref-controls .mode-seg button,
+.stApp:has(.eu-tutorial-page-marker) .eu-topbar-ref-controls .lang-seg button {
+  line-height: 17.25px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-topbar-ref-controls .mode-seg button {
+  padding-left: 9px !important;
+  padding-right: 9px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-topbar-ref-controls .mode-seg button:first-child {
+  width: 66.031px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-topbar-ref-controls .mode-seg button:nth-child(2) {
+  width: 58.688px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-topbar-ref-controls .lang-seg button:first-child {
+  width: 33.172px !important;
+  min-width: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-topbar-ref-controls .lang-seg button:nth-child(2) {
+  width: 30px !important;
+  min-width: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-topbar-ref-controls .btn.sm.eu-topbar-copilot-visual {
+  padding-left: 10px !important;
+  padding-right: 10px !important;
+  width: 81.969px !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-rail-sep {
+  width: 215px !important;
+  height: 1px !important;
+  margin: 12px 16px 12px 10px !important;
+  padding: 0 !important;
+  background: var(--hair) !important;
+  transform: translateY(-14.87px) !important;
+}
+
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_block"] {
+  position: relative !important;
+  width: 247px !important;
+  height: 325.75px !important;
+  margin: -5.14px 0 0 -6px !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_block"] > [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-rail {
+  box-sizing: border-box !important;
+  display: block !important;
+  width: 247px !important;
+  height: 325.75px !important;
+  margin: 0 !important;
+  padding: 2px 16px 8px !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-rail .rail-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 215px !important;
+  height: 15.75px !important;
+  margin: 0 0 10px !important;
+  padding: 0 !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-rail .rail-head .t,
+[data-testid="stSidebar"] .eu-tutorial-shortcuts-label {
+  color: var(--ink-4) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  line-height: 15.75px !important;
+  letter-spacing: 0.84px !important;
+  text-transform: uppercase !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-rail-links {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  color: var(--ink-3) !important;
+  font-size: 12.5px !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-rail .nav-item {
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+  width: 215px !important;
+  height: 30px !important;
+  margin: 0 !important;
+  padding: 0 11px !important;
+  gap: 11px !important;
+  border: 0 !important;
+  border-radius: var(--r-2) !important;
+  background: transparent !important;
+  color: var(--ink-2) !important;
+  font-family: var(--font-sans) !important;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-rail .nav-item .ico,
+[data-testid="stSidebar"] .eu-tutorial-rail .nav-item svg {
+  width: 15px !important;
+  height: 15px !important;
+  color: var(--ink-3) !important;
+  flex: none !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-shortcuts-label {
+  display: block !important;
+  width: 215px !important;
+  height: 15.75px !important;
+  margin: 16px 0 8px !important;
+  padding: 0 !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-shortcuts {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 215px !important;
+  margin-top: 0 !important;
+  padding: 0 !important;
+  font-size: 12px !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-shortcuts .shortcut-row {
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 215px !important;
+  height: 37.75px !important;
+  margin: 0 !important;
+  padding: 9px 2px !important;
+  border-bottom: 1px solid var(--hair) !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font-sans) !important;
+  font-size: 12.5px !important;
+  font-weight: 400 !important;
+  line-height: 18.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-shortcuts .shortcut-row:last-child {
+  height: 36.75px !important;
+  border-bottom: 0 !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-shortcuts .keys {
+  display: flex !important;
+  gap: 4px !important;
+  align-items: center !important;
+}
+
+[data-testid="stSidebar"] .eu-tutorial-shortcuts .kbd {
+  box-sizing: border-box !important;
+  height: 17px !important;
+  padding: 1px 5px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-bottom-width: 2px !important;
+  border-radius: 4px !important;
+  background: var(--surface) !important;
+  color: var(--ink-3) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  line-height: 15.75px !important;
+}
+
+[data-testid="stSidebar"] [class*="st-key-_eu_tutorial_rail_btn_"] {
+  position: absolute !important;
+  left: 16px !important;
+  width: 215px !important;
+  height: 30px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  z-index: 4 !important;
+}
+
+[data-testid="stSidebar"] [class*="st-key-_eu_tutorial_rail_btn_extract"] { top: 27.75px !important; }
+[data-testid="stSidebar"] [class*="st-key-_eu_tutorial_rail_btn_quick_viz"] { top: 63.75px !important; }
+[data-testid="stSidebar"] [class*="st-key-_eu_tutorial_rail_btn_cross_db"] { top: 99.75px !important; }
+[data-testid="stSidebar"] [class*="st-key-_eu_tutorial_rail_btn_research_agent"] { top: 135.75px !important; }
+
+[data-testid="stSidebar"] [class*="st-key-_eu_tutorial_rail_btn_"] button {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  opacity: 0 !important;
+}
+
+[data-testid="stSidebar"] [class*="st-key-_eu_tutorial_rail_btn_"] .stButton,
+[data-testid="stSidebar"] [class*="st-key-_eu_tutorial_rail_btn_"] [data-testid="stTooltipHoverTarget"] {
+  width: 215px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+}
+
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_block"] [data-testid="stElementContainer"][class*="st-key-_eu_tutorial_rail_btn_"] {
+  position: absolute !important;
+  inset: auto auto auto 16px !important;
+  width: 215px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  z-index: 4 !important;
+}
+
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_block"] [data-testid="stElementContainer"][class*="st-key-_eu_tutorial_rail_btn_extract"] { top: 27.75px !important; }
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_block"] [data-testid="stElementContainer"][class*="st-key-_eu_tutorial_rail_btn_quick_viz"] { top: 63.75px !important; }
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_block"] [data-testid="stElementContainer"][class*="st-key-_eu_tutorial_rail_btn_cross_db"] { top: 99.75px !important; }
+[data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_block"] [data-testid="stElementContainer"][class*="st-key-_eu_tutorial_rail_btn_research_agent"] { top: 135.75px !important; }
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_tutorial"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_dictionary"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_settings"] {
+  position: relative !important;
+  width: 247px !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_tutorial"] > [data-testid="stVerticalBlock"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_dictionary"] > [data-testid="stVerticalBlock"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_settings"] > [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-nav-item.level-top {
+  box-sizing: border-box !important;
+  display: flex !important;
+  align-items: center !important;
+  position: relative !important;
+  width: 223px !important;
+  height: 36px !important;
+  margin: 0 12px 2px !important;
+  padding: 0 11px !important;
+  gap: 11px !important;
+  border: 0 !important;
+  border-radius: var(--r-2) !important;
+  background: transparent !important;
+  color: var(--ink-2) !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-nav-item.level-top.active {
+  background: var(--ink) !important;
+  color: #fff !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-nav-item.level-top .ico,
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-nav-item.level-top .ico svg {
+  width: 17px !important;
+  height: 17px !important;
+  color: var(--ink-3) !important;
+  flex: none !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-nav-item.level-top.active .ico,
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-nav-item.level-top.active .ico svg {
+  color: #fff !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_tutorial"] [class*="st-key-euonav_tutorial"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_dictionary"] [class*="st-key-euonav_dictionary"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_settings"] [class*="st-key-euonav_settings"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_tutorial"] div[data-testid="stButton"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_dictionary"] div[data-testid="stButton"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_settings"] div[data-testid="stButton"],
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_tutorial"] .stButton,
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_dictionary"] .stButton,
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_settings"] .stButton {
+  position: absolute !important;
+  left: 12px !important;
+  top: 0 !important;
+  width: 223px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  z-index: 4 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_tutorial"] button,
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_dictionary"] button,
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eunavrow_settings"] button {
+  width: 100% !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  opacity: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail-sep {
+  width: 215px !important;
+  height: 1px !important;
+  margin: 12px 16px !important;
+  transform: translateY(-13.765px) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] [class*="st-key-eu_tutorial_rail_block"] {
+  width: 247px !important;
+  height: 325.75px !important;
+  min-height: 325.75px !important;
+  margin: 5.626px 0 0 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail {
+  color: var(--ink) !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 13.5px !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail .nav-item {
+  text-decoration: none !important;
+  -webkit-text-fill-color: var(--ink-2) !important;
+  cursor: pointer !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-shortcuts .shortcut-row {
+  gap: normal !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-shortcuts .keys,
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-shortcuts .kbd,
+.stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-shortcuts em {
+  height: auto !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--ink) !important;
+  -webkit-text-fill-color: var(--ink) !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 12.5px !important;
+  font-weight: 400 !important;
+  line-height: 18.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] {
+  position: relative !important;
+  display: block !important;
+  width: 976px !important;
+  height: 302.156px !important;
+  min-height: 302.156px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] > [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+  row-gap: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] [data-testid="stElementContainer"]:has(.eu-faq-shell),
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] [data-testid="stMarkdown"]:has(.eu-faq-shell),
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] [data-testid="stMarkdownContainer"]:has(.eu-faq-shell) {
+  width: 976px !important;
+  height: 302.156px !important;
+  min-height: 302.156px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell {
+  box-sizing: border-box !important;
+  display: block !important;
+  width: 976px !important;
+  height: 302.156px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 1px solid var(--hair) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: var(--sh-1) !important;
+  overflow: hidden !important;
+  color: var(--ink) !important;
+  font-family: var(--font-sans) !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .eu-faq-item {
+  height: 48.875px !important;
+  min-height: 48.875px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .eu-faq-item.open {
+  height: 105.656px !important;
+  min-height: 105.656px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .eu-faq-item:last-child {
+  height: 47.875px !important;
+  min-height: 47.875px !important;
+  border-bottom: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .eu-faq-question {
+  height: 47.875px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .eu-faq-answer {
+  height: 56.781px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] {
+  position: absolute !important;
+  left: 1px !important;
+  width: 974px !important;
+  height: 47.875px !important;
+  min-height: 47.875px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  z-index: 5 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] .stButton,
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] [data-testid="stTooltipHoverTarget"],
+.stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] button {
+  width: 974px !important;
+  height: 47.875px !important;
+  min-height: 47.875px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  opacity: 0 !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-tutorial-page-marker,
+.stApp:has(.eu-tutorial-page-marker) .eu-tutorial-page-marker h1,
+.stApp:has(.eu-tutorial-page-marker) .eu-tutorial-page-marker .lead,
+.stApp:has(.eu-tutorial-page-marker) .guide-hero,
+.stApp:has(.eu-tutorial-page-marker) .guide-hero *,
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-section,
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-section h2,
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-steps-card,
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-steps-card *,
+.stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell,
+.stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell * {
+  font-family: var(--eu-tutorial-ref-sans) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-tutorial-page-marker .eyebrow,
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-section .lbl,
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-section .eyebrow,
+.stApp:has(.eu-tutorial-page-marker) .gs-num {
+  font-family: var(--eu-tutorial-ref-mono) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-section {
+  color: var(--ink) !important;
+  border-top-color: var(--ink) !important;
+  line-height: 20.25px !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .gs-num {
+  grid-template-columns: none !important;
+  justify-content: normal !important;
+  justify-items: center !important;
+  align-items: center !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .eu-guide-step-num.gs-num {
+  font-family: var(--eu-tutorial-ref-mono) !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .fq-chev {
+  display: block !important;
+  width: 14px !important;
+  height: 19.875px !important;
+  margin: 0 0 0 auto !important;
+  padding: 0 !important;
+  color: var(--ink-4) !important;
+  font-size: 13.25px !important;
+  line-height: 19.875px !important;
+  letter-spacing: normal !important;
+  flex: none !important;
+}
+
+.stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .fq-chev svg {
+  display: inline-block !important;
+  width: 14px !important;
+  height: 14px !important;
+  vertical-align: -2px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-hero {
+  height: 144.796625px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-hero > .row {
+  height: 86.796825px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-hero p {
+  height: 40.796825px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-hero .btn {
+  width: 132.718625px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(1) .btn:nth-child(1),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_1_0"] {
+  width: 136.718625px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(1) .btn:nth-child(2),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_1_1"] {
+  width: 122.546625px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(2) .btn:nth-child(1),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_2_0"] {
+  width: 131.593625px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(3) .btn:nth-child(1),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_3_0"] {
+  width: 125.766px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(3) .btn:nth-child(2),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_3_1"] {
+  width: 134.921625px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(3) .btn:nth-child(3),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_3_2"] {
+  width: 161.719px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(4) .btn:nth-child(1),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_4_0"] {
+  width: 162.796625px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-step:nth-child(4) .btn:nth-child(2),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_4_1"] {
+  width: 126.969px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_3_1"] {
+  left: 214.766px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_3_2"] {
+  left: 357.672px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_step_4_1"] {
+  left: 251.781px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"],
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] [data-testid="stElementContainer"]:has(.eu-faq-shell),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] [data-testid="stMarkdown"]:has(.eu-faq-shell),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] [data-testid="stMarkdownContainer"]:has(.eu-faq-shell),
+html body .stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell {
+  height: 302.171625px !important;
+  min-height: 302.171625px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .eu-faq-item.open,
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_0"],
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stVerticalBlockBorderWrapper"]:has([data-testid="stVerticalBlock"][class*="st-key-eu_getstarted_faq_0"]) {
+  height: 105.671625px !important;
+  min-height: 105.671625px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .eu-faq-answer {
+  height: 56.796825px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail,
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail *,
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-shortcuts,
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-shortcuts * {
+  font-family: var(--eu-tutorial-ref-sans) !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail .rail-head .t,
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-shortcuts-label {
+  font-family: var(--eu-tutorial-ref-mono) !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail-sep {
+  height: 0 !important;
+  color: var(--ink) !important;
+  border-top-color: var(--ink) !important;
+  font-family: var(--eu-tutorial-ref-sans) !important;
+  line-height: 20.25px !important;
+  transform: translateY(-11.766px) !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-shortcuts .kbd {
+  font-family: var(--eu-tutorial-ref-sans) !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail-links {
+  line-height: 18.75px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-shortcuts {
+  line-height: 18px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail .nav-item .ico,
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-rail .nav-item svg {
+  align-items: normal !important;
+  justify-content: normal !important;
+  line-height: 20.25px !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [data-testid="stSidebar"] .eu-tutorial-shortcuts .keys {
+  align-items: normal !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker)
+  [data-testid="stSidebar"]
+  [data-testid="stElementContainer"][class*="st-key-_eu_tutorial_rail_btn_"],
+html body .stApp:has(.eu-tutorial-page-marker)
+  [data-testid="stSidebar"]
+  [class*="st-key-_eu_tutorial_rail_btn_"],
+html body .stApp:has(.eu-tutorial-page-marker)
+  [data-testid="stSidebar"]
+  [class*="st-key-_eu_tutorial_rail_btn_"] .stButton,
+html body .stApp:has(.eu-tutorial-page-marker)
+  [data-testid="stSidebar"]
+  [class*="st-key-_eu_tutorial_rail_btn_"] [data-testid="stTooltipHoverTarget"],
+html body .stApp:has(.eu-tutorial-page-marker)
+  [data-testid="stSidebar"]
+  [class*="st-key-_eu_tutorial_rail_btn_"] button {
+  height: 30px !important;
+  min-height: 30px !important;
+}
+
+/* Moved from classic_viz_overrides.css: Get Started final width parity */
+/* Get Started final width parity.
+   Reference: EasyICU #tutorial at 1440px uses x=276, width=976 for the
+   visible content column. Keep Streamlit click overlays on the same geometry. */
+html body .stApp:has(.eu-tutorial-page-marker) .eu-getstarted-head.page-head,
+html body .stApp:has(.eu-tutorial-page-marker) .guide-hero,
+html body .stApp:has(.eu-tutorial-page-marker) .eu-guide-section,
+html body .stApp:has(.eu-tutorial-page-marker) .card.pad.eu-guide-steps-card,
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_demo_tour"],
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_steps"],
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"],
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] [data-testid="stElementContainer"]:has(.eu-faq-shell),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] [data-testid="stMarkdown"]:has(.eu-faq-shell),
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"] [data-testid="stMarkdownContainer"]:has(.eu-faq-shell),
+html body .stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell {
+  width: 976px !important;
+  max-width: none !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-hero > .row {
+  width: 922px !important;
+  max-width: none !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-steps {
+  width: 934px !important;
+  max-width: none !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .guide-step,
+html body .stApp:has(.eu-tutorial-page-marker) .eu-guide-step-copy.guide-step {
+  width: 934px !important;
+  max-width: none !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .eu-guide-step-body {
+  width: 874px !important;
+  max-width: none !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .eu-faq-item,
+html body .stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .eu-faq-question,
+html body .stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell .eu-faq-answer {
+  width: 974px !important;
+  max-width: none !important;
+}
+
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"],
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] .stButton,
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] [data-testid="stTooltipHoverTarget"],
+html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_faq_q_"] button {
+  width: 974px !important;
+  max-width: none !important;
+}
+
+/* Get Started mobile desktop-lock containment:
+   desktop exact-width overlays must collapse before they push live controls
+   outside the mobile viewport. */
+@media (max-width: 780px) {
+  html body .stApp:has(.eu-tutorial-page-marker) .eu-getstarted-head.page-head,
+  html body .stApp:has(.eu-tutorial-page-marker) .guide-hero,
+  html body .stApp:has(.eu-tutorial-page-marker) .eu-guide-section,
+  html body .stApp:has(.eu-tutorial-page-marker) .card.pad.eu-guide-steps-card,
+  html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_demo_tour"],
+  html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_steps"],
+  html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-eu_getstarted_faq_card"],
+  html body
+    .stApp:has(.eu-tutorial-page-marker)
+    [class*="st-key-eu_getstarted_faq_card"]
+    [data-testid="stElementContainer"]:has(.eu-faq-shell),
+  html body
+    .stApp:has(.eu-tutorial-page-marker)
+    [class*="st-key-eu_getstarted_faq_card"]
+    [data-testid="stMarkdown"]:has(.eu-faq-shell),
+  html body
+    .stApp:has(.eu-tutorial-page-marker)
+    [class*="st-key-eu_getstarted_faq_card"]
+    [data-testid="stMarkdownContainer"]:has(.eu-faq-shell),
+  html body .stApp:has(.eu-tutorial-page-marker) .faq.eu-faq-shell {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  html body .stApp:has(.eu-tutorial-page-marker) .guide-hero,
+  html body .stApp:has(.eu-tutorial-page-marker) .guide-hero > .row,
+  html body .stApp:has(.eu-tutorial-page-marker) .guide-hero p {
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
+  html body .stApp:has(.eu-tutorial-page-marker) .guide-hero > .row {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 14px !important;
+  }
+
+  html body .stApp:has(.eu-tutorial-page-marker) .eu-guide-hero-left,
+  html body .stApp:has(.eu-tutorial-page-marker) .eu-guide-hero-action {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  html body .stApp:has(.eu-tutorial-page-marker) .eu-guide-hero-action .btn {
+    display: none !important;
+  }
+
+  html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_start_demo"] {
+    position: static !important;
+    inset: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 40px !important;
+    margin: 12px 0 0 !important;
+  }
+
+  html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_start_demo"] .stButton,
+  html body
+    .stApp:has(.eu-tutorial-page-marker)
+    [class*="st-key-_eu_getstarted_start_demo"]
+    [data-testid="stTooltipHoverTarget"],
+  html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_start_demo"] button {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 40px !important;
+    min-height: 40px !important;
+  }
+
+  html body .stApp:has(.eu-tutorial-page-marker) [class*="st-key-_eu_getstarted_start_demo"] button {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border: 1px solid var(--ink) !important;
+    border-radius: var(--r-2) !important;
+    background: var(--ink) !important;
+    color: #fff !important;
+    box-shadow: none !important;
+    opacity: 1 !important;
+    font-family: var(--eu-tutorial-ref-sans) !important;
+    font-size: 12.5px !important;
+    font-weight: 600 !important;
+    line-height: 18.75px !important;
+    letter-spacing: 0 !important;
+  }
+}

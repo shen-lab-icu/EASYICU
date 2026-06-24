@@ -1,0 +1,2554 @@
+/* Shared shell navigation and chrome Streamlit overrides.
+   Loaded globally after alignment.css and before route-specific CSS.
+   Owns shared topbar, sidebar, footer, floating launcher mobile clearance,
+   mobile bottom navigation, and sidebar hit-target pass-through.
+   Do not add page-specific rules here; use route-gated CSS files. */
+
+/* Moved from shell_overrides.css: shared shell navigation, sidebar, and topbar chrome. */
+/* Sidebar brand + nav */
+.eu-brand {
+  display: flex; align-items: center; gap: 9px;
+  padding: 16px 16px 14px;
+  margin: 6px 8px 2px;
+  border-radius: var(--r-2);
+  transition: background-color .12s, box-shadow .12s;
+}
+.stApp [class*="st-key-eu_brand_home"] {
+  position: relative;
+  min-height: 72px;
+}
+.stApp [class*="st-key-eu_brand_home"]:hover .eu-brand,
+.stApp [class*="st-key-eu_brand_home"]:has([class*="st-key-_eu_brand_home_button"] button:focus-visible) .eu-brand {
+  background: var(--surface-2);
+}
+.stApp [class*="st-key-eu_brand_home"]:has([class*="st-key-_eu_brand_home_button"] button:focus-visible) .eu-brand {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.stApp [class*="st-key-_eu_brand_home_button"] {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3 !important;
+  margin: 0 !important;
+  min-height: 0 !important;
+  height: 100% !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+.stApp [class*="st-key-_eu_brand_home_button"] > div,
+.stApp [class*="st-key-_eu_brand_home_button"] [data-testid="stTooltipIcon"],
+.stApp [class*="st-key-_eu_brand_home_button"] [data-testid="stTooltipHoverTarget"],
+.stApp [class*="st-key-_eu_brand_home_button"] [class*="st-emotion-cache-"] {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+.stApp [class*="st-key-_eu_brand_home_button"] [data-testid="stButton"],
+.stApp [class*="st-key-_eu_brand_home_button"] .stButton {
+  width: 100% !important;
+  height: 100% !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+.stApp [class*="st-key-_eu_brand_home_button"] button,
+.stApp [class*="st-key-_eu_brand_home_button"] button:hover,
+.stApp [class*="st-key-_eu_brand_home_button"] button:focus,
+.stApp [class*="st-key-_eu_brand_home_button"] button:focus-visible,
+.stApp [class*="st-key-_eu_brand_home_button"] button:active,
+.stApp [class*="st-key-_eu_brand_home_button"] button[aria-pressed="true"],
+.stApp [class*="st-key-_eu_brand_home_button"] button *,
+.stApp [class*="st-key-_eu_brand_home_button"] button *:hover,
+.stApp [class*="st-key-_eu_brand_home_button"] button *:focus,
+.stApp [class*="st-key-_eu_brand_home_button"] button *:active {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border-color: transparent !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  cursor: pointer !important;
+}
+.stApp [class*="st-key-_eu_brand_home_button"] button::before,
+.stApp [class*="st-key-_eu_brand_home_button"] button::after,
+.stApp [class*="st-key-_eu_brand_home_button"] button *::before,
+.stApp [class*="st-key-_eu_brand_home_button"] button *::after {
+  background: transparent !important;
+  background-color: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+.stApp [class*="st-key-_eu_brand_home_button"] [data-testid="stMarkdownContainer"] p {
+  margin: 0 !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+.eu-brand .logo {
+  width: 34px; height: 34px;
+  border-radius: 9px;
+  background: var(--ink);
+  border: 0;
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 600; font-size: 0;
+  letter-spacing: 0;
+  position: relative;
+}
+.eu-brand .logo::before {
+  display: none;
+  content: none;
+}
+.eu-brand .logo svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  color: #fff !important;
+  stroke: currentColor !important;
+}
+.eu-brand .logo svg * {
+  color: #fff !important;
+  stroke: currentColor !important;
+}
+.eu-brand .text {
+  min-width: 0;
+}
+.eu-brand .text .name {
+  font-size: 15px; font-weight: 600; color: var(--ink);
+  letter-spacing: 0;
+  display: block;
+  line-height: 1.1;
+}
+.eu-brand .text .sub {
+  font-size: 11px; color: var(--ink-4);
+  font-family: var(--font);
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_nav_area"] {
+  flex: 0 0 auto !important;
+  min-height: 0 !important;
+  margin-top: 14px !important;
+  padding-bottom: clamp(10px, 1.2vh, 18px) !important;
+}
+.stApp [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(> [class*="st-key-eu_sidebar_nav_area"]) {
+  flex: 0 0 auto !important;
+  min-height: 0 !important;
+}
+.stApp [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(> [class*="st-key-eu_sidebar_dock"]) {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_dock"] {
+  flex: 1 1 auto !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  min-height: 0 !important;
+  margin-top: 0 !important;
+  padding-bottom: 84px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior: contain !important;
+  scrollbar-width: thin !important;
+  scrollbar-color: color-mix(in oklch, var(--ink-4) 45%, transparent) transparent !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_dock"]::-webkit-scrollbar {
+  width: 5px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_dock"]::-webkit-scrollbar-thumb {
+  border-radius: 999px !important;
+  background: color-mix(in oklch, var(--ink-4) 38%, transparent) !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_dock"] [data-testid="stVerticalBlock"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_nav_area"] [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+.eu-workspace-field .eu-pill {
+  height: 18px;
+  padding: 0 7px;
+  font-size: 10px;
+  gap: 5px;
+}
+.eu-workspace-field .eu-pill .dot {
+  width: 5px;
+  height: 5px;
+}
+.eu-workspace-field .chev {
+  color: var(--ink-4);
+  display: inline-flex;
+}
+.eu-search-field > span:not(.keys) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.eu-search-field .keys {
+  margin-left: auto;
+  display: flex;
+  gap: 3px;
+}
+
+.eu-recent-label .num {
+  max-width: 90px;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eu-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 3px 10px;
+  color: var(--ink-3);
+  box-sizing: border-box;
+}
+.eu-recent-row .ico {
+  width: 8px;
+  color: var(--ink-4);
+  display: inline-flex;
+  flex: none;
+}
+.eu-recent-row .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-size: 11.8px;
+}
+.eu-recent-row .count {
+  margin-left: auto;
+  color: var(--ink-4);
+  font-size: 10.2px;
+}
+
+.eu-context-label {
+  margin: 24px 12px 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hair);
+}
+.eu-context-card {
+  margin: 0 12px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--surface) 88%, var(--rail));
+  border-radius: var(--r-2);
+  box-shadow: var(--sh-1);
+}
+.eu-context-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+  padding: 6px 2px;
+  font-size: 11.5px;
+  color: var(--ink-4);
+}
+.eu-context-row + .eu-context-row {
+  border-top: 1px solid var(--hair);
+}
+.eu-context-row strong {
+  min-width: 0;
+  max-width: 154px;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-align: right;
+  white-space: normal;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_context_edit_setup"] {
+  padding: 0 12px !important;
+  margin-top: 10px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_context_edit_setup"] button {
+  min-height: 32px !important;
+  height: 32px !important;
+  border-radius: var(--r-2) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  background: var(--surface) !important;
+  border-color: var(--hair-2) !important;
+  color: var(--ink-2) !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_context_edit_setup"] button:hover {
+  background: var(--surface-2) !important;
+  color: var(--ink) !important;
+}
+@media (max-height: 720px) and (min-width: 1101px) {
+  .stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_nav_area"] {
+    margin-top: 8px !important;
+    padding-bottom: 8px !important;
+  }
+  .stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_dock"] {
+    padding-bottom: 68px !important;
+  }
+}
+
+/* Top bar (breadcrumb + actions) */
+.eu-topbar {
+  display: flex; align-items: center;
+  min-height: 52px;
+  padding: 14px 4px 12px;
+  border-bottom: 0;
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.eu-topbar .bc { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.eu-topbar .bc .sep { color: var(--ink-4); padding: 0 2px; }
+.eu-topbar .bc .crumb { color: var(--ink-3); }
+.eu-topbar .bc .crumb.current { color: var(--ink); font-weight: 500; }
+.eu-topbar .right { display: flex; align-items: center; gap: 6px; }
+.stApp [data-testid="stHorizontalBlock"]:has(.eu-topbar),
+.stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_page_breadcrumb_nav_"]) {
+  border-bottom: 1px solid var(--hair);
+  margin-bottom: 18px !important;
+  align-items: center !important;
+  min-height: 52px !important;
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 20 !important;
+  width: calc(100% + 64px) !important;
+  margin-left: -32px !important;
+  padding-left: 32px !important;
+  padding-right: 32px !important;
+  background: color-mix(in oklab, var(--bg) 92%, white) !important;
+  backdrop-filter: blur(10px);
+  box-sizing: border-box !important;
+}
+.stApp [class*="st-key-eu_page_breadcrumb_nav_"] {
+  min-height: 38px !important;
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+}
+.stApp [class*="st-key-eu_page_breadcrumb_nav_"] [data-testid="stHorizontalBlock"] {
+  align-items: center !important;
+  display: inline-flex !important;
+  flex: 0 0 auto !important;
+  flex-wrap: nowrap !important;
+  justify-content: flex-start !important;
+  align-self: flex-start !important;
+  width: auto !important;
+  max-width: 100% !important;
+  gap: 3px !important;
+}
+.stApp [class*="st-key-eu_page_breadcrumb_nav_"] [data-testid="stColumn"] {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+}
+.stApp [class*="st-key-eu_page_breadcrumb_nav_"] .stButton {
+  display: inline-flex !important;
+  width: auto !important;
+  min-width: 0 !important;
+}
+.stApp [class*="st-key-eu_page_breadcrumb_nav_"] .stButton > button,
+.stApp [class*="st-key-eu_page_breadcrumb_nav_"] button {
+  width: auto !important;
+  min-width: 0 !important;
+  min-height: 22px !important;
+  height: 22px !important;
+  padding: 0 2px !important;
+  border: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  color: var(--ink-3) !important;
+  box-shadow: none !important;
+  justify-content: flex-start !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 22px !important;
+  white-space: nowrap !important;
+}
+.stApp [class*="st-key-eu_page_breadcrumb_nav_"] .stButton > button *,
+.stApp [class*="st-key-eu_page_breadcrumb_nav_"] button * {
+  margin: 0 !important;
+  padding: 0 !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 22px !important;
+}
+.stApp [class*="st-key-eu_page_breadcrumb_nav_"] .stButton > button:hover,
+.stApp [class*="st-key-eu_page_breadcrumb_nav_"] button:hover {
+  color: var(--ink) !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  text-decoration: underline !important;
+  text-underline-offset: 3px !important;
+}
+.eu-bc-current {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  color: var(--ink) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 22px;
+  white-space: nowrap;
+}
+.eu-bc-sep {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-4);
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  min-height: 22px;
+  line-height: 22px;
+  padding: 0 4px;
+}
+.eu-topbar-stage .eu-pill {
+  height: 22px;
+  font-family: var(--font) !important;
+  letter-spacing: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+/* Shell-A topbar action group: keep labels on one line, compact height,
+   align with the breadcrumb visual baseline. */
+.stApp [class*="st-key-_eu_topbar_"] .stButton > button,
+.stApp [class*="st-key-_eu_topbar_"] button {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  min-height: 28px !important;
+  height: 28px !important;
+  padding: 3px 10px !important;
+  font-size: 12px !important;
+}
+
+/* Shell-A topbar wrapper: subtle bottom border under the whole row. */
+.stApp [class*="st-key-_eu_topbar_run"] {
+  text-align: right;
+}
+@media (max-width: 1100px) {
+  .stApp [class*="st-key-_eu_topbar_run"] button span[data-testid="stIconMaterial"] {
+    display: none !important;
+  }
+}
+
+/* Shared sidebar rhythm. */
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_nav_area"] {
+  margin-top: 10px !important;
+}
+
+/* Global mobile shell chrome. Keep Streamlit's native sidebar toggle hidden
+   and let the EasyICU topbar crumbs scroll inline on every route. */
+@media (max-width: 900px) {
+  .stApp button[data-testid="stBaseButton-headerNoPadding"][kind="headerNoPadding"] {
+    display: none !important;
+    pointer-events: none !important;
+  }
+
+  .stApp .eu-topbar .bc,
+  .stApp .eu-topbar .crumbs {
+    min-width: 0;
+    overflow-x: auto;
+    white-space: nowrap;
+    flex-wrap: nowrap;
+  }
+}
+
+@media (max-width: 520px) {
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_page_breadcrumb_nav_"]) {
+    width: calc(100% + 24px) !important;
+    margin-left: -12px !important;
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+    min-height: auto !important;
+  }
+
+  .stApp [class*="st-key-eu_page_breadcrumb_nav_"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: auto !important;
+  }
+
+  .stApp [class*="st-key-eu_page_breadcrumb_nav_"] [data-testid="stHorizontalBlock"] {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    row-gap: 0 !important;
+  }
+
+  .stApp [class*="st-key-eu_page_breadcrumb_nav_"] .eu-bc-current,
+  .stApp [class*="st-key-eu_page_breadcrumb_nav_"] button {
+    white-space: normal !important;
+  }
+}
+
+/* Moved from alignment.css: shared shell chrome and design-DOM alignment. */
+:root,
+.stApp {
+  --accent: oklch(0.55 0.075 205);
+  --accent-ink: oklch(0.4 0.07 205);
+}
+
+/* Topbar controls (reference topbar() in easyicu_ui/EasyICU/js/app.js):
+   breadcrumb + spacer + Demo/Real segment + EN/中 segment + Copilot.
+   The visible markup mirrors .mode-seg/.lang-seg/.btn.sm. Streamlit
+   buttons stay transparent above it so routing/state callbacks survive. */
+.stApp [class*="st-key-eu_topbar_controls"] {
+  position: relative !important;
+  min-height: 34px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  overflow: visible !important;
+}
+.stApp [class*="st-key-eu_topbar_controls"] [data-testid="stVerticalBlock"],
+.stApp [class*="st-key-eu_topbar_controls"] [data-testid="stElementContainer"],
+.stApp [class*="st-key-eu_topbar_controls"] [data-testid="stMarkdown"],
+.stApp [class*="st-key-eu_topbar_controls"] [data-testid="stMarkdownContainer"] {
+  min-height: 34px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp [class*="st-key-eu_topbar_controls"] [data-testid="stMarkdown"] {
+  position: absolute !important;
+  top: 50% !important;
+  right: 0 !important;
+  transform: translateY(-50%) !important;
+  z-index: 1 !important;
+  width: 328px !important;
+  max-width: 328px !important;
+  height: 34px !important;
+  overflow: visible !important;
+}
+.stApp [class*="st-key-eu_topbar_controls"] [data-testid="stMarkdownContainer"] {
+  position: static !important;
+  transform: none !important;
+  width: 328px !important;
+  max-width: 328px !important;
+  height: 34px !important;
+  overflow: visible !important;
+}
+.eu-topbar-ref-controls {
+  position: static;
+  transform: none;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.eu-topbar-ref-controls .mode-seg,
+.eu-topbar-ref-controls .lang-seg {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  flex: none;
+}
+.eu-topbar-ref-controls .mode-seg button,
+.eu-topbar-ref-controls .lang-seg button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-4);
+  border-radius: var(--r-1);
+  cursor: pointer;
+  line-height: 1;
+}
+.eu-topbar-ref-controls .mode-seg button {
+  gap: 5px;
+  padding: 0 9px;
+}
+.eu-topbar-ref-controls .lang-seg button {
+  min-width: 30px;
+  padding: 0 9px;
+}
+.eu-topbar-ref-controls .mode-seg button.on,
+.eu-topbar-ref-controls .lang-seg button.on {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--sh-1);
+}
+.eu-topbar-ref-controls .mode-seg button.on svg {
+  color: var(--accent-ink);
+}
+.eu-topbar-ref-controls svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.eu-topbar-ref-controls .btn.sm.eu-topbar-copilot-visual {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--hair-2);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: var(--r-2);
+  box-shadow: var(--sh-1);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: none;
+}
+.stApp [class*="st-key-eu_topbar_controls"] [data-testid="stHorizontalBlock"] {
+  position: absolute !important;
+  top: 50% !important;
+  right: 0 !important;
+  transform: translateY(-50%) !important;
+  z-index: 3 !important;
+  width: 328px !important;
+  max-width: 328px !important;
+  min-height: 34px !important;
+  height: 34px !important;
+  gap: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  opacity: 0 !important;
+}
+.stApp [class*="st-key-eu_topbar_controls"] [data-testid="stColumn"] {
+  min-width: 0 !important;
+  width: auto !important;
+  padding: 0 !important;
+}
+.stApp [class*="st-key-eu_topbar_controls"] .stButton,
+.stApp [class*="st-key-_eu_topbar_controls"] {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  height: 34px !important;
+}
+.stApp [class*="st-key-eu_topbar_controls"] .stButton > button,
+.stApp [class*="st-key-_eu_topbar_controls"] button {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: transparent !important;
+  font-size: 0 !important;
+  box-shadow: none !important;
+}
+.stApp [class*="st-key-_eu_topbar_run"] button [data-testid="stIconMaterial"],
+.stApp [class*="st-key-_eu_topbar_start_demo"] button [data-testid="stIconMaterial"] {
+  width: 14px !important;
+  height: 14px !important;
+  font-size: 14px !important;
+  line-height: 14px !important;
+  margin: 0 !important;
+}
+.stApp [class*="st-key-_eu_topbar_run"] button[data-testid^="stBaseButton"]:has([data-testid="stIconMaterial"])::before,
+.stApp [class*="st-key-_eu_topbar_start_demo"] button[data-testid^="stBaseButton"]:has([data-testid="stIconMaterial"])::before {
+  content: none !important;
+  display: none !important;
+}
+
+/* Sidebar brand (design .brand): logo + copy is the only visible surface.
+   The real Home button remains as an invisible overlay so the brand block
+   is clickable without adding a second text row. */
+.stApp [class*="st-key-eu_brand_home"] {
+  min-height: 64px !important;
+}
+.stApp [class*="st-key-eu_brand_home"] [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+.stApp [class*="st-key-eu_brand_home"] .eu-brand {
+  gap: 11px !important;
+  padding: 14px 16px 8px !important;
+  margin: 6px 8px 0 !important;
+}
+.stApp [class*="st-key-eu_brand_home"] .eu-brand .logo {
+  width: 34px !important;
+  height: 34px !important;
+  border-radius: 9px !important;
+}
+.stApp [class*="st-key-_eu_brand_home_button"] {
+  height: 58px !important;
+  inset: 6px 8px 0 8px !important;
+}
+
+/* Sidebar footer (design .rail-foot): 30 px icon slots with avatar pushed
+   to the right. Streamlit button labels are intentionally invisible. */
+.stApp [class*="st-key-eu_sidebar_footer"] {
+  position: static !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  z-index: auto !important;
+  width: var(--eu-sidebar-w) !important;
+  padding: 0 !important;
+  border-top: 1px solid var(--hair) !important;
+  background: var(--rail) !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_dock"] {
+  flex: 0 0 auto !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+  padding-bottom: 0 !important;
+}
+.stApp [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(> [class*="st-key-eu_sidebar_dock"]) {
+  flex: 0 0 auto !important;
+  overflow: visible !important;
+}
+.stApp [class*="st-key-eu_sidebar_footer"] .eu-sidebar-footer-rule {
+  margin: 0 !important;
+}
+.stApp [class*="st-key-eu_sidebar_footer"] [data-testid="stHorizontalBlock"] {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  min-height: 48px !important;
+  padding: 9px 14px !important;
+  box-sizing: border-box !important;
+}
+.stApp [class*="st-key-eu_sidebar_footer"] [data-testid="stColumn"] {
+  flex: 0 0 30px !important;
+  width: 30px !important;
+  min-width: 30px !important;
+}
+.stApp [class*="st-key-eu_sidebar_footer"] [data-testid="stColumn"]:last-child {
+  margin-left: auto !important;
+}
+.stApp [class*="st-key-eu_footer_"] {
+  position: relative !important;
+  width: 30px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+}
+.stApp [class*="st-key-eu_footer_"] [data-testid="stVerticalBlock"],
+.stApp [class*="st-key-eu_footer_"] [data-testid="stElementContainer"],
+.stApp [class*="st-key-eu_footer_"] [data-testid="stMarkdown"],
+.stApp [class*="st-key-eu_footer_"] [data-testid="stMarkdownContainer"] {
+  width: 30px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp [class*="st-key-eu_footer_"]:hover .eu-footer-icobtn,
+.eu-footer-icobtn.active {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.eu-footer-icobtn.active {
+  border-color: var(--hair);
+}
+.stApp [class*="st-key-eu_footer_"] .stButton,
+.stApp [class*="st-key-_eu_footer_"] {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.eu-footer-avatar-wrap {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+}
+.eu-footer-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: oklch(82% 0.05 70);
+  color: oklch(35% 0.06 60);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+@media (max-width: 900px) {
+  :root,
+  .stApp {
+    --eu-sidebar-w: 0px;
+  }
+  [data-testid="stSidebar"] {
+    display: none !important;
+  }
+  .stApp [class*="st-key-eu_topbar_controls"] {
+    display: none !important;
+  }
+}
+
+/* Shared design-DOM primitives.
+   Route-specific CSS owns page layouts; these base button/chip/pill tokens
+   stay global because several shell and route surfaces still emit them. */
+.stApp a.btn,
+.stApp button.btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  height: 34px !important;
+  padding: 0 14px !important;
+  border: 1px solid var(--hair-2) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  border-radius: var(--r-2) !important;
+  font-family: var(--font-sans), var(--font-cn) !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  line-height: 1.5 !important;
+  letter-spacing: normal !important;
+  cursor: pointer !important;
+  white-space: nowrap !important;
+  text-decoration: none !important;
+  transition: background .12s, border-color .12s, box-shadow .12s !important;
+}
+.stApp a.btn.primary,
+.stApp button.btn.primary {
+  background: var(--ink) !important;
+  color: #fff !important;
+  border-color: var(--ink) !important;
+}
+.stApp a.btn.ghost,
+.stApp button.btn.ghost {
+  background: transparent !important;
+  border-color: transparent !important;
+}
+.stApp a.btn.sm,
+.stApp button.btn.sm {
+  height: 28px !important;
+  padding: 0 10px !important;
+  font-size: 12.25px !important;
+}
+.stApp a.btn.lg,
+.stApp button.btn.lg {
+  height: 44px !important;
+  padding: 0 20px !important;
+  font-size: 13.5px !important;
+}
+.stApp a.btn.block,
+.stApp button.btn.block {
+  width: 100% !important;
+}
+.stApp .mt-8 { margin-top: 8px !important; }
+.stApp .mt-16 { margin-top: 16px !important; }
+.stApp .row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+.stApp .grow { flex: 1 1 auto !important; min-width: 0 !important; }
+.stApp .eyebrow {
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.84px !important;
+  text-transform: uppercase !important;
+  color: var(--ink-4) !important;
+  line-height: 15.75px !important;
+}
+.stApp .chip {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  height: 24px !important;
+  padding: 0 9px !important;
+  border-radius: var(--r-pill) !important;
+  white-space: nowrap !important;
+  font-family: var(--font-mono) !important;
+  font-size: 11.5px !important;
+  font-weight: 400 !important;
+  line-height: 1 !important;
+  letter-spacing: normal !important;
+  background: var(--surface-2) !important;
+  color: var(--ink-2) !important;
+  border: 1px solid var(--hair) !important;
+}
+.stApp .chip.solid {
+  background: var(--surface) !important;
+}
+.stApp .pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  height: 23px !important;
+  padding: 2px 8px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-pill) !important;
+  background: var(--surface) !important;
+  color: var(--ink-2) !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  line-height: 16.5px !important;
+  white-space: nowrap !important;
+}
+.stApp .pill .dot {
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 50% !important;
+  background: var(--ink-3) !important;
+}
+/* Shared typography fallback tokens. */
+:root,
+.stApp {
+  --font-sans: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-cn: "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --accent-border: oklch(0.86 0.045 205);
+}
+
+/* ============================================================
+   SIDEBAR · Research Copilot CTA card  (design .cp-entry)
+   The assistant nav row renders .eu-cp-entry, so its keyed container
+   must un-clamp the 40px height the generic native-button overlay
+   imposes.
+   ============================================================ */
+[data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] {
+  height: auto !important;
+  min-height: 0 !important;
+  margin-top: 0 !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] .stButton,
+[data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] div[data-testid="stButton"],
+[data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] [class*="st-key-euonav_assistant"],
+[data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] [class*="st-key-euonav_assistant"] button {
+  min-height: 0 !important;   /* let the overlay match the card height */
+}
+[data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"]:hover .eu-cp-entry,
+.eu-cp-entry.on {
+  box-shadow: var(--sh-2);
+  border-color: var(--accent);
+}
+.eu-cp-entry .cp-ico {
+  width: 32px; height: 32px; flex: none;
+  border-radius: var(--r-2);
+  background: var(--accent); color: #fff;
+  display: grid; place-items: center;
+}
+.eu-cp-entry .cp-ico svg { width: 16px; height: 16px; }
+.eu-cp-entry .cp-body { min-width: 0; flex: 1; }
+.eu-cp-entry .cp-t {
+  display: block; font-size: 13px; font-weight: 600;
+  color: var(--ink); letter-spacing: -0.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.eu-cp-entry .cp-d {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  font-size: 10.5px; line-height: 1.3; color: var(--accent-ink);
+  margin-top: 2px; overflow: hidden;
+}
+.eu-cp-entry .cp-go { flex: none; color: var(--accent-ink); opacity: .6; }
+[data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"]:hover .eu-cp-entry .cp-go { opacity: 1; }
+
+/* shared-study note under the CTA (design .shared-note) */
+.eu-shared-note {
+  display: flex; align-items: center; gap: 7px;
+  margin: 4px 12px 8px;
+  font-size: 10.75px; line-height: 1.4; color: var(--ink-4);
+}
+.eu-shared-note .ico { flex: none; color: var(--accent-ink); opacity: .8; display: inline-flex; }
+.eu-shared-note .ico svg { width: 11px; height: 11px; }
+/* tighten the wrapping Streamlit markdown block for the note */
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(> .eu-shared-note) {
+  margin: 0 !important;
+}
+
+/* ------------------------------------------------------------
+   Re-assert design type scale for the live CTA spans.
+   shell_overrides.css line ~20849 floors every sidebar <span>
+   to `max(--eu-readable-min, 1em) !important`; the Copilot CTA
+   intentionally uses smaller captions, so override with
+   matching specificity + !important (loaded last → wins).
+   ------------------------------------------------------------ */
+[data-testid="stSidebar"] .eu-cp-entry .cp-t { font-size: 13px !important; }
+[data-testid="stSidebar"] .eu-cp-entry .cp-d { font-size: 10.5px !important; line-height: 1.3 !important; }
+
+/* Sidebar Agent Projects card (reference .cp-entry.agent-entry). */
+[data-testid="stSidebar"] [class*="st-key-eunavrow_research_agent"] {
+  height: auto !important;
+  min-height: 58px !important;
+  margin: 8px 8px 8px !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eunavrow_research_agent"]:hover .eu-agent-entry,
+[data-testid="stSidebar"] .eu-agent-entry.on {
+  border-color: var(--ink-3) !important;
+  box-shadow: var(--sh-1) !important;
+}
+[data-testid="stSidebar"] .eu-agent-entry .ag-body {
+  min-width: 0 !important;
+  flex: 1 !important;
+}
+
+[data-testid="stSidebar"] .eu-shared-note span { font-size: 10.75px !important; }
+
+/* ============================================================
+   SIDEBAR · design app.js nav structure lock
+   Source of truth:
+   easyicu_ui/EasyICU/css/redesign.css .cp-entry/.shared-note/
+   .wsnav/.wsgroup-head/.wsg-children/.wsitem.
+   Streamlit buttons stay transparent overlays for routing only.
+   ============================================================ */
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] {
+  position: relative !important;
+  width: 100% !important;
+  height: auto !important;
+  min-height: 64px !important;
+  margin: 0 !important;
+}
+.stApp [data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+  scrollbar-gutter: auto !important;
+}
+.stApp [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+  width: calc(100% + 1px) !important;
+  max-width: none !important;
+  padding: 0 !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_nav_area"] {
+  gap: 0 !important;
+  margin-top: 5.23px !important;
+}
+.stApp [data-testid="stSidebar"] {
+  --ink: #0E1116;
+  --ink-2: #2E3338;
+  --ink-3: #6B7280;
+  --ink-4: #9CA3AF;
+  --surface: #FFFFFF;
+  --surface-2: #F4F4F0;
+  --surface-3: #EEEEE8;
+  --hair: #E7E5DF;
+  --hair-2: #DCDAD2;
+  --hair-3: #C8C6BD;
+  --rail: #FCFCFA;
+  --r-1: 4px;
+  --r-2: 6px;
+  --r-3: 10px;
+  --r-4: 14px;
+  --r-pill: 999px;
+  --sh-1: 0 1px 0 rgba(14,17,22,0.04), 0 1px 2px rgba(14,17,22,0.04);
+  --sh-2: 0 4px 12px rgba(14,17,22,0.06), 0 1px 0 rgba(14,17,22,0.04);
+}
+.stApp [data-testid="stSidebar"] .cp-entry.eu-cp-entry {
+  display: flex !important;
+  align-items: center !important;
+  gap: 11px !important;
+  width: calc(100% - 16px) !important;
+  margin: 6px 8px 2px !important;
+  padding: 11px 12px !important;
+  border: 1px solid var(--accent-border) !important;
+  border-radius: var(--r-3) !important;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-soft) 75%, var(--surface)),
+    var(--surface)
+  ) !important;
+  box-shadow: none !important;
+  cursor: pointer !important;
+  font: inherit !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  text-align: left !important;
+  color: #000 !important;
+  line-height: 1.5 !important;
+  letter-spacing: normal !important;
+  transition: box-shadow .12s, border-color .12s !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"]:hover .cp-entry.eu-cp-entry,
+.stApp [data-testid="stSidebar"] .cp-entry.eu-cp-entry.on {
+  box-shadow: var(--sh-2) !important;
+  border-color: var(--accent) !important;
+}
+.stApp [data-testid="stSidebar"] .cp-entry .cp-ico {
+  width: 32px !important;
+  height: 32px !important;
+  flex: none !important;
+  border-radius: var(--r-2) !important;
+  background: var(--accent) !important;
+  color: #fff !important;
+  display: grid !important;
+  place-items: center !important;
+  line-height: 1.5 !important;
+  letter-spacing: normal !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+}
+.stApp [data-testid="stSidebar"] .cp-entry .cp-ico svg {
+  width: 16px !important;
+  height: 16px !important;
+}
+.stApp [data-testid="stSidebar"] .cp-entry .cp-body {
+  min-width: 0 !important;
+  flex: 1 !important;
+}
+.stApp [data-testid="stSidebar"] .cp-entry .cp-t {
+  display: block !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  line-height: 1.5 !important;
+  color: var(--ink) !important;
+  letter-spacing: -0.01em !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+.stApp [data-testid="stSidebar"] .cp-entry .cp-d {
+  display: -webkit-box !important;
+  -webkit-line-clamp: 2 !important;
+  -webkit-box-orient: vertical !important;
+  margin-top: 2px !important;
+  overflow: hidden !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 10.5px !important;
+  font-weight: 400 !important;
+  line-height: 1.3 !important;
+  letter-spacing: normal !important;
+  color: var(--accent-ink) !important;
+}
+.stApp [data-testid="stSidebar"] .cp-entry .cp-go {
+  flex: none !important;
+  color: var(--accent-ink) !important;
+  opacity: .6 !important;
+  line-height: 1.5 !important;
+  letter-spacing: normal !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"]:hover .cp-entry .cp-go {
+  opacity: 1 !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] [class*="st-key-euonav_assistant"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] div[data-testid="stButton"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] .stButton {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 64px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] [class*="st-key-euonav_assistant"] button {
+  opacity: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 64px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+.stApp [data-testid="stSidebar"] .shared-note.eu-shared-note {
+  display: flex !important;
+  align-items: center !important;
+  gap: 7px !important;
+  margin: 0 2px 10px !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 10.75px !important;
+  font-weight: 400 !important;
+  line-height: 1.4 !important;
+  letter-spacing: -0.0675px !important;
+  color: var(--ink-4) !important;
+}
+.stApp [data-testid="stSidebar"] .shared-note .ico {
+  flex: none !important;
+  color: var(--accent-ink) !important;
+  opacity: .8 !important;
+  display: block !important;
+  line-height: 1.4 !important;
+  letter-spacing: -0.0675px !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+}
+.stApp [data-testid="stSidebar"] .shared-note .ico svg {
+  width: 11px !important;
+  height: 11px !important;
+}
+.stApp [data-testid="stSidebar"] [data-testid="stMarkdownContainer"]:has(> .shared-note.eu-shared-note) {
+  margin: 2px 0 0 !important;
+}
+
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] {
+  position: relative !important;
+  width: 100% !important;
+  height: 217px !important;
+  min-height: 217px !important;
+  margin: 0 !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] .wsnav {
+  padding: 8px 8px 2px !important;
+}
+.stApp [data-testid="stSidebar"] .wsnav,
+.stApp [data-testid="stSidebar"] .wsg-children {
+  color: var(--ink) !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  line-height: 20.25px !important;
+}
+.stApp [data-testid="stSidebar"] .wsgroup-head {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  width: 100% !important;
+  padding: 10px 11px !important;
+  border: 1px solid var(--hair-2) !important;
+  border-radius: var(--r-3) !important;
+  background: var(--surface) !important;
+  box-shadow: none !important;
+  color: #000 !important;
+  font-family: Arial !important;
+  font-size: 13.3333px !important;
+  font-weight: 400 !important;
+  line-height: normal !important;
+  letter-spacing: normal !important;
+  cursor: pointer !important;
+  transition: background .12s, border-color .12s !important;
+}
+.stApp [data-testid="stSidebar"] .wsgroup-head:hover {
+  background: var(--surface-2) !important;
+}
+.stApp [data-testid="stSidebar"] .wsgroup-head.active {
+  border-color: var(--hair-3) !important;
+}
+.stApp [data-testid="stSidebar"] .wsg-ico {
+  width: 28px !important;
+  height: 28px !important;
+  flex: none !important;
+  border-radius: var(--r-2) !important;
+  background: var(--ink) !important;
+  color: #fff !important;
+  display: grid !important;
+  place-items: center !important;
+  line-height: normal !important;
+  letter-spacing: normal !important;
+  font-family: Arial !important;
+}
+.stApp [data-testid="stSidebar"] .wsg-ico svg {
+  width: 15px !important;
+  height: 15px !important;
+}
+.stApp [data-testid="stSidebar"] .wsg-t {
+  font-family: Arial !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  height: 30px !important;
+  line-height: normal !important;
+  color: var(--ink) !important;
+  letter-spacing: -0.005em !important;
+}
+.stApp [data-testid="stSidebar"] .wsg-prog {
+  margin-left: auto !important;
+  font-family: var(--font-mono) !important;
+  font-size: 10.5px !important;
+  font-weight: 400 !important;
+  height: 28px !important;
+  line-height: normal !important;
+  letter-spacing: normal !important;
+  color: var(--ink-3) !important;
+}
+.stApp [data-testid="stSidebar"] .wsg-chev {
+  flex: none !important;
+  color: var(--ink-4) !important;
+  display: grid !important;
+  place-items: center !important;
+  line-height: normal !important;
+  letter-spacing: normal !important;
+  font-family: Arial !important;
+}
+.stApp [data-testid="stSidebar"] .wsg-chev svg {
+  width: 13px !important;
+  height: 13px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_classic_workspace"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] div[data-testid="stButton"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] .stButton {
+  position: absolute !important;
+  z-index: 3 !important;
+  width: auto !important;
+  height: 52px !important;
+  min-height: 52px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_classic_workspace"] {
+  inset: 8px 8px auto 8px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_classic_workspace"] button {
+  opacity: 0 !important;
+  width: 100% !important;
+  height: 52px !important;
+  min-height: 52px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_extract"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_quick_viz"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_cohort"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_cross_db"] {
+  position: absolute !important;
+  left: 14px !important;
+  right: 8px !important;
+  z-index: 4 !important;
+  width: auto !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_extract"] {
+  top: 66px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_quick_viz"] {
+  top: 103px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_cohort"] {
+  top: 140px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_cross_db"] {
+  top: 177px !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_extract"] div[data-testid="stButton"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_quick_viz"] div[data-testid="stButton"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_cohort"] div[data-testid="stButton"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_cross_db"] div[data-testid="stButton"],
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_extract"] .stButton,
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_quick_viz"] .stButton,
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_cohort"] .stButton,
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_cross_db"] .stButton,
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_extract"] button,
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_quick_viz"] button,
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_cohort"] button,
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] [class*="st-key-euonav_cross_db"] button {
+  opacity: 0 !important;
+  width: 100% !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+}
+
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_classic_workspace"] .wsg-children {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 1px !important;
+  width: 100% !important;
+  margin: 4px 0 2px !important;
+  padding: 2px 0 0 6px !important;
+}
+.stApp [data-testid="stSidebar"] .wsitem .ico {
+  flex: none !important;
+  color: var(--ink-4) !important;
+  display: block !important;
+  height: 18px !important;
+  line-height: normal !important;
+  letter-spacing: normal !important;
+  font-family: Arial !important;
+}
+.stApp [data-testid="stSidebar"] .wsitem .ico svg {
+  width: 15px !important;
+  height: 15px !important;
+}
+.stApp [data-testid="stSidebar"] .wsitem .wsi-t {
+  font-family: Arial !important;
+  font-size: 12.5px !important;
+  font-weight: 500 !important;
+  height: 14px !important;
+  line-height: normal !important;
+  letter-spacing: normal !important;
+  color: var(--ink-2) !important;
+}
+.stApp [data-testid="stSidebar"] .wsitem:hover .wsi-t {
+  color: var(--ink) !important;
+}
+.stApp [data-testid="stSidebar"] .wsitem.active {
+  background: var(--surface-3) !important;
+}
+.stApp [data-testid="stSidebar"] .wsitem.active .wsi-t {
+  color: var(--ink) !important;
+  font-weight: 600 !important;
+}
+.stApp [data-testid="stSidebar"] .wsitem.active .ico {
+  color: var(--accent-ink) !important;
+}
+.stApp [data-testid="stSidebar"] .agent-entry.eu-agent-entry {
+  width: calc(100% - 16px) !important;
+  margin: 8px 8px 2px !important;
+  padding: 11px 12px !important;
+  border-color: var(--hair-2) !important;
+  background: var(--surface) !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  line-height: 1.5 !important;
+  letter-spacing: normal !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_research_agent"] {
+  margin: 0 !important;
+}
+.stApp [data-testid="stSidebar"] .agent-entry .cp-ico,
+.stApp [data-testid="stSidebar"] .agent-entry .cp-go {
+  line-height: 1.5 !important;
+  letter-spacing: normal !important;
+}
+.stApp [data-testid="stSidebar"] [class*="st-key-eunavrow_research_agent"]:hover .agent-entry.eu-agent-entry,
+.stApp [data-testid="stSidebar"] .agent-entry.eu-agent-entry.on {
+  border-color: var(--ink-3) !important;
+  box-shadow: var(--sh-1) !important;
+}
+.stApp [data-testid="stSidebar"] .agent-entry .cp-ico {
+  background: var(--ink) !important;
+  color: #fff !important;
+}
+.stApp [data-testid="stSidebar"] .agent-entry .cp-t {
+  color: var(--ink) !important;
+}
+.stApp [data-testid="stSidebar"] .agent-entry .cp-d,
+.stApp [data-testid="stSidebar"] .agent-entry .cp-go {
+  color: var(--ink-4) !important;
+}
+/* ============================================================
+   TOPBAR · match the design's clean page chrome
+   The design top bar is only: breadcrumb · Demo/Real · EN/中 ·
+   Copilot. The live page-top status strip (Mode/Database/Path/
+   Cohort/… ) duplicates the sidebar CURRENT SETUP rail and the
+   page's own readiness card, and the design never shows it — so
+   hide it. Reversible: delete this block to bring it back.
+   ============================================================ */
+[data-testid="stMain"] .eu-status-strip {
+  display: none !important;
+}
+
+/* ============================================================
+   MAIN · page-title hierarchy  (design .page-head h1)
+   Live page titles render as a bare Streamlit st.title at
+   22px/500; the design uses a stronger 25px/600/-0.02em head.
+   ============================================================ */
+[data-testid="stMain"] [data-testid="stHeadingWithActionElements"] h1 {
+  font-size: 25px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em !important;
+  line-height: 1.15 !important;
+}
+
+/* NOTE: Copilot right "Study workspace" rail (eu_study_step_row_* /
+   eu_copilot_study_rail) is an actively-in-progress Codex component
+   styled in shell_overrides.css. Do not override it here — competing
+   !important rules produce a broken hybrid layout. Align it in one
+   place once Codex's in-flight changes settle. */
+
+/* ============================================================
+   CROSS-PAGE QA FIXES · shell parity pass
+   Evidence: output/ui-qa/baseline/computed-style-baseline.json.
+   These rules keep the live Streamlit hit targets but align their
+   visible shell geometry with the Claude reference.
+   ============================================================ */
+
+/* Topbar primary action: the real st.button column was too far left and
+   overlapped the visual Copilot control on Patient/Cohort/CrossDB pages.
+   Pin the actual clickable button to the reference right edge. */
+@media (min-width: 901px) {
+  .stApp [class*="st-key-_eu_topbar_run"],
+  .stApp [class*="st-key-_eu_topbar_start_demo"] {
+    position: fixed !important;
+    top: 10.5px !important;
+    right: 28px !important;
+    z-index: 80 !important;
+    width: auto !important;
+    min-width: 0 !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .stApp [class*="st-key-_eu_topbar_run"] .stButton,
+  .stApp [class*="st-key-_eu_topbar_start_demo"] .stButton,
+  .stApp [class*="st-key-_eu_topbar_run"] [data-testid="stButton"],
+  .stApp [class*="st-key-_eu_topbar_start_demo"] [data-testid="stButton"] {
+    width: auto !important;
+    min-width: 0 !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    display: flex !important;
+    justify-content: flex-end !important;
+  }
+}
+
+/* Final desktop topbar geometry pass: the Streamlit block is nested in the
+   centered page container, so use the viewport minus the 248 px rail to match
+   the reference .topbar edge-to-edge across the main workspace. */
+@media (min-width: 901px) {
+  .stApp [data-testid="stHorizontalBlock"]:has(.eu-topbar),
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-eu_page_breadcrumb_nav_"]) {
+    width: calc(100vw - var(--rail-w, 248px)) !important;
+    max-width: calc(100vw - var(--rail-w, 248px)) !important;
+  }
+
+  .eu-topbar-ref-controls .btn.sm.eu-topbar-copilot-visual {
+    height: 28px !important;
+    padding: 0 9px !important;
+    font-size: 12.25px !important;
+    font-weight: 500 !important;
+  }
+  .eu-topbar-ref-controls .mode-seg button {
+    padding-left: 8px !important;
+    padding-right: 8px !important;
+  }
+
+  .stApp [class*="st-key-_eu_topbar_run"] .stButton > button,
+  .stApp [class*="st-key-_eu_topbar_start_demo"] .stButton > button,
+  .stApp [class*="st-key-_eu_topbar_run"] [data-testid="stButton"] > button,
+  .stApp [class*="st-key-_eu_topbar_start_demo"] [data-testid="stButton"] > button,
+  .stApp [class*="st-key-_eu_topbar_run"] button[data-testid^="stBaseButton"],
+  .stApp [class*="st-key-_eu_topbar_start_demo"] button[data-testid^="stBaseButton"] {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 7px !important;
+    width: auto !important;
+    min-width: 0 !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    padding: 0 14px !important;
+    border-radius: var(--r-2) !important;
+    border: 1px solid var(--ink) !important;
+    background: var(--ink) !important;
+    color: #fff !important;
+    -webkit-text-fill-color: #fff !important;
+    box-shadow: var(--sh-1) !important;
+    font-family: var(--font) !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+  }
+
+  .stApp [class*="st-key-_eu_topbar_run"] button[data-testid^="stBaseButton"]::before,
+  .stApp [class*="st-key-_eu_topbar_start_demo"] button[data-testid^="stBaseButton"]::before {
+    content: "" !important;
+    display: inline-block !important;
+    width: 10px !important;
+    height: 10px !important;
+    border: 0 !important;
+    margin: 0 !important;
+    background: currentColor !important;
+    clip-path: polygon(18% 8%, 18% 92%, 90% 50%) !important;
+    flex: 0 0 auto !important;
+  }
+
+}
+
+@media (min-width: 901px) {
+  .stApp [class*="st-key-_eu_topbar_run"] button[data-testid^="stBaseButton"]:has([data-testid="stIconMaterial"])::before,
+  .stApp [class*="st-key-_eu_topbar_start_demo"] button[data-testid^="stBaseButton"]:has([data-testid="stIconMaterial"])::before {
+    content: none !important;
+    display: none !important;
+  }
+}
+
+/* Sidebar footer final parity.
+   Design target: EasyICU/css/app.css .rail-foot and .rail-foot .icobtn.
+   Keep the Streamlit buttons as invisible overlays; this block only locks
+   the visible rail footer and its hit-slot wrapper metrics. */
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_footer"] {
+  position: fixed !important;
+  left: 0 !important;
+  right: auto !important;
+  bottom: 0 !important;
+  z-index: 50 !important;
+  display: flex !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  width: 247px !important;
+  height: 49px !important;
+  min-height: 49px !important;
+  max-height: 49px !important;
+  margin: 0 !important;
+  padding: 9px 14px !important;
+  gap: 4px !important;
+  border-top: 1px solid #E7E5DF !important;
+  border-right: 0 !important;
+  border-bottom: 0 !important;
+  border-left: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #0E1116 !important;
+  box-shadow: none !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_footer"] .eu-sidebar-footer-rule {
+  display: none !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_footer"] [data-testid="stHorizontalBlock"] {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  width: 219px !important;
+  min-width: 219px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  max-height: 30px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_footer"] [data-testid="stColumn"] {
+  flex: 0 0 30px !important;
+  width: 30px !important;
+  min-width: 30px !important;
+  max-width: 30px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  max-height: 30px !important;
+  padding: 0 !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_footer"] [data-testid="stColumn"]:last-child {
+  margin-left: auto !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_footer_"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_footer_"] [data-testid="stVerticalBlock"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_footer_"] [data-testid="stElementContainer"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_footer_"] [data-testid="stMarkdown"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_footer_"] [data-testid="stMarkdownContainer"] {
+  width: 30px !important;
+  min-width: 30px !important;
+  max-width: 30px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  max-height: 30px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-footer-avatar-wrap {
+  display: grid !important;
+  place-items: center !important;
+  width: 30px !important;
+  min-width: 30px !important;
+  max-width: 30px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  max-height: 30px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-footer-avatar {
+  display: grid !important;
+  place-items: center !important;
+  box-sizing: border-box !important;
+  width: 28px !important;
+  min-width: 28px !important;
+  max-width: 28px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  max-height: 28px !important;
+  margin: 0 !important;
+  margin-left: 55px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: oklch(82% 0.05 70) !important;
+  color: oklch(35% 0.06 60) !important;
+  box-shadow: none !important;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  line-height: 16.5px !important;
+  letter-spacing: -0.0675px !important;
+  transform: translateX(-55px) !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_footer_"] {
+  transform: translateY(-4px) !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-footer-avatar-wrap {
+  transform: translate(2px, -4px) !important;
+}
+
+/* Shared mobile bottom navigation mirrors the Claude Design `.mbottomnav`
+   shell while retaining the six real Streamlit radio routes. Cohort and
+   Cross-DB stay routable programmatically but are hidden from the four-slot
+   mobile rail, so those pages show no active bottom item.
+   Moved from alignment.css; this is global shell chrome, not Cross-DB CSS. */
+@media (max-width: 900px) {
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    section[data-testid="stMain"] {
+    padding-bottom: 64px !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar {
+    position: fixed !important;
+    z-index: 40 !important;
+    top: auto !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    display: flex !important;
+    align-items: stretch !important;
+    width: 100% !important;
+    height: calc(67.5px + env(safe-area-inset-bottom, 0px)) !important;
+    min-height: calc(67.5px + env(safe-area-inset-bottom, 0px)) !important;
+    max-height: calc(67.5px + env(safe-area-inset-bottom, 0px)) !important;
+    margin: 0 !important;
+    padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px)) !important;
+    box-sizing: border-box !important;
+    background: color-mix(in srgb, var(--rail) 92%, transparent) !important;
+    border-top: 1px solid var(--hair) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    backdrop-filter: blur(10px) saturate(1.1) !important;
+    -webkit-backdrop-filter: blur(10px) saturate(1.1) !important;
+    overflow: visible !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-floating_ai_launcher.st-key-floating_ai_launcher {
+    bottom: calc(84px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-floating_ai_panel.st-key-floating_ai_panel {
+    bottom: calc(108px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    [data-testid="stMarkdown"]:has(style) {
+    display: none !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    > [data-testid="stVerticalBlock"],
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    [data-testid="stElementContainer"],
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    [data-testid="stRadio"] {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+    gap: 0 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label {
+    position: relative !important;
+    flex: 1 1 25% !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    min-height: 48px !important;
+    margin: 0 !important;
+    padding: 6px 2px !important;
+    box-sizing: border-box !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 3px !important;
+    border: 0 !important;
+    border-radius: var(--r-2) !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    color: var(--ink-4) !important;
+    -webkit-text-fill-color: var(--ink-4) !important;
+    cursor: pointer !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    transition: background .12s, color .12s !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:nth-child(3),
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:nth-child(4) {
+    display: none !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:nth-child(6) {
+    order: 1 !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:nth-child(1) {
+    order: 2 !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:nth-child(2) {
+    order: 3 !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:nth-child(5) {
+    order: 4 !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:hover {
+    background: var(--surface-2) !important;
+    color: var(--ink) !important;
+    -webkit-text-fill-color: var(--ink) !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:has(input:checked) {
+    background: transparent !important;
+    box-shadow: none !important;
+    color: var(--ink) !important;
+    -webkit-text-fill-color: var(--ink) !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label > div:first-child {
+    display: none !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label p {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+    color: currentColor !important;
+    -webkit-text-fill-color: currentColor !important;
+    font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif !important;
+    font-size: 10.5px !important;
+    font-weight: 500 !important;
+    line-height: 12px !important;
+    letter-spacing: 0 !important;
+    text-align: center !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label::before {
+    display: block !important;
+    width: 20px !important;
+    height: 20px !important;
+    margin: 0 !important;
+    color: currentColor !important;
+    -webkit-text-fill-color: currentColor !important;
+    font-family: "Material Symbols Rounded" !important;
+    font-size: 20px !important;
+    font-style: normal !important;
+    font-weight: 400 !important;
+    line-height: 20px !important;
+    letter-spacing: 0 !important;
+    text-align: center !important;
+    text-transform: none !important;
+    font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 20 !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:has(input:checked)::before {
+    color: var(--accent-ink) !important;
+    -webkit-text-fill-color: var(--accent-ink) !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:nth-child(6)::before {
+    content: "auto_awesome" !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:nth-child(1)::before {
+    content: "database" !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+    div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:nth-child(2)::before {
+    content: "patient_list" !important;
+  }
+
+  html body .stApp.stApp.stApp.stApp.stApp.stApp.stApp
+  div.st-key-main_nav_bar.st-key-main_nav_bar
+    div[role="radiogroup"] > label:nth-child(5)::before {
+    content: "psychology" !important;
+  }
+}
+
+/* EOF final: Sidebar visual nav hit-target pass-through.
+   The sidebar uses Claude-reference HTML buttons for visual fidelity and
+   transparent Streamlit buttons positioned above them for real callbacks.
+   Keep the visible layer out of pointer hit-testing so clicks consistently
+   reach the native Streamlit target instead of competing with decorative
+   markup. */
+html body .stApp [data-testid="stSidebar"] .cp-entry.eu-cp-entry,
+html body .stApp [data-testid="stSidebar"] .agent-entry.eu-agent-entry,
+html body .stApp [data-testid="stSidebar"] .wsgroup-head,
+html body .stApp [data-testid="stSidebar"] .wsitem {
+  pointer-events: none !important;
+}
+
+/* Moved from visualization_shell_overrides.css: shared sidebar/reference nav exact-pass CSS.
+   Owner: shell/navigation, not Patient/Cohort/Cross-DB visualization. */
+html body .stApp [data-testid="stSidebar"] .wsg-ico svg,
+html body .stApp [data-testid="stSidebar"] .cp-entry .cp-ico svg {
+  display: block !important;
+}
+
+/* Global sidebar exact pass: shell sidebar shared note height from
+   redesign.css/app.js runtime at 1440x900. */
+html body .stApp [data-testid="stSidebar"] .shared-note {
+  height: 30.094px !important;
+  max-height: 30.094px !important;
+  overflow: visible !important;
+}
+
+/* Global sidebar exact pass: Reference nav from app.js + app.css.
+   The visible layer matches the reference .sec-label + .nav > .nav-item
+   structure; transparent Streamlit buttons remain as functional hit targets. */
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"] {
+  position: relative !important;
+  width: 247px !important;
+  height: 160.266px !important;
+  min-height: 160.266px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  overflow: visible !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [data-testid="stElementContainer"]:has(.eu-reference-sec-label) {
+  position: absolute !important;
+  top: 2.016px !important;
+  left: 0 !important;
+  width: 247px !important;
+  height: 20.25px !important;
+  min-height: 20.25px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-reference-sec-label {
+  display: block !important;
+  width: 247px !important;
+  height: 20.25px !important;
+  min-height: 20.25px !important;
+  margin: 16px 0 6px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #0E1116 !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  box-sizing: border-box !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [data-testid="stElementContainer"]:has(.eu-reference-nav) {
+  position: absolute !important;
+  top: 44.266px !important;
+  left: 0 !important;
+  width: 247px !important;
+  height: 116px !important;
+  min-height: 116px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-reference-nav.nav {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  width: 247px !important;
+  height: 116px !important;
+  min-height: 116px !important;
+  margin: 0 !important;
+  padding: 0 12px 4px !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #0E1116 !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  line-height: 20.25px !important;
+  box-sizing: border-box !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-reference-nav .eu-reference-nav-item {
+  display: flex !important;
+  align-items: center !important;
+  gap: 11px !important;
+  position: relative !important;
+  width: 223px !important;
+  height: 36px !important;
+  margin: 0 !important;
+  padding: 0 11px !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  color: #2E3338 !important;
+  cursor: pointer !important;
+  font-family: "IBM Plex Sans", -apple-system, "system-ui", system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 13.5px !important;
+  font-weight: 500 !important;
+  line-height: 20.25px !important;
+  text-transform: none !important;
+  white-space: nowrap !important;
+  box-sizing: border-box !important;
+  transition: background .12s, color .12s !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-reference-nav .eu-reference-nav-item:hover {
+  background: #F4F4F0 !important;
+  color: #0E1116 !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-reference-nav .eu-reference-nav-item.active {
+  background: #0E1116 !important;
+  color: #FFFFFF !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-reference-nav .eu-reference-nav-item .ico {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 17px !important;
+  width: 17px !important;
+  height: 17px !important;
+  min-width: 17px !important;
+  min-height: 17px !important;
+  color: #6B7280 !important;
+  line-height: 17px !important;
+  transition: color .12s !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-reference-nav .eu-reference-nav-item:hover .ico {
+  color: #2E3338 !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-reference-nav .eu-reference-nav-item.active .ico {
+  color: #FFFFFF !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-reference-nav .eu-reference-nav-item .ico svg {
+  display: block !important;
+  width: 17px !important;
+  height: 17px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .eu-reference-nav .eu-reference-nav-item .label {
+  display: inline !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_tutorial"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_dictionary"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_settings"] {
+  position: absolute !important;
+  left: 12px !important;
+  z-index: 5 !important;
+  width: 223px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  overflow: visible !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_tutorial"] {
+  top: 44.266px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_dictionary"] {
+  top: 82.266px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_settings"] {
+  top: 120.266px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_tutorial"] [class*="st-key-euonav_tutorial"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_dictionary"] [class*="st-key-euonav_dictionary"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_settings"] [class*="st-key-euonav_settings"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_tutorial"] div[data-testid="stButton"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_dictionary"] div[data-testid="stButton"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_settings"] div[data-testid="stButton"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_tutorial"] .stButton,
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_dictionary"] .stButton,
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_settings"] .stButton,
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_tutorial"] button,
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_dictionary"] button,
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_settings"] button {
+  width: 223px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  max-height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  color: transparent !important;
+  opacity: 0 !important;
+  -webkit-text-fill-color: transparent !important;
+  transform: none !important;
+}
+
+html body .stApp [data-testid="stSidebar"],
+html body .stApp [data-testid="stSidebar"] [data-testid="stSidebarContent"],
+html body .stApp [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {
+  overflow-x: hidden !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_tutorial"] [class*="st-key-euonav_tutorial"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_dictionary"] [class*="st-key-euonav_dictionary"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_settings"] [class*="st-key-euonav_settings"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_tutorial"] div[data-testid="stButton"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_dictionary"] div[data-testid="stButton"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_settings"] div[data-testid="stButton"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_tutorial"] .stButton,
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_dictionary"] .stButton,
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_settings"] .stButton {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 223px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  max-height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  transform: none !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_tutorial"] button,
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_dictionary"] button,
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eunav_reference_group"]
+  [class*="st-key-eunavrow_settings"] button {
+  position: absolute !important;
+  inset: 0 !important;
+}
+
+/* Sidebar numeric parity cleanup: visible reference elements keep the
+   design computed min-height while Streamlit's invisible hit targets
+   remain explicitly sized for routing. */
+html body .stApp [data-testid="stSidebar"] .cp-entry.eu-cp-entry,
+html body .stApp [data-testid="stSidebar"] .shared-note.eu-shared-note,
+html body .stApp [data-testid="stSidebar"] .wsgroup-head,
+html body .stApp [data-testid="stSidebar"] .wsitem {
+  min-height: auto !important;
+}
+
+/* Sidebar primary rail final parity pass.
+   Source: EasyICU/css/app.css .sidebar/.brand and
+   EasyICU/css/redesign.css .cp-entry/.shared-note/.wsgroup-head/.wsitem.
+   The visible HTML mirrors the design; native Streamlit buttons stay as
+   transparent hit targets so every route still uses the real callbacks. */
+html body .stApp [data-testid="stSidebar"] {
+  color: #0E1116 !important;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_brand_home"] {
+  height: 73px !important;
+  min-height: 73px !important;
+  max-height: 73px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  position: relative !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_brand_home"] .eu-brand {
+  display: flex !important;
+  align-items: center !important;
+  gap: 11px !important;
+  box-sizing: border-box !important;
+  width: 231px !important;
+  height: 65px !important;
+  min-height: 65px !important;
+  max-height: 65px !important;
+  margin: 6px 8px 2px !important;
+  padding: 16px 16px 14px !important;
+  border-radius: 6px !important;
+  color: #0E1116 !important;
+  cursor: pointer !important;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  line-height: 20.25px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_brand_home"] .eu-brand .logo {
+  display: grid !important;
+  place-items: center !important;
+  align-items: center !important;
+  justify-content: normal !important;
+  flex: 0 0 34px !important;
+  width: 34px !important;
+  height: 34px !important;
+  min-width: 34px !important;
+  min-height: 34px !important;
+  border-radius: 9px !important;
+  background: #0E1116 !important;
+  color: #FFFFFF !important;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  letter-spacing: -0.0675px !important;
+  position: static !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_brand_home"] .eu-brand .logo svg {
+  display: block !important;
+  width: 18px !important;
+  height: 18px !important;
+  vertical-align: baseline !important;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 13.5px !important;
+  font-weight: 400 !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_brand_home"] .eu-brand .text {
+  flex: 0 0 auto !important;
+  min-width: 0 !important;
+  width: auto !important;
+  height: 34.5px !important;
+  line-height: 20.25px !important;
+  transform: translateY(-0.25px) !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_brand_home"] .eu-brand .name {
+  display: block !important;
+  height: 16.5px !important;
+  color: #0E1116 !important;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  line-height: 16.5px !important;
+  letter-spacing: -0.15px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_brand_home"] .eu-brand .sub {
+  display: block !important;
+  height: 16.5px !important;
+  margin-top: 2px !important;
+  overflow: visible !important;
+  color: #9CA3AF !important;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  font-size: 11px !important;
+  font-weight: 400 !important;
+  line-height: 16.5px !important;
+  letter-spacing: 0 !important;
+  white-space: nowrap !important;
+  text-overflow: clip !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-_eu_brand_home_button"],
+html body .stApp [data-testid="stSidebar"] [class*="st-key-_eu_brand_home_button"] .stButton,
+html body .stApp [data-testid="stSidebar"] [class*="st-key-_eu_brand_home_button"] button {
+  width: 231px !important;
+  height: 65px !important;
+  min-height: 65px !important;
+  max-height: 65px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-_eu_brand_home_button"] {
+  position: absolute !important;
+  inset: 6px 8px auto 8px !important;
+  z-index: 4 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-_eu_brand_home_button"] button {
+  opacity: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+}
+
+@media (min-width: 901px) and (max-width: 1100px) {
+  :root,
+  .stApp {
+    --eu-sidebar-w: 64px;
+  }
+
+  html body .stApp [data-testid="stSidebar"] {
+    min-width: 64px !important;
+    max-width: 64px !important;
+    width: 64px !important;
+  }
+
+  html body .stApp [data-testid="stSidebar"] .eu-shell-brand-subtitle,
+  html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_brand_home"] .eu-brand .text {
+    display: none !important;
+  }
+
+  html body .stApp [data-testid="stSidebar"] .eu-section-label {
+    display: none !important;
+  }
+
+  html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_brand_home"] .eu-brand,
+  html body .stApp [data-testid="stSidebar"] [class*="st-key-_eu_brand_home_button"],
+  html body .stApp [data-testid="stSidebar"] [class*="st-key-_eu_brand_home_button"] .stButton,
+  html body .stApp [data-testid="stSidebar"] [class*="st-key-_eu_brand_home_button"] button {
+    width: 48px !important;
+    min-width: 48px !important;
+    max-width: 48px !important;
+  }
+
+  html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_brand_home"] .eu-brand {
+    justify-content: center !important;
+    gap: 0 !important;
+    padding: 16px 0 14px !important;
+  }
+}
+
+html body .stApp [data-testid="stSidebar"] .cp-entry .cp-go {
+  display: block !important;
+  width: 14px !important;
+  height: 20.25px !important;
+  line-height: 20.25px !important;
+  align-items: normal !important;
+  justify-content: normal !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .cp-entry .cp-go svg {
+  display: inline !important;
+  width: 14px !important;
+  height: 14px !important;
+  vertical-align: baseline !important;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  letter-spacing: normal !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .shared-note .ico {
+  display: block !important;
+  align-items: normal !important;
+  justify-content: normal !important;
+  width: 11px !important;
+  height: 15.05px !important;
+  min-width: 11px !important;
+  min-height: 15.05px !important;
+  max-width: 11px !important;
+  max-height: 15.05px !important;
+  line-height: 15.05px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .shared-note .ico svg {
+  display: inline !important;
+  width: 11px !important;
+  height: 11px !important;
+  vertical-align: baseline !important;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif, "IBM Plex Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .wsitem .ico {
+  display: block !important;
+  align-items: normal !important;
+  justify-content: normal !important;
+  flex: 0 0 15px !important;
+  width: 15px !important;
+  height: 18px !important;
+  min-width: 15px !important;
+  min-height: auto !important;
+  max-width: 15px !important;
+  max-height: 18px !important;
+  line-height: normal !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .nav-item.eu-reference-nav-item {
+  min-height: auto !important;
+  letter-spacing: -0.0675px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] .wsitem .ico svg {
+  display: block !important;
+  width: 15px !important;
+  height: 15px !important;
+}
+
+html body .stApp [data-testid="stSidebar"] [class*="st-key-eu_sidebar_nav_area"] {
+  margin-top: -3.754px !important;
+}
+
+/* Sidebar native nav button transparent overlay.
+   Live visuals are .eu-cp-entry, .wsgroup-head/.wsitem, .eu-agent-entry,
+   and .eu-reference-nav-item; Streamlit buttons stay invisible routing
+   hit targets above those rows. */
+[data-testid="stSidebar"] [class*="st-key-eunavrow_"] {
+  position: relative !important;
+  margin: 0 !important;
+  min-height: 40px !important;
+  height: 40px !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eunavrow_extract"] {
+  margin-top: 12px !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eunavrow_assistant"] {
+  margin-top: 12px !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eunavrow_"] [data-testid="stVerticalBlock"] {
+  gap: 0 !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eunavrow_research_agent"] {
+  margin-top: 8px !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eunavrow_"] [class*="st-key-euonav_"] {
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 3 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eunavrow_"] div[data-testid="stButton"],
+[data-testid="stSidebar"] [class*="st-key-eunavrow_"] .stButton {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 40px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eunavrow_"] [class*="st-key-euonav_"] button {
+  opacity: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 40px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+[data-testid="stSidebar"] [class*="st-key-eunavrow_"] [class*="st-key-euonav_"] button * {
+  pointer-events: none !important;
+}
