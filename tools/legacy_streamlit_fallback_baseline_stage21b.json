@@ -1,0 +1,114 @@
+{
+  "stage": "Stage21b legacy Streamlit fallback CSS baseline",
+  "date": "2026-06-24",
+  "fastapi_mainline_commit": "fdd3009",
+  "cleanup_performed": false,
+  "css_files_deleted": [],
+  "inventory_output": "output/stage21b_legacy_fallback_baseline/inventory_20260624_105721/css_inventory.json",
+  "summary": {
+    "css_files_under_webapp": 16,
+    "total_css_lines": 62171,
+    "imported_by_shell_styles": 16,
+    "untracked_imported_css": 14,
+    "immediate_delete_candidates": 0
+  },
+  "imported_css": [
+    {"order": 1, "path": "src/easyicu/webapp/tokens.css", "status": "clean_tracked", "lines": 200},
+    {"order": 2, "path": "src/easyicu/webapp/shell_overrides.css", "status": "modified_tracked", "lines": 1480},
+    {"order": 3, "path": "src/easyicu/webapp/alignment.css", "status": "untracked", "lines": 21},
+    {"order": 4, "path": "src/easyicu/webapp/shell_navigation_overrides.css", "status": "untracked", "lines": 2554},
+    {"order": 5, "path": "src/easyicu/webapp/entry_overrides.css", "status": "untracked", "lines": 2251},
+    {"order": 6, "path": "src/easyicu/webapp/tutorial_overrides.css", "status": "untracked", "lines": 2536},
+    {"order": 7, "path": "src/easyicu/webapp/dictionary_overrides.css", "status": "untracked", "lines": 909},
+    {"order": 8, "path": "src/easyicu/webapp/states_overrides.css", "status": "untracked", "lines": 3808},
+    {"order": 9, "path": "src/easyicu/webapp/settings_overrides.css", "status": "untracked", "lines": 2138},
+    {"order": 10, "path": "src/easyicu/webapp/extract_overrides.css", "status": "untracked", "lines": 7090},
+    {"order": 11, "path": "src/easyicu/webapp/visualization_shell_overrides.css", "status": "untracked", "lines": 141},
+    {"order": 12, "path": "src/easyicu/webapp/patient_overrides.css", "status": "untracked", "lines": 6191},
+    {"order": 13, "path": "src/easyicu/webapp/cohort_overrides.css", "status": "untracked", "lines": 4086},
+    {"order": 14, "path": "src/easyicu/webapp/crossdb_overrides.css", "status": "untracked", "lines": 3583},
+    {"order": 15, "path": "src/easyicu/webapp/agent_overrides.css", "status": "untracked", "lines": 15943},
+    {"order": 16, "path": "src/easyicu/webapp/guided_overrides.css", "status": "untracked", "lines": 9240}
+  ],
+  "staging_plan": {
+    "must_stage_for_runnable_fallback_css_baseline": [
+      "tools/legacy_streamlit_fallback_baseline_stage21b.json",
+      "tools/inventory_legacy_streamlit_css.py",
+      "src/easyicu/webapp/shell_styles.py",
+      "src/easyicu/webapp/shell_overrides.css",
+      "src/easyicu/webapp/agent_overrides.css",
+      "src/easyicu/webapp/alignment.css",
+      "src/easyicu/webapp/cohort_overrides.css",
+      "src/easyicu/webapp/crossdb_overrides.css",
+      "src/easyicu/webapp/dictionary_overrides.css",
+      "src/easyicu/webapp/entry_overrides.css",
+      "src/easyicu/webapp/extract_overrides.css",
+      "src/easyicu/webapp/guided_overrides.css",
+      "src/easyicu/webapp/patient_overrides.css",
+      "src/easyicu/webapp/settings_overrides.css",
+      "src/easyicu/webapp/shell_navigation_overrides.css",
+      "src/easyicu/webapp/states_overrides.css",
+      "src/easyicu/webapp/tutorial_overrides.css",
+      "src/easyicu/webapp/visualization_shell_overrides.css"
+    ],
+    "optional_after_review": [
+      "tests/test_app_rendering.py"
+    ],
+    "ignored_local_evidence_use_git_add_f_if_committing": [
+      "docs/legacy_streamlit_fallback_baseline_stage21b.md",
+      "task_logs/20260624_webapp_stage21b_legacy_fallback_baseline.md"
+    ],
+    "defer_dirty_webapp_python": [
+      "src/easyicu/webapp/agent_workbench.py",
+      "src/easyicu/webapp/app.py",
+      "src/easyicu/webapp/cohort_filters.py",
+      "src/easyicu/webapp/cohort_group_page.py",
+      "src/easyicu/webapp/cohort_multidb_page.py",
+      "src/easyicu/webapp/cohort_redesign.py",
+      "src/easyicu/webapp/cohort_severity_page.py",
+      "src/easyicu/webapp/cohort_workspace.py",
+      "src/easyicu/webapp/conversion_workflow.py",
+      "src/easyicu/webapp/copilot/presentation.py",
+      "src/easyicu/webapp/data_coverage_audit_page.py",
+      "src/easyicu/webapp/data_dictionary_page.py",
+      "src/easyicu/webapp/data_paths.py",
+      "src/easyicu/webapp/demo_data.py",
+      "src/easyicu/webapp/icd_preview.py",
+      "src/easyicu/webapp/pages_redesign.py",
+      "src/easyicu/webapp/patient_page.py",
+      "src/easyicu/webapp/quality_page.py",
+      "src/easyicu/webapp/quick_visualization_page.py",
+      "src/easyicu/webapp/research_agent.py",
+      "src/easyicu/webapp/sidebar.py",
+      "src/easyicu/webapp/sofa_reclassification.py",
+      "src/easyicu/webapp/styles.py",
+      "src/easyicu/webapp/timeseries_page.py",
+      "src/easyicu/webapp/ui_helpers.py",
+      "src/easyicu/webapp/workspace_snapshots.py"
+    ],
+    "defer_other_dirty": [
+      "tests/test_research_agent_web_helpers.py",
+      "src/easyicu/data/concept-dict2.json",
+      "src/easyicu/test-results/.last-run.json"
+    ]
+  },
+  "rationale": {
+    "shell_styles_required": "HEAD shell_styles.py only loads tokens.css and shell_overrides.css; split CSS is runnable only with the working-tree shell_styles.py loader changes.",
+    "no_css_file_delete": "All 16 CSS files under src/easyicu/webapp are imported by shell_styles.py, so file-level deletion has no evidence base."
+  },
+  "stage22_first_slice": {
+    "target": "src/easyicu/webapp/agent_overrides.css",
+    "cleanup_type": "selector-level",
+    "constraints": [
+      "do not change shell_styles.py import order",
+      "do not delete CSS files",
+      "add or update owner-guard regression before deletion",
+      "treat .eu-agent-page-marker as the required Agent owner guard"
+    ],
+    "candidate_work": [
+      "classify likely valid Agent-owned marker hits such as .eu-agent-linked-cohort, .state-hero, and Agent Copilot handoff controls",
+      "remove only a small confirmed stale selector/comment slice",
+      "rerun CSS ownership scan, fallback smoke if allowed, FastAPI route QA, and git diff --check"
+    ]
+  }
+}
