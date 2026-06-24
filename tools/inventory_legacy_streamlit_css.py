@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -28,6 +29,7 @@ DEFAULT_OUT_ROOT = Path("output/stage21_legacy_css_inventory")
 SHELL_STYLES_PATH = WEBAPP_DIR / "shell_styles.py"
 OWNERSHIP_TEST_PATH = Path("tests/test_app_rendering.py")
 RESEARCH_AGENT_HELPER_TEST_PATH = Path("tests/test_research_agent_web_helpers.py")
+LEGACY_STREAMLIT_CSS_ENV = "EASYICU_ENABLE_LEGACY_STREAMLIT_CSS"
 
 CSS_OWNER_BY_FILE = {
     "tokens.css": "global design tokens",
@@ -65,6 +67,10 @@ EXPECTED_RENDER_ORDER = [
     "crossdb_overrides.css",
     "agent_overrides.css",
     "guided_overrides.css",
+]
+DEFAULT_LOADED_CSS = ["tokens.css", "shell_overrides.css"]
+LEGACY_SPLIT_CSS = [
+    name for name in EXPECTED_RENDER_ORDER if name not in set(DEFAULT_LOADED_CSS)
 ]
 
 ROUTE_MARKERS = {
@@ -179,13 +185,37 @@ def css_files() -> list[Path]:
     return sorted(WEBAPP_DIR.glob("*.css"), key=lambda p: p.name)
 
 
-def loaded_css_from_shell_styles() -> list[str]:
+def referenced_css_from_shell_styles() -> list[str]:
     path = WEBAPP_DIR / "shell_styles.py"
     text = path.read_text(encoding="utf-8")
     found = re.findall(r'with_name\("([^"]+\.css)"\)', text)
     return [name for name in EXPECTED_RENDER_ORDER if name in set(found)] + [
         name for name in found if name not in EXPECTED_RENDER_ORDER
     ]
+
+
+def _present_css_names(names: list[str]) -> list[str]:
+    return [name for name in names if (WEBAPP_DIR / name).exists()]
+
+
+def legacy_css_env_enabled() -> bool:
+    return os.environ.get(LEGACY_STREAMLIT_CSS_ENV) == "1"
+
+
+def default_loaded_css_from_shell_styles() -> list[str]:
+    referenced = set(referenced_css_from_shell_styles())
+    return _present_css_names([name for name in DEFAULT_LOADED_CSS if name in referenced])
+
+
+def legacy_enabled_loaded_css_from_shell_styles() -> list[str]:
+    referenced = set(referenced_css_from_shell_styles())
+    return _present_css_names([name for name in EXPECTED_RENDER_ORDER if name in referenced])
+
+
+def loaded_css_from_shell_styles() -> list[str]:
+    if legacy_css_env_enabled():
+        return legacy_enabled_loaded_css_from_shell_styles()
+    return default_loaded_css_from_shell_styles()
 
 
 def marker_hits(text: str, owner_file: str) -> list[dict[str, Any]]:
@@ -898,9 +928,18 @@ def check_patient_owner_guards() -> dict[str, Any]:
     }
 
 
-def classify_cleanup(file_name: str, imported: bool, status: str, marker_count: int) -> str:
-    if not imported:
-        return "archive_candidate_not_imported"
+def classify_cleanup(
+    file_name: str,
+    active_loaded: bool,
+    loaded_by_default: bool,
+    loaded_when_legacy_env_enabled: bool,
+    status: str,
+    marker_count: int,
+) -> str:
+    if not loaded_by_default and loaded_when_legacy_env_enabled:
+        return "legacy_css_inactive_by_default_keep_until_stage24b"
+    if not active_loaded:
+        return "present_not_loaded"
     if status == "untracked":
         return "snapshot_first_untracked_imported_do_not_delete"
     if marker_count:
@@ -911,15 +950,42 @@ def classify_cleanup(file_name: str, imported: bool, status: str, marker_count: 
 def inventory() -> dict[str, Any]:
     head = run_git(["rev-parse", "--short", "HEAD"])
     branch = run_git(["branch", "--show-current"])
+    present_css_names = [path.name for path in css_files()]
+    referenced_css = referenced_css_from_shell_styles()
+    default_loaded_css = default_loaded_css_from_shell_styles()
+    legacy_enabled_loaded_css = legacy_enabled_loaded_css_from_shell_styles()
     shell_loaded = loaded_css_from_shell_styles()
     loaded_set = set(shell_loaded)
+    default_loaded_set = set(default_loaded_css)
+    legacy_enabled_loaded_set = set(legacy_enabled_loaded_css)
     files = []
-    totals = {"files": 0, "lines": 0, "bytes": 0, "imported_files": 0, "untracked_files": 0}
+    totals = {
+        "files": 0,
+        "lines": 0,
+        "bytes": 0,
+        "imported_files": 0,
+        "active_loaded_files": 0,
+        "active_loaded_lines": 0,
+        "default_loaded_files": 0,
+        "default_loaded_lines": 0,
+        "legacy_enabled_loaded_files": 0,
+        "legacy_enabled_loaded_lines": 0,
+        "inactive_by_default_legacy_files": 0,
+        "inactive_by_default_legacy_lines": 0,
+        "untracked_files": 0,
+    }
     for path in css_files():
         text = path.read_text(encoding="utf-8", errors="replace")
         lines = text.splitlines()
         status = git_status(path)
-        imported = path.name in loaded_set
+        active_loaded = path.name in loaded_set
+        loaded_by_default = path.name in default_loaded_set
+        loaded_when_legacy_env_enabled = path.name in legacy_enabled_loaded_set
+        inactive_by_default_legacy = (
+            loaded_when_legacy_env_enabled
+            and not loaded_by_default
+            and path.name in LEGACY_SPLIT_CSS
+        )
         hits = marker_hits(text, path.name)
         record = {
             "file": str(path),
@@ -927,8 +993,19 @@ def inventory() -> dict[str, Any]:
             "owner": CSS_OWNER_BY_FILE.get(path.name, "unknown"),
             "owner_route": OWNER_ROUTE_BY_FILE.get(path.name),
             "git_status": status,
-            "imported_by_shell_styles": imported,
-            "render_order": shell_loaded.index(path.name) + 1 if imported else None,
+            "present_in_webapp": True,
+            "imported_by_shell_styles": active_loaded,
+            "active_loaded_by_shell_styles": active_loaded,
+            "loaded_by_default": loaded_by_default,
+            "loaded_when_legacy_env_enabled": loaded_when_legacy_env_enabled,
+            "inactive_by_default_legacy_css": inactive_by_default_legacy,
+            "render_order": shell_loaded.index(path.name) + 1 if active_loaded else None,
+            "default_render_order": default_loaded_css.index(path.name) + 1
+            if loaded_by_default
+            else None,
+            "legacy_enabled_render_order": legacy_enabled_loaded_css.index(path.name) + 1
+            if loaded_when_legacy_env_enabled
+            else None,
             "lines": len(lines),
             "bytes": path.stat().st_size,
             "sha256": sha256(path),
@@ -936,33 +1013,67 @@ def inventory() -> dict[str, Any]:
             "has_selector_count": text.count(":has("),
             "media_rule_count": len(re.findall(r"@media\b", text)),
             "marker_hits": hits,
-            "cleanup_recommendation": classify_cleanup(path.name, imported, status, len(hits)),
+            "cleanup_recommendation": classify_cleanup(
+                path.name,
+                active_loaded,
+                loaded_by_default,
+                loaded_when_legacy_env_enabled,
+                status,
+                len(hits),
+            ),
         }
         files.append(record)
         totals["files"] += 1
         totals["lines"] += record["lines"]
         totals["bytes"] += record["bytes"]
-        totals["imported_files"] += int(imported)
+        totals["imported_files"] += int(active_loaded)
+        totals["active_loaded_files"] += int(active_loaded)
+        totals["active_loaded_lines"] += record["lines"] if active_loaded else 0
+        totals["default_loaded_files"] += int(loaded_by_default)
+        totals["default_loaded_lines"] += record["lines"] if loaded_by_default else 0
+        totals["legacy_enabled_loaded_files"] += int(loaded_when_legacy_env_enabled)
+        totals["legacy_enabled_loaded_lines"] += (
+            record["lines"] if loaded_when_legacy_env_enabled else 0
+        )
+        totals["inactive_by_default_legacy_files"] += int(inactive_by_default_legacy)
+        totals["inactive_by_default_legacy_lines"] += (
+            record["lines"] if inactive_by_default_legacy else 0
+        )
         totals["untracked_files"] += int(status == "untracked")
-    unimported = [item["name"] for item in files if not item["imported_by_shell_styles"]]
+    unimported = [item["name"] for item in files if not item["active_loaded_by_shell_styles"]]
+    inactive_by_default = [
+        item["name"] for item in files if item["inactive_by_default_legacy_css"]
+    ]
     report = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "git": {"branch": branch, "head": head},
+        "legacy_streamlit_css_env": {
+            "name": LEGACY_STREAMLIT_CSS_ENV,
+            "enabled": legacy_css_env_enabled(),
+            "required_value": "1",
+        },
         "shell_styles": {
             "path": str(WEBAPP_DIR / "shell_styles.py"),
+            "referenced_css": referenced_css,
+            "present_css_files": present_css_names,
+            "default_loaded_css": default_loaded_css,
+            "legacy_enabled_loaded_css": legacy_enabled_loaded_css,
             "loaded_css": shell_loaded,
-            "missing_expected_css": [name for name in EXPECTED_RENDER_ORDER if name not in loaded_set],
+            "missing_expected_css": [
+                name for name in EXPECTED_RENDER_ORDER if name not in set(present_css_names)
+            ],
+            "inactive_by_default_legacy_css": inactive_by_default,
         },
         "totals": totals,
         "files": files,
         "archive_delete_candidates": unimported,
         "first_slice_decision": {
             "delete_now": [],
-            "archive_only": [item["name"] for item in files if item["imported_by_shell_styles"]],
+            "archive_only": inactive_by_default,
             "reason": (
-                "All CSS files present in src/easyicu/webapp are loaded by shell_styles.py. "
-                "The 14 split route CSS files are untracked but imported, so deleting or editing "
-                "them before an archive snapshot would mix cleanup with the dirty fallback line."
+                "Stage24A hard-decommissions legacy Streamlit route CSS from the default runtime "
+                "without deleting files. The legacy split CSS remains present and can be temporarily "
+                f"re-enabled with {LEGACY_STREAMLIT_CSS_ENV}=1 until Stage24B removes the files."
             ),
         },
     }
@@ -971,17 +1082,17 @@ def inventory() -> dict[str, Any]:
 
 
 def baseline_staging_plan(report: dict[str, Any]) -> dict[str, Any]:
-    """Return an explicit no-cleanup staging boundary for legacy fallback CSS."""
+    """Return the current reversible legacy CSS decommission boundary."""
     status_entries = git_status_entries()
-    imported_files = [item for item in report["files"] if item["imported_by_shell_styles"]]
-    imported_css_paths = [item["file"] for item in imported_files]
-    untracked_imported_css = [
-        item["file"] for item in imported_files if item["git_status"] == "untracked"
+    default_loaded_files = [item for item in report["files"] if item["loaded_by_default"]]
+    default_loaded_css_paths = [item["file"] for item in default_loaded_files]
+    legacy_enabled_files = [
+        item for item in report["files"] if item["loaded_when_legacy_env_enabled"]
     ]
-    modified_imported_css = [
+    inactive_legacy_files = [
         item["file"]
-        for item in imported_files
-        if item["git_status"] not in {"clean_tracked", "untracked"}
+        for item in legacy_enabled_files
+        if item["inactive_by_default_legacy_css"]
     ]
     dirty_webapp_python = sorted(
         entry["path"]
@@ -997,23 +1108,19 @@ def baseline_staging_plan(report: dict[str, Any]) -> dict[str, Any]:
     )
     runnable_required = [
         str(SHELL_STYLES_PATH),
-        *modified_imported_css,
-        *untracked_imported_css,
+        *default_loaded_css_paths,
     ]
     return {
-        "purpose": "baseline_legacy_streamlit_fallback_before_selector_cleanup",
-        "do_not_cleanup_in_baseline": True,
-        "must_stage_for_runnable_fallback_css_baseline": runnable_required,
-        "all_imported_css_snapshot": imported_css_paths,
-        "untracked_imported_css_should_be_added": untracked_imported_css,
-        "modified_imported_css_should_be_added": modified_imported_css,
-        "already_tracked_css_no_new_stage_needed_if_unchanged": [
-            item["file"] for item in imported_files if item["git_status"] == "clean_tracked"
-        ],
+        "purpose": "stage24a_reversible_legacy_streamlit_css_decommission",
+        "do_not_delete_css_files_in_stage24a": True,
+        "must_stage_for_default_runtime_boundary": runnable_required,
+        "default_loaded_css_snapshot": default_loaded_css_paths,
+        "inactive_by_default_legacy_css_kept_for_env_opt_in": inactive_legacy_files,
+        "stage24b_delete_candidates_after_validation": inactive_legacy_files,
+        "already_tracked_css_no_new_stage_needed_if_unchanged": default_loaded_css_paths,
         "recommended_auxiliary_baseline_files": [
             "tools/inventory_legacy_streamlit_css.py",
-            "tools/legacy_streamlit_fallback_baseline_stage21b.json",
-            "docs/legacy_streamlit_fallback_baseline_stage21b.md",
+            "src/easyicu/webapp/LEGACY.md",
         ],
         "optional_css_ownership_test_baseline": [
             str(OWNERSHIP_TEST_PATH),
@@ -1032,13 +1139,12 @@ def baseline_staging_plan(report: dict[str, Any]) -> dict[str, Any]:
             and not entry["path"].startswith("tools/inventory_legacy_streamlit_css.py")
         ),
         "why_shell_styles_is_required": (
-            "HEAD shell_styles.py only loads tokens.css and shell_overrides.css; "
-            "the current fallback split CSS baseline is runnable only with the "
-            "working-tree shell_styles.py loader changes."
+            "shell_styles.py is the default-runtime cutover point: it loads only "
+            "tokens.css and shell_overrides.css unless EASYICU_ENABLE_LEGACY_STREAMLIT_CSS=1."
         ),
         "why_no_css_file_delete": (
-            "All 16 CSS files under src/easyicu/webapp are imported by shell_styles.py, "
-            "so file-level deletion has no current evidence base."
+            "Stage24A is reversible. The split CSS files stay present for one commit "
+            "as an opt-in rollback path; Stage24B can git-rm them after validation."
         ),
     }
 
@@ -1070,10 +1176,19 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Git: `{report['git']['branch']}` @ `{report['git']['head']}`",
         f"- CSS files: `{report['totals']['files']}`",
         f"- Total lines: `{report['totals']['lines']}`",
-        f"- Imported by `shell_styles.py`: `{report['totals']['imported_files']}`",
+        f"- Active-loaded by `shell_styles.py`: `{report['totals']['active_loaded_files']}`",
+        f"- Active-loaded lines: `{report['totals']['active_loaded_lines']}`",
+        f"- Default-loaded CSS files: `{report['totals']['default_loaded_files']}`",
+        f"- Default-loaded CSS lines: `{report['totals']['default_loaded_lines']}`",
+        f"- Legacy-env loaded CSS files: `{report['totals']['legacy_enabled_loaded_files']}`",
+        f"- Legacy-env loaded CSS lines: `{report['totals']['legacy_enabled_loaded_lines']}`",
+        f"- Legacy CSS inactive by default: `{report['totals']['inactive_by_default_legacy_files']}`",
+        f"- Legacy inactive lines: `{report['totals']['inactive_by_default_legacy_lines']}`",
+        f"- Legacy env: `{report['legacy_streamlit_css_env']['name']}={report['legacy_streamlit_css_env']['required_value']}`",
+        f"- Legacy env currently enabled: `{report['legacy_streamlit_css_env']['enabled']}`",
         f"- Untracked imported CSS files: `{report['totals']['untracked_files']}`",
         "",
-        "## Import Order",
+        "## Active Import Order",
         "",
     ]
     for idx, name in enumerate(report["shell_styles"]["loaded_css"], start=1):
@@ -1095,7 +1210,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                     f"`{item['name']}`",
                     item["owner"],
                     f"`{item['git_status']}`",
-                    "yes" if item["imported_by_shell_styles"] else "no",
+                    "yes" if item["active_loaded_by_shell_styles"] else "no",
                     str(item["lines"]),
                     str(item["important_count"]),
                     str(item["has_selector_count"]),
@@ -1130,7 +1245,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             "## First Slice Decision",
             "",
             f"- Delete now: `{len(decision['delete_now'])}` files",
-            f"- Archive-only imported files: `{len(decision['archive_only'])}` files",
+            f"- Kept for legacy env opt-in: `{len(decision['archive_only'])}` files",
             f"- Reason: {decision['reason']}",
             "",
         ]
@@ -1140,11 +1255,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         [
             "## Baseline Staging Plan",
             "",
-            "Stage these for a runnable legacy fallback CSS baseline:",
+            "Stage these for the reversible default-runtime cutover:",
             "",
         ]
     )
-    for path in plan["must_stage_for_runnable_fallback_css_baseline"]:
+    for path in plan["must_stage_for_default_runtime_boundary"]:
         lines.append(f"- `{path}`")
     if plan["optional_css_ownership_test_baseline"]:
         lines.extend(
@@ -1169,7 +1284,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         [
             "",
             f"Reason shell loader is required: {plan['why_shell_styles_is_required']}",
-            f"Reason no CSS file is deleted: {plan['why_no_css_file_delete']}",
+            f"Reason no CSS file is deleted in Stage24A: {plan['why_no_css_file_delete']}",
             "",
         ]
     )
@@ -1232,6 +1347,18 @@ def main() -> int:
                 "files": report["totals"]["files"],
                 "lines": report["totals"]["lines"],
                 "imported": report["totals"]["imported_files"],
+                "active_loaded_lines": report["totals"]["active_loaded_lines"],
+                "default_loaded": report["shell_styles"]["default_loaded_css"],
+                "default_loaded_lines": report["totals"]["default_loaded_lines"],
+                "legacy_env_enabled": report["legacy_streamlit_css_env"]["enabled"],
+                "legacy_env_loaded_files": report["totals"]["legacy_enabled_loaded_files"],
+                "legacy_env_loaded_lines": report["totals"]["legacy_enabled_loaded_lines"],
+                "inactive_by_default_legacy_files": report["totals"][
+                    "inactive_by_default_legacy_files"
+                ],
+                "inactive_by_default_legacy_lines": report["totals"][
+                    "inactive_by_default_legacy_lines"
+                ],
                 "untracked": report["totals"]["untracked_files"],
                 "delete_now": report["first_slice_decision"]["delete_now"],
             },
