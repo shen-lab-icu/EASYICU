@@ -329,7 +329,6 @@ def _unit_compatible(mention: Dict[str, Any], fact: Dict[str, Any]) -> bool:
 
 
 def _numeric_tolerance(mention: Dict[str, Any], fact: Dict[str, Any]) -> tuple[float, float]:
-    value = float(mention["value"])
     fact_value = float(fact["value"])
     if mention.get("unit") == "percent" and fact.get("unit") != "percent" and 0 <= fact_value <= 1:
         fact_value = fact_value * 100

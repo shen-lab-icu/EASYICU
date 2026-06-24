@@ -1,4 +1,4 @@
-"""EasyICU web server — FastAPI backend for the native (non-Streamlit) UI.
+"""EasyICU web server — FastAPI backend for the native UI.
 
 Migration target (route C, see WEBAPP_MIGRATION_PLAN.md): the static frontend
 under ``static/`` is the real product UI (vendored from the easyicu_ui design

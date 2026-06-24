@@ -1,8 +1,8 @@
 """Shared local data path resolution helpers.
 
-The legacy Streamlit package still renders directory-picker UI, but production
-API and FastAPI paths only need deterministic filesystem path resolution. Keep
-that pure logic here so importing core EasyICU does not pull in Streamlit.
+Production API and FastAPI paths need deterministic filesystem path resolution
+without importing any UI runtime. Keep that pure logic here so core EasyICU
+imports stay local and lightweight.
 """
 
 from __future__ import annotations

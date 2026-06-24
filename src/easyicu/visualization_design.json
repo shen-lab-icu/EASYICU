@@ -1,5 +1,5 @@
 {
-  "project": "PyRICU Visualization & Interactive Interface",
+  "project": "EasyICU Visualization & Native Interface",
   "version": "1.0.0",
   "description": "本地化ICU数据可视化和交互式界面工具包",
   "deployment_mode": "local_only",
@@ -13,7 +13,7 @@
   
   "modules": {
     "visualization": {
-      "path": "pyricu/src/pyricu/visualization/",
+      "path": "src/easyicu/visualization/",
       "description": "静态可视化模块",
       "status": "completed",
       "submodules": {
@@ -71,21 +71,21 @@
       }
     },
     "webapp": {
-      "path": "pyricu/src/pyricu/webapp/",
-      "description": "Streamlit交互式界面",
+      "path": "src/easyicu/webserver/",
+      "description": "FastAPI原生本地交互界面",
       "status": "completed",
       "deployment": {
         "mode": "local",
-        "command": "streamlit run pyricu/src/pyricu/webapp/app.py",
-        "cli_command": "pyricu-webapp"
+        "command": "easyicu-webapp",
+        "cli_command": "easyicu-webapp"
       },
       "submodules": {
-        "__init__.py": {
-          "description": "模块初始化和run_app函数",
+        "__main__.py": {
+          "description": "FastAPI原生入口",
           "status": "completed"
         },
         "app.py": {
-          "description": "Streamlit主应用入口",
+          "description": "FastAPI应用与API路由入口",
           "pages": [
             "🏠 首页 - 概览和快速导航",
             "📈 时序分析 - 时序数据浏览",
@@ -105,8 +105,8 @@
       "packages": ["plotly>=5.15", "kaleido>=0.2.1"]
     },
     "webapp": {
-      "install": "pip install pyricu[webapp]",
-      "packages": ["streamlit>=1.28", "plotly>=5.15", "kaleido>=0.2.1", "openpyxl>=3.1"]
+      "install": "pip install easyicu[webapp]",
+      "packages": ["fastapi>=0.115", "uvicorn>=0.30", "psutil>=5.9", "openai>=1.0"]
     },
     "all": {
       "install": "pip install pyricu[all]"
@@ -140,11 +140,11 @@
     ],
     "webapp": [
       "# 命令行启动",
-      "pyricu-webapp",
+      "easyicu-webapp",
       "",
       "# 或 Python 代码",
-      "from pyricu.webapp import run_app",
-      "run_app(port=8501)"
+      "from easyicu.webserver.__main__ import main",
+      "main()"
     ]
   },
   

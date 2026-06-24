@@ -7,14 +7,12 @@ Two net-new capabilities the design mock did not have (it used hardcoded
   type=file>`` can only upload files, never enumerate the user's folders, so
   the local-first FastAPI process lists directories on demand for the picker.
 - :func:`scan_path` — points the existing extraction logic at a folder and
-  reports the database / layout / readiness. Wraps the *pure* parts of
-  ``webapp.data_workflows.check_data_status`` plus a light database heuristic
-  (mirrors ``DataConverter._detect_database`` without constructing one).
+  reports the database / layout / readiness. Uses the same pure readiness rules
+  plus a light database heuristic (mirrors ``DataConverter._detect_database``
+  without constructing one).
 
-Everything runs locally; nothing is uploaded. The Streamlit converter wrapper
-``convert_data_with_progress`` is intentionally NOT reused here — it renders
-``st.progress``/``st.balloons``. Conversion is a later SSE job that drives
-``DataConverter.convert_all(progress_callback=...)`` directly.
+Everything runs locally; nothing is uploaded. Conversion is an SSE job that
+drives ``DataConverter.convert_all(progress_callback=...)`` directly.
 """
 from __future__ import annotations
 
@@ -236,10 +234,9 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
 
 def make_convert_runner(raw_path: str, database: str) -> Any:
     """Build a job runner that converts a raw folder to Parquet, emitting one
-    progress event per file. Drives ``DataConverter.convert_all`` directly —
-    NOT the Streamlit ``convert_data_with_progress`` wrapper (which renders
-    ``st.progress``). convert_all is idempotent: already-converted files are
-    skipped, so a re-run finishes fast."""
+    progress event per file. Drives ``DataConverter.convert_all`` directly.
+    convert_all is idempotent: already-converted files are skipped, so a re-run
+    finishes fast."""
 
     def runner(job: Any) -> Dict[str, Any]:
         from easyicu.data_converter import ConversionStatus, DataConverter
@@ -1092,8 +1089,8 @@ def _series_payload(vitals: Any, stay_id: str) -> List[Dict[str, Any]]:
 def _check_data_status(path: Path, db_key: str) -> Dict[str, Any]:
     """Count prepared parquet (flat + shard dirs) vs raw csv, and judge ready.
 
-    Pure pathlib port of ``webapp.data_workflows.check_data_status`` — inlined
-    so the new backend never transitively imports Streamlit.
+    Pure pathlib implementation kept here so the backend does not transitively
+    import a UI runtime.
     """
     parquet_files = [f for f in path.glob("*.parquet") if not f.name.startswith(".")]
     parquet_names = [f.stem for f in parquet_files]

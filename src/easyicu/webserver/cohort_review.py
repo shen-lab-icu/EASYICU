@@ -554,7 +554,6 @@ def _bool_summary(
 def _sex_summary(values: List[Any]) -> Dict[str, Any]:
     buckets = [_sex_bucket(value) for value in values]
     buckets = [b for b in buckets if b]
-    total = len(buckets)
     female = sum(1 for b in buckets if b == "female")
     male = sum(1 for b in buckets if b == "male")
     unknown = len(values) - female - male
