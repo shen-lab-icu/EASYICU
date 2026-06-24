@@ -865,27 +865,6 @@
   border-radius: 0 !important;
   background: transparent !important;
 }
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-codex-welcome {
-  min-height: 0;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: 9px;
-  padding: 28px 18px;
-  text-align: center;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-codex-title {
-  color: var(--ink);
-  font-size: 20px;
-  font-weight: 650;
-  line-height: 1.22;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-codex-subtitle {
-  max-width: 560px;
-  color: var(--ink-4);
-  font-size: 13px;
-  line-height: 1.5;
-}
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-welcome-thread {
   width: min(calc(100% - 52px), var(--copilot-content-max));
   max-width: var(--copilot-content-max);
@@ -1307,63 +1286,6 @@
   gap: 10px;
   box-shadow: 0 12px 28px rgba(20, 24, 30, 0.04);
 }
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-head {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-head span {
-  color: var(--ink-4);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-head b {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink);
-  font-size: 12.5px;
-  font-weight: 680;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-question {
-  margin: 0;
-  color: var(--ink-2);
-  font-size: 12.25px;
-  line-height: 1.45;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-steps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-step {
-  height: 24px;
-  border: 1px solid var(--hair);
-  border-radius: 999px;
-  padding: 0 9px;
-  display: inline-flex;
-  align-items: center;
-  color: var(--ink-4);
-  background: var(--surface);
-  font-size: 11px;
-  line-height: 1;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-step.done {
-  border-color: color-mix(in srgb, var(--ok) 30%, var(--hair));
-  color: color-mix(in srgb, var(--ok) 78%, var(--ink));
-  background: color-mix(in srgb, var(--ok-soft) 72%, var(--surface));
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-step.active {
-  border-color: var(--accent-border);
-  color: var(--accent-ink);
-  background: var(--accent-soft);
-  font-weight: 650;
-}
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-current {
   border: 0;
   background: transparent;
@@ -1390,70 +1312,6 @@
   color: var(--ink-3);
   font-size: 11.75px;
   line-height: 1.45;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-facts {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 7px;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-facts span {
-  min-width: 0;
-  border: 1px solid var(--hair);
-  border-radius: 7px;
-  background: var(--surface);
-  padding: 7px 8px;
-  color: var(--ink);
-  font-size: 11.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-facts b {
-  display: block;
-  color: var(--ink-4);
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-api,
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-gate {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--ink-3);
-  font-size: 11.5px;
-  line-height: 1.35;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-api span {
-  flex: none;
-  height: 22px;
-  border-radius: 999px;
-  padding: 0 8px;
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--hair);
-  background: var(--surface);
-  color: var(--ink-4);
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-api span.connected,
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-api span.configured {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-api p {
-  margin: 0;
-  min-width: 0;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-gate {
-  border-top: 1px solid var(--hair);
-  padding-top: 9px;
-  color: var(--ink-4);
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="_workflow_step_controls"] {
   margin-top: -4px !important;
@@ -2256,13 +2114,6 @@
   color: var(--accent);
   font-weight: 650;
 }
-.eu-copilot-session-item.active {
-  border-color: var(--hair);
-  background: var(--surface);
-}
-.eu-copilot-session-item.active .session-dot {
-  background: var(--accent);
-}
 .eu-copilot-rail-context {
   margin-top: 10px;
   padding: 10px;
@@ -2330,37 +2181,6 @@
 }
 [class*="st-key-eu_study_step_list"] > [data-testid="stVerticalBlock"] {
   gap: 0;
-}
-.eu-study-step .si-dot {
-  position: relative;
-  z-index: 1;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--hair-2);
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  background: var(--surface);
-  color: var(--ink-4);
-}
-.eu-study-step .si-dot svg {
-  width: 14px;
-  height: 14px;
-}
-.eu-study-step.done .si-dot {
-  border-color: var(--ok);
-  background: var(--ok);
-  color: #fff;
-}
-.eu-study-step.active .si-dot {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 10%, transparent);
-}
-.eu-study-step.done,
-.eu-study-step.active {
-  color: var(--ink);
 }
 [class*="st-key-eu_study_step_row_"] {
   position: relative;
@@ -2708,14 +2528,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.eu-copilot-gate-row.done {
-  border-color: color-mix(in srgb, var(--ok) 30%, var(--hair));
-  background: color-mix(in srgb, var(--ok) 6%, var(--surface));
-}
-.eu-copilot-gate-row.done span {
-  border-color: var(--ok);
-  background: var(--ok);
-}
 .eu-copilot-state-card {
   padding: 14px;
   border: 1px solid var(--hair);
@@ -2906,8 +2718,7 @@
   .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) [class*="st-key-_llm_ai_page_workspace_history"] [data-testid="stVerticalBlockBorderWrapper"],
   .eu-copilot-left-rail,
   .eu-copilot-study-rail,
-  .eu-copilot-rail,
-  .eu-copilot-study-workspace {
+  .eu-copilot-rail {
     min-height: 0 !important;
     height: auto !important;
   }
@@ -2920,20 +2731,12 @@
     width: calc(100% - 28px) !important;
     max-width: none !important;
   }
-  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-facts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-api,
-  .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-flow-card .flow-gate {
-    align-items: flex-start;
-  }
   .eu-copilot-state-card {
     margin-top: 12px;
   }
   .eu-copilot-left-rail,
   .eu-copilot-study-rail,
-  .eu-copilot-rail,
-  .eu-copilot-study-workspace {
+  .eu-copilot-rail {
     margin-top: 12px;
   }
 }
@@ -4144,27 +3947,6 @@
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-active-study-folder {
   margin-top: 0 !important;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-session-empty,
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-session-item,
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-session-item.active {
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-session-empty {
-  margin-top: 8px !important;
-  padding: 10px 0 12px !important;
-  border-top: 1px dashed var(--hair-2) !important;
-  border-bottom: 1px dashed var(--hair-2) !important;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-session-item {
-  min-height: 42px !important;
-  padding: 8px 0 !important;
-}
-.stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-session-item.active {
-  color: var(--ink) !important;
 }
 .stApp div.st-key-ai_assistant_page_panel:has(.eu-copilot-page-marker) .eu-copilot-rail-context {
   padding: 10px 0 0 !important;

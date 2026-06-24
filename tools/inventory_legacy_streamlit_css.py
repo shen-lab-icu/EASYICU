@@ -105,6 +105,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run the Stage22A Agent CSS owner-guard regression and exit.",
     )
+    parser.add_argument(
+        "--check-guided-owner-guards",
+        action="store_true",
+        help="Run the Stage22D Guided/Copilot CSS owner-guard regression and exit.",
+    )
     return parser.parse_args()
 
 
@@ -313,6 +318,161 @@ def check_agent_owner_guards() -> dict[str, Any]:
         "unclassified_foreign_marker": counts.get("unclassified_foreign_marker", 0),
         "classification_counts": counts,
         "issues": issues[:25],
+    }
+
+
+GUIDED_OWNER_GUARD_RE = re.compile(
+    r"("
+    r"eu-guided-fullscreen-marker|"
+    r"eu-copilot-page-marker|"
+    r"st-key-ai_assistant_page_panel|"
+    r"st-key-inline_ai_assistant_panel|"
+    r"st-key-(?:_?llm_ai_page_workspace|eu_copilot|_copilot)|"
+    r"eu-copilot|"
+    r"inline-ai|"
+    r"floating-ai|"
+    r"guided[_-]|"
+    r"study_depth_|"
+    r"route_fallback"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+GUIDED_COMPONENT_RE = re.compile(
+    r"("
+    r"eu-study-step|"
+    r"eu-copilot-(?:conversation|launch|active-study|agent-contract|state|stage|step|rail|evidence)|"
+    r"copilot|"
+    r"assistant|"
+    r"workflow|"
+    r"study"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+GUIDED_CONFIRMED_STALE_RE = re.compile(
+    r"("
+    r"eu-codex-(?:welcome|title|subtitle)|"
+    r"eu-copilot-session-(?:empty|item)|"
+    r"session-dot|"
+    r"eu-copilot-gate-row|"
+    r"eu-copilot-study-workspace|"
+    r"\.eu-study-step(?:[\s.{:#]|$)|"
+    r"flow-(?:head|question|steps|step|facts|api|gate)"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+GUIDED_FALSE_POSITIVE_RE = re.compile(
+    r"("
+    r"font-feature-settings|"
+    r"guided_overrides\.css|"
+    r"css/guided\.css|"
+    r"EasyICU/js/icons\.js|"
+    r"reference(?: glyph| breakpoints| parity| look| values|)"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+
+def _guided_line_context(lines: list[str], index: int) -> str:
+    start = max(0, index - 8)
+    end = min(len(lines), index + 1)
+    return " ".join(line.strip() for line in lines[start:end] if line.strip())
+
+
+def _guided_hit_classification(route: str, line: str, context: str) -> str:
+    text = f"{context} {line}".strip()
+    if GUIDED_CONFIRMED_STALE_RE.search(line):
+        return "confirmed_stale_selector_or_comment"
+    if GUIDED_FALSE_POSITIVE_RE.search(line):
+        return "false_positive_marker"
+    if "eu-guided-fullscreen-marker" in text or re.search(r"\bgd-", text, flags=re.IGNORECASE):
+        return "valid_guided_owned"
+    if GUIDED_OWNER_GUARD_RE.search(text) or GUIDED_COMPONENT_RE.search(text):
+        return "valid_copilot_assistant_owned"
+    if route in {"agent", "cohort", "crossdb", "extract", "patient", "states", "tutorial"}:
+        if re.search(r"(copilot|assistant|guided|study|workflow|handoff|route_fallback)", text, re.I):
+            return "valid_copilot_assistant_owned"
+    return "unclassified_marker"
+
+
+def check_guided_owner_guards() -> dict[str, Any]:
+    """Validate Guided/Copilot CSS ownership without touching dirty pytest files."""
+    path = WEBAPP_DIR / "guided_overrides.css"
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    hits: list[dict[str, Any]] = []
+    for index, line in enumerate(lines):
+        stale_match = GUIDED_CONFIRMED_STALE_RE.search(line)
+        matched_route = None
+        matched_pattern = None
+        if stale_match is not None:
+            matched_route = "guided"
+            matched_pattern = stale_match.group(0)
+        else:
+            for route, patterns in ROUTE_MARKERS.items():
+                if route == "guided":
+                    continue
+                matched_pattern = next(
+                    (
+                        pattern
+                        for pattern in patterns
+                        if re.search(pattern, line, flags=re.IGNORECASE)
+                    ),
+                    None,
+                )
+                if matched_pattern is not None:
+                    matched_route = route
+                    break
+        if matched_pattern is None or matched_route is None:
+            continue
+        context = _guided_line_context(lines, index)
+        classification = _guided_hit_classification(matched_route, line, context)
+        hits.append(
+            {
+                "line": index + 1,
+                "route": matched_route,
+                "pattern": matched_pattern,
+                "classification": classification,
+                "text": line.strip()[:180],
+            }
+        )
+    counts: dict[str, int] = {}
+    for hit in hits:
+        counts[hit["classification"]] = counts.get(hit["classification"], 0) + 1
+    issues = [
+        hit
+        for hit in hits
+        if hit["classification"]
+        in {"confirmed_stale_selector_or_comment", "unclassified_marker"}
+    ]
+    for marker in (".eu-guided-fullscreen-marker", ".eu-copilot-page-marker"):
+        if marker not in text:
+            issues.insert(
+                0,
+                {
+                    "line": None,
+                    "route": "guided",
+                    "pattern": marker,
+                    "classification": "missing_guided_owner_guard",
+                    "text": "Guided CSS must retain the fullscreen and Copilot page marker owner guards.",
+                },
+            )
+    return {
+        "path": str(path),
+        "line_count": len(lines),
+        "has_guided_fullscreen_marker": ".eu-guided-fullscreen-marker" in text,
+        "has_copilot_page_marker": ".eu-copilot-page-marker" in text,
+        "valid_guided_owned": counts.get("valid_guided_owned", 0),
+        "valid_copilot_assistant_owned": counts.get("valid_copilot_assistant_owned", 0),
+        "false_positive_marker": counts.get("false_positive_marker", 0),
+        "confirmed_stale_selector_or_comment": counts.get(
+            "confirmed_stale_selector_or_comment", 0
+        ),
+        "unclassified_marker": counts.get("unclassified_marker", 0),
+        "classification_counts": counts,
+        "issues": issues[:50],
     }
 
 
@@ -598,6 +758,10 @@ def main() -> int:
     args = parse_args()
     if args.check_agent_owner_guards:
         report = check_agent_owner_guards()
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 1 if report["issues"] else 0
+    if args.check_guided_owner_guards:
+        report = check_guided_owner_guards()
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return 1 if report["issues"] else 0
     stamp = time.strftime("%Y%m%d_%H%M%S")
