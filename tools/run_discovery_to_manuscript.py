@@ -64,6 +64,20 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--selection-rationale", default=None)
     parser.add_argument("--research-question", default=None)
     parser.add_argument("--target-outcome", default="death")
+    parser.add_argument(
+        "--outcome-concepts",
+        default=None,
+        help=(
+            "Comma-separated concept ids to materialise DETERMINISTICALLY as "
+            "binary outcomes (each emits a bare <c> 0/1 column plus <c>_time "
+            "onset), independent of the data-foundation agent's feature "
+            "selection. Use when --target-outcome is a non-death outcome whose "
+            "presence must not depend on the LLM picking it as a feature "
+            "(e.g. --outcome-concepts aki --target-outcome aki). Defaults to "
+            "the target outcome when it is not a per-stay summary suffix, else "
+            "to death."
+        ),
+    )
     parser.add_argument("--database", default="miiv")
     parser.add_argument(
         "--out-root",
@@ -128,6 +142,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         request_timeout=args.request_timeout,
     )
     universe_dir = out_root / "universe"
+    # Deterministic outcome materialisation: a non-death target outcome only
+    # appears in the universe if the data-foundation agent happens to pick its
+    # concept as a feature (brittle — the LLM may select a sibling like
+    # aki_stage instead of aki, leaving the target column missing and the run
+    # at 0 steps). When --outcome-concepts is given we pass them as outcome
+    # concepts so the materialiser emits a bare 0/1 column (+ <c>_time onset)
+    # regardless of feature selection.
+    if args.outcome_concepts:
+        outcome_concepts = tuple(
+            c.strip() for c in args.outcome_concepts.split(",") if c.strip()
+        )
+    elif args.target_outcome and args.target_outcome != "death":
+        outcome_concepts = (args.target_outcome,)
+    else:
+        outcome_concepts = ("death",)
     acquisition = acquire_universe_for_question(
         export_dir=Path(args.export_dir).resolve(),
         question=handoff.research_question,
@@ -135,6 +164,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         output_dir=universe_dir,
         stem="discovery_universe",
         target_outcome=handoff.target_outcome,
+        outcome_concepts=outcome_concepts,
         database=handoff.database,
     )
     acquisition_path = out_root / "data_foundation_acquisition.json"
