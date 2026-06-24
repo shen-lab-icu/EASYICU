@@ -221,6 +221,14 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   these columns are present. Check for them before concluding that
   row-level timing is unavailable; a NaN means the concept was never
   recorded for that stay (no onset), not that timing is unknown.
+- Outcome TIMING: an outcome may carry `<outcome>_time` alongside the
+  binary `<outcome>` — the event time in hours from ICU admission (e.g.
+  `death_time` is time-of-death; NaN when the event never occurred).
+  When present it supports survival/time-to-event models and
+  immortal-time-bias guards (e.g. a follow-up/landmark window), so an
+  early-vs-delayed treatment comparison need not be blocked solely for
+  lack of outcome timing. Still block if the exposure time-zero or
+  eligibility onset themselves remain uncertified.
 - If a missingness or component-completeness QC check finds that interpretation is
   unsafe, write the QC artefacts and stop cleanly with null primary
   estimates. Do not repair by silently changing the clinical estimand
