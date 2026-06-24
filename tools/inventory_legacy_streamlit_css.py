@@ -100,6 +100,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-root", default=str(DEFAULT_OUT_ROOT), help="Report root directory")
     parser.add_argument("--no-copy", action="store_true", help="Skip copying CSS files into the snapshot")
+    parser.add_argument(
+        "--check-agent-owner-guards",
+        action="store_true",
+        help="Run the Stage22A Agent CSS owner-guard regression and exit.",
+    )
     return parser.parse_args()
 
 
@@ -182,6 +187,133 @@ def marker_hits(text: str, owner_file: str) -> list[dict[str, Any]]:
         if samples:
             hits.append({"route": route, "kind": sample_kind, "samples": samples})
     return hits
+
+
+AGENT_OWNER_GUARD_RE = re.compile(
+    r"("
+    r"eu-agent-page-marker|"
+    r"st-key-(?:_?eu_)?(?:agent|ra|wb)|"
+    r"eu-agent|"
+    r"ra-|"
+    r"eu-wb|"
+    r"agent_workbench|"
+    r"research[_-]agent|"
+    r"eu_topbar_controls_research_agent|"
+    r"data-eu-agent|"
+    r"\bag-"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+AGENT_OWNED_COMPONENT_RE = re.compile(
+    r"("
+    r"eu-summary-|"
+    r"eu-state-|"
+    r"eu-step-|"
+    r"eu-handoff-note|"
+    r"ra-history-|"
+    r"ra-idea-|"
+    r"ra-step-|"
+    r"ra-grounding-|"
+    r"ra-repro-"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+STALE_AGENT_TAB_MARKERS = [
+    "Agent main view switcher: match the polish (2) prototype's lightweight",
+    '.stApp [class*="st-key-_eu_ra_view_"] button {',
+]
+
+
+def _agent_line_context(lines: list[str], index: int) -> str:
+    start = max(0, index - 8)
+    end = min(len(lines), index + 1)
+    return " ".join(line.strip() for line in lines[start:end] if line.strip())
+
+
+def _agent_hit_classification(route: str, line: str, context: str) -> str:
+    text = f"{context} {line}".strip()
+    if any(marker in line for marker in STALE_AGENT_TAB_MARKERS):
+        return "confirmed_stale_selector_or_comment"
+    if AGENT_OWNER_GUARD_RE.search(text) or AGENT_OWNED_COMPONENT_RE.search(text):
+        return "valid_agent_owned"
+    if "font-feature-settings" in line:
+        return "false_positive_css_property"
+    if route == "tutorial" and "reference" in line.lower():
+        return "false_positive_agent_reference_copy"
+    if route == "guided" and "guided_overrides.css" in line:
+        return "false_positive_move_provenance_comment"
+    return "unclassified_foreign_marker"
+
+
+def check_agent_owner_guards() -> dict[str, Any]:
+    """Validate Stage22A Agent CSS ownership without touching dirty pytest files."""
+    path = WEBAPP_DIR / "agent_overrides.css"
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    hits: list[dict[str, Any]] = []
+    for index, line in enumerate(lines):
+        for route, patterns in ROUTE_MARKERS.items():
+            if route == "agent":
+                continue
+            matched = next(
+                (
+                    pattern
+                    for pattern in patterns
+                    if re.search(pattern, line, flags=re.IGNORECASE)
+                ),
+                None,
+            )
+            if matched is None:
+                continue
+            context = _agent_line_context(lines, index)
+            classification = _agent_hit_classification(route, line, context)
+            hits.append(
+                {
+                    "line": index + 1,
+                    "route": route,
+                    "pattern": matched,
+                    "classification": classification,
+                    "text": line.strip()[:180],
+                }
+            )
+            break
+    counts: dict[str, int] = {}
+    for hit in hits:
+        counts[hit["classification"]] = counts.get(hit["classification"], 0) + 1
+    issues = [
+        hit
+        for hit in hits
+        if hit["classification"]
+        in {"confirmed_stale_selector_or_comment", "unclassified_foreign_marker"}
+    ]
+    if ".eu-agent-page-marker" not in text:
+        issues.insert(
+            0,
+            {
+                "line": None,
+                "route": "agent",
+                "pattern": ".eu-agent-page-marker",
+                "classification": "missing_agent_page_guard",
+                "text": "Agent CSS must retain the page marker owner guard.",
+            },
+        )
+    return {
+        "path": str(path),
+        "line_count": len(lines),
+        "has_agent_page_marker": ".eu-agent-page-marker" in text,
+        "valid_agent_owned": counts.get("valid_agent_owned", 0),
+        "false_positive_marker": counts.get("false_positive_css_property", 0)
+        + counts.get("false_positive_agent_reference_copy", 0)
+        + counts.get("false_positive_move_provenance_comment", 0),
+        "confirmed_stale_selector_or_comment": counts.get(
+            "confirmed_stale_selector_or_comment", 0
+        ),
+        "unclassified_foreign_marker": counts.get("unclassified_foreign_marker", 0),
+        "classification_counts": counts,
+        "issues": issues[:25],
+    }
 
 
 def classify_cleanup(file_name: str, imported: bool, status: str, marker_count: int) -> str:
@@ -464,6 +596,10 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def main() -> int:
     args = parse_args()
+    if args.check_agent_owner_guards:
+        report = check_agent_owner_guards()
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 1 if report["issues"] else 0
     stamp = time.strftime("%Y%m%d_%H%M%S")
     out_dir = Path(args.out_root) / f"inventory_{stamp}"
     report = inventory()
