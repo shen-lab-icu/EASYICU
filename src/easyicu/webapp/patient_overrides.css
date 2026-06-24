@@ -160,11 +160,6 @@
   }
 }
 
-/* EOF final: Patient Review loaded mobile topbar current page #3.
-   Keep this after every mobile navigation override so the current page title
-   wins over the older breadcrumb pruning rules. */
-@media (max-width: 600px) {}
-
 /* EOF final: Patient Review real Time Series / Data Quality mobile rhythm.
    Keep the real renderers and data-backed charts, but make their native
    controls follow the compact Claude Design Patient Review shell. */
@@ -4893,8 +4888,6 @@ html body .stApp:has([class*="st-key-eu_qv_loaded_bar"]) .eu-qv-quality-note .d 
   font-size: 12px !important;
   line-height: 1.45 !important;
 }
-
-@media (max-width: 1100px) {}
 
 @media (max-width: 640px) {
   .stApp .patient-feature-snapshot-grid {
