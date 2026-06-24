@@ -239,15 +239,19 @@ def test_webapp_buttons_do_not_use_stretch_width_keyword() -> None:
 
 def test_webapp_concept_catalog_is_split_from_streamlit_app() -> None:
     catalog_path = REPO_ROOT / "src" / "easyicu" / "webapp" / "concept_catalog.py"
-    assert catalog_path.exists(), "Large concept metadata should live outside app.py."
+    shared_catalog_path = REPO_ROOT / "src" / "easyicu" / "concept_catalog.py"
+    assert catalog_path.exists(), "Legacy Streamlit import path should remain as a shim."
+    assert shared_catalog_path.exists(), "Large concept metadata should live outside webapp."
 
     app_content = (REPO_ROOT / "src" / "easyicu" / "webapp" / "app.py").read_text(encoding="utf-8")
     catalog_content = catalog_path.read_text(encoding="utf-8")
+    shared_catalog_content = shared_catalog_path.read_text(encoding="utf-8")
 
     assert "CONCEPT_DICTIONARY = {" not in app_content
     assert "CONCEPT_DESCRIPTIONS = {" not in app_content
-    assert "CONCEPT_DICTIONARY = {" in catalog_content
-    assert "CONCEPT_DESCRIPTIONS = {" in catalog_content
+    assert "from easyicu import concept_catalog as _shared_concept_catalog" in catalog_content
+    assert "CONCEPT_DICTIONARY = {" in shared_catalog_content
+    assert "CONCEPT_DESCRIPTIONS = {" in shared_catalog_content
 
 
 def test_webapp_global_styles_are_split_from_streamlit_app() -> None:

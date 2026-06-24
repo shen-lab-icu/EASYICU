@@ -8,10 +8,12 @@ Do not delete `src/easyicu/webapp` in the current state.
 
 The legacy route split CSS has been removed, and only `tokens.css` plus
 `shell_overrides.css` remain. Stage26A migrated shared helpers out of the
-Streamlit namespace, and Stage26B moved the default package entrypoint and
-repository launchers to the native FastAPI WebApp. The Python package still
-cannot be deleted because legacy UI tests and `src/easyicu/webapp` self-imports
-remain.
+Streamlit namespace, Stage26B moved the default package entrypoint and
+repository launchers to the native FastAPI WebApp, and Stage26C moved the last
+non-legacy export script import to the shared catalog while removing legacy
+Streamlit tests from the default pytest collection path. The Python package
+still cannot be deleted because explicit legacy UI tests and
+`src/easyicu/webapp` self-imports remain.
 
 ## Current package size
 
@@ -46,44 +48,37 @@ rg -n "easyicu\\[webapp\\]|streamlit|easyicu-webapp|webapp" scripts/launch_easyi
 | FastAPI export/data summaries | `src/easyicu/webserver/dataio.py` historically imported `CONCEPT_GROUPS_INTERNAL` from `easyicu.webapp.concept_catalog` | resolved by Stage26A | Uses shared `easyicu.concept_catalog`. |
 | Core public API path detection | `src/easyicu/api.py` historically imported `easyicu.webapp.data_paths.find_database_path` | resolved by Stage26A | Uses shared `easyicu.data_paths`. |
 | Core visualization helper | `src/easyicu/cohort_visualization.py` historically imported `easyicu.webapp.data_paths.find_database_path` | resolved by Stage26A | Uses shared `easyicu.data_paths`. |
-| Export script | `scripts/full_export_modules.py` still imports `easyicu.webapp.concept_catalog` | remaining script dependency | Move to shared `easyicu.concept_catalog` before Stage27 package deletion, or archive the script if it is legacy-only. |
+| Export script | `scripts/full_export_modules.py` historically imported `easyicu.webapp.concept_catalog` | resolved by Stage26C | Uses shared `easyicu.concept_catalog`; this script is a gitignored local utility and is not part of the tracked package boundary. |
 | Streamlit launcher | `scripts/launch_easyicu.py`, `start_easyicu.sh`, `start_easyicu.command` historically installed/ran the Streamlit app | resolved by Stage26B | Default launchers now start the native FastAPI server on port 8765. |
 | Python package entrypoint | `pyproject.toml` historically had `easyicu-webapp = "easyicu.webapp.__main__:main"` | resolved by Stage26B | `easyicu-webapp` now points to `easyicu.webserver.__main__:main`; Streamlit is explicit as `easyicu-webapp-legacy`. |
 | Optional dependencies | `pyproject.toml` historically defined `webapp` as Streamlit dependencies | resolved by Stage26B | `webapp` now installs native FastAPI dependencies; Streamlit dependencies moved to `webapp-legacy`. |
 
 ## Tests-only blockers
 
-The following test files import `easyicu.webapp` or Streamlit-specific helpers and must be migrated, archived, skipped, or deleted before deleting the package:
+Stage26C marks the following Streamlit/WebApp tests as explicit legacy scope.
+They are not collected by the default `pytest -q` gate and require
+`--run-legacy-streamlit`:
 
 - `tests/test_app_rendering.py`
 - `tests/test_research_agent_web_helpers.py`
 - `tests/test_webapp_launch.py`
 - `tests/test_webapp_resume_panel.py`
 - `tests/test_real_ui_smoke.py`
-- `tests/test_repository_contract.py`
 - `tests/test_llm_chat.py`
 - `tests/test_cohort_workspace_bundle.py`
-- `tests/test_concept_catalog_consistency.py`
 - `tests/test_mock_data_catalog_coverage.py`
-- `tests/test_batch2_medications.py`
-- `tests/test_batch3_medications.py`
-- `tests/test_batch4_medications.py`
-- `tests/test_batch5_medications.py`
-- `tests/test_batch6_medications.py`
-- `tests/test_batch7_medications.py`
-- `tests/test_batch8_medications.py`
-- `tests/test_new_medication_concepts.py`
-- `tests/test_propofol_rate_concept.py`
-- `tests/test_furosemide_concept.py`
-- `tests/test_mass_rate_concepts.py`
-- `tests/test_uo_rate_concepts.py`
+- `tests/test_shared_webapp_helper_migration.py`
 - `tests/webapp/test_copilot_classic_parity.py`
 - `tests/webapp/test_copilot_classic_parity_synthetic.py`
 - `tests/webapp/test_copilot_cli_agent.py`
 - `tests/webapp/test_copilot_engine.py`
 - `tests/webapp/test_copilot_keyword_route.py`
 
-The medication/concept catalog tests are not inherently Streamlit tests; they should move to the shared concept catalog import after the catalog is extracted.
+These files still import `easyicu.webapp` when explicitly run. Stage27 must
+either migrate their still-useful pure helper coverage to shared/FastAPI modules
+or delete/archive them with the legacy package. `tests/test_repository_contract.py`
+is not a legacy test; it remains in the default gate and currently tracks
+repository-level split contracts.
 
 ## Docs-only and archive references
 
@@ -129,15 +124,16 @@ Done in Stage26A:
    - Done in Stage26A for `src/easyicu/webserver/dataio.py`.
    - Done in Stage26A for `src/easyicu/api.py`.
    - Done in Stage26A for `src/easyicu/cohort_visualization.py`.
-   - Remaining follow-up: `scripts/full_export_modules.py`.
+   - Done in Stage26C for `scripts/full_export_modules.py`.
 3. Update or remove package entrypoints:
    - Done in Stage26B: `easyicu-webapp` and `start_easyicu.*` are native FastAPI by default.
    - Done in Stage26B: Streamlit launch is explicit as `easyicu-webapp-legacy`.
    - Done in Stage26B: Streamlit dependencies moved to `webapp-legacy`.
 4. Split tests:
-   - Convert concept catalog tests to shared catalog imports.
-   - Convert provider policy tests to the shared opt-in module.
-   - Archive/delete legacy UI rendering tests once the Streamlit package is removed.
+   - Done in Stage26C: default pytest collection ignores legacy Streamlit UI
+     files unless `--run-legacy-streamlit` is passed.
+   - Remaining Stage27 choice: migrate useful pure helper tests to shared/FastAPI
+     modules, then archive/delete the legacy UI rendering tests with the package.
 5. Update public docs:
    - `README.md`, `README_zh.md`, `src/easyicu/README.md`, and native FastAPI docs should no longer present Streamlit as the active no-code path.
 6. Only after all imports are gone:
@@ -151,10 +147,11 @@ Current readiness: no.
 
 Blocking reasons:
 
-- At least 27 test files import `easyicu.webapp` or Streamlit-specific helpers.
-- `scripts/full_export_modules.py` still imports the legacy concept catalog shim.
+- Explicit legacy tests still import `easyicu.webapp` when run with
+  `--run-legacy-streamlit`.
 - `src/easyicu/webapp` still has internal self-imports and Streamlit runtime code.
 - Some docs and archive tools intentionally mention Streamlit as legacy material.
-- Stage26C must split/skip/archive legacy tests before Stage27 can remove the package.
+- Stage27 must remove/archive the package and either migrate or delete the
+  explicit legacy test coverage.
 
 Stage25 is an audit-only milestone. It does not remove files.

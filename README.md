@@ -137,7 +137,7 @@ archive forensics require it, install `easyicu[webapp-legacy]` and run
 - **Prepared data is the shared contract**: raw CSV / CSV.GZ / tar.gz dumps should be converted first, then reused by both the web interface and Python APIs.
 - **AI assistant is opt-in**: the assistant starts disabled until a user explicitly enables it in the sidebar.
 - **Human confirmation stays in the loop**: cohort, feature, conversion, and export actions still require explicit confirmation.
-- **Automated checks are included**: `pytest` and GitHub Actions provide baseline repository and rendering checks for the packaged workflows.
+- **Automated checks are included**: `pytest` and GitHub Actions provide baseline repository checks for the packaged workflows. Deprecated Streamlit UI tests are outside the default gate and require an explicit legacy test flag.
 
 ## Paper, Citation & Reproducibility
 
@@ -281,7 +281,7 @@ pip install -e ".[dev,webapp]"
 pytest -q
 ```
 
-GitHub Actions runs `ruff check src tests` and `pytest -q` on Python 3.10, 3.11, and 3.12 for pushes and pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected workflow when proposing changes.
+GitHub Actions runs `ruff check src tests` and `pytest -q` on Python 3.10, 3.11, and 3.12 for pushes and pull requests. Deprecated Streamlit UI tests are not collected by the default test gate; for archive forensics, install `easyicu[webapp-legacy]` and run them explicitly with `pytest --run-legacy-streamlit ...`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected workflow when proposing changes.
 
 ## 💻 Python API
 
