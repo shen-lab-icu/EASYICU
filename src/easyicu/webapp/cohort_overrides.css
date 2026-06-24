@@ -37,11 +37,6 @@
 
 /* Cohort Statistics final overrides: keep this at EOF so older migration
    rules above cannot override design-reference values. */
-.stApp:has(.eu-cohort-page-marker) .eu-cohort-header-gap {
-  display: block !important;
-  height: 16px !important;
-  min-height: 16px !important;
-}
 .stApp:has(.eu-cohort-page-marker) .eu-cohort-reference-head.page-head {
   display: block !important;
   margin: 0 !important;
@@ -533,8 +528,7 @@ html body .stApp:has(.eu-cohort-page-marker) .card.card.pad {
   margin: 0 !important;
   transform: none !important;
 }
-.stApp:has(.eu-cohort-page-marker) .stat,
-.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card {
+.stApp:has(.eu-cohort-page-marker) .stat {
   min-height: 0 !important;
   padding: 13px 15px !important;
   border: 1px solid var(--hair) !important;
@@ -543,24 +537,19 @@ html body .stApp:has(.eu-cohort-page-marker) .card.card.pad {
   background: var(--surface) !important;
   box-shadow: none !important;
 }
-.stApp:has(.eu-cohort-page-marker) .stat.accent,
-.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card.accent {
+.stApp:has(.eu-cohort-page-marker) .stat.accent {
   border-left-color: var(--accent) !important;
 }
-.stApp:has(.eu-cohort-page-marker) .stat.ok,
-.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card.ok {
+.stApp:has(.eu-cohort-page-marker) .stat.ok {
   border-left-color: var(--ok) !important;
 }
-.stApp:has(.eu-cohort-page-marker) .stat.warn,
-.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card.warn {
+.stApp:has(.eu-cohort-page-marker) .stat.warn {
   border-left-color: var(--warn) !important;
 }
-.stApp:has(.eu-cohort-page-marker) .stat.bad,
-.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card.bad {
+.stApp:has(.eu-cohort-page-marker) .stat.bad {
   border-left-color: var(--bad) !important;
 }
-.stApp:has(.eu-cohort-page-marker) .stat .label,
-.stApp:has(.eu-cohort-page-marker) .eu-cohort-metric-card span {
+.stApp:has(.eu-cohort-page-marker) .stat .label {
   color: var(--ink-4) !important;
   font-family: var(--font-mono) !important;
   font-size: 10px !important;
@@ -569,8 +558,7 @@ html body .stApp:has(.eu-cohort-page-marker) .card.card.pad {
   line-height: 1.2 !important;
   text-transform: uppercase !important;
 }
-.stApp:has(.eu-cohort-page-marker) .stat .val,
-.stApp:has(.eu-cohort-page-marker) .eu-cohort-metric-card b {
+.stApp:has(.eu-cohort-page-marker) .stat .val {
   margin-top: 6px !important;
   color: var(--ink) !important;
   font-family: var(--font-mono) !important;
@@ -579,8 +567,7 @@ html body .stApp:has(.eu-cohort-page-marker) .card.card.pad {
   letter-spacing: -0.02em !important;
   line-height: 1.05 !important;
 }
-.stApp:has(.eu-cohort-page-marker) .stat .hint,
-.stApp:has(.eu-cohort-page-marker) .eu-cohort-metric-card em {
+.stApp:has(.eu-cohort-page-marker) .stat .hint {
   margin-top: 5px !important;
   color: var(--ink-4) !important;
   font-size: 11px !important;
@@ -761,9 +748,6 @@ html body .stApp:has(.eu-cohort-page-marker) .card.card.pad {
   font-weight: 400 !important;
   line-height: 20.25px !important;
   letter-spacing: 0 !important;
-}
-.stApp:has(.eu-cohort-page-marker) .eu-cohort-header-gap {
-  display: none !important;
 }
 .stApp:has(.eu-cohort-page-marker) .eu-cohort-ref-preflight {
   margin: 0 0 14px !important;
@@ -1055,15 +1039,13 @@ html body .stApp:has(.eu-cohort-page-marker) .card.card.pad {
   font-family: var(--font-sans), var(--font-cn) !important;
   line-height: 20.25px !important;
 }
-.stApp:has(.eu-cohort-page-marker) .stat,
-.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card {
+.stApp:has(.eu-cohort-page-marker) .stat {
   min-height: auto !important;
   color: var(--ink) !important;
   font-family: var(--font-sans), var(--font-cn) !important;
   line-height: 20.25px !important;
 }
-.stApp:has(.eu-cohort-page-marker) .stat .hint,
-.stApp:has(.eu-cohort-page-marker) .eu-cohort-metric-card em {
+.stApp:has(.eu-cohort-page-marker) .stat .hint {
   display: none !important;
 }
 .stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] {
@@ -1106,8 +1088,7 @@ html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-eu_cohort_jump_card
   height: 16px !important;
   line-height: normal !important;
 }
-html body .stApp:has(.eu-cohort-page-marker) .stat.stat,
-html body .stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card {
+html body .stApp:has(.eu-cohort-page-marker) .stat.stat {
   min-height: auto !important;
 }
 html body .stApp:has(.eu-cohort-page-marker) [class*="st-key-group_comp_mode"] div[role="radiogroup"] > label {
@@ -1842,54 +1823,6 @@ html body .stApp:has(.eu-cohort-page-marker)
     grid-template-columns: 1fr !important;
   }
 }
-.eu-cohort-readiness-row.ok .eu-cohort-readiness-node {
-  border-color: color-mix(in oklab, var(--ok) 35%, var(--hair));
-  background: color-mix(in oklab, var(--ok-soft) 60%, var(--surface));
-  color: var(--ok);
-}
-.eu-cohort-readiness-row.warn .eu-cohort-readiness-node {
-  border-color: color-mix(in oklab, var(--warn) 35%, var(--hair));
-  background: color-mix(in oklab, var(--warn-soft) 66%, var(--surface));
-  color: color-mix(in oklab, var(--warn) 80%, var(--ink));
-}
-.eu-cohort-readiness-row.bad .eu-cohort-readiness-node {
-  border-color: color-mix(in oklab, var(--bad) 35%, var(--hair));
-  background: color-mix(in oklab, var(--bad-soft) 66%, var(--surface));
-  color: var(--bad);
-}
-.eu-readiness-strip .eu-gate-card {
-  position: relative;
-  border: 0;
-  border-left: 0;
-  border-radius: 0;
-  background: var(--surface);
-  padding: 10px 12px;
-}
-.eu-readiness-strip .eu-gate-card + .eu-gate-card {
-  border-left: 1px solid var(--hair);
-}
-.eu-readiness-strip .eu-gate-card .k {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.eu-readiness-strip .eu-gate-card .k::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  flex: none;
-  border-radius: 999px;
-  background: var(--ink-3);
-}
-.eu-readiness-strip .eu-gate-card.ok .k::before {
-  background: var(--ok);
-}
-.eu-readiness-strip .eu-gate-card.warn .k::before {
-  background: var(--warn);
-}
-.eu-readiness-strip .eu-gate-card.bad .k::before {
-  background: var(--bad);
-}
 .eu-gate-card {
   border: 1px solid var(--hair);
   border-left: 2px solid var(--ink-3);
@@ -2339,16 +2272,6 @@ html body .stApp:has(.eu-cohort-page-marker)
   gap: 9px;
   margin: 8px 0 14px;
 }
-.stApp .eu-cohort-metric-card.accent {
-  border-left-color: var(--accent);
-  background: color-mix(in srgb, var(--accent-soft) 36%, var(--surface));
-}
-.stApp .eu-cohort-metric-card.ok {
-  border-left-color: var(--ok);
-}
-.stApp .eu-cohort-metric-card.warn {
-  border-left-color: var(--warn);
-}
 .stApp .eu-directory-guide {
   min-width: min(560px, 80vw);
 }
@@ -2741,13 +2664,6 @@ html body .stApp:has(.eu-cohort-page-marker)
   line-height: 1.25 !important;
 }
 
-.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card {
-  min-height: 76px !important;
-  padding: 12px 13px !important;
-}
-.stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-card em {
-  display: none !important;
-}
 .stApp:has(.eu-cohort-page-marker):has([class*="st-key-group_comp_mode"]) .eu-cohort-metric-grid {
   transform: translateY(-23px) !important;
 }

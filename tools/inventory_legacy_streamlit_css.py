@@ -110,6 +110,31 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run the Stage22D Guided/Copilot CSS owner-guard regression and exit.",
     )
+    parser.add_argument(
+        "--check-extract-owner-guards",
+        action="store_true",
+        help="Run the Stage22E Data Extraction CSS owner-guard regression and exit.",
+    )
+    parser.add_argument(
+        "--check-patient-owner-guards",
+        action="store_true",
+        help="Run the Stage22E Patient Review CSS owner-guard regression and exit.",
+    )
+    parser.add_argument(
+        "--check-cohort-owner-guards",
+        action="store_true",
+        help="Run the Stage22E Cohort Review CSS owner-guard regression and exit.",
+    )
+    parser.add_argument(
+        "--check-crossdb-owner-guards",
+        action="store_true",
+        help="Run the Stage22E Cross-DB CSS owner-guard regression and exit.",
+    )
+    parser.add_argument(
+        "--check-states-owner-guards",
+        action="store_true",
+        help="Run the Stage22E Workspace States CSS owner-guard regression and exit.",
+    )
     return parser.parse_args()
 
 
@@ -476,6 +501,403 @@ def check_guided_owner_guards() -> dict[str, Any]:
     }
 
 
+EXTRACT_REQUIRED_GUARDS = (
+    ".eu-source-header.page-head",
+    ".eu-step2-design-marker",
+    ".eu-step3-design-marker",
+    ".eu-step4-design-marker",
+    ".eu-export-progress-shell",
+    ".eu-convert-dialog-marker",
+)
+
+EXTRACT_OWNER_GUARD_RE = re.compile(
+    r"("
+    r"eu-source-header|"
+    r"eu_extract_breadcrumb|"
+    r"eu_pipeline_step|"
+    r"eu-step[1-4]|"
+    r"step[1-4]_|"
+    r"eu-source|"
+    r"eu-real-source|"
+    r"eu_demo|"
+    r"eu_express|"
+    r"eu-cohort|"
+    r"eu_cohort|"
+    r"cohort_builder|"
+    r"cohort_disease_card|"
+    r"concept_|"
+    r"eu-concept|"
+    r"eu-export|"
+    r"eu_export|"
+    r"post_export|"
+    r"eu-extract|"
+    r"eu-convert|"
+    r"convert_|"
+    r"validate_path|"
+    r"sidebar_data_path|"
+    r"final_export|"
+    r"ex2-|"
+    r"express|"
+    r"icd-"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+EXTRACT_FALSE_POSITIVE_RE = re.compile(
+    r"("
+    r"Patient/Cohort/Cross-DB routes|"
+    r"already-checked tutorial, agent, patient, cohort, or settings pages|"
+    r"states\.css|"
+    r"running/conflict states|"
+    r"doneState\(\)|"
+    r"Cohort builder page|"
+    r"\bReference:|"
+    r"\breference header|"
+    r"page-cohort-builder\.jsx|"
+    r"font-feature-settings|"
+    r"data:image/svg\\+xml|"
+    r"w3\\.org"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+EXTRACT_STALE_SOURCE_CLASSES = {
+    "eu-export-complete-stats",
+    "eu-export-content-row",
+    "eu-export-contents-card",
+    "eu-express-chips",
+    "eu-express-left",
+    "eu-express-note",
+    "eu-eyebrow",
+    "eu-source-metric",
+    "eu-source-real-hero",
+    "eu-source-real-summary",
+    "eu-source-table-card",
+    "summary-state",
+}
+
+
+def _webapp_python_text() -> str:
+    return "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in WEBAPP_DIR.rglob("*.py")
+    )
+
+
+def _extract_line_context(lines: list[str], index: int) -> str:
+    start = max(0, index - 8)
+    end = min(len(lines), index + 1)
+    return " ".join(line.strip() for line in lines[start:end] if line.strip())
+
+
+def _extract_hit_classification(route: str, line: str, context: str) -> str:
+    text = f"{context} {line}".strip()
+    if EXTRACT_FALSE_POSITIVE_RE.search(text):
+        return "false_positive_marker"
+    if EXTRACT_OWNER_GUARD_RE.search(text):
+        return "valid_extract_owned"
+    if route in {"cohort", "dictionary"} and re.search(
+        r"(eu-cohort|cohort_builder|dict-link|eu-source-keyterms)", text, re.I
+    ):
+        return "valid_extract_owned"
+    return "unclassified_marker"
+
+
+def check_extract_owner_guards() -> dict[str, Any]:
+    """Validate Data Extraction CSS ownership without touching dirty pytest files."""
+    path = WEBAPP_DIR / "extract_overrides.css"
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    source = _webapp_python_text()
+
+    source_missing_hits: list[dict[str, Any]] = []
+    for class_name in sorted(EXTRACT_STALE_SOURCE_CLASSES):
+        if class_name in source:
+            continue
+        for index, line in enumerate(lines):
+            if class_name in line:
+                source_missing_hits.append(
+                    {
+                        "line": index + 1,
+                        "route": "extract",
+                        "pattern": class_name,
+                        "classification": "confirmed_stale_source_missing_class",
+                        "text": line.strip()[:180],
+                    }
+                )
+                break
+
+    marker_hits_for_report: list[dict[str, Any]] = []
+    for index, line in enumerate(lines):
+        for route, patterns in ROUTE_MARKERS.items():
+            if route == "extract":
+                continue
+            matched = next(
+                (
+                    pattern
+                    for pattern in patterns
+                    if re.search(pattern, line, flags=re.IGNORECASE)
+                ),
+                None,
+            )
+            if matched is None:
+                continue
+            context = _extract_line_context(lines, index)
+            classification = _extract_hit_classification(route, line, context)
+            marker_hits_for_report.append(
+                {
+                    "line": index + 1,
+                    "route": route,
+                    "pattern": matched,
+                    "classification": classification,
+                    "text": line.strip()[:180],
+                }
+            )
+            break
+
+    counts: dict[str, int] = {}
+    for hit in [*source_missing_hits, *marker_hits_for_report]:
+        counts[hit["classification"]] = counts.get(hit["classification"], 0) + 1
+
+    issues = [
+        *source_missing_hits,
+        *[
+            hit
+            for hit in marker_hits_for_report
+            if hit["classification"] == "unclassified_marker"
+        ],
+    ]
+    for marker in EXTRACT_REQUIRED_GUARDS:
+        if marker not in text:
+            issues.insert(
+                0,
+                {
+                    "line": None,
+                    "route": "extract",
+                    "pattern": marker,
+                    "classification": "missing_extract_owner_guard",
+                    "text": "Data Extraction CSS must retain required route owner guards.",
+                },
+            )
+    return {
+        "path": str(path),
+        "line_count": len(lines),
+        "required_guards_present": {
+            marker: marker in text for marker in EXTRACT_REQUIRED_GUARDS
+        },
+        "valid_extract_owned": counts.get("valid_extract_owned", 0),
+        "false_positive_marker": counts.get("false_positive_marker", 0),
+        "confirmed_stale_source_missing_class": counts.get(
+            "confirmed_stale_source_missing_class", 0
+        ),
+        "unclassified_marker": counts.get("unclassified_marker", 0),
+        "classification_counts": counts,
+        "issues": issues[:50],
+    }
+
+
+PATIENT_REQUIRED_GUARDS = (
+    ".eu-qv-loaded-root",
+    ".eu-qv-design-root",
+    ".eu-qv-reference-table",
+    ".eu-patient-empty-state",
+)
+
+PATIENT_STALE_SOURCE_CLASSES = {
+    "eu-crossdb-empty-copy",
+    "eu-qv-loaded-bar",
+    "eu-qv-loaded-pill",
+    "eu-qv-native-tabs-marker",
+    "eu-qv-reference-note",
+    "mt-4",
+}
+
+PATIENT_ALLOWED_RUNTIME_CLASSES = {
+    # Plotly inserts this class at runtime; it is not expected in Python source.
+    "modebar-container",
+}
+
+COHORT_REQUIRED_GUARDS = (
+    ".eu-cohort-page-marker",
+    ".eu-cohort-summary-grid",
+    ".eu-cohort-ref-preflight",
+)
+
+COHORT_STALE_SOURCE_CLASSES = {
+    "eu-cohort-header-gap",
+    "eu-cohort-metric-card",
+    "eu-cohort-readiness-node",
+    "eu-cohort-readiness-row",
+    "eu-readiness-strip",
+}
+
+CROSSDB_REQUIRED_GUARDS = (
+    ".eu-crossdb-page-marker",
+    ".eu-crossdb-summary-table",
+    ".eu-crossdb-loaded-copy",
+)
+
+CROSSDB_STALE_SOURCE_CLASSES = {
+    "eu-cohort-readiness-node",
+    "eu-cohort-readiness-row",
+    "eu-crossdb-availability-board",
+    "eu-crossdb-availability-cell",
+    "eu-crossdb-availability-head",
+    "eu-crossdb-availability-legend",
+    "eu-crossdb-empty-copy",
+    "eu-crossdb-empty-steps",
+    "eu-crossdb-gate-pill-wrap",
+    "eu-crossdb-provenance-pill",
+    "eu-crossdb-summary-head",
+    "eu-crossdb-summary-ledger",
+    "eu-readiness-strip",
+}
+
+STATES_REQUIRED_GUARDS = (
+    ".eu-states-reference-head",
+    ".eu-states-controls-reference",
+    ".eu-states-stage-host",
+    ".eu-state-preview-card",
+)
+
+STATES_STALE_SOURCE_CLASSES = {
+    "eu-state-action-slot",
+    "eu-state-body-pad",
+    "eu-state-callout",
+    "eu-state-loading-row",
+    "eu-state-pills",
+    "eu-states-control-divider",
+    "eu-states-control-label",
+    "eu-states-control-row",
+    "eu-states-controls",
+    "eu-states-overview-head",
+    "eu-states-preview-actions-success",
+}
+
+
+def _source_has_class(source: str, class_name: str) -> bool:
+    return (
+        re.search(
+            rf"(?<![A-Za-z0-9_-]){re.escape(class_name)}(?![A-Za-z0-9_-])",
+            source,
+        )
+        is not None
+    )
+
+
+def _text_has_class_token(text: str, class_name: str) -> bool:
+    return (
+        re.search(
+            rf"(?<![A-Za-z0-9_-]){re.escape(class_name)}(?![A-Za-z0-9_-])",
+            text,
+        )
+        is not None
+    )
+
+
+def check_source_missing_owner_guards(
+    *,
+    path: Path,
+    route: str,
+    required_guards: tuple[str, ...],
+    stale_source_classes: set[str],
+) -> dict[str, Any]:
+    """Validate route CSS required guards and source-missing stale classes."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    source = _webapp_python_text()
+
+    source_missing_hits: list[dict[str, Any]] = []
+    for class_name in sorted(stale_source_classes):
+        if _source_has_class(source, class_name):
+            continue
+        for index, line in enumerate(lines):
+            if _text_has_class_token(line, class_name):
+                source_missing_hits.append(
+                    {
+                        "line": index + 1,
+                        "route": route,
+                        "pattern": class_name,
+                        "classification": "confirmed_stale_source_missing_class",
+                        "text": line.strip()[:180],
+                    }
+                )
+                break
+
+    issues: list[dict[str, Any]] = [*source_missing_hits]
+    for marker in required_guards:
+        if marker not in text:
+            issues.insert(
+                0,
+                {
+                    "line": None,
+                    "route": route,
+                    "pattern": marker,
+                    "classification": f"missing_{route}_owner_guard",
+                    "text": f"{route} CSS must retain required route owner guards.",
+                },
+            )
+    return {
+        "path": str(path),
+        "line_count": len(lines),
+        "required_guards_present": {
+            marker: marker in text for marker in required_guards
+        },
+        "confirmed_stale_source_missing_class": len(source_missing_hits),
+        "unclassified_marker": 0,
+        "issues": issues[:50],
+    }
+
+
+def check_patient_owner_guards() -> dict[str, Any]:
+    """Validate Patient Review CSS ownership without touching dirty pytest files."""
+    path = WEBAPP_DIR / "patient_overrides.css"
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    source = _webapp_python_text()
+
+    source_missing_hits: list[dict[str, Any]] = []
+    for class_name in sorted(PATIENT_STALE_SOURCE_CLASSES):
+        if class_name in source or class_name in PATIENT_ALLOWED_RUNTIME_CLASSES:
+            continue
+        for index, line in enumerate(lines):
+            if class_name in line:
+                source_missing_hits.append(
+                    {
+                        "line": index + 1,
+                        "route": "patient",
+                        "pattern": class_name,
+                        "classification": "confirmed_stale_source_missing_class",
+                        "text": line.strip()[:180],
+                    }
+                )
+                break
+
+    issues: list[dict[str, Any]] = [*source_missing_hits]
+    for marker in PATIENT_REQUIRED_GUARDS:
+        if marker not in text:
+            issues.insert(
+                0,
+                {
+                    "line": None,
+                    "route": "patient",
+                    "pattern": marker,
+                    "classification": "missing_patient_owner_guard",
+                    "text": "Patient Review CSS must retain required route owner guards.",
+                },
+            )
+    return {
+        "path": str(path),
+        "line_count": len(lines),
+        "required_guards_present": {
+            marker: marker in text for marker in PATIENT_REQUIRED_GUARDS
+        },
+        "confirmed_stale_source_missing_class": len(source_missing_hits),
+        "runtime_allowed_source_missing_class": sorted(PATIENT_ALLOWED_RUNTIME_CLASSES),
+        "issues": issues[:50],
+    }
+
+
 def classify_cleanup(file_name: str, imported: bool, status: str, marker_count: int) -> str:
     if not imported:
         return "archive_candidate_not_imported"
@@ -762,6 +1184,41 @@ def main() -> int:
         return 1 if report["issues"] else 0
     if args.check_guided_owner_guards:
         report = check_guided_owner_guards()
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 1 if report["issues"] else 0
+    if args.check_extract_owner_guards:
+        report = check_extract_owner_guards()
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 1 if report["issues"] else 0
+    if args.check_patient_owner_guards:
+        report = check_patient_owner_guards()
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 1 if report["issues"] else 0
+    if args.check_cohort_owner_guards:
+        report = check_source_missing_owner_guards(
+            path=WEBAPP_DIR / "cohort_overrides.css",
+            route="cohort",
+            required_guards=COHORT_REQUIRED_GUARDS,
+            stale_source_classes=COHORT_STALE_SOURCE_CLASSES,
+        )
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 1 if report["issues"] else 0
+    if args.check_crossdb_owner_guards:
+        report = check_source_missing_owner_guards(
+            path=WEBAPP_DIR / "crossdb_overrides.css",
+            route="crossdb",
+            required_guards=CROSSDB_REQUIRED_GUARDS,
+            stale_source_classes=CROSSDB_STALE_SOURCE_CLASSES,
+        )
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 1 if report["issues"] else 0
+    if args.check_states_owner_guards:
+        report = check_source_missing_owner_guards(
+            path=WEBAPP_DIR / "states_overrides.css",
+            route="states",
+            required_guards=STATES_REQUIRED_GUARDS,
+            stale_source_classes=STATES_STALE_SOURCE_CLASSES,
+        )
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return 1 if report["issues"] else 0
     stamp = time.strftime("%Y%m%d_%H%M%S")

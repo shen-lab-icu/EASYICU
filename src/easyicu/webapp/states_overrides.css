@@ -22,17 +22,11 @@
 }
 
 /* Moved from shell_overrides.css: Workspace States route controls and stage primitives */
-.stApp .eu-states-controls,
 .stApp .eu-state-preview-card {
   border: 1px solid var(--hair);
   border-radius: var(--r-3);
   background: var(--surface);
   box-shadow: var(--shadow-1);
-}
-.stApp .eu-states-control-row button.active {
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--hair);
 }
 .stApp .eu-state-preview-card {
   overflow: hidden;
@@ -362,15 +356,6 @@
   background: var(--surface) !important;
   box-shadow: var(--shadow-1) !important;
 }
-.stApp [class*="st-key-eu_states_controls"] .eu-states-control-label {
-  margin: 6px 0 8px;
-  color: var(--ink-4);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-}
 .stApp [class*="st-key-eu_states_controls"] .stButton > button {
   min-height: 40px;
   border-radius: var(--r-2);
@@ -493,11 +478,6 @@
   border: 1px solid var(--hair);
   border-radius: var(--r-3);
   background: var(--surface-2);
-}
-.stApp .eu-state-callout.warn {
-  border-color: color-mix(in oklab, var(--warn) 34%, white);
-  background: color-mix(in oklab, var(--warn-soft) 76%, white);
-  color: #7b560f;
 }
 .stApp .checks {
   display: grid;
@@ -735,20 +715,10 @@
   border-style: dashed;
   color: var(--ink-4);
 }
-.stApp .eu-state-callout.ok {
-  border-color: color-mix(in oklab, var(--ok) 34%, white);
-  background: color-mix(in oklab, var(--ok-soft) 75%, white);
-}
-.stApp .eu-state-callout.bad {
-  border-color: color-mix(in oklab, var(--bad) 34%, white);
-  background: color-mix(in oklab, var(--bad-soft) 78%, white);
-}
 
 /* Moved from shell_overrides.css: Workspace States mobile rules split from mixed media block */
 @media (max-width: 780px) {
-  .stApp .eu-state-preview-head,
-  .stApp .eu-state-loading-row,
-  .stApp .eu-state-pills {
+  .stApp .eu-state-preview-head {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -1022,15 +992,6 @@
 .stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] > [data-testid="stVerticalBlock"] {
   gap: 0 !important;
 }
-.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .eu-states-control-label {
-  margin: 0 !important;
-  color: var(--ink-4) !important;
-  font-family: var(--font-mono) !important;
-  font-size: 10px !important;
-  font-weight: 500 !important;
-  letter-spacing: .08em !important;
-  text-transform: uppercase !important;
-}
 .stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] [data-testid="stHorizontalBlock"] {
   gap: 3px !important;
   min-height: 38px !important;
@@ -1051,24 +1012,6 @@
 }
 .stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] > [data-testid="stHorizontalBlock"]:first-child [data-testid="stVerticalBlock"] {
   gap: 6px !important;
-}
-.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] [data-testid="stHorizontalBlock"]:has(.eu-states-control-divider) {
-  align-items: flex-end !important;
-  gap: 14px !important;
-  min-height: 52px !important;
-  padding: 0 !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-}
-.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] .eu-states-control-divider {
-  width: 1px !important;
-  align-self: stretch !important;
-  height: auto !important;
-  min-height: 38px !important;
-  margin: -4px 2px !important;
-  background: var(--hair) !important;
-  border-left: 0 !important;
 }
 .stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] [data-testid="stHorizontalBlock"]:has([class*="st-key-_eu_states_ctx_"]),
 .stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_controls"] [data-testid="stHorizontalBlock"]:has([class*="st-key-_eu_states_mode_"]),
@@ -1168,21 +1111,6 @@
   color: var(--ink-4) !important;
   line-height: 1.25 !important;
 }
-.stApp:has(.eu-states-reference-head) .eu-state-pills {
-  gap: 7px !important;
-  margin-left: auto !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-state-pills .eu-pill {
-  height: 22px !important;
-  padding: 1px 8px !important;
-  font-size: 11px !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad {
-  padding: 22px !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-state-preview-card:has(.ok-banner) .eu-state-body-pad {
-  padding-bottom: 22px !important;
-}
 .stApp:has(.eu-states-reference-head) .ok-banner {
   margin-bottom: 14px !important;
   padding: 11px 14px !important;
@@ -1225,61 +1153,6 @@
   letter-spacing: -0.02em !important;
   line-height: 1.05 !important;
 }
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap {
-  width: 100% !important;
-  overflow: hidden !important;
-  border: 1px solid var(--hair) !important;
-  border-radius: var(--r-3) !important;
-  background: var(--surface) !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap .eu-table {
-  width: 100% !important;
-  border-collapse: collapse !important;
-  table-layout: auto !important;
-  font-size: 12.75px !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th {
-  padding: 10px 14px !important;
-  border-bottom: 1px solid var(--hair-2) !important;
-  background: var(--surface-2) !important;
-  color: var(--ink-4) !important;
-  font-family: var(--font-mono) !important;
-  font-size: 10px !important;
-  font-weight: 500 !important;
-  letter-spacing: .06em !important;
-  text-align: left !important;
-  text-transform: uppercase !important;
-  white-space: nowrap !important;
-  line-height: 1.5 !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th.num {
-  text-align: right !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td {
-  height: auto !important;
-  padding: 9px 14px !important;
-  border-bottom: 1px solid var(--hair) !important;
-  color: var(--ink-2) !important;
-  font-size: 12.75px !important;
-  line-height: 1.5 !important;
-  letter-spacing: -0.005em !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td.key {
-  color: var(--ink) !important;
-  font-weight: 500 !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td.num {
-  color: var(--ink) !important;
-  font-family: var(--font-mono) !important;
-  text-align: right !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap tr:last-child td {
-  border-bottom: 0 !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-state-action-slot {
-  height: 34px !important;
-  margin-top: 0 !important;
-}
 .stApp:has(.eu-states-reference-head) .st-toast {
   position: absolute !important;
   right: 16px !important;
@@ -1319,40 +1192,6 @@
 .stApp:has(.eu-states-reference-head) .st-toast .x {
   color: rgba(255,255,255,.5) !important;
 }
-.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) {
-  position: relative !important;
-  z-index: 4 !important;
-  width: calc(100% - 44px) !important;
-  margin: -56px 22px 6px !important;
-  padding: 0 !important;
-}
-.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) .eu-states-preview-actions-success {
-  display: none !important;
-}
-.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) [data-testid="stHorizontalBlock"] {
-  gap: 8px !important;
-  align-items: center !important;
-}
-.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) .stButton > button,
-.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) [data-testid="stDownloadButton"] > button {
-  height: 34px !important;
-  min-height: 34px !important;
-  padding: 0 14px !important;
-  border-radius: var(--r-2) !important;
-  font-size: 13px !important;
-  font-weight: 500 !important;
-  line-height: 1.5 !important;
-}
-.stApp:has(.eu-states-reference-head) [class*="st-key-eu_states_preview_actions"]:has(.eu-states-preview-actions-success) .stButton > button[kind="primary"] {
-  background: var(--ink) !important;
-  border-color: var(--ink) !important;
-  color: #fff !important;
-  -webkit-text-fill-color: #fff !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-states-overview-head {
-  margin-top: 28px !important;
-}
-.stApp:has(.eu-states-reference-head) .eu-states-overview-head,
 .stApp:has(.eu-states-reference-head) .eu-workspace-status-shell,
 .stApp:has(.eu-states-reference-head) [class*="st-key-eu_workspace_status_actions"],
 .stApp:has(.eu-states-reference-head) .eu-state-primitive-head,
@@ -1566,8 +1405,6 @@ html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body >
 .stApp:has(.eu-states-reference-head) .eu-states-reference-head .eyebrow,
 .stApp:has(.eu-states-reference-head) .mono,
 .stApp:has(.eu-states-reference-head) .eu-state-preview-head .st-sub,
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th,
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td.num,
 [data-testid="stSidebar"] .eu-states-rail-head .t,
 [data-testid="stSidebar"] .eu-states-rail .eyebrow {
   font-family: var(--eu-states-ref-mono) !important;
@@ -1588,10 +1425,6 @@ html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body >
   font-family: var(--eu-states-ref-sans) !important;
 }
 
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad {
-  height: 399.672px !important;
-  font-family: var(--eu-states-ref-sans) !important;
-}
 
 [data-testid="stSidebar"] .eu-states-rail-sep {
   width: 215px !important;
@@ -1897,61 +1730,6 @@ html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body >
   letter-spacing: -0.11px !important;
 }
 
-.stApp:has(.eu-states-reference-head) .eu-state-pills {
-  display: flex !important;
-  align-items: center !important;
-  gap: 7px !important;
-  margin-left: auto !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-pills .pill {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 6px !important;
-  height: 23px !important;
-  padding: 0 9px !important;
-  border: 1px solid #DCDAD2 !important;
-  border-radius: 999px !important;
-  background: #FFFFFF !important;
-  color: #2E3338 !important;
-  font-size: 11.25px !important;
-  font-weight: 500 !important;
-  line-height: 16.875px !important;
-  letter-spacing: -0.0675px !important;
-  white-space: nowrap !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-pills .pill .dot {
-  width: 6px !important;
-  height: 6px !important;
-  border-radius: 50% !important;
-  background: #6B7280 !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-pills .pill.demo {
-  color: oklch(38% 0.06 205) !important;
-  background: oklch(96% 0.02 205) !important;
-  border-color: oklch(86% 0.04 205) !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-pills .pill.demo .dot {
-  background: oklch(55% 0.07 205) !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-pills .pill.ok {
-  color: oklch(58% 0.10 150) !important;
-  background: oklch(96% 0.03 150) !important;
-  border-color: oklch(86% 0.05 150) !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-pills .pill.ok .dot {
-  background: oklch(58% 0.10 150) !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad {
-  padding: 22px !important;
-}
-
 .stApp:has(.eu-states-reference-head) .ok-banner {
   display: flex !important;
   align-items: center !important;
@@ -2036,80 +1814,6 @@ html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body >
   font-weight: 500 !important;
   line-height: 27.3px !important;
   letter-spacing: -0.52px !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap {
-  width: 100% !important;
-  margin: 16px 0 0 !important;
-  padding: 0 !important;
-  overflow: hidden !important;
-  border: 1px solid #E7E5DF !important;
-  border-radius: 10px !important;
-  background: #FFFFFF !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap .eu-table {
-  width: 100% !important;
-  margin: 0 !important;
-  border-collapse: collapse !important;
-  table-layout: auto !important;
-  font-size: 12.75px !important;
-  line-height: 19.125px !important;
-  letter-spacing: -0.0675px !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th,
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td {
-  border-top: 0 !important;
-  border-right: 0 !important;
-  border-left: 0 !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th {
-  padding: 10px 14px !important;
-  border-bottom: 1px solid #DCDAD2 !important;
-  background: #F4F4F0 !important;
-  color: #9CA3AF !important;
-  font-size: 10px !important;
-  font-weight: 500 !important;
-  line-height: 15px !important;
-  letter-spacing: 0.6px !important;
-  text-align: left !important;
-  text-transform: uppercase !important;
-  white-space: nowrap !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap th.num {
-  text-align: right !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td {
-  padding: 9px 14px !important;
-  border-bottom: 1px solid #E7E5DF !important;
-  color: #2E3338 !important;
-  font-size: 12.75px !important;
-  font-weight: 400 !important;
-  line-height: 19.125px !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td.key {
-  color: #0E1116 !important;
-  font-weight: 500 !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td.num {
-  color: #0E1116 !important;
-  text-align: right !important;
-  font-feature-settings: "tnum" !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap tr:last-child td {
-  border-bottom: 0 !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-action-slot {
-  height: 34px !important;
-  margin-top: 16px !important;
 }
 
 .stApp:has(.eu-states-reference-head) .st-toast {
@@ -2290,24 +1994,6 @@ html body .stApp:has(.eu-states-reference-head) .eu-states-stage-host .st-body >
 .stApp:has(.eu-states-reference-head) .eu-state-preview-icon {
   grid-template-columns: 30px !important;
   justify-content: normal !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-pills {
-  gap: 12px !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-pills .pill.demo {
-  color: oklch(40% 0.07 205) !important;
-  border-color: oklch(86% 0.045 205) !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap tr {
-  border-top: 0 !important;
-  border-bottom: 0 !important;
-}
-
-.stApp:has(.eu-states-reference-head) .eu-state-body-pad .table-wrap td {
-  letter-spacing: -0.0675px !important;
 }
 
 .stApp:has(.eu-states-reference-head) .st-toast {
