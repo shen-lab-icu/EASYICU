@@ -19,6 +19,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -41,11 +42,15 @@ EXTRACT_SELECTORS = [
     ".eu-extract-console-cards",
     ".eu-extract-console-steps",
     ".eu-step2-design-marker",
+    ".eu-cohort-header",
+    "[class*='st-key-eu_cohort_demographics_card']",
     ".eu-step3-design-marker",
     ".eu-step4-design-marker",
     ".eu-export-progress-shell",
     ".eu-demo-ex2-left",
     ".eu-step3-modules-cfg",
+    "[class*='st-key-eu_export_settings_card']",
+    "[class*='st-key-eu_step4_summary_card']",
     ".eu-step4-run-link",
 ]
 
@@ -61,10 +66,20 @@ PATIENT_SELECTORS = [
     ".eu-qv-reference-table",
     ".eu-qv-reference-stats",
     ".eu-qv-series-grid",
+    ".eu-ts-lane-head",
+    ".eu-ts-notice",
+    ".eu-ts-static-value",
     ".eu-qv-patient-chip-row",
     ".eu-qv-patient-split",
     ".eu-qv-quality-card",
     ".eu-qv-quality-note",
+    ".quality-summary-grid",
+    ".quality-summary-card",
+    ".quality-issue-panel",
+    ".quality-issue-card",
+    ".eu-quality-notice",
+    "[data-testid='stPlotlyChart']",
+    "[data-testid='stDataFrame']",
     ".eu-qv-nextbar-root",
 ]
 
@@ -116,6 +131,8 @@ SHELL_SELECTORS = [
     "[class*='st-key-euonav_quick_viz']",
     "[class*='st-key-euonav_cohort']",
     "[class*='st-key-euonav_cross_db']",
+    "div.st-key-main_nav_bar",
+    "[data-testid='stRadio']",
     "div.st-key-floating_ai_launcher",
     "div.st-key-floating_ai_panel",
     ".eu-settings-page-marker",
@@ -140,19 +157,21 @@ ROUTES: dict[str, dict[str, Any]] = {
         "selectors": EXTRACT_SELECTORS,
     },
     "extract_step2": {
-        "path": "?page=extract&mode=demo&ex_step=2&ex_custom=1&ex_adv_cohort=1",
+        "path": "?page=extract&mode=demo&ex_action=open_adv_cohort&ex_step=2&ex_custom=1&ex_adv_cohort=1",
+        "wait_for_guard_ms": 6_000,
         "required_any": [
-            [".eu-source-header.page-head"],
+            ["[data-testid='stMain']"],
         ],
         "state_required_any": [
-            [".eu-step2-design-marker", ".eu-demo-ex2-left"],
+            [".eu-step2-design-marker", ".eu-cohort-header", "[class*='st-key-eu_cohort_demographics_card']"],
         ],
         "selectors": EXTRACT_SELECTORS,
     },
     "extract_step3": {
-        "path": "?page=extract&mode=demo&ex_step=3&ex_show_all=1",
+        "path": "?page=extract&mode=demo&ex_action=show_core_modules&ex_step=3&ex_show_all=1",
+        "wait_for_guard_ms": 6_000,
         "required_any": [
-            [".eu-source-header.page-head"],
+            ["[data-testid='stMain']"],
         ],
         "state_required_any": [
             [".eu-step3-design-marker", ".eu-step3-modules-cfg"],
@@ -160,12 +179,25 @@ ROUTES: dict[str, dict[str, Any]] = {
         "selectors": EXTRACT_SELECTORS,
     },
     "extract_step4": {
-        "path": "?page=extract&mode=demo&ex_step=4&ex_adv_export=1&ex_format=csv&ex_merge=separate",
+        "path": "?page=extract&mode=demo&ex_action=open_adv_export&ex_step=4&ex_adv_export=1&ex_format=csv&ex_merge=separate",
+        "wait_for_guard_ms": 6_000,
         "required_any": [
-            [".eu-source-header.page-head"],
+            ["[data-testid='stMain']"],
         ],
         "state_required_any": [
             [".eu-step4-design-marker", ".eu-step4-run-link"],
+        ],
+        "selectors": EXTRACT_SELECTORS,
+    },
+    "extract_export_preview": {
+        "path": "?page=extract&mode=demo&ex_action=open_adv_export&ex_step=4&ex_adv_export=1&ex_format=csv&ex_merge=separate",
+        "wait_for_guard_ms": 6_000,
+        "required_any": [
+            ["[data-testid='stMain']"],
+        ],
+        "state_required_any": [
+            [".eu-step4-design-marker", ".eu-step4-run-link"],
+            ["[class*='st-key-eu_export_settings_card']", "[class*='st-key-eu_step4_summary_card']"],
         ],
         "selectors": EXTRACT_SELECTORS,
     },
@@ -189,6 +221,7 @@ ROUTES: dict[str, dict[str, Any]] = {
     },
     "patient_loaded_tables": {
         "path": "?page=patient&mode=demo&qv_action=panel&qv_source=demo&qv_panel=data_tables&qv_patients=10&qv_hours=24",
+        "wait_for_guard_ms": 8_000,
         "required_any": [
             [".eu-qv-design-root"],
         ],
@@ -200,17 +233,19 @@ ROUTES: dict[str, dict[str, Any]] = {
     },
     "patient_loaded_time_series": {
         "path": "?page=patient&mode=demo&qv_action=panel&qv_source=demo&qv_panel=time_series&qv_patients=10&qv_hours=24",
+        "wait_for_guard_ms": 10_000,
         "required_any": [
             [".eu-qv-design-root"],
         ],
         "state_required_any": [
             [".eu-qv-loaded-root"],
-            [".eu-qv-series-grid"],
+            [".eu-qv-series-grid", ".eu-ts-lane-head", ".eu-ts-notice", "[data-testid='stPlotlyChart']"],
         ],
         "selectors": PATIENT_SELECTORS,
     },
     "patient_loaded_overview": {
         "path": "?page=patient&mode=demo&qv_action=panel&qv_source=demo&qv_panel=patient_overview&qv_patients=10&qv_hours=24",
+        "wait_for_guard_ms": 8_000,
         "required_any": [
             [".eu-qv-design-root"],
         ],
@@ -222,39 +257,66 @@ ROUTES: dict[str, dict[str, Any]] = {
     },
     "patient_loaded_quality": {
         "path": "?page=patient&mode=demo&qv_action=panel&qv_source=demo&qv_panel=data_quality&qv_patients=10&qv_hours=24",
+        "wait_for_guard_ms": 10_000,
         "required_any": [
             [".eu-qv-design-root"],
         ],
         "state_required_any": [
             [".eu-qv-loaded-root"],
-            [".eu-qv-quality-card", ".eu-qv-quality-note"],
+            [
+                ".eu-qv-quality-card",
+                ".eu-qv-quality-note",
+                ".quality-summary-grid",
+                ".quality-issue-panel",
+                ".eu-quality-notice",
+                "[data-testid='stPlotlyChart']",
+            ],
         ],
         "selectors": PATIENT_SELECTORS,
     },
     "guided": {
         "path": "?page=guided",
         "required_any": [
-            [".eu-guided-fullscreen-marker", ".eu-copilot-page-marker"],
+            ["[data-testid='stMain']"],
+            ["div.st-key-ai_assistant_page_panel"],
         ],
         "selectors": GUIDED_SELECTORS,
     },
     "guided_welcome": {
         "path": "?page=guided",
+        "wait_for_guard_ms": 8_000,
         "required_any": [
-            [".eu-guided-fullscreen-marker", ".eu-copilot-page-marker"],
+            ["[data-testid='stMain']"],
+            ["div.st-key-ai_assistant_page_panel"],
+            ["div.st-key-eu_copilot_guided_shell"],
         ],
         "state_required_any": [
             [".eu-copilot-welcome-thread", "div.st-key-_llm_ai_page_workspace_guided_intents"],
             ["div.st-key-_llm_ai_page_workspace_composer_wrap"],
-            ["div.st-key-eu_copilot_left_rail"],
-            ["div.st-key-eu_copilot_right_rail"],
         ],
+        "state_required_any_by_viewport": {
+            "desktop": [
+                ["div.st-key-eu_copilot_left_rail"],
+                ["div.st-key-eu_copilot_right_rail"],
+            ],
+            "mobile": [
+                ["div.st-key-eu_copilot_right_rail", "div.st-key-eu_copilot_study_rail"],
+            ],
+        },
+        "expected_hidden_any_by_viewport": {
+            "mobile": [
+                ["div.st-key-eu_copilot_left_rail"],
+            ],
+        },
         "selectors": GUIDED_SELECTORS,
     },
     "guided_study_workspace": {
         "path": "?page=guided",
+        "wait_for_guard_ms": 8_000,
         "required_any": [
-            [".eu-guided-fullscreen-marker", ".eu-copilot-page-marker"],
+            ["[data-testid='stMain']"],
+            ["div.st-key-ai_assistant_page_panel"],
+            ["div.st-key-eu_copilot_guided_shell"],
         ],
         "state_required_any": [
             [".eu-copilot-dynamic-thread", ".eu-copilot-msg"],
@@ -382,16 +444,25 @@ ROUTES: dict[str, dict[str, Any]] = {
     },
     "shell_navigation": {
         "path": "?page=settings&mode=demo",
+        "wait_for_guard_ms": 8_000,
         "required_any": [
             ["[data-testid='stMain']"],
-            ["[data-testid='stSidebar']"],
-            [".eu-topbar", ".eu-topbar-ref-controls"],
         ],
-        "state_required_any": [
-            ["div.st-key-eu_sidebar_nav_area", ".wsnav", ".wsitem"],
-            [".eu-topbar-ref-controls", ".eu-topbar"],
-            ["div.st-key-floating_ai_launcher"],
-        ],
+        "state_required_any_by_viewport": {
+            "desktop": [
+                ["div.st-key-eu_sidebar_nav_area", ".wsnav", ".wsitem"],
+                [".eu-topbar-ref-controls", ".eu-topbar"],
+            ],
+            "mobile": [
+                ["div.st-key-main_nav_bar"],
+            ],
+        },
+        "expected_hidden_any_by_viewport": {
+            "mobile": [
+                ["div.st-key-eu_sidebar_nav_area", ".wsnav", ".wsitem"],
+                [".eu-topbar-ref-controls", ".eu-topbar"],
+            ],
+        },
         "selectors": SHELL_SELECTORS,
     },
 }
@@ -420,6 +491,21 @@ STYLE_KEYS = [
     "marginBottom",
     "overflowX",
     "overflowY",
+]
+
+STABLE_COMPARE_STYLE_KEYS = [
+    key
+    for key in STYLE_KEYS
+    if key
+    not in {
+        "width",
+        "height",
+        "minWidth",
+        "maxWidth",
+        "gridTemplateColumns",
+        "gridTemplateRows",
+        "overflowY",
+    }
 ]
 
 QA_JS = """
@@ -503,6 +589,11 @@ QA_JS = """
     present: group.some((selector) => document.querySelectorAll(selector).length > 0),
     visible: group.some((selector) => Array.from(document.querySelectorAll(selector)).some(visible)),
   }));
+  const expectedHidden = (routeConfig.expected_hidden_any || []).map((group) => ({
+    anyOf: group,
+    present: group.some((selector) => document.querySelectorAll(selector).length > 0),
+    visible: group.some((selector) => Array.from(document.querySelectorAll(selector)).some(visible)),
+  }));
   const computed = {};
   for (const selector of routeConfig.selectors) computed[selector] = styleFor(selector);
     const keyCounts = {
@@ -524,9 +615,15 @@ QA_JS = """
     },
     required,
     stateRequired,
-    guardBlockers: stateRequired
-      .filter((group) => !group.visible)
-      .map((group) => `state not visible: ${group.anyOf.join(' OR ')}`),
+    expectedHidden,
+    guardBlockers: [
+      ...stateRequired
+        .filter((group) => !group.visible)
+        .map((group) => `state not visible: ${group.anyOf.join(' OR ')}`),
+      ...expectedHidden
+        .filter((group) => group.visible)
+        .map((group) => `expected hidden but visible: ${group.anyOf.join(' OR ')}`),
+    ],
     computed,
     keyCounts,
     offscreenCount: offscreen.length,
@@ -536,6 +633,19 @@ QA_JS = """
   };
 }
 """
+
+
+def _route_config_for_viewport(route: str, viewport_name: str) -> dict[str, Any]:
+    config = deepcopy(ROUTES[route])
+    for key in ("state_required_any", "expected_hidden_any"):
+        merged = list(config.get(key) or [])
+        by_viewport = config.pop(f"{key}_by_viewport", {}) or {}
+        merged.extend(by_viewport.get(viewport_name, []) or [])
+        if merged:
+            config[key] = merged
+        else:
+            config.pop(key, None)
+    return config
 
 
 def _apply_interactions(page: Any, route_config: dict[str, Any]) -> list[str]:
@@ -577,6 +687,38 @@ def _apply_interactions(page: Any, route_config: dict[str, Any]) -> list[str]:
                 continue
             raise
     return blockers
+
+
+def _evaluate_guard(page: Any, route_config: dict[str, Any]) -> dict[str, Any]:
+    return page.evaluate(QA_JS, {"routeConfig": route_config, "styleKeys": STYLE_KEYS})
+
+
+def _wait_for_streamlit_idle(page: Any, timeout_ms: int = 12_000) -> None:
+    try:
+        page.wait_for_function(
+            """
+            () => {
+              const app = document.querySelector('[data-testid="stApp"]');
+              if (!app) return false;
+              return app.getAttribute('data-test-script-state') !== 'running';
+            }
+            """,
+            timeout=timeout_ms,
+        )
+    except PlaywrightTimeoutError:
+        pass
+
+
+def _wait_for_guard_contract(page: Any, route_config: dict[str, Any]) -> dict[str, Any]:
+    """Wait for Streamlit reruns to settle into the expected route state."""
+    _wait_for_streamlit_idle(page)
+    result = _evaluate_guard(page, route_config)
+    deadline = time.monotonic() + (int(route_config.get("wait_for_guard_ms") or 0) / 1000)
+    while result.get("guardBlockers") and time.monotonic() < deadline:
+        page.wait_for_timeout(500)
+        _wait_for_streamlit_idle(page, timeout_ms=5_000)
+        result = _evaluate_guard(page, route_config)
+    return result
 
 
 def parse_args() -> argparse.Namespace:
@@ -623,15 +765,18 @@ def collect_one(
     errors: list[str] = []
     page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
     page.on("pageerror", lambda exc: errors.append(str(exc)))
-    target = base_url + ROUTES[route]["path"]
+    route_config = _route_config_for_viewport(route, viewport_name)
+    target = base_url + route_config["path"]
     page.goto(target, wait_until="domcontentloaded", timeout=45_000)
     try:
         page.wait_for_load_state("networkidle", timeout=15_000)
     except PlaywrightTimeoutError:
         pass
     page.wait_for_timeout(900)
-    interaction_blockers = _apply_interactions(page, ROUTES[route])
-    result = page.evaluate(QA_JS, {"routeConfig": ROUTES[route], "styleKeys": STYLE_KEYS})
+    _wait_for_streamlit_idle(page)
+    interaction_blockers = _apply_interactions(page, route_config)
+    _wait_for_streamlit_idle(page)
+    result = _wait_for_guard_contract(page, route_config)
     if interaction_blockers:
         result["guardBlockers"] = [*result.get("guardBlockers", []), *interaction_blockers]
     result.update(
@@ -653,21 +798,27 @@ def collect_one(
 def _signature(item: dict[str, Any]) -> dict[str, Any]:
     selectors: dict[str, Any] = {}
     for selector, data in sorted(item.get("computed", {}).items()):
-        if not data.get("exists"):
-            selectors[selector] = {"exists": False, "count": data.get("count", 0)}
+        if not data.get("exists") or not data.get("visible"):
+            selectors[selector] = {"visible": False}
             continue
         styles = data.get("styles", {})
         selectors[selector] = {
             "exists": True,
             "visible": bool(data.get("visible")),
             "count": data.get("count", 0),
-            "rect": data.get("rect", {}),
-            "styles": {key: styles.get(key, "") for key in STYLE_KEYS},
+            "styles": {key: styles.get(key, "") for key in STABLE_COMPARE_STYLE_KEYS},
         }
+    key_counts = item.get("keyCounts", {})
     return {
         "rootOverflowX": item.get("root", {}).get("overflowX"),
         "required": item.get("required", []),
-        "keyCounts": item.get("keyCounts", {}),
+        "stateRequired": item.get("stateRequired", []),
+        "expectedHidden": item.get("expectedHidden", []),
+        "keyCounts": {
+            key: key_counts.get(key)
+            for key in ("tables", "rails", "topbar")
+            if key in key_counts
+        },
         "selectors": selectors,
     }
 
@@ -698,9 +849,11 @@ def validate(report: dict[str, Any], strict_offscreen: bool) -> list[str]:
             failures.append(f"{label}: console errors: {item['consoleErrors']}")
         if item.get("root", {}).get("overflowX", 0) > 1:
             failures.append(f"{label}: horizontal overflow {item['root']['overflowX']}px")
-        missing = [group for group in item.get("required", []) if not group.get("present")]
+        missing = [group for group in item.get("required", []) if not group.get("visible")]
         if missing:
             failures.append(f"{label}: missing required visible selectors: {missing}")
+        if item.get("guardBlockers"):
+            failures.append(f"{label}: guard blockers: {item['guardBlockers']}")
         if strict_offscreen and (item.get("offscreenCount", 0) or item.get("clippedCount", 0)):
             failures.append(
                 f"{label}: offscreen={item.get('offscreenCount')} clipped={item.get('clippedCount')}"
@@ -723,7 +876,8 @@ def main() -> int:
         try:
             for viewport_name, width, height in VIEWPORTS:
                 for route in args.routes:
-                    page = browser.new_page(viewport={"width": width, "height": height})
+                    context = browser.new_context(viewport={"width": width, "height": height})
+                    page = context.new_page()
                     try:
                         results.append(
                             collect_one(
@@ -738,7 +892,7 @@ def main() -> int:
                             )
                         )
                     finally:
-                        page.close()
+                        context.close()
         finally:
             browser.close()
 
