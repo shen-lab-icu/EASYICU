@@ -61,6 +61,33 @@ def test_first_time_uses_true_onset_for_categorical_event_concept():
     assert r1.vent_last_time == 8.0
 
 
+def test_event_time_column_carries_time_of_event():
+    # death indexed by deathtime: the charttime of the event row IS the
+    # time-of-death (hours from ICU admission). Survivors have no event -> no
+    # time row (NaN after merge), never a spurious 0.
+    df = pd.DataFrame(
+        {
+            "stay_id": [1, 2, 2, 3],
+            "charttime": [87.0, float("nan"), float("nan"), 12.0],
+            "death": [True, None, None, True],
+        }
+    )
+    out = M._event_time_column(df, "death")
+    assert set(out.columns) == {"stay_id", "death_time"}
+    assert out[out.stay_id == 1].iloc[0].death_time == 87.0
+    assert out[out.stay_id == 3].iloc[0].death_time == 12.0
+    # stay 2 never died -> not present (becomes NaN after the left-merge)
+    assert (out.stay_id == 2).sum() == 0
+
+
+def test_event_time_column_empty_without_time_index():
+    # A purely stay-level derived flag with no charttime yields no event time.
+    df = pd.DataFrame({"stay_id": [1, 2], "death": [1, 0]})
+    out = M._event_time_column(df, "death")
+    assert list(out.columns) == ["stay_id"]
+    assert out.empty
+
+
 def test_first_time_absent_when_concept_never_recorded():
     # A stay with only NaN values for the concept gets no onset time (NaN after
     # the left-merge in materialize_cohort), never a spurious 0.

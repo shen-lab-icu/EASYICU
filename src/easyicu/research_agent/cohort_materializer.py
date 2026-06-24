@@ -25,6 +25,11 @@ columns are what make exposure-timing questions answerable — e.g. the first
 ``charttime`` where ``norepi_rate`` is recorded is the vasopressor initiation
 time, so "early vs delayed" exposure groups can be constructed from the wide
 cohort without re-reading the raw event stream.
+Each outcome is emitted as a whole-stay binary ``<outcome>`` and, when its
+source carries a timestamp, an event time ``<outcome>_time`` (e.g.
+``death_time`` = time-of-death in hours from ICU admission, NaN when the event
+never occurred) so survival models and immortal-time guards are possible
+instead of being blocked by a timeless binary outcome.
 For every concept named by a CTAS cohort predicate it additionally emits a
 bare ``<concept_id>`` column carrying the predicate's declared aggregation, so
 :func:`easyicu.research_agent.cohort_schema.build_cohort` can apply the
@@ -306,6 +311,39 @@ def _binary_event_column(df: pd.DataFrame, concept: str) -> pd.DataFrame:
     return out
 
 
+def _event_time_column(df: pd.DataFrame, concept: str) -> pd.DataFrame:
+    """Per-stay ``<concept>_time``: the ``charttime`` of the event itself.
+
+    ``_binary_event_column`` collapses an outcome to a whole-stay 0/1 and drops
+    its time index. For an event concept whose source carries a timestamp (e.g.
+    ``death`` is indexed by ``deathtime``), that time IS the time-of-event in
+    hours from ICU admission. Surfacing it as ``<concept>_time`` (NaN when the
+    event never occurred) is what lets a downstream analysis guard against
+    immortal-time bias or fit a survival model — without it an agent sees only a
+    binary outcome and must block any timing-aware effect estimate.
+
+    Symmetric to ``_timing_columns`` for features. Returns an empty frame when
+    the source has no usable time index (purely stay-level derived flags).
+    """
+    if TIME_COL not in df.columns or concept not in df.columns or ID_COL not in df.columns:
+        return pd.DataFrame(columns=[ID_COL])
+    work = df[[ID_COL, TIME_COL, concept]].dropna(subset=[ID_COL]).copy()
+    if work.empty:
+        return pd.DataFrame(columns=[ID_COL])
+    event = _truthy_series(work[concept])
+    work = work[event & work[TIME_COL].notna()]
+    if work.empty:
+        return pd.DataFrame(columns=[ID_COL])
+    out = (
+        work.sort_values([ID_COL, TIME_COL])
+        .groupby(ID_COL)[TIME_COL]
+        .first()
+        .reset_index()
+    )
+    out.columns = [ID_COL, f"{concept}_time"]
+    return out
+
+
 def _hash_df(df: pd.DataFrame) -> str:
     return hashlib.sha256(
         pd.util.hash_pandas_object(df, index=False).values.tobytes()
@@ -389,9 +427,16 @@ def materialize_cohort(
         else:
             frames.append(_static_column(df, c))
 
-    # ---- outcomes -> whole-stay binary (a death after 24h still counts)
+    # ---- outcomes -> whole-stay binary (a death after 24h still counts), plus
+    # the event time (<c>_time, e.g. death_time = time-of-death hours from ICU
+    # admission) when the source carries a timestamp, so timing-aware analyses
+    # (immortal-time guards, survival models) are possible.
     for c in outcome_set:
-        frames.append(_binary_event_column(load(c), c))
+        loaded = load(c)
+        frames.append(_binary_event_column(loaded, c))
+        event_time = _event_time_column(loaded, c)
+        if not event_time.empty:
+            frames.append(event_time)
 
     # ---- bare predicate columns for 纳排 (skip concepts already materialised bare)
     produced_bare = set(static_set) | set(outcome_set)
