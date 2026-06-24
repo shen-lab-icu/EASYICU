@@ -223,6 +223,38 @@ def _timing_columns(w: pd.DataFrame, concept: str) -> pd.DataFrame:
     )
 
 
+def _load_concept(
+    source_mode: str,
+    root: Path,
+    concept: str,
+    database: str,
+    patient_ids: Optional[Sequence[int]],
+    unavailable: List[str],
+) -> pd.DataFrame:
+    """Load one concept from an export package or a converted database.
+
+    Shared by the wide-summary path and the long-trajectory path so they read
+    the source identically. Appends to ``unavailable`` and returns an empty
+    stay-keyed frame when the concept is absent (fail-soft); re-raises other
+    errors with concept context.
+    """
+    try:
+        if source_mode == "export":
+            return _coerce_int_stay(read_exported_concept(root, concept))
+        from ..api import load_concepts  # local import: heavy module
+
+        return _coerce_int_stay(
+            load_concepts(
+                [concept], database=database, data_path=str(root), patient_ids=patient_ids
+            )
+        )
+    except KeyError:
+        unavailable.append(concept)
+        return pd.DataFrame(columns=[ID_COL])
+    except Exception as exc:  # noqa: BLE001 - add concept context before failing closed
+        raise RuntimeError(f"failed to load concept {concept!r}") from exc
+
+
 def _summarize_timeseries(df: pd.DataFrame, concept: str, window: Window) -> pd.DataFrame:
     """Per-stay summary columns for one time-series concept over ``window``."""
     w = _window(df, window[0], window[1])
@@ -374,21 +406,9 @@ def materialize_cohort(
     unavailable: List[str] = []
 
     def load(concept: str) -> pd.DataFrame:
-        try:
-            if source_mode == "export":
-                return _coerce_int_stay(read_exported_concept(root, concept))
-            from ..api import load_concepts  # local import: heavy module
-
-            return _coerce_int_stay(
-                load_concepts(
-                    [concept], database=database, data_path=str(root), patient_ids=patient_ids
-                )
-            )
-        except KeyError:
-            unavailable.append(concept)
-            return pd.DataFrame(columns=[ID_COL])
-        except Exception as exc:  # noqa: BLE001 - add concept context before failing closed
-            raise RuntimeError(f"failed to load concept {concept!r}") from exc
+        return _load_concept(
+            source_mode, root, concept, database, patient_ids, unavailable
+        )
 
     # concepts required by the CTAS cohort predicates (for 纳排)
     pred_specs: List[Tuple[str, Window, str]] = []
@@ -495,10 +515,98 @@ def materialize_cohort(
     return cohort.reset_index(drop=True), provenance
 
 
+def build_trajectory_long(
+    *,
+    data_path: Union[str, Path],
+    concepts: Sequence[str],
+    database: str = "miiv",
+    window: Optional[Window] = None,
+    patient_ids: Optional[Sequence[int]] = None,
+    prefer_existing: bool = True,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """Long-format trajectory ``(stay_id, charttime, concept, value_num, value_str)``.
+
+    The wide per-stay summary in :func:`materialize_cohort` decides the temporal
+    aggregation (max/min/first over a fixed window) up front, BEFORE the agent
+    sees the data — which is lossy for any question that needs a threshold-
+    crossing onset (first time MAP < 65), an incident-after-exposure endpoint
+    (first AKI after first PEEP), or a time-varying exposure / landmark design.
+    This emits the per-timepoint series for the named concepts so the agent can
+    construct those temporal features itself in-sandbox, instead of being forced
+    through the baseline-summary lens.
+
+    Only rows with a recorded (non-null) value are kept. ``value_num`` is the
+    numeric view (NaN when the concept is categorical/unparseable); ``value_str``
+    preserves the raw value. ``window`` (hours from ICU admission) bounds the
+    series; ``None`` keeps the full available trajectory.
+    """
+    source_mode, root = _resolve_source(data_path, prefer_existing)
+    unavailable: List[str] = []
+    frames: List[pd.DataFrame] = []
+    materialized: List[str] = []
+    for concept in dict.fromkeys(concepts):
+        df = _load_concept(source_mode, root, concept, database, patient_ids, unavailable)
+        if TIME_COL not in df.columns or concept not in df.columns:
+            continue
+        w = _window(df, window[0], window[1]) if window is not None else df
+        sub = w.loc[w[concept].notna(), [ID_COL, TIME_COL, concept]]
+        if sub.empty:
+            continue
+        frames.append(
+            pd.DataFrame(
+                {
+                    ID_COL: sub[ID_COL].to_numpy(),
+                    TIME_COL: sub[TIME_COL].to_numpy(),
+                    "concept": concept,
+                    "value_num": pd.to_numeric(sub[concept], errors="coerce").to_numpy(),
+                    "value_str": sub[concept].astype("string").to_numpy(),
+                }
+            )
+        )
+        materialized.append(concept)
+    if frames:
+        long_df = (
+            pd.concat(frames, ignore_index=True)
+            .sort_values([ID_COL, TIME_COL, "concept"])
+            .reset_index(drop=True)
+        )
+    else:
+        long_df = pd.DataFrame(
+            columns=[ID_COL, TIME_COL, "concept", "value_num", "value_str"]
+        )
+    provenance = {
+        "schema_version": "easyicu.cohort_trajectory/1",
+        "source_mode": source_mode,
+        "source": str(root),
+        "database": database,
+        "trajectory_window_hours": list(window) if window is not None else None,
+        "trajectory_concepts_requested": list(dict.fromkeys(concepts)),
+        "trajectory_concepts_materialized": materialized,
+        "unavailable_concepts": unavailable,
+        "n_rows": int(len(long_df)),
+        "n_stays": int(long_df[ID_COL].nunique()) if len(long_df) else 0,
+        "trajectory_sha256": _hash_df(long_df),
+    }
+    return long_df, provenance
+
+
 def materialize_to_parquet(
-    output_dir: Union[str, Path], *, stem: str = "cohort", **kwargs: Any
+    output_dir: Union[str, Path],
+    *,
+    stem: str = "cohort",
+    emit_trajectory: bool = False,
+    trajectory_concepts: Optional[Sequence[str]] = None,
+    trajectory_window: Optional[Window] = None,
+    **kwargs: Any,
 ) -> Dict[str, Path]:
-    """Materialize and write ``<stem>.parquet`` + ``<stem>_provenance.json``."""
+    """Materialize and write ``<stem>.parquet`` + ``<stem>_provenance.json``.
+
+    When ``emit_trajectory`` is set, also writes ``<stem>_trajectory.parquet``
+    (+ ``_provenance.json``): the long per-timepoint series for
+    ``trajectory_concepts`` (default: the outcome + feature concepts), so the
+    agent can build onsets / incident endpoints / landmark designs that the wide
+    summary cannot express. Default off — existing callers are unaffected.
+    """
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     cohort, provenance = materialize_cohort(**kwargs)
@@ -506,4 +614,29 @@ def materialize_to_parquet(
     prov_path = out / f"{stem}_provenance.json"
     cohort.to_parquet(parquet_path, index=False)
     prov_path.write_text(json.dumps(provenance, indent=2, ensure_ascii=False), encoding="utf-8")
-    return {"parquet": parquet_path, "provenance": prov_path}
+    paths = {"parquet": parquet_path, "provenance": prov_path}
+
+    if emit_trajectory:
+        concepts = trajectory_concepts
+        if concepts is None:
+            concepts = [
+                *kwargs.get("outcome_concepts", ("death",)),
+                *kwargs.get("feature_concepts", ()),
+            ]
+        long_df, traj_prov = build_trajectory_long(
+            data_path=kwargs["data_path"],
+            concepts=concepts,
+            database=kwargs.get("database", "miiv"),
+            window=trajectory_window,
+            patient_ids=kwargs.get("patient_ids"),
+            prefer_existing=kwargs.get("prefer_existing", True),
+        )
+        traj_path = out / f"{stem}_trajectory.parquet"
+        traj_prov_path = out / f"{stem}_trajectory_provenance.json"
+        long_df.to_parquet(traj_path, index=False)
+        traj_prov_path.write_text(
+            json.dumps(traj_prov, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        paths["trajectory"] = traj_path
+        paths["trajectory_provenance"] = traj_prov_path
+    return paths

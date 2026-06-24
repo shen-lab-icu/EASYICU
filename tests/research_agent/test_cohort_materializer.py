@@ -61,6 +61,62 @@ def test_first_time_uses_true_onset_for_categorical_event_concept():
     assert r1.vent_last_time == 8.0
 
 
+def test_build_trajectory_long_emits_per_timepoint_series(monkeypatch, tmp_path):
+    # The trajectory layer must keep the raw per-timepoint values (so the agent
+    # can compute a threshold-crossing onset like "first MAP < 65"), only the
+    # recorded rows, with a numeric and a raw view.
+    synthetic = {
+        "map": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 1, 2],
+                "charttime": [0.0, 2.0, 5.0, 1.0],
+                "map": [80.0, 60.0, None, 55.0],  # stay 1 crosses <65 at t=2
+            }
+        ),
+        "peep": pd.DataFrame(
+            {"stay_id": [1, 2], "charttime": [1.0, 0.0], "peep": [5.0, 8.0]}
+        ),
+    }
+
+    def fake_load(source_mode, root, concept, database, patient_ids, unavailable):
+        return synthetic.get(concept, pd.DataFrame(columns=["stay_id"]))
+
+    monkeypatch.setattr(M, "_load_concept", fake_load)
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+
+    long_df, prov = M.build_trajectory_long(
+        data_path=tmp_path, concepts=["map", "peep", "absent"]
+    )
+    assert set(long_df.columns) == {"stay_id", "charttime", "concept", "value_num", "value_str"}
+    # the None MAP row is dropped (not recorded); 3 map + 2 peep = 5 rows
+    assert len(long_df) == 5
+    assert prov["trajectory_concepts_materialized"] == ["map", "peep"]
+    assert "absent" not in prov["trajectory_concepts_materialized"]
+    # onset construction is now possible from the long frame
+    s1_map = long_df[(long_df.stay_id == 1) & (long_df.concept == "map")]
+    first_low = s1_map[s1_map.value_num < 65].sort_values("charttime").iloc[0]
+    assert first_low.charttime == 2.0
+
+
+def test_build_trajectory_long_respects_window(monkeypatch, tmp_path):
+    synthetic = {
+        "lact": pd.DataFrame(
+            {"stay_id": [1, 1], "charttime": [3.0, 48.0], "lact": [2.0, 9.0]}
+        )
+    }
+    monkeypatch.setattr(
+        M,
+        "_load_concept",
+        lambda sm, r, c, db, pid, un: synthetic.get(c, pd.DataFrame(columns=["stay_id"])),
+    )
+    monkeypatch.setattr(M, "_resolve_source", lambda *a, **k: ("export", tmp_path))
+    long_df, _ = M.build_trajectory_long(
+        data_path=tmp_path, concepts=["lact"], window=(0.0, 24.0)
+    )
+    # the 48h row is outside the window
+    assert long_df.charttime.tolist() == [3.0]
+
+
 def test_event_time_column_carries_time_of_event():
     # death indexed by deathtime: the charttime of the event row IS the
     # time-of-death (hours from ICU admission). Survivors have no event -> no
