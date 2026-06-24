@@ -51,3 +51,14 @@ def test_native_extraction_advanced_filters_are_backend_wired() -> None:
     assert "previewExtractionFilters" in extraction_js
     assert "Real-source filter audit" in extraction_js
     assert "Unsupported filters stay blocked" in extraction_js
+
+
+def test_native_webapp_foreground_interrupt_returns_shell_status(monkeypatch) -> None:
+    from easyicu.webserver import __main__ as webmain
+
+    def fake_run(cmd, env):  # noqa: ANN001
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(webmain.subprocess, "run", fake_run)
+
+    assert webmain.run_app(port=9876) == 130

@@ -76,6 +76,11 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 easyicu = ["data/*.json"]
+"easyicu.webserver" = [
+  "static/index.html",
+  "static/css/*.css",
+  "static/js/*.js"
+]
 
 [tool.ruff]
 target-version = "py310"
