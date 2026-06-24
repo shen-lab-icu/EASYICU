@@ -229,6 +229,23 @@ CLINICAL SCORE AND MISSINGNESS SEMANTICS:
   early-vs-delayed treatment comparison need not be blocked solely for
   lack of outcome timing. Still block if the exposure time-zero or
   eligibility onset themselves remain uncertified.
+- An event time recorded BEFORE time-zero (e.g. an `<outcome>_time` or
+  `<c>_first_time` < 0 relative to ICU admission, or before the chosen
+  landmark) is a pre-baseline event, not a missing or invalid one. Handle
+  it the standard survival way — exclude those stays from the at-risk /
+  landmark cohort and record the count — rather than failing an
+  outcome-timing certification over them. Report how many were excluded.
+- A required eligibility / onset "time-zero" can often be CONSTRUCTED from
+  the timing columns rather than read from a single pre-built status
+  field. If no certified onset field exists, try to assemble one by
+  combining the available onset timestamps (a state's `_first_time` with
+  the first qualifying physiology/treatment `_first_time`), then state and
+  justify the definition and its coverage. Only block if the components
+  needed for a defensible onset are themselves absent — not merely because
+  a ready-made certified field is missing. (Non-binding example, adapt to
+  the question: an onset could combine an infection-suspicion `_first_time`
+  with the first qualifying hypotension/lactate/vasopressor `_first_time`;
+  the specific rule is the study's to define, not a fixed default.)
 - If a missingness or component-completeness QC check finds that interpretation is
   unsafe, write the QC artefacts and stop cleanly with null primary
   estimates. Do not repair by silently changing the clinical estimand
