@@ -14,16 +14,29 @@ Code contract:
   MANDATORY when a timing/onset/incident question is being gated: if
   TRAJECTORY_PARQUET is set and contains the concept(s) the endpoint needs,
   you MUST construct the onset / incident endpoint FROM THE TRAJECTORY
-  (threshold crossing per the rule below) before deciding feasibility. Do
-  NOT block citing "no certified row-level onset/status field" or that a
-  wide column like `<c>_first_time` is only a first-recorded time — the
-  trajectory IS the row-level source you are expected to derive the onset
-  from. Auditing only the wide summary columns and then blocking is a
-  failure of the step, not an honest block. Only block if a required
+  before deciding feasibility. Do NOT block citing "no certified row-level
+  onset/status field" or that a wide column like `<c>_first_time` is only a
+  first-recorded time — the trajectory IS the row-level source you derive
+  the onset from. Auditing only the wide summary columns and then blocking
+  is a failure of the step, not an honest block. Only block if a required
   component concept is itself ABSENT from the trajectory, or after building
   the endpoint the design is still indefensible for a stated reason (then
   say exactly which component is missing). Always still apply the usual
   confounding / immortal-time caveats.
+  USE THE VALIDATED PRIMITIVES, do not re-derive these by hand (hand-rolled
+  onset logic has mis-counted stage-0 records as events). Import from
+  `easyicu.research_agent.temporal_features`:
+    * `onset_times(traj, concept, op=..., threshold=...)` — first crossing
+      time (numeric); for a categorical/boolean concept pass `op="present"`
+      or `positive_values={...}` (e.g. mech_vent).
+    * `incident_outcome_cohort(traj, outcome_concept=, index_concept=, ...)`
+      — per-stay prevalent / incident / event_free vs an index event, with
+      `at_risk`, `incident`, `time_to_event`; join your exposure (e.g. a PEEP
+      level from the wide cohort) to the `at_risk==1` subset and model
+      `incident`. This is the prevalent-vs-incident / reverse-order guard.
+    * `landmark_cohort(traj, outcome_concept=, landmark_hours=, exposure_onset=)`
+      — at-risk set + follow-up clock for an early-vs-delayed (immortal-time-
+      guarded) design.
 - When defining an ONSET from an ordinal/staged concept (where 0 means
   measured-but-event-absent, e.g. a KDIGO 0-3 stage or a 0/1 indicator),
   the onset is the first charttime where value_num crosses the clinical
