@@ -53,6 +53,13 @@
 @media (max-width: 640px){ .path-field{ min-width: 0; width: 100%; } .set-row{ flex-direction: column; gap: 10px; } .set-row .sr-ctl{ width: 100%; } }
 
 .set-nav{ display: flex; flex-wrap: wrap; gap: 4px; }
+.set-nav-btn{
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+}
 
 @media (max-width: 640px){
   .settings-page .sr-ctl{

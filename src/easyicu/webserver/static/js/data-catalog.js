@@ -210,6 +210,51 @@
   ];
 
   const totalConcepts = Object.values(groupConcepts).reduce((a, c) => a + c.length, 0);
+  const supportedDbs = ['miiv', 'mimic', 'eicu', 'aumc', 'hirid', 'sic'];
+  const isDerivedRuleConcept = k => /^(sofa_|sofa2_|sep3_)/.test(k) || ['susp_inf', 'culture_positive', 'bld_culture_positive'].includes(k);
+  const conceptCoverage = {};
+  Object.keys(dict).forEach(k => {
+    if (Object.prototype.hasOwnProperty.call(cov, k)) {
+      conceptCoverage[k] = { kind: 'audited', databases: cov[k], basis: 'CONCEPT_DB_COVERAGE' };
+    } else if (isDerivedRuleConcept(k)) {
+      conceptCoverage[k] = { kind: 'derived', databases: null, basis: 'score_or_rule_component', source: 'rule_based_output' };
+    } else {
+      conceptCoverage[k] = { kind: 'not_audited', databases: null, basis: 'fallback_catalog_missing_from_CONCEPT_DB_COVERAGE' };
+    }
+  });
+  const coverageSummary = Object.values(conceptCoverage).reduce((acc, meta) => {
+    if (meta.kind === 'derived') {
+      acc.derived += 1;
+      return acc;
+    }
+    if (meta.kind !== 'audited') {
+      acc.notAudited += 1;
+      return acc;
+    }
+    acc.audited += 1;
+    if (meta.databases === supportedDbs.length) acc.auditedAll += 1;
+    else if (meta.databases === supportedDbs.length - 1) acc.auditedFive += 1;
+    else acc.auditedPartial += 1;
+    return acc;
+  }, { supportedDatabases: supportedDbs.length, audited: 0, auditedAll: 0, auditedFive: 0, auditedPartial: 0, derived: 0, notAudited: 0 });
+  const activeExportCoverage = {
+    status: 'no_active_source',
+    concepts: {},
+    summary: { included: 0, notInExport: totalConcepts },
+    payload_scope: 'aggregate_only_no_rows',
+  };
 
-  window.EU_CATALOG = { groups, groupConcepts, dict, cov, desc, auditModules, totalConcepts };
+  window.EU_CATALOG = {
+    groups,
+    groupConcepts,
+    dict,
+    cov,
+    conceptCoverage,
+    coverageSummary,
+    activeExportCoverage,
+    desc,
+    auditModules,
+    supportedDbs,
+    totalConcepts,
+  };
 })();

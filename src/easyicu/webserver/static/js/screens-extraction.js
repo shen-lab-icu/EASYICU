@@ -45,7 +45,7 @@
       const inner = `
         <div class="home-inner" style="max-width:1180px;">
           <h1 class="home-h1">${t('Welcome to EasyICU', '欢迎使用 EasyICU')}</h1>
-          <p class="home-sub">${t('Your local-first ICU research workspace. Pick how you want to work — talk it through with the Copilot, or drive the panels yourself. Both go from question to a gated draft; nothing is uploaded.', '本地优先的 ICU 研究工作台。选一种你习惯的方式 —— 用 Copilot 对话,或自己操作面板。两者都能从问题走到受闸草稿;不上传任何数据。')}</p>
+          <p class="home-sub">${t('Your local-first ICU research workspace. Pick how you want to work — start a Guided study, or drive the panels yourself. Both go from question to a gated draft; nothing is uploaded.', '本地优先的 ICU 研究工作台。选一种你习惯的方式 —— 开始研究引导,或自己操作面板。两者都能从问题走到受闸草稿;不上传任何数据。')}</p>
           <div class="entry-firsttime" id="firstTimeNudge" hidden>
             <span class="ft-ico">${icon('play', 13)}</span>
             <span>${t('New here?', '第一次使用?')} <b>${t('Take the 2-minute demo', '先跑 2 分钟演示')}</b> ${t('— no setup, no data, fully explorable.', '—— 无需配置、无需数据,全程可探索。')}</span>
@@ -64,11 +64,11 @@
                 ${i > 0 ? '<div class="ej-conn"></div>' : ''}
                 <div class="ej-node"><div class="ej-num">${n[0]}</div><div><div class="ej-lab">${n[1]}</div><div class="ej-sub">${n[2]}</div></div></div>`).join('')}
             </div>
-            <div class="ej-foot">${t('Two ways through it:', '两种走法:')} <b>${t('① talk it through with Copilot', '① 用 Copilot 对话')}</b> ${t('or', '或')} <b>${t('② drive the panels yourself', '② 自己操作面板')}</b></div>
+            <div class="ej-foot">${t('Two ways through it:', '两种走法:')} <b>${t('① Guided study', '① 研究引导')}</b> ${t('or', '或')} <b>${t('② drive the panels yourself', '② 自己操作面板')}</b></div>
           </div>
           <div class="home-split">
             <div class="home-col col-copilot">
-              <div class="col-head"><div class="col-mk">${icon('spark', 17)}</div><div><div class="col-t">${t('Research Copilot', '研究 Copilot')}</div><div class="col-sub">${t('talk it through · easiest way to start', '对话引导 · 最推荐的入口')}</div></div><span class="col-badge">${t('Recommended', '推荐')}</span></div>
+              <div class="col-head"><div class="col-mk">${icon('spark', 17)}</div><div><div class="col-t">${t('Guided study', '研究引导')}</div><div class="col-sub">${t('talk it through · easiest way to start', '对话引导 · 最推荐的入口')}</div></div><span class="col-badge">${t('Recommended', '推荐')}</span></div>
               <div class="col-body">
                 <p class="col-lead">${t('Describe your study in a sentence — I frame it, pull the cohort, run the analysis, and prepare a gated draft.', '用一句话描述你的研究 —— 我来框定问题、筛取队列、运行分析,并准备一份受证据约束的草稿。')}</p>
                 <div class="col-prompt">
@@ -181,18 +181,25 @@
 
   /* ================= DATA EXTRACTION (simplified) ================= */
   function dataMode() { return window.EU_DATA || 'demo'; }  // global Demo/Real (topbar)
+  const DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30;
+  const MAX_OBSERVATION_WINDOW_HOURS = 24 * 30;
   let exView = 'home';          // home | running | done
   let exMaxPatients = 500;      // cohort sample cap for real extraction (full-cohort = 3c follow-up)
   let exportES = null;          // EventSource for the extract job
+  let exportJobId = null;       // current extract job id for cooperative cancel
   let exportProg = null;        // {current,total,module} latest extract progress
   let exportResult = null;      // terminal export summary {out_dir,files,total_rows,...}
   let exportErr = null;         // terminal export error
+  let exportCancelRequested = false;
+  let exportRunMode = 'custom';  // custom | recommended
+  let exportRunModules = null;   // module keys used by the current/last run
   let exCustomOpen = true;
-  let exAdvCohort = false, exAdvExport = false, exShowAllMods = false;
-  let exFormat = 'csv';         // csv | excel | parquet
+  let exAdvCohort = false, exAdvExport = false, exShowAllMods = true;
+  let exFormat = 'parquet';     // parquet | csv | excel
   let exMerge = 'separate';
   let exReal = 'connect';   // connect | scanning | scanresult | converting | convfail | ready
-  let exPath = '/Volumes/data/mimic-iv-3.1/';   // the local folder the user points at
+  let exPath = '';   // the local folder the user points at; never prefilled
+  let exManualSourceOpen = false;
   let convTimer = null;
   let convDone = 0;         // completed conversion steps (mock fallback only)
   let convJobId = null;     // live convert job id (SSE-driven)
@@ -209,32 +216,53 @@
   let exFilterError = null;
   let exMinCoveragePct = 0;
   let exQualityStatus = 'all';
+  let exCohortPreset = 'adult_first';
+  let exAgeMin = 18;
+  let exAgeMax = 100;
+  let exMinLosHours = 0;
+  let exWindowHours = DEFAULT_OBSERVATION_WINDOW_HOURS;
+  let exExcludeReadmissions = true;
   let convFail = false;     // demo: conversion hit a recoverable error
 
+  const COHORT_PRESETS = [
+    ['all_icu', 'All ICU stays', '全部 ICU 住院', 'Broad denominator; no diagnosis filter is applied.', '宽队列;不预设诊断筛选。'],
+    ['adult_first', 'Adult first ICU stay', '成年首次 ICU', 'Default ICU denominator for most extraction workflows.', '多数抽取流程的默认 ICU 分母。'],
+    ['sepsis3', 'Sepsis-3 / suspected infection', 'Sepsis-3 / 疑似感染', 'Uses Sepsis concepts when available; ICD is not prefilled.', '可用时使用 Sepsis 概念;不会预填 ICD。'],
+    ['aki', 'AKI / renal dysfunction', 'AKI / 肾功能异常', 'Renal cohort starting point for AKI studies.', 'AKI 研究的肾功能队列起点。'],
+    ['ventilation', 'Mechanical ventilation', '机械通气', 'Ventilator exposure cohort starting point.', '机械通气暴露队列起点。'],
+    ['vasopressor', 'Vasopressor exposure', '血管活性药物暴露', 'Shock/pressor cohort starting point.', '休克/升压药队列起点。'],
+    ['respiratory', 'Respiratory failure', '呼吸衰竭', 'Respiratory support and blood-gas focused cohort.', '呼吸支持与血气相关队列。'],
+    ['icd', 'Diagnosis / ICD cohort', '诊断 / ICD 队列', 'Enter ICD prefixes or diagnosis terms manually.', '手动输入 ICD 前缀或诊断关键词。'],
+  ];
+  const REAL_EXPORT_COHORT_PRESETS = new Set(['all_icu', 'adult_first', 'adult_all', 'sepsis3', 'aki', 'ventilation', 'vasopressor', 'respiratory', 'icd']);
+  const CONCEPT_DERIVED_COHORT_PRESETS = new Set(['sepsis3', 'aki', 'ventilation', 'vasopressor', 'respiratory']);
+
   // Feature modules — aligned to the real concept catalog (concept_catalog.py:
-  // CONCEPT_GROUP_NAMES, 19 groups). [name_en, name_zh, conceptCount, selected, isCore]
+  // CONCEPT_GROUP_NAMES, 19 groups). Counts are a fallback; render-time values
+  // come from window.EU_CATALOG.groupConcepts so the UI follows the backend.
+  // [name_en, name_zh, fallbackConceptCount, selected, isCore]
   const MODS = [
     // —— recommended core ——
     ['Demographics', '人口统计', 6, true, true],
-    ['Vital signs', '生命体征', 8, true, true],
-    ['Lab — Chemistry', '实验室-生化', 22, true, true],
+    ['Vital signs', '生命体征', 11, true, true],
+    ['Lab — Chemistry', '实验室-生化', 30, true, true],
     ['SOFA-2 scores', 'SOFA-2 评分', 7, true, true],
     ['Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true, true],
-    ['Outcome', '结局', 3, true, true],
+    ['Outcome', '结局', 10, true, true],
     // —— additional modules ——
-    ['SOFA-1 scores', 'SOFA-1 评分', 7, false, false],
-    ['Sepsis-3 (SOFA-1)', 'Sepsis-3 (SOFA-1)', 1, false, false],
-    ['Sepsis shared', 'Sepsis 共享概念', 3, false, false],
-    ['Respiratory', '呼吸系统', 14, false, false],
-    ['Ventilator', '呼吸机参数', 12, false, false],
-    ['Blood gas', '血气分析', 9, false, false],
-    ['Lab — Hematology', '实验室-血液学', 20, false, false],
-    ['Vasopressors', '血管活性药物', 17, false, false],
-    ['Other medications', '其他药物', 51, false, false],
-    ['Renal & urine output', '肾脏与尿量', 20, false, false],
-    ['Neurological', '神经系统', 11, false, false],
-    ['Circulatory', '循环系统', 3, false, false],
-    ['Other scores', '其他评分', 4, false, false],
+    ['SOFA-1 scores', 'SOFA-1 评分', 7, true, false],
+    ['Sepsis-3 (SOFA-1)', 'Sepsis-3 (SOFA-1)', 1, true, false],
+    ['Sepsis shared', 'Sepsis 共享概念', 5, true, false],
+    ['Respiratory', '呼吸系统', 15, true, false],
+    ['Ventilator', '呼吸机参数', 12, true, false],
+    ['Blood gas', '血气分析', 9, true, false],
+    ['Lab — Hematology', '实验室-血液学', 22, true, false],
+    ['Vasopressors', '血管活性药物', 17, true, false],
+    ['Other medications', '其他药物', 49, true, false],
+    ['Renal & urine output', '肾脏与尿量', 22, true, false],
+    ['Neurological', '神经系统', 11, true, false],
+    ['Circulatory', '循环系统', 3, true, false],
+    ['Other scores', '其他评分', 9, true, false],
   ];
   const CORE = MODS.filter(m => m[4]).map(m => m[0]);
   const EX_KEYS = {
@@ -249,8 +277,18 @@
   const EX_EXT = { csv: 'csv', excel: 'xlsx', parquet: 'parquet' };
 
   function selMods() { return MODS.filter(m => m[3]); }
-  function conceptN() { return selMods().reduce((a, m) => a + m[2], 0); }
-  function modKeys() { return selMods().map(m => EX_KEYS[m[0]] || m[0].toLowerCase()); }
+  function moduleKey(m) { return EX_KEYS[m[0]] || m[0].toLowerCase(); }
+  function moduleConceptCount(m) {
+    const groups = window.EU_CATALOG && window.EU_CATALOG.groupConcepts;
+    const members = groups && groups[moduleKey(m)];
+    return Array.isArray(members) ? members.length : (m[2] || 0);
+  }
+  function conceptTotal(modules) { return (modules || []).reduce((a, m) => a + moduleConceptCount(m), 0); }
+  function conceptN() { return conceptTotal(selMods()); }
+  function coreConceptN() { return conceptTotal(MODS.filter(m => m[4])); }
+  function modKeys() { return selMods().map(moduleKey); }
+  function coreModuleKeys() { return MODS.filter(m => m[4]).map(moduleKey); }
+  function runModuleKeys(mode) { return mode === 'recommended' ? coreModuleKeys() : modKeys(); }
   function repaint() { if (window.__euRender) window.__euRender(); }
   function escHtml(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -263,6 +301,21 @@
         .then(() => { if (window.__euRender) window.__euRender(); })
         .catch(err => { console.warn('[EasyICU] source registry update failed:', err); });
     }
+  }
+  function exportDestinationLabel() {
+    return t('Default export root from Settings', '使用设置中的默认导出目录');
+  }
+  function exportDestinationHint() {
+    return t(
+      'Each extraction creates a timestamped folder with README.md and _manifest.json.',
+      '每次抽取都会创建带时间戳的文件夹，并写入 README.md 与 _manifest.json。'
+    );
+  }
+  function preparedDestinationHint() {
+    return t('local prepared-data folder', '本地预处理数据文件夹');
+  }
+  function pathDisplay(path) {
+    return path ? path : t('No folder selected', '尚未选择文件夹');
   }
 
   /* continuity hook for Copilot / resume */
@@ -283,22 +336,47 @@
   };
 
   function teardownExportES() { if (exportES) { try { exportES.close(); } catch (e) {} exportES = null; } }
-  function runExtract() {
-    teardownExportES();
-    exportProg = null; exportResult = null; exportErr = null;
-    exView = 'running'; repaint();
+  function runExtract(mode) {
+    const runMode = mode === 'recommended' ? 'recommended' : 'custom';
+    const modules = runModuleKeys(runMode);
+    if (!modules.length) return;
     const real = dataMode() === 'real';
+    const support = runMode === 'recommended' ? { ok: true, reason: 'recommended' } : cohortExportSupport();
+    if (real && !support.ok) {
+      teardownExportES();
+      exportRunMode = runMode;
+      exportRunModules = modules;
+      exportProg = null;
+      exportResult = null;
+      exportJobId = null;
+      exportCancelRequested = false;
+      exportErr = support.message || t('This cohort cannot be exported yet.', '这个队列暂不能导出。');
+      exView = 'running';
+      repaint();
+      return;
+    }
+    teardownExportES();
+    exportRunMode = runMode;
+    exportRunModules = modules;
+    exportProg = null; exportResult = null; exportErr = null; exportJobId = null; exportCancelRequested = false;
+    exView = 'running'; repaint();
     const database = (exScanResult && exScanResult.db_key) || 'miiv';
     // Real path: only in real mode with a scanned/ready folder + live backend.
     if (real && exPath && window.EU_API && window.EU_API.postJSON && window.EventSource) {
       window.EU_API.postJSON('/api/jobs/extract', {
-        path: exPath, database: database, modules: modKeys(),
+        path: exPath, database: database, modules: modules,
         format: exFormat, merge: exMerge === 'merged', max_patients: exMaxPatients,
+        cohort: runMode === 'recommended' ? recommendedCohortContract() : cohortContract(),
       }).then(r => {
+        exportJobId = r.job_id;
         exportES = new EventSource('/api/jobs/' + r.job_id + '/events');
         exportES.onmessage = ev => {
           let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
           if (m.type === 'progress') { exportProg = m; }
+          else if (m.type === 'cancel_requested') {
+            exportCancelRequested = true;
+            exportProg = { phase: 'cancel', message: t('Cancel requested. The current database read may finish before the job stops.', '已请求取消。当前数据库读取可能会先完成，然后任务停止。') };
+          }
           else if (m.type === 'end') {
             if (m.status === 'done') {
               exportResult = m.result || {};
@@ -307,6 +385,9 @@
                 rememberExportPath(exportResult.out_dir);
               }
               exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true;
+            }
+            else if (m.status === 'cancelled') {
+              exportErr = t('Extraction cancelled before completion.', '抽取已在完成前取消。');
             }
             else { exportErr = m.error || 'extraction failed'; }
             teardownExportES();
@@ -323,7 +404,16 @@
       setTimeout(() => { exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true; repaint(); }, 1200);
     }
   }
-  function resetToCore() { MODS.forEach(m => { m[3] = m[4]; }); }
+  function resetToCore() { MODS.forEach(m => { m[3] = m[4]; }); window.EU_STALE = true; }
+  function setAllModules(on) { MODS.forEach(m => { m[3] = !!on; }); window.EU_STALE = true; }
+  function cancelExportJob() {
+    if (!exportJobId || exportCancelRequested || !window.EU_API || !window.EU_API.postJSON) return;
+    exportCancelRequested = true;
+    exportProg = { phase: 'cancel', message: t('Cancel requested. The current database read may finish before the job stops.', '已请求取消。当前数据库读取可能会先完成，然后任务停止。') };
+    repaint();
+    window.EU_API.postJSON('/api/jobs/' + exportJobId + '/cancel', { reason: 'user_requested' })
+      .catch(err => { exportErr = String(err && err.message || err); repaint(); });
+  }
 
   /* ---- real-data connect + convert (the onboarding cliff) ---- */
   const CONV_STEPS = [
@@ -339,25 +429,40 @@
         <span style="min-width:0;"><span class="nm" style="display:block;">${t(tEn, tZh)}</span><span style="display:block;font-size:11px;color:var(--ink-4);margin-top:2px;font-weight:400;">${t(dEn, dZh)}</span></span>
       </button>`;
     return `
-      <div class="cfg" style="max-width:680px;">
+      <div class="cfg ex-connect-card">
         <div class="cfg-head">
           <div class="cfg-ico">${icon('folder', 17)}</div>
           <div class="grow"><div class="cfg-h">${t('Connect your data', '连接你的数据')}</div><div class="cfg-sub">${t('local-only · nothing is uploaded', '仅本地 · 不上传任何数据')}</div></div>
         </div>
         <div class="cfg-body">
-          <label class="pf-label" style="display:block;font-size:11.5px;color:var(--ink-3);margin-bottom:6px;">${t('Data folder on this machine', '本机上的数据文件夹')}</label>
-          <div class="path-field editable" style="width:100%;margin-bottom:6px;">
+          <label class="ex-connect-label" for="exPathInput">${t('Data folder on this machine', '本机上的数据文件夹')}</label>
+          <div class="path-field editable ex-connect-path">
             <span class="pf-ico">${icon('folder', 14)}</span>
-            <input class="pf-input" id="exPathInput" type="text" spellcheck="false" autocomplete="off" value="${exPath}" aria-label="${t('Data folder path', '数据文件夹路径')}" />
-            <button class="btn sm ghost" data-ex-browse style="flex:none;margin-left:6px;">${icon('folder', 13)} ${t('Browse…', '浏览…')}</button>
+            <input class="pf-input" id="exPathInput" type="text" spellcheck="false" autocomplete="off" value="${escHtml(exPath)}" placeholder="${t('Paste or browse to a local ICU folder', '粘贴或浏览选择本机 ICU 文件夹')}" aria-label="${t('Data folder path', '数据文件夹路径')}" />
+            <button class="btn sm ghost ex-connect-browse" data-ex-browse>${icon('folder', 13)} ${t('Browse…', '浏览…')}</button>
           </div>
-          <div class="pf-hint" style="font-size:11px;color:var(--ink-4);margin-bottom:14px;">${t('Then tell us what kind of folder it is:', '然后告诉我们这是哪种文件夹:')}</div>
-          <div class="col gap-8">
-            ${opt('prepared', 'layers', 'Prepared data path', '已转换的路径', 'A converted EasyICU folder (Parquet) — ready now.', '已转换的 EasyICU 文件夹(Parquet),可直接使用。')}
-            ${opt('module', 'download', 'Module export folder', '模块导出文件夹', 'A prior EasyICU export — ready now.', '之前的 EasyICU 导出,可直接使用。')}
-            ${opt('raw', 'db', 'Raw ICU files (CSV / CSV.GZ)', '原始 ICU 文件', 'Needs a one-time conversion first (~2 GB, ~3 min).', '需先做一次性转换(约 2GB、约 3 分钟)。')}
+          <div class="ex-connect-primary">
+            <div class="ex-connect-copy">
+              <div class="ex-connect-copy-ico">${icon('shield', 15)}</div>
+              <div>
+                <div class="ex-connect-copy-title">${t('Let EasyICU identify the folder', '让 EasyICU 自动识别文件夹')}</div>
+                <div class="ex-connect-copy-desc">${t('We inspect filenames, manifests, and table layout only. No patient rows are uploaded or returned.', '只检查文件名、manifest 和表结构。不上传,也不返回患者行。')}</div>
+              </div>
+            </div>
+            <button class="btn primary ex-connect-analyze" data-ex-analyze>${icon('search', 14)} ${t('Analyze folder', '识别数据目录')}</button>
           </div>
-          <div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('New to this? Tap', '初次使用?点')} <button class="adv-toggle" style="margin:0;display:inline-flex;" data-ex-sample>${t('Explore a sample study', '体验示例研究')}</button> ${t('to learn the flow with read-only data first.', '先用只读数据熟悉流程。')}</div></div></div>
+          <div class="ex-connect-actions">
+            <button class="ex-linkbtn" data-ex-manual>${icon('sliders', 13)} ${t('Advanced: choose manually', '高级:手动选择')} <span class="chev">${icon('chevdown', 13)}</span></button>
+            <button class="ex-linkbtn" data-ex-sample>${icon('play', 13)} ${t('Explore a sample study', '体验示例研究')}</button>
+          </div>
+          <div class="adv-body mt-12" ${exManualSourceOpen ? '' : 'hidden'} data-ex-manual-body>
+            <div class="pf-hint" style="font-size:11px;color:var(--ink-4);margin-bottom:10px;">${t('Use this only if automatic detection is wrong:', '仅在自动识别不正确时使用:')}</div>
+            <div class="col gap-8">
+              ${opt('prepared', 'layers', 'Prepared data path', '已转换的路径', 'Converted ICU tables such as Parquet/FST — ready now.', '已转换的 ICU 表(如 Parquet/FST),可直接使用。')}
+              ${opt('module', 'download', 'Module export folder', '模块导出文件夹', 'A prior EasyICU export with a manifest — ready now.', '带 manifest 的既有 EasyICU 导出,可直接使用。')}
+              ${opt('raw', 'db', 'Raw ICU files (CSV / CSV.GZ)', '原始 ICU 文件', 'Original CSV/CSV.GZ — needs one-time conversion first.', '原始 CSV/CSV.GZ,需先做一次性转换。')}
+            </div>
+          </div>
         </div>
       </div>`;
   }
@@ -372,7 +477,7 @@
       <div class="cfg" style="max-width:680px;">
         <div class="cfg-head">
           <div class="cfg-ico"><span class="spin sm" style="width:17px;height:17px;"></span></div>
-          <div class="grow"><div class="cfg-h">${t('Scanning folder…', '正在扫描文件夹…')}</div><div class="cfg-sub mono">${exPath}</div></div>
+          <div class="grow"><div class="cfg-h">${t('Scanning folder…', '正在扫描文件夹…')}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))}</div></div>
           <span class="pill warn" style="height:20px;"><span class="dot"></span>${t('reading', '读取中')}</span>
         </div>
         <div class="cfg-body">
@@ -391,6 +496,7 @@
       return {
         db: r.db || t('Unknown', '未知'),
         layout: r.layout || ['—', '—'],
+        source: r.source || 'unknown',
         tables: r.tables, modules: r.modules,
         ready: !!r.ready,
         size: r.size_hint || '',
@@ -399,20 +505,24 @@
       };
     }
     const d = DETECTED[exSource] || DETECTED.prepared;  // offline fallback
-    return { db: d.db, layout: d.layout, tables: d.tables, modules: d.modules,
+    return { db: d.db, layout: d.layout, source: exSource || 'prepared', tables: d.tables, modules: d.modules,
              ready: d.ready, size: d.size || '', est: d.est || '', missing: [] };
   }
   function scanErrorState() {
-    const msg = exScanError === 'not_a_directory'
+    const msg = exScanError === 'no_path'
+      ? t('Choose or paste a local folder path first.', '请先选择或粘贴本机文件夹路径。')
+      : exScanError === 'not_a_directory'
       ? t('That path is not a folder on this machine.', '该路径不是本机上的文件夹。')
       : exScanError === 'permission_denied'
       ? t('Permission denied reading that folder.', '没有读取该文件夹的权限。')
+      : exScanError === 'unrecognized_folder'
+      ? t('EasyICU could not identify a supported ICU data layout in that folder.', 'EasyICU 未能在该文件夹中识别出支持的 ICU 数据结构。')
       : t('Could not scan that folder.', '无法扫描该文件夹。');
     return `
       <div class="cfg" style="max-width:680px;">
         <div class="cfg-head">
           <div class="cfg-ico" style="color:var(--bad,#c0392b);">${icon('alert', 17)}</div>
-          <div class="grow"><div class="cfg-h">${t('Folder not recognized', '未识别该文件夹')}</div><div class="cfg-sub mono">${exPath}</div></div>
+          <div class="grow"><div class="cfg-h">${t('Folder not recognized', '未识别该文件夹')}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))}</div></div>
         </div>
         <div class="cfg-body">
           <div class="note mt-4" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);">
@@ -432,7 +542,7 @@
     const okHead = `
         <div class="cfg-head">
           <div class="cfg-ico" style="color:var(--ok);">${icon('check', 17, 2.6)}</div>
-          <div class="grow"><div class="cfg-h">${t('Folder recognized', '已识别该文件夹')}</div><div class="cfg-sub mono">${exPath}</div></div>
+          <div class="grow"><div class="cfg-h">${t('Folder recognized', '已识别该文件夹')}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))}</div></div>
           <span class="pill ok" style="height:20px;"><span class="dot"></span>${d.db}</span>
         </div>`;
     const facts = [
@@ -441,11 +551,16 @@
       [t('Source tables', '源数据表'), String(d.tables)],
       [t('Mappable modules', '可映射模块'), String(d.modules)],
     ];
+    const sourceLabel = d.source === 'module'
+      ? t('EasyICU module export', 'EasyICU 模块导出')
+      : d.source === 'raw'
+      ? t('Raw ICU files', '原始 ICU 文件')
+      : t('Prepared ICU data path', '已转换 ICU 数据路径');
     const cta = d.ready
-      ? `<button class="btn primary" data-ex-usedata>${icon('arrow', 14)} ${t('Use this data', '使用这份数据')}</button>`
-      : `<button class="btn primary" data-ex-startconv>${icon('refresh', 14)} ${t('Convert now', '开始转换')} · ${d.size} · ${d.est}</button>`;
+      ? `<button class="btn primary" data-ex-usedata>${icon('arrow', 14)} ${d.source === 'module' ? t('Use this export', '使用这个导出') : t('Continue with prepared data', '继续使用已转换数据')}</button>`
+      : `<button class="btn primary" data-ex-startconv>${icon('refresh', 14)} ${t('Convert raw files', '转换原始文件')}${d.size ? ` · ${d.size}` : ''}${d.est ? ` · ${d.est}` : ''}</button>`;
     const note = d.ready
-      ? `<div class="note ok mt-16" style="padding:10px 12px;"><div class="ico">${icon('check', 14, 2.6)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Already analysis-ready — no conversion needed. You can extract straight away.', '已是可分析格式 —— 无需转换,可直接抽取。')}</div></div></div>`
+      ? `<div class="note ok mt-16" style="padding:10px 12px;"><div class="ico">${icon('check', 14, 2.6)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Detected', '已识别')}: ${sourceLabel}</div><div class="d" style="font-size:11px;margin:0;">${d.source === 'module' ? t('This looks like an existing EasyICU export. Register it as a reusable local source.', '这看起来是已有 EasyICU 导出。可以注册为可复用的本地来源。') : t('Already analysis-ready — no conversion needed. You can extract straight away.', '已是可分析格式 —— 无需转换,可直接抽取。')}</div></div></div>`
       : `<div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('One-time conversion to Parquet. Runs on your machine; results are cached so a re-run is instant.', '一次性转换为 Parquet。在本机运行;结果会缓存,再次运行会很快。')}</div></div></div>`;
     return `
       <div class="cfg" style="max-width:680px;">
@@ -468,7 +583,7 @@
       <div class="cfg" style="max-width:680px;">
         <div class="cfg-head">
           <div class="cfg-ico" style="color:var(--bad,#c0392b);">${icon('alert', 17)}</div>
-          <div class="grow"><div class="cfg-h">${t('Conversion paused', '转换已暂停')}</div><div class="cfg-sub mono">${exPath} → ~/easyicu/prepared/</div></div>
+          <div class="grow"><div class="cfg-h">${t('Conversion paused', '转换已暂停')}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))} → ${preparedDestinationHint()}</div></div>
           <span class="pill" style="height:20px;background:color-mix(in srgb,var(--bad,#c0392b) 14%,transparent);color:var(--bad,#c0392b);"><span class="dot" style="background:var(--bad,#c0392b);"></span>${t('1 step failed', '1 步失败')}</span>
         </div>
         <div class="cfg-body">
@@ -543,7 +658,7 @@
       <div class="cfg" style="max-width:680px;">
         <div class="cfg-head">
           ${headIco}
-          <div class="grow"><div class="cfg-h">${headTitle}</div><div class="cfg-sub mono">${exPath} → ~/easyicu/prepared/</div></div>
+          <div class="grow"><div class="cfg-h">${headTitle}</div><div class="cfg-sub mono">${escHtml(pathDisplay(exPath))} → ${preparedDestinationHint()}</div></div>
           ${pill}
         </div>
         <div class="cfg-body">${body}</div>
@@ -676,14 +791,22 @@
   }
 
   function startScan(src) {
-    exSource = src; exScanResult = null; exScanError = null;
+    if (!String(exPath || '').trim()) {
+      exSource = src || null;
+      exScanResult = null;
+      exScanError = 'no_path';
+      exReal = 'scanresult';
+      repaint();
+      return;
+    }
+    exSource = src || null; exScanResult = null; exScanError = null;
     exReal = 'scanning'; repaint();
     // Live scan via the FastAPI backend. Falls back to the mock DETECTED table
     // only if the API is unreachable (e.g. opened as a static file).
     if (window.EU_API && window.EU_API.scanPath) {
       window.EU_API.scanPath(exPath, src).then(r => {
         if (exReal !== 'scanning') return;          // user navigated away
-        if (r && r.ok) { exScanResult = r; exReal = 'scanresult'; }
+        if (r && r.ok) { exScanResult = r; exSource = r.source || src || null; exReal = 'scanresult'; }
         else { exScanError = (r && r.error) || 'scan_failed'; exReal = 'scanresult'; }
         repaint();
       }).catch(err => {
@@ -700,8 +823,8 @@
     return `
     <div class="handoff">
       <span class="ho-ico">${icon('spark', 17)}</span>
-      <div class="ho-body"><b>${t('Prefer to talk it through?', '想用对话完成?')}</b> ${t('Copilot can pick the cohort, modules and export for you in plain conversation — same pipeline, same result.', 'Copilot 能用对话帮你选好队列、模块和导出 —— 同一条流水线,同样的结果。')}</div>
-      <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Let Copilot drive', '让 Copilot 接手')} ${icon('arrow', 13)}</button>
+      <div class="ho-body"><b>${t('Prefer to talk it through?', '想用对话完成?')}</b> ${t('Guided study can pick the cohort, modules and export for you in plain conversation — same pipeline, same result.', '研究引导能用对话帮你选好队列、模块和导出 —— 同一条流水线,同样的结果。')}</div>
+      <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Start Guided study', '开始研究引导')} ${icon('arrow', 13)}</button>
     </div>`;
   }
 
@@ -713,27 +836,158 @@
         <div>
           <div class="eyebrow">${icon('spark', 13)} ${t('Recommended', '推荐')}</div>
           <h2>${t('Recommended extraction', '推荐抽取')}</h2>
-          <p class="lead">${t('Sensible defaults that work for most ICU studies — first ICU stay, the first 24 hours, and the six core feature modules. One click gives you analysis-ready tables.', '适用于大多数 ICU 研究的合理默认 —— 首次 ICU 住院、入院前 24 小时,以及六个核心特征模块。一键得到可直接分析的数据表。')}</p>
+          <p class="lead">${t('Sensible defaults that work for most ICU studies — first ICU stay, the full available ICU window with a 30-day cap, and the six core feature modules. One click gives you analysis-ready tables.', '适用于大多数 ICU 研究的合理默认 —— 首次 ICU 住院、全可用 ICU 时间窗（30 天上限）,以及六个核心特征模块。一键得到可直接分析的数据表。')}</p>
           <div class="express-chips">
             ${CORE.map((n, i) => `<span class="chip solid">${t(n, MODS.find(m => m[0] === n)[1])}</span>`).join('')}
           </div>
           <div class="express-meta">
-            <span>${t('Cohort', '队列')} · <b>${t('first ICU stay', '首次 ICU')} · ${t('first 24h', '前 24h')}</b></span>
+            <span>${t('Cohort', '队列')} · <b>${t('first ICU stay', '首次 ICU')} · ${t('full window', '全窗口')}</b></span>
             <span>${t('Modules', '模块')} · <b>${CORE.length}</b></span>
-            <span>${t('Concepts', '概念')} · <b>~${CORE.reduce((a, n) => a + MODS.find(m => m[0] === n)[2], 0)}</b></span>
+            <span>${t('Concepts', '概念')} · <b>~${coreConceptN()}</b></span>
             <span>${dataMode() === 'demo' ? t('Stays', '住院数') + ' · <b>10</b>' : t('Source', '来源') + ' · <b>' + t('local', '本地') + '</b>'}</span>
           </div>
         </div>
         <div class="express-cta">
-          <button class="btn primary lg" data-ex-run>${icon('play', 16)} ${t('Run recommended extraction', '运行推荐抽取')}</button>
+          <button class="btn primary lg" data-ex-run="recommended">${icon('play', 16)} ${t('Run recommended extraction', '运行推荐抽取')}</button>
           <div class="note-line">${icon('shield', 12)} ${dataMode() === 'demo' ? t('reproducible · no tokens', '可复现 · 不消耗 token') : t('local-only · nothing uploaded', '仅本地 · 不上传')}</div>
         </div>
       </div>
     </div>`;
   }
 
+  function cohortPresetMeta() {
+    return COHORT_PRESETS.find(p => p[0] === exCohortPreset) || COHORT_PRESETS[1];
+  }
+  function cohortPresetIsRealExportReady(id) {
+    return REAL_EXPORT_COHORT_PRESETS.has(id);
+  }
+  function cohortPresetUsesConceptPrefilter(id) {
+    return CONCEPT_DERIVED_COHORT_PRESETS.has(id);
+  }
+  function fmtHours(v) {
+    const n = Math.max(0, Number(v || 0));
+    if (!n) return t('Any', '不限');
+    if (n % 24 === 0) return n + 'h · ' + (n / 24) + 'd';
+    return n + 'h';
+  }
+  function fmtObservationWindow(v) {
+    const n = Math.max(1, Number(v || DEFAULT_OBSERVATION_WINDOW_HOURS));
+    if (n >= MAX_OBSERVATION_WINDOW_HOURS) return t('full available · 30d cap', '全可用 · 30天上限');
+    return t('first ', '前 ') + fmtHours(n);
+  }
+  function fmtAgeRange() {
+    if (exAgeMin <= 0 && exAgeMax >= 100) return t('all ages', '全部年龄');
+    if (exAgeMin <= 0) return '≤ ' + exAgeMax;
+    if (exAgeMax >= 100) return '≥ ' + exAgeMin;
+    return exAgeMin + '–' + exAgeMax;
+  }
+  function cohortContract() {
+    const icd = (window.EUIcd && window.EUIcd.contract) ? window.EUIcd.contract() : {};
+    return {
+      preset: exCohortPreset,
+      age_min: exAgeMin,
+      age_max: exAgeMax,
+      min_icu_los_hours: exMinLosHours,
+      observation_window_hours: exWindowHours,
+      exclude_readmissions: exExcludeReadmissions,
+      icd_enabled: exCohortPreset === 'icd',
+      ...icd,
+    };
+  }
+  function recommendedCohortContract() {
+    return {
+      preset: 'adult_first',
+      age_min: 18,
+      age_max: 100,
+      min_icu_los_hours: 0,
+      observation_window_hours: DEFAULT_OBSERVATION_WINDOW_HOURS,
+      exclude_readmissions: true,
+      icd_enabled: false,
+    };
+  }
+  function cohortExportSupport() {
+    if (dataMode() !== 'real') return { ok: true, reason: 'demo' };
+    if (!cohortPresetIsRealExportReady(exCohortPreset)) {
+      return {
+        ok: false,
+        reason: 'unsupported_preset',
+        message: t(
+          'This cohort preset is not wired to a real export denominator yet. Use All ICU, Adult first ICU stay, or Diagnosis / ICD cohort.',
+          '这个队列预设还没有真实导出分母接线。请先使用全部 ICU、成年首次 ICU，或诊断 / ICD 队列。'
+        ),
+      };
+    }
+    if (exCohortPreset === 'icd') {
+      const icd = (window.EUIcd && window.EUIcd.contract) ? window.EUIcd.contract() : {};
+      const hasTokens = (icd.include_diagnoses || []).length || (icd.exclude_diagnoses || []).length;
+      if (!hasTokens) {
+        return {
+          ok: false,
+          reason: 'empty_icd_filter',
+          message: t(
+            'Add at least one ICD include or exclude token before exporting a diagnosis cohort.',
+            '导出诊断队列前，请至少填写一个 ICD 包含或排除条件。'
+          ),
+        };
+      }
+    }
+    return { ok: true, reason: 'ready' };
+  }
+  function cohortPresetCards() {
+    return `
+      <div class="cohort-preset-grid">
+        ${COHORT_PRESETS.map(([id, en, zh, den, dzh]) => `
+          <button class="cohort-preset ${exCohortPreset === id ? 'on' : ''} ${dataMode() === 'real' && !cohortPresetIsRealExportReady(id) ? 'pending' : ''}" data-ex-cohort-preset="${id}">
+            <span class="cp-dot"></span>
+            <span class="cp-body"><span class="cp-title">${t(en, zh)}</span><span class="cp-sub">${t(den, dzh)}${dataMode() === 'real' && !cohortPresetIsRealExportReady(id) ? ' · ' + t('planned, not export-ready', '计划中，暂不可真实导出') : ''}${dataMode() === 'real' && cohortPresetUsesConceptPrefilter(id) ? ' · ' + t('concept prefilter, slower', '概念预筛，较慢') : ''}</span></span>
+          </button>`).join('')}
+      </div>`;
+  }
+  function rangeCtl(key, value, min, max, step, display) {
+    return `
+      <div class="range-ctl">
+        <input type="range" min="${min}" max="${max}" step="${step}" value="${value}" data-ex-range="${key}" />
+        <span class="range-val mono" data-ex-range-value="${key}">${display}</span>
+      </div>`;
+  }
+  function ageRangeCtl() {
+    return `
+      <div class="range-pair">
+        <div class="range-ctl">
+          <input type="range" min="0" max="100" step="1" value="${exAgeMin}" data-ex-range="age_min" />
+          <span class="range-val mono" data-ex-range-value="age_min">min ${exAgeMin}</span>
+        </div>
+        <div class="range-ctl">
+          <input type="range" min="0" max="100" step="1" value="${exAgeMax}" data-ex-range="age_max" />
+          <span class="range-val mono" data-ex-range-value="age_max">max ${exAgeMax >= 100 ? '100+' : exAgeMax}</span>
+        </div>
+      </div>`;
+  }
+  function updateRangeLabel(root, key) {
+    const el = root.querySelector(`[data-ex-range-value="${key}"]`);
+    if (!el) return;
+    if (key === 'age_min') el.textContent = 'min ' + exAgeMin;
+    else if (key === 'age_max') el.textContent = 'max ' + (exAgeMax >= 100 ? '100+' : exAgeMax);
+    else if (key === 'los_min') el.textContent = fmtHours(exMinLosHours);
+    else if (key === 'window') el.textContent = fmtObservationWindow(exWindowHours);
+  }
+  function cohortChips() {
+    const preset = cohortPresetMeta();
+    const chips = [
+      t(preset[1], preset[2]),
+      t('age ', '年龄 ') + fmtAgeRange(),
+      exMinLosHours ? t('ICU LOS ≥ ', 'ICU 时长 ≥ ') + fmtHours(exMinLosHours) : t('any ICU LOS', '不限 ICU 时长'),
+      t('window: ', '观察窗:') + fmtObservationWindow(exWindowHours),
+    ];
+    if (exExcludeReadmissions) chips.push(t('exclude readmissions', '排除再入院'));
+    return chips.map(c => `<span class="chip solid">${escHtml(c)}</span>`).join('');
+  }
+
   /* ---- cohort cfg ---- */
   function cohortCfg() {
+    const preset = cohortPresetMeta();
+    const showICD = exCohortPreset === 'icd';
+    const support = cohortExportSupport();
     return `
     <div class="cfg">
       <div class="cfg-head">
@@ -743,21 +997,31 @@
       </div>
       <div class="cfg-body">
         <div class="cfg-chips">
-          <span class="chip solid">${t('first ICU stay', '首次 ICU 住院')}</span>
-          <span class="chip solid">${t('age ≥ 18', '年龄 ≥ 18')}</span>
-          <span class="chip solid">${t('window: first 24h', '观察窗:前 24h')}</span>
+          ${cohortChips()}
         </div>
         <button class="adv-toggle ${exAdvCohort ? 'open' : ''}" data-ex-advc>${t('Adjust inclusion criteria', '调整纳入标准')} <span class="chev">${icon('chevdown', 13)}</span></button>
         <div class="adv-body" ${exAdvCohort ? '' : 'hidden'}>
           <div class="col gap-12">
-            ${advRow(t('Age at admission', '入院年龄'), `<div class="seg" data-seg><button class="active">${t('All', '全部')}</button><button>≥ 18</button><button>≥ 65</button></div>`)}
-            ${advRow(t('Minimum ICU LOS', '最短 ICU 时长'), `<div class="seg" data-seg><button class="active">${t('Any', '不限')}</button><button>≥ 24h</button><button>≥ 72h</button></div>`)}
-            ${advRow(t('Observation window', '观察窗口'), `<div class="seg" data-seg><button class="active">${t('First 24h', '前 24h')}</button><button>48h</button><button>72h</button><button>${t('Full', '全程')}</button></div>`)}
-            ${advRow(t('Sepsis-3 positive only', '仅 Sepsis-3 阳性'), switchEl(false))}
-            ${advRow(t('Exclude readmissions', '排除再入院'), switchEl(true))}
+            <div>
+              <div class="row" style="justify-content:space-between;gap:12px;align-items:flex-start;">
+                <div><div style="font-size:12.5px;font-weight:600;color:var(--ink-2);">${t('Cohort preset', '队列预设')}</div><div style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('Pick the clinical starting point; use ICD only when you want a diagnosis-code cohort.', '选择临床起点;只有需要诊断编码队列时才使用 ICD。')}</div></div>
+                <span class="pill">${escHtml(t(preset[1], preset[2]))}</span>
+              </div>
+              ${cohortPresetCards()}
+              ${!support.ok ? `<div class="note warn mt-12" style="padding:10px 12px;"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Real export is blocked for this cohort', '此队列暂不能真实导出')}</div><div class="d" style="font-size:11px;margin:0;">${support.message}</div></div></div>` : ''}
+              ${support.ok && dataMode() === 'real' && cohortPresetUsesConceptPrefilter(exCohortPreset) ? `<div class="note info mt-12" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Clinical cohort prefilter', '临床队列预筛')}</div><div class="d" style="font-size:11px;margin:0;">${t('This preset computes the defining concepts on the selected denominator before exporting matched stays, so it may take longer than demographic or ICD filters.', '该预设会先在所选分母上计算定义概念，再导出匹配住院，因此可能比人口学或 ICD 筛选更慢。')}</div></div></div>` : ''}
+            </div>
+            ${advRow(t('Age range at admission', '入院年龄范围'), ageRangeCtl())}
+            ${advRow(t('Minimum ICU LOS', '最短 ICU 时长'), rangeCtl('los_min', exMinLosHours, 0, 168, 1, fmtHours(exMinLosHours)))}
+            ${advRow(t('Observation window', '观察窗口'), rangeCtl('window', exWindowHours, 1, MAX_OBSERVATION_WINDOW_HOURS, 1, fmtObservationWindow(exWindowHours)))}
+            ${advRow(t('Exclude readmissions', '排除再入院'), switchEl(exExcludeReadmissions, 'readmissions'))}
           </div>
           <div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:14px;">
-            ${window.EUIcd ? window.EUIcd.block() : ''}
+            ${showICD && window.EUIcd ? window.EUIcd.block() : `
+              <div class="note info" style="padding:10px 12px;">
+                <div class="ico">${icon('shield', 14)}</div>
+                <div class="body"><div class="t" style="font-size:12px;">${t('ICD filter is off by default', 'ICD 默认关闭')}</div><div class="d" style="font-size:11px;margin:0;">${t('Choose “Diagnosis / ICD cohort” above to enter code prefixes or diagnosis terms. Nothing is prefilled.', '在上方选择“诊断 / ICD 队列”后再输入编码前缀或诊断关键词。不会预填任何编码。')}</div></div>
+              </div>`}
           </div>
           <div style="border-top:1px solid var(--hair);margin-top:14px;padding-top:14px;">
             <div class="row" style="justify-content:space-between;gap:12px;align-items:flex-start;">
@@ -770,9 +1034,9 @@
     </div>`;
   }
   function advRow(label, ctl) {
-    return `<div class="row" style="justify-content:space-between;gap:14px;"><span style="font-size:12.5px;color:var(--ink-2);font-weight:500;">${label}</span><span style="flex:none;">${ctl}</span></div>`;
+    return `<div class="adv-row"><span class="adv-label">${label}</span><span class="adv-control">${ctl}</span></div>`;
   }
-  function switchEl(on) { return `<span class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" tabindex="0"></span>`; }
+  function switchEl(on, key) { return `<span class="switch ${on ? 'on' : ''}" role="switch" aria-checked="${on}" tabindex="0" ${key ? `data-ex-switch="${key}"` : ''}></span>`; }
 
   function filterSourceBody() {
     if (dataMode() !== 'real') {
@@ -881,23 +1145,28 @@
     <button class="modcard ${on ? 'on' : ''} ${m[4] ? 'core' : ''}" data-ex-mod="${i}">
       <span class="mk">${on ? icon('check', 11, 3) : ''}</span>
       <span class="nm">${t(m[0], m[1])}</span>
-      <span class="ct">${m[2]}</span>
+      <span class="ct">${moduleConceptCount(m)}</span>
     </button>`;
   }
   function modulesCfg() {
     const shown = exShowAllMods ? MODS : MODS.filter(m => m[4]);
-    const offCore = false;
+    const selectedCount = selMods().length;
     return `
     <div class="cfg">
       <div class="cfg-head">
         <div class="cfg-ico">${icon('layers', 17)}</div>
         <div class="grow"><div class="cfg-h">${t('Feature modules', '特征模块')}</div><div class="cfg-sub"><span id="exModSub">${selMods().length} ${t('modules', '模块')} · ${conceptN()} ${t('concepts', '概念')}</span></div></div>
-        <button class="btn sm ghost" data-ex-core>${icon('refresh', 13)} ${t('Reset to core', '恢复核心')}</button>
+        <div class="row gap-6" style="flex-wrap:wrap;justify-content:flex-end;">
+          <button class="btn sm ghost" data-ex-selectall ${selectedCount === MODS.length ? 'disabled' : ''}>${icon('check', 13)} ${t('Select all', '全选')}</button>
+          <button class="btn sm ghost" data-ex-clearmods ${selectedCount === 0 ? 'disabled' : ''}>${icon('close', 13)} ${t('Clear all', '清空')}</button>
+          <button class="btn sm ghost" data-ex-core>${icon('refresh', 13)} ${t('Core 6', '核心 6 项')}</button>
+        </div>
       </div>
       <div class="cfg-body">
         <div class="modgrid" id="exModGrid">
           ${shown.map(m => modCard(m, MODS.indexOf(m))).join('')}
         </div>
+        ${selectedCount === 0 ? `<div class="note mt-12" style="padding:10px 12px;background:color-mix(in srgb,var(--warn,#b45309) 8%,transparent);border-color:color-mix(in srgb,var(--warn,#b45309) 22%,transparent);"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Select at least one module before extracting.', '抽取前至少选择一个模块。')}</div></div></div>` : ''}
         <button class="adv-toggle ${exShowAllMods ? 'open' : ''}" data-ex-allmods>${exShowAllMods ? t('Show core modules only', '仅显示核心模块') : t('Show all ' + MODS.length + ' modules', '显示全部 ' + MODS.length + ' 个模块')} <span class="chev">${icon('chevdown', 13)}</span></button>
       </div>
     </div>`;
@@ -905,7 +1174,7 @@
 
   /* ---- export cfg ---- */
   function exportCfg() {
-    const fmtSeg = `<div class="seg" data-ex-fmt><button class="${exFormat === 'csv' ? 'active' : ''}" data-val="csv">CSV</button><button class="${exFormat === 'excel' ? 'active' : ''}" data-val="excel">Excel</button><button class="${exFormat === 'parquet' ? 'active' : ''}" data-val="parquet">Parquet</button></div>`;
+    const fmtSeg = `<div class="seg" data-ex-fmt><button class="${exFormat === 'parquet' ? 'active' : ''}" data-val="parquet">Parquet</button><button class="${exFormat === 'csv' ? 'active' : ''}" data-val="csv">CSV</button><button class="${exFormat === 'excel' ? 'active' : ''}" data-val="excel">Excel</button></div>`;
     return `
     <div class="cfg">
       <div class="cfg-head">
@@ -915,7 +1184,8 @@
       </div>
       <div class="cfg-body">
         ${advRow(t('Format', '格式'), fmtSeg)}
-        <div class="path-field" style="width:100%;margin-top:12px;"><span class="pf-ico">${icon('folder', 14)}</span><span class="pf-path">~/easyicu/exports/${dataMode()}</span></div>
+        <div class="path-field" style="width:100%;margin-top:12px;"><span class="pf-ico">${icon('folder', 14)}</span><span class="pf-path">${exportDestinationLabel()}</span></div>
+        <div class="note-line mt-8" style="font-size:11px;color:var(--ink-4);">${icon('shield', 11)} ${exportDestinationHint()}</div>
         <button class="adv-toggle ${exAdvExport ? 'open' : ''}" data-ex-adve>${t('Advanced export options', '高级导出选项')} <span class="chev">${icon('chevdown', 13)}</span></button>
         <div class="adv-body" ${exAdvExport ? '' : 'hidden'}>
           <div class="col gap-12">
@@ -931,6 +1201,8 @@
 
   /* ---- summary rail ---- */
   function summaryRail() {
+    const support = cohortExportSupport();
+    const extractDisabled = !selMods().length || !support.ok;
     return `
     <div class="ex2-summary">
       <div class="sumcard">
@@ -940,8 +1212,8 @@
         <div class="sum-row"><span class="k">${t('Modules', '模块')}</span><span class="v" id="exSumMods">${selMods().length}</span></div>
         <div class="sum-row"><span class="k">${t('Concepts', '概念')}</span><span class="v" id="exSumConc">${conceptN()}</span></div>
         <div class="sum-row"><span class="k">${t('Format', '格式')}</span><span class="v">${exFormat.toUpperCase()}</span></div>
-        <button class="btn primary block mt-16" data-ex-run>${icon('download', 14)} ${t('Extract', '开始抽取')}</button>
-        <div class="note-line mt-8" style="font-size:11px;color:var(--ink-4);text-align:center;">${icon('shield', 11)} ${t('local-only · reproducible manifest', '仅本地 · 可复现清单')}</div>
+        <button class="btn primary block mt-16" data-ex-run="custom" ${extractDisabled ? 'disabled' : ''}>${icon('download', 14)} ${t('Extract', '开始抽取')}</button>
+        <div class="note-line mt-8" style="font-size:11px;color:${support.ok ? 'var(--ink-4)' : 'var(--warn,#a66a00)'};text-align:center;">${icon(support.ok ? 'shield' : 'alert', 11)} ${support.ok ? t('local-only · reproducible manifest', '仅本地 · 可复现清单') : support.message}</div>
       </div>
     </div>`;
   }
@@ -952,28 +1224,34 @@
     const cur = p.current || 0, tot = p.total || 0;
     const pct = tot ? Math.round((cur / tot) * 100) : 0;
     const err = !!exportErr;
+    const progressText = p.message || (p.module
+      ? `${p.module}${p.rows != null ? ` · ${Number(p.rows).toLocaleString()} ${t('rows', '行')}` : ''}`
+      : t('selecting cohort…', '正在选择队列…'));
     return `
     <div class="card pad" style="max-width:680px;margin:0 auto;">
       <div class="load-strip">
         ${err ? `<span style="color:var(--bad,#c0392b);">${icon('alert', 18)}</span>` : `<span class="spin accent"></span>`}
-        <div class="grow"><div style="font-weight:600;font-size:13px;">${err ? t('Extraction failed', '抽取失败') : t('Extracting feature modules…', '正在抽取特征模块…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('local-only · writing to', '仅本地 · 写入')} ~/easyicu/exports</div></div>
+        <div class="grow"><div style="font-weight:600;font-size:13px;">${err ? t('Extraction failed', '抽取失败') : t('Extracting feature modules…', '正在抽取特征模块…')}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${t('local-only · writing to a timestamped export folder', '仅本地 · 写入带时间戳的导出文件夹')}</div></div>
         ${tot ? `<span class="mono" style="font-size:11px;color:var(--ink-3);">${cur}/${tot}</span>` : ''}
       </div>
       ${err
         ? `<div class="note mt-12" style="padding:11px 13px;background:color-mix(in srgb,var(--bad,#c0392b) 7%,transparent);border-color:color-mix(in srgb,var(--bad,#c0392b) 22%,transparent);"><div class="ico" style="color:var(--bad,#c0392b);">${icon('alert', 15)}</div><div class="body"><div class="d mono" style="font-size:11.5px;margin:0;">${exportErr}</div></div></div>
-           <div class="row gap-8 mt-16"><button class="btn primary" data-ex-run>${icon('refresh', 14)} ${t('Retry', '重试')}</button><button class="btn ghost" data-ex-reset>${t('Back', '返回')}</button></div>`
+           <div class="row gap-8 mt-16"><button class="btn primary" data-ex-run="${exportRunMode}">${icon('refresh', 14)} ${t('Retry', '重试')}</button><button class="btn ghost" data-ex-reset>${t('Back', '返回')}</button></div>`
         : `<div style="height:8px;border-radius:999px;background:var(--surface-2,#eef0f4);overflow:hidden;margin:12px 0 8px;"><div style="height:100%;width:${pct}%;background:var(--accent,#2f7d6b);transition:width .25s;"></div></div>
-           <div style="font-size:12px;color:var(--ink-3);min-height:18px;">${p.module ? `<span class="mono">${p.module}</span>${p.rows != null ? ` · ${Number(p.rows).toLocaleString()} ${t('rows', '行')}` : ''}` : t('selecting cohort…', '正在选择队列…')}</div>`}
+           <div style="font-size:12px;color:var(--ink-3);min-height:18px;">${p.phase === 'cohort' || p.phase === 'cancel' ? `${escHtml(progressText)}` : `<span class="mono">${escHtml(progressText)}</span>`}</div>
+           <div class="row mt-12" style="justify-content:flex-end;"><button class="btn sm ghost" data-ex-cancel ${exportCancelRequested || !exportJobId ? 'disabled' : ''}>${icon('alert', 13)} ${exportCancelRequested ? t('Cancel requested', '已请求取消') : t('Request cancel', '请求取消')}</button></div>`}
     </div>`;
   }
   function doneState() {
     const r = exportResult;
     // Live result from the export job; fall back to a descriptive summary offline.
     const files = (r && r.files) ? r.files
-      : modKeys().map(k => ({ file: k + '.' + EX_EXT[exFormat], module: k, rows: null }));
-    const outDir = (r && r.out_dir) || ('~/easyicu/exports/' + dataMode());
+      : (exportRunModules || modKeys()).map(k => ({ file: k + '.' + EX_EXT[exFormat], module: k, rows: null }));
+    const outDir = (r && r.out_dir) || t('timestamped export folder', '带时间戳导出文件夹');
     const totalRows = r ? r.total_rows : null;
-    const fileList = files.concat([{ file: '_manifest.json', manifest: true }]);
+    const fileList = files
+      .concat([{ file: '_manifest.json', manifest: true }])
+      .concat((r && r.readme) ? [{ file: r.readme, readme: true }] : []);
     return `
       <div class="state-hero success solid" style="max-width:720px;margin:0 auto;">
         <div class="glyph">${icon('check', 26, 2.6)}</div>
@@ -987,7 +1265,7 @@
       </div>
       <div class="cols-2 mt-20" style="max-width:720px;margin-left:auto;margin-right:auto;">
         ${fileList.map(f => `
-          <div class="ledger-row"><span class="ledger-ico">${icon(f.manifest ? 'shield' : 'file', 14)}</span><div><div class="mono" style="font-weight:600;font-size:12px;">${f.file}</div><div style="font-size:11px;color:var(--ink-4);">${f.manifest ? t('reproducibility manifest', '可复现清单') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : (f.module || ''))}</div></div></div>`).join('')}
+          <div class="ledger-row"><span class="ledger-ico">${icon(f.manifest ? 'shield' : 'file', 14)}</span><div><div class="mono" style="font-weight:600;font-size:12px;">${f.file}</div><div style="font-size:11px;color:var(--ink-4);">${f.manifest ? t('reproducibility manifest', '可复现清单') : (f.readme ? t('human-readable extraction README', '可读抽取说明') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : (f.module || '')))}</div></div></div>`).join('')}
       </div>`;
   }
 
@@ -1017,7 +1295,7 @@
       </div>`;
     },
     render() {
-      if (window.__euExtractFocusICD) { exAdvCohort = true; exCustomOpen = true; }
+      if (window.__euExtractFocusICD) { exAdvCohort = true; exCustomOpen = true; exCohortPreset = 'icd'; }
       let body;
       const real = dataMode() === 'real';
       if (exView === 'running') body = runningState();
@@ -1061,6 +1339,16 @@
       // real-data connect / scan / convert
       const pathInput = root.querySelector('#exPathInput');
       if (pathInput) pathInput.addEventListener('input', () => { exPath = pathInput.value; });
+      const analyzeBtn = root.querySelector('[data-ex-analyze]');
+      if (analyzeBtn) analyzeBtn.addEventListener('click', () => {
+        if (pathInput) exPath = pathInput.value || exPath;
+        startScan(null);
+      });
+      const manualBtn = root.querySelector('[data-ex-manual]');
+      if (manualBtn) manualBtn.addEventListener('click', () => {
+        exManualSourceOpen = !exManualSourceOpen;
+        repaint();
+      });
       root.querySelectorAll('[data-ex-browse]').forEach(browseBtn => browseBtn.addEventListener('click', () => {
         if (window.EU_API && window.EU_API.listDir) {
           openFolderPicker(exPath, picked => {
@@ -1084,8 +1372,9 @@
       const convDoneBtn = root.querySelector('[data-ex-convdone]'); if (convDoneBtn) convDoneBtn.addEventListener('click', () => { exReal = 'ready'; repaint(); });
       const sampleBtn = root.querySelector('[data-ex-sample]'); if (sampleBtn) sampleBtn.addEventListener('click', () => { if (window.setDataMode) window.setDataMode('demo'); });
       // run
-      root.querySelectorAll('[data-ex-run]').forEach(b => b.addEventListener('click', runExtract));
-      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { teardownExportES(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; repaint(); }));
+      root.querySelectorAll('[data-ex-run]').forEach(b => b.addEventListener('click', () => runExtract(b.dataset.exRun || 'custom')));
+      root.querySelectorAll('[data-ex-cancel]').forEach(b => b.addEventListener('click', cancelExportJob));
+      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { teardownExportES(); exView = 'home'; exportProg = null; exportResult = null; exportErr = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; repaint(); }));
       // custom disclosure
       const cust = root.querySelector('[data-ex-custom]');
       if (cust) cust.addEventListener('click', () => { exCustomOpen = !exCustomOpen; repaint(); setTimeout(() => { const el = root.querySelector('.ex2-custom'); if (el && exCustomOpen) el.scrollIntoView ? null : null; }, 0); });
@@ -1093,6 +1382,37 @@
       const advc = root.querySelector('[data-ex-advc]'); if (advc) advc.addEventListener('click', () => { exAdvCohort = !exAdvCohort; repaint(); });
       const adve = root.querySelector('[data-ex-adve]'); if (adve) adve.addEventListener('click', () => { exAdvExport = !exAdvExport; repaint(); });
       const allm = root.querySelector('[data-ex-allmods]'); if (allm) allm.addEventListener('click', () => { exShowAllMods = !exShowAllMods; repaint(); });
+      root.querySelectorAll('[data-ex-cohort-preset]').forEach(b => b.addEventListener('click', () => {
+        exCohortPreset = b.dataset.exCohortPreset || 'adult_first';
+        window.EU_STALE = true;
+        repaint();
+      }));
+      root.querySelectorAll('[data-ex-range]').forEach(input => {
+        const applyRange = () => {
+          const key = input.dataset.exRange;
+          const val = Number(input.value || 0);
+          if (key === 'age_min') {
+            exAgeMin = Math.min(Math.max(0, val), exAgeMax);
+            if (val > exAgeMax) input.value = String(exAgeMin);
+          } else if (key === 'age_max') {
+            exAgeMax = Math.max(Math.min(100, val), exAgeMin);
+            if (val < exAgeMin) input.value = String(exAgeMax);
+          } else if (key === 'los_min') {
+            exMinLosHours = Math.max(0, Math.min(168, val));
+          } else if (key === 'window') {
+            exWindowHours = Math.max(1, Math.min(MAX_OBSERVATION_WINDOW_HOURS, val));
+          }
+          updateRangeLabel(root, key);
+          window.EU_STALE = true;
+        };
+        input.addEventListener('input', applyRange);
+        input.addEventListener('change', () => { applyRange(); repaint(); });
+      });
+      root.querySelectorAll('[data-ex-switch="readmissions"]').forEach(s => s.addEventListener('click', () => {
+        exExcludeReadmissions = !exExcludeReadmissions;
+        window.EU_STALE = true;
+        repaint();
+      }));
       root.querySelectorAll('[data-ex-filter-load]').forEach(b => b.addEventListener('click', loadExtractionFilters));
       const coverage = root.querySelector('[data-ex-filter-coverage]'); if (coverage) coverage.addEventListener('click', e => {
         const b = e.target.closest('button'); if (!b) return;
@@ -1111,25 +1431,22 @@
       }
       // reset to core
       const core = root.querySelector('[data-ex-core]'); if (core) core.addEventListener('click', () => { resetToCore(); repaint(); });
+      const selectAll = root.querySelector('[data-ex-selectall]'); if (selectAll) selectAll.addEventListener('click', () => { setAllModules(true); repaint(); });
+      const clearMods = root.querySelector('[data-ex-clearmods]'); if (clearMods) clearMods.addEventListener('click', () => { setAllModules(false); repaint(); });
       // module toggle
       const grid = root.querySelector('#exModGrid');
       if (grid) grid.addEventListener('click', e => {
         const card = e.target.closest('[data-ex-mod]'); if (!card) return;
         const i = +card.dataset.exMod; MODS[i][3] = !MODS[i][3];
         window.EU_STALE = true;  // selection changed → downstream out of date
-        const on = MODS[i][3];
-        card.classList.toggle('on', on);
-        card.querySelector('.mk').innerHTML = on ? icon('check', 11, 3) : '';
-        const sub = root.querySelector('#exModSub'); if (sub) sub.textContent = `${selMods().length} ${t('modules', '模块')} · ${conceptN()} ${t('concepts', '概念')}`;
-        const sm = root.querySelector('#exSumMods'); if (sm) sm.textContent = selMods().length;
-        const sc = root.querySelector('#exSumConc'); if (sc) sc.textContent = conceptN();
+        repaint();
       });
       // format
       const fmt = root.querySelector('[data-ex-fmt]'); if (fmt) fmt.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; exFormat = b.dataset.val; repaint(); });
       const merge = root.querySelector('[data-ex-merge]'); if (merge) merge.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; exMerge = b.dataset.val; repaint(); });
       // generic segs + switches (display only)
       root.querySelectorAll('.adv-body [data-seg]').forEach(seg => seg.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; seg.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b)); }));
-      root.querySelectorAll('.adv-body .switch').forEach(s => s.addEventListener('click', () => { s.classList.toggle('on'); s.setAttribute('aria-checked', s.classList.contains('on')); }));
+      root.querySelectorAll('.adv-body .switch:not([data-ex-switch])').forEach(s => s.addEventListener('click', () => { s.classList.toggle('on'); s.setAttribute('aria-checked', s.classList.contains('on')); }));
       // ICD disease-cohort filter (folded in from the former standalone screen)
       if (window.EUIcd && window.EUIcd.bind) window.EUIcd.bind(root);
       if (window.__euExtractFocusICD) window.__euExtractFocusICD = false;

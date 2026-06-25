@@ -21,7 +21,7 @@
         </div>
         <div class="eyebrow mt-16" style="margin-bottom:8px;">Shortcuts</div>
         <div class="col" style="font-size:12px;">
-          <div class="shortcut-row"><span style="color:var(--ink-3);">Open Copilot</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">K</span></span></div>
+          <div class="shortcut-row"><span style="color:var(--ink-3);">Open Page guide</span><span class="keys"><span class="kbd">⌘</span><span class="kbd">K</span></span></div>
           <div class="shortcut-row"><span style="color:var(--ink-3);">Switch section</span><span class="keys"><span class="kbd">1</span>–<span class="kbd">5</span></span></div>
           <div class="shortcut-row"><span style="color:var(--ink-3);">Toggle language</span><span class="keys"><span class="kbd">L</span></span></div>
         </div>
@@ -57,7 +57,7 @@
             ['1', 'Frame the question', 'Pick a data mode — Demo generates reproducible mock data, Real connects a local export folder (nothing is ever uploaded) — then pin down what you’re asking: an outcome, a time window, and a comparator.', [['Configure source', 'extraction'], ['Talk it through', 'guided']], true],
             ['2', 'Extract & gate the data', 'One click runs the recommended extraction — cohort, coverage-audited feature modules, and a reproducible export. Need more control? Open Customize to set every detail. Nothing runs on incomplete data.', [['Open extraction', 'extraction']], false],
             ['3', 'Review & explore', 'Inspect patient-level tables and time series, step up to cohort contrasts and SOFA reclassification, then benchmark one cohort definition across two or more ICU databases.', [['Patient Review', 'patient'], ['Cohort Statistics', 'cohort'], ['Cross-DB Benchmark', 'crossdb']], false],
-            ['4', 'Analyze & draft', 'Plan, run, and review an auditable pipeline with the Research Agent. The manuscript draft stays locked until every evidence check passes and you confirm.', [['Open Research Agent', 'agent'], ['Ask the Copilot', 'guided']], false],
+            ['4', 'Analyze & draft', 'Plan, run, and review an auditable pipeline with the Research Agent. The manuscript draft stays locked until every evidence check passes and you confirm.', [['Open Research Agent', 'agent'], ['Start Guided study', 'guided']], false],
           ].map(([n, t, d, actions, acc]) => `
             <div class="guide-step ${acc ? 'accent' : ''}">
               <div class="gs-num">${n}</div>

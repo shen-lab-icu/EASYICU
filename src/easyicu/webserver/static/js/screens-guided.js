@@ -1,4 +1,4 @@
-/* Screen: Research Copilot — conversational mode (v2).
+/* Screen: Guided Copilot — conversational front door (v2).
    A branching, forgiving conversation that drives the whole EasyICU workflow.
    Highlights over v1:
      • Three real branches (predict / cross-DB / quality) with distinct cards
@@ -28,9 +28,9 @@
 
   /* one genuine clarifying question per branch (reciprocal turn) */
   const CLARIFY = {
-    predict: { q: `Quick check before I build the plan — which mortality endpoint do you mean?`, opts: [['In-hospital mortality', 'in-hospital'], ['28-day mortality', '28-day'], ['ICU mortality', 'ICU']] },
-    crossdb: { q: `How many databases should we compare?`, opts: [['All six', 'all 6 databases'], ['A focused three', '3 databases'], ['Let me pick', 'a custom set']] },
-    quality: { q: `Should I audit everything, or focus on the modelling features?`, opts: [['Everything (19 modules)', 'all 19 modules'], ['Modelling features only', 'the modelling features']] },
+    predict: { q: bi(`Quick check before I build the plan — which mortality endpoint do you mean?`, `建计划前先确认一下：你说的死亡结局是哪一种？`), opts: [['In-hospital mortality', 'in-hospital'], ['28-day mortality', '28-day'], ['ICU mortality', 'ICU']] },
+    crossdb: { q: bi(`How many databases should we compare?`, `这次要比较多少个数据库？`), opts: [['All six', 'all 6 databases'], ['A focused three', '3 databases'], ['Let me pick', 'a custom set']] },
+    quality: { q: bi(`Should I audit everything, or focus on the modelling features?`, `要审计全部模块，还是只关注建模特征？`), opts: [['Everything (19 modules)', 'all 19 modules'], ['Modelling features only', 'the modelling features']] },
   };
 
   /* ============== branch configs ============== */
@@ -106,23 +106,37 @@
     extract: {
       label: 'Extract only', goal: 'extract',
       chip: 'Just a cohort & data',
-      hi: `Got it — an <strong>extract-only</strong> run. I’ll stop once your cohort is resolved and packaged, and you leave with analysis-ready frames plus a reproducible manifest.`,
+      hi: bi(
+        `Got it — an <strong>extract-only</strong> run. I’ll stop once your cohort is resolved and packaged, and you leave with analysis-ready frames plus a reproducible manifest.`,
+        `明白，这次走<strong>仅抽取</strong>。我会在队列解析并打包完成后停下，给你留下可分析的数据表和可复现 manifest。`,
+      ),
     },
     review: {
       label: 'Extract + review', goal: 'review',
       chip: 'Data, then a visual review',
-      hi: `Good — <strong>extract &amp; review</strong>. I’ll pull the data and prepare a quick visual review, then hand you a populated workspace. No agent run unless you ask.`,
+      hi: bi(
+        `Good — <strong>extract &amp; review</strong>. I’ll pull the data and prepare a quick visual review, then hand you a populated workspace. No agent run unless you ask.`,
+        `好的，走<strong>抽取 + 审阅</strong>。我会读取数据、生成快速可视化审阅，再把已填充的工作区交给你；除非你确认，不会启动 Agent run。`,
+      ),
     },
     full: {
       label: 'Full study', goal: 'draft',
       chip: 'All the way to a gated draft',
-      hi: `The full ride — <strong>extract → review → analyse → gated draft</strong>. Everything runs locally and the draft stays locked until checks pass.`,
+      hi: bi(
+        `The full ride — <strong>extract → review → analyse → gated draft</strong>. Everything runs locally and the draft stays locked until checks pass.`,
+        `完整流程：<strong>抽取 → 审阅 → 分析 → 受控草稿</strong>。所有步骤都在本机运行，检查通过前草稿保持锁定。`,
+      ),
     },
   };
 
   /* ============== runtime state ============== */
   let branch, depth, dataMode, mods, cohortPhase, extractPhase, runPhase, draftPhase;
   let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath;
+  let guidedHistory = { loading: false, error: null, data: null };
+  let guidedDrafts = { loading: false, error: null, data: null };
+  let guidedCopilot = { loading: false, error: null, session: null, last: null };
+  let selectedGuidedRun = null;
+  let selectedGuidedDraft = null;
   let studyParams;   // dynamic params extracted from clarify answers + free text
 
   const DEFAULT_MODS = ['Demographics', 'Vital signs', 'Lab — Chemistry', 'SOFA-2 scores', 'Sepsis-3 (SOFA-2)', 'Outcome'];
@@ -176,6 +190,20 @@
   function fmtNum(v, fallback) {
     const n = Number(v);
     return Number.isFinite(n) ? String(Math.round(n * 10) / 10) : (fallback || 'n/a');
+  }
+  function compactPath(value) {
+    const text = String(value || '');
+    if (!text) return '';
+    const home = (window.EU_SETTINGS && window.EU_SETTINGS.about && window.EU_SETTINGS.about.home) || '';
+    if (home && text.startsWith(home + '/')) return '~/' + text.slice(home.length + 1);
+    const match = text.match(/^\/Users\/[^/]+\/(.+)$/);
+    return match ? '~/' + match[1] : text;
+  }
+  function fmtRunTime(value) {
+    if (!value) return '';
+    const d = new Date(String(value));
+    if (Number.isNaN(d.getTime())) return String(value);
+    return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
   function cohortLine() {
     if (!realMode()) return `${patientN} stays · 20% mort.`;
@@ -305,7 +333,16 @@
   /* ============== conversation engine ============== */
   function scrollEnd() { const sc = document.getElementById('gdScroll'); if (sc) sc.scrollTop = sc.scrollHeight + 600; }
   function esc(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+  function attr(s) { return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
   function stripTags(s) { return String(s).replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim(); }
+  function bi(en, zh) { return { en, zh }; }
+  function htmlOf(value) {
+    if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'en')) {
+      return window.t ? window.t(value.en, value.zh) : value.en;
+    }
+    return value == null ? '' : String(value);
+  }
+  function pushBot(en, zh) { thread.push({ bot: true, html: bi(en, zh) }); }
 
   function pushUser(text) { thread.push({ user: true, html: esc(text) }); renderThread(); }
 
@@ -367,7 +404,10 @@
     if (STEP_INDEX[step] <= STEP_INDEX.cohort) cohortPhase = 'normal';
     extractPhase = 'run'; runPhase = 'run'; draftPhase = 'gate';
     markThrough(step, 'active');
-    thread.push({ bot: true, html: `Sure — let’s adjust this. Anything downstream will re-run from here.` });
+    pushBot(
+      `Sure — let’s adjust this. Anything downstream will re-run from here.`,
+      `可以，我们从这里调整。后续步骤会基于这个改动重新运行。`,
+    );
     const st = STATES[STEP_STATE[step]];
     chips = (st && (typeof st.chips === 'function' ? st.chips() : st.chips)) || [];
     renderThread(); renderChips();
@@ -420,13 +460,19 @@
       extractPhase = 'done'; renderThread();
       if (depth === 'extract') {
         markThrough('extract', 'done');
-        thread.push({ bot: true, html: `Done — frames packaged and frozen locally. This is your finish line for an extract-only run.` });
+        pushBot(
+          `Done — frames packaged and frozen locally. This is your finish line for an extract-only run.`,
+          `完成：数据表已在本地打包并冻结。这里就是仅抽取流程的终点。`,
+        );
         chips = [['Finish &amp; export', '@finish', 'express'], ['Open in workspace', '@open'], ['Take it further → review', '@extendNext']];
         renderThread(); renderChips();
         if (autop) schedule(() => finishHere());
         return;
       }
-      thread.push({ bot: true, html: `Done — the workspace is loaded and frozen for analysis. Want a quick look before we run?` });
+      pushBot(
+        `Done — the workspace is loaded and frozen for analysis. Want a quick look before we run?`,
+        `完成：工作区已加载并冻结，可用于分析。运行前要先快速看一眼吗？`,
+      );
       chips = [['Review the data', 'toReview'], (depth === 'full' ? ['Skip to analysis', 'toRun'] : null), ['Open in workspace', '@open']].filter(Boolean);
       renderThread(); renderChips();
       if (autop) schedule(() => go('toReview'));
@@ -589,7 +635,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   const ONCE = {
     folder() {
       const src = activeExportSource();
-      const path = src && src.path ? src.path : '~/easyicu/exports/';
+      const path = src && src.path ? src.path : 'No export selected yet';
       return `
       <div class="gd-card" style="max-width:600px;margin-left:39px;">
         <div class="gc-head"><div class="gc-ico">${icon('folder', 15)}</div><div class="grow"><div class="gc-t">Connect a local export folder</div><div class="gc-sub">read locally · nothing uploaded</div></div></div>
@@ -602,7 +648,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     },
     detect() {
       const src = activeExportSource();
-      const path = src && src.path ? src.path : '~/easyicu/exports/';
+      const path = src && src.path ? src.path : 'No export selected yet';
       const tasks = ['Read folder tree', 'Match known layout', 'Verify concept map', 'Index tables'];
       return `
       <div class="gd-card" style="max-width:600px;margin-left:39px;">
@@ -633,7 +679,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     streamTasks('#gdDetect', ['0:01', '0:02', '0:02', '0:03'], () => {
       const finish = () => {
         thread = thread.filter(t => !(t.once === 'detect'));   // drop the transient scan card
-        thread.push({ bot: true, html: `Recognized <strong>${esc(activeExportLabel())}</strong> — concept map verified. Files stay on your machine.` });
+        pushBot(
+          `Recognized <strong>${esc(activeExportLabel())}</strong> — concept map verified. Files stay on your machine.`,
+          `已识别 <strong>${esc(activeExportLabel())}</strong>，概念映射已验证。文件仍留在你的机器上。`,
+        );
         go('detected');
       };
       loadWorkspaceSnapshot(activeExportSource()).then(finish);
@@ -651,10 +700,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const p = document.getElementById('gdRunPill'); if (p) p.outerHTML = '<span class="pill ok" id="gdRunPill"><span class="dot"></span>Complete</span>';
       outputsReady = true;
       renderThread();
-      thread.push({ bot: true, html: `Run complete — six artifacts written locally and logged to the evidence ledger. <span style="color:var(--ink-4);">(Step 4 hit a singular matrix; auto-repair dropped one collinear feature and re-fit — logged in the ledger.)</span>` });
+      pushBot(
+        `Run complete — six artifacts written locally and logged to the evidence ledger. <span style="color:var(--ink-4);">(Step 4 hit a singular matrix; auto-repair dropped one collinear feature and re-fit — logged in the ledger.)</span>`,
+        `运行完成：6 个 artifact 已写入本地，并记录到 evidence ledger。<span style="color:var(--ink-4);">(第 4 步遇到奇异矩阵；自动修复删除了一个共线特征并重新拟合，已写入 ledger。)</span>`,
+      );
       thread.push({ diff: true });
       renderThread(); renderAside();
-      thread.push({ bot: true, html: `I’ve drafted findings from these — but the manuscript draft stays <strong>locked</strong> until you sign off.` });
+      pushBot(
+        `I’ve drafted findings from these — but the manuscript draft stays <strong>locked</strong> until you sign off.`,
+        `我已经基于这些结果生成 findings 草稿，但在你签署前，稿件草稿会保持<strong>锁定</strong>。`,
+      );
       chips = []; renderThread();
       go('toFindings');
     }, { failAt: 3 });
@@ -713,10 +768,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     setVal({ analysis: () => analysisLine(), draft: 'locked · analysis_only' });
     const p = document.getElementById('gdRunPill'); if (p) p.outerHTML = '<span class="pill ok" id="gdRunPill"><span class="dot"></span>Preflight complete</span>';
     renderThread();
-    thread.push({ bot: true, html: `Run complete — registry-backed preflight artifacts were written locally and logged to the evidence ledger. <span style="color:var(--ink-4);">No patient rows were persisted and no external model call was made.</span>` });
+    pushBot(
+      `Run complete — registry-backed preflight artifacts were written locally and logged to the evidence ledger. <span style="color:var(--ink-4);">No patient rows were persisted and no external model call was made.</span>`,
+      `运行完成：registry-backed 预检 artifacts 已写入本地，并记录到 evidence ledger。<span style="color:var(--ink-4);">没有持久化患者行，也没有外部模型调用。</span>`,
+    );
     thread.push({ diff: true });
     renderThread(); renderAside();
-    thread.push({ bot: true, html: `I can open this in Agent Projects now. Manuscript claims remain <strong>locked</strong> until human sign-off.` });
+    pushBot(
+      `I can open this in Agent Projects now. Manuscript claims remain <strong>locked</strong> until human sign-off.`,
+      `现在可以在 Agent Projects 中打开它。人工签署前，稿件 claims 仍保持<strong>锁定</strong>。`,
+    );
     chips = []; renderThread();
     go('toFindings');
   }
@@ -725,7 +786,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     liveAgentRun = { active: false, result: null, error: error };
     runPhase = 'run';
     const p = document.getElementById('gdRunPill'); if (p) p.outerHTML = '<span class="pill bad" id="gdRunPill"><span class="dot"></span>Failed closed</span>';
-    thread.push({ bot: true, html: `The run failed closed: <span class="mono">${esc(error)}</span>` });
+    pushBot(
+      `The run failed closed: <span class="mono">${esc(error)}</span>`,
+      `这次 run 已 fail-closed：<span class="mono">${esc(error)}</span>`,
+    );
     chips = [['Retry analysis', 'toRun'], ['Open Agent Projects', '@draft']];
     renderThread(); renderChips();
   }
@@ -923,7 +987,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             <div class="setup-row"><span class="k">Data</span><span class="vv">${patientN} stays · ${mods.length} modules</span></div>
             <div class="setup-row"><span class="k">Analysis</span><span class="vv">5 steps · 6 artifacts</span></div>
             <div class="setup-row"><span class="k">Draft</span><span class="vv">unlocked after sign-off</span></div>
-            <div class="setup-row"><span class="k">Bundle</span><span class="vv">~/easyicu/exports</span></div>
+            <div class="setup-row"><span class="k">Bundle</span><span class="vv">local run folder selected at runtime</span></div>
           </div>`,
           `<button class="btn primary sm" data-act="open">${icon('arrow', 13)} Open full workspace</button>
            <button class="btn sm" data-act="draft">Open draft</button>
@@ -966,8 +1030,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function finishHere() {
     markThrough(goalStep(), 'done');
     const msg = depth === 'extract'
-      ? `That’s your finish line for an <strong>extract-only</strong> run — cohort frames and a reproducible <code>manifest.json</code> are written locally. Nothing left this machine.`
-      : `That’s your finish line for <strong>${DEPTH[depth].label}</strong> — the populated workspace is ready to explore. Nothing left this machine.`;
+      ? bi(
+          `That’s your finish line for an <strong>extract-only</strong> run — cohort frames and a reproducible <code>manifest.json</code> are written locally. Nothing left this machine.`,
+          `这里就是<strong>仅抽取</strong>的终点：队列数据表和可复现 <code>manifest.json</code> 已写入本机。没有任何数据离开这台机器。`,
+        )
+      : bi(
+          `That’s your finish line for <strong>${DEPTH[depth].label}</strong> — the populated workspace is ready to explore. Nothing left this machine.`,
+          `这里就是<strong>${esc(DEPTH[depth].label)}</strong>的终点：工作区已经填充好，可以继续查看。没有任何数据离开这台机器。`,
+        );
     thread.push({ bot: true, html: msg });
     chips = [['Open in workspace', '@open', 'express'], (depth !== 'full' ? ['Actually, take it further', '@extendNext'] : null)].filter(Boolean);
     renderThread(); renderChips();
@@ -986,7 +1056,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const s = summaryOf(t.step);
         return `<div class="gd-collapsed"><span class="cc-mk">${icon('check', 10, 3)}</span><span class="cc-t">${s.t}</span><span class="cc-v">${s.v}</span>${s.edit ? `<button class="cc-edit" data-edit="${t.step}">${icon('sliders', 11)} Edit</button>` : ''}</div>`;
       }
-      if (t.bot) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble">${t.html}</div></div></div>`;
+      if (t.bot) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble">${htmlOf(t.html)}</div></div></div>`;
       return `<div class="msg user"><div class="m-ava">LK</div><div class="m-body"><div class="m-bubble">${t.html}</div></div></div>`;
     }).join('');
     scrollEnd();
@@ -994,7 +1064,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function renderChips() {
     const host = document.getElementById('gdSuggest');
     if (!host) return;
-    host.innerHTML = chips.map(([label, next, cls]) => `<button class="suggest-chip ${cls || ''}" data-go="${next}">${label}</button>`).join('');
+    host.innerHTML = chips.map(([label, next, cls]) => `<button class="suggest-chip ${cls || ''}" data-go="${next}">${htmlOf(label)}</button>`).join('');
     host.style.display = chips.length ? 'flex' : 'none';
   }
   function renderAside() {
@@ -1048,7 +1118,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (m && /(patient|case|stay|stays|cohort|n=|sample)/.test(t)) {
       const n = Math.max(5, Math.min(50, parseInt(m[1], 10)));
       patientN = n;
-      return () => { pushUser(text); if (currentId !== 'toCohort' && STEP_INDEX[expandedStep] > STEP_INDEX.cohort) editStep('cohort'); else { renderThread(); renderAside(); thread.push({ bot: true, html: `Set to <strong>${n}</strong> demo stays. ${currentId === 'toCohort' ? 'Use this cohort when ready.' : ''}` }); renderThread(); } };
+      return () => { pushUser(text); if (currentId !== 'toCohort' && STEP_INDEX[expandedStep] > STEP_INDEX.cohort) editStep('cohort'); else { renderThread(); renderAside(); pushBot(
+        `Set to <strong>${n}</strong> demo stays. ${currentId === 'toCohort' ? 'Use this cohort when ready.' : ''}`,
+        `已设为 <strong>${n}</strong> 个 demo stays。${currentId === 'toCohort' ? '准备好后就使用这个队列。' : ''}`,
+      ); renderThread(); } };
     }
     return null;
   }
@@ -1095,13 +1168,452 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     location.hash = '#agent';
   }
 
+  function localRunRows() {
+    const data = guidedHistory && guidedHistory.data;
+    return data && Array.isArray(data.runs) ? data.runs : [];
+  }
+  function localDraftRows() {
+    const data = guidedDrafts && guidedDrafts.data;
+    return data && Array.isArray(data.drafts) ? data.drafts : [];
+  }
+  function loadGuidedDrafts(force) {
+    if (!window.EU_API || !window.EU_API.loadGuidedDrafts) return;
+    if (!force && (guidedDrafts.loading || guidedDrafts.data || guidedDrafts.error)) return;
+    guidedDrafts = { loading: true, error: null, data: guidedDrafts.data || null };
+    renderSessions();
+    window.EU_API.loadGuidedDrafts({ limit: 20 }).then(data => {
+      guidedDrafts = { loading: false, error: null, data: data };
+      renderSessions();
+    }).catch(err => {
+      guidedDrafts = { loading: false, error: err.message || String(err), data: null };
+      renderSessions();
+    });
+  }
+  function loadGuidedHistory(force) {
+    if (!window.EU_API || !window.EU_API.loadAgentRunHistory) return;
+    if (!force && (guidedHistory.loading || guidedHistory.data || guidedHistory.error)) return;
+    guidedHistory = { loading: true, error: null, data: guidedHistory.data || null };
+    renderSessions();
+    window.EU_API.loadAgentRunHistory({ limit: 20 }).then(data => {
+      guidedHistory = { loading: false, error: null, data: data };
+      renderSessions();
+    }).catch(err => {
+      guidedHistory = { loading: false, error: err.message || String(err), data: null };
+      renderSessions();
+    });
+  }
+  function guidedBackendContext() {
+    const src = activeExportSource();
+    const sum = (src && src.summary) || {};
+    return {
+      route: 'guided',
+      data_mode: dataMode || 'demo',
+      language: window.EU_LANG || 'en',
+      selected_source: src ? {
+        id: src.id,
+        label: src.label || src.database || 'active export',
+        database: src.database,
+        path: src.path,
+      } : null,
+      summary: {
+        stays: sum.stays,
+        modules: sum.modules,
+        database: src && src.database,
+        label: src && src.label,
+      },
+    };
+  }
+  function ensureGuidedSession(force) {
+    if (!window.EU_API || !window.EU_API.createGuidedSession) return Promise.resolve(null);
+    if (!force && guidedCopilot.session && (!selectedGuidedDraft || guidedCopilot.session.project_dir === selectedGuidedDraft.project_dir)) return Promise.resolve(guidedCopilot.session);
+    if (selectedGuidedDraft && selectedGuidedDraft.project_dir && window.EU_API.openGuidedProject) {
+      guidedCopilot = { loading: true, error: null, session: guidedCopilot.session, last: guidedCopilot.last };
+      return window.EU_API.openGuidedProject({
+        project_dir: selectedGuidedDraft.project_dir,
+        draft_id: selectedGuidedDraft.id,
+        title: selectedGuidedDraft.title,
+        mode: 'local',
+        context: guidedBackendContext(),
+      }).then(data => {
+        guidedCopilot = { loading: false, error: null, session: data.session || null, last: data };
+        return guidedCopilot.session;
+      }).catch(err => {
+        guidedCopilot = { loading: false, error: err.message || String(err), session: null, last: null };
+        renderThread();
+        return null;
+      });
+    }
+    guidedCopilot = { loading: true, error: null, session: guidedCopilot.session, last: guidedCopilot.last };
+    return window.EU_API.createGuidedSession({
+      mode: 'local',
+      context: guidedBackendContext(),
+    }).then(data => {
+      guidedCopilot = { loading: false, error: null, session: data.session || null, last: data };
+      return guidedCopilot.session;
+    }).catch(err => {
+      guidedCopilot = { loading: false, error: err.message || String(err), session: null, last: null };
+      renderThread();
+      return null;
+    });
+  }
+  function threadFromSessionMessage(msg) {
+    if (!msg || typeof msg !== 'object') return null;
+    if (msg.role === 'user') {
+      const text = msg.text || msg.goal || msg.action;
+      return text ? { user: true, html: esc(text) } : null;
+    }
+    const reply = msg.reply || {};
+    const text = reply.en || reply.zh || msg.text || msg.intent || '';
+    if (!text) return null;
+    return { bot: true, html: bi(reply.en || esc(text), reply.zh || reply.en || esc(text)) };
+  }
+  function restoreGuidedProjectThread(result, row, kind) {
+    const session = result && result.session ? result.session : null;
+    guidedCopilot = { loading: false, error: null, session, last: result || guidedCopilot.last };
+    currentId = 'frontdoor';
+    thread = [];
+    const title = (session && session.project_title) || (row && (row.title || row.study_id || row.run_label)) || 'local project';
+    const path = row && row.project_dir ? compactPath(row.project_dir) : (session && session.project_dir ? compactPath(session.project_dir) : '~/easyicu/projects');
+    const nounEn = kind === 'run' ? 'Agent run project' : 'guided draft';
+    const nounZh = kind === 'run' ? 'Agent run 项目' : '引导草稿';
+    thread.push({ bot: true, html: bi(
+      `Opened <strong>${esc(title)}</strong> as this ${nounEn} context. Memory is scoped to <span class="mono">${esc(path)}</span>; Idea Mining and Agent Projects still own their own artifacts.`,
+      `已切换到 <strong>${esc(title)}</strong> 这个${nounZh}上下文。记忆范围限定在 <span class="mono">${esc(path)}</span>；Idea Mining 和 Agent Projects 仍各自管理自己的 artifacts。`,
+    ) });
+    const restored = session && Array.isArray(session.messages) ? session.messages.map(threadFromSessionMessage).filter(Boolean) : [];
+    if (restored.length) {
+      restored.forEach(item => thread.push(item));
+      if (session && session.handoff) thread.push({ bot: true, html: renderGuidedHandoffCard(session.handoff) });
+    } else if (kind === 'run') {
+      thread.push({ bot: true, html: bi(
+        `This context is attached to an existing Agent run folder. Review artifacts or open Agent Projects; Guided will not rewrite the run outputs.`,
+        `这个上下文关联到已有 Agent run 文件夹。你可以审阅 artifacts 或打开 Agent Projects；Guided 不会改写 run 输出。`,
+      ) });
+    } else {
+      thread.push({ bot: true, html: bi(renderGuidedGoalCards(), renderGuidedGoalCards()) });
+    }
+    chips = kind === 'run'
+      ? [['Review local artifacts', '@reviewLocalRun'], ['Open Agent Projects', '@openAgent'], ['Use active export for a new run', '@activeExport']]
+      : [['Use active export', '@activeExport'], ['Continue conversation', '@noop'], ['Open Agent Projects', '@openAgent']];
+    renderThread(); renderChips();
+  }
+  function openGuidedProjectMemory(row, el, kind) {
+    if (!row || !row.project_dir || !window.EU_API || !window.EU_API.openGuidedProject) {
+      pushBot(
+        `This local project cannot be opened as scoped Guided memory yet.`,
+        `这个本地项目暂时不能作为有范围的 Guided 记忆打开。`,
+      );
+      renderThread();
+      return;
+    }
+    document.querySelectorAll('.gd-sess').forEach(s => s.classList.toggle('active', s === el));
+    guidedCopilot = { loading: true, error: null, session: null, last: guidedCopilot.last };
+    thread = [{ typing: true }];
+    chips = [];
+    renderThread(); renderChips();
+    window.EU_API.openGuidedProject({
+      project_dir: row.project_dir,
+      draft_id: row.id || null,
+      title: row.title || row.study_id || row.run_label || 'local project',
+      mode: 'local',
+      context: guidedBackendContext(),
+    }).then(result => {
+      thread = thread.filter(item => !item.typing);
+      if (!result || !result.ok) {
+        const reason = result && (result.reason || result.error) ? (result.reason || result.error) : 'unknown error';
+        pushBot(`Could not open project memory: <span class="mono">${esc(reason)}</span>`, `无法打开项目记忆：<span class="mono">${esc(reason)}</span>`);
+        renderThread();
+        return;
+      }
+      restoreGuidedProjectThread(result, row, kind);
+    }).catch(err => {
+      thread = thread.filter(item => !item.typing);
+      pushBot(`Could not open project memory: <span class="mono">${esc(err.message || String(err))}</span>`, `无法打开项目记忆：<span class="mono">${esc(err.message || String(err))}</span>`);
+      renderThread();
+    });
+  }
+  function guidedGoalMeta(goal) {
+    const cards = guidedCopilot.last && Array.isArray(guidedCopilot.last.goal_cards) ? guidedCopilot.last.goal_cards : [];
+    return cards.find(c => c.goal === goal) || {
+      goal,
+      label_en: goal === 'idea_mining' ? 'Find a Study Idea' : goal === 'data_extraction' ? 'Prepare Data' : goal === 'review_data' ? 'Review Data' : 'Run a Research Project',
+      label_zh: goal === 'idea_mining' ? '找研究想法' : goal === 'data_extraction' ? '准备/抽取数据' : goal === 'review_data' ? '审阅已有数据' : '运行研究项目',
+      target_route: goal === 'idea_mining' ? 'ideas' : goal === 'data_extraction' ? 'extraction' : goal === 'review_data' ? 'patient' : 'agent',
+    };
+  }
+  function renderGuidedGoalCards() {
+    const cards = [
+      ['idea_mining', 'spark', t('Find a Study Idea', '找研究想法'), t('Paper, PDF, review topic, or hunch → idea ledger.', '文章、PDF、综述主题或想法 → idea ledger。')],
+      ['data_extraction', 'extract', t('Prepare Data', '准备/抽取数据'), t('Choose a local data folder, cohort, modules, and export format.', '选择本地数据文件夹、队列、模块和导出格式。')],
+      ['review_data', 'eye', t('Review Data', '审阅已有数据'), t('Open patient, cohort, or Cross-DB review for an active export.', '打开 active export 的患者、队列或跨库审阅。')],
+      ['run_agent', 'agent', t('Run a Research Project', '运行研究项目'), t('Confirm a plan, then hand it to Agent Projects.', '确认计划后交接到研究项目。')],
+    ];
+    return `
+      <div class="gd-frontdoor" data-guided-frontdoor>
+        <div class="gdf-head">
+          <span class="gdf-kicker">${t('Choose a goal', '选择目标')}</span>
+          <strong>${t('What do you want EasyICU to help with?', '你想让 EasyICU 帮你做哪件事？')}</strong>
+          <span>${t('Pick a goal. Guided Copilot only routes and prefills; each native module owns its detailed configuration.', '先选目标。Guided Copilot 只负责路由和预填，详细配置仍由各原生模块负责。')}</span>
+        </div>
+        <div class="gdf-grid">
+          ${cards.map(([goal, ico, title, body]) => `
+            <button class="gdf-card" type="button" data-guided-goal="${goal}">
+              <span class="gdf-ico">${icon(ico, 16)}</span>
+              <span><strong>${title}</strong><small>${body}</small></span>
+              <span class="gdf-go">${icon('arrow', 14)}</span>
+            </button>
+          `).join('')}
+        </div>
+        <div class="gdf-ai">
+          <span>${icon('shield', 12)} ${t('AI-assisted mode stays opt-in. Local mode never calls a model or reads patient rows in this front door.', 'AI 辅助模式保持显式 opt-in。本地模式在这个前门不会调用模型，也不会读取患者行。')}</span>
+        </div>
+      </div>`;
+  }
+  function applyGuidedBackendReply(result, userLabel) {
+    if (userLabel) pushUser(userLabel);
+    guidedCopilot = {
+      loading: false,
+      error: null,
+      session: result.session || guidedCopilot.session,
+      last: result || guidedCopilot.last,
+    };
+    const reply = result.reply || {};
+    if (reply.en || reply.zh) thread.push({ bot: true, html: bi(reply.en || '', reply.zh || reply.en || '') });
+    if (result.handoff || (result.result && result.result.handoff)) {
+      const handoff = result.handoff || result.result.handoff;
+      thread.push({ bot: true, html: renderGuidedHandoffCard(handoff) });
+    } else if (result.goal_cards) {
+      thread.push({ bot: true, html: renderGuidedGoalCards() });
+    }
+    renderThread();
+    renderChips();
+  }
+  function renderGuidedHandoffCard(handoff) {
+    const meta = guidedGoalMeta(handoff && handoff.goal);
+    const target = (handoff && handoff.target_route) || meta.target_route || 'entry';
+    return `
+      <div class="gd-handoff-ready">
+        <span class="gdf-ico">${icon('arrow', 15)}</span>
+        <div><strong>${esc(t('Ready to hand off', '可以交接了'))}: ${esc(t(meta.label_en, meta.label_zh || meta.label_en))}</strong>
+        <small>${esc(t('The target module will own the detailed settings. You can still edit there before anything runs.', '目标模块会继续负责详细设置。真正运行前你仍可在那里修改。'))}</small></div>
+        <button class="btn primary sm" data-guided-handoff="${attr((handoff && handoff.goal) || meta.goal)}" data-target="${attr(target)}">${t('Open module', '打开模块')}</button>
+      </div>`;
+  }
+  function chooseGuidedGoal(goal, label) {
+    if (!window.EU_API || !window.EU_API.runGuidedAction) {
+      pushUser(label || goal);
+      pushBot(
+        `Guided Copilot backend is unavailable, so I cannot create a reliable handoff yet.`,
+        `Guided Copilot 后端不可用，所以暂时不能创建可靠交接。`,
+      );
+      renderThread();
+      return;
+    }
+    ensureGuidedSession().then(session => {
+      window.EU_API.runGuidedAction({
+        session_id: session && session.id,
+        action: 'choose_goal',
+        goal,
+        context: guidedBackendContext(),
+      }).then(result => applyGuidedBackendReply(result, label || (guidedGoalMeta(goal).label_en)))
+        .catch(err => {
+          pushBot(`Guided handoff failed: <span class="mono">${esc(err.message || String(err))}</span>`, `引导交接失败：<span class="mono">${esc(err.message || String(err))}</span>`);
+          renderThread();
+        });
+    });
+  }
+  function runGuidedHandoff(goal, target, label) {
+    ensureGuidedSession().then(session => {
+      window.EU_API.runGuidedAction({
+        session_id: session && session.id,
+        action: 'handoff_to_module',
+        goal,
+        context: guidedBackendContext(),
+      }).then(result => {
+        const handoff = (result.result && result.result.handoff) || result.handoff || {};
+        try { window.__euGuidedHandoff = handoff.prefill || null; } catch (e) {}
+        pushUser(label || 'Open module');
+        location.hash = '#' + (target || handoff.target_route || 'entry');
+      }).catch(err => {
+        pushBot(`Could not open the module: <span class="mono">${esc(err.message || String(err))}</span>`, `无法打开模块：<span class="mono">${esc(err.message || String(err))}</span>`);
+        renderThread();
+      });
+    });
+  }
+  function sendGuidedShortcut(text) {
+    if (!window.EU_API || !window.EU_API.sendGuidedMessage) return false;
+    pushUser(text);
+    ensureGuidedSession().then(session => {
+      window.EU_API.sendGuidedMessage({
+        session_id: session && session.id,
+        message: text,
+        context: guidedBackendContext(),
+      }).then(result => applyGuidedBackendReply(result, null))
+        .catch(err => {
+          pushBot(`Guided Copilot could not classify that request: <span class="mono">${esc(err.message || String(err))}</span>`, `Guided Copilot 无法识别这个请求：<span class="mono">${esc(err.message || String(err))}</span>`);
+          renderThread();
+        });
+    });
+    return true;
+  }
+  function guidedDraftPayload(label) {
+    const src = activeExportSource();
+    return {
+      title: label || (BRANCH[branch] && BRANCH[branch].chip) || 'Guided study draft',
+      folder_slug: slugifyDraftFolder(label || (BRANCH[branch] && BRANCH[branch].chip) || 'guided-study'),
+      branch: branch || 'predict',
+      depth: depth || 'full',
+      data_mode: dataMode || 'demo',
+      question: frameFor(branch || 'predict'),
+      cohort_hint: BRANCH[branch] && BRANCH[branch].cohortKind === 'databases' ? `${dbCount()} databases` : cohortLine(),
+      module_hint: `${mods.length} modules`,
+      source: src ? {
+        id: src.id,
+        label: src.label || src.database || 'active export',
+        database: src.database,
+        path: src.path,
+      } : null,
+    };
+  }
+  function slugifyDraftFolder(text) {
+    return String(text || 'guided-study').trim().toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/^[-._]+|[-._]+$/g, '')
+      .slice(0, 64) || 'guided-study';
+  }
+  function showGuidedDraftSetup(seedTitle) {
+    const title = seedTitle || (BRANCH[branch] && BRANCH[branch].chip) || 'New study draft';
+    const slug = slugifyDraftFolder(title);
+    thread.push({ bot: true, html: `
+      <div class="gd-draft-setup" data-draft-setup>
+        <div class="gds-head">
+          <span class="gds-ico">${icon('folder', 14)}</span>
+          <div><strong>Create a local study folder</strong><span>Guided Copilot, Idea Mining, and Agent runs should be manageable as folders on this machine.</span></div>
+        </div>
+        <label class="gds-field"><span>Study title</span><input data-draft-title value="${attr(title)}" autocomplete="off" /></label>
+        <label class="gds-field"><span>Folder name</span><input data-draft-slug value="${attr(slug)}" autocomplete="off" /></label>
+        <div class="gds-path"><span>Root</span><code>~/easyicu/projects</code><small>Only metadata is written here until an Agent run is explicitly started.</small></div>
+        <div class="row gap-8">
+          <button class="btn primary sm" data-createdraft>${icon('folder', 13)} Create local draft folder</button>
+          <button class="btn sm" data-canceldraft>Cancel</button>
+        </div>
+      </div>` });
+    renderThread();
+    setTimeout(() => {
+      const inp = document.querySelector('[data-draft-setup] [data-draft-title]');
+      if (inp) { inp.focus(); inp.select(); }
+    }, 80);
+  }
+  function createLocalGuidedDraft(label, folderSlug) {
+    const text = label || 'New study draft';
+    pushUser(`Create local study folder: ${text}`);
+    if (!window.EU_API || !window.EU_API.createGuidedDraft) {
+      pushBot(
+        `This browser can draft the conversation, but the local draft registry endpoint is not available yet.`,
+        `这个浏览器可以先记录对话，但本地草稿 registry 端点暂时不可用。`,
+      );
+      renderThread();
+      return;
+    }
+    pushBot(
+      `Creating a <strong>metadata-only local study folder</strong>. This does not create an Agent run, does not read patient rows, and does not unlock a manuscript draft.`,
+      `正在创建<strong>仅元数据的本地研究文件夹</strong>。这不会创建 Agent run、不会读取患者行，也不会解锁稿件草稿。`,
+    );
+    renderThread();
+    const payload = guidedDraftPayload(text);
+    payload.folder_slug = folderSlug || payload.folder_slug;
+    window.EU_API.createGuidedDraft(payload).then(result => {
+      selectedGuidedDraft = result.draft || null;
+      loadGuidedDrafts(true);
+      const title = selectedGuidedDraft && selectedGuidedDraft.title ? selectedGuidedDraft.title : text;
+      const path = selectedGuidedDraft && selectedGuidedDraft.project_dir ? compactPath(selectedGuidedDraft.project_dir) : '~/easyicu/projects';
+      pushBot(
+        `Saved local guided draft <strong>${esc(title)}</strong> at <span class="mono">${esc(path)}</span>. It is metadata-only; persistent Agent artifacts are created only when you start an auditable run.`,
+        `已保存本地引导草稿 <strong>${esc(title)}</strong> 到 <span class="mono">${esc(path)}</span>。它只保存元数据；只有你启动可审计 run 时才会生成持久 Agent artifacts。`,
+      );
+      chips = [['Use active export', '@activeExport'], ['Open Agent Projects', '@openAgent'], ['Continue conversation', '@noop']];
+      renderThread(); renderChips();
+    }).catch(err => {
+      pushBot(
+        `Could not save the guided draft: <span class="mono">${esc(err.message || String(err))}</span>`,
+        `无法保存引导草稿：<span class="mono">${esc(err.message || String(err))}</span>`,
+      );
+      renderThread();
+    });
+  }
+  function openGuidedRunReview(row, label) {
+    if (!row || !row.project_dir || !window.EU_API || !window.EU_API.loadAgentRunReview) return;
+    selectedGuidedRun = row;
+    pushUser(label || 'Review local run');
+    pushBot(
+      `Reading local run artifacts from <span class="mono">${esc(compactPath(row.project_dir))}</span>. Only whitelisted JSON files are opened.`,
+      `正在从 <span class="mono">${esc(compactPath(row.project_dir))}</span> 读取本地 run artifacts。只会打开白名单 JSON 文件。`,
+    );
+    renderThread();
+    window.EU_API.loadAgentRunReview(row.project_dir).then(review => {
+      liveAgentRun = {
+        active: false,
+        result: {
+          run_id: review.run_id,
+          run_label: row.run_label || review.run_id,
+          study_id: review.study_id,
+          project_dir: review.project_dir,
+          run_type: review.run_type,
+          artifacts: review.artifacts || [],
+          gate: review.gate || {},
+        },
+        error: null,
+      };
+      outputsReady = true;
+      const readiness = (review.readiness && review.readiness.status) || row.readiness_status || 'analysis_only';
+      pushBot(
+        `Opened <strong>${esc(review.study_id || row.study_id || 'local study')}</strong> / <span class="mono">${esc(review.run_id || row.run_id || 'run')}</span>: ${esc(readiness)} · ${(review.artifacts || []).length} artifacts. Draft/reportable remains locked unless the Agent gate says otherwise.`,
+        `已打开 <strong>${esc(review.study_id || row.study_id || '本地研究')}</strong> / <span class="mono">${esc(review.run_id || row.run_id || 'run')}</span>：${esc(readiness)} · ${(review.artifacts || []).length} 个 artifact。除非 Agent gate 明确允许，草稿/reportable 仍保持锁定。`,
+      );
+      thread.push({ diff: true });
+      chips = [['Open in Agent Projects', '@openAgent'], ['Use active export for a new run', '@activeExport']];
+      renderThread(); renderChips();
+    }).catch(err => {
+      pushBot(
+        `Could not open that run: <span class="mono">${esc(err.message || String(err))}</span>`,
+        `无法打开这个 run：<span class="mono">${esc(err.message || String(err))}</span>`,
+      );
+      renderThread();
+    });
+  }
+
   /* ============== conversation script ============== */
   const STATES = {
+    frontdoor: {
+      delay: 220,
+      step: 'question',
+      bot: () => [
+        bi(
+          `Hi — I’m the EasyICU <strong>Guided Copilot</strong>. Pick a goal card first, or type a short shortcut like “find an idea” or “extract my data”.`,
+          `你好，我是 EasyICU <strong>引导式 Copilot</strong>。请先选一个目标卡片，或输入类似“找研究想法”“抽取我的数据”的短指令。`,
+        ),
+        bi(renderGuidedGoalCards(), renderGuidedGoalCards()),
+      ],
+      chips: () => [
+        [t('Find a Study Idea', '找研究想法'), '@guidedGoal:idea_mining'],
+        [t('Prepare Data', '准备/抽取数据'), '@guidedGoal:data_extraction'],
+        [t('Review Data', '审阅已有数据'), '@guidedGoal:review_data'],
+        [t('Run a Research Project', '运行研究项目'), '@guidedGoal:run_agent'],
+      ],
+      markStep: 'question',
+    },
     goal: {
       delay: 340,
       bot: [
-        `Hi — I’m the EasyICU <strong>Research Copilot</strong>. I’ll drive the workspace by chat, and you can stop at any point.`,
-        `First, <strong>how far do you want to go today?</strong> This just sets where I stop — you can always extend later.`,
+        bi(
+          `Hi — I’m the EasyICU <strong>Research Copilot</strong>. I’ll drive the workspace by chat, and you can stop at any point.`,
+          `你好，我是 EasyICU <strong>研究 Copilot</strong>。我会用对话驱动工作区，你可以随时停下。`,
+        ),
+        bi(
+          `First, <strong>how far do you want to go today?</strong> This just sets where I stop — you can always extend later.`,
+          `先确认一下：<strong>今天你想做到哪一步？</strong> 这只是设置我在哪里停下，后面随时可以继续扩展。`,
+        ),
       ],
       chips: () => [
         [DEPTH.extract.chip, '@depth:extract'],
@@ -1114,7 +1626,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       step: 'question',
       bot: () => [
         DEPTH[depth].hi,
-        `Now — what would you like to study? Pick a direction below, or describe your own.`,
+        bi(
+          `Now — what would you like to study? Pick a direction below, or describe your own.`,
+          `接下来，你想研究什么？可以选下面的方向，也可以直接描述自己的问题。`,
+        ),
       ],
       chips: () => {
         const base = [
@@ -1137,28 +1652,47 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     },
     frame: {
       step: 'question', card: true,
-      bot: () => [studyParams.caught ? `From your description I picked up <strong>${studyParams.caught}</strong>. Here’s a tighter, researchable framing — tweak anything:` : clarified ? `Got it — <strong>${clarified}</strong>. Here’s a tighter, researchable framing:` : `Good — here’s a tighter, researchable framing:`],
+      bot: () => [studyParams.caught
+        ? bi(
+            `From your description I picked up <strong>${studyParams.caught}</strong>. Here’s a tighter, researchable framing — tweak anything:`,
+            `我从你的描述里识别到 <strong>${studyParams.caught}</strong>。下面是一个更紧凑、可执行的研究表述，你可以继续改：`,
+          )
+        : clarified
+          ? bi(
+              `Got it — <strong>${clarified}</strong>. Here’s a tighter, researchable framing:`,
+              `明白：<strong>${clarified}</strong>。下面是一个更紧凑、可执行的研究表述：`,
+            )
+          : bi(
+              `Good — here’s a tighter, researchable framing:`,
+              `好的，下面是一个更紧凑、可执行的研究表述：`,
+            )],
       chips: () => [['Why frame it this way?', '@why'], ['Use my own wording', '@noop']],
       markStep: 'question', markStatus: 'active',
       val: { question: () => BRANCH[branch].chip },
     },
     toData: {
       step: 'data', card: true,
-      bot: [`How should data enter the workspace?`],
+      bot: [bi(`How should data enter the workspace?`, `数据要怎样进入工作区？`)],
       chips: () => [['What’s the difference?', '@why']],
       markStep: 'data',
       val: { question: () => BRANCH[branch].chip },
     },
     realConfirm: {
       step: 'data',
-      bot: [`Before we read local data, two things: this reads files on your machine and this first Agent run is a <strong>local preflight only</strong>: no external model call, no uploads, and never patient rows. Continue?`],
+      bot: [bi(
+        `Before we read local data, two things: this reads files on your machine and this first Agent run is a <strong>local preflight only</strong>: no external model call, no uploads, and never patient rows. Continue?`,
+        `读取本地数据前先确认两点：这会读取你机器上的文件；第一次 Agent run 只是<strong>本地预检</strong>，不会外部模型调用、不会上传、也不会持久化患者行。继续吗？`,
+      )],
       chips: () => [['Continue with local data', 'connect'], ['Use demo instead', '@usedemo']],
       markStep: 'data',
       val: { question: () => BRANCH[branch].chip },
     },
     connect: {
       step: 'data',
-      bot: [`Point me at a local ICU export root — I’ll detect the layout. Nothing leaves your machine.`],
+      bot: [bi(
+        `Point me at a local ICU export root — I’ll detect the layout. Nothing leaves your machine.`,
+        `请选择一个本地 ICU export 根目录，我会自动识别布局。任何数据都不会离开本机。`,
+      )],
       once: 'folder',
       chips: [],
       markStep: 'data',
@@ -1166,7 +1700,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     detect: {
       delay: 360,
       step: 'data',
-      bot: [`Scanning the folder…`],
+      bot: [bi(`Scanning the folder…`, `正在扫描文件夹…`)],
       once: 'detect',
       chips: [],
       markStep: 'data',
@@ -1182,14 +1716,30 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     },
     toCohort: {
       step: 'cohort', card: true,
-      bot: () => [BRANCH[branch].cohortKind === 'databases' ? `Pick the databases to compare — the same cohort definition applies to each.` : (realMode() ? `Here’s the active export cohort summary. Full-cohort aggregates are used; row previews stay bounded.` : `Here’s a starting cohort. The demo set is small on purpose so every screen stays explorable.`)],
+      bot: () => [BRANCH[branch].cohortKind === 'databases'
+        ? bi(
+            `Pick the databases to compare — the same cohort definition applies to each.`,
+            `选择要比较的数据库，同一个队列定义会应用到每个数据库。`,
+          )
+        : (realMode()
+            ? bi(
+                `Here’s the active export cohort summary. Full-cohort aggregates are used; row previews stay bounded.`,
+                `这是当前 active export 的队列摘要。这里使用全队列聚合，行级预览保持有界。`,
+              )
+            : bi(
+                `Here’s a starting cohort. The demo set is small on purpose so every screen stays explorable.`,
+                `这是一个起始队列。演示集故意保持较小，方便每个页面都能快速探索。`,
+              ))],
       chips: () => [['Adjust patient count', '@hintN'], ['Why this matters', '@why']],
       markStep: 'cohort',
       val: { data: () => dataMode === 'demo' ? 'Demo · local' : 'Local export' },
     },
     toConcepts: {
       step: 'concepts', card: true,
-      bot: [`I’ve pre-selected the feature modules your question needs. Toggle any — coverage gets audited before modelling.`],
+      bot: [bi(
+        `I’ve pre-selected the feature modules your question needs. Toggle any — coverage gets audited before modelling.`,
+        `我已预选这个问题需要的特征模块。你可以增删模块；建模前会先审计覆盖率。`,
+      )],
       chips: () => [['Why these modules?', '@why']],
       markStep: 'concepts',
       val: { cohort: () => BRANCH[branch].cohortKind === 'databases' ? `${dbCount()} databases` : cohortLine() },
@@ -1197,7 +1747,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     toExtract: {
       delay: 420,
       step: 'extract', card: true,
-      bot: [`Extracting now — normalizing, resolving the cohort, and packaging frames locally.`],
+      bot: [bi(
+        `Extracting now — normalizing, resolving the cohort, and packaging frames locally.`,
+        `正在抽取：标准化概念、解析队列，并在本机打包数据表。`,
+      )],
       chips: [],
       markStep: 'extract',
       val: { concepts: () => `${mods.length} modules` },
@@ -1206,7 +1759,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     toReview: {
       delay: 300,
       step: 'review', card: true,
-      bot: () => [`Here’s a quick look — the full ${BRANCH[branch].openTarget === 'crossdb' ? 'benchmark' : 'review'} is one click away in the workspace.`],
+      bot: () => [bi(
+        `Here’s a quick look — the full ${BRANCH[branch].openTarget === 'crossdb' ? 'benchmark' : 'review'} is one click away in the workspace.`,
+        `这里先快速看一眼；完整${BRANCH[branch].openTarget === 'crossdb' ? '跨库比较' : '审阅'}可以一键在工作区打开。`,
+      )],
       chips: () => depth === 'full'
         ? [['Looks fine — analyze', 'toRun'], ['Open the workspace', '@open']]
         : [['Finish here', '@finish', 'express'], ['Open the workspace', '@open'], ['Take it further → analyse', '@extendNext']],
@@ -1218,8 +1774,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       delay: 420,
       step: 'analysis', card: true,
       bot: () => [realMode()
-        ? `Running a registry-backed local preflight — source resolution, bounded snapshot, evidence gate, and local artifact write. No external model call.`
-        : `Running the analysis — deterministic steps, no tokens. I’ll only draft findings after every step’s evidence contract passes.`],
+        ? bi(
+            `Running a registry-backed local preflight — source resolution, bounded snapshot, evidence gate, and local artifact write. No external model call.`,
+            `正在运行 registry-backed 本地预检：解析数据源、生成有界快照、执行 evidence gate，并写入本地 artifact。不会调用外部模型。`,
+          )
+        : bi(
+            `Running the analysis — deterministic steps, no tokens. I’ll only draft findings after every step’s evidence contract passes.`,
+            `正在运行分析：确定性步骤，不消耗 token。只有每一步 evidence contract 通过后，才会进入 findings 草稿。`,
+          )],
       chips: [],
       markStep: 'analysis',
       val: { extract: () => extractLine(), review: () => reviewLine() },
@@ -1239,15 +1801,60 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function renderSessions() {
     const host = document.getElementById('gdSessions');
     if (!host) return;
-    const items = [
-      ['live', 'Sepsis mortality prediction', '~/easyicu/projects/sepsis_mortality', true],
-      ['s1', 'Lactate trajectory · 48h', '~/easyicu/projects/lactate_48h', false],
-      ['s2', 'AKI onset · MIMIC-IV / eICU', '~/easyicu/projects/aki_onset', false],
-      ['s3', 'Vasopressor exposure audit', '~/easyicu/projects/vaso_audit', false],
+    const rows = localRunRows();
+    const drafts = localDraftRows();
+    const draftHtml = guidedDrafts.loading
+      ? `<div class="gd-empty-local"><div class="ss-t">Loading local drafts</div><div class="ss-m">Reading metadata-only guided draft registry.</div></div>`
+      : guidedDrafts.error
+        ? `<div class="gd-empty-local warn"><div class="ss-t">Local drafts unavailable</div><div class="ss-m">${esc(guidedDrafts.error)}</div></div>`
+        : drafts.length
+          ? drafts.slice(0, 8).map((row, i) => `
+            <button class="gd-sess draft ${selectedGuidedDraft && selectedGuidedDraft.id === row.id ? 'active' : ''}" data-localdraft="${i}">
+              <span class="ss-fold">${icon('file', 15)}</span>
+              <span>
+                <span class="ss-t">${esc(row.title || 'Guided draft')}</span>
+                <span class="ss-m">${esc(row.status || 'metadata_only')} · ${esc(row.depth || 'full')} · ${esc(row.data_mode || 'demo')}</span>
+                <span class="ss-m mono">${row.project_dir ? esc(compactPath(row.project_dir)) : 'legacy registry-only draft'}</span>
+                <span class="ss-m mono">${esc(fmtRunTime(row.updated_at || row.created_at))}</span>
+              </span>
+            </button>`).join('')
+          : `<div class="gd-empty-local">
+              <div class="ss-t">No guided drafts yet</div>
+              <div class="ss-m">Use New study draft to choose a local project folder first.</div>
+            </div>`;
+    const localHtml = guidedHistory.loading
+      ? `<div class="gd-empty-local"><div class="ss-t">Loading local runs</div><div class="ss-m">Scanning configured local Agent project folders; export rows are not read.</div></div>`
+      : guidedHistory.error
+        ? `<div class="gd-empty-local warn"><div class="ss-t">Local run history unavailable</div><div class="ss-m">${esc(guidedHistory.error)}</div></div>`
+        : rows.length
+          ? rows.slice(0, 8).map((row, i) => `
+            <button class="gd-sess local ${selectedGuidedRun && selectedGuidedRun.project_dir === row.project_dir ? 'active' : ''}" data-localrun="${i}">
+              <span class="ss-fold">${icon('history', 15)}</span>
+              <span>
+                <span class="ss-t">${esc(row.study_id || 'study')} · ${esc(row.run_label || row.run_id || 'run')}</span>
+                <span class="ss-m">${esc(row.readiness_status || row.gate_status || 'analysis_only')} · ${esc(String(row.artifact_count || 0))} artifacts · ${esc(fmtRunTime(row.updated_at))}</span>
+                <span class="ss-m mono">${esc(compactPath(row.project_dir))}</span>
+              </span>
+            </button>`).join('')
+          : `<div class="gd-empty-local">
+              <div class="ss-t">No local runs found</div>
+              <div class="ss-m">Start an auditable Agent run to create a real local study folder.</div>
+            </div>`;
+    const examples = [
+      ['ex1', 'Sepsis mortality prediction', 'Seeded example · not a local project'],
+      ['ex2', 'Lactate trajectory · 48h', 'Seeded example · not a local project'],
+      ['ex3', 'AKI onset · MIMIC-IV / eICU', 'Seeded example · not a local project'],
+      ['ex4', 'Vasopressor exposure audit', 'Seeded example · not a local project'],
     ];
-    host.innerHTML = items.map(([id, tt, folder, live]) =>
-      `<button class="gd-sess ${live ? 'live active' : ''}" data-sess="${id}"><span class="ss-fold">${icon('folder', 15)}</span><span><span class="ss-t">${tt}</span><span class="ss-m mono">${folder}</span></span></button>`
-    ).join('');
+    host.innerHTML = `
+      <div class="gd-rail-sec in-list">Local guided drafts <button class="gd-refresh-mini" data-refreshdrafts title="Refresh local drafts">${icon('refresh', 10)}</button></div>
+      ${draftHtml}
+      <div class="gd-rail-sec in-list">Local runs <button class="gd-refresh-mini" data-refreshruns title="Refresh local runs">${icon('refresh', 10)}</button></div>
+      ${localHtml}
+      <div class="gd-rail-sec in-list">Seeded examples</div>
+      ${examples.map(([id, tt, scope]) =>
+        `<button class="gd-sess example" data-sess="${id}"><span class="ss-fold">${icon('folder', 15)}</span><span><span class="ss-t">${tt}</span><span class="ss-m">${scope}</span></span></button>`
+      ).join('')}`;
   }
 
   /* ============== screen ============== */
@@ -1255,21 +1862,33 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     section: 'guided', full: true,
     render() {
       reset();
+      currentId = 'frontdoor';
       return `
       <div class="gd-shell">
         <div class="gd-top">
-          <div class="brand-mark">${icon('spark', 16)}</div>
-          <div><div class="gd-name">Research Copilot</div><div class="gd-mode">EasyICU · research copilot</div></div>
+          <button class="gd-home-link" type="button" data-open="entry" aria-label="Back to EasyICU home" title="Back to EasyICU home">
+            <span class="brand-mark">${icon('spark', 16)}</span>
+            <span><span class="gd-name">Guided Copilot</span><span class="gd-mode">EasyICU · guided study</span></span>
+          </button>
           <span class="grow"></span>
-          <button class="btn sm" data-open="entry">${icon('back', 13)} Exit</button>
-          <button class="btn sm" data-open="extraction">${icon('grid', 13)} Classic workspace</button>
+          <button class="btn sm" data-open="entry">${icon('back', 13)} ${t('Exit', '退出')}</button>
+          <button class="btn sm" data-open="extraction">${icon('grid', 13)} ${t('Data workspace', '数据工作台')}</button>
         </div>
         <div class="gd-main threecol">
           <aside class="gd-rail">
-            <div class="gd-rail-top"><button class="gd-newbtn" data-newstudy title="Creates a new local project folder">${icon('plus', 14)} New study</button></div>
-            <div class="gd-rail-sec">Studies · local folders</div>
+            <div class="gd-rail-top"><button class="gd-newbtn" data-newstudy title="Start a local guided draft">${icon('plus', 14)} New study draft</button></div>
+            <div class="gd-rail-sec">Workspace</div>
             <div class="gd-rail-list" id="gdSessions"></div>
-            <div class="gd-rail-foot"><button class="btn sm block" data-open="extraction">${icon('grid', 13)} Classic workspace</button></div>
+            <div class="gd-rail-foot">
+              <div class="gd-rail-utils" aria-label="${t('Guided study utilities', '研究引导工具')}">
+                <button class="gd-utilbtn" type="button" data-open="entry" title="${t('Home', '主页')}" aria-label="${t('Home', '主页')}">${icon('back', 14)}</button>
+                <button class="gd-utilbtn" type="button" data-open="settings" title="${t('Settings', '设置')}" aria-label="${t('Settings', '设置')}">${icon('gear', 14)}</button>
+                <button class="gd-utilbtn lang" type="button" data-lang-toggle title="${t('Switch language', '切换语言')}" aria-label="${t('Switch language', '切换语言')}">
+                  ${icon('globe', 14)} <span>${window.EU_LANG === 'zh' ? 'EN' : '中'}</span>
+                </button>
+              </div>
+              <button class="btn sm block gd-data-workspace" data-open="extraction">${icon('grid', 13)} ${t('Data workspace', '数据工作台')}</button>
+            </div>
           </aside>
           <div class="gd-conv">
             <div class="gd-scroll" id="gdScroll"><div class="gd-thread" id="gdThread" role="log" aria-live="polite" aria-label="Copilot conversation"></div></div>
@@ -1279,7 +1898,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
                 <input class="gd-input" id="gdInput" placeholder="Reply, or tap an option above to continue…" autocomplete="off" />
                 <button class="gd-send" id="gdSend">${icon('arrow', 16)}</button>
               </div>
-              <div class="gd-foot-note">Research Copilot · reproducible · nothing leaves your machine</div>
+              <div class="gd-foot-note">Guided Copilot · local first · nothing leaves your machine</div>
             </div>
           </div>
           <aside class="gd-aside">
@@ -1293,6 +1912,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     afterRender(root) {
       renderAside();
       renderSessions();
+      loadGuidedDrafts();
+      loadGuidedHistory();
+      ensureGuidedSession();
       // continue from the dock if we just expanded it
       let bridged = false;
       try {
@@ -1310,13 +1932,19 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             } else if (b.lastUser) {
               handleText(stripTags(b.lastUser));
             } else {
-              thread.push({ bot: true, html: `Continuing from the dock${b.route && b.route !== 'entry' ? ` — you were on <strong>${({extraction:'Data Extraction',patient:'Patient Review',cohort:'Cohort Statistics',crossdb:'Cross-DB Benchmark',agent:'Research Agent'}[b.route]) || 'the workspace'}</strong>` : ''}. Want to turn that into a full study?` });
+              const routeLabel = b.route && b.route !== 'entry'
+                ? (({extraction:'Data Extraction',patient:'Patient Review',cohort:'Cohort Statistics',crossdb:'Cross-DB Benchmark',agent:'Research Agent'}[b.route]) || 'the workspace')
+                : '';
+              pushBot(
+                `Continuing from the dock${routeLabel ? ` — you were on <strong>${routeLabel}</strong>` : ''}. Want to turn that into a full study?`,
+                `我会接着右下角 quick help 的上下文继续${routeLabel ? `：刚才你在 <strong>${routeLabel}</strong>` : ''}。要把它扩展成完整研究吗？`,
+              );
               renderThread();
             }
           }, 700);
         }
       } catch (e) {}
-      if (!bridged) go('goal');
+      if (!bridged) go('frontdoor');
       setTimeout(() => { const inp = root.querySelector('#gdInput'); if (inp) inp.focus(); }, 400);
 
       const shell = root.querySelector('.gd-shell');
@@ -1342,12 +1970,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (goEl) {
           const tok = goEl.dataset.go;
           const label = stripText(goEl.textContent);
+          if (tok.startsWith('@guidedGoal:')) { chooseGuidedGoal(tok.split(':')[1], label); return; }
           if (tok.startsWith('@depth:')) { depth = tok.split(':')[1]; renderAside(); go('welcome', label); return; }
           if (tok === '@regoal') { pushUser(label); go('goal'); return; }
           if (tok === '@finish') { pushUser(label); finishHere(); return; }
           if (tok === '@extendNext') {
             const prev = depth; bumpDepth(); renderAside(); pushUser(label);
-            thread.push({ bot: true, html: `Extending from <strong>${DEPTH[prev].label}</strong> to <strong>${DEPTH[depth].label}</strong> — picking up where we left off.` });
+            pushBot(
+              `Extending from <strong>${DEPTH[prev].label}</strong> to <strong>${DEPTH[depth].label}</strong> — picking up where we left off.`,
+              `正在从 <strong>${DEPTH[prev].label}</strong> 扩展到 <strong>${DEPTH[depth].label}</strong>，我会从刚才停下的地方继续。`,
+            );
             renderThread();
             if (prev === 'extract') { schedule(() => go('toReview')); }
             else if (prev === 'review') { schedule(() => go('toRun')); }
@@ -1359,12 +1991,24 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           if (tok === '@autopilot') { autopilot(label); return; }
           if (tok === '@why') { toggleWhy(expandedStep, true); return; }
           if (tok === '@open') { openWorkspace(); return; }
-          if (tok === '@noop') { pushUser(label); thread.push({ bot: true, html: `Go ahead — type your own wording in the box and I’ll work from it.` }); renderThread(); return; }
-          if (tok === '@typemine') { pushUser(label); thread.push({ bot: true, html: `Of course — type your research question in the box below and I’ll frame it with you.` }); renderThread(); const inp = document.getElementById('gdInput'); if (inp) inp.focus(); return; }
-          if (tok === '@folderpick') { pushUser(label); thread.push({ bot: true, html: `Opened <span class="mono">~/easyicu/projects/</span> — choose an existing study folder to resume, or start fresh below.` }); renderThread(); if (window.__euRender) setTimeout(window.__euRender, 700); return; }
-          if (tok === '@foldernew') { pushUser(label); thread.push({ bot: true, html: `Created a new project folder. Let’s set up the study — intermediate files will be written there.` }); renderThread(); if (window.__euRender) setTimeout(window.__euRender, 700); return; }
+          if (tok === '@noop') { pushUser(label); pushBot(`Go ahead — type your own wording in the box and I’ll work from it.`, `可以，直接在输入框里写你的表述，我会基于你的文字继续。`); renderThread(); return; }
+          if (tok === '@typemine') { pushUser(label); pushBot(`Of course — type your research question in the box below and I’ll frame it with you.`, `当然可以。请在下面输入你的研究问题，我会帮你整理成可执行框架。`); renderThread(); const inp = document.getElementById('gdInput'); if (inp) inp.focus(); return; }
+          if (tok === '@openAgent') { pushUser(label); location.hash = '#agent'; return; }
+          if (tok === '@reviewLocalRun') { openGuidedRunReview(selectedGuidedRun, label); return; }
+          if (tok === '@activeExport') { pushUser(label); dataMode = 'real'; go('realConfirm', label); return; }
+          if (tok === '@foldernew') { pushUser(label || 'New study draft'); showGuidedDraftSetup('Guided study draft'); return; }
           if (tok === '@hintN') { handleText('use 30 patients'); return; }
           go(tok, goEl.classList.contains('suggest-chip') ? label : null);
+          return;
+        }
+        const guidedGoalEl = e.target.closest('[data-guided-goal]');
+        if (guidedGoalEl) {
+          chooseGuidedGoal(guidedGoalEl.dataset.guidedGoal, stripText(guidedGoalEl.textContent));
+          return;
+        }
+        const guidedHandoffEl = e.target.closest('[data-guided-handoff]');
+        if (guidedHandoffEl) {
+          runGuidedHandoff(guidedHandoffEl.dataset.guidedHandoff, guidedHandoffEl.dataset.target, stripText(guidedHandoffEl.textContent));
           return;
         }
         // mode picker
@@ -1398,14 +2042,17 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const actEl = e.target.closest('[data-act]');
         if (actEl) {
           const a = actEl.dataset.act;
-          if (a === 'strict') { cohortPhase = 'empty'; renderThread(); thread.push({ bot: true, html: `Trying “Sepsis-3 + age ≥ 80”…` }); renderThread(); return; }
-          if (a === 'loosen') { cohortPhase = 'normal'; renderThread(); thread.push({ bot: true, html: `Loosened back to the working cohort — ${patientN} stays match again.` }); renderThread(); return; }
+          if (a === 'strict') { cohortPhase = 'empty'; renderThread(); pushBot(`Trying “Sepsis-3 + age ≥ 80”…`, `正在尝试 “Sepsis-3 + age ≥ 80”…`); renderThread(); return; }
+          if (a === 'loosen') { cohortPhase = 'normal'; renderThread(); pushBot(`Loosened back to the working cohort — ${patientN} stays match again.`, `已放宽回可用队列：现在匹配 ${patientN} 个 stay。`); renderThread(); return; }
           if (a === 'open') { openWorkspace(); return; }
           if (a === 'draft') { openDraft(); return; }
           if (a === 'signoff') {
             draftPhase = 'signed'; markThrough('draft', 'done'); setVal({ draft: 'unlocked' }); renderThread();
             try { localStorage.setItem('easyicu_study', JSON.stringify({ branch, mods, patientN, ts: Date.now() })); } catch (e) {}
-            thread.push({ bot: true, html: `Signed off — the draft is unlocked and the full study is assembled. Open the workspace or start another.` });
+            pushBot(
+              `Signed off — the draft is unlocked and the full study is assembled. Open the workspace or start another.`,
+              `已签署：草稿已解锁，完整研究已组装。你可以打开工作区，或开始另一个研究。`,
+            );
             chips = []; renderThread(); renderChips();
             return;
           }
@@ -1418,28 +2065,86 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const stEl = e.target.closest('[data-study]');
         if (stEl) { jumpToStep(stEl.dataset.study); return; }
         // sessions rail
+        const refreshRuns = e.target.closest('[data-refreshruns]');
+        if (refreshRuns) { loadGuidedHistory(true); return; }
+        const refreshDrafts = e.target.closest('[data-refreshdrafts]');
+        if (refreshDrafts) { loadGuidedDrafts(true); return; }
+        const localDraftEl = e.target.closest('[data-localdraft]');
+        if (localDraftEl) {
+          const row = localDraftRows()[Number(localDraftEl.dataset.localdraft || -1)];
+          if (!row) return;
+          selectedGuidedDraft = row;
+          selectedGuidedRun = null;
+          openGuidedProjectMemory(row, localDraftEl, 'draft');
+          return;
+        }
+        const localRunEl = e.target.closest('[data-localrun]');
+        if (localRunEl) {
+          const row = localRunRows()[Number(localRunEl.dataset.localrun || -1)];
+          if (!row) return;
+          selectedGuidedRun = row;
+          selectedGuidedDraft = null;
+          openGuidedProjectMemory(row, localRunEl, 'run');
+          return;
+        }
         if (e.target.closest('[data-newstudy]')) {
-          pushUser('New study');
-          thread.push({ bot: true, html: `Starting a new study. Each study lives in its own local folder — what would you like to do?` });
-          chips = [['Open an existing folder', '@folderpick'], ['Create a new folder', '@foldernew']];
-          renderThread(); renderChips();
+          showGuidedDraftSetup('New study draft');
+          return;
+        }
+        const createDraftEl = e.target.closest('[data-createdraft]');
+        if (createDraftEl) {
+          const box = createDraftEl.closest('[data-draft-setup]');
+          const titleEl = box ? box.querySelector('[data-draft-title]') : null;
+          const slugEl = box ? box.querySelector('[data-draft-slug]') : null;
+          const title = (titleEl && titleEl.value || '').trim() || 'New study draft';
+          const slug = slugifyDraftFolder((slugEl && slugEl.value) || title);
+          createLocalGuidedDraft(title, slug);
+          return;
+        }
+        if (e.target.closest('[data-canceldraft]')) {
+          pushBot(
+            `No folder created. Use <strong>New study draft</strong> when you want to bind the conversation to a local project folder.`,
+            `没有创建文件夹。需要把对话绑定到本地项目文件夹时，再使用 <strong>New study draft</strong>。`,
+          );
+          renderThread();
           return;
         }
         const sessEl = e.target.closest('[data-sess]');
         if (sessEl) {
           root.querySelectorAll('.gd-sess').forEach(s => s.classList.toggle('active', s === sessEl));
-          if (!sessEl.classList.contains('live')) {
-            thread.push({ bot: true, html: `That’s a saved demo session — in this prototype I’ll start a fresh study instead. Tell me what to explore, or pick a direction below.` });
-            chips = STATES.welcome.chips(); renderThread(); renderChips();
-          }
+          pushBot(
+            `That is a seeded example, not a local project. I can use it as a starting pattern, or you can switch to the active local export.`,
+            `这是 seeded 示例，不是真实本地项目。我可以把它当作起点模板，也可以切换到当前 active local export。`,
+          );
+          chips = [['Use this example pattern', '@foldernew'], ['Use active export', '@activeExport'], ['Open Agent Projects', '@openAgent']];
+          renderThread(); renderChips();
           return;
         }
+      });
+
+      shell.addEventListener('input', (e) => {
+        const title = e.target.closest('[data-draft-title]');
+        if (!title) return;
+        const box = title.closest('[data-draft-setup]');
+        const slug = box ? box.querySelector('[data-draft-slug]') : null;
+        if (slug && !slug.dataset.edited) slug.value = slugifyDraftFolder(title.value);
+      });
+      shell.addEventListener('change', (e) => {
+        const slug = e.target.closest('[data-draft-slug]');
+        if (!slug) return;
+        slug.dataset.edited = 'true';
+        slug.value = slugifyDraftFolder(slug.value);
       });
 
       // composer
       const input = root.querySelector('#gdInput');
       const send = root.querySelector('#gdSend');
-      function handleTextLocal() { const v = input.value.trim(); if (!v) return; input.value = ''; handleText(v); }
+      function handleTextLocal() {
+        const v = input.value.trim();
+        if (!v || busy) return;
+        input.value = '';
+        handleText(v);
+      }
       send.addEventListener('click', handleTextLocal);
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); handleTextLocal(); } });
     },
@@ -1448,14 +2153,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   /* handle free text (from composer or hint chips) */
   function handleText(v) {
     if (busy) return;
-    if (autop && /\b(stop|pause|halt|cancel)\b/i.test(v)) { autop = false; pushUser(v); thread.push({ bot: true, html: `Autopilot paused — tap a suggestion to continue manually.` }); renderThread(); return; }
+    if (currentId === 'frontdoor') {
+      if (sendGuidedShortcut(v)) return;
+    }
+    if (autop && /\b(stop|pause|halt|cancel)\b/i.test(v)) { autop = false; pushUser(v); pushBot(`Autopilot paused — tap a suggestion to continue manually.`, `自动流程已暂停。你可以点一个建议继续手动推进。`); renderThread(); return; }
     const fn = parseIntent(v);
     if (fn) { fn(); return; }
     // fallback: advance the primary path of the current state, echoing the text
     const map = { frame: 'toData', toData: null, toCohort: 'toConcepts', toConcepts: 'toExtract', toReview: 'toRun', toFindings: null };
     const next = map[currentId];
     if (next) { go(next, v); }
-    else { pushUser(v); thread.push({ bot: true, html: `I’ll treat that as “<em>${esc(v)}</em>”. In this guided demo I move step by step — tap a suggestion to continue, or say <strong>“why?”</strong>, <strong>“go back”</strong>, <strong>“use 30 patients”</strong>, or <strong>“run the whole demo”</strong>.` }); renderThread(); }
+    else { pushUser(v); pushBot(
+      `I’ll treat that as “<em>${esc(v)}</em>”. In this guided demo I move step by step — tap a suggestion to continue, or say <strong>“why?”</strong>, <strong>“go back”</strong>, <strong>“use 30 patients”</strong>, or <strong>“run the whole demo”</strong>.`,
+      `我会把它理解为“<em>${esc(v)}</em>”。在引导模式里我会一步一步推进；你可以点建议继续，或说 <strong>“为什么”</strong>、<strong>“返回”</strong>、<strong>“用 30 个患者”</strong>、<strong>“跑完整演示”</strong>。`,
+    ); renderThread(); }
   }
 
   function stripText(s) { return s.replace(/\s+/g, ' ').trim(); }

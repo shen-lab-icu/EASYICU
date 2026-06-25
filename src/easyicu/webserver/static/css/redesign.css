@@ -95,44 +95,6 @@ body.lang-zh .eyebrow{ letter-spacing: 0.04em; }
 .cfg-body{ padding:0 18px 16px; }
 .cfg-chips{ display:flex; flex-wrap:wrap; gap:6px; }
 
-/* advanced disclosure inside a cfg */
-.adv-toggle{
-  display:inline-flex; align-items:center; gap:6px; margin-top:14px; white-space:nowrap;
-  font-size:12px; font-weight:500; color:var(--accent-ink); cursor:pointer;
-  background:none; border:0; padding:0; font-family:inherit;
-}
-.adv-toggle .chev{ transition:transform .18s; }
-.adv-toggle.open .chev{ transform:rotate(180deg); }
-.adv-body{ margin-top:14px; padding-top:14px; border-top:1px dashed var(--hair-2); }
-.adv-body[hidden]{ display:none; }
-
-/* compact module grid */
-.modgrid{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
-@media (max-width:560px){ .modgrid{ grid-template-columns:1fr; } }
-.modcard{
-  display:flex; align-items:center; gap:10px;
-  padding:10px 12px; border:1px solid var(--hair-2); border-radius:var(--r-2);
-  background:var(--surface); cursor:pointer; transition:border-color .12s, background .12s;
-}
-.modcard:hover{ border-color:var(--hair-3); background:var(--surface-2); }
-.modcard.on{ border-color:var(--accent-border); background:var(--accent-soft); }
-.modcard .mk{
-  width:18px; height:18px; flex:none; border-radius:5px;
-  border:1.5px solid var(--hair-3); display:grid; place-items:center; color:#fff;
-}
-.modcard.on .mk{ background:var(--accent); border-color:var(--accent); }
-.modcard .nm{ font-size:12.5px; font-weight:600; min-width:0; }
-.modcard .ct{ font-family:var(--font-mono); font-size:10.5px; color:var(--ink-4); margin-left:auto; }
-
-/* sticky summary rail */
-.ex2-summary{ position:sticky; top:74px; }
-.sumcard{ border:1px solid var(--hair); border-radius:var(--r-3); background:var(--surface); box-shadow:var(--sh-1); padding:16px 18px; }
-.sumcard .eyebrow{ margin-bottom:12px; }
-.sum-row{ display:flex; align-items:center; justify-content:space-between; padding:7px 0; font-size:12.5px; border-bottom:1px solid var(--hair); }
-.sum-row:last-of-type{ border-bottom:0; }
-.sum-row .k{ color:var(--ink-3); }
-.sum-row .v{ font-family:var(--font-mono); font-weight:500; color:var(--ink); }
-
 /* ============================================================
    RESEARCH AGENT — project workspace
    ============================================================ */
@@ -377,7 +339,7 @@ body.lang-zh .eyebrow{ letter-spacing: 0.04em; }
 .jphase.beyond .jp-num{ border-style:dashed; background:transparent; }
 .jphase.beyond .jp-t{ font-weight:500; }
 
-/* ---------- Classic Workspace: collapsible group (matches code IA) ---------- */
+/* ---------- Data Workspace: collapsible task group ---------- */
 .wsnav{ padding:8px 8px 2px; }
 .wsgroup-head{ display:flex; align-items:center; gap:10px; width:100%; padding:10px 11px; border:1px solid var(--hair-2); border-radius:var(--r-3); background:var(--surface); cursor:pointer; transition:background .12s, border-color .12s; }
 .wsgroup-head:hover{ background:var(--surface-2); }

@@ -147,7 +147,7 @@
           <div style="font-weight:600;font-size:12.75px;">${msg}…</div>
           <div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${stMode === 'demo' ? 'reproducible · no outbound calls' : 'local-only · nothing uploaded'}</div>
         </div>
-        <button class="btn sm">${icon('stop', 13)} Cancel</button>
+        <button class="btn sm" aria-disabled="true" tabindex="-1">${icon('stop', 13)} Cancel</button>
       </div>
       <div class="indet mt-12"></div>
       <div class="st-stats mt-16">
@@ -164,10 +164,10 @@
         <div class="st-t">${e.t}</div>
         <div class="st-d">${e.d[stMode]}</div>
         <div class="st-actions">
-          <button class="btn primary lg">${icon(stMode === 'demo' ? 'flask' : 'folder', 15)} ${e.cta[stMode]}</button>
+          <button class="btn primary lg" aria-disabled="true" tabindex="-1">${icon(stMode === 'demo' ? 'flask' : 'folder', 15)} ${e.cta[stMode]}</button>
           ${stMode === 'demo'
-            ? `<button class="btn lg">${icon('db', 15)} Switch to real data</button>`
-            : `<button class="btn lg">${icon('flask', 15)} Try demo instead</button>`}
+            ? `<button class="btn lg" aria-disabled="true" tabindex="-1">${icon('db', 15)} Switch to real data</button>`
+            : `<button class="btn lg" aria-disabled="true" tabindex="-1">${icon('flask', 15)} Try demo instead</button>`}
         </div>
         <div class="st-meta">
           <div class="eyebrow" style="margin-bottom:8px;">${stMode === 'demo' ? 'Included in demo set' : 'Supported sources'}</div>
@@ -190,8 +190,8 @@
           ${n.filters.map(f => `<span class="chip solid">${f}</span>`).join('')}
         </div>
         <div class="st-actions">
-          <button class="btn primary">${icon('sliders', 14)} ${stCtx === 'agent' ? 'Review inputs' : 'Adjust filters'}</button>
-          <button class="btn">${icon('refresh', 14)} Reset to defaults</button>
+          <button class="btn primary" aria-disabled="true" tabindex="-1">${icon('sliders', 14)} ${stCtx === 'agent' ? 'Review inputs' : 'Adjust filters'}</button>
+          <button class="btn" aria-disabled="true" tabindex="-1">${icon('refresh', 14)} Reset to defaults</button>
         </div>
       </div>`;
   }
@@ -206,11 +206,11 @@
         <div class="st-d">${er.d[stMode]}</div>
         <div class="detail-box">${lines.map((l, i) => i === 1 ? `<span class="ln-bad">${l}</span>` : i === 0 ? `<span class="ln-key">${l}</span>` : l).join('\n')}</div>
         <div class="st-actions">
-          <button class="btn primary">${icon('refresh', 14)} Retry</button>
-          <button class="btn">${icon('file', 14)} View log</button>
+          <button class="btn primary" aria-disabled="true" tabindex="-1">${icon('refresh', 14)} Retry</button>
+          <button class="btn" aria-disabled="true" tabindex="-1">${icon('file', 14)} View log</button>
           ${stMode === 'real'
-            ? `<button class="btn ghost">${icon('flask', 14)} Switch to demo</button>`
-            : `<button class="btn ghost">${icon('help', 14)} Get help</button>`}
+            ? `<button class="btn ghost" aria-disabled="true" tabindex="-1">${icon('flask', 14)} Switch to demo</button>`
+            : `<button class="btn ghost" aria-disabled="true" tabindex="-1">${icon('help', 14)} Get help</button>`}
         </div>
       </div>`;
   }
@@ -248,7 +248,7 @@
             <div style="font-weight:600;font-size:13px;">One reviewer sign-off outstanding</div>
             <div style="font-size:11.5px;color:var(--ink-3);">The action unlocks once a reviewer confirms the findings.</div>
           </div>
-          <button class="btn">Request review</button>
+          <button class="btn" aria-disabled="true" tabindex="-1">Request review</button>
           <button class="btn" aria-disabled="true">${icon('lock', 13)} ${stCtx === 'agent' ? 'Draft' : 'Export'}</button>
         </div>
       </div>`;
@@ -283,8 +283,8 @@
         </table>
       </div>
       <div class="row gap-8 mt-16">
-        <button class="btn primary">${icon(stCtx === 'agent' ? 'shield' : 'arrow', 14)} ${stCtx === 'agent' ? 'Open review gate' : 'Open full workspace'}</button>
-        <button class="btn">${icon('download', 14)} Export bundle</button>
+        <button class="btn primary" aria-disabled="true" tabindex="-1">${icon(stCtx === 'agent' ? 'shield' : 'arrow', 14)} ${stCtx === 'agent' ? 'Open review gate' : 'Open full workspace'}</button>
+        <button class="btn" aria-disabled="true" tabindex="-1">${icon('download', 14)} Export bundle</button>
         <span class="grow"></span>
         <span class="mono" style="font-size:10.5px;color:var(--ink-4);align-self:center;">${stMode === 'demo' ? 'demo · no tokens' : 'local · 0 uploads'}</span>
       </div>
@@ -395,7 +395,7 @@
   S.states = {
     section: 'states', nav: 'states',
     crumbs: ['Home', 'Workspace States'],
-    actionHtml: `<button class="btn">${icon('eye', 13)} Reference</button>`,
+    actionHtml: `<span class="pill">${icon('eye', 13)} Reference</span>`,
     rail() {
       return `
       <div class="rail-sep"></div>

@@ -89,3 +89,13 @@ body[data-density="compact"] .set-row{ padding: 10px 0; }
 body[data-density="compact"] .stat{ padding: 10px 13px; }
 body[data-density="compact"] .topbar{ height: 50px; }
 body[data-density="compact"] .plan-item{ padding: 8px 4px; }
+
+/* ---------- Reduced motion setting ---------- */
+body[data-reduce-motion="true"] *,
+body[data-reduce-motion="true"] *::before,
+body[data-reduce-motion="true"] *::after{
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+}
