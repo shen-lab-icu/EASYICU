@@ -109,6 +109,12 @@ def write_fixture_export(root: Path) -> Path:
             {"stay_id": 1, "charttime": "2026-01-01 01:00", "sofa2": 5},
             {"stay_id": 2, "charttime": "2026-01-01 00:00", "sofa2": 8},
         ],
+        "sofa1_score": [
+            {"stay_id": 1, "charttime": "2026-01-01 00:00", "sofa1": 6},
+            {"stay_id": 1, "charttime": "2026-01-01 01:00", "sofa1": 7},
+            {"stay_id": 2, "charttime": "2026-01-01 00:00", "sofa1": 7},
+            {"stay_id": 3, "charttime": "2026-01-01 00:00", "sofa1": 3},
+        ],
         "sepsis3_sofa2": [
             {"stay_id": 1, "sep3_sofa2": "true"},
             {"stay_id": 2, "sep3_sofa2": ""},
@@ -174,10 +180,31 @@ def validate_cohort_payload(payload: dict[str, Any]) -> None:
         raise AssertionError(f"unexpected SOFA summary: {summary.get('sofa2')}")
     if (payload.get("groups") or {}).get("inferential_statistics_allowed") is not False:
         raise AssertionError("inferential statistics were not fail-closed")
+    survival = next((row for row in (payload.get("groups") or {}).get("supported") or [] if row.get("id") == "survival"), None)
+    if not survival:
+        raise AssertionError("survival descriptive split missing")
+    profile = survival.get("profile") or {}
+    if profile.get("status") != "descriptive_aggregate_only":
+        raise AssertionError(f"survival profile is not aggregate-only: {profile}")
+    if profile.get("columns") != ["Survived", "Deceased", "Unknown"]:
+        raise AssertionError(f"unexpected survival profile columns: {profile.get('columns')}")
+    profile_rows = {row.get("metric"): row for row in profile.get("rows") or []}
+    if (profile_rows.get("N") or {}).get("values") != [2, 1, 0]:
+        raise AssertionError(f"unexpected survival N profile: {profile_rows.get('N')}")
+    if "p_value" in json.dumps(profile) or "smd" in json.dumps(profile):
+        raise AssertionError("profile unexpectedly exposed inferential statistics")
     if (payload.get("table_one") or {}).get("status") != "blocked":
         raise AssertionError("table-one inferential preview was not blocked")
-    if (payload.get("sofa_reclassification") or {}).get("status") != "blocked":
-        raise AssertionError("paired SOFA reclassification was not blocked")
+    reclass = payload.get("sofa_reclassification") or {}
+    if reclass.get("status") != "ready":
+        raise AssertionError(f"paired SOFA reclassification was not ready: {reclass}")
+    if reclass.get("paired_count") != 2:
+        raise AssertionError(f"unexpected paired SOFA count: {reclass}")
+    directions = reclass.get("direction_counts") or {}
+    if (directions.get("up") or {}).get("count") != 1 or (directions.get("down") or {}).get("count") != 1:
+        raise AssertionError(f"unexpected SOFA movement directions: {directions}")
+    if "p_value" in json.dumps(reclass) or "smd" in json.dumps(reclass):
+        raise AssertionError("SOFA reclassification unexpectedly exposed inferential statistics")
     text = json.dumps(payload, ensure_ascii=False)
     for marker in ["stay_id", "subject_id", "hadm_id", "tableRows", '"series"']:
         if marker in text:
@@ -198,10 +225,11 @@ def page_snapshot(page: Any, panel: str) -> dict[str, Any]:
             mainTextLength: content.textContent.trim().length,
             hasRealReady: lower.includes('local export cohort review ready'),
             hasAggregate: lower.includes('cohort size') && lower.includes('mortality') && lower.includes('median sofa-2'),
+            hasProfile: lower.includes('aggregate-only group characteristics') && lower.includes('median icu los'),
             hasProvenance: lower.includes('path hash') && lower.includes('aggregate-only payload'),
             hasCoverage: lower.includes('real module coverage and quality'),
             hasSnapshot: lower.includes('aggregate ranges') && lower.includes('source provenance'),
-            hasSofa: lower.includes('sofa-2 aggregate review') && lower.includes('paired reclassification blocked'),
+            hasSofa: lower.includes('sofa-2 aggregate review') && lower.includes('sofa-1 to sofa-2 movement') && lower.includes('worst-icu severity transition matrix'),
             hasBlockedScope: lower.includes('no row-level filters') || lower.includes('fail-closed scope'),
             hasDemoCopy: /demo cohort snapshot|demo \\/ seeded|group contrast table|total patients\\s+10|generate demo/.test(lower),
             hasRawMarkers: /stay_id|subject_id|hadm_id|tableRows/.test(text),
@@ -219,18 +247,21 @@ def run_browser(base_url: str, run_dir: Path, screenshots: bool) -> dict[str, An
         errors: list[str] = []
         page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
         page.on("pageerror", lambda exc: errors.append(str(exc)))
-        page.goto(base_url + "#cohort", wait_until="networkidle")
+        page.goto(base_url + "#cohort", wait_until="domcontentloaded")
         page.wait_for_function("window.EU_API && window.EU_API.loadCohortReviewSummary", timeout=5000)
         page.evaluate("window.setDataMode && window.setDataMode('real', {force:true})")
         page.wait_for_timeout(250)
         page.locator("[data-cohort-run]").last.click()
         page.wait_for_function("document.body.innerText.includes('Local export cohort review ready')", timeout=8000)
         panels = [page_snapshot(page, "groups")]
+        page.locator("[data-cohort-comp='age']").click()
+        page.wait_for_function("document.body.innerText.includes('Age Groups overview')", timeout=5000)
+        panels.append(page_snapshot(page, "groups-age"))
 
         for panel, marker in [
             ("coverage", "Real module coverage and quality"),
             ("snapshot", "Source provenance"),
-            ("sofa", "Paired reclassification blocked"),
+            ("sofa", "Worst-ICU severity transition matrix"),
         ]:
             page.locator(f"[data-cohtab='{panel}']").click()
             try:
@@ -246,7 +277,8 @@ def run_browser(base_url: str, run_dir: Path, screenshots: bool) -> dict[str, An
 
         if screenshots:
             for item in panels:
-                page.locator(f"[data-cohtab='{item['panel']}']").click()
+                panel_tab = "groups" if str(item["panel"]).startswith("groups") else item["panel"]
+                page.locator(f"[data-cohtab='{panel_tab}']").click()
                 page.wait_for_timeout(100)
                 shot = run_dir / f"cohort_{item['panel']}_mobile.png"
                 page.screenshot(path=str(shot), full_page=True)
@@ -305,6 +337,9 @@ def main() -> int:
         for key in ["hasRealReady", "hasAggregate", "hasProvenance", "hasBlockedScope"]:
             if not first.get(key):
                 failures.append(f"groups: browser assertion failed: {key}")
+        for item in [row for row in browser["panels"] if row["panel"] in {"groups", "groups-age"}]:
+            if not item.get("hasProfile"):
+                failures.append(f"{item['panel']}: browser assertion failed: hasProfile")
         checks = {
             "coverage": "hasCoverage",
             "snapshot": "hasSnapshot",

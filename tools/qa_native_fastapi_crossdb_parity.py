@@ -215,6 +215,24 @@ def validate_crossdb_payload(payload: dict[str, Any]) -> None:
     availability = {row.get("module"): row for row in payload.get("availability") or []}
     if not availability.get("demographics", {}).get("shared"):
         raise AssertionError(f"demographics not shared in availability: {availability.get('demographics')}")
+    density = {row.get("module"): row for row in payload.get("feature_density") or []}
+    if not density.get("vitals"):
+        raise AssertionError(f"vitals feature density missing: {payload.get('feature_density')}")
+    vitals_features = {row.get("feature"): row for row in density["vitals"].get("features") or []}
+    for feature in ["hr", "map", "spo2", "temp"]:
+        if feature not in vitals_features:
+            raise AssertionError(f"vitals feature density did not include {feature}: {vitals_features}")
+        values = vitals_features[feature].get("values") or []
+        if not values or not all(value.get("present") for value in values):
+            raise AssertionError(f"vitals density values not present for {feature}: {values}")
+    distributions = {row.get("module"): row for row in payload.get("feature_distributions") or []}
+    if not distributions.get("vitals"):
+        raise AssertionError(f"vitals feature distributions missing: {payload.get('feature_distributions')}")
+    hr_dist = next((row for row in distributions["vitals"].get("features") or [] if row.get("feature") == "hr"), None)
+    if not hr_dist:
+        raise AssertionError(f"hr value distribution missing from vitals: {distributions['vitals']}")
+    if not all((value.get("points") or []) for value in hr_dist.get("values") or []):
+        raise AssertionError(f"hr value distribution did not include density points: {hr_dist}")
     text = json.dumps(payload, ensure_ascii=False)
     for marker in ["stay_id", "subject_id", "hadm_id", "tableRows", '"series"']:
         if marker in text:
@@ -236,6 +254,13 @@ def page_snapshot(page: Any) -> dict[str, Any]:
             hasRegisteredComparison: lower.includes('registered export comparison'),
             hasProvenance: lower.includes('source provenance') && lower.includes('path hash'),
             hasAggregate: lower.includes('cohort size') && lower.includes('mortality') && lower.includes('median sofa-2'),
+            hasDistribution: (lower.includes('multi-database feature density grid') ||
+              lower.includes('value density distribution by module and feature')) &&
+              document.querySelectorAll('.xdb-density-panel').length >= 1 &&
+              document.querySelectorAll('.xdb-density-module').length >= 1 &&
+              document.querySelectorAll('.xdb-density-feature').length >= 1 &&
+              document.querySelectorAll('.xdb-density-svg').length >= 1 &&
+              document.querySelectorAll('.xdb-density-line').length >= 1,
             hasAvailability: lower.includes('module availability matrix') && lower.includes('demographics'),
             hasGate: lower.includes('compatibility gate') && lower.includes('inferential_statistics=false'),
             hasBlockedScope: lower.includes('fail-closed scope') && lower.includes('matched_cohort'),
@@ -250,21 +275,68 @@ def page_snapshot(page: Any) -> dict[str, Any]:
 def run_browser(base_url: str, run_dir: Path, screenshots: bool) -> dict[str, Any]:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 393, "height": 852})
+        context = browser.new_context(accept_downloads=True, viewport={"width": 393, "height": 852})
+        page = context.new_page()
         errors: list[str] = []
         page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
         page.on("pageerror", lambda exc: errors.append(str(exc)))
-        page.goto(base_url + "#crossdb", wait_until="networkidle")
+        page.goto(base_url + "#crossdb", wait_until="domcontentloaded")
         page.wait_for_function("window.EU_API && window.EU_API.loadCrossdbReviewSummary", timeout=5000)
         page.evaluate("window.setDataMode && window.setDataMode('real', {force:true})")
         page.wait_for_timeout(250)
         page.locator("[data-run]").last.click()
-        page.wait_for_function("document.body.innerText.includes('Real cross-database benchmark ready')", timeout=8000)
+        page.wait_for_function(
+            """() => document.querySelector('.xdb-density-panel') ||
+              document.body.innerText.includes('Registered export comparison') ||
+              document.body.innerText.includes('Module availability matrix') ||
+              document.body.innerText.includes('Real cross-database benchmark ready')""",
+            timeout=12000,
+        )
+        module_filters = page.locator("[data-density-module-filter]").count()
+        if module_filters > 1:
+            page.locator("[data-density-module-filter]").nth(1).click()
+            page.wait_for_timeout(100)
+        feature_cards = page.locator("[data-density-feature-key]").count()
+        if feature_cards > 0:
+            page.locator("[data-density-feature-key]").first.click()
+            page.wait_for_timeout(100)
         snapshot = page_snapshot(page)
+        snapshot["densityModuleFilterCount"] = module_filters
+        snapshot["densityFeatureCount"] = feature_cards
+        snapshot["densityDetailVisible"] = page.locator(".xdb-density-detail").count()
+        with page.expect_download(timeout=8000) as export_info:
+            page.locator(".loaded-bar [data-crossdb-export]").click()
+        export_download = export_info.value
+        export_path = run_dir / export_download.suggested_filename
+        export_download.save_as(str(export_path))
+        exported = json.loads(export_path.read_text(encoding="utf-8"))
+        export_text = json.dumps(exported, ensure_ascii=False)
+        snapshot["exportDownloadOk"] = (
+            exported.get("payload_scope") == "bounded_crossdb_review"
+            and isinstance(exported.get("crossdb_review"), dict)
+            and not any(marker in export_text for marker in ["stay_id", "subject_id", "hadm_id", "tableRows"])
+        )
+        snapshot["exportDownloadPath"] = str(export_path)
+        snapshot["exportDownloadFilename"] = export_download.suggested_filename
+        page.locator(".loaded-bar [data-viz-reset]").click()
+        page.wait_for_function("document.body.innerText.includes('Real raw database mode')", timeout=5000)
+        snapshot["changeSelectionOk"] = page.evaluate(
+            "() => document.body.innerText.includes('Raw ICU data root') && !!document.querySelector('[data-run]')"
+        )
+        page.locator("[data-run]").last.click()
+        page.wait_for_function(
+            """() => document.querySelector('.xdb-density-panel') &&
+              document.body.innerText.includes('Real cross-database benchmark ready')""",
+            timeout=12000,
+        )
+        snapshot["rerunOk"] = page.evaluate(
+            "() => document.body.innerText.includes('Real cross-database benchmark ready') && document.querySelectorAll('.xdb-density-panel').length >= 1"
+        )
         if screenshots:
             shot = run_dir / "crossdb_real_mobile.png"
             page.screenshot(path=str(shot), full_page=True)
             snapshot["screenshot"] = str(shot)
+        context.close()
         browser.close()
         return {"page": snapshot, "consoleErrors": errors}
 
@@ -303,6 +375,8 @@ def main() -> int:
                 "sources": payload.get("sources"),
                 "rows": payload.get("rows"),
                 "availability": payload.get("availability"),
+                "feature_density": payload.get("feature_density"),
+                "feature_distributions": payload.get("feature_distributions"),
                 "compatibility_gate": payload.get("compatibility_gate"),
                 "privacy": payload.get("privacy"),
                 "blocked_features": payload.get("blocked_features"),
@@ -328,12 +402,22 @@ def main() -> int:
             "hasRegisteredComparison",
             "hasProvenance",
             "hasAggregate",
+            "hasDistribution",
             "hasAvailability",
             "hasGate",
             "hasBlockedScope",
         ]:
             if not page.get(key):
                 failures.append(f"browser assertion failed: {key}")
+        if page.get("densityModuleFilterCount", 0) < 2:
+            failures.append(f"density module filters missing: {page.get('densityModuleFilterCount')}")
+        if page.get("densityFeatureCount", 0) < 1:
+            failures.append(f"density feature cards missing: {page.get('densityFeatureCount')}")
+        if page.get("densityDetailVisible", 0) < 1:
+            failures.append("density feature detail did not open")
+        for key in ["exportDownloadOk", "changeSelectionOk", "rerunOk"]:
+            if not page.get(key):
+                failures.append(f"browser action assertion failed: {key}")
         print(f"Cross-DB parity QA report: {report_path}")
         print(json.dumps({"api": report["api"], "browser": browser}, indent=2, ensure_ascii=False))
         if failures:
