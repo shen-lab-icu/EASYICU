@@ -145,7 +145,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "页面指南只支持固定快捷操作" in dock_js
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
-    assert "js/screens-guided.js?v=20260625-stage102" in index_html
+    assert "js/screens-guided.js?v=20260626-folder-flow" in index_html
     assert "js/copilot-dock.js?v=20260625-stage99" in index_html
 
 
@@ -696,9 +696,15 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert "~/easyicu/projects" in guided_js
     assert "/Users/haibo" not in guided_js
     assert "Seeded example · not a local project" in guided_js
-    assert "New study draft" in guided_js
+    assert "New / open study folder" in guided_js
+    assert "Choose a local study folder" in guided_js
+    assert "Open existing project folder" in guided_js
+    assert "Project folder path" in guided_js
+    assert "data-openprojectfolder" in guided_js
+    assert "data-existing-project-dir" in guided_js
+    assert "openExistingGuidedProject" in guided_js
     assert "Creating a <strong>metadata-only local study folder</strong>" in guided_js
-    assert "Create a local study folder" in guided_js
+    assert "Create new local study folder" in guided_js
     assert "data-createdraft" in guided_js
     assert "data-draft-title" in guided_js
     assert "folder_slug" in guided_js
@@ -723,12 +729,13 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert ".gd-utilbtn.lang" in guided_css
     assert ".gd-data-workspace" in guided_css
     assert ".gd-draft-setup" in guided_css
+    assert ".gds-choice" in guided_css
     assert ".gd-frontdoor" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
     assert "api.js?v=20260625-stage100" in index_html
-    assert "screens-guided.js?v=20260625-stage102" in index_html
-    assert "guided.css?v=20260625-stage100" in index_html
+    assert "screens-guided.js?v=20260626-folder-flow" in index_html
+    assert "guided.css?v=20260626-folder-flow" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js

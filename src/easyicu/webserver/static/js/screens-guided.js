@@ -1483,17 +1483,25 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       .slice(0, 64) || 'guided-study';
   }
   function showGuidedDraftSetup(seedTitle) {
-    const title = seedTitle || (BRANCH[branch] && BRANCH[branch].chip) || 'New study draft';
+    const title = seedTitle || (BRANCH[branch] && BRANCH[branch].chip) || 'New local study';
     const slug = slugifyDraftFolder(title);
     thread.push({ bot: true, html: `
       <div class="gd-draft-setup" data-draft-setup>
         <div class="gds-head">
           <span class="gds-ico">${icon('folder', 14)}</span>
-          <div><strong>Create a local study folder</strong><span>Guided Copilot, Idea Mining, and Agent runs should be manageable as folders on this machine.</span></div>
+          <div><strong>Choose a local study folder</strong><span>Each folder owns its own Guided conversation and memory. Idea Mining and Agent Projects keep their own artifacts in linked folders.</span></div>
         </div>
-        <label class="gds-field"><span>Study title</span><input data-draft-title value="${attr(title)}" autocomplete="off" /></label>
-        <label class="gds-field"><span>Folder name</span><input data-draft-slug value="${attr(slug)}" autocomplete="off" /></label>
-        <div class="gds-path"><span>Root</span><code>~/easyicu/projects</code><small>Only metadata is written here until an Agent run is explicitly started.</small></div>
+        <div class="gds-choice">
+          <div class="gds-choice-head"><strong>Open existing project folder</strong><span>Use this when you already have a local Guided, Idea Mining, or Agent project folder.</span></div>
+          <label class="gds-field"><span>Project folder path</span><input data-existing-project-dir placeholder="~/easyicu/projects/my-study or C:\\Users\\you\\easyicu\\projects\\my-study" autocomplete="off" /></label>
+          <div class="row gap-8"><button class="btn sm" data-openprojectfolder>${icon('folder', 13)} Open folder memory</button></div>
+        </div>
+        <div class="gds-choice">
+          <div class="gds-choice-head"><strong>Create new local study folder</strong><span>Creates a metadata-only folder under the EasyICU projects root. No patient rows, no Agent run, no draft unlock.</span></div>
+          <label class="gds-field"><span>Study title</span><input data-draft-title value="${attr(title)}" autocomplete="off" /></label>
+          <label class="gds-field"><span>Folder name</span><input data-draft-slug value="${attr(slug)}" autocomplete="off" /></label>
+        </div>
+        <div class="gds-path"><span>Scope</span><code>EasyICU projects folder</code><small>Existing folders must live under the local EasyICU projects root. The browser cannot expose arbitrary folder paths, so paste the path shown by Finder, Explorer, or your terminal.</small></div>
         <div class="row gap-8">
           <button class="btn primary sm" data-createdraft>${icon('folder', 13)} Create local draft folder</button>
           <button class="btn sm" data-canceldraft>Cancel</button>
@@ -1505,8 +1513,58 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (inp) { inp.focus(); inp.select(); }
     }, 80);
   }
+  function openExistingGuidedProject(projectDir) {
+    const raw = String(projectDir || '').trim();
+    if (!raw) {
+      pushBot(
+        `Paste a local EasyICU project folder path first, then I can open the memory scoped to that folder.`,
+        `请先粘贴一个本地 EasyICU 项目文件夹路径，然后我才能打开绑定到该文件夹的记忆。`,
+      );
+      renderThread();
+      return;
+    }
+    pushUser(`Open local project folder: ${raw}`);
+    if (!window.EU_API || !window.EU_API.openGuidedProject) {
+      pushBot(
+        `The local project memory endpoint is unavailable, so I cannot open that folder reliably yet.`,
+        `本地项目记忆端点不可用，所以暂时不能可靠打开这个文件夹。`,
+      );
+      renderThread();
+      return;
+    }
+    thread.push({ typing: true });
+    renderThread();
+    window.EU_API.openGuidedProject({
+      project_dir: raw,
+      mode: 'local',
+      context: guidedBackendContext(),
+    }).then(result => {
+      thread = thread.filter(item => !item.typing);
+      if (!result || !result.ok) {
+        const reason = result && (result.reason || result.error) ? (result.reason || result.error) : 'unknown error';
+        pushBot(`Could not open project folder: <span class="mono">${esc(reason)}</span>`, `无法打开项目文件夹：<span class="mono">${esc(reason)}</span>`);
+        renderThread();
+        return;
+      }
+      selectedGuidedDraft = {
+        id: result.session && result.session.draft_id,
+        title: result.session && result.session.project_title,
+        project_dir: result.session && result.session.project_dir,
+      };
+      selectedGuidedRun = null;
+      restoreGuidedProjectThread(result, selectedGuidedDraft, 'draft');
+      loadGuidedDrafts(true);
+    }).catch(err => {
+      thread = thread.filter(item => !item.typing);
+      pushBot(
+        `Could not open project folder: <span class="mono">${esc(err.message || String(err))}</span>`,
+        `无法打开项目文件夹：<span class="mono">${esc(err.message || String(err))}</span>`,
+      );
+      renderThread();
+    });
+  }
   function createLocalGuidedDraft(label, folderSlug) {
-    const text = label || 'New study draft';
+    const text = label || 'New local study';
     pushUser(`Create local study folder: ${text}`);
     if (!window.EU_API || !window.EU_API.createGuidedDraft) {
       pushBot(
@@ -1820,7 +1878,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             </button>`).join('')
           : `<div class="gd-empty-local">
               <div class="ss-t">No guided drafts yet</div>
-              <div class="ss-m">Use New study draft to choose a local project folder first.</div>
+              <div class="ss-m">Use New / open study folder to bind the conversation to a local project folder first.</div>
             </div>`;
     const localHtml = guidedHistory.loading
       ? `<div class="gd-empty-local"><div class="ss-t">Loading local runs</div><div class="ss-m">Scanning configured local Agent project folders; export rows are not read.</div></div>`
@@ -1876,7 +1934,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         </div>
         <div class="gd-main threecol">
           <aside class="gd-rail">
-            <div class="gd-rail-top"><button class="gd-newbtn" data-newstudy title="Start a local guided draft">${icon('plus', 14)} New study draft</button></div>
+            <div class="gd-rail-top"><button class="gd-newbtn" data-newstudy title="Choose or create a local study folder">${icon('plus', 14)} New / open study folder</button></div>
             <div class="gd-rail-sec">Workspace</div>
             <div class="gd-rail-list" id="gdSessions"></div>
             <div class="gd-rail-foot">
@@ -1996,7 +2054,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           if (tok === '@openAgent') { pushUser(label); location.hash = '#agent'; return; }
           if (tok === '@reviewLocalRun') { openGuidedRunReview(selectedGuidedRun, label); return; }
           if (tok === '@activeExport') { pushUser(label); dataMode = 'real'; go('realConfirm', label); return; }
-          if (tok === '@foldernew') { pushUser(label || 'New study draft'); showGuidedDraftSetup('Guided study draft'); return; }
+          if (tok === '@foldernew') { pushUser(label || 'New / open study folder'); showGuidedDraftSetup('Guided study draft'); return; }
           if (tok === '@hintN') { handleText('use 30 patients'); return; }
           go(tok, goEl.classList.contains('suggest-chip') ? label : null);
           return;
@@ -2088,7 +2146,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           return;
         }
         if (e.target.closest('[data-newstudy]')) {
-          showGuidedDraftSetup('New study draft');
+          showGuidedDraftSetup('New local study');
+          return;
+        }
+        const openProjectFolderEl = e.target.closest('[data-openprojectfolder]');
+        if (openProjectFolderEl) {
+          const box = openProjectFolderEl.closest('[data-draft-setup]');
+          const pathEl = box ? box.querySelector('[data-existing-project-dir]') : null;
+          openExistingGuidedProject(pathEl && pathEl.value);
           return;
         }
         const createDraftEl = e.target.closest('[data-createdraft]');
@@ -2096,15 +2161,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           const box = createDraftEl.closest('[data-draft-setup]');
           const titleEl = box ? box.querySelector('[data-draft-title]') : null;
           const slugEl = box ? box.querySelector('[data-draft-slug]') : null;
-          const title = (titleEl && titleEl.value || '').trim() || 'New study draft';
+          const title = (titleEl && titleEl.value || '').trim() || 'New local study';
           const slug = slugifyDraftFolder((slugEl && slugEl.value) || title);
           createLocalGuidedDraft(title, slug);
           return;
         }
         if (e.target.closest('[data-canceldraft]')) {
           pushBot(
-            `No folder created. Use <strong>New study draft</strong> when you want to bind the conversation to a local project folder.`,
-            `没有创建文件夹。需要把对话绑定到本地项目文件夹时，再使用 <strong>New study draft</strong>。`,
+            `No folder created. Use <strong>New / open study folder</strong> when you want to bind the conversation to a local project folder.`,
+            `没有创建文件夹。需要把对话绑定到本地项目文件夹时，再使用 <strong>New / open study folder</strong>。`,
           );
           renderThread();
           return;
