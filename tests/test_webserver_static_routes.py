@@ -798,6 +798,12 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     assert "function cohortProfileValue" in viz_js
     assert "function cohortSurvivalBody" in viz_js
     assert "function cohortSurvivalChart" in viz_js
+    assert "function cohortUnavailablePanel" in viz_js
+    assert "The old seeded audit panel has been removed." in viz_js
+    assert "window.EUAudit" not in viz_js
+    assert "window.EUSofa" not in viz_js
+    assert "screens-audit.js" not in index_html
+    assert not (STATIC_DIR / "js" / "screens-audit.js").exists()
     assert "Aggregate-only group characteristics" in viz_js
     assert "profileRows.map" in viz_js
     assert "active.profile" in viz_js
