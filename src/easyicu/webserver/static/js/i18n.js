@@ -3,21 +3,56 @@
    setLang('en'|'zh') persists + re-renders the whole shell. */
 (function () {
   try { window.EU_LANG = localStorage.getItem('easyicu_lang') || 'en'; } catch (e) { window.EU_LANG = 'en'; }
+  function validLang(l) { return l === 'en' || l === 'zh'; }
+  function validMode(m) { return m === 'demo' || m === 'real'; }
+  function applyLangDom(l) {
+    document.documentElement.setAttribute('lang', l === 'zh' ? 'zh' : 'en');
+    document.body && document.body.classList.toggle('lang-zh', l === 'zh');
+  }
+  function applyDisplayDom(settings) {
+    settings = settings || {};
+    const density = settings.density === 'compact' ? 'compact' : 'comfortable';
+    if (document.body) {
+      document.body.setAttribute('data-density', density);
+      document.body.setAttribute('data-reduce-motion', settings.reduce_motion ? 'true' : 'false');
+    }
+  }
+  window.applySettingsState = function (settings, opts) {
+    settings = settings || {};
+    opts = opts || {};
+    const lang = validLang(settings.language) ? settings.language : (validLang(window.EU_LANG) ? window.EU_LANG : 'en');
+    window.EU_LANG = lang;
+    if (opts.syncStorage) {
+      try { localStorage.setItem('easyicu_lang', lang); } catch (e) {}
+    }
+    const mode = validMode(settings.data_mode) ? settings.data_mode : (validMode(window.EU_DATA) ? window.EU_DATA : 'demo');
+    window.EU_DATA = mode;
+    if (opts.syncStorage) {
+      try { localStorage.setItem('easyicu_home_data', mode); } catch (e) {}
+    }
+    applyLangDom(lang);
+    applyDisplayDom(settings);
+  };
   window.t = function (en, zh) {
     return window.EU_LANG === 'zh' ? (zh == null ? en : zh) : en;
   };
   window.setLang = function (l) {
-    if (l !== 'en' && l !== 'zh') return;
+    if (!validLang(l)) return;
     window.EU_LANG = l;
     try { localStorage.setItem('easyicu_lang', l); } catch (e) {}
-    document.documentElement.setAttribute('lang', l === 'zh' ? 'zh' : 'en');
-    document.body && document.body.classList.toggle('lang-zh', l === 'zh');
+    if (window.EU_SETTINGS) window.EU_SETTINGS.language = l;
+    if (window.EU_API && window.EU_API.saveSetting) {
+      window.EU_API.saveSetting('language', l).catch(function (err) {
+        console.warn('[EasyICU] language setting sync failed', err);
+      });
+    }
+    applyLangDom(l);
     if (window.__euRender) window.__euRender();
   };
   // apply on boot
   document.addEventListener('DOMContentLoaded', function () {
-    document.documentElement.setAttribute('lang', window.EU_LANG === 'zh' ? 'zh' : 'en');
-    document.body && document.body.classList.toggle('lang-zh', window.EU_LANG === 'zh');
+    applyLangDom(window.EU_LANG);
+    applyDisplayDom(window.EU_SETTINGS || {});
   });
 
   /* ---- lightweight styled confirm modal (replaces native confirm) ---- */
@@ -59,6 +94,13 @@
       window.EU_PATIENT_DRILLDOWN = null;
       window.EU_COHORT_REVIEW = null;
       try { localStorage.setItem('easyicu_home_data', m); } catch (e) {}
+      if (window.EU_SETTINGS) window.EU_SETTINGS.data_mode = m;
+      if (window.EU_API && window.EU_API.saveSetting) {
+        window.EU_API.saveSetting('data_mode', m).catch(function (err) {
+          console.warn('[EasyICU] data mode setting sync failed', err);
+        });
+      }
+      if (window.__euVizResetForDataMode) window.__euVizResetForDataMode();
       if (window.__euExtractReset) window.__euExtractReset();  // prev extraction belonged to the old source
       if (window.__euRender) window.__euRender();
     };

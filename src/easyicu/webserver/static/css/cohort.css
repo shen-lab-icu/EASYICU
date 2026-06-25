@@ -1,0 +1,225 @@
+.surv-toolbar{
+  display:grid;
+  grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr);
+  gap:14px;
+  margin:12px 0 14px;
+}
+.surv-label{
+  color:var(--ink-4);
+  font-family:var(--font-mono);
+  font-size:10.5px;
+  font-weight:700;
+  letter-spacing:.06em;
+  margin-bottom:7px;
+  text-transform:uppercase;
+}
+.surv-segments{
+  align-items:stretch;
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+.surv-segments .seg-btn{
+  align-items:flex-start;
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:8px;
+  color:var(--ink-2);
+  cursor:pointer;
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+  min-height:50px;
+  min-width:150px;
+  padding:9px 11px;
+  text-align:left;
+}
+.surv-segments .seg-btn span{
+  font-size:12px;
+  font-weight:700;
+  line-height:1.25;
+}
+.surv-segments .seg-btn b{
+  color:var(--ink-4);
+  font-family:var(--font-mono);
+  font-size:10.5px;
+  font-weight:600;
+}
+.surv-segments .seg-btn.active{
+  background:#ecfeff;
+  border-color:#4fb8c5;
+  box-shadow:0 0 0 2px rgba(79,184,197,.14);
+}
+.surv-segments .seg-btn.disabled{
+  background:#f7f7f4;
+  color:var(--ink-4);
+  cursor:not-allowed;
+  opacity:.72;
+}
+.surv-card{
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:18px;
+}
+.surv-head{
+  align-items:flex-start;
+  display:flex;
+  gap:18px;
+  justify-content:space-between;
+  margin-bottom:10px;
+}
+.surv-head h3{
+  font-size:18px;
+  letter-spacing:0;
+  line-height:1.25;
+  margin:4px 0 4px;
+}
+.surv-head p{
+  color:var(--ink-4);
+  font-size:12px;
+  line-height:1.45;
+  margin:0;
+}
+.surv-logrank{
+  background:#f7faf9;
+  border:1px solid var(--line);
+  border-radius:8px;
+  min-width:190px;
+  padding:10px 12px;
+}
+.surv-logrank span,
+.surv-logrank small{
+  color:var(--ink-4);
+  display:block;
+  font-size:11px;
+}
+.surv-logrank strong{
+  color:var(--ink-1);
+  display:block;
+  font-family:var(--font-mono);
+  font-size:15px;
+  margin:3px 0;
+}
+.km-chart-wrap{
+  border-top:1px solid var(--line);
+  margin-top:10px;
+  padding-top:14px;
+}
+.km-chart{
+  display:block;
+  height:auto;
+  width:100%;
+}
+.km-grid{
+  stroke:#e5e2da;
+  stroke-width:1;
+}
+.km-grid.faint{
+  stroke:#eeeeea;
+}
+.km-line{
+  fill:none;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+  stroke-width:3;
+}
+.km-axis,
+.km-axis-title{
+  fill:var(--ink-4);
+  font-family:var(--font-mono);
+  font-size:10px;
+}
+.km-axis-title{
+  font-size:11px;
+  font-weight:700;
+}
+.km-legend{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px 16px;
+  margin:10px 0 0 56px;
+}
+.km-legend span{
+  align-items:center;
+  color:var(--ink-3);
+  display:inline-flex;
+  font-size:11.5px;
+  gap:7px;
+}
+.km-legend i{
+  border-radius:999px;
+  display:inline-block;
+  height:8px;
+  width:22px;
+}
+.risk-table-wrap{
+  margin-top:18px;
+}
+.risk-table{
+  border-collapse:separate;
+  border-spacing:0;
+  font-size:12px;
+  width:100%;
+}
+.risk-table th,
+.risk-table td{
+  border-bottom:1px solid var(--line);
+  padding:8px 10px;
+  text-align:right;
+}
+.risk-table th:first-child,
+.risk-table td:first-child{
+  color:var(--ink-2);
+  font-weight:700;
+  text-align:left;
+}
+.risk-table th{
+  background:#f7f7f4;
+  color:var(--ink-4);
+  font-family:var(--font-mono);
+  font-size:10.5px;
+  text-transform:uppercase;
+}
+.surv-blocked{
+  border:1px solid var(--line);
+  border-radius:8px;
+  overflow:hidden;
+}
+.surv-blocked-row{
+  display:grid;
+  gap:10px;
+  grid-template-columns:180px minmax(0,1fr);
+  padding:9px 11px;
+}
+.surv-blocked-row + .surv-blocked-row{
+  border-top:1px solid var(--line);
+}
+.surv-blocked-row span{
+  font-weight:700;
+}
+.surv-blocked-row em{
+  color:var(--ink-4);
+  font-style:normal;
+}
+@media (max-width:900px){
+  .surv-toolbar,
+  .surv-head{
+    grid-template-columns:1fr;
+  }
+  .surv-head{
+    display:grid;
+  }
+  .surv-logrank{
+    min-width:0;
+  }
+  .surv-segments .seg-btn{
+    min-width:min(100%,180px);
+  }
+  .km-legend{
+    margin-left:0;
+  }
+  .surv-blocked-row{
+    grid-template-columns:1fr;
+  }
+}

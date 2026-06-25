@@ -34,6 +34,7 @@
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     map: '<path d="M9 3L3 6v15l6-3 6 3 6-3V3l-6 3-6-3z"/><path d="M9 3v15M15 6v15"/>',
     list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
     target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
     shield: '<path d="M12 3l8 3v6c0 4-3.5 7.5-8 9-4.5-1.5-8-5-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/>',
     refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/>',

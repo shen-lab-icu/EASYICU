@@ -54,8 +54,39 @@
 
   async function hydrateSettings() {
     window.EU_SETTINGS = await getJSON('/api/settings');
-    // keep the UI language in sync with persisted setting
-    if (window.EU_SETTINGS.language) window.EU_LANG = window.EU_SETTINGS.language;
+    // Browser language/data-mode selection is the source of truth for the
+    // current UI. If it differs from the backend settings file, keep the UI
+    // responsive now and persist the browser choice in the background.
+    let browserLang = null;
+    let browserMode = null;
+    try { browserLang = localStorage.getItem('easyicu_lang'); } catch (e) {}
+    try { browserMode = localStorage.getItem('easyicu_home_data'); } catch (e) {}
+    const serverLang = window.EU_SETTINGS.language;
+    const serverMode = window.EU_SETTINGS.data_mode;
+    const validLang = l => l === 'en' || l === 'zh';
+    const validMode = m => m === 'demo' || m === 'real';
+    const lang = validLang(browserLang) ? browserLang : (validLang(serverLang) ? serverLang : (validLang(window.EU_LANG) ? window.EU_LANG : 'en'));
+    const mode = validMode(browserMode) ? browserMode : (validMode(serverMode) ? serverMode : (validMode(window.EU_DATA) ? window.EU_DATA : 'demo'));
+    window.EU_LANG = lang;
+    window.EU_DATA = mode;
+    window.EU_SETTINGS.language = lang;
+    window.EU_SETTINGS.data_mode = mode;
+    if (window.applySettingsState) window.applySettingsState(window.EU_SETTINGS);
+    const syncPatch = {};
+    if (validLang(browserLang) && browserLang !== serverLang) syncPatch.language = browserLang;
+    if (validMode(browserMode) && browserMode !== serverMode) syncPatch.data_mode = browserMode;
+    if (Object.keys(syncPatch).length) {
+      postJSON('/api/settings', syncPatch).then(settings => {
+        window.EU_SETTINGS = Object.assign({}, window.EU_SETTINGS || {}, settings || {}, syncPatch);
+        if (window.applySettingsState) window.applySettingsState(window.EU_SETTINGS);
+      }).catch(err => console.warn('[EasyICU] language setting sync failed', err));
+    }
+    if (!validLang(browserLang)) {
+      try { localStorage.setItem('easyicu_lang', lang); } catch (e) {}
+    }
+    if (!validMode(browserMode)) {
+      try { localStorage.setItem('easyicu_home_data', mode); } catch (e) {}
+    }
     return window.EU_SETTINGS;
   }
 
@@ -63,6 +94,13 @@
   async function saveSetting(key, value) {
     const patch = {}; patch[key] = value;
     window.EU_SETTINGS = await postJSON('/api/settings', patch);
+    if (window.applySettingsState) window.applySettingsState(window.EU_SETTINGS);
+    return window.EU_SETTINGS;
+  }
+
+  async function resetSettings() {
+    window.EU_SETTINGS = await postJSON('/api/settings/reset', {});
+    if (window.applySettingsState) window.applySettingsState(window.EU_SETTINGS, { syncStorage: true });
     return window.EU_SETTINGS;
   }
 
@@ -74,6 +112,12 @@
     cat.groupConcepts = real.groupConcepts;
     cat.dict = real.dict;
     cat.cov = real.cov;
+    if (real.conceptCoverage) cat.conceptCoverage = real.conceptCoverage;
+    else delete cat.conceptCoverage;
+    if (real.coverageSummary) cat.coverageSummary = real.coverageSummary;
+    else delete cat.coverageSummary;
+    if (real.activeExportCoverage) cat.activeExportCoverage = real.activeExportCoverage;
+    else delete cat.activeExportCoverage;
     cat.desc = real.desc;
     cat.totalConcepts = real.totalConcepts;
     cat.supportedDbs = real.supportedDbs;
@@ -162,6 +206,9 @@
   function loadWorkspaceSummary(path) {
     return postJSON('/api/workspace/summary', { path: path });
   }
+  function loadPatientReviewSources(body) {
+    return postJSON('/api/patient-review/sources', body || {});
+  }
   function loadPatientReviewDrilldown(body) {
     return postJSON('/api/patient-review/drilldown', body || {});
   }
@@ -170,6 +217,15 @@
   }
   function loadCrossdbReviewSummary(body) {
     return postJSON('/api/crossdb-review/summary', body || {});
+  }
+  function loadCrossdbRawDistribution(body) {
+    return postJSON('/api/crossdb-review/raw-distribution', body || {});
+  }
+  function startCrossdbRawDistributionJob(body) {
+    return postJSON('/api/jobs/crossdb-raw-distribution', body || {});
+  }
+  function loadCrossdbDemoDistribution(body) {
+    return postJSON('/api/crossdb-review/demo-distribution', body || {});
   }
   function loadCrossdbSummary(paths) {
     return postJSON('/api/workspaces/crossdb-summary', { paths: paths || [] });
@@ -181,6 +237,12 @@
   function startAgentRun(body) {
     return postJSON('/api/jobs/agent-run', body || {});
   }
+  function loadJobSnapshot(jobId) {
+    return getJSON('/api/jobs/' + encodeURIComponent(jobId || ''));
+  }
+  function cancelJob(jobId, reason) {
+    return postJSON('/api/jobs/' + encodeURIComponent(jobId || '') + '/cancel', { reason: reason || 'user_requested' });
+  }
   function loadAgentRunReview(projectDir) {
     return postJSON('/api/agent-runs/review', { project_dir: projectDir });
   }
@@ -190,6 +252,75 @@
   }
   function loadAgentRunHistory(body) {
     return postJSON('/api/agent-runs/history', body || {});
+  }
+  function createGuidedDraft(body) {
+    return postJSON('/api/guided/drafts', body || {});
+  }
+  function loadGuidedDrafts(body) {
+    return postJSON('/api/guided/drafts/list', body || {});
+  }
+  function createGuidedSession(body) {
+    return postJSON('/api/guided/session', body || {});
+  }
+  function openGuidedProject(body) {
+    return postJSON('/api/guided/project/open', body || {});
+  }
+  function sendGuidedMessage(body) {
+    return postJSON('/api/guided/message', body || {});
+  }
+  function runGuidedAction(body) {
+    return postJSON('/api/guided/action', body || {});
+  }
+  function loadGuidedSessions(body) {
+    return postJSON('/api/guided/sessions/list', body || {});
+  }
+  function createPageGuideSession(body) {
+    return postJSON('/api/page-guide/sessions', body || {});
+  }
+  function sendPageGuideMessage(body) {
+    return postJSON('/api/page-guide/message', body || {});
+  }
+  function runPageGuideAction(body) {
+    return postJSON('/api/page-guide/action', body || {});
+  }
+  function loadPageGuideSessions(body) {
+    return postJSON('/api/page-guide/sessions/list', body || {});
+  }
+  function createCopilotSession(body) {
+    return postJSON('/api/copilot/sessions', body || {});
+  }
+  function sendCopilotMessage(body) {
+    return postJSON('/api/copilot/message', body || {});
+  }
+  function runCopilotAction(body) {
+    return postJSON('/api/copilot/action', body || {});
+  }
+  function loadCopilotSessions(body) {
+    return postJSON('/api/copilot/sessions/list', body || {});
+  }
+  function mineIdeas(body) {
+    return postJSON('/api/ideas/mine', body || {});
+  }
+  function resolveIdeaSource(body) {
+    return postJSON('/api/ideas/resolve-source', body || {});
+  }
+  function checkIdeaPriorArt(body) {
+    return postJSON('/api/ideas/prior-art', body || {});
+  }
+  function handoffIdea(body) {
+    return postJSON('/api/ideas/handoff', body || {});
+  }
+  function createIdeaAgentProject(body) {
+    return postJSON('/api/ideas/create-agent-project', body || {});
+  }
+  function loadIdeaAgentProjects(body) {
+    return postJSON('/api/ideas/agent-projects', body || {});
+  }
+  function loadIdeaHistory(body) {
+    return postJSON('/api/ideas/history', body || {});
+  }
+  function loadIdeaRun(body) {
+    return postJSON('/api/ideas/run', body || {});
   }
   function loadAgentRunArtifact(projectDir, artifact) {
     return postJSON('/api/agent-runs/artifact', { project_dir: projectDir, artifact: artifact });
@@ -222,6 +353,7 @@
   window.EU_API.hydrateSettings = hydrateSettings;
   window.EU_API.hydrateWorkspaceRegistry = hydrateWorkspaceRegistry;
   window.EU_API.saveSetting = saveSetting;
+  window.EU_API.resetSettings = resetSettings;
   window.EU_API.saveWorkspaceRegistry = saveWorkspaceRegistry;
   window.EU_API.registerWorkspaceSource = registerWorkspaceSource;
   window.EU_API.renameWorkspaceSource = renameWorkspaceSource;
@@ -231,15 +363,44 @@
   window.EU_API.loadExtractionFilterOptions = loadExtractionFilterOptions;
   window.EU_API.previewExtractionFilters = previewExtractionFilters;
   window.EU_API.loadWorkspaceSummary = loadWorkspaceSummary;
+  window.EU_API.loadPatientReviewSources = loadPatientReviewSources;
   window.EU_API.loadPatientReviewDrilldown = loadPatientReviewDrilldown;
   window.EU_API.loadCohortReviewSummary = loadCohortReviewSummary;
   window.EU_API.loadCrossdbReviewSummary = loadCrossdbReviewSummary;
+  window.EU_API.loadCrossdbRawDistribution = loadCrossdbRawDistribution;
+  window.EU_API.startCrossdbRawDistributionJob = startCrossdbRawDistributionJob;
+  window.EU_API.loadCrossdbDemoDistribution = loadCrossdbDemoDistribution;
   window.EU_API.loadCrossdbSummary = loadCrossdbSummary;
   window.EU_API.loadAgentProviderStatus = loadAgentProviderStatus;
   window.EU_API.startAgentRun = startAgentRun;
+  window.EU_API.loadJobSnapshot = loadJobSnapshot;
+  window.EU_API.cancelJob = cancelJob;
   window.EU_API.loadAgentRunReview = loadAgentRunReview;
   window.EU_API.signoffAgentRun = signoffAgentRun;
   window.EU_API.loadAgentRunHistory = loadAgentRunHistory;
+  window.EU_API.createGuidedDraft = createGuidedDraft;
+  window.EU_API.loadGuidedDrafts = loadGuidedDrafts;
+  window.EU_API.createGuidedSession = createGuidedSession;
+  window.EU_API.openGuidedProject = openGuidedProject;
+  window.EU_API.sendGuidedMessage = sendGuidedMessage;
+  window.EU_API.runGuidedAction = runGuidedAction;
+  window.EU_API.loadGuidedSessions = loadGuidedSessions;
+  window.EU_API.createPageGuideSession = createPageGuideSession;
+  window.EU_API.sendPageGuideMessage = sendPageGuideMessage;
+  window.EU_API.runPageGuideAction = runPageGuideAction;
+  window.EU_API.loadPageGuideSessions = loadPageGuideSessions;
+  window.EU_API.createCopilotSession = createCopilotSession;
+  window.EU_API.sendCopilotMessage = sendCopilotMessage;
+  window.EU_API.runCopilotAction = runCopilotAction;
+  window.EU_API.loadCopilotSessions = loadCopilotSessions;
+  window.EU_API.mineIdeas = mineIdeas;
+  window.EU_API.resolveIdeaSource = resolveIdeaSource;
+  window.EU_API.checkIdeaPriorArt = checkIdeaPriorArt;
+  window.EU_API.handoffIdea = handoffIdea;
+  window.EU_API.createIdeaAgentProject = createIdeaAgentProject;
+  window.EU_API.loadIdeaAgentProjects = loadIdeaAgentProjects;
+  window.EU_API.loadIdeaHistory = loadIdeaHistory;
+  window.EU_API.loadIdeaRun = loadIdeaRun;
   window.EU_API.loadAgentRunArtifact = loadAgentRunArtifact;
   window.EU_API.downloadAgentRunArtifact = downloadAgentRunArtifact;
   window.EU_API.downloadAgentRunBundle = downloadAgentRunBundle;

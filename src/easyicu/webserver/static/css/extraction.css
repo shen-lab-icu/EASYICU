@@ -1,0 +1,193 @@
+/* Data Extraction route-owned styles. Keep extraction-specific rules here. */
+
+.ex-connect-card{
+  max-width:720px;
+}
+
+.ex-connect-card .cfg-body{
+  padding-bottom:18px;
+}
+
+.ex-connect-label{
+  display:block;
+  font-size:11.5px;
+  font-weight:500;
+  color:var(--ink-3);
+  margin:0 0 7px;
+}
+
+.ex-connect-path{
+  width:100%;
+  height:40px;
+}
+
+.ex-connect-browse{
+  flex:none;
+  margin-left:6px;
+}
+
+.ex-connect-primary{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:14px;
+  align-items:center;
+  margin-top:12px;
+  padding:13px;
+  border:1px solid var(--accent-border);
+  border-radius:var(--r-3);
+  background:color-mix(in srgb, var(--accent-soft) 48%, var(--surface));
+}
+
+.ex-connect-copy{
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+  min-width:0;
+}
+
+.ex-connect-copy-ico{
+  width:26px;
+  height:26px;
+  flex:none;
+  display:grid;
+  place-items:center;
+  border-radius:var(--r-2);
+  color:var(--accent-ink);
+  background:color-mix(in srgb, var(--accent-soft) 75%, var(--surface));
+  border:1px solid var(--accent-border);
+}
+
+.ex-connect-copy-title{
+  font-size:12.75px;
+  font-weight:600;
+  color:var(--ink);
+}
+
+.ex-connect-copy-desc{
+  margin-top:2px;
+  max-width:58ch;
+  font-size:11.5px;
+  line-height:1.45;
+  color:var(--ink-3);
+}
+
+.ex-connect-analyze{
+  min-width:154px;
+  height:36px;
+  justify-content:center;
+}
+
+.ex-connect-actions{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:8px 14px;
+  margin-top:10px;
+}
+
+.ex-linkbtn{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  border:0;
+  background:transparent;
+  padding:4px 0;
+  color:var(--ink-3);
+  font:inherit;
+  font-size:12px;
+  font-weight:500;
+  cursor:pointer;
+}
+
+.ex-linkbtn:hover{
+  color:var(--accent-ink);
+}
+
+.ex-linkbtn .chev{
+  color:var(--ink-4);
+}
+
+@media (max-width:720px){
+  .ex-connect-primary{
+    grid-template-columns:1fr;
+  }
+
+  .ex-connect-analyze{
+    width:100%;
+  }
+}
+
+/* Extraction advanced controls */
+.adv-toggle{
+  display:inline-flex; align-items:center; gap:6px; margin-top:14px; white-space:nowrap;
+  font-size:12px; font-weight:500; color:var(--accent-ink); cursor:pointer;
+  background:none; border:0; padding:0; font-family:inherit;
+}
+
+.adv-toggle .chev{ transition:transform .18s; }
+.adv-toggle.open .chev{ transform:rotate(180deg); }
+.adv-body{ margin-top:14px; padding-top:14px; border-top:1px dashed var(--hair-2); }
+.adv-body[hidden]{ display:none; }
+.adv-row{ display:grid; grid-template-columns:minmax(140px, 220px) minmax(0, 1fr); align-items:center; gap:14px; }
+.adv-label{ font-size:12.5px; color:var(--ink-2); font-weight:500; }
+.adv-control{ min-width:0; }
+
+.cohort-preset-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:10px; }
+.cohort-preset{ min-width:0; width:100%; min-height:58px; display:flex; align-items:flex-start; gap:9px; padding:10px 11px; border:1px solid var(--hair-2); border-radius:var(--r-2); background:var(--surface); color:var(--ink); font:inherit; text-align:left; cursor:pointer; transition:background .12s,border-color .12s; }
+.cohort-preset:hover{ background:var(--surface-2); border-color:var(--hair-3); }
+.cohort-preset.on{ background:var(--accent-soft); border-color:var(--accent-border); }
+.cohort-preset .cp-dot{ width:16px; height:16px; flex:none; margin-top:1px; border-radius:50%; border:1.5px solid var(--hair-3); background:var(--surface); }
+.cohort-preset.on .cp-dot{ border-color:var(--accent); background:radial-gradient(circle at center,var(--accent) 0 42%,transparent 45%); }
+.cohort-preset .cp-body{ min-width:0; display:flex; flex-direction:column; gap:2px; }
+.cohort-preset .cp-title{ font-size:12.5px; font-weight:650; line-height:1.25; }
+.cohort-preset .cp-sub{ font-size:10.8px; color:var(--ink-4); line-height:1.35; }
+
+.range-ctl{ min-width:0; display:grid; grid-template-columns:minmax(120px,1fr) auto; align-items:center; gap:10px; }
+.range-pair{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.range-ctl input[type="range"]{ width:100%; accent-color:var(--accent); }
+.range-val{ min-width:58px; text-align:right; font-size:11px; color:var(--ink-3); white-space:nowrap; }
+
+/* Extraction module selection */
+.modgrid{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
+.modcard{
+  display:flex; align-items:center; gap:10px;
+  padding:10px 12px; border:1px solid var(--hair-2); border-radius:var(--r-2);
+  background:var(--surface); cursor:pointer; transition:border-color .12s, background .12s;
+}
+.modcard:hover{ border-color:var(--hair-3); background:var(--surface-2); }
+.modcard.on{ border-color:var(--accent-border); background:var(--accent-soft); }
+.modcard .mk{
+  width:18px; height:18px; flex:none; border-radius:5px;
+  border:1.5px solid var(--hair-3); display:grid; place-items:center; color:#fff;
+}
+.modcard.on .mk{ background:var(--accent); border-color:var(--accent); }
+.modcard .nm{ font-size:12.5px; font-weight:600; min-width:0; }
+.modcard .ct{ font-family:var(--font-mono); font-size:10.5px; color:var(--ink-4); margin-left:auto; }
+
+/* Sticky extraction summary rail */
+.ex2-summary{ align-self:stretch; min-width:0; }
+.sumcard{
+  position:sticky; top:74px; z-index:3;
+  max-height:calc(100vh - 92px); overflow:auto; scrollbar-gutter:stable;
+  border:1px solid var(--hair); border-radius:var(--r-3); background:var(--surface); box-shadow:var(--sh-1); padding:16px 18px;
+}
+.sumcard .eyebrow{ margin-bottom:12px; }
+.sum-row{ display:flex; align-items:center; justify-content:space-between; padding:7px 0; font-size:12.5px; border-bottom:1px solid var(--hair); }
+.sum-row:last-of-type{ border-bottom:0; }
+.sum-row .k{ color:var(--ink-3); }
+.sum-row .v{ font-family:var(--font-mono); font-weight:500; color:var(--ink); }
+
+@media (max-width:720px){
+  .adv-row{ grid-template-columns:1fr; gap:6px; }
+  .cohort-preset-grid{ grid-template-columns:1fr; }
+  .range-pair{ grid-template-columns:1fr; }
+}
+
+@media (max-width:560px){
+  .modgrid{ grid-template-columns:1fr; }
+}
+
+@media (max-width:980px){
+  .ex2-summary{ align-self:auto; }
+  .sumcard{ position:static; max-height:none; overflow:visible; }
+}

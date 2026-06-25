@@ -46,13 +46,13 @@
     { n: 3, id: 'agent', label: ['Analyze & draft', '分析与撰稿'], sub: ['runs → gated manuscript', '运行 → 受闸草稿'], ico: 'agent' },
   ];
   const VIZ_IDS = ['patient', 'cohort', 'crossdb'];
-  /* Flat "Classic Workspace" group — matches code's _shell_nav_items:
-     Copilot (top) · Classic Workspace[Extract + 3 review pages] · Agent (top). */
+  /* User-facing data workspace: task-oriented labels, no migration-era "classic"
+     terminology in the navigation. */
   const CLASSIC = [
-    { id: 'extraction', label: ['Data Extraction', '数据抽取'], ico: 'extract', stale: false },
-    { id: 'patient', label: ['Patient Review', '患者审阅'], ico: 'patient', stale: true },
-    { id: 'cohort', label: ['Cohort Statistics', '队列统计'], ico: 'cohort', stale: true },
-    { id: 'crossdb', label: ['Cross-DB Benchmark', '跨库基准'], ico: 'benchmark', stale: true },
+    { id: 'extraction', label: ['Extract Data', '抽取数据'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract', stale: false },
+    { id: 'patient', label: ['Patient Drilldown', '患者明细'], sub: ['single-patient review', '单患者审阅'], ico: 'patient', stale: true },
+    { id: 'cohort', label: ['Cohort Review', '队列审阅'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort', stale: true },
+    { id: 'crossdb', label: ['Cross-DB Compare', '跨库对比'], sub: ['multi-database checks', '多数据库检查'], ico: 'benchmark', stale: true },
   ];
   let classicOpen = true;
   function phaseOf(r) {
@@ -63,7 +63,8 @@
   }
 
   const MOBILE_NAV = [
-    { id: 'guided', label: ['Copilot', '助手'], ico: 'spark' },
+    { id: 'guided', label: ['Guide', '引导'], ico: 'spark' },
+    { id: 'ideas', label: ['Ideas', '想法'], ico: 'target' },
     { id: 'extraction', label: ['Extract', '抽取'], ico: 'extract' },
     { id: 'patient', label: ['Review', '审阅'], ico: 'patient' },
     { id: 'agent', label: ['Analyze', '分析'], ico: 'agent' },
@@ -91,14 +92,26 @@
       </div>
       <button class="cp-entry ${route === 'guided' ? 'on' : ''}" data-nav="guided">
         <span class="cp-ico">${icon('spark', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Research Copilot', '研究 Copilot')}</span><span class="cp-d">${window.EU_HASWORK ? t('continue this study by chat', '用对话继续这项研究') : t('the whole study, by chat', '对话完成整项研究')}</span></span>
+        <span class="cp-body"><span class="cp-t">${t('Guided study', '研究引导')}</span><span class="cp-d">${window.EU_HASWORK ? t('continue the current workflow by chat', '用对话继续当前流程') : t('plan a study by conversation', '用对话规划研究')}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
-      <div class="shared-note"><span class="ico">${icon('refresh', 11)}</span><span>${t('Copilot and Classic share one study — switch between them anytime.', 'Copilot 与经典工作台共享同一项研究 —— 可随时切换。')}</span></div>
+      <div class="shared-note"><span class="ico">${icon('target', 11)}</span><span>${t('Have a paper or question? Start with Idea Mining. Already have data? Start with Extract Data.', '有文章或问题，从 Idea 挖掘开始；已有数据，从抽取数据开始。')}</span></div>
+      <div class="sec-label nav-sec">${t('Discovery & Plan', '发现与计划')}</div>
+      <button class="cp-entry ideas-entry ${route === 'ideas' ? 'on' : ''}" data-nav="ideas">
+        <span class="cp-ico">${icon('target', 16)}</span>
+        <span class="cp-body"><span class="cp-t">${t('Find a Study Idea', '找研究想法')}</span><span class="cp-d">${t('paper, PDF, or topic → feasible plan', '文章、PDF 或主题 → 可行计划')}</span></span>
+        <span class="cp-go">${icon('arrow', 14)}</span>
+      </button>
+      <button class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent">
+        <span class="cp-ico">${icon('agent', 16)}</span>
+        <span class="cp-body"><span class="cp-t">${t('Run a Research Project', '运行研究项目')}</span><span class="cp-d">${t('confirmed plan → evidence-gated draft', '确认计划 → 证据闸草稿')}</span></span>
+        <span class="cp-go">${icon('arrow', 14)}</span>
+      </button>
+      <div class="sec-label nav-sec">${t('Data & Review', '数据与审阅')}</div>
       <div class="wsnav">
         <button class="wsgroup-head ${wsOpen ? 'open' : ''} ${classicActive ? 'active' : ''}" data-ws-toggle>
           <span class="wsg-ico">${icon('grid', 15)}</span>
-          <span class="wsg-t">${t('Classic Workspace', '经典工作台')}</span>
+          <span class="wsg-t">${t('Data Workspace', '数据工作台')}</span>
           <span class="wsg-prog">${progLabel}</span>
           <span class="wsg-chev">${icon(wsOpen ? 'chevdown' : 'chevron', 13)}</span>
         </button>
@@ -107,15 +120,10 @@
           ${CLASSIC.map(c => `
             <button class="wsitem ${route === c.id ? 'active' : ''}" data-nav="${c.id}">
               <span class="ico">${icon(c.ico, 15)}</span>
-              <span class="wsi-t">${L(c.label)}${(window.EU_STALE && c.stale) ? ` <span class="jp-stale">${icon('refresh', 9)} ${t('stale', '过期')}</span>` : ''}</span>
+              <span class="wsi-copy"><span class="wsi-t">${L(c.label)}${(window.EU_STALE && c.stale) ? ` <span class="jp-stale">${icon('refresh', 9)} ${t('stale', '过期')}</span>` : ''}</span><span class="wsi-sub">${L(c.sub)}</span></span>
             </button>`).join('')}
         </div>` : ''}
       </div>
-      <button class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent">
-        <span class="cp-ico">${icon('agent', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Agent Projects', '研究项目')}</span><span class="cp-d">${t('runs → gated manuscript', '运行 → 受闸草稿')}</span></span>
-        <span class="cp-go">${icon('arrow', 14)}</span>
-      </button>
       <div class="sec-label" style="margin:16px 0 6px;">${t('Reference', '参考')}</div>
       <div class="nav" style="padding-top:0;">
         <div class="nav-item ${route === 'tutorial' ? 'active' : ''}" data-nav="tutorial"><span class="ico">${icon('help', 17)}</span>${t('Get Started', '快速上手')}</div>
@@ -128,7 +136,7 @@
         <div class="icobtn" title="Back" data-nav="entry">${icon('back', 16)}</div>
         <div class="icobtn ${route === 'tutorial' ? 'on' : ''}" title="Help" data-nav="tutorial">${icon('help', 16)}</div>
         <div class="icobtn ${route === 'settings' ? 'on' : ''}" title="Settings" data-nav="settings">${icon('gear', 16)}</div>
-        <div class="icobtn" title="Language">${icon('globe', 16)}</div>
+        <div class="icobtn" title="Language" data-lang-toggle>${icon('globe', 16)}</div>
         <div class="avatar">LK</div>
       </div>
     </aside>`;
@@ -161,7 +169,7 @@
         <button class="${window.EU_LANG !== 'zh' ? 'on' : ''}" data-lang="en">EN</button>
         <button class="${window.EU_LANG === 'zh' ? 'on' : ''}" data-lang="zh">中</button>
       </div>
-      <button class="btn sm" data-cpopen title="Ask the Copilot">${icon('spark', 13)} ${t('Copilot','助手')}</button>
+      <button class="btn sm" data-cpopen title="${t('Open page guide for this screen', '打开当前页面指南')}">${icon('spark', 13)} ${t('Page guide','页面指南')}</button>
       ${scr.actionHtml || ''}
     </div>`;
   }
@@ -174,7 +182,7 @@
         <div class="mark" data-nav="entry">${icon('flask', 16)}</div>
         <div class="name">${title}</div>
         <div class="spacer"></div>
-        <button class="btn sm icon" data-cpopen title="Copilot">${icon('spark', 16)}</button>
+        <button class="btn sm icon" data-cpopen title="${t('Page guide', '页面指南')}">${icon('spark', 16)}</button>
         ${scr.actionHtml || ''}
       </div>`;
     const bottom = `
@@ -217,6 +225,8 @@
   app.addEventListener('click', (e) => {
     const langEl = e.target.closest('[data-lang]');
     if (langEl) { if (window.setLang) window.setLang(langEl.dataset.lang); return; }
+    const langToggleEl = e.target.closest('[data-lang-toggle]');
+    if (langToggleEl) { if (window.setLang) window.setLang(window.EU_LANG === 'zh' ? 'en' : 'zh'); return; }
     const dmEl = e.target.closest('[data-datamode]');
     if (dmEl) { if (window.setDataMode) window.setDataMode(dmEl.dataset.datamode); return; }
     const goalEl = e.target.closest('[data-goal-cycle]');
@@ -224,7 +234,11 @@
     const wsEl = e.target.closest('[data-ws-toggle]');
     if (wsEl) { classicOpen = !classicOpen; render(); return; }
     const cpEl = e.target.closest('[data-cpopen]');
-    if (cpEl) { if (window.EUCopilot) window.EUCopilot.toggle(); return; }
+    if (cpEl) {
+      const guide = window.EUPageGuide || window.EUCopilot;
+      if (guide) guide.toggle();
+      return;
+    }
     const navEl = e.target.closest('[data-nav]');
     if (navEl && navEl.dataset.nav) {
       let id = normRoute(navEl.dataset.nav);
@@ -246,15 +260,16 @@
   });
 
   /* ---- global keyboard shortcuts (advertised on Get Started) ---- */
-  const SHORTCUT_SECTIONS = ['extraction', 'patient', 'cohort', 'crossdb', 'agent'];
+  const SHORTCUT_SECTIONS = ['ideas', 'extraction', 'patient', 'crossdb', 'agent'];
   function goto(id) { if (window.SCREENS[id]) { route = id; location.hash = '#' + id; render(); } }
   document.addEventListener('keydown', (e) => {
     const tgt = e.target;
     const typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable);
-    // ⌘K / Ctrl+K → open the Copilot command surface (works even while typing)
+    // ⌘K / Ctrl+K → open the Page guide command surface (works even while typing)
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault();
-      if (window.EUCopilot) window.EUCopilot.toggle();
+      const guide = window.EUPageGuide || window.EUCopilot;
+      if (guide) guide.toggle();
       return;
     }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;

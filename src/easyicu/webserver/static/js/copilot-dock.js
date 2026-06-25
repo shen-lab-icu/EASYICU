@@ -1,64 +1,211 @@
-/* EasyICU — Copilot dock controller.
-   A persistent companion for the classic workspace. Body-level (survives
-   route re-renders). It reads the current screen for context, answers
-   page-specific questions, and DRIVES the GUI (navigate, load, run) so the
-   user sees the workspace change while chatting. Can escalate to the full
-   guided Copilot. Evidence-bound, demo-safe. */
+/* EasyICU — Page guide dock controller.
+   A persistent command panel for the active workspace page. It explains the
+   current screen and offers bounded local shortcuts. It is deliberately not
+   the full conversational Copilot; longer study planning belongs in Guided
+   Copilot. Body-level so it survives route re-renders. */
 (function () {
   let dock, fab, backdrop, scroll, suggestEl, input;
   let thread = [];
   let busy = false;
   let lastRoute = '';
+  let sessionId = null;
+  let sessionReady = null;
+
+  function bi(en, zh) { return { en, zh }; }
+  function htmlOf(value) {
+    if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'en')) {
+      return window.t ? window.t(value.en, value.zh) : value.en;
+    }
+    return value == null ? '' : String(value);
+  }
+  function currentContext() {
+    const src = window.EU_SOURCES && window.EU_SOURCES.activeSource ? window.EU_SOURCES.activeSource() : null;
+    const selected = src ? {
+      label: src.label || src.name || src.database || '',
+      database: src.database || src.source || '',
+      path: src.path || '',
+    } : null;
+    return {
+      route: routeOf(),
+      language: window.EU_LANG || 'en',
+      data_mode: window.EU_DATA || 'demo',
+      selected_source: selected,
+    };
+  }
+  function localized(value) {
+    if (value && typeof value === 'object') {
+      return window.t ? window.t(value.en || '', value.zh || value.en || '') : (value.en || value.zh || '');
+    }
+    return value == null ? '' : String(value);
+  }
+  function chipText(chip) {
+    if (Array.isArray(chip)) return htmlOf(chip[0]);
+    return localized({ en: chip.label_en || chip.label || '', zh: chip.label_zh || chip.label || chip.label_en || '' });
+  }
+  function hasPageGuideBackend() {
+    return !!(window.EU_API && window.EU_API.createPageGuideSession && window.EU_API.sendPageGuideMessage && window.EU_API.runPageGuideAction);
+  }
+  async function ensureSession() {
+    if (!hasPageGuideBackend()) return null;
+    if (sessionId) return { session: { id: sessionId } };
+    if (!sessionReady) {
+      sessionReady = window.EU_API.createPageGuideSession({
+        scope: 'page_guide',
+        context: currentContext(),
+      }).then(payload => {
+        sessionId = payload && payload.session && payload.session.id;
+        return payload;
+      }).catch(err => {
+        sessionReady = null;
+        throw err;
+      });
+    }
+    return sessionReady;
+  }
+  function applyBackendResult(result) {
+    if (!result || !result.type) return false;
+    if (result.type === 'navigate' && result.target) {
+      nav('#' + result.target);
+      return true;
+    }
+    if (result.type === 'reply') {
+      botSay(localized(result.reply), result.chips || ctxFor(routeOf()).chips);
+      return true;
+    }
+    return false;
+  }
+  async function sendBackendMessage(value) {
+    try {
+      const session = await ensureSession();
+      const payload = await window.EU_API.sendPageGuideMessage({
+        session_id: session && session.session && session.session.id,
+        scope: 'page_guide',
+        message: value,
+        context: currentContext(),
+      });
+      botSay(localized(payload.reply), payload.chips);
+      const action = payload.actions && payload.actions[0];
+      if (action && action.type === 'navigate' && action.target) {
+        setTimeout(() => nav('#' + action.target), 720);
+      }
+      return true;
+    } catch (err) {
+      console.warn('[EasyICU] Page guide backend unavailable, using local fallback', err);
+      return false;
+    }
+  }
+  async function runBackendAction(action, label) {
+    if (!action || !hasPageGuideBackend()) return false;
+    if (action.indexOf('explain_') === 0) {
+      return sendBackendMessage(label || action.replace(/^explain_/, ''));
+    }
+    try {
+      const payload = await window.EU_API.runPageGuideAction({
+        session_id: sessionId,
+        action: action,
+        context: currentContext(),
+      });
+      if (payload.blocked) {
+        botSay(localized(payload.reason || payload.error || 'Blocked.'), ctxFor(routeOf()).chips);
+        return true;
+      }
+      if (applyBackendResult(payload.result)) return true;
+      botSay(bi('Done.', '完成。'), ctxFor(routeOf()).chips);
+      return true;
+    } catch (err) {
+      console.warn('[EasyICU] Page guide action failed', err);
+      botSay(bi('That action is not available yet.', '这个动作现在还不可用。'), ctxFor(routeOf()).chips);
+      return true;
+    }
+  }
+  function backendExplainActionForRoute(route) {
+    return {
+      extraction: 'explain_extraction',
+      patient: 'explain_patient',
+      crossdb: 'explain_crossdb',
+      agent: 'explain_gate',
+      settings: 'explain_settings',
+    }[route] || null;
+  }
+  function appendRouteGreeting(route) {
+    const c = ctxFor(route);
+    thread.push({ ctxline: true, html: bi(`now on ${c.label}`, `现在在：${c.label}`) });
+    render();
+    const action = backendExplainActionForRoute(route);
+    if (action && hasPageGuideBackend()) {
+      window.EU_API.runPageGuideAction({
+        session_id: sessionId,
+        action: action,
+        context: currentContext(),
+      }).then(payload => {
+        const result = payload && payload.result;
+        if (result && result.type === 'reply') {
+          thread.push({ bot: true, html: localized(result.reply) });
+          render(); renderChips(result.chips || c.chips);
+          return;
+        }
+        thread.push({ bot: true, html: c.hi });
+        render(); renderChips(c.chips);
+      }).catch(err => {
+        console.warn('[EasyICU] Page guide route context backend failed', err);
+        thread.push({ bot: true, html: c.hi });
+        render(); renderChips(c.chips);
+      });
+      return;
+    }
+    thread.push({ bot: true, html: c.hi });
+    render(); renderChips(c.chips);
+  }
 
   /* ---- per-route context: greeting + chips + answers ---- */
   const CTX = {
     entry: {
       label: 'Home',
-      hi: `I’m your EasyICU companion. I can explain any screen, drive it for you, or run a whole study by chat.`,
-      chips: [['Start a guided study', '@guided', 'act'], ['How does EasyICU work?', '@say:how'], ['Load a demo workspace', '@load', 'act']],
+      hi: bi(`This Page guide explains the current screen and offers safe shortcuts. Open Guided Copilot when you want a full conversational study plan.`, `页面指南会解释当前页面并提供安全快捷操作。需要完整对话式研究规划时，请打开 Guided Copilot。`),
+      chips: [[bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act'], [bi('How does EasyICU work?', 'EasyICU 怎么工作？'), '@say:how'], [bi('Load a demo workspace', '加载演示工作区'), '@load', 'act']],
     },
     extraction: {
       label: 'Data Extraction',
-      hi: `You’re in Data Extraction — one click runs the recommended tables, or you can customize the cohort, modules, and export yourself. Want me to walk it, or just run a guided extraction?`,
-      chips: [['How does extraction work?', '@say:extract'], ['What gets exported?', '@say:export'], ['Run a guided study', '@guided', 'act']],
+      hi: bi(`You’re in Data Extraction. Use the page controls to configure cohort, modules, and export. This guide can explain the page or open Guided Copilot.`, `这里是数据抽取。请用页面控件配置队列、模块和导出。页面指南可以解释页面，或打开 Guided Copilot。`),
+      chips: [[bi('How does extraction work?', '抽取怎么工作？'), '@say:extract'], [bi('What gets exported?', '会导出什么？'), '@say:export'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']],
     },
     patient: {
       label: 'Patient Review',
-      hi: `This is Patient Review — tables, time series, a patient overview, and data-quality flags. I can load a demo workspace so it’s populated.`,
-      chips: [['Load demo workspace', '@load', 'act'], ['What’s in each tab?', '@say:tabs'], ['Explain data-quality flags', '@say:quality']],
+      hi: bi(`This is Patient Review — tables, time series, a patient overview, and data-quality flags. I can load a demo workspace so it’s populated.`, `这里是患者审阅：包含表格、时间序列、患者概览和数据质量标记。我可以先加载一个演示工作区。`),
+      chips: [[bi('Load demo workspace', '加载演示工作区'), '@load', 'act'], [bi('What’s in each tab?', '每个标签页是什么？'), '@say:tabs'], [bi('Explain data-quality flags', '解释数据质量标记'), '@say:quality']],
     },
     cohort: {
       label: 'Cohort Statistics',
-      hi: `Cohort Statistics compares groups, audits coverage, and reclassifies SOFA. I can re-run it or explain what you’re seeing.`,
-      chips: [['Re-run statistics', '@cohortrun', 'act'], ['Explain SOFA reclassification', '@say:sofa'], ['What’s the comparison?', '@say:contrast']],
+      hi: bi(`Cohort Statistics compares groups, audits coverage, and reclassifies SOFA. I can re-run it or explain what you’re seeing.`, `队列统计用于分组比较、覆盖率审计和 SOFA 重分类。我可以重新运行，或解释当前结果。`),
+      chips: [[bi('Re-run statistics', '重新运行统计'), '@cohortrun', 'act'], [bi('Explain SOFA reclassification', '解释 SOFA 重分类'), '@say:sofa'], [bi('What’s the comparison?', '当前比较是什么？'), '@say:contrast']],
     },
     crossdb: {
       label: 'Cross-DB Benchmark',
-      hi: `Cross-DB Benchmark applies one cohort definition across ICU databases. I can load it or explain where databases diverge.`,
-      chips: [['Load the benchmark', '@loadcross', 'act'], ['Which databases overlap?', '@say:overlap'], ['Run a guided comparison', '@guided', 'act']],
+      hi: bi(`Cross-DB Benchmark applies one cohort definition across ICU databases. I can load it or explain where databases diverge.`, `跨库比较会把同一个队列定义应用到多个 ICU 数据库。我可以加载比较，或解释哪些数据库差异最大。`),
+      chips: [[bi('Load the benchmark', '加载跨库比较'), '@loadcross', 'act'], [bi('Which databases overlap?', '哪些数据库有重叠？'), '@say:overlap'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']],
     },
     agent: {
       label: 'Agent Projects',
-      hi: `The Research Agent runs an auditable pipeline and drafts findings — but the draft stays gated until checks pass. Want the run, or the reasoning?`,
-      chips: [['Why is the draft locked?', '@say:gate'], ['Show a completed run', '@agentrun', 'act'], ['Run a guided study', '@guided', 'act']],
+      hi: bi(`The Research Agent runs an auditable pipeline and drafts findings — but the draft stays gated until checks pass. Want the run, or the reasoning?`, `Research Agent 会运行可审计 pipeline 并生成 findings 草稿，但检查通过前草稿保持锁定。你想看运行，还是想看 gate 逻辑？`),
+      chips: [[bi('Why is the draft locked?', '为什么草稿锁定？'), '@say:gate'], [bi('Show a completed run', '查看已完成 run'), '@agentrun', 'act'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']],
     },
-    states: { label: 'Workspace States', hi: `This is the states reference — loading, empty, no-data, error, blocked, success. Ask me when each one shows.`, chips: [['When do states show?', '@say:states'], ['Start a guided study', '@guided', 'act']] },
-    settings: { label: 'Settings', hi: `Settings are local-first and reversible. Ask me what any option does.`, chips: [['Is my data uploaded?', '@say:privacy'], ['Explain the evidence gate', '@say:gate']] },
-    tutorial: { label: 'Get Started', hi: `Get Started orients you to the workflow. I can run the whole thing by chat instead.`, chips: [['Run a guided study', '@guided', 'act'], ['How does EasyICU work?', '@say:how']] },
+    states: { label: 'Workspace States', hi: bi(`This is the states reference — loading, empty, no-data, error, blocked, success. Use the shortcuts below or open Guided Copilot.`, `这里是工作区状态参考：加载、空、无数据、错误、阻断、成功。可用下方快捷操作，或打开 Guided Copilot。`), chips: [[bi('When do states show?', '状态什么时候出现？'), '@say:states'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']] },
+    settings: { label: 'Settings', hi: bi(`Settings are local-first and reversible. Ask me what any option does.`, `设置是本地优先且可回退的。你可以问任意选项的含义。`), chips: [[bi('Is my data uploaded?', '我的数据会上传吗？'), '@say:privacy'], [bi('Explain the evidence gate', '解释 evidence gate'), '@say:gate']] },
+    tutorial: { label: 'Get Started', hi: bi(`Get Started orients you to the workflow. Open Guided Copilot for the full conversational path.`, `快速上手会介绍整个流程；完整对话式路径请打开 Guided Copilot。`), chips: [[bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act'], [bi('How does EasyICU work?', 'EasyICU 怎么工作？'), '@say:how']] },
   };
 
   const ANSWERS = {
-    how: `EasyICU runs locally and moves a study through four stages: <strong>frame → extract → review → analyze & draft</strong>. You can drive each panel yourself, or let me run the whole thing by chat. Nothing is uploaded.`,
-    extract: `Extraction has a one-click <strong>recommended</strong> path — first ICU stay, first 24h, six core feature modules — that writes analysis-ready frames plus a reproducible manifest. Need more control? The <strong>Customize</strong> panel opens cohort criteria, feature modules, and export format. Either way, nothing runs on incomplete data.`,
-    export: `An export bundle is the concept data plus a <strong>manifest.json</strong> — not the figures. Code, tables, and figures come from a Research Agent run, with an evidence ledger.`,
-    tabs: `<ul class="mb-list"><li><strong>Data Tables</strong> — raw stay-level rows</li><li><strong>Time Series</strong> — hourly trajectories</li><li><strong>Patient Overview</strong> — one stay at a glance</li><li><strong>Data Quality</strong> — coverage, ranges, missingness</li></ul>`,
-    quality: `Flags mark concepts that are sparse or out-of-range. They protect your denominators — a flagged module is surfaced before it can bias a model. Want me to load the workspace so you can see them?`,
-    sofa: `SOFA reclassification shows how patients move between severity bands when you recompute the score — it’s a sensitivity check, not a new finding.`,
-    contrast: `The default contrast is Survived vs Deceased; you can switch to age groups, sex, length-of-stay, or Sepsis vs non-sepsis. All values shown are seeded demo numbers.`,
-    overlap: `Only concepts present in every selected database can be compared fairly — the availability matrix shows where one is missing. Lactate and MAP usually overlap; some scores are partial.`,
-    gate: `Drafting is a deliberate second stage. A claim may only be written once it traces to a logged artifact — denominators resolved, coverage above threshold, tables reproducing from the manifest — and a human signs off. That’s why the draft is locked until then.`,
-    states: `Every data surface passes through the same six: loading (skeletons), empty (first run), no-data (0 results), error (recoverable), blocked (gated), success. The reference page lets you preview each.`,
-    privacy: `No. EasyICU is local-first and the guarantee is enforced — extraction, review, and analysis run on your machine. Only the agent’s plan text can ever leave, and only if you explicitly enable it. Never patient rows.`,
+    how: bi(`EasyICU runs locally and moves a study through four stages: <strong>frame → extract → review → analyze & draft</strong>. This Page guide explains and links; Guided Copilot handles full conversational planning. Nothing is uploaded.`, `EasyICU 在本机运行，把研究推进为四步：<strong>定义问题 → 抽取 → 审阅 → 分析与草稿</strong>。页面指南负责解释和跳转；完整对话式规划由 Guided Copilot 承担。不会上传数据。`),
+    extract: bi(`Extraction has a one-click <strong>recommended</strong> path — first ICU stay, full available ICU window with a 30-day cap, six core feature modules — that writes analysis-ready frames plus a reproducible manifest. Need more control? The <strong>Customize</strong> panel opens cohort criteria, feature modules, and export format. Either way, nothing runs on incomplete data.`, `抽取有一键<strong>推荐路径</strong>：首个 ICU stay、完整可用 ICU 窗口并设 30 天上限、核心特征模块，输出可分析数据表和可复现 manifest。需要更多控制时，<strong>自定义</strong>面板可以配置队列、模块和导出格式。`),
+    export: bi(`An export bundle is the concept data plus a <strong>manifest.json</strong> — not the figures. Code, tables, and figures come from a Research Agent run, with an evidence ledger.`, `导出包包含概念数据和 <strong>manifest.json</strong>，不是图件。代码、表格和图件来自 Research Agent run，并附 evidence ledger。`),
+    tabs: bi(`<ul class="mb-list"><li><strong>Data Tables</strong> — raw stay-level rows</li><li><strong>Time Series</strong> — hourly trajectories</li><li><strong>Patient Overview</strong> — one stay at a glance</li><li><strong>Data Quality</strong> — coverage, ranges, missingness</li></ul>`, `<ul class="mb-list"><li><strong>数据表</strong>：stay 级数据</li><li><strong>时间序列</strong>：小时级轨迹</li><li><strong>患者概览</strong>：单个 stay 一屏查看</li><li><strong>数据质量</strong>：覆盖率、范围和缺失</li></ul>`),
+    quality: bi(`Flags mark concepts that are sparse or out-of-range. They protect your denominators — a flagged module is surfaced before it can bias a model. Want me to load the workspace so you can see them?`, `标记用于提示稀疏或越界的概念，保护分母不被悄悄污染。某个模块影响模型前，会先暴露出来。要我加载工作区给你看吗？`),
+    sofa: bi(`SOFA reclassification shows how patients move between severity bands when you recompute the score — it’s a sensitivity check, not a new finding.`, `SOFA 重分类展示重新计算评分后患者如何在严重度分层之间移动。它是敏感性检查，不是新的临床发现。`),
+    contrast: bi(`The default contrast is Survived vs Deceased; you can switch to age groups, sex, length-of-stay, or Sepsis vs non-sepsis. All values shown are seeded demo numbers.`, `默认比较是存活 vs 死亡；也可以切换到年龄、性别、住院时长或 Sepsis vs 非 Sepsis。演示模式下显示的是 seeded demo 数字。`),
+    overlap: bi(`Only concepts present in every selected database can be compared fairly — the availability matrix shows where one is missing. Lactate and MAP usually overlap; some scores are partial.`, `只有在所选数据库中都存在的概念才适合公平比较；availability matrix 会显示缺失在哪里。乳酸和 MAP 通常有重叠，部分评分可能不完整。`),
+    gate: bi(`Drafting is a deliberate second stage. A claim may only be written once it traces to a logged artifact — denominators resolved, coverage above threshold, tables reproducing from the manifest — and a human signs off. That’s why the draft is locked until then.`, `草稿是有意延后的阶段。只有当 claim 能追溯到已记录 artifact，并且分母、覆盖率、表格复现和人工签署都通过后，才允许写入稿件。所以在此之前草稿保持锁定。`),
+    states: bi(`Every data surface passes through the same six: loading (skeletons), empty (first run), no-data (0 results), error (recoverable), blocked (gated), success. The reference page lets you preview each.`, `每个数据界面都经过六种状态：加载、空、无数据、错误、阻断和成功。参考页可以预览这些状态。`),
+    privacy: bi(`No. EasyICU is local-first and the guarantee is enforced — extraction, review, and analysis run on your machine. Only the agent’s plan text can ever leave, and only if you explicitly enable it. Never patient rows.`, `不会。EasyICU 是本地优先：抽取、审阅和分析都在你的机器上运行。只有你明确启用时，Agent 的计划文本才可能离开本机，患者行永远不会发送。`),
   };
 
   function routeOf() { const r = (location.hash || '#entry').slice(1); return CTX[r] ? r : (window.SCREENS && window.SCREENS[r] ? r : 'entry'); }
@@ -68,14 +215,22 @@
   function render() {
     scroll.innerHTML = thread.map(t => {
       if (t.typing) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble"><div class="typing"><span></span><span></span><span></span></div></div></div></div>`;
-      if (t.ctxline) return `<div class="cp-ctxline"><span class="dotline"></span>${t.html}<span class="dotline"></span></div>`;
-      if (t.bot) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble">${t.html}</div></div></div>`;
+      if (t.ctxline) return `<div class="cp-ctxline"><span class="dotline"></span>${htmlOf(t.html)}<span class="dotline"></span></div>`;
+      if (t.bot) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble">${htmlOf(t.html)}</div></div></div>`;
       return `<div class="msg user"><div class="m-ava">LK</div><div class="m-body"><div class="m-bubble">${t.html}</div></div></div>`;
     }).join('');
     scroll.scrollTop = scroll.scrollHeight + 400;
   }
   function renderChips(chips) {
-    suggestEl.innerHTML = (chips || []).map(([label, tok, cls]) => `<button class="suggest-chip ${cls || ''}" data-cp="${tok}">${label}</button>`).join('');
+    suggestEl.innerHTML = (chips || []).map(chip => {
+      if (Array.isArray(chip)) {
+        const [label, tok, cls] = chip;
+        return `<button class="suggest-chip ${cls || ''}" data-cp="${tok}">${htmlOf(label)}</button>`;
+      }
+      const action = esc(chip.action || '');
+      const cls = chip.class || (action.indexOf('open_') === 0 ? 'act' : '');
+      return `<button class="suggest-chip ${cls}" data-cp-action="${action}">${esc(chipText(chip))}</button>`;
+    }).join('');
   }
   function esc(s) { return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 
@@ -97,10 +252,10 @@
   function nav(hash) { location.hash = hash; setTimeout(flashContent, 80); }
   function drive(tok) {
     switch (tok) {
-      case '@load': try { window.__euVizPreset && window.__euVizPreset(); } catch (e) {} nav('#patient'); return 'Loaded a demo workspace — Patient Review is populated. Tabs are live on the left.';
-      case '@loadcross': try { window.__euVizPreset && window.__euVizPreset(); } catch (e) {} nav('#crossdb'); return 'Loaded the benchmark — Cross-DB is on the left with the availability matrix.';
-      case '@cohortrun': nav('#cohort'); setTimeout(() => { const b = document.querySelector('[data-cohort-run]'); if (b) b.click(); }, 240); return 'Re-running cohort statistics — watch the panel recompute on the left.';
-      case '@agentrun': try { window.__euAgentPreset && window.__euAgentPreset(); } catch (e) {} nav('#agent'); return 'Opened a completed Research Agent run — the Summary gate is on the left.';
+      case '@load': try { window.__euVizPreset && window.__euVizPreset(); } catch (e) {} nav('#patient'); return bi('Loaded a demo workspace — Patient Review is populated. Tabs are live on the left.', '已加载演示工作区，Patient Review 已填充。左侧标签页可以直接查看。');
+      case '@loadcross': try { window.__euVizPreset && window.__euVizPreset(); } catch (e) {} nav('#crossdb'); return bi('Loaded the benchmark — Cross-DB is on the left with the availability matrix.', '已加载跨库比较，Cross-DB 页面会显示 availability matrix。');
+      case '@cohortrun': nav('#cohort'); setTimeout(() => { const b = document.querySelector('[data-cohort-run]'); if (b) b.click(); }, 240); return bi('Re-running cohort statistics — watch the panel recompute on the left.', '正在重新运行队列统计，请看左侧面板重新计算。');
+      case '@agentrun': try { window.__euAgentPreset && window.__euAgentPreset(); } catch (e) {} nav('#agent'); return bi('Opened a completed Research Agent run — the Summary gate is on the left.', '已打开一个完成的 Research Agent run，左侧是 Summary gate。');
     }
     return null;
   }
@@ -109,19 +264,30 @@
   function handleText(v) {
     if (!v || busy) return;
     thread.push({ user: true, html: esc(v) }); render();
+    if (hasPageGuideBackend()) {
+      sendBackendMessage(v).then(ok => { if (!ok) fallbackText(v); });
+      return;
+    }
+    fallbackText(v);
+  }
+
+  function fallbackText(v) {
     const t = v.toLowerCase();
-    if (/\b(guided|whole|run it|do it for me|walk me)\b/.test(t)) { botSay(`Opening the guided Copilot — it’ll run the full study by chat.`, []); setTimeout(openGuided, 700); return; }
+    if (/\b(guided|whole|run it|do it for me|walk me)\b/.test(t)) { botSay(bi(`Opening Guided Copilot for the full conversational workflow.`, `正在打开 Guided Copilot，用于完整对话式流程。`), []); setTimeout(openGuided, 700); return; }
     if (/\b(load|demo|populate|show me data)\b/.test(t)) { const m = drive('@load'); botSay(m, ctxFor(routeOf()).chips); return; }
     if (/\b(privacy|upload|local|phi)\b/.test(t)) { botSay(ANSWERS.privacy, ctxFor(routeOf()).chips); return; }
     if (/\b(gate|lock|draft|sign)\b/.test(t)) { botSay(ANSWERS.gate, ctxFor(routeOf()).chips); return; }
     if (/\b(quality|missing|coverage|flag)\b/.test(t)) { botSay(ANSWERS.quality, ctxFor(routeOf()).chips); return; }
     if (/\b(how|what is|explain|work)\b/.test(t)) { botSay(ANSWERS.how, ctxFor(routeOf()).chips); return; }
     // restate fallback — never a dead end
-    botSay(`I’ll treat that as “<em>${esc(v)}</em>”. In this demo I can explain the current screen, load/run it for you, or open the full guided study — tap one below, or rephrase.`, ctxFor(routeOf()).chips);
+    botSay(bi(
+      `I’ll treat that as “<em>${esc(v)}</em>”. Page guide supports fixed shortcuts only. Pick an action below, or open Guided Copilot for free-form planning.`,
+      `我会把它理解为“<em>${esc(v)}</em>”。页面指南只支持固定快捷操作。请选择下方动作，或打开 Guided Copilot 做自由对话规划。`,
+    ), ctxFor(routeOf()).chips);
   }
 
   function openGuided() {
-    // hand off the dock conversation so the full Copilot continues, not restarts
+    // hand off the page context so Guided Copilot continues, not restarts
     try {
       const lastUser = [...thread].reverse().find(t => t.user);
       window.__cpBridge = { ts: Date.now(), route: routeOf(), lastUser: lastUser ? lastUser.html : null };
@@ -129,11 +295,23 @@
     close(); location.hash = '#guided';
   }
 
-  function greet(force) {
+  async function greet(force) {
     const r = routeOf();
     const c = ctxFor(r);
     if (force || !thread.length) {
-      thread = [{ ctxline: true, html: `on ${c.label}` }, { bot: true, html: c.hi }];
+      thread = [{ ctxline: true, html: bi(`on ${c.label}`, `当前页面：${c.label}`) }];
+      render(); renderChips([]);
+      if (hasPageGuideBackend()) {
+        try {
+          const payload = await ensureSession();
+          thread.push({ bot: true, html: localized(payload.reply) });
+          render(); renderChips(payload.chips || c.chips);
+          return;
+        } catch (err) {
+          console.warn('[EasyICU] Page guide greeting backend failed', err);
+        }
+      }
+      thread.push({ bot: true, html: c.hi });
       render(); renderChips(c.chips);
     }
   }
@@ -141,7 +319,7 @@
   /* ---- open / close ---- */
   function open() {
     dock.classList.add('open'); backdrop.classList.add('open'); fab.hidden = true;
-    document.getElementById('cpCtx').textContent = 'on ' + ctxFor(routeOf()).label;
+    document.getElementById('cpCtx').textContent = (window.t ? window.t('on ', '当前页面：') : 'on ') + ctxFor(routeOf()).label;
     greet();
     setTimeout(() => input && input.focus(), 320);
     try { localStorage.setItem('easyicu_dock', '1'); } catch (e) {}
@@ -155,24 +333,29 @@
 
   /* ---- build ---- */
   function build() {
+    const pageGuideLabel = window.t ? window.t('Page guide', '页面指南') : 'Page guide';
+    const pageGuideContext = window.t ? window.t('screen guide', '页面指南') : 'screen guide';
+    const shortcutPlaceholder = window.t
+      ? window.t('Optional shortcut, e.g. “open Patient Review”…', '可选快捷指令，例如“打开患者审阅”…')
+      : 'Optional shortcut, e.g. “open Patient Review”…';
     backdrop = document.createElement('div'); backdrop.id = 'cpBackdrop';
-    fab = document.createElement('button'); fab.id = 'cpFab'; fab.setAttribute('aria-label', 'Open EasyICU Copilot');
-    fab.innerHTML = `<span class="fab-mk">${icon('spark', 14)}</span> Copilot`;
-    dock = document.createElement('aside'); dock.id = 'cpDock'; dock.setAttribute('aria-label', 'EasyICU Copilot');
+    fab = document.createElement('button'); fab.id = 'cpFab'; fab.setAttribute('aria-label', 'Open EasyICU page guide');
+    fab.innerHTML = `<span class="fab-mk">${icon('spark', 14)}</span> ${pageGuideLabel}`;
+    dock = document.createElement('aside'); dock.id = 'cpDock'; dock.setAttribute('aria-label', 'EasyICU page guide');
     dock.innerHTML = `
       <div class="cp-head">
         <div class="cp-mk">${icon('spark', 16)}</div>
-        <div class="grow"><div class="cp-name">Copilot</div><div class="cp-ctx" id="cpCtx">companion</div></div>
-        <button class="cp-iconbtn" id="cpExpand" title="Open full guided study" aria-label="Open full guided study">${icon('grid', 16)}</button>
-        <button class="cp-iconbtn" id="cpClose" title="Close" aria-label="Close Copilot">${icon('stop', 15)}</button>
+        <div class="grow"><div class="cp-name">${pageGuideLabel}</div><div class="cp-ctx" id="cpCtx">${pageGuideContext}</div></div>
+        <button class="cp-iconbtn" id="cpExpand" title="Open Guided Copilot" aria-label="Open Guided Copilot">${icon('grid', 16)}</button>
+        <button class="cp-iconbtn" id="cpClose" title="Close" aria-label="Close page guide">${icon('stop', 15)}</button>
       </div>
       <div class="cp-scroll" id="cpScroll" role="log" aria-live="polite"></div>
       <div class="cp-suggest" id="cpSuggest"></div>
       <div class="cp-composer">
-        <input class="c-in" id="cpInput" placeholder="Ask about this screen, or say “run a guided study”…" autocomplete="off" aria-label="Message Copilot" />
-        <button class="c-go" id="cpSend" aria-label="Send">${icon('arrow', 16)}</button>
+        <input class="c-in" id="cpInput" placeholder="${shortcutPlaceholder}" autocomplete="off" aria-label="Page guide shortcut" />
+        <button class="c-go" id="cpSend" aria-label="Run shortcut">${icon('arrow', 16)}</button>
       </div>
-      <div class="cp-foot">Context-aware · drives the workspace · evidence-bound</div>`;
+      <div class="cp-foot">Page-specific · safe shortcuts · local only</div>`;
     document.body.appendChild(backdrop); document.body.appendChild(fab); document.body.appendChild(dock);
 
     scroll = dock.querySelector('#cpScroll');
@@ -185,14 +368,22 @@
     dock.querySelector('#cpExpand').addEventListener('click', openGuided);
 
     suggestEl.addEventListener('click', (e) => {
+      const backendBtn = e.target.closest('[data-cp-action]');
+      if (backendBtn) {
+        const action = backendBtn.dataset.cpAction;
+        const label = backendBtn.textContent.trim();
+        thread.push({ user: true, html: esc(label) }); render();
+        runBackendAction(action, label);
+        return;
+      }
       const b = e.target.closest('[data-cp]'); if (!b) return;
       const tok = b.dataset.cp; const label = b.textContent.trim();
       thread.push({ user: true, html: esc(label) }); render();
-      if (tok === '@guided') { botSay(`Opening the guided Copilot…`, []); setTimeout(openGuided, 650); return; }
+      if (tok === '@guided') { botSay(bi(`Opening Guided Copilot…`, `正在打开 Guided Copilot…`), []); setTimeout(openGuided, 650); return; }
       if (tok.startsWith('@say:')) { botSay(ANSWERS[tok.split(':')[1]] || '…', ctxFor(routeOf()).chips); return; }
       const msg = drive(tok);
       if (msg) { botSay(msg, ctxFor(routeOf()).chips); return; }
-      botSay(`Done.`, ctxFor(routeOf()).chips);
+      botSay(bi(`Done.`, `完成。`), ctxFor(routeOf()).chips);
     });
     dock.querySelector('#cpSend').addEventListener('click', () => { const v = input.value.trim(); input.value = ''; handleText(v); });
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = input.value.trim(); input.value = ''; handleText(v); } });
@@ -203,10 +394,8 @@
       if (r === 'guided') { close(); fab.hidden = true; }
       else { if (!dock.classList.contains('open')) fab.hidden = false; }
       if (dock.classList.contains('open') && r !== lastRoute && r !== 'guided') {
-        document.getElementById('cpCtx').textContent = 'on ' + ctxFor(r).label;
-        thread.push({ ctxline: true, html: `now on ${ctxFor(r).label}` });
-        thread.push({ bot: true, html: ctxFor(r).hi });
-        render(); renderChips(ctxFor(r).chips);
+        document.getElementById('cpCtx').textContent = (window.t ? window.t('on ', '当前页面：') : 'on ') + ctxFor(r).label;
+        appendRouteGreeting(r);
       }
       lastRoute = r;
     });
@@ -215,6 +404,10 @@
     if (routeOf() === 'guided') fab.hidden = true;
   }
 
-  function init() { build(); window.EUCopilot = { open, close, toggle }; }
+  function init() {
+    build();
+    window.EUPageGuide = { open, close, toggle };
+    window.EUCopilot = window.EUPageGuide; // compatibility for existing shell shortcuts
+  }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

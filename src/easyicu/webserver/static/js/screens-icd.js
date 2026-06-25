@@ -13,7 +13,7 @@
     ['eicu', 'eICU-CRD', 'ICD-9 + text · diagnosis'],
   ];
   let icdDb = 'miiv';
-  let icdInclude = 'A41, R65';   // sepsis / severe sepsis — matches the demo study
+  let icdInclude = '';
   let icdExclude = '';
   const ICD_TOTAL = 412;         // candidate ICU stays (matches the eligibility flow)
 
@@ -91,6 +91,14 @@
      block — the single source for ICD cohort filtering. The legacy standalone
      screen was removed; the router redirects #icd → extraction. */
   window.EUIcd = {
+    contract() {
+      return {
+        icd_include: splitTokens(icdInclude).join(', '),
+        icd_exclude: splitTokens(icdExclude).join(', '),
+        include_diagnoses: splitTokens(icdInclude),
+        exclude_diagnoses: splitTokens(icdExclude),
+      };
+    },
     block() {
       const incTokens = splitTokens(icdInclude);
       const excTokens = splitTokens(icdExclude);
@@ -111,7 +119,7 @@
         <div class="icd-inputs" style="margin-top:12px;">
           <div class="icd-field">
             <label>${icon('plus', 13)} ${L('Include diagnoses', '包含诊断')}</label>
-            <input id="icdIncInput" type="text" value="${icdInclude.replace(/"/g, '&quot;')}" placeholder="${L('e.g. A41, R65, sepsis', '如 A41、R65、sepsis')}" autocomplete="off" spellcheck="false" />
+            <input id="icdIncInput" type="text" value="${icdInclude.replace(/"/g, '&quot;')}" placeholder="${L('e.g. J18, N17, I50, C, free text', '如 J18、N17、I50、C、自由文本')}" autocomplete="off" spellcheck="false" />
             <span class="icd-field-hint">${L('Comma- or space-separated ICD prefixes or terms', '逗号或空格分隔的 ICD 前缀或关键词')}</span>
           </div>
           <div class="icd-field">

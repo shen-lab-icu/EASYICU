@@ -1,15 +1,15 @@
 /* Screen: Research Agent — project workspace (redesigned, bilingual).
    Goal: make the WORKFLOW and PROJECT MANAGEMENT obvious.
      • Left rail = a persistent list of studies (projects), like chat sessions.
-     • Each study carries a workflow mode (Analysis run / Idea exploration),
-       a linked cohort, its own run history, outputs, and draft versions.
+     • Each study carries a linked cohort, its own run history, outputs, and
+       draft versions. Idea mining lives in the separate #ideas workspace.
      • The pipeline + evidence gate are drawn explicitly per study.
-   Outputs are clearly seeded demos; the manuscript draft stays gated. */
+   Outputs fail closed: Real mode lists only whitelisted local artifacts. */
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});
 
   /* ---------------- project data ---------------- */
-  const STUDIES = [
+  const DEMO_STUDIES = [
     {
       id: 'sepsis', name: ['Sepsis mortality prediction', '脓毒症死亡率预测'],
       mode: 'analysis', status: 'gate', stage: 3, // 0 plan,1 build,2 analyze,3 gate,4 draft
@@ -41,16 +41,16 @@
       signed: false,
     },
     {
-      id: 'lactate', name: ['Early lactate — idea scan', '早期乳酸 — 想法探索'],
-      mode: 'idea', status: 'draft', stage: 2, // frame, recipe, dry-run, recommend
-      cohort: 'sepsis_mortality_demo', source: ['demo · feasibility only', '演示 · 仅可行性'],
+      id: 'lactate', name: ['Early lactate analysis seed', '早期乳酸分析种子'],
+      mode: 'analysis', status: 'idle', stage: 0,
+      cohort: 'sepsis_mortality_demo', source: ['idea seed · not yet run', '想法种子 · 尚未运行'],
       question: [
-        'Is there a feasible signal linking first-6h lactate clearance to 28-day mortality worth a full study?',
-        '前 6 小时乳酸清除率与 28 天死亡率之间是否存在值得开展完整研究的可行信号?',
+        'Test whether early lactate trajectory adds prognostic information after the idea has been confirmed in Idea Mining.',
+        '在 Idea 挖掘确认后,检验早期乳酸轨迹是否提供额外预后信息。',
       ],
       runs: [
-        ['dry-run 02', ['Feasibility scan', '可行性扫描'], 'complete', '0:41', ['today 13:05', '今天 13:05']],
-        ['dry-run 01', ['Source check', '来源核查'], 'complete', '0:19', ['today 12:40', '今天 12:40']],
+        ['seed 02', ['Feasibility handoff', '可行性交接'], 'complete', '0:41', ['today 13:05', '今天 13:05']],
+        ['seed 01', ['Source check', '来源核查'], 'complete', '0:19', ['today 12:40', '今天 12:40']],
       ],
       signed: false,
     },
@@ -67,7 +67,7 @@
     },
   ];
 
-  let agSel = 'sepsis';
+  let agSel = null;
   let agTab = 'overview';
   let agEvOpen = -1;   // expanded evidence-gate check index
   let agRun = { active: false, prog: 0, timer: null, es: null, jobId: null, step: null, error: null, result: null };
@@ -75,6 +75,9 @@
   let agHistory = { studyId: null, loading: false, error: null, data: null };
   let agArtifact = { projectDir: null, name: null, loading: false, error: null, data: null };
   let agProvider = { provider: 'openai', consent: false, loading: false, error: null, status: null };
+  let agIdeaProjects = { loading: false, error: null, data: null };
+  const AG_JOB_KEY = 'easyicu.agent.activeJob.v1';
+  let agResumeProbe = { loading: false, checkedJobId: null };
 
   /* continuity: Copilot can land a completed run */
   window.__euAgentPreset = function () { agSel = 'sepsis'; agTab = 'outputs'; };
@@ -82,7 +85,98 @@
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   }
-  function study() { return STUDIES.find(s => s.id === agSel) || STUDIES[0]; }
+  function seedStudy(row) {
+    const title = row.title || row.question || 'Idea-derived study';
+    const q = row.question || title;
+    const pre = row.pre_experiment_summary || {};
+    const source = row.source || {};
+    return {
+      id: row.study_id || row.id || title,
+      name: [title, title],
+      mode: 'analysis',
+      status: row.status === 'seeded_from_idea' ? 'idle' : (row.status || 'idle'),
+      stage: Number(row.stage || 0),
+      cohort: row.study_id || 'idea_seed',
+      source: [
+        `idea seed · ${pre.status || 'pre-experiment'} · ${pre.feature_count || 0} features`,
+        `idea 种子 · ${pre.status || '预实验'} · ${pre.feature_count || 0} 特征`,
+      ],
+      question: [q, q],
+      runs: (row.runs || []).map((r, i) => [
+        r.label || ('seed ' + String(i + 1).padStart(2, '0')),
+        [r.scope || 'metadata seed', r.scope || '元数据种子'],
+        r.status || 'complete',
+        '—',
+        [r.created_at || 'local', r.created_at || '本地'],
+      ]),
+      signed: false,
+      ideaSeed: row,
+      sourceArticle: [source.title, source.journal, source.year].filter(Boolean).join(' · '),
+    };
+  }
+  function realMode() {
+    return window.EU_DATA === 'real';
+  }
+  function emptyStudy() {
+    return {
+      id: '__none__',
+      name: [t('No local research project selected', '尚未选择本地研究项目'), t('No local research project selected', '尚未选择本地研究项目')],
+      mode: 'analysis',
+      status: 'idle',
+      stage: 0,
+      cohort: '—',
+      source: [t('No local project seed', '无本地项目种子'), t('No local project seed', '无本地项目种子')],
+      question: [
+        t('Create a project from Idea Mining or start a local Agent run from an active export. Demo studies are hidden in Real mode.', '请从 Idea Mining 创建项目，或基于 active export 启动本地 Agent run。真实模式下不会显示演示研究。'),
+        t('Create a project from Idea Mining or start a local Agent run from an active export. Demo studies are hidden in Real mode.', '请从 Idea Mining 创建项目，或基于 active export 启动本地 Agent run。真实模式下不会显示演示研究。'),
+      ],
+      runs: [],
+      signed: false,
+      empty: true,
+    };
+  }
+  function allStudies() {
+    const seeds = (agIdeaProjects.data && Array.isArray(agIdeaProjects.data.projects) ? agIdeaProjects.data.projects : []).map(seedStudy);
+    const seedIds = new Set(seeds.map(s => s.id));
+    const base = realMode() ? [] : DEMO_STUDIES;
+    return seeds.concat(base.filter(s => !seedIds.has(s.id)));
+  }
+  function study() { return allStudies().find(s => s.id === agSel) || allStudies()[0] || emptyStudy(); }
+  function displayPath(path) {
+    const raw = String(path || '');
+    const home = String(window.EU_HOME || '');
+    return home && raw.startsWith(home) ? raw.replace(home, '~') : raw;
+  }
+  function projectFolderLabel(s) {
+    if (s && s.empty) return t('No local project folder yet', '还没有本地项目文件夹');
+    return s && s.ideaSeed && s.ideaSeed.project_dir
+      ? displayPath(s.ideaSeed.project_dir)
+      : t('Created when this study is first run', '首次运行时创建');
+  }
+  function requestIdeaAgentProjects(force) {
+    if (!window.EU_API || !window.EU_API.loadIdeaAgentProjects) return;
+    if (!force && (agIdeaProjects.loading || agIdeaProjects.data || agIdeaProjects.error)) return;
+    agIdeaProjects = { loading: true, error: null, data: null };
+    window.EU_API.loadIdeaAgentProjects({ limit: 50 }).then(data => {
+      agIdeaProjects = { loading: false, error: null, data: data };
+      const studies = allStudies();
+      let preferred = null;
+      try {
+        const raw = localStorage.getItem('easyicu_last_idea_agent_project');
+        const parsed = raw ? JSON.parse(raw) : null;
+        preferred = parsed && parsed.study_id;
+      } catch (_) {}
+      const before = agSel;
+      if (preferred && studies.some(row => row.id === preferred)) agSel = preferred;
+      else if (!studies.some(row => row.id === agSel) && studies.length) agSel = studies[0].id;
+      maybeRestoreAgentJob();
+      if (agSel !== before && window.__euRender) window.__euRender();
+      else repaintBody();
+    }).catch(err => {
+      agIdeaProjects = { loading: false, error: err.message || String(err), data: null };
+      repaintBody();
+    });
+  }
   function activeExportSource() {
     if (window.EU_DATA !== 'real') return null;
     if (window.EU_SOURCES && window.EU_SOURCES.activeSource) return window.EU_SOURCES.activeSource();
@@ -102,6 +196,44 @@
     const s = study();
     return window.EU_AGENT_LAST_RUN && window.EU_AGENT_LAST_RUN.study_id === s.id ? window.EU_AGENT_LAST_RUN : null;
   }
+  function artifactsForLive(live) {
+    if (!live) return [];
+    const review = currentLiveReview(live);
+    if (review && Array.isArray(review.artifacts)) return review.artifacts;
+    return Array.isArray(live.artifacts) ? live.artifacts : [];
+  }
+  function outputCountForStudy() {
+    const live = liveRunForStudy();
+    if (live) return artifactsForLive(live).length;
+    return 0;
+  }
+  function artifactKind(name) {
+    const n = String(name || '').toLowerCase();
+    if (n.includes('cohort')) return 'num';
+    if (n.includes('ledger') || n.includes('gate') || n.includes('plan') || n.includes('draft')) return 'table';
+    if (n.includes('missing')) return 'heat';
+    if (n.includes('roc')) return 'roc';
+    if (n.includes('calib')) return 'calib';
+    return 'file';
+  }
+  function artifactTitle(name) {
+    const n = String(name || '');
+    const labels = {
+      'run_context.json': t('Run context', '运行上下文'),
+      'cohort_summary.json': t('Cohort summary', '队列摘要'),
+      'table1_summary.json': t('Table 1 summary', 'Table 1 摘要'),
+      'missingness_audit.json': t('Missingness audit', '缺失审计'),
+      'roc_curve.json': t('ROC curve', 'ROC 曲线'),
+      'calibration_curve.json': t('Calibration curve', '校准曲线'),
+      'quality_gate.json': t('Evidence gate', '证据闸'),
+      'evidence_ledger.json': t('Evidence ledger', '证据账本'),
+      'agent_plan.json': t('Agent plan', 'Agent 计划'),
+      'manuscript_draft.json': t('Locked manuscript draft', '锁定论文草稿'),
+      'human_signoff.json': t('Human sign-off', '人工签署'),
+    };
+    if (labels[n]) return labels[n];
+    return n.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
   function requestLiveReview(live) {
     if (!live || !live.project_dir || !window.EU_API || !window.EU_API.loadAgentRunReview) return;
     if (agReview.projectDir === live.project_dir && (agReview.loading || agReview.data || agReview.error)) return;
@@ -112,6 +244,7 @@
       repaintBody();
     }).catch(err => {
       agReview = { projectDir: live.project_dir, loading: false, error: err.message || String(err), data: null, signing: false };
+      window.EU_AGENT_RUN_REVIEW = null;
       repaintBody();
     });
   }
@@ -122,6 +255,7 @@
   function requestRunHistory(force) {
     if (window.EU_DATA !== 'real' || !window.EU_API || !window.EU_API.loadAgentRunHistory) return;
     const s = study();
+    if (s.empty) return;
     if (!force && agHistory.studyId === s.id && (agHistory.loading || agHistory.data || agHistory.error)) return;
     agHistory = { studyId: s.id, loading: true, error: null, data: null };
     window.EU_API.loadAgentRunHistory({ study_id: s.id, limit: 50 }).then(data => {
@@ -166,6 +300,7 @@
   function openReview(review) {
     if (!review || !review.ok) return;
     window.EU_AGENT_LAST_RUN = liveRunFromReview(review);
+    window.EU_AGENT_RUN_REVIEW = review;
     agReview = { projectDir: review.project_dir, loading: false, error: null, data: review, signing: false };
     agArtifact = { projectDir: null, name: null, loading: false, error: null, data: null };
     agTab = 'draft';
@@ -191,6 +326,111 @@
   function closeRunStream() {
     if (agRun.timer) { clearInterval(agRun.timer); agRun.timer = null; }
     if (agRun.es) { agRun.es.close(); agRun.es = null; }
+  }
+  function rememberAgentJob(meta) {
+    try {
+      localStorage.setItem(AG_JOB_KEY, JSON.stringify(Object.assign({ created_at: Date.now() }, meta || {})));
+    } catch (_) {}
+  }
+  function readRememberedAgentJob() {
+    try {
+      const raw = localStorage.getItem(AG_JOB_KEY);
+      const meta = raw ? JSON.parse(raw) : null;
+      if (!meta || !meta.job_id) return null;
+      const age = Date.now() - Number(meta.created_at || 0);
+      if (age > 24 * 60 * 60 * 1000) {
+        localStorage.removeItem(AG_JOB_KEY);
+        return null;
+      }
+      return meta;
+    } catch (_) {
+      return null;
+    }
+  }
+  function clearRememberedAgentJob(jobId) {
+    try {
+      const meta = readRememberedAgentJob();
+      if (!jobId || !meta || meta.job_id === jobId) localStorage.removeItem(AG_JOB_KEY);
+    } catch (_) {}
+  }
+  function lastRunEvent(snapshot) {
+    const events = snapshot && Array.isArray(snapshot.events) ? snapshot.events : [];
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i] && events[i].label) return events[i];
+    }
+    return null;
+  }
+  function applyRunEventProgress(ev) {
+    if (ev && ev.total) agRun.prog = Math.max(agRun.prog || 0, Math.min(1, Number(ev.current || 0) / Number(ev.total || 1)));
+    if (ev && ev.label) agRun.step = ev.label;
+    const bar = document.querySelector('#agHost .runbar-fill');
+    if (bar) bar.style.width = Math.round((agRun.prog || 0) * 100) + '%';
+    const detail = document.querySelector('#agHost .nb-d');
+    if (detail && agRun.step) detail.innerHTML = `${esc(agRun.step)}${agRun.jobId ? ` · <span class="mono">${esc(agRun.jobId)}</span>` : ''}`;
+  }
+  function attachAgentJobStream(jobId, s) {
+    if (!jobId || !window.EventSource) return;
+    closeRunStream();
+    const es = new EventSource('/api/jobs/' + jobId + '/events');
+    agRun.es = es;
+    es.onmessage = msg => {
+      const ev = JSON.parse(msg.data);
+      applyRunEventProgress(ev);
+      if (ev.type === 'end') finishRealRun(s, ev.status, ev.result, ev.error);
+    };
+    es.onerror = () => {
+      if (!agRun.active) return;
+      closeRunStream();
+      agRun.active = false;
+      agRun.error = t('Connection interrupted. If the server job is still running, resume the stream; otherwise retry from the active export.', '连接中断。如果服务端任务仍在运行,可恢复任务流；否则从 active export 重跑。');
+      agRun.reconnectable = true;
+      repaintBody();
+    };
+  }
+  function restoreAgentJobFromSnapshot(meta, snapshot) {
+    const s = study();
+    if (meta && meta.study_id && allStudies().some(row => row.id === meta.study_id)) agSel = meta.study_id;
+    const target = study();
+    if (snapshot.status === 'running') {
+      const ev = lastRunEvent(snapshot);
+      agRun = {
+        active: true,
+        prog: 0,
+        timer: null,
+        es: null,
+        jobId: snapshot.id || (meta && meta.job_id),
+        step: ev ? ev.label : t('Reconnected to running Agent job', '已重新连接正在运行的 Agent 任务'),
+        error: null,
+        result: null,
+        reconnectable: false,
+      };
+      applyRunEventProgress(ev || {});
+      agTab = 'overview';
+      attachAgentJobStream(agRun.jobId, target);
+      repaintBody();
+      return;
+    }
+    clearRememberedAgentJob(snapshot.id || (meta && meta.job_id));
+    finishRealRun(target, snapshot.status, snapshot.result, snapshot.error);
+  }
+  function maybeRestoreAgentJob() {
+    if (agRun.active || agRun.result || agRun.error || agResumeProbe.loading) return;
+    if (!window.EU_API || !window.EU_API.loadJobSnapshot) return;
+    if (realMode() && agIdeaProjects.loading) return;
+    if (realMode() && !agIdeaProjects.data && !agIdeaProjects.error) {
+      requestIdeaAgentProjects();
+      return;
+    }
+    const meta = readRememberedAgentJob();
+    if (!meta || !meta.job_id || agResumeProbe.checkedJobId === meta.job_id) return;
+    agResumeProbe = { loading: true, checkedJobId: meta.job_id };
+    window.EU_API.loadJobSnapshot(meta.job_id).then(snapshot => {
+      agResumeProbe.loading = false;
+      restoreAgentJobFromSnapshot(meta, snapshot);
+    }).catch(() => {
+      agResumeProbe.loading = false;
+      clearRememberedAgentJob(meta.job_id);
+    });
   }
 
   /* ---------------- pipeline ---------------- */
@@ -227,23 +467,35 @@
 
   /* ---------------- studies list ---------------- */
   function studyList() {
+    const studies = allStudies();
     const dotCls = { ready: 'ready', running: 'running', gate: 'running', draft: 'draft', idle: 'idle' };
     return `
     <div class="ag-list">
       <div class="ag-list-head">
-        <div><span class="ttl">${t('Studies', '研究项目')} · ${STUDIES.length}</span><div class="ag-list-cap">${t('each study = a local project folder', '每个研究 = 一个本地项目文件夹')}</div></div>
+        <div><span class="ttl">${t('Studies', '研究项目')} · ${studies.length}</span><div class="ag-list-cap">${t('each study = a local project folder', '每个研究 = 一个本地项目文件夹')}</div></div>
         <button class="ag-newbtn" data-ag-new>${icon('plus', 13)} ${t('New', '新建')}</button>
       </div>
       <div class="ag-studies">
-        ${STUDIES.map(s => {
+        ${agIdeaProjects.loading ? `<div class="empty-mini" style="margin:10px;min-height:80px;">${t('Loading idea project seeds…', '正在加载 idea 项目种子…')}</div>` : ''}
+        ${agIdeaProjects.error ? `<div class="note warn" style="margin:10px;"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Idea project seeds unavailable', 'Idea 项目种子不可用')}</div><div class="d">${esc(agIdeaProjects.error)}</div></div></div>` : ''}
+        ${!studies.length && !agIdeaProjects.loading ? `<div class="empty-mini ideas-empty-list" style="margin:10px;min-height:210px;">
+          <div>${icon('folder', 22)}</div>
+          <h3>${t('No local projects yet', '还没有本地项目')}</h3>
+          <p>${t('Real mode only lists project seeds and runs written on this machine. Create one from Idea Mining, then refresh.', '真实模式只列出写在本机的 project seed 和 run。从 Idea Mining 创建后再刷新。')}</p>
+          <div class="row gap-8 mt-12" style="justify-content:center;">
+            <button class="btn primary sm" data-nav="ideas">${icon('target', 12)} ${t('Open Idea Mining', '打开 Idea Mining')}</button>
+            <button class="btn sm" data-ag-refresh-projects>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
+          </div>
+        </div>` : ''}
+        ${studies.map(s => {
           const zh = window.EU_LANG === 'zh';
-          const folder = '~/easyicu/projects/' + s.cohort;
+          const folder = projectFolderLabel(s);
           return `
           <button class="studycard ${s.id === agSel ? 'on' : ''}" data-ag-sel="${s.id}">
             <div class="sc-top">
               <span class="sc-dot ${dotCls[s.status] || 'idle'}"></span>
               <span class="sc-name">${t(s.name[0], s.name[1])}</span>
-              <span class="sc-mode ${s.mode}">${s.mode === 'idea' ? t('Idea', '想法') : t('Analysis', '分析')}</span>
+              <span class="sc-mode analysis">${s.ideaSeed ? t('Idea seed', '想法种子') : t('Analysis', '分析')}</span>
             </div>
             <div class="sc-meta"><span class="sc-folder">${icon('folder', 11)} ${folder}</span></div>
             <div class="sc-meta" style="margin-top:3px;">${s.runs.length ? `${s.runs[0][0]}<span class="mid"></span>${s.runs[0][4][zh ? 1 : 0]}` : t('not run yet', '尚未运行')}</div>
@@ -273,7 +525,7 @@
         <div style="min-width:0;">
           <div class="ag-title">${t(s.name[0], s.name[1])} <span class="editmk">${icon('edit', 14)}</span></div>
           <div class="ag-src">
-            <span class="lk" title="${t('Local project folder — intermediate files are written here', '本地项目文件夹 — 中间文件写在这里')}">${icon('folder', 12)} ~/easyicu/projects/${s.cohort}</span>
+            <span class="lk" title="${t('Local project folder — intermediate files are written here', '本地项目文件夹 — 中间文件写在这里')}">${icon('folder', 12)} ${esc(projectFolderLabel(s))}</span>
             <span class="mid"></span>
             <span class="lk">${icon('cohort', 12)} ${s.cohort}</span>
             ${activeSourceLabel() ? `<span class="mid"></span><span class="lk">${icon('db', 12)} ${activeSourceLabel()}</span>` : ''}
@@ -281,9 +533,9 @@
             ${statusPill}
           </div>
         </div>
-        <div class="modeswitch" data-ag-mode>
-          <button class="${s.mode === 'analysis' ? 'on' : ''}" data-val="analysis">${icon('agent', 13)} ${t('Analysis run', '分析运行')}</button>
-          <button class="${s.mode === 'idea' ? 'on' : ''}" data-val="idea">${icon('spark', 13)} ${t('Idea exploration', '想法探索')}</button>
+        <div class="row gap-8">
+          <button class="btn sm" data-nav="ideas">${icon('target', 13)} ${t('Open Idea Mining', '打开 Idea 挖掘')}</button>
+          <span class="pill ok"><span class="dot"></span>${t('Analysis workspace', '分析运行工作台')}</span>
         </div>
       </div>
       ${pipeline()}
@@ -293,6 +545,9 @@
   /* ---------------- tabs ---------------- */
   function tabsFor(mode) {
     const s = study();
+    if (s.empty) return [
+      ['overview', t('Overview', '概览'), null],
+    ];
     if (mode === 'idea') return [
       ['overview', t('Overview', '概览'), null],
       ['runs', t('Dry-runs', '试运行'), s.runs.length],
@@ -301,7 +556,7 @@
     return [
       ['overview', t('Overview', '概览'), null],
       ['runs', t('Runs', '运行历史'), s.runs.length],
-      ['outputs', t('Outputs', '产出'), 6],
+      ['outputs', t('Outputs', '产出'), outputCountForStudy()],
       ['draft', t('Draft', '草稿'), null],
     ];
   }
@@ -317,7 +572,10 @@
   /* ---------------- tab bodies ---------------- */
   function planList() {
     const s = study();
-    const plan = s.mode === 'idea'
+    const seedPlan = s.ideaSeed && Array.isArray(s.ideaSeed.analysis_plan) ? s.ideaSeed.analysis_plan : null;
+    const plan = seedPlan
+      ? seedPlan.map(x => [x, t('from Idea Mining handoff', '来自 Idea Mining 交接'), 'ready'])
+      : s.mode === 'idea'
       ? [
         [t('Frame the idea', '框定想法'), t('exposure / outcome / source', '暴露 / 结局 / 来源'), 'ready'],
         [t('Data recipe', '数据配方'), t('concepts the dry-run needs', '试运行所需概念'), 'ready'],
@@ -352,7 +610,7 @@
 
   function providerRunPanel() {
     if (window.EU_DATA !== 'real') return '';
-    if (study().mode !== 'analysis') return '';
+    if (study().empty || study().mode !== 'analysis') return '';
     const src = activeExportSource();
     requestProviderStatus();
     const st = agProvider.status || {};
@@ -370,7 +628,12 @@
       : agRun.active
       ? t('Run already in progress', '已有运行进行中')
       : '';
-    const providers = ['openai', 'openrouter', 'custom'];
+    const providers = [
+      ['openai', 'OpenAI'],
+      ['openrouter', 'OpenRouter'],
+      ['deepseek', 'DeepSeek-compatible'],
+      ['custom', 'Custom / local OpenAI-compatible'],
+    ];
     return `
       <div class="card pad">
         <div class="row" style="justify-content:space-between;align-items:baseline;">
@@ -381,8 +644,9 @@
           <button class="btn sm ghost" data-ag-provider-refresh>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
         </div>
         <div class="row wrap gap-6 mt-12">
-          ${providers.map(p => `<button class="btn sm ${agProvider.provider === p ? 'primary' : 'ghost'}" data-ag-provider="${p}">${esc(p)}</button>`).join('')}
+          ${providers.map(([p, label]) => `<button class="btn sm ${agProvider.provider === p ? 'primary' : 'ghost'}" data-ag-provider="${p}">${esc(label)}</button>`).join('')}
         </div>
+        <div class="note-line mt-8" style="font-size:11px;color:var(--ink-4);">${icon('shield', 11)} ${t('Custom/local endpoints must be OpenAI-compatible and configured by environment variables; values are never shown here.', 'Custom/本地端点必须兼容 OpenAI Chat Completions,并通过环境变量配置;这里不会显示具体值。')}</div>
         ${agProvider.loading ? `<div class="note info mt-12"><div class="ico">${icon('shield', 16)}</div><div class="body"><span class="t">${t('Checking provider readiness', '正在检查 provider 就绪状态')}</span><span class="d">${t('No client is constructed and no network call is made.', '不会构造 client,也不会发起网络调用。')}</span></div></div>` : ''}
         ${agProvider.error ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 16)}</div><div class="body"><span class="t">${t('Provider status unavailable', 'provider 状态不可用')}</span><span class="d">${esc(agProvider.error)}</span></div></div>` : ''}
         <div class="row wrap gap-6 mt-12">
@@ -428,14 +692,20 @@
           <div class="nb-d">${esc(detail)}${agRun.jobId ? ` · <span class="mono">${esc(agRun.jobId)}</span>` : ''}</div>
           <div class="runbar mt-8" style="height:6px;"><div class="runbar-fill" style="width:${Math.round(agRun.prog * 100)}%;transition:width .12s linear;"></div></div>
         </div>
+        ${agRun.jobId ? `<button class="btn ghost" data-ag-cancel-job>${icon('stop', 13)} ${t('Request cancel', '请求取消')}</button>` : ''}
       </div>`;
     }
     if (agRun.error) {
+      const canReconnect = !!agRun.jobId && !!agRun.reconnectable;
+      const retryLabel = agRun.result && agRun.result.cancelled
+        ? t('Restart from active export', '从 active export 重跑')
+        : t('Retry from active export', '从 active export 重试');
       return `
       <div class="nextbar gate">
         <div class="nb-ico">${icon('shield', 16)}</div>
-        <div class="grow"><div class="nb-t">${t('Run failed closed', '运行已 fail-closed')}</div><div class="nb-d">${esc(agRun.error)}</div></div>
-        <button class="btn primary" data-ag-runbtn>${icon('refresh', 13)} ${t('Retry', '重试')}</button>
+        <div class="grow"><div class="nb-t">${agRun.result && agRun.result.cancelled ? t('Run cancelled safely', '运行已安全取消') : t('Run failed closed', '运行已 fail-closed')}</div><div class="nb-d">${esc(agRun.error)}</div></div>
+        ${canReconnect ? `<button class="btn" data-ag-reconnect>${icon('history', 13)} ${t('Resume stream', '恢复任务流')}</button>` : ''}
+        <button class="btn primary" data-ag-runbtn>${icon('refresh', 13)} ${retryLabel}</button>
       </div>`;
     }
     if (s.mode === 'idea') {
@@ -498,10 +768,11 @@
     return `
     <div class="card pad">
       <div class="eyebrow" style="margin-bottom:12px;">${t('Project folder', '项目文件夹')}</div>
-      <div class="row gap-8" style="align-items:center;"><span style="color:var(--ink-3);flex:none;">${icon('folder', 14)}</span><div class="mono" style="font-size:11.5px;color:var(--ink-2);min-width:0;overflow:hidden;text-overflow:ellipsis;">~/easyicu/projects/${s.cohort}</div></div>
+      <div class="row gap-8" style="align-items:center;"><span style="color:var(--ink-3);flex:none;">${icon('folder', 14)}</span><div class="mono" style="font-size:11.5px;color:var(--ink-2);min-width:0;overflow:hidden;text-overflow:ellipsis;">${esc(projectFolderLabel(s))}</div></div>
       <div class="eyebrow" style="margin:14px 0 8px;">${src ? t('Linked export source', '关联导出源') : t('Linked cohort', '关联队列')}</div>
       <div style="font-weight:600;font-size:13px;">${s.cohort}</div>
       <div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${linkedPath || linked}</div>
+      ${s.ideaSeed ? `<div class="note ok mt-12"><div class="ico">${icon('target', 13)}</div><div class="body"><div class="t">${t('Seeded from Idea Mining', '来自 Idea Mining 种子')}</div><div class="d">${esc(s.sourceArticle || '')}</div></div></div>` : ''}
       <div class="cols-2 mt-12" style="gap:8px;">
         ${stats.map(([en, zh, v]) => `
           <div style="padding:8px 10px;background:var(--surface-2);border-radius:var(--r-2);">
@@ -515,6 +786,18 @@
 
   function tabOverview() {
     const s = study();
+    if (s.empty) {
+      return `
+      <div class="state-hero empty-state" style="min-height:360px;">
+        <div class="glyph">${icon('folder', 28)}</div>
+        <div class="st-t">${t('No local Agent project selected', '尚未选择本地 Agent 项目')}</div>
+        <div class="st-d">${t('Agent Projects no longer shows fabricated studies in Real mode. Create a project seed from Idea Mining, or switch to Demo to inspect examples.', '真实模式下 Agent Projects 不再显示编造研究。请从 Idea Mining 创建 project seed，或切到 Demo 查看示例。')}</div>
+        <div class="st-actions">
+          <button class="btn primary" data-nav="ideas">${icon('target', 14)} ${t('Create from Idea Mining', '从 Idea Mining 创建')}</button>
+          <button class="btn" data-ag-refresh-projects>${icon('refresh', 13)} ${t('Refresh local projects', '刷新本地项目')}</button>
+        </div>
+      </div>`;
+    }
     const staleBanner = (window.EU_STALE && !agRun.active) ? `
       <div class="stale-banner">
         <span class="sb-ico">${icon('refresh', 16)}</span>
@@ -524,7 +807,7 @@
     return `
       ${staleBanner}
       ${nextBar()}
-      ${s.mode === 'idea' ? `<div class="idea-band mt-16"><span class="ico">${icon('spark', 16)}</span><div><div style="font-weight:600;font-size:13px;">${t('Idea exploration — a fast feasibility scan', '想法探索 —— 快速可行性扫描')}</div><div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${t('This mode answers “is a full study worth it?” with counts and coverage. It never drafts a manuscript and never asserts effect sizes.', '该模式用计数和覆盖率回答"是否值得做完整研究?"。它不会生成论文,也不会给出效应量。')}</div></div></div>` : ''}
+      ${s.mode === 'idea' ? `<div class="idea-band mt-16"><span class="ico">${icon('spark', 16)}</span><div><div style="font-weight:600;font-size:13px;">${t('Legacy feasibility seed', '旧可行性种子')}</div><div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${t('New discovery work starts in Idea Mining. Agent Projects only executes confirmed analysis runs.', '新的发现流程从 Idea 挖掘开始。研究项目只执行已确认的分析运行。')}</div></div></div>` : ''}
       <div class="split-320 mt-16" style="grid-template-columns:1fr 300px;">
         <div class="col gap-16">
           <div class="card pad">
@@ -543,8 +826,8 @@
       </div>
       <div class="handoff">
         <span class="ho-ico">${icon('spark', 17)}</span>
-        <div class="ho-body"><b>${t('Rather drive this study by chat?', '想用对话来推进这项研究?')}</b> ${t('Copilot walks the same plan → run → review → gated-draft workflow conversationally, then hands the study back here.', 'Copilot 用对话走同一套 计划 → 运行 → 审阅 → 受闸草稿 的流程,完成后把研究交回这里。')}</div>
-        <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Continue in Copilot', '在 Copilot 中继续')} ${icon('arrow', 13)}</button>
+        <div class="ho-body"><b>${t('Rather drive this study by chat?', '想用对话来推进这项研究?')}</b> ${t('Guided study walks the same plan → run → review → gated-draft workflow conversationally, then hands the study back here.', '研究引导用对话走同一套 计划 → 运行 → 审阅 → 受闸草稿 的流程,完成后把研究交回这里。')}</div>
+        <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Continue in Guided study', '在研究引导中继续')} ${icon('arrow', 13)}</button>
       </div>`;
   }
 
@@ -559,7 +842,7 @@
           <div><div class="panel-title" style="font-size:15px;">${t('Run history', '运行历史')}</div><div class="panel-sub">${t('Whitelisted local artifacts only · hashes checked on every review.', '仅白名单本地产物 · 每次回看都校验哈希。')}</div></div>
           <button class="btn sm" data-ag-history-refresh>${icon('refresh', 13)} ${t('Refresh', '刷新')}</button>
         </div>
-        ${agHistory.studyId === s.id && agHistory.loading ? `<div class="note info mt-12"><div class="ico">${icon('history', 16)}</div><div class="body"><span class="t">${t('Loading local run history', '正在加载本地运行历史')}</span><span class="d">${t('Scanning ~/easyicu/projects without reading export rows.', '扫描 ~/easyicu/projects,不读取 export 行。')}</span></div></div>` : ''}
+        ${agHistory.studyId === s.id && agHistory.loading ? `<div class="note info mt-12"><div class="ico">${icon('history', 16)}</div><div class="body"><span class="t">${t('Loading local run history', '正在加载本地运行历史')}</span><span class="d">${t('Scanning configured local Agent project folders without reading export rows.', '扫描已配置的本地 Agent 项目文件夹,不读取 export 行。')}</span></div></div>` : ''}
         ${agHistory.studyId === s.id && agHistory.error ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 16)}</div><div class="body"><span class="t">${t('History load failed', '历史加载失败')}</span><span class="d">${esc(agHistory.error)}</span></div></div>` : ''}
         ${!rows.length && !(agHistory.studyId === s.id && agHistory.loading) ? `<div class="state-hero empty-state"><div class="glyph">${icon('history', 26)}</div><div class="st-t">${t('No local runs found', '未找到本地运行')}</div><div class="st-d">${t('Run the plan from the Overview tab. History is rebuilt from local artifacts, not browser memory.', '从概览页运行计划。历史由本地产物重建,不依赖浏览器内存。')}</div></div>` : ''}
         <div style="margin-top:6px;">
@@ -609,6 +892,7 @@
 
   function thumb(kind) {
     if (kind === 'num') return `<div class="mono" style="font-size:30px;font-weight:500;color:var(--ink);">10</div>`;
+    if (kind === 'file') return `<div style="color:var(--ink-3);">${icon('file', 34, 1.8)}</div>`;
     if (kind === 'table') return `<svg width="120" height="64" viewBox="0 0 120 64">${[0, 1, 2, 3, 4].map(r => `<rect x="12" y="${8 + r * 11}" width="38" height="5" fill="${r === 0 ? 'var(--ink-3)' : 'var(--hair-3)'}" rx="1"/><rect x="56" y="${8 + r * 11}" width="22" height="5" fill="var(--hair-2)" rx="1"/><rect x="84" y="${8 + r * 11}" width="22" height="5" fill="var(--hair-2)" rx="1"/>`).join('')}</svg>`;
     if (kind === 'roc') return `<svg width="120" height="64" viewBox="0 0 120 64"><line x1="14" y1="54" x2="106" y2="8" stroke="var(--hair-2)" stroke-dasharray="2 3"/><line x1="14" y1="54" x2="14" y2="8" stroke="var(--hair-3)"/><line x1="14" y1="54" x2="106" y2="54" stroke="var(--hair-3)"/><path d="M14 54 Q 30 24 60 16 Q 90 11 106 9" stroke="var(--accent)" stroke-width="1.8" fill="none"/></svg>`;
     if (kind === 'calib') return `<svg width="120" height="64" viewBox="0 0 120 64"><line x1="14" y1="54" x2="106" y2="8" stroke="var(--hair-2)" stroke-dasharray="2 3"/><line x1="14" y1="54" x2="14" y2="8" stroke="var(--hair-3)"/><line x1="14" y1="54" x2="106" y2="54" stroke="var(--hair-3)"/><path d="M14 52 Q 40 40 62 30 Q 86 18 104 10" stroke="var(--ok)" stroke-width="1.8" fill="none"/></svg>`;
@@ -647,43 +931,56 @@
     if (live) {
       requestLiveReview(live);
       const review = currentLiveReview(live);
-      const artifacts = review && Array.isArray(review.artifacts) ? review.artifacts : (live.artifacts || []);
+      const artifacts = artifactsForLive(live);
       const integrity = review && review.signoff_integrity ? review.signoff_integrity : null;
+      const loadingReview = agReview.projectDir === live.project_dir && agReview.loading;
       return `
       <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:14px;">
-        <div><div class="panel-title" style="font-size:15px;">${t('Outputs', '产出物')}</div><div class="panel-sub">${t('Real local preflight artifacts written to', '真实本地预检产物写入')} <span class="mono">${esc(live.project_dir || '')}</span></div></div>
+        <div><div class="panel-title" style="font-size:15px;">${t('Outputs', '产出物')}</div><div class="panel-sub">${t('Real local artifacts read from', '真实本地产物读取自')} <span class="mono">${esc(live.project_dir || '')}</span></div></div>
         <div class="row gap-8">
           <span class="pill ${review && review.signoff_stale ? 'bad' : 'warn'}" style="height:22px;"><span class="dot"></span>${esc(review && review.signoff_stale ? 'signoff_stale' : (live.gate && live.gate.status ? live.gate.status : 'analysis_only'))}</span>
-          <button class="btn sm" data-ag-bundle-download>${icon('download', 13)} ${t('Download bundle', '下载打包')}</button>
+          ${artifacts.length ? `<button class="btn sm" data-ag-bundle-download>${icon('download', 13)} ${t('Download bundle', '下载打包')}</button>` : ''}
         </div>
       </div>
-      <div class="outgrid">
-        ${artifacts.map((a, i) => `
-          <div class="outcard" data-ag-artifact-view="${esc(a.name || '')}">
-            <div class="outthumb">${thumb(i === 1 ? 'num' : 'table')}</div>
-            <div class="outmeta"><div class="od" style="font-size:10px;">${String(i + 1).padStart(2, '0')} · ${esc(a.kind || 'json')}</div><div class="ot">${esc(a.name || a.relative_path || 'artifact')}</div><div class="od mono">${esc((a.sha256 || '').slice(0, 12))}${a.bytes != null ? ' · ' + Number(a.bytes || 0).toLocaleString() + ' B' : ''}</div></div>
-          </div>`).join('')}
-      </div>
+      ${loadingReview && !artifacts.length ? `<div class="note info mt-12"><div class="ico">${icon('file', 16)}</div><div class="body"><span class="t">${t('Loading local artifacts', '正在加载本地产物')}</span><span class="d">${t('Reading the whitelisted run folder before showing any output cards.', '先读取白名单运行文件夹,再展示产物卡片。')}</span></div></div>` : ''}
+      ${artifacts.length ? `
+        <div class="outgrid">
+          ${artifacts.map((a, i) => {
+            const name = a.name || a.relative_path || '';
+            const kind = artifactKind(name);
+            return `
+            <button class="outcard" data-ag-artifact-view="${esc(name)}" type="button">
+              <div class="outthumb">${thumb(kind)}</div>
+              <div class="outmeta"><div class="od" style="font-size:10px;">${String(i + 1).padStart(2, '0')} · ${esc(a.kind || 'json')}</div><div class="ot">${esc(artifactTitle(name))}</div><div class="od mono">${esc(name)}</div><div class="od mono">${esc((a.sha256 || '').slice(0, 12))}${a.bytes != null ? ' · ' + Number(a.bytes || 0).toLocaleString() + ' B' : ''}</div></div>
+            </button>`;
+          }).join('')}
+        </div>` : (!loadingReview ? `
+        <div class="state-hero empty-state">
+          <div class="glyph">${icon('file', 28)}</div>
+          <div class="st-t">${t('No real output artifacts yet', '还没有真实产物')}</div>
+          <div class="st-d">${t('This project has not produced Table 1, missingness, ROC, calibration, or evidence files yet. Run the analysis or open a reviewed local run; placeholders are not shown in Real mode.', '这个项目还没有生成 Table 1、缺失审计、ROC、校准或证据文件。请先运行分析,或打开已有本地运行；真实模式不会显示占位产物。')}</div>
+          <div class="st-actions">
+            <button class="btn primary" data-ag-tab="overview">${icon('play', 14)} ${t('Run analysis', '运行分析')}</button>
+            <button class="btn" data-ag-tab="runs">${icon('history', 14)} ${t('Open Runs', '打开运行历史')}</button>
+          </div>
+        </div>` : '')}
       ${integrity && integrity.status !== 'unsigned' ? `<div class="note ${integrity.signoff_stale ? 'warn' : 'ok'} mt-16"><div class="ico">${icon(integrity.signoff_stale ? 'alert' : 'shield', 16)}</div><div class="body"><span class="t">${integrity.signoff_stale ? t('Sign-off is stale', '签署已失效') : t('Sign-off hashes verified', '签署哈希已验证')}</span><span class="d" style="display:block;margin-top:2px;">${integrity.signoff_stale ? esc((integrity.tampered_artifacts || []).map(x => x.name).concat(integrity.missing_artifacts || []).join(', ') || integrity.reason || 'artifact hash mismatch') : t('Signed artifact hashes match current files.', '已签署产物哈希与当前文件一致。')}</span></div></div>` : ''}
       <div class="note info mt-16"><div class="ico">${icon('shield', 16)}</div><div class="body"><span class="t">${t('Evidence-bound preflight.', '证据绑定预检。')}</span> <span class="d" style="display:inline;">${t('The run used the active export snapshot, wrote bounded local artifacts, and kept the manuscript draft locked until human sign-off.', '本次运行使用 active export snapshot,写入有界本地产物,并在人工签署前保持论文草稿锁定。')}</span></div></div>
       ${artifactViewer(live)}`;
     }
-    const outs = s.id === 'crossdb'
-      ? [['01 · matrix', t('Availability matrix', '可用性矩阵'), 'heat', 'png'], ['02 · deltas', t('Distribution deltas', '分布差异'), 'table', 'csv'], ['03 · summary', t('Per-DB summary', '各库摘要'), 'num', 'json'], ['04 · ledger', t('Evidence ledger', '证据账本'), 'table', 'json']]
-      : [['01 · summary', t('Cohort summary', '队列摘要'), 'num', 'json'], ['02 · table', 'Table 1', 'table', 'csv'], ['03 · audit', t('Missingness', '缺失审计'), 'heat', 'png'], ['04 · roc', 'ROC · LR + lactate', 'roc', 'png'], ['05 · calib', t('Calibration', '校准曲线'), 'calib', 'png'], ['06 · ledger', t('Evidence ledger', '证据账本'), 'table', 'json']];
     return `
       <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:14px;">
-        <div><div class="panel-title" style="font-size:15px;">${t('Outputs', '产出物')}</div><div class="panel-sub">${t('Figures, tables and the evidence ledger from the latest run — written to', '最近一次运行的图、表和证据账本 —— 写入')} <span class="mono">~/easyicu/exports/${s.cohort}</span></div></div>
-        <button class="btn sm">${icon('download', 13)} ${t('Export bundle', '导出打包')}</button>
+        <div><div class="panel-title" style="font-size:15px;">${t('Outputs', '产出物')}</div><div class="panel-sub">${t('No local run has been opened for this project.', '这个项目尚未打开本地运行。')}</div></div>
       </div>
-      <div class="outgrid">
-        ${outs.map(([k, ti, kind, ext]) => `
-          <div class="outcard">
-            <div class="outthumb">${thumb(kind)}</div>
-            <div class="outmeta"><div class="od" style="font-size:10px;">${k}</div><div class="ot">${ti}</div><div class="od">${ext}</div></div>
-          </div>`).join('')}
-      </div>
-      <div class="note demo mt-16"><div class="ico">${icon('flask', 16)}</div><div class="body"><span class="t">${t('Seeded demo artifacts.', '种子演示产物。')}</span> <span class="d" style="display:inline;">${t('Illustrative outputs for layout — switch to Real Data to produce results from your own export.', '用于布局的示意产物 —— 切换到真实数据可基于你自己的导出生成结果。')}</span></div></div>`;
+      <div class="state-hero empty-state">
+        <div class="glyph">${icon('file', 28)}</div>
+        <div class="st-t">${t('No real output artifacts yet', '还没有真实产物')}</div>
+        <div class="st-d">${t('Outputs are generated only by a local Agent run. This panel will list real JSON/CSV/PNG/HTML files from the run folder and let you open or download them. It will not show seeded Table 1, missingness, ROC, or calibration placeholders.', '产物只来自本地 Agent 运行。这里会列出运行文件夹里的真实 JSON/CSV/PNG/HTML 文件,并允许打开或下载；不会显示种子 Table 1、缺失审计、ROC 或校准占位卡片。')}</div>
+        <div class="st-actions">
+          <button class="btn primary" data-ag-tab="overview">${icon('play', 14)} ${t('Run analysis', '运行分析')}</button>
+          <button class="btn" data-ag-tab="runs">${icon('history', 14)} ${t('Open Runs', '打开运行历史')}</button>
+        </div>
+      </div>`;
   }
 
   function tabNotes() {
@@ -875,10 +1172,21 @@
 
   /* ---------------- run animation ---------------- */
   function startRun() {
+    const s = study();
+    if (s.empty) {
+      agRun.error = t('No local research project is selected. Create an Agent project seed from Idea Mining first.', '尚未选择本地研究项目。请先从 Idea Mining 创建 Agent project seed。');
+      repaintBody();
+      return;
+    }
     const src = activeExportSource();
     agRun.error = null;
     if (src && window.EU_API && window.EU_API.startAgentRun && window.EventSource) {
       startRealRun(src);
+      return;
+    }
+    if (realMode()) {
+      agRun.error = t('No active registered export is selected. Register/select a local export before running this project.', '尚未选择 active registered export。请先注册/选择本地导出后再运行该项目。');
+      repaintBody();
       return;
     }
     startDemoRun();
@@ -887,6 +1195,10 @@
   function startRealRun(src) {
     const opts = arguments.length > 1 && arguments[1] ? arguments[1] : {};
     const s = study();
+    if (s.empty) {
+      finishRealRun(s, 'failed', null, t('No local research project is selected. Create an Agent project seed from Idea Mining first.', '尚未选择本地研究项目。请先从 Idea Mining 创建 Agent project seed。'));
+      return;
+    }
     closeRunStream();
     agRun = { active: true, prog: 0, timer: null, es: null, jobId: null, step: t('Submitting local run', '提交本地运行'), error: null, result: null };
     agReview = { projectDir: null, loading: false, error: null, data: null, signing: false };
@@ -907,22 +1219,15 @@
     }).then(r => {
       agRun.jobId = r.job_id;
       agRun.step = t('Connected to job stream', '已连接任务流');
-      const es = new EventSource('/api/jobs/' + r.job_id + '/events');
-      agRun.es = es;
-      es.onmessage = msg => {
-        const ev = JSON.parse(msg.data);
-        if (ev.total) agRun.prog = Math.max(agRun.prog, Math.min(1, Number(ev.current || 0) / Number(ev.total || 1)));
-        if (ev.label) agRun.step = ev.label;
-        const bar = document.querySelector('#agHost .runbar-fill');
-        if (bar) bar.style.width = Math.round(agRun.prog * 100) + '%';
-        const detail = document.querySelector('#agHost .nb-d');
-        if (detail && agRun.step) detail.innerHTML = `${esc(agRun.step)}${agRun.jobId ? ` · <span class="mono">${esc(agRun.jobId)}</span>` : ''}`;
-        if (ev.type === 'end') finishRealRun(s, ev.status, ev.result, ev.error);
-      };
-      es.onerror = () => {
-        if (!agRun.active) return;
-        finishRealRun(s, 'failed', null, t('Lost connection to the agent run.', '与 Agent 运行的连接中断。'));
-      };
+      rememberAgentJob({
+        job_id: r.job_id,
+        study_id: s.id,
+        source_path: src.path,
+        run_type: opts.runType || 'preflight',
+        provider: opts.provider || 'mock',
+        external_llm_opt_in: !!opts.externalOptIn,
+      });
+      attachAgentJobStream(r.job_id, s);
     }).catch(err => finishRealRun(s, 'failed', null, err.message || String(err)));
   }
 
@@ -930,8 +1235,11 @@
     closeRunStream();
     agRun.active = false;
     agRun.prog = 1;
+    if (status !== 'running') clearRememberedAgentJob(agRun.jobId);
     if (status === 'done' && result) {
       agRun.result = result;
+      agRun.error = null;
+      agRun.reconnectable = false;
       window.EU_AGENT_LAST_RUN = result;
       agReview = { projectDir: null, loading: false, error: null, data: null, signing: false };
       agHistory = { studyId: null, loading: false, error: null, data: null };
@@ -948,8 +1256,17 @@
         ['just now', '刚刚'],
       ]);
       agTab = 'outputs';
+    } else if (status === 'cancelled') {
+      agRun.result = result || null;
+      agRun.reconnectable = false;
+      agRun.error = result && result.cancelled
+        ? `${t('Cancelled at', '取消阶段')}: ${result.cancelled_at || 'agent_run'} · ${t('safe continuation is to restart from the active export.', '安全继续方式是从 active export 重跑。')}`
+        : (error || t('Agent run cancelled.', 'Agent 运行已取消。'));
+      s.status = 'idle';
     } else {
       agRun.error = error || t('Agent run failed.', 'Agent 运行失败。');
+      agRun.result = result || null;
+      agRun.reconnectable = false;
       s.status = 'idle';
     }
     repaintBody();
@@ -986,9 +1303,34 @@
     }));
     host.querySelectorAll('[data-ag-tab]').forEach(b => b.addEventListener('click', () => { agTab = b.dataset.agTab; repaintBody(); }));
     host.querySelectorAll('[data-ev]').forEach(b => b.addEventListener('click', () => { const i = +b.dataset.ev; agEvOpen = (agEvOpen === i ? -1 : i); repaintBody(); }));
-    const modeSeg = host.querySelector('[data-ag-mode]');
-    if (modeSeg) modeSeg.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; study().mode = b.dataset.val; agTab = 'overview'; repaintBody(); });
     host.querySelectorAll('[data-ag-runbtn]').forEach(b => b.addEventListener('click', startRun));
+    host.querySelectorAll('[data-ag-cancel-job]').forEach(b => b.addEventListener('click', () => {
+      if (!agRun.jobId || !window.EU_API || !window.EU_API.cancelJob) return;
+      b.setAttribute('disabled', 'true');
+      agRun.step = t('Cancel requested. The current local phase may finish before the job stops.', '已请求取消。当前本地阶段可能会先完成,然后任务停止。');
+      repaintBody();
+      window.EU_API.cancelJob(agRun.jobId, 'user_requested').catch(err => {
+        agRun.error = err.message || String(err);
+        agRun.active = false;
+        repaintBody();
+      });
+    }));
+    host.querySelectorAll('[data-ag-reconnect]').forEach(b => b.addEventListener('click', () => {
+      if (!agRun.jobId || !window.EU_API || !window.EU_API.loadJobSnapshot) return;
+      const jobId = agRun.jobId;
+      agRun.error = null;
+      agRun.active = true;
+      agRun.step = t('Checking server job state', '正在检查服务端任务状态');
+      repaintBody();
+      window.EU_API.loadJobSnapshot(jobId).then(snapshot => {
+        restoreAgentJobFromSnapshot({ job_id: jobId, study_id: study().id }, snapshot);
+      }).catch(err => {
+        agRun.active = false;
+        agRun.error = err.message || String(err);
+        clearRememberedAgentJob(jobId);
+        repaintBody();
+      });
+    }));
     host.querySelectorAll('[data-ag-provider-refresh]').forEach(b => b.addEventListener('click', () => requestProviderStatus(true)));
     host.querySelectorAll('[data-ag-provider]').forEach(b => b.addEventListener('click', () => {
       agProvider = { provider: b.dataset.agProvider || 'openai', consent: false, loading: false, error: null, status: null };
@@ -1006,6 +1348,7 @@
       startRealRun(src, { runType: 'full', provider: agProvider.provider, externalOptIn: true });
     }));
     host.querySelectorAll('[data-ag-history-refresh]').forEach(b => b.addEventListener('click', () => requestRunHistory(true)));
+    host.querySelectorAll('[data-ag-refresh-projects]').forEach(b => b.addEventListener('click', () => requestIdeaAgentProjects(true)));
     host.querySelectorAll('[data-ag-history-open]').forEach(b => b.addEventListener('click', () => {
       const rows = agHistory.data && Array.isArray(agHistory.data.runs) ? agHistory.data.runs : [];
       const row = rows[Number(b.dataset.agHistoryOpen || -1)];
@@ -1100,7 +1443,7 @@
     }
     host.querySelectorAll('[data-ag-promote]').forEach(b => b.addEventListener('click', () => { study().mode = 'analysis'; study().status = 'idle'; study().stage = 0; agTab = 'overview'; repaintBody(); }));
     const newBtn = host.querySelector('[data-ag-new]');
-    if (newBtn) newBtn.addEventListener('click', () => { location.hash = '#guided'; });
+    if (newBtn) newBtn.addEventListener('click', () => { location.hash = '#ideas'; });
   }
 
   S.agent = {
@@ -1113,10 +1456,10 @@
       return `
       <div class="rail-sep"></div>
       <div class="rail-block">
-        <div class="rail-head"><span class="t">${t('Projects', '项目')}</span><span class="pill ${s.mode === 'idea' ? 'demo' : 'ok'}" style="height:20px;"><span class="dot"></span>${STUDIES.length}</span></div>
+        <div class="rail-head"><span class="t">${t('Projects', '项目')}</span><span class="pill ok" style="height:20px;"><span class="dot"></span>${allStudies().length}</span></div>
         <div class="col gap-6" style="font-size:12px;">
           <div class="setup-row"><span class="k">${t('Active', '当前')}</span><span class="vv" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t(s.name[0], s.name[1])}</span></div>
-          <div class="setup-row"><span class="k">${t('Mode', '模式')}</span><span class="vv">${s.mode === 'idea' ? t('Idea', '想法') : t('Analysis', '分析')}</span></div>
+          <div class="setup-row"><span class="k">${t('Mode', '模式')}</span><span class="vv">${t('Analysis', '分析')}</span></div>
           <div class="setup-row"><span class="k">${t('Runs', '运行')}</span><span class="vv">${s.runs.length}</span></div>
         </div>
         <div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Guarantees', '保证')}</div>
@@ -1141,6 +1484,6 @@
       </div>
       <div id="agHost">${agShell()}</div>`;
     },
-    afterRender(root) { wire(root); },
+    afterRender(root) { wire(root); requestIdeaAgentProjects(); maybeRestoreAgentJob(); },
   };
 })();
