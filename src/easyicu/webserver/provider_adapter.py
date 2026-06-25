@@ -17,6 +17,7 @@ import stat
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from easyicu.webserver import agent_outputs
 
 _MAX_EXTERNAL_CALLS_PER_RUN = 1
 _DEFAULT_MAX_OUTPUT_TOKENS = 1200
@@ -61,6 +62,7 @@ def generate_bound_provider_payload(
     summary: Dict[str, Any],
     cohort: Dict[str, Any],
     quality: List[Dict[str, Any]],
+    output_artifacts: Optional[Dict[str, Dict[str, Any]]] = None,
     transport: Optional[Callable[[Dict[str, Any], Dict[str, str]], Dict[str, Any]]] = None,
     environ: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
@@ -76,6 +78,7 @@ def generate_bound_provider_payload(
         summary=summary,
         cohort=cohort,
         quality=quality,
+        output_artifacts=output_artifacts or {},
         model=credentials["model"],
         max_output_tokens=max_output_tokens,
         json_format_style=json_format_style,
@@ -315,11 +318,17 @@ def _build_chat_request(
     summary: Dict[str, Any],
     cohort: Dict[str, Any],
     quality: List[Dict[str, Any]],
+    output_artifacts: Dict[str, Dict[str, Any]],
     model: str,
     max_output_tokens: int,
     json_format_style: str,
 ) -> Dict[str, Any]:
-    valid_evidence = ["run_context.json", "cohort_summary.json", "quality_gate.json"]
+    valid_evidence = [
+        "run_context.json",
+        "cohort_summary.json",
+        *agent_outputs.OUTPUT_ARTIFACT_NAMES,
+        "quality_gate.json",
+    ]
     bounded_context = {
         "run_id": run_id,
         "study_id": study_id,
@@ -327,6 +336,11 @@ def _build_chat_request(
         "summary": summary,
         "cohort": cohort,
         "quality": quality,
+        "output_artifacts": {
+            name: output_artifacts.get(name)
+            for name in agent_outputs.OUTPUT_ARTIFACT_NAMES
+            if name in output_artifacts
+        },
         "valid_evidence_ids": valid_evidence,
     }
     system = (

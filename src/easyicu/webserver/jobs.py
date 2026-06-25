@@ -27,11 +27,13 @@ class Job:
     def __init__(self, job_id: str, kind: str) -> None:
         self.id = job_id
         self.kind = kind
-        self.status = "running"            # running | done | failed
+        self.status = "running"            # running | done | failed | cancelled
         self.created = time.time()
         self.events: List[Dict[str, Any]] = []
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[str] = None
+        self.cancel_requested = False
+        self.cancel_reason: Optional[str] = None
 
     def emit(self, event: Dict[str, Any]) -> None:
         """Append a progress event (read by the SSE tailer)."""
@@ -46,6 +48,21 @@ class Job:
         self.emit({"type": "end", "status": status, "result": result, "error": error})
         self.status = status
 
+    def request_cancel(self, reason: Optional[str] = None) -> bool:
+        """Mark this job for cooperative cancellation.
+
+        Runners check ``cancel_requested`` between phases. We do not force-kill
+        Python threads because a runner may be inside a file/database read; the
+        request is still surfaced immediately over SSE so the UI is honest.
+        """
+        if self.status != "running":
+            return False
+        if not self.cancel_requested:
+            self.cancel_requested = True
+            self.cancel_reason = reason or "user_requested"
+            self.emit({"type": "cancel_requested", "reason": self.cancel_reason})
+        return True
+
     def snapshot(self) -> Dict[str, Any]:
         return {
             "id": self.id,
@@ -54,6 +71,8 @@ class Job:
             "events": list(self.events),
             "result": self.result,
             "error": self.error,
+            "cancel_requested": self.cancel_requested,
+            "cancel_reason": self.cancel_reason,
         }
 
 
@@ -78,7 +97,10 @@ class JobManager:
         try:
             result = runner(job)
             if job.status == "running":
-                job.finish("done", result=result)
+                if job.cancel_requested:
+                    job.finish("cancelled", result=result)
+                else:
+                    job.finish("done", result=result)
         except Exception as exc:  # noqa: BLE001 — surface any failure to the client
             job.finish("failed", error=str(exc))
 

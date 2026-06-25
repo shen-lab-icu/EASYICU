@@ -14,22 +14,25 @@ import asyncio
 import json
 from pathlib import Path
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from easyicu.webserver import agent_runs
 from easyicu.webserver import cohort_review
+from easyicu.webserver import copilot_sessions
 from easyicu.webserver import crossdb_review
 from easyicu.webserver import dataio
 from easyicu.webserver import extraction_filters
+from easyicu.webserver import guided_sessions
 from easyicu.webserver import patient_drilldown
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import sources as source_store
 from easyicu.webserver.catalog import build_catalog
+from easyicu.webserver.ideas import mining as idea_mining_web
 from easyicu.webserver.jobs import MANAGER
 
 STATIC_DIR = Path(__file__).with_name("static")
@@ -37,9 +40,25 @@ STATIC_DIR = Path(__file__).with_name("static")
 app = FastAPI(title="EasyICU", version="0.1.0")
 
 
+@app.middleware("http")
+async def no_store_native_ui_assets(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path in {"/", "/index.html"} or path.startswith(("/js/", "/css/")):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+    return response
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    """Avoid noisy browser 404s while the native UI has no branded icon asset."""
+    return Response(status_code=204)
 
 
 @app.get("/api/catalog")
@@ -58,6 +77,12 @@ def get_settings() -> dict:
 def post_settings(patch: Dict[str, Any]) -> dict:
     """Merge-update known settings keys and persist locally."""
     return {**settings_store.update_settings(patch), "about": settings_store.about()}
+
+
+@app.post("/api/settings/reset")
+def post_settings_reset() -> dict:
+    """Reset local settings to backend defaults."""
+    return {**settings_store.reset_settings(), "about": settings_store.about()}
 
 
 @app.get("/api/fs/list")
@@ -93,6 +118,12 @@ def patient_review_drilldown(body: Dict[str, Any]) -> dict:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
 
+@app.post("/api/patient-review/sources")
+def patient_review_sources(body: Dict[str, Any] | None = None) -> dict:
+    """Return metadata-only local export candidates for Patient Review."""
+    return patient_drilldown.patient_review_sources(body or {})
+
+
 @app.post("/api/cohort-review/summary")
 def cohort_review_summary(body: Dict[str, Any]) -> dict:
     """Return bounded real Cohort Review aggregates for the active export."""
@@ -107,6 +138,24 @@ def crossdb_review_summary(body: Dict[str, Any]) -> dict:
     """Return bounded real Cross-DB descriptive aggregates for registered exports."""
     try:
         return crossdb_review.crossdb_review_summary(body)
+    except crossdb_review.CrossdbReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/crossdb-review/raw-distribution")
+def crossdb_raw_distribution(body: Dict[str, Any]) -> dict:
+    """Return bounded real Cross-DB density aggregates from a local ICU data root."""
+    try:
+        return crossdb_review.crossdb_raw_distribution(body)
+    except crossdb_review.CrossdbReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/crossdb-review/demo-distribution")
+def crossdb_demo_distribution(body: Dict[str, Any]) -> dict:
+    """Return bounded legacy-seeded Cross-DB demo density aggregates."""
+    try:
+        return crossdb_review.crossdb_demo_distribution(body)
     except crossdb_review.CrossdbReviewError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
@@ -218,16 +267,35 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
     database = str(body.get("database") or "")
     if not path or not database:
         raise HTTPException(status_code=400, detail="path and database are required")
+    settings = settings_store.load_settings()
+    out_dir = body.get("out_dir") or settings.get("export_dir")
     runner = dataio.make_export_runner(
         data_path=path,
         database=database,
         modules=body.get("modules"),
         export_format=str(body.get("format") or "csv"),
         merge=bool(body.get("merge")),
-        out_dir=body.get("out_dir"),
+        out_dir=out_dir,
+        create_run_subdir=True,
         max_patients=body.get("max_patients"),
+        cohort=body.get("cohort"),
     )
     job = MANAGER.submit("extract", runner)
+    return {"job_id": job.id, "kind": job.kind, "status": job.status}
+
+
+@app.post("/api/jobs/crossdb-raw-distribution")
+def jobs_crossdb_raw_distribution(body: Dict[str, Any]) -> dict:
+    """Start a raw local Cross-DB density aggregation job.
+
+    Full raw-database density comparisons can span several ICU databases and
+    many concepts, so the native UI runs them through the same local job/SSE
+    model as extraction instead of a foreground request.
+    """
+    job = MANAGER.submit(
+        "crossdb-raw-distribution",
+        crossdb_review.make_crossdb_raw_distribution_runner(body),
+    )
     return {"job_id": job.id, "kind": job.kind, "status": job.status}
 
 
@@ -331,6 +399,193 @@ def post_agent_run_history(body: Dict[str, Any]) -> dict:
     )
 
 
+@app.post("/api/guided/drafts")
+def post_guided_draft(body: Dict[str, Any]) -> dict:
+    """Persist a metadata-only guided Copilot draft.
+
+    This is intentionally separate from Agent run creation: a guided draft does
+    not create an Agent run, does not read patient rows, and never unlocks a
+    manuscript draft. It does create a local metadata-only project folder so
+    users can manage drafts on disk.
+    """
+    return guided_sessions.create_guided_draft(body)
+
+
+@app.post("/api/guided/drafts/list")
+def post_guided_drafts_list(body: Dict[str, Any] | None = None) -> dict:
+    """List metadata-only guided Copilot drafts from local settings storage."""
+    return guided_sessions.list_guided_drafts(limit=int((body or {}).get("limit") or 20))
+
+
+@app.post("/api/guided/session")
+def post_guided_session(body: Dict[str, Any]) -> dict:
+    """Create a local metadata-only front-door Guided Copilot session."""
+    return guided_sessions.create_guided_session(body)
+
+
+@app.post("/api/guided/project/open")
+def post_guided_project_open(body: Dict[str, Any]) -> dict:
+    """Open or create Guided Copilot memory scoped to one local project folder."""
+    result = guided_sessions.open_guided_project(body or {})
+    if not result.get("ok") and not result.get("blocked"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.post("/api/guided/message")
+def post_guided_message(body: Dict[str, Any]) -> dict:
+    """Route one Guided Copilot local-mode message through the backend state machine."""
+    result = guided_sessions.post_guided_message(body)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.post("/api/guided/action")
+def post_guided_action(body: Dict[str, Any]) -> dict:
+    """Execute a whitelisted Guided Copilot routing action or fail closed."""
+    result = guided_sessions.execute_guided_action(body or {})
+    if not result.get("ok") and not result.get("blocked"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.post("/api/guided/sessions/list")
+def post_guided_sessions_list(body: Dict[str, Any] | None = None) -> dict:
+    """List local metadata-only Guided Copilot session folders."""
+    return guided_sessions.list_guided_sessions(limit=int((body or {}).get("limit") or 20))
+
+
+@app.post("/api/copilot/sessions")
+def post_copilot_session(body: Dict[str, Any]) -> dict:
+    """Compatibility endpoint for local metadata-only Copilot/Page guide sessions."""
+    return copilot_sessions.create_session(body)
+
+
+@app.post("/api/copilot/message")
+def post_copilot_message(body: Dict[str, Any]) -> dict:
+    """Compatibility endpoint for one bounded local Copilot/Page guide shortcut."""
+    result = copilot_sessions.post_message(body)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.post("/api/copilot/action")
+def post_copilot_action(body: Dict[str, Any]) -> dict:
+    """Compatibility endpoint for a whitelisted local Copilot/Page guide action."""
+    result = copilot_sessions.execute_action(body)
+    if not result.get("ok") and not result.get("blocked"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.post("/api/copilot/sessions/list")
+def post_copilot_sessions_list(body: Dict[str, Any] | None = None) -> dict:
+    """List local metadata-only Copilot/Page guide session folders."""
+    return copilot_sessions.list_sessions(limit=int((body or {}).get("limit") or 20))
+
+
+@app.post("/api/page-guide/sessions")
+def post_page_guide_session(body: Dict[str, Any]) -> dict:
+    """Create a local metadata-only Page guide session."""
+    payload = dict(body or {})
+    payload["scope"] = "page_guide"
+    return copilot_sessions.create_session(payload)
+
+
+@app.post("/api/page-guide/message")
+def post_page_guide_message(body: Dict[str, Any]) -> dict:
+    """Classify one Page guide shortcut and return bounded local UI actions."""
+    payload = dict(body or {})
+    payload["scope"] = "page_guide"
+    result = copilot_sessions.post_message(payload)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.post("/api/page-guide/action")
+def post_page_guide_action(body: Dict[str, Any]) -> dict:
+    """Execute a whitelisted local Page guide action or fail closed."""
+    result = copilot_sessions.execute_action(body or {})
+    if not result.get("ok") and not result.get("blocked"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.post("/api/page-guide/sessions/list")
+def post_page_guide_sessions_list(body: Dict[str, Any] | None = None) -> dict:
+    """List local metadata-only Page guide session folders."""
+    return copilot_sessions.list_sessions(limit=int((body or {}).get("limit") or 20))
+
+
+@app.post("/api/ideas/mine")
+def post_ideas_mine(body: Dict[str, Any]) -> dict:
+    """Run local-first idea mining from user-supplied metadata/excerpts."""
+    try:
+        return idea_mining_web.mine_ideas(body)
+    except idea_mining_web.IdeaMiningWebError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/ideas/resolve-source")
+def post_ideas_resolve_source(body: Dict[str, Any]) -> dict:
+    """Resolve a paper/PDF/frontier source seed into bounded metadata."""
+    try:
+        return idea_mining_web.resolve_source(body)
+    except idea_mining_web.IdeaMiningWebError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/ideas/prior-art")
+def post_ideas_prior_art(body: Dict[str, Any]) -> dict:
+    """Run or prepare an opt-in bounded prior-art check for an idea."""
+    try:
+        return idea_mining_web.check_prior_art(body)
+    except idea_mining_web.IdeaMiningWebError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/ideas/handoff")
+def post_ideas_handoff(body: Dict[str, Any]) -> dict:
+    """Freeze a selected idea into an Agent handoff plan."""
+    try:
+        return idea_mining_web.create_handoff(body)
+    except idea_mining_web.IdeaMiningWebError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/ideas/create-agent-project")
+def post_ideas_create_agent_project(body: Dict[str, Any]) -> dict:
+    """Create a metadata-only Agent Projects seed from an idea handoff."""
+    try:
+        return idea_mining_web.create_agent_project(body)
+    except idea_mining_web.IdeaMiningWebError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/ideas/agent-projects")
+def post_ideas_agent_projects(body: Dict[str, Any] | None = None) -> dict:
+    """List Agent project seeds created by Idea Mining."""
+    return idea_mining_web.list_agent_projects(body or {})
+
+
+@app.post("/api/ideas/history")
+def post_ideas_history(body: Dict[str, Any] | None = None) -> dict:
+    """List local metadata-only idea mining runs."""
+    return idea_mining_web.list_runs(body or {})
+
+
+@app.post("/api/ideas/run")
+def post_ideas_run(body: Dict[str, Any] | None = None) -> dict:
+    """Load one persisted metadata-only idea mining run."""
+    try:
+        return idea_mining_web.get_run(body or {})
+    except idea_mining_web.IdeaMiningWebError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
 @app.post("/api/agent-runs/artifact")
 def post_agent_run_artifact(body: Dict[str, Any]) -> dict:
     """Return a bounded JSON viewer payload for one whitelisted artifact."""
@@ -381,6 +636,19 @@ def jobs_get(job_id: str) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="unknown job")
     return job.snapshot()
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def jobs_cancel(job_id: str, body: Optional[Dict[str, Any]] = None) -> dict:
+    """Request cooperative cancellation for a running local job."""
+    job = MANAGER.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    reason = str((body or {}).get("reason") or "user_requested")
+    requested = job.request_cancel(reason=reason)
+    snap = job.snapshot()
+    snap["cancel_request_accepted"] = requested
+    return snap
 
 
 @app.get("/api/jobs/{job_id}/events")

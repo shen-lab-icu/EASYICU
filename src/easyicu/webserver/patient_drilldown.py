@@ -11,11 +11,13 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from easyicu import concept_catalog
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 
 _MAX_ENTITIES = 5
 _MAX_SIGNAL_POINTS = 12
+_MAX_REVIEW_SIGNALS = 24
 _READ_MODULES = ("demographics", "outcome", "sofa2_score", "sepsis3_sofa2", "vitals")
 _SIGNAL_SPECS = (
     ("hr", "Heart rate", "bpm"),
@@ -23,6 +25,28 @@ _SIGNAL_SPECS = (
     ("spo2", "SpO2", "%"),
     ("temp", "Temp", "deg C"),
 )
+_TIME_COLUMNS = (
+    "charttime",
+    "time",
+    "datetime",
+    "timestamp",
+    "starttime",
+    "endtime",
+    "hour",
+    "measuredat_minutes",
+    "observationoffset",
+)
+_ID_COLUMNS = {"stay_id", "subject_id", "hadm_id"}
+_METADATA_COLUMNS = {
+    "valueuom",
+    "unit",
+    "units",
+    "category",
+    "type",
+    "dur_var",
+    "entertime",
+    "intakeoutputentryoffset",
+}
 _MODULE_COLUMNS = {
     "demographics": ("stay_id", "age", "sex"),
     "outcome": ("stay_id", "death", "los_icu"),
@@ -30,6 +54,82 @@ _MODULE_COLUMNS = {
     "sepsis3_sofa2": ("stay_id", "sep3_sofa2"),
     "vitals": ("stay_id", "charttime", "hr", "map", "spo2", "temp"),
 }
+
+
+def patient_review_sources(body: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    """Return registered local exports that can back Patient Review.
+
+    This is a source-selection contract, not a data preview: it reads registry
+    and export metadata only, and never returns patient rows or row identifiers.
+    """
+    del body
+    registry = source_store.load_registry()
+    active_path = str(registry.get("active_path") or "")
+    active_norm = _norm_path(active_path) if active_path else ""
+    sources: List[Dict[str, Any]] = []
+
+    for source in registry.get("sources") or []:
+        if not isinstance(source, dict):
+            continue
+        raw_path = str(source.get("path") or "")
+        if not raw_path or not source.get("ok", True):
+            continue
+        desc = dataio.describe_export_source(raw_path)
+        if not desc.get("ok"):
+            continue
+        summary = desc.get("summary") or source.get("summary") or {}
+        source_norm = _norm_path(raw_path)
+        public = _source_provenance(source, desc)
+        public.update({
+            "active": source_norm == active_norm,
+            "path": raw_path,
+            "path_hash": _hash(source_norm),
+            "patient_ready": _is_patient_ready(desc),
+            "summary": {
+                "entities": _int_or_none(summary.get("stays")),
+                "modules": _int_or_none(summary.get("modules")),
+                "file_count": _int_or_none(summary.get("file_count")),
+                "total_rows": _int_or_none(summary.get("total_rows")),
+            },
+        })
+        sources.append(public)
+
+    active_source = next((item for item in sources if item.get("active")), None)
+    return {
+        "ok": True,
+        "mode": "real",
+        "demo": False,
+        "source_count": len(sources),
+        "active_path_hash": _hash(active_norm) if active_norm else None,
+        "active_source": active_source,
+        "can_load": bool(active_source and active_source.get("patient_ready")),
+        "sources": sources,
+        "provenance": {
+            "computed_from": [
+                "source_registry",
+                "autodiscovered_export_folders",
+                "export_manifest_or_file_schema",
+            ],
+            "payload_scope": "local_export_source_metadata_only",
+        },
+        "privacy": {
+            "raw_rows_returned": False,
+            "direct_identifiers_returned": False,
+            "patient_rows_returned": False,
+        },
+        "blocked_features": [
+            {
+                "id": "unregistered_path_review",
+                "status": "blocked",
+                "reason": "Patient Review only loads registered local exports.",
+            },
+            {
+                "id": "row_preview_in_source_picker",
+                "status": "blocked",
+                "reason": "The source picker shows metadata only; drilldown remains bounded and pseudonymous.",
+            },
+        ],
+    }
 
 
 def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -60,6 +160,7 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
     sofa2 = dataio._filter_by_stay(frames.get("sofa2_score"), entity_set)
     sepsis = dataio._filter_by_stay(frames.get("sepsis3_sofa2"), entity_set)
     vitals = dataio._filter_by_stay(frames.get("vitals"), entity_set)
+    review_frames = _read_review_frames(path, desc, entity_set)
 
     death_by_entity = dataio._stay_bool(outcome, "death", missing_false=True)
     los_by_entity = dataio._stay_numeric(outcome, "los_icu", "median")
@@ -107,6 +208,14 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         "median_sofa2": dataio._median(list(sofa_by_entity.values())),
         "sepsis_pct": dataio._bool_pct(list(sepsis_by_entity.values())),
     }
+    module_profiles = _module_profiles(desc, review_frames, entity_set)
+    time_lanes = _time_lane_payloads(review_frames, selected_id)
+    quality_metrics = _quality_metrics_payload(review_frames, entity_set)
+    quality = _quality_from_module_profiles(module_profiles)
+    data_tables = _data_table_review_payload(module_profiles, summary)
+    trajectory_review = _trajectory_review_payload(time_lanes, selected, entities, quality_metrics)
+    patient_overview = _patient_overview_payload(selected, entities, time_lanes, quality_metrics)
+    quality_review = _quality_review_payload(quality, quality_metrics)
 
     return {
         "ok": True,
@@ -128,11 +237,19 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
             "direct_identifiers_returned": False,
             "max_entity_options": _MAX_ENTITIES,
             "max_points_per_signal": _MAX_SIGNAL_POINTS,
+            "payload_tables_are_aggregated": True,
         },
         "summary": summary,
+        "module_profiles": module_profiles,
         "entities": entities,
         "selected": selected,
-        "quality": _quality_payload(path, desc),
+        "time_lanes": time_lanes,
+        "quality": quality,
+        "quality_metrics": quality_metrics,
+        "data_tables": data_tables,
+        "trajectory_review": trajectory_review,
+        "patient_overview": patient_overview,
+        "quality_review": quality_review,
         "blocked_features": [
             {
                 "id": "raw_identifier_table",
@@ -204,6 +321,806 @@ def _read_selected_columns(path: Path, columns: List[str]) -> Any:
     if suffix == ".xlsx":
         return pd.read_excel(path, usecols=columns)
     return pd.read_csv(path, usecols=columns)
+
+
+def _read_review_frames(path: Path, desc: Dict[str, Any], entity_set: set[str]) -> List[Dict[str, Any]]:
+    """Read bounded columns needed for Patient Review charts.
+
+    The old Streamlit Patient Review computed module previews, clinical-lane
+    trends, and data-quality profiles from loaded concept frames. The native API
+    mirrors those calculations but only reads selected non-identifier columns
+    and returns aggregates plus the chosen pseudonymous entity signals.
+    """
+    best_by_module: Dict[str, Dict[str, Any]] = {}
+    for item in desc.get("files") or []:
+        module = str(item.get("module") or "")
+        columns = [str(col) for col in (item.get("columns") or [])]
+        if not module or "stay_id" not in columns:
+            continue
+        feature_cols = _feature_columns(columns)
+        time_cols = [col for col in _TIME_COLUMNS if col in columns]
+        selected_columns = _ordered_unique(["stay_id", *time_cols, *feature_cols])
+        if len(selected_columns) <= 1:
+            continue
+        try:
+            frame = _read_selected_columns(path / str(item.get("file") or ""), selected_columns)
+        except Exception:
+            continue
+        if frame is None or getattr(frame, "empty", True) or "stay_id" not in frame.columns:
+            continue
+        frame = frame.copy()
+        frame["stay_id"] = frame["stay_id"].map(dataio._norm_id)
+        frame = frame[frame["stay_id"].isin(entity_set)]
+        if frame.empty:
+            continue
+        candidate = {
+            "module": module,
+            "file": item.get("file"),
+            "rows": int(item.get("rows") or len(frame)),
+            "columns": columns,
+            "features": [col for col in feature_cols if col in frame.columns],
+            "time_col": _detect_time_col(frame),
+            "frame": frame,
+            "entity_overlap": int(frame["stay_id"].nunique()),
+        }
+        current = best_by_module.get(module)
+        if current is None or candidate["entity_overlap"] > int(current.get("entity_overlap") or 0):
+            best_by_module[module] = candidate
+    return list(best_by_module.values())
+
+
+def _feature_columns(columns: List[str]) -> List[str]:
+    concepts = set(concept_catalog.CONCEPT_DICTIONARY)
+    out: List[str] = []
+    for col in columns:
+        if col in concepts and col not in _ID_COLUMNS and col not in _METADATA_COLUMNS:
+            out.append(col)
+    return out
+
+
+def _ordered_unique(values: List[str]) -> List[str]:
+    out: List[str] = []
+    for value in values:
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
+def _detect_time_col(frame: Any) -> str | None:
+    for col in _TIME_COLUMNS:
+        if col in getattr(frame, "columns", []):
+            return col
+    return None
+
+
+def _module_profiles(
+    desc: Dict[str, Any],
+    review_frames: List[Dict[str, Any]],
+    entity_set: set[str],
+) -> List[Dict[str, Any]]:
+    frame_by_module = {row["module"]: row for row in review_frames}
+    order: List[str] = []
+    item_by_module: Dict[str, Dict[str, Any]] = {}
+    for item in desc.get("files") or []:
+        module = str(item.get("module") or "")
+        if not module:
+            continue
+        if module not in item_by_module:
+            order.append(module)
+            item_by_module[module] = item
+        frame_item = frame_by_module.get(module)
+        if frame_item and item.get("file") == frame_item.get("file"):
+            item_by_module[module] = item
+
+    profiles: List[Dict[str, Any]] = []
+    for module in order:
+        item = item_by_module[module]
+        frame_item = frame_by_module.get(module)
+        columns = [str(col) for col in ((frame_item or item).get("columns") or [])]
+        features = [str(col) for col in ((frame_item or {}).get("features") or _feature_columns(columns))]
+        frame = frame_item.get("frame") if frame_item else None
+        time_col = frame_item.get("time_col") if frame_item else None
+        rows = int((frame_item or item).get("rows") or 0)
+        entities = None
+        dynamic_features = 0
+        static_features = 0
+        observed_features = 0
+        if frame is not None and not frame.empty:
+            entities = int(frame["stay_id"].nunique()) if "stay_id" in frame.columns else None
+            for feature in [f for f in features if f in frame.columns]:
+                if frame[feature].notna().any():
+                    observed_features += 1
+                    if time_col:
+                        dynamic_features += 1
+                    else:
+                        static_features += 1
+        coverage = round(entities / len(entity_set) * 100, 1) if entities is not None and entity_set else None
+        profiles.append({
+            "module": module,
+            "label": _module_label(module),
+            "rows": rows,
+            "feature_count": len(features),
+            "observed_features": observed_features,
+            "entities": entities,
+            "coverage_pct": coverage,
+            "time_indexed": bool(time_col),
+            "dynamic_features": dynamic_features,
+            "static_features": static_features,
+            "preview_features": features[:6],
+        })
+    return profiles
+
+
+def _module_label(module: str) -> str:
+    label = concept_catalog.CONCEPT_GROUP_NAMES.get(module, (module, module))[0]
+    return _plain_label(label)
+
+
+def _plain_label(label: str) -> str:
+    text = str(label or "").strip()
+    while text and not (text[0].isalnum() or "\u4e00" <= text[0] <= "\u9fff"):
+        text = text[1:].lstrip()
+    return text or str(label or "")
+
+
+def _time_lane_payloads(review_frames: List[Dict[str, Any]], entity_id: str) -> List[Dict[str, Any]]:
+    by_feature: Dict[str, Dict[str, Any]] = {}
+    for item in review_frames:
+        frame = item.get("frame")
+        if frame is None or frame.empty or "stay_id" not in frame.columns:
+            continue
+        one = frame[frame["stay_id"] == str(entity_id)].copy()
+        if one.empty:
+            continue
+        time_col = item.get("time_col")
+        if not time_col or time_col not in one.columns:
+            continue
+        if time_col and time_col in one.columns:
+            one = one.sort_values(time_col)
+        for feature in item.get("features") or []:
+            if feature not in one.columns:
+                continue
+            values = dataio._numeric_values(one[feature])
+            if not values:
+                continue
+            by_feature.setdefault(feature, {
+                "feature": feature,
+                "name": _concept_name(feature),
+                "unit": _concept_unit(feature),
+                "module": item.get("module"),
+                "time_indexed": bool(time_col),
+                "values": values[:_MAX_SIGNAL_POINTS],
+                "point_count": len(values),
+                "current": values[min(len(values), _MAX_SIGNAL_POINTS) - 1],
+                "min": round(min(values), 3),
+                "max": round(max(values), 3),
+                "mean": round(sum(values) / len(values), 3),
+                "thresholds": _threshold_payload(feature),
+            })
+            if len(by_feature) >= _MAX_REVIEW_SIGNALS:
+                break
+        if len(by_feature) >= _MAX_REVIEW_SIGNALS:
+            break
+
+    lanes: List[Dict[str, Any]] = []
+    used: set[str] = set()
+    for lane, features in concept_catalog.CLINICAL_LANES.items():
+        lane_signals = [by_feature[f] for f in features if f in by_feature]
+        used.update(row["feature"] for row in lane_signals)
+        lanes.append({
+            "lane": lane,
+            "label": lane.replace("_", " ").title(),
+            "signal_count": len(lane_signals),
+            "signals": lane_signals,
+            "status": "ready" if lane_signals else "unavailable",
+        })
+    other = [row for key, row in by_feature.items() if key not in used]
+    if other:
+        lanes.append({
+            "lane": "other",
+            "label": "Other signals",
+            "signal_count": len(other),
+            "signals": other,
+            "status": "ready",
+        })
+    return lanes
+
+
+def _concept_name(feature: str) -> str:
+    entry = concept_catalog.CONCEPT_DICTIONARY.get(feature)
+    if entry:
+        return str(entry[0])
+    return feature
+
+
+def _concept_unit(feature: str) -> str:
+    threshold_unit = concept_catalog.CLINICAL_THRESHOLDS.get(feature, {}).get("unit")
+    if threshold_unit:
+        return str(threshold_unit)
+    entry = concept_catalog.CONCEPT_DICTIONARY.get(feature)
+    if entry and len(entry) > 2:
+        return str(entry[2] or "")
+    return ""
+
+
+def _threshold_payload(feature: str) -> List[Dict[str, Any]]:
+    thresholds = concept_catalog.CLINICAL_THRESHOLDS.get(feature) or {}
+    lines = thresholds.get("lines") or []
+    labels = thresholds.get("labels") or []
+    out = []
+    for idx, value in enumerate(lines):
+        out.append({
+            "value": dataio._num(value),
+            "label": labels[idx] if idx < len(labels) else "clinical threshold",
+        })
+    return out
+
+
+def _quality_metrics_payload(review_frames: List[Dict[str, Any]], entity_set: set[str]) -> Dict[str, Any]:
+    rows: List[Dict[str, Any]] = []
+    total_records = 0
+    missing_weight = 0.0
+    outlier_weight = 0.0
+    duplicate_weight = 0.0
+    denominator = len(entity_set)
+
+    for item in review_frames:
+        frame = item.get("frame")
+        if frame is None or frame.empty or "stay_id" not in frame.columns:
+            continue
+        module = str(item.get("module") or "")
+        time_col = item.get("time_col")
+        for feature in item.get("features") or []:
+            if feature not in frame.columns:
+                continue
+            observed = frame[["stay_id", feature] + ([time_col] if time_col and time_col in frame.columns else [])].copy()
+            non_null = observed[observed[feature].notna()]
+            records = int(len(non_null))
+            entities = int(non_null["stay_id"].nunique()) if records else 0
+            missing_pct = round((1 - entities / denominator) * 100, 1) if denominator else None
+            outlier_pct = _out_of_physio_pct(feature, non_null[feature])
+            duplicate_pct = _duplicate_time_pct(non_null, time_col)
+            density = round(records / max(denominator, 1), 3) if denominator else None
+            total_records += records
+            if missing_pct is not None:
+                missing_weight += missing_pct * max(records, 1)
+            outlier_weight += outlier_pct * max(records, 1)
+            duplicate_weight += duplicate_pct * max(records, 1)
+            rows.append({
+                "feature": feature,
+                "name": _concept_name(feature),
+                "module": module,
+                "records": records,
+                "entities": entities,
+                "coverage_pct": round(entities / denominator * 100, 1) if denominator else None,
+                "missing_pct": missing_pct,
+                "out_of_physio_pct": outlier_pct,
+                "duplicate_time_pct": duplicate_pct,
+                "density_per_entity": density,
+                "time_indexed": bool(time_col),
+                "status": _quality_feature_status(missing_pct, outlier_pct, duplicate_pct),
+            })
+
+    weight_denominator = sum(max(int(row.get("records") or 0), 1) for row in rows)
+    summary = {
+        "concept_count": len(rows),
+        "total_records": total_records,
+        "weighted_missing_pct": round(missing_weight / weight_denominator, 1) if weight_denominator else None,
+        "weighted_out_of_physio_pct": round(outlier_weight / weight_denominator, 1) if weight_denominator else None,
+        "weighted_duplicate_time_pct": round(duplicate_weight / weight_denominator, 1) if weight_denominator else None,
+        "denominator_entities": denominator,
+    }
+    top_issues = sorted(
+        rows,
+        key=lambda row: (
+            float(row.get("missing_pct") or 0),
+            float(row.get("out_of_physio_pct") or 0),
+            float(row.get("duplicate_time_pct") or 0),
+            int(row.get("records") or 0),
+        ),
+        reverse=True,
+    )[:5]
+    return {
+        "summary": summary,
+        "features": rows[:80],
+        "top_issues": top_issues,
+        "payload_scope": "aggregate_quality_metrics_no_row_payload",
+    }
+
+
+def _data_table_review_payload(
+    module_profiles: List[Dict[str, Any]],
+    summary: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Mirror the old Data Tables review contract without source rows."""
+    module_count = len([row for row in module_profiles if int(row.get("feature_count") or 0) > 0])
+    feature_count = sum(int(row.get("feature_count") or 0) for row in module_profiles)
+    selected_count = sum(int(row.get("observed_features") or 0) for row in module_profiles)
+    modules = []
+    for row in module_profiles:
+        feature_count_row = int(row.get("feature_count") or 0)
+        if feature_count_row <= 0:
+            continue
+        coverage = row.get("coverage_pct")
+        modules.append({
+            "module": row.get("module"),
+            "label": row.get("label"),
+            "review_features": feature_count_row,
+            "observed_features": int(row.get("observed_features") or 0),
+            "rows": int(row.get("rows") or 0),
+            "entities": row.get("entities"),
+            "coverage_pct": coverage,
+            "share_pct": round(feature_count_row / feature_count * 100, 1) if feature_count else None,
+            "shape": "time_indexed" if row.get("time_indexed") else "static",
+            "dynamic_features": int(row.get("dynamic_features") or 0),
+            "static_features": int(row.get("static_features") or 0),
+            "preview_features": [
+                {
+                    "feature": feature,
+                    "name": _concept_name(str(feature)),
+                    "unit": _concept_unit(str(feature)),
+                    "group": _concept_group_label(str(feature)),
+                }
+                for feature in (row.get("preview_features") or [])[:6]
+            ],
+            "status": _module_review_status(coverage, feature_count_row),
+        })
+    return {
+        "loaded_summary": {
+            "entities": summary.get("entities"),
+            "review_features": feature_count,
+            "observed_features": selected_count,
+            "module_count": module_count,
+            "source_count": 1,
+        },
+        "module_picker": {
+            "default_module": modules[0]["module"] if modules else None,
+            "module_count": len(modules),
+            "selection_mode": "module_then_feature",
+        },
+        "detail_gate": {
+            "title": "Source records are optional",
+            "default_open": False,
+            "reason": "The browser shows module aggregates and feature metadata; row previews stay out of the payload.",
+            "available_detail_modes": ["module_glance", "single_feature_metadata"],
+        },
+        "modules": modules,
+        "payload_scope": "old_data_tables_semantics_without_row_payload",
+    }
+
+
+def _trajectory_review_payload(
+    time_lanes: List[Dict[str, Any]],
+    selected: Dict[str, Any],
+    entities: List[Dict[str, Any]],
+    quality_metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Mirror old Time Series modes: lanes, single entity, comparison."""
+    ready_lanes = [row for row in time_lanes if row.get("status") == "ready" and row.get("signals")]
+    signal_count = sum(int(row.get("signal_count") or 0) for row in ready_lanes)
+    selected_signals = []
+    for lane in ready_lanes:
+        for signal in lane.get("signals") or []:
+            selected_signals.append(signal)
+    selected_signals = selected_signals[:_MAX_REVIEW_SIGNALS]
+    comparison_features = _comparison_feature_payload(quality_metrics)
+    return {
+        "contract": [
+            {
+                "index": "01",
+                "label": "Entity scope",
+                "detail": f"{len(entities)} pseudonymous options exposed",
+                "status": "ready" if entities else "warn",
+            },
+            {
+                "index": "02",
+                "label": "Loaded signals",
+                "detail": f"{signal_count} selected-entity signals",
+                "status": "ready" if signal_count else "neutral",
+            },
+            {
+                "index": "03",
+                "label": "Clinical lanes",
+                "detail": f"{len(ready_lanes)} lanes available",
+                "status": "ready" if ready_lanes else "neutral",
+            },
+            {
+                "index": "04",
+                "label": "Review mode",
+                "detail": "clinical lanes / single entity / multi-entity comparison",
+                "status": "ready",
+            },
+        ],
+        "modes": [
+            {
+                "id": "clinical_lanes",
+                "label": "Clinical Lanes",
+                "status": "ready" if ready_lanes else "unavailable",
+                "description": "Grouped longitudinal signals with clinical thresholds when available.",
+            },
+            {
+                "id": "single_entity",
+                "label": "Single Patient",
+                "status": "ready" if selected_signals else "unavailable",
+                "description": "Selected pseudonymous entity trends and latest values.",
+            },
+            {
+                "id": "multi_entity_comparison",
+                "label": "Multi-Patient Comparison",
+                "status": "aggregate_only" if comparison_features else "unavailable",
+                "description": "Cohort-level feature summaries replace raw multi-entity traces in the native browser payload.",
+            },
+        ],
+        "lanes": ready_lanes,
+        "single_entity": {
+            "selected_ref": selected.get("ref"),
+            "selected_label": selected.get("label"),
+            "signals": selected_signals[:12],
+        },
+        "multi_entity_comparison": {
+            "selection_cap": _MAX_ENTITIES,
+            "normalization_available": True,
+            "features": comparison_features,
+            "payload_scope": "aggregate_comparison_no_multi_entity_rows",
+        },
+        "payload_scope": "old_timeseries_semantics_bounded",
+    }
+
+
+def _patient_overview_payload(
+    selected: Dict[str, Any],
+    entities: List[Dict[str, Any]],
+    time_lanes: List[Dict[str, Any]],
+    quality_metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Mirror old Patient Overview dashboard/category/table modes."""
+    signal_index = _selected_signal_index(time_lanes)
+    category_sections = [
+        _category_section("vitals", "Vital Signs Snapshot", ("hr", "map", "sbp", "dbp", "resp", "temp", "spo2"), signal_index),
+        _category_section("labs", "Key Laboratory Snapshot", ("lact", "lac", "crea", "plt", "wbc", "hgb", "bili"), signal_index),
+        _category_section("scores", "Scores and sepsis flags", ("sofa", "sofa2", "qsofa", "sirs", "gcs", "sep3_sofa1", "sep3_sofa2"), signal_index),
+        _category_section("support", "Support and therapies", ("mech_vent", "vent_ind", "rrt", "vaso_ind", "norepi_rate", "epi_rate"), signal_index),
+    ]
+    available_features = {
+        str(row.get("feature"))
+        for row in (quality_metrics.get("features") or [])
+        if row.get("feature")
+    }
+    return {
+        "navigator": {
+            "current": selected.get("label"),
+            "ordinal": selected.get("ordinal"),
+            "options": [
+                {
+                    "ref": item.get("ref"),
+                    "label": item.get("label"),
+                    "outcome": item.get("outcome"),
+                    "severity": item.get("severity"),
+                }
+                for item in entities
+            ],
+            "actions": ["first", "previous", "next", "last", "random"],
+        },
+        "dashboard": {
+            "mode": "Dashboard",
+            "summary_cards": _patient_summary_cards(selected),
+            "trend_panels": [
+                section for section in category_sections
+                if section.get("available_count")
+            ][:3],
+            "sofa_comparator": _sofa_comparator(signal_index),
+        },
+        "category_view": {
+            "mode": "Category View",
+            "sections": category_sections,
+        },
+        "data_table": {
+            "mode": "Data Table",
+            "available_features": len(available_features),
+            "row_preview": "blocked",
+            "reason": "Native Patient Overview preserves category metadata but does not return source rows.",
+        },
+        "payload_scope": "old_patient_overview_semantics_pseudonymous",
+    }
+
+
+def _quality_review_payload(
+    quality: List[Dict[str, Any]],
+    quality_metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Mirror old Quality page summary, contract and three panels."""
+    summary = quality_metrics.get("summary") or {}
+    features = quality_metrics.get("features") or []
+    missing = sorted(features, key=lambda row: float(row.get("missing_pct") or 0), reverse=True)[:10]
+    outliers = sorted(features, key=lambda row: float(row.get("out_of_physio_pct") or 0), reverse=True)[:10]
+    temporal = sorted(features, key=lambda row: float(row.get("duplicate_time_pct") or 0), reverse=True)[:10]
+    return {
+        "summary_cards": [
+            {"label": "QC concepts", "value": summary.get("concept_count"), "tone": "ok"},
+            {"label": "Records", "value": summary.get("total_records"), "tone": "accent"},
+            {"label": "Weighted missing", "value": summary.get("weighted_missing_pct"), "unit": "%", "tone": _rate_tone(summary.get("weighted_missing_pct"), warn=5, danger=20)},
+            {"label": "Out-of-physio", "value": summary.get("weighted_out_of_physio_pct"), "unit": "%", "tone": _rate_tone(summary.get("weighted_out_of_physio_pct"), warn=1, danger=5)},
+            {"label": "Duplicate TS", "value": summary.get("weighted_duplicate_time_pct"), "unit": "%", "tone": _rate_tone(summary.get("weighted_duplicate_time_pct"), warn=0.5, danger=2)},
+        ],
+        "contract": [
+            {
+                "index": "01",
+                "label": "Local concept scope",
+                "detail": f"{summary.get('concept_count') or 0} concepts · {summary.get('denominator_entities') or 0} entities · {summary.get('total_records') or 0} records",
+                "status": "ready" if summary.get("concept_count") else "neutral",
+            },
+            {
+                "index": "02",
+                "label": "Missingness gate",
+                "detail": f"{summary.get('weighted_missing_pct')}% weighted missing",
+                "status": _rate_tone(summary.get("weighted_missing_pct"), warn=5, danger=20),
+            },
+            {
+                "index": "03",
+                "label": "Physiologic range",
+                "detail": f"{summary.get('weighted_out_of_physio_pct')}% out-of-range values",
+                "status": _rate_tone(summary.get("weighted_out_of_physio_pct"), warn=1, danger=5),
+            },
+            {
+                "index": "04",
+                "label": "Temporal integrity",
+                "detail": f"{summary.get('weighted_duplicate_time_pct')}% duplicate time rows",
+                "status": _rate_tone(summary.get("weighted_duplicate_time_pct"), warn=0.5, danger=2),
+            },
+        ],
+        "panels": [
+            {"id": "missingness", "label": "Missingness", "rows": _quality_panel_rows(missing, "missing_pct")},
+            {"id": "outliers", "label": "Out-of-Physio", "rows": _quality_panel_rows(outliers, "out_of_physio_pct")},
+            {"id": "temporal", "label": "Temporal Integrity", "rows": _quality_panel_rows(temporal, "duplicate_time_pct")},
+        ],
+        "top_issues": quality_metrics.get("top_issues") or [],
+        "module_coverage": quality,
+        "payload_scope": "old_quality_semantics_aggregate_only",
+    }
+
+
+def _comparison_feature_payload(quality_metrics: Dict[str, Any]) -> List[Dict[str, Any]]:
+    features = [
+        row for row in (quality_metrics.get("features") or [])
+        if row.get("time_indexed") and int(row.get("records") or 0) > 0
+    ]
+    features = sorted(
+        features,
+        key=lambda row: (
+            int(row.get("entities") or 0),
+            int(row.get("records") or 0),
+        ),
+        reverse=True,
+    )
+    return [
+        {
+            "feature": row.get("feature"),
+            "name": row.get("name"),
+            "module": row.get("module"),
+            "records": row.get("records"),
+            "entities": row.get("entities"),
+            "coverage_pct": row.get("coverage_pct"),
+            "density_per_entity": row.get("density_per_entity"),
+        }
+        for row in features[:8]
+    ]
+
+
+def _selected_signal_index(time_lanes: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    index: Dict[str, Dict[str, Any]] = {}
+    for lane in time_lanes:
+        for signal in lane.get("signals") or []:
+            feature = str(signal.get("feature") or "")
+            if feature and feature not in index:
+                index[feature] = signal
+    return index
+
+
+def _category_section(
+    section_id: str,
+    title: str,
+    features: Tuple[str, ...],
+    signal_index: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    cards = []
+    for feature in features:
+        signal = signal_index.get(feature)
+        if not signal:
+            continue
+        current = dataio._num(signal.get("current"))
+        cards.append({
+            "feature": feature,
+            "label": signal.get("name") or _concept_name(feature),
+            "unit": signal.get("unit") or _concept_unit(feature),
+            "current": current,
+            "delta": _signal_delta(signal.get("values") or []),
+            "tone": _patient_feature_tone(feature, current),
+            "values": (signal.get("values") or [])[:_MAX_SIGNAL_POINTS],
+            "thresholds": signal.get("thresholds") or [],
+        })
+    return {
+        "id": section_id,
+        "title": title,
+        "available_count": len(cards),
+        "cards": cards,
+    }
+
+
+def _patient_summary_cards(selected: Dict[str, Any]) -> List[Dict[str, Any]]:
+    demo = selected.get("demographics") or {}
+    scores = selected.get("scores") or {}
+    outcomes = selected.get("outcomes") or {}
+    return [
+        {
+            "label": "Age / sex",
+            "value": f"{_display_value(dataio._num(demo.get('age')), decimals=0)} / {dataio._clean(demo.get('sex')) or 'unknown'}",
+            "tone": "neutral",
+        },
+        {
+            "label": "SOFA-2 max",
+            "value": _display_value(dataio._num(scores.get("sofa2_max")), decimals=1),
+            "tone": _score_tone(dataio._num(scores.get("sofa2_max"))),
+        },
+        {
+            "label": "Sepsis-3",
+            "value": "Positive" if scores.get("sepsis3_sofa2") is True else ("Negative" if scores.get("sepsis3_sofa2") is False else "unknown"),
+            "tone": "warn" if scores.get("sepsis3_sofa2") is True else "ok",
+        },
+        {
+            "label": "Outcome",
+            "value": outcomes.get("status") or "Unknown",
+            "tone": "bad" if outcomes.get("status") == "Deceased" else "ok",
+        },
+        {
+            "label": "ICU LOS",
+            "value": f"{_display_value(dataio._num(outcomes.get('icu_los_days')), decimals=1)} d",
+            "tone": "neutral",
+        },
+    ]
+
+
+def _sofa_comparator(signal_index: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    sofa1 = signal_index.get("sofa")
+    sofa2 = signal_index.get("sofa2")
+    if not sofa1 or not sofa2:
+        return {
+            "status": "unavailable",
+            "reason": "SOFA-1 and SOFA-2 signals are both required.",
+        }
+    return {
+        "status": "ready",
+        "features": [
+            {
+                "feature": "sofa",
+                "label": "SOFA-1",
+                "current": sofa1.get("current"),
+                "values": sofa1.get("values") or [],
+            },
+            {
+                "feature": "sofa2",
+                "label": "SOFA-2",
+                "current": sofa2.get("current"),
+                "values": sofa2.get("values") or [],
+            },
+        ],
+    }
+
+
+def _quality_panel_rows(rows: List[Dict[str, Any]], metric: str) -> List[Dict[str, Any]]:
+    return [
+        {
+            "feature": row.get("feature"),
+            "name": row.get("name"),
+            "module": row.get("module"),
+            "value": row.get(metric),
+            "records": row.get("records"),
+            "entities": row.get("entities"),
+            "status": row.get("status"),
+        }
+        for row in rows[:8]
+    ]
+
+
+def _concept_group_label(feature: str) -> str:
+    for group, features in concept_catalog.CONCEPT_GROUPS_INTERNAL.items():
+        if feature in features:
+            return _module_label(group)
+    return "Other"
+
+
+def _module_review_status(coverage: Any, feature_count: int) -> str:
+    if feature_count <= 0:
+        return "empty"
+    if not isinstance(coverage, (int, float)):
+        return "unknown"
+    if coverage >= 80:
+        return "ready"
+    if coverage >= 50:
+        return "partial"
+    return "sparse"
+
+
+def _signal_delta(values: List[Any]) -> float | None:
+    nums = [dataio._num(value) for value in values]
+    nums = [value for value in nums if value is not None]
+    if len(nums) < 2:
+        return None
+    return round(float(nums[-1] - nums[0]), 3)
+
+
+def _patient_feature_tone(feature: str, value: float | None) -> str:
+    if value is None:
+        return "neutral"
+    if feature in {"sep3_sofa1", "sep3_sofa2", "susp_inf", "infection_icd"}:
+        return "bad" if value >= 1 else "ok"
+    if feature in {"mech_vent", "vent_ind", "rrt", "vaso_ind"}:
+        return "warn" if value >= 1 else "ok"
+    if feature in {"sofa", "sofa2", "qsofa", "sirs", "mews", "news"}:
+        return _score_tone(value)
+    bounds = concept_catalog.PHYSIOLOGIC_RANGES.get(feature)
+    if bounds:
+        low, high = bounds
+        if value < low or value > high:
+            return "warn"
+    return "neutral"
+
+
+def _score_tone(value: float | None) -> str:
+    if value is None:
+        return "neutral"
+    if value < 6:
+        return "ok"
+    if value < 10:
+        return "warn"
+    return "bad"
+
+
+def _rate_tone(value: Any, *, warn: float, danger: float) -> str:
+    number = dataio._num(value)
+    if number is None:
+        return "neutral"
+    if number >= danger:
+        return "bad"
+    if number >= warn:
+        return "warn"
+    return "ok"
+
+
+def _display_value(value: float | None, *, decimals: int) -> str:
+    if value is None:
+        return "unknown"
+    return f"{value:.{decimals}f}"
+
+
+def _out_of_physio_pct(feature: str, values: Any) -> float:
+    bounds = concept_catalog.PHYSIOLOGIC_RANGES.get(feature)
+    if not bounds:
+        return 0.0
+    numeric = dataio._numeric_values(values)
+    if not numeric:
+        return 0.0
+    low, high = bounds
+    hits = sum(1 for value in numeric if value < low or value > high)
+    return round(hits / len(numeric) * 100, 1)
+
+
+def _duplicate_time_pct(frame: Any, time_col: str | None) -> float:
+    if not time_col or time_col not in getattr(frame, "columns", []) or "stay_id" not in getattr(frame, "columns", []):
+        return 0.0
+    observed = frame.dropna(subset=[time_col])
+    if observed.empty:
+        return 0.0
+    duplicates = int(observed.duplicated(subset=["stay_id", time_col], keep="first").sum())
+    return round(duplicates / len(observed) * 100, 1)
+
+
+def _quality_feature_status(missing_pct: float | None, outlier_pct: float, duplicate_pct: float) -> str:
+    missing = float(missing_pct or 0.0)
+    if missing >= 50 or outlier_pct >= 5 or duplicate_pct >= 2:
+        return "bad"
+    if missing >= 20 or outlier_pct >= 1 or duplicate_pct >= 0.5:
+        return "warn"
+    return "ok"
 
 
 def _entity_option(
@@ -292,6 +1209,22 @@ def _signals_payload(vitals: Any, entity_id: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _quality_from_module_profiles(module_profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in module_profiles:
+        module = str(item.get("module") or "")
+        coverage = item.get("coverage_pct")
+        out.append({
+            "module": module,
+            "rows": item.get("rows"),
+            "column_count": item.get("feature_count"),
+            "covered_entities": item.get("entities"),
+            "coverage_pct": coverage,
+            "quality_status": _quality_status(module, coverage if isinstance(coverage, (int, float)) else None),
+        })
+    return out
+
+
 def _quality_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
     cohort_size = (desc.get("summary") or {}).get("stays")
     out: List[Dict[str, Any]] = []
@@ -338,6 +1271,13 @@ def _quality_status(module: str, coverage_pct: float | None) -> str:
     return "bad"
 
 
+def _is_patient_ready(desc: Dict[str, Any]) -> bool:
+    modules = {str(item.get("module") or "") for item in desc.get("files") or []}
+    if "demographics" in modules:
+        return True
+    return any("stay_id" in (item.get("columns") or []) for item in desc.get("files") or [])
+
+
 def _source_provenance(source: Dict[str, Any], desc: Dict[str, Any]) -> Dict[str, Any]:
     path = str(desc.get("path") or source.get("path") or "")
     return {
@@ -347,6 +1287,15 @@ def _source_provenance(source: Dict[str, Any], desc: Dict[str, Any]) -> Dict[str
         "database": desc.get("database") or source.get("database"),
         "generated": desc.get("generated") or source.get("generated"),
     }
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _entity_ref(path: Path, entity_id: str) -> str:

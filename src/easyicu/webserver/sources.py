@@ -104,9 +104,16 @@ def _autodiscovered_paths() -> List[str]:
             pass
         if not base.is_dir():
             continue
-        for child in sorted(base.iterdir(), key=lambda p: p.name.lower()):
-            if child.is_dir() and dataio.describe_export_source(str(child)).get("ok"):
-                paths.append(str(child))
+        try:
+            children = sorted(base.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            continue
+        for child in children:
+            try:
+                if child.is_dir() and dataio.describe_export_source(str(child)).get("ok"):
+                    paths.append(str(child))
+            except Exception:  # noqa: BLE001 - arbitrary local folders must not break registry boot.
+                continue
     return _dedup_paths(paths)
 
 
