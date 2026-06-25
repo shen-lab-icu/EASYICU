@@ -214,6 +214,27 @@
 }
 .gds-head strong{ display: block; font-size: 12.5px; font-weight: 650; }
 .gds-head > div > span{ display: block; margin-top: 2px; color: var(--ink-4); font-size: 11px; line-height: 1.35; }
+.gds-choice{
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+}
+.gds-choice-head{
+  display: grid;
+  gap: 2px;
+}
+.gds-choice-head strong{
+  font-size: 12.25px;
+  line-height: 1.25;
+}
+.gds-choice-head span{
+  color: var(--ink-4);
+  font-size: 10.75px;
+  line-height: 1.35;
+}
 .gds-field{ display: grid; gap: 5px; }
 .gds-field span,
 .gds-path span{

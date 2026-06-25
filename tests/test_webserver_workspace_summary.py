@@ -549,6 +549,44 @@ def test_guided_project_memory_restores_conversation_per_local_folder(tmp_path: 
     assert outside.json()["error"] == "invalid_guided_project_dir"
 
 
+def test_guided_project_open_accepts_existing_local_folder_without_draft(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
+    monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
+    project_dir = tmp_path / "projects" / "existing-study"
+    project_dir.mkdir(parents=True)
+    client = TestClient(app)
+
+    opened = client.post(
+        "/api/guided/project/open",
+        json={
+            "project_dir": str(project_dir),
+            "title": "Existing study folder",
+            "context": {"route": "guided", "language": "zh", "data_mode": "real"},
+        },
+    )
+
+    assert opened.status_code == 200
+    body = opened.json()
+    session = body["session"]
+    assert body["opened"] is True
+    assert body["messages_restored"] == 0
+    assert session["project_dir"] == str(project_dir.resolve())
+    assert session["project_title"] == "Existing study folder"
+    assert session["project_kind"] == "guided_project_memory"
+    assert session["memory_scope"] == "project_folder"
+    assert session["draft_id"] is None
+    assert session["local_first"] == {"uploads": 0, "tokens": 0, "external_calls": 0}
+    assert (project_dir / "guided_copilot_session.json").exists()
+
+    outside = tmp_path / "not-projects" / "other-study"
+    outside.mkdir(parents=True)
+    blocked = client.post("/api/guided/project/open", json={"project_dir": str(outside)})
+    assert blocked.status_code == 200
+    assert blocked.json()["blocked"] is True
+    assert blocked.json()["error"] == "invalid_guided_project_dir"
+
+
 def test_page_guide_session_backend_is_metadata_only_and_drives_actions(
     tmp_path: Path, monkeypatch
 ) -> None:
