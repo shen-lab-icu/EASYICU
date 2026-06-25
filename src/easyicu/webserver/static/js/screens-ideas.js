@@ -301,8 +301,8 @@
           <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="4" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
           <label class="field ideas-field"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="4" placeholder="${t('Paste only the sentence(s) or bounded excerpt that triggered the idea. We store this quote and hashes, not the full paper.', '只粘贴触发想法的句子或有界摘录。系统保存引用和哈希，不保存全文。')}">${esc(fieldValue('excerpt'))}</textarea></label>
         </div>
-        <details class="ideas-advanced mt-14">
-          <summary>${icon('list', 13)} ${t('Source metadata', '来源元数据')} <span>${t('optional, but useful for citation and prior-art checks', '可选；用于引用和已有研究检查')}</span></summary>
+        <section class="ideas-advanced ideas-source-metadata mt-14">
+          <div class="ideas-advanced-head">${icon('list', 13)} <b>${t('Source metadata', '来源元数据')}</b> <span>${t('optional, but useful for citation and prior-art checks', '可选；用于引用和已有研究检查')}</span></div>
           <div class="ideas-meta-grid mt-10">
             <label class="field ideas-field"><span>Title</span><input id="ideaTitle" placeholder="Article or review title" value="${esc(fieldValue('title'))}" /></label>
             <label class="field ideas-field"><span>Journal</span><input id="ideaJournal" placeholder="e.g. Intensive Care Medicine" value="${esc(fieldValue('journal'))}" /></label>
@@ -310,7 +310,7 @@
             <label class="field ideas-field"><span>DOI / PMID</span><input id="ideaDoi" placeholder="10.xxxx or PMID" value="${esc(fieldValue('doi'))}" /></label>
             <label class="field ideas-field ideas-url-field"><span>URL</span><input id="ideaUrl" placeholder="https://..." value="${esc(fieldValue('url'))}" /></label>
           </div>
-        </details>
+        </section>
         <details class="ideas-advanced mt-10">
           <summary>${icon('shield', 13)} ${t('Network and provider opt-in', '网络与模型 opt-in')} <span>${t('off by default', '默认关闭')}</span></summary>
           <label class="rtodo-row mt-10 ideas-network-row">

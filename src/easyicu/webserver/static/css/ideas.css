@@ -58,6 +58,28 @@
 }
 .ideas-advanced[open]{ padding:0 12px 12px; }
 .ideas-advanced[open] summary{ padding-left:0; padding-right:0; border-bottom:1px solid var(--hair); margin-bottom:10px; }
+.ideas-source-metadata{
+  padding:12px;
+}
+.ideas-advanced-head{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding-bottom:10px;
+  border-bottom:1px solid var(--hair);
+  color:var(--ink-2);
+  font-size:12px;
+}
+.ideas-advanced-head b{
+  font-weight:700;
+}
+.ideas-advanced-head span{
+  margin-left:auto;
+  color:var(--ink-4);
+  font-size:11px;
+  line-height:1.35;
+  text-align:right;
+}
 .ideas-step-nav{
   position:sticky;
   top:74px;
