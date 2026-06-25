@@ -131,7 +131,7 @@
 
   /* ============== runtime state ============== */
   let branch, depth, dataMode, mods, cohortPhase, extractPhase, runPhase, draftPhase;
-  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedExtract;
+  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedExtract, guidedReview, guidedAgent;
   let guidedHistory = { loading: false, error: null, data: null };
   let guidedDrafts = { loading: false, error: null, data: null };
   let guidedCopilot = { loading: false, error: null, session: null, last: null };
@@ -175,7 +175,7 @@
   function reset() {
     branch = 'predict'; depth = 'full'; dataMode = 'demo'; mods = DEFAULT_MODS.slice();
     cohortPhase = 'normal'; extractPhase = 'run'; runPhase = 'run'; draftPhase = 'gate';
-    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null;
+    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null; guidedReview = null; guidedAgent = null;
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
     studyStatus = {}; studyVal = {};
     gen++;
@@ -222,6 +222,16 @@
   function fmtNum(v, fallback) {
     const n = Number(v);
     return Number.isFinite(n) ? String(Math.round(n * 10) / 10) : (fallback || 'n/a');
+  }
+  function fmtFixed(v, digits, fallback) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n.toFixed(digits == null ? 1 : digits).replace(/\.0+$/, '') : (fallback || 'n/a');
+  }
+  function fmtP(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return 'n/a';
+    if (n < 0.001) return '<0.001';
+    return n.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
   }
   function compactPath(value) {
     const text = String(value || '');
@@ -1394,6 +1404,358 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     });
   }
 
+  /* ============== inline native review: patient + cohort + KM ============== */
+  function resetGuidedReviewState() {
+    guidedReview = {
+      loading: false,
+      error: null,
+      patient: null,
+      cohort: null,
+      selectedRef: null,
+    };
+  }
+  function guidedSourceLabel(payload) {
+    const source = payload && payload.source ? payload.source : activeExportSource();
+    if (!source) return t('No active export', '没有 active export');
+    const label = source.label || source.database || 'active export';
+    const summary = (payload && payload.summary) || source.summary || {};
+    const parts = [];
+    if (summary.entities != null || summary.stays != null) parts.push(`${fmtInt(summary.entities != null ? summary.entities : summary.stays)} entities`);
+    if (summary.modules != null) parts.push(`${fmtInt(summary.modules)} modules`);
+    return `${label}${parts.length ? ' · ' + parts.join(' · ') : ''}`;
+  }
+  function startGuidedReviewFlow(label) {
+    if (label) pushUser(label);
+    dataMode = 'real';
+    resetGuidedReviewState();
+    setVal({ data: activeExportLabel(), review: 'inline Copilot' });
+    markThrough('review', 'active');
+    thread.push({ bot: true, html: bi(
+      `I’ll review the active local export here: patient drilldown, cohort summary, feature coverage, and KM/log-rank when the export has time-to-event fields.`,
+      `我会直接在这里审阅 active 本地导出：患者概览、队列汇总、特征覆盖，以及在导出具备 time-to-event 字段时显示 KM/log-rank。`,
+    ) });
+    thread.push({ guidedReview: true });
+    chips = [];
+    renderThread();
+    renderChips();
+    loadGuidedReviewData();
+  }
+  function loadGuidedReviewData(entityRef) {
+    if (!guidedReview) resetGuidedReviewState();
+    if (!window.EU_API || !window.EU_API.loadPatientReviewDrilldown || !window.EU_API.loadCohortReviewSummary) {
+      guidedReview.loading = false;
+      guidedReview.error = 'Review APIs are unavailable.';
+      renderThread();
+      return;
+    }
+    guidedReview.loading = true;
+    guidedReview.error = null;
+    if (entityRef) guidedReview.selectedRef = entityRef;
+    renderThread();
+    const body = guidedReview.selectedRef ? { entity_ref: guidedReview.selectedRef } : {};
+    Promise.allSettled([
+      window.EU_API.loadPatientReviewDrilldown(body),
+      window.EU_API.loadCohortReviewSummary({}),
+    ]).then(([patientResult, cohortResult]) => {
+      guidedReview.loading = false;
+      const patientOk = patientResult.status === 'fulfilled' && patientResult.value && patientResult.value.ok;
+      const cohortOk = cohortResult.status === 'fulfilled' && cohortResult.value && cohortResult.value.ok;
+      guidedReview.patient = patientOk ? patientResult.value : null;
+      guidedReview.cohort = cohortOk ? cohortResult.value : null;
+      if (guidedReview.patient && guidedReview.patient.selected) guidedReview.selectedRef = guidedReview.patient.selected.ref;
+      if (!patientOk && !cohortOk) {
+        const pErr = patientResult.status === 'rejected' ? patientResult.reason : (patientResult.value && (patientResult.value.error || patientResult.value.reason));
+        const cErr = cohortResult.status === 'rejected' ? cohortResult.reason : (cohortResult.value && (cohortResult.value.error || cohortResult.value.reason));
+        guidedReview.error = (pErr && (pErr.message || String(pErr))) || (cErr && (cErr.message || String(cErr))) || 'No active registered export is available.';
+      }
+      if (guidedReview.cohort && guidedReview.cohort.summary) {
+        setVal({
+          cohort: `${fmtInt(guidedReview.cohort.summary.cohort_size || guidedReview.cohort.summary.entities)} entities`,
+          review: 'cohort + KM audit',
+        });
+      }
+      renderThread();
+      renderAside();
+    }).catch(err => {
+      guidedReview.loading = false;
+      guidedReview.error = err.message || String(err);
+      renderThread();
+    });
+  }
+  function guidedMetricCard(label, value, sub) {
+    return `<div class="gdr-metric"><span>${esc(label)}</span><strong>${esc(value == null ? 'n/a' : value)}</strong>${sub ? `<small>${esc(sub)}</small>` : ''}</div>`;
+  }
+  function renderGuidedPatientPanel(patient) {
+    if (!patient) {
+      return `<div class="gdr-panel blocked"><strong>${t('Patient drilldown unavailable', '患者 drilldown 不可用')}</strong><span>${t('Select or register an active EasyICU export first.', '请先选择或注册一个 active EasyICU 导出。')}</span></div>`;
+    }
+    const summary = patient.summary || {};
+    const selected = patient.selected || {};
+    const demo = selected.demographics || {};
+    const scores = selected.scores || {};
+    const outcomes = selected.outcomes || {};
+    const entities = (patient.entities || []).slice(0, 5);
+    const lanes = (patient.time_lanes || []).filter(row => row.status !== 'unavailable');
+    return `
+      <div class="gdr-panel">
+        <div class="gdr-panel-head">
+          <div><span class="gdx-label">${t('Patient drilldown', '患者 drilldown')}</span><strong>${esc(selected.label || 'Entity')}</strong></div>
+          <div class="gdr-entity-pick">
+            ${entities.map(row => `<button type="button" class="${row.ref === selected.ref ? 'on' : ''}" data-gr-entity="${attr(row.ref)}">${esc(row.label || row.ref)}</button>`).join('')}
+          </div>
+        </div>
+        <div class="gdr-metrics">
+          ${guidedMetricCard(t('Entities', '实体数'), fmtInt(summary.entities))}
+          ${guidedMetricCard(t('Age', '年龄'), fmtNum(demo.age, 'n/a'), demo.sex || '')}
+          ${guidedMetricCard(t('Outcome', '结局'), outcomes.status || 'Unknown', outcomes.icu_los_days != null ? `${fmtNum(outcomes.icu_los_days)} ICU days` : '')}
+          ${guidedMetricCard('SOFA-2', fmtNum(scores.sofa2_max, 'n/a'), scores.sepsis3_sofa2 == null ? '' : `sepsis ${scores.sepsis3_sofa2 ? 'yes' : 'no'}`)}
+        </div>
+        <div class="gdr-mini-table">
+          ${(patient.module_profiles || []).slice(0, 5).map(row => `
+            <div><strong>${esc(row.label || row.module)}</strong><span>${fmtInt(row.rows)} rows · ${fmtPct(row.coverage_pct)} coverage · ${fmtInt(row.feature_count)} features</span></div>
+          `).join('') || `<div><strong>${t('No modules found', '未找到模块')}</strong><span>${t('The export does not expose reviewable modules.', '该导出没有可审阅模块。')}</span></div>`}
+        </div>
+        ${lanes.length ? `<div class="gdr-note">${lanes.map(row => `${row.label}: ${fmtInt(row.signal_count)} signals`).join(' · ')}</div>` : `<div class="gdr-note">${t('No time-series lanes are available in this export. Add vitals/labs/scores modules to review trajectories.', '该导出暂无时间序列通道。请补充 vitals/labs/scores 模块后查看轨迹。')}</div>`}
+      </div>`;
+  }
+  function guidedSurvivalCurve(cohort) {
+    const survival = cohort && cohort.survival_analysis ? cohort.survival_analysis : {};
+    const outcomeId = survival.default_outcome || ((survival.outcomes || []).find(row => row.status === 'ready') || {}).id;
+    const groupId = survival.default_group || ((survival.group_options || []).find(row => row.status === 'ready') || {}).id;
+    return (survival.curves || []).find(row => row.outcome_id === outcomeId && row.group_id === groupId) || null;
+  }
+  function renderGuidedKmPanel(cohort) {
+    const survival = cohort && cohort.survival_analysis ? cohort.survival_analysis : {};
+    const curve = guidedSurvivalCurve(cohort);
+    const blocked = (survival.outcomes || []).filter(row => row.status !== 'ready').slice(0, 3);
+    if (!curve) {
+      return `
+        <div class="gdr-panel blocked">
+          <div class="gdr-panel-head"><div><span class="gdx-label">KM / log-rank</span><strong>${t('Blocked by export schema', '被导出结构阻断')}</strong></div></div>
+          <p>${esc(survival.reason || t('This export does not expose event and time-to-event columns for KM/log-rank.', '该导出没有 KM/log-rank 所需的事件列和 time-to-event 列。'))}</p>
+          ${blocked.length ? `<div class="gdr-mini-table">${blocked.map(row => `<div><strong>${esc(row.label || row.id)}</strong><span>${esc(row.reason || 'unavailable')}</span></div>`).join('')}</div>` : ''}
+        </div>`;
+    }
+    const logrank = curve.logrank || {};
+    const groups = curve.groups || [];
+    const risk = curve.number_at_risk || {};
+    const times = risk.times || [];
+    const rows = risk.rows || [];
+    return `
+      <div class="gdr-panel">
+        <div class="gdr-panel-head">
+          <div><span class="gdx-label">KM / log-rank</span><strong>${esc(curve.label || 'Kaplan-Meier curve')}</strong></div>
+          <div class="gdr-logrank"><span>log-rank</span><strong>${logrank.status === 'ready' ? `χ² ${fmtFixed(logrank.chi_square, 2)} · p ${fmtP(logrank.p_value)}` : 'blocked'}</strong></div>
+        </div>
+        <div class="gdr-km">
+          ${groups.map((g, i) => `<div class="gdr-km-row"><span class="line c${i % 4}"></span><strong>${esc(g.label || `Group ${i + 1}`)}</strong><em>n ${fmtInt(g.n)} · events ${fmtInt(g.events)}</em></div>`).join('')}
+        </div>
+        ${times.length && rows.length ? `<div class="gdr-risk"><strong>${t('Number at risk', '风险人数表')}</strong><table><thead><tr><th>Group</th>${times.map(x => `<th>${fmtNum(x)}d</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.label)}</td>${(row.values || []).map(v => `<td>${fmtInt(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : ''}
+        <div class="gdr-note">${t('Exploratory aggregate only. Manuscript claims still need Agent evidence gate and human review.', '仅为探索性聚合结果。论文结论仍需 Agent evidence gate 和人工审阅。')}</div>
+      </div>`;
+  }
+  function renderGuidedCohortPanel(cohort) {
+    if (!cohort) {
+      return `<div class="gdr-panel blocked"><strong>${t('Cohort summary unavailable', '队列汇总不可用')}</strong><span>${t('Register an active export, then refresh this card.', '请先注册 active export，然后刷新这张卡。')}</span></div>`;
+    }
+    const summary = cohort.summary || {};
+    const mortality = summary.mortality || {};
+    const coverage = (cohort.coverage || []).slice(0, 6);
+    return `
+      <div class="gdr-panel">
+        <div class="gdr-panel-head"><div><span class="gdx-label">${t('Cohort summary', '队列汇总')}</span><strong>${esc(guidedSourceLabel(cohort))}</strong></div></div>
+        <div class="gdr-metrics">
+          ${guidedMetricCard(t('Cohort', '队列'), fmtInt(summary.cohort_size || summary.entities), 'entities')}
+          ${guidedMetricCard(t('Mortality', '死亡率'), fmtPct(summary.mortality_pct), `${fmtInt(mortality.deceased_count, 'n/a')} events`)}
+          ${guidedMetricCard(t('Median age', '年龄中位数'), fmtNum(summary.age && summary.age.median, 'n/a'), 'years')}
+          ${guidedMetricCard(t('Modules', '模块'), fmtInt(summary.modules), `${fmtInt(summary.total_records)} records`)}
+        </div>
+        <div class="gdr-mini-table">
+          ${coverage.map(row => `<div><strong>${esc(row.label || row.module)}</strong><span>${fmtPct(row.coverage_pct)} · ${fmtInt(row.rows)} rows · ${esc(row.quality_status || 'ok')}</span></div>`).join('') || `<div><strong>${t('No coverage rows', '暂无覆盖率')}</strong><span>${t('This export has no auditable feature modules yet.', '该导出还没有可审计特征模块。')}</span></div>`}
+        </div>
+      </div>`;
+  }
+  function renderGuidedReviewCard() {
+    if (!guidedReview) resetGuidedReviewState();
+    const loading = guidedReview.loading;
+    const hasPayload = guidedReview.patient || guidedReview.cohort;
+    return `
+      <div class="gd-review-card">
+        <div class="gdx-head">
+          <span class="gdx-ico">${icon('eye', 15)}</span>
+          <div>
+            <strong>${t('Review active export inside Copilot', '在 Copilot 内审阅 active export')}</strong>
+            <span>${t('Uses Patient Review and Cohort Statistics APIs; no seeded demo panels are substituted.', '复用 Patient Review 和 Cohort Statistics API；不会用 seeded demo 面板替代。')}</span>
+          </div>
+        </div>
+        <div class="gdx-status ${guidedReview.error ? 'bad' : hasPayload ? 'ok' : ''}">
+          <span>${icon(guidedReview.error ? 'x' : hasPayload ? 'check' : 'shield', 12)}</span>
+          <div><strong>${loading ? t('Loading active export review...', '正在加载 active export 审阅...') : guidedReview.error ? esc(guidedReview.error) : hasPayload ? t('Loaded from active registered export.', '已从 active registered export 加载。') : t('No review loaded yet.', '尚未加载审阅。')}</strong><small>${esc(guidedSourceLabel(guidedReview.cohort || guidedReview.patient))}</small></div>
+        </div>
+        ${hasPayload ? `
+          <div class="gdr-grid">
+            ${renderGuidedPatientPanel(guidedReview.patient)}
+            ${renderGuidedCohortPanel(guidedReview.cohort)}
+            ${renderGuidedKmPanel(guidedReview.cohort)}
+          </div>
+        ` : ''}
+        <div class="gdx-actions">
+          <button type="button" class="btn primary" data-gr-refresh ${loading ? 'disabled' : ''}>${icon('refresh', 13)} ${t('Refresh review', '刷新审阅')}</button>
+          <button type="button" class="btn" data-guided-goal="data_extraction">${t('Prepare more modules here', '在这里补抽取模块')}</button>
+          <button type="button" class="btn" data-guided-goal="run_agent" ${hasPayload ? '' : 'disabled'}>${t('Continue to Agent preflight', '继续 Agent 预检')}</button>
+        </div>
+      </div>`;
+  }
+
+  /* ============== inline Agent preflight ============== */
+  function resetGuidedAgentState() {
+    guidedAgent = {
+      question: (studyParams && studyParams.exposure)
+        ? `Evaluate whether ${studyParams.exposure} is associated with ${studyParams.outcome || 'mortality'} in the active ICU cohort.`
+        : 'Evaluate the active ICU cohort with an evidence-bound local preflight.',
+      running: false,
+      jobId: null,
+      progress: null,
+      result: null,
+      error: null,
+    };
+  }
+  function startGuidedAgentFlow(label) {
+    if (label) pushUser(label);
+    dataMode = 'real';
+    resetGuidedAgentState();
+    setVal({ analysis: 'local preflight', draft: 'locked' });
+    markThrough('analysis', 'active');
+    thread.push({ bot: true, html: bi(
+      `We can run the local Agent preflight here. It consumes the active export, writes local artifacts, and keeps the manuscript draft locked until evidence checks and human sign-off pass.`,
+      `可以直接在这里启动本地 Agent 预检。它读取 active export、写入本地 artifacts，并在证据检查与人工签署前保持论文草稿锁定。`,
+    ) });
+    thread.push({ guidedAgent: true });
+    chips = [];
+    renderThread();
+    renderChips();
+  }
+  function guidedAgentStatusText() {
+    if (!guidedAgent) return '';
+    if (guidedAgent.running && guidedAgent.progress) {
+      return esc(guidedAgent.progress.message || guidedAgent.progress.phase || guidedAgent.progress.step || 'running');
+    }
+    if (guidedAgent.running) return t('Starting local Agent preflight...', '正在启动本地 Agent 预检...');
+    if (guidedAgent.error) return esc(guidedAgent.error);
+    if (guidedAgent.result) {
+      const gate = guidedAgent.result.gate || {};
+      return `${t('Agent preflight complete', 'Agent 预检完成')} · ${esc(gate.status || 'analysis_only')}`;
+    }
+    const src = activeExportSource();
+    return src ? t('Ready to run against the active export. No external provider is used.', '可以基于 active export 运行。不会使用外部 provider。') : t('No active export. Prepare/register data first.', '没有 active export。请先准备或注册数据。');
+  }
+  function renderGuidedAgentCard() {
+    if (!guidedAgent) resetGuidedAgentState();
+    const src = activeExportSource();
+    const result = guidedAgent.result || {};
+    const gate = result.gate || {};
+    const artifacts = result.artifacts || result.artifact_manifest || [];
+    const artCount = Array.isArray(artifacts) ? artifacts.length : (result.artifact_count || 0);
+    return `
+      <div class="gd-agent-card">
+        <div class="gdx-head">
+          <span class="gdx-ico">${icon('agent', 15)}</span>
+          <div>
+            <strong>${t('Run Agent preflight inside Copilot', '在 Copilot 内运行 Agent 预检')}</strong>
+            <span>${t('Same /api/jobs/agent-run path as Agent Projects, defaulting to local mock/preflight and evidence gate.', '复用 Agent Projects 相同的 /api/jobs/agent-run，默认本地 mock/preflight 与 evidence gate。')}</span>
+          </div>
+        </div>
+        <label class="gda-question">
+          <span>${t('Research question / run objective', '研究问题 / 运行目标')}</span>
+          <textarea data-ga-question rows="3">${esc(guidedAgent.question || '')}</textarea>
+        </label>
+        <div class="gdx-source ${src ? '' : 'blocked'}">
+          <span>${icon(src ? 'check' : 'shield', 12)}</span>
+          <div><strong>${src ? t('Active local export', 'active 本地导出') : t('No active export', '没有 active export')}</strong><small>${src ? esc(activeExportLabel()) : t('Use Prepare Data first, or register an existing EasyICU export.', '先使用准备数据，或注册已有 EasyICU 导出。')}</small></div>
+        </div>
+        <div class="gdx-status ${guidedAgent.error ? 'bad' : guidedAgent.result ? 'ok' : ''}">
+          <span>${icon(guidedAgent.error ? 'x' : guidedAgent.result ? 'check' : 'shield', 12)}</span>
+          <div><strong>${guidedAgentStatusText()}</strong>${guidedAgent.jobId ? `<small>job ${esc(guidedAgent.jobId)}</small>` : ''}</div>
+        </div>
+        ${guidedAgent.result ? `<div class="gda-result">
+          ${guidedMetricCard(t('Run type', '运行类型'), result.run_type || 'preflight')}
+          ${guidedMetricCard(t('Reportable', '可报告'), result.reportable ? 'true' : 'false', t('Draft remains locked until sign-off.', '签署前草稿保持锁定。'))}
+          ${guidedMetricCard(t('Gate', '证据闸'), gate.status || 'analysis_only', gate.reason || '')}
+          ${guidedMetricCard(t('Artifacts', 'Artifacts'), fmtInt(artCount), result.project_dir ? compactPath(result.project_dir) : '')}
+        </div>` : ''}
+        <div class="gdx-actions">
+          <button type="button" class="btn primary" data-ga-run ${!src || guidedAgent.running ? 'disabled' : ''}>${icon('play', 13)} ${t('Start local preflight', '启动本地预检')}</button>
+          <button type="button" class="btn" data-guided-goal="data_extraction">${t('Prepare/register data', '准备/注册数据')}</button>
+          ${guidedAgent.result && guidedAgent.result.project_dir ? `<button type="button" class="btn" data-open="agent">${t('Open Agent Projects', '打开 Agent Projects')}</button>` : ''}
+        </div>
+      </div>`;
+  }
+  function runGuidedAgentPreflight() {
+    if (!guidedAgent || guidedAgent.running) return;
+    const src = activeExportSource();
+    if (!src) {
+      guidedAgent.error = 'No active registered export is selected.';
+      renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.startAgentRun || !window.EventSource) {
+      guidedAgent.error = 'Agent run backend or event stream is unavailable.';
+      renderThread();
+      return;
+    }
+    guidedAgent.running = true;
+    guidedAgent.error = null;
+    guidedAgent.result = null;
+    guidedAgent.progress = null;
+    renderThread();
+    const studyId = slugifyDraftFolder((guidedAgent.question || 'guided-agent-preflight').slice(0, 80)) || 'guided-agent-preflight';
+    window.EU_API.startAgentRun({
+      path: src.path,
+      study_id: studyId,
+      mode: 'analysis',
+      run_type: 'preflight',
+      llm_provider: 'mock',
+      external_llm_opt_in: false,
+      question: guidedAgent.question,
+    }).then(r => {
+      guidedAgent.jobId = r.job_id;
+      renderThread();
+      const es = new EventSource('/api/jobs/' + encodeURIComponent(r.job_id) + '/events');
+      es.onmessage = ev => {
+        let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+        if (m.type === 'progress') {
+          guidedAgent.progress = m;
+          renderThread();
+          return;
+        }
+        if (m.type === 'end') {
+          try { es.close(); } catch (e) {}
+          guidedAgent.running = false;
+          if (m.status === 'done') {
+            guidedAgent.result = m.result || {};
+            liveAgentRun = { result: guidedAgent.result };
+            setVal({ analysis: 'preflight complete', draft: 'locked' });
+            markThrough('draft', 'locked');
+          } else {
+            guidedAgent.error = (m.error && (m.error.message || m.error.code)) || m.status || 'Agent preflight failed.';
+          }
+          renderThread();
+          renderAside();
+        }
+      };
+      es.onerror = () => {
+        try { es.close(); } catch (e) {}
+        guidedAgent.running = false;
+        guidedAgent.error = 'Agent event stream stopped before completion.';
+        renderThread();
+      };
+    }).catch(err => {
+      guidedAgent.running = false;
+      guidedAgent.error = err.message || String(err);
+      renderThread();
+    });
+  }
+
   /* ============== local concept definition answers ============== */
   const CONCEPT_ALIASES = [
     ['sofa2', ['sofa2', 'sofa-2', 'sofa 2', 'SOFA-2', 'SOFA2']],
@@ -1471,6 +1833,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const s = String(text || '').toLowerCase();
     return /extract|export|prepare data|data extraction|抽取|提取|导出|准备数据|生成数据/.test(s);
   }
+  function isGuidedReviewIntent(text) {
+    const s = String(text || '').toLowerCase();
+    return /review|patient|cohort|km|kaplan|logrank|visual|visualiz|可视化|审阅|查看|队列|患者|生存|曲线/.test(s);
+  }
+  function isGuidedAgentIntent(text) {
+    const s = String(text || '').toLowerCase();
+    return /agent|analysis|run project|research project|preflight|manuscript|draft|跑研究|运行研究|分析|预检|草稿/.test(s);
+  }
 
   /* ============== DOM render ============== */
   function renderThread() {
@@ -1479,6 +1849,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     host.innerHTML = thread.map(t => {
       if (t.typing) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble"><div class="typing"><span></span><span></span><span></span></div></div></div></div>`;
       if (t.guidedExtraction) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedExtractionCard()}</div></div>`;
+      if (t.guidedReview) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedReviewCard()}</div></div>`;
+      if (t.guidedAgent) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedAgentCard()}</div></div>`;
       if (t.diff) return diffCard();
       if (t.once) return ONCE[t.once] ? ONCE[t.once]() : '';
       if (t.card) {
@@ -1783,7 +2155,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         <div class="gdf-head">
           <span class="gdf-kicker">${t('Choose a goal', '选择目标')}</span>
           <strong>${t('What do you want EasyICU to help with?', '你想让 EasyICU 帮你做哪件事？')}</strong>
-          <span>${t('Pick a goal. Guided Copilot only routes and prefills; each native module owns its detailed configuration.', '先选目标。Guided Copilot 只负责路由和预填，详细配置仍由各原生模块负责。')}</span>
+          <span>${t('Pick a goal. Common extraction, review, KM, and Agent preflight steps can run inside Copilot; Classic remains the expert workspace for deep controls.', '先选目标。常用抽取、审阅、KM 和 Agent 预检可直接在 Copilot 内完成；经典视图保留为高级控制台。')}</span>
         </div>
         <div class="gdf-grid">
           ${cards.map(([goal, ico, title, body]) => `
@@ -1832,6 +2204,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function chooseGuidedGoal(goal, label) {
     if (goal === 'data_extraction') {
       startGuidedExtractionFlow(label || guidedGoalMeta(goal).label_en);
+      return;
+    }
+    if (goal === 'review_data') {
+      startGuidedReviewFlow(label || guidedGoalMeta(goal).label_en);
+      return;
+    }
+    if (goal === 'run_agent') {
+      startGuidedAgentFlow(label || guidedGoalMeta(goal).label_en);
       return;
     }
     if (!window.EU_API || !window.EU_API.runGuidedAction) {
@@ -2547,6 +2927,19 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           runGuidedExtractionJob();
           return;
         }
+        if (e.target.closest('[data-gr-refresh]')) {
+          loadGuidedReviewData();
+          return;
+        }
+        const grEntity = e.target.closest('[data-gr-entity]');
+        if (grEntity) {
+          loadGuidedReviewData(grEntity.dataset.grEntity);
+          return;
+        }
+        if (e.target.closest('[data-ga-run]')) {
+          runGuidedAgentPreflight();
+          return;
+        }
         const guidedHandoffEl = e.target.closest('[data-guided-handoff]');
         if (guidedHandoffEl) {
           runGuidedHandoff(guidedHandoffEl.dataset.guidedHandoff, guidedHandoffEl.dataset.target, stripText(guidedHandoffEl.textContent));
@@ -2679,6 +3072,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           guidedExtract.error = null;
           return;
         }
+        const gaQuestion = e.target.closest('[data-ga-question]');
+        if (gaQuestion && guidedAgent) {
+          guidedAgent.question = gaQuestion.value;
+          guidedAgent.error = null;
+          return;
+        }
         const title = e.target.closest('[data-draft-title]');
         if (!title) return;
         const box = title.closest('[data-draft-setup]');
@@ -2716,6 +3115,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     }
     if (currentId === 'frontdoor' && isGuidedExtractionIntent(v)) {
       startGuidedExtractionFlow(v);
+      return;
+    }
+    if (currentId === 'frontdoor' && isGuidedReviewIntent(v)) {
+      startGuidedReviewFlow(v);
+      return;
+    }
+    if (currentId === 'frontdoor' && isGuidedAgentIntent(v)) {
+      startGuidedAgentFlow(v);
       return;
     }
     if (currentId === 'frontdoor') {
