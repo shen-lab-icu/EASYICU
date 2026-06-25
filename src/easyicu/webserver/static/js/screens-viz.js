@@ -1303,9 +1303,9 @@
 
   /* ---------------- COHORT STATISTICS ---------------- */
   /* In-page panels (aligned with cohort_redesign.py _SUBTABS): Group contrast,
-     Coverage audit, Cohort profile, SOFA reclassification. Coverage + SOFA
-     delegate to the shared EUAudit / EUSofa renderers (formerly standalone
-     screens). */
+     Coverage audit, Cohort profile, SOFA reclassification. Real coverage and
+     SOFA panels require a loaded cohort-review payload; the native UI does not
+     fall back to old seeded audit matrices. */
   function cohortTabs() {
     const tabs = [
       ['groups',   t('Group contrast', '组间对照'),       'layers'],
@@ -1322,11 +1322,21 @@
     const review = cohortReview();
     switch (cohortPanel) {
       case 'survival': return review ? cohortSurvivalBody(review) : cohortSurvivalDemoBody();
-      case 'coverage': return review ? cohortCoverageBody(review) : (window.EUAudit ? window.EUAudit.panel() : '');
-      case 'sofa':     return review ? cohortSofaBody(review) : (window.EUSofa ? window.EUSofa.panel() : '');
+      case 'coverage': return review ? cohortCoverageBody(review) : cohortUnavailablePanel('coverage');
+      case 'sofa':     return review ? cohortSofaBody(review) : cohortUnavailablePanel('sofa');
       case 'snapshot': return cohortSnapshotBody();
       default:         return cohortGroupsBody();
     }
+  }
+
+  function cohortUnavailablePanel(kind) {
+    const isSofa = kind === 'sofa';
+    return `
+      <div class="state empty mt-16">
+        <div class="ico">${icon(isSofa ? 'refresh' : 'shield', 18)}</div>
+        <div class="t">${isSofa ? t('SOFA reclassification requires a real cohort review', 'SOFA 重分层需要真实队列审阅') : t('Coverage audit requires a real cohort review', '覆盖审计需要真实队列审阅')}</div>
+        <div class="d">${t('The old seeded audit panel has been removed. Switch to Real mode, register an EasyICU export, then load Cohort Statistics to compute this aggregate-only panel.', '旧的种子审计面板已移除。请切换到真实模式，注册 EasyICU 导出，再加载队列统计以计算这个仅聚合的面板。')}</div>
+      </div>`;
   }
 
   function cohortProfileValue(row, value) {
@@ -1953,7 +1963,6 @@
         window.EU_STALE = true;
         repaintScreen('cohort');
       }));
-      if (cohortPanel === 'sofa' && window.EUSofa && window.EUSofa.bind) window.EUSofa.bind(root);
     },
     render() {
       if (window.__euCohortPanel) { cohortPanel = window.__euCohortPanel; window.__euCohortPanel = null; }
