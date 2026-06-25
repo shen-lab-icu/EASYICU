@@ -60,6 +60,23 @@ QA_JS = r"""
       cls: cls.replace(/\s+/g, '.').slice(0, 96),
     };
   }
+  function insideHorizontalScrollRegion(el) {
+    const host = el.closest('.table-scroll, .risk-table-wrap, .dict-table, .xdb-density-detail-table');
+    if (!host || host === el) return false;
+    const hs = getComputedStyle(host);
+    return /(auto|scroll)/.test(`${hs.overflowX} ${hs.overflow}`);
+  }
+  function intentionallyEllipsized(el, cs) {
+    return cs.textOverflow === 'ellipsis' && /(hidden|clip)/.test(`${cs.overflowX} ${cs.overflow}`);
+  }
+  function intentionalVerticalViewportClip(el, clipsX, clipsY) {
+    return clipsY && !clipsX && el.matches('.sidebar, .gd-sidebar');
+  }
+  function isExplicitHorizontalScroller(el, clipsX, clipsY) {
+    if (!clipsX || clipsY) return false;
+    const cls = typeof el.className === 'string' ? el.className : '';
+    return /(table-scroll|risk-table-wrap|xdb-density-detail-table)/.test(cls) && /(auto|scroll)/.test(`${getComputedStyle(el).overflowX} ${getComputedStyle(el).overflow}`);
+  }
   while (walker.nextNode()) {
     const el = walker.currentNode;
     if (el.closest('#cpDock:not(.open), #cpBackdrop:not(.open), template, script, style')) continue;
@@ -68,12 +85,17 @@ QA_JS = r"""
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) continue;
     if (cs.position === 'fixed' && (r.left >= vw || r.right <= 0)) continue;
-    if (r.right > vw + 1 || r.left < -1) {
+    if ((r.right > vw + 1 || r.left < -1) && !insideHorizontalScrollRegion(el)) {
       offscreen.push({ ...label(el), left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width) });
     }
     const clipsX = el.scrollWidth > el.clientWidth + 2;
     const clipsY = el.scrollHeight > el.clientHeight + 2;
-    if ((clipsX || clipsY) && /(hidden|clip)/.test(`${cs.overflow} ${cs.overflowX} ${cs.overflowY}`)) {
+    if ((clipsX || clipsY)
+      && /(hidden|clip)/.test(`${cs.overflow} ${cs.overflowX} ${cs.overflowY}`)
+      && !intentionallyEllipsized(el, cs)
+      && !intentionalVerticalViewportClip(el, clipsX, clipsY)
+      && !isExplicitHorizontalScroller(el, clipsX, clipsY)
+    ) {
       clipped.push({ ...label(el), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
     }
   }
@@ -191,7 +213,8 @@ def validate(results: list[dict[str, Any]], strict_offscreen: bool) -> list[str]
     else:
       if unknown.get("hash") != "#entry":
         failures.append(f"unknown hash did not rewrite to #entry: {unknown.get('hash')}")
-      if "Welcome to EasyICU" not in (unknown.get("title") or ""):
+      title = unknown.get("title") or ""
+      if "Welcome to EasyICU" not in title and "欢迎使用 EasyICU" not in title:
         failures.append(f"unknown hash did not render Entry: {unknown.get('title')}")
       if unknown.get("backHashAfterFallback") != "#settings":
         failures.append(f"history back after unknown fallback did not return to #settings: {unknown.get('backHashAfterFallback')}")

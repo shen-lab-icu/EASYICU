@@ -1,0 +1,96 @@
+/* Agent Projects route-owned layout fixes. Do not add cross-route shell rules here. */
+
+.ag-pipe .pstep{
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.ag-pipe .pmeta{
+  min-width: 0;
+}
+
+.ag-pipe .pt,
+.ag-pipe .pd{
+  overflow-wrap: anywhere;
+}
+
+.ag-pipe .pd{
+  white-space: normal;
+}
+
+.ag-wrap .chip{
+  max-width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 24px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+@media (max-width: 720px){
+  .ag-detail,
+  .ag-dtop,
+  .ag-title,
+  .ag-src,
+  .ag-body,
+  .ag-tabs,
+  .ag-pipe{
+    min-width: 0;
+  }
+
+  .ag-dhead{
+    padding: 16px 16px 0;
+  }
+
+  .ag-title{
+    font-size: 18px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+  .ag-src .lk,
+  .ag-src .mono,
+  .sc-name,
+  .sc-folder{
+    max-width: 100%;
+  }
+
+  .ag-pipe{
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 10px;
+    overflow: visible;
+  }
+
+  .ag-pipe .pline{
+    display: none;
+  }
+
+  .ag-pipe .pstep{
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--hair);
+    border-radius: var(--r-2);
+    background: var(--surface);
+  }
+
+  .ag-pipe .pmeta{
+    min-width: 0;
+  }
+
+  .ag-pipe .pt,
+  .ag-pipe .pd{
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .ag-tabs{
+    padding: 12px 16px 0;
+    overflow-x: auto;
+  }
+
+  .ag-body{
+    padding: 16px;
+  }
+}
