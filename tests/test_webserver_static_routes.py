@@ -193,9 +193,11 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     agent_js = _static_js("screens-agent.js")
+    agent_css = _static_css("agent.css")
     index_html = _static_html("index.html")
 
     assert "js/screens-agent.js?v=20260625-stage94" in index_html
+    assert "css/agent.css?v=20260626-strict-layout" in index_html
     assert "function artifactsForLive(live)" in agent_js
     assert "function outputCountForStudy()" in agent_js
     assert "['outputs', t('Outputs', '产出'), outputCountForStudy()]" in agent_js
@@ -208,6 +210,26 @@ def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
     assert "['outputs', t('Outputs', '产出'), 6]" not in agent_js
     assert "Seeded demo artifacts." not in agent_js
     assert "Illustrative outputs for layout" not in agent_js
+    assert "Agent Projects route-owned layout fixes" in agent_css
+    assert ".ag-pipe .pline" in agent_css
+    assert ".ag-pipe .pstep" in agent_css
+    assert ".ag-pipe .pt" in agent_css
+    assert ".ag-pipe .pd" in agent_css
+    assert ".ag-wrap .chip" in agent_css
+
+
+def test_native_route_qa_allows_only_explicit_truncation_and_scroll_regions() -> None:
+    route_qa = Path("tools/qa_native_fastapi_routes.py").read_text(encoding="utf-8")
+    app_css = _static_css("app.css")
+
+    assert "insideHorizontalScrollRegion" in route_qa
+    assert ".table-scroll, .risk-table-wrap, .dict-table, .xdb-density-detail-table" in route_qa
+    assert "intentionallyEllipsized" in route_qa
+    assert "textOverflow === 'ellipsis'" in route_qa
+    assert "intentionalVerticalViewportClip" in route_qa
+    assert "isExplicitHorizontalScroller" in route_qa
+    assert "欢迎使用 EasyICU" in route_qa
+    assert ".table-scroll{\n    overflow-x: auto;" in app_css
 
 
 def test_native_settings_controls_are_backend_wired() -> None:
