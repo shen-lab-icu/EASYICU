@@ -17,7 +17,8 @@ drives ``DataConverter.convert_all(progress_callback=...)`` directly.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+import re
 
 # Core metadata tables per database — a folder that holds these (as parquet or
 # csv) is recognised as that database. Mirrors check_data_status' core_tables.
@@ -39,6 +40,21 @@ _DB_LABELS = {
 }
 
 _MODULE_MANIFESTS = ("easyicu_export_manifest.json", "_manifest.json")
+DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30
+
+_COHORT_PROGRESS_MESSAGES = {
+    "normalizing": "Preparing cohort contract",
+    "all_icu_ids": "Listing ICU stays",
+    "all_icu_selected": "ICU denominator selected",
+    "demographics_filter": "Applying demographic and stay filters",
+    "demographics_selected": "Base cohort selected",
+    "concept_prefilter": "Applying clinical concept prefilter",
+    "concept_prefilter_selected": "Clinical concept prefilter complete",
+    "icd_filter": "Applying ICD diagnosis filters",
+    "icd_selected": "ICD diagnosis filters complete",
+    "cohort_selected": "Cohort selected",
+    "ready": "Cohort resolved",
+}
 
 
 def _safe_dir(path: Path) -> bool:
@@ -51,9 +67,8 @@ def _safe_dir(path: Path) -> bool:
 def list_dir(raw_path: Optional[str]) -> Dict[str, Any]:
     """List immediate sub-directories of ``raw_path`` for the folder picker.
 
-    When ``raw_path`` is empty/None we start from the user's home and surface
-    mounted volumes (macOS ``/Volumes``) so external drives are reachable —
-    that is where ICU dumps usually live on this machine.
+    When ``raw_path`` is empty/None we start from the user's home and add
+    common OS shortcuts that exist on the current machine.
     """
     home = Path.home()
 
@@ -193,7 +208,7 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
         source = "module"
         layout = ["EasyICU module export", "EasyICU 模块导出"]
         ready = True
-        tables = parquet_count
+        tables = parquet_count + csv_count
     elif parquet_count > 0:
         source = "prepared"
         layout = ["Prepared (Parquet)", "已转换 (Parquet)"]
@@ -204,10 +219,23 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
         ready = False
         tables = csv_count
     else:
-        source = "unknown"
-        layout = ["No recognized tables", "未识别到数据表"]
-        ready = False
-        tables = 0
+        return {
+            "ok": False,
+            "error": "unrecognized_folder",
+            "path": str(path),
+            "db": db_label,
+            "db_key": db_key,
+            "layout": ["No recognized ICU tables", "未识别到 ICU 数据表"],
+            "source": "unknown",
+            "tables": 0,
+            "modules": 0,
+            "ready": False,
+            "missing_tables": missing_tables,
+            "privacy": {
+                "raw_rows_read": False,
+                "patient_identifiers_returned": False,
+            },
+        }
 
     # Honor an explicit user hint only when it does not contradict readiness.
     if source_hint in {"prepared", "module", "raw"} and source != "unknown":
@@ -226,6 +254,10 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
         "modules": _mappable_modules(),
         "ready": ready,
         "missing_tables": missing_tables,
+        "privacy": {
+            "raw_rows_read": False,
+            "patient_identifiers_returned": False,
+        },
     }
     if source == "raw":
         result["size_hint"] = _estimate_size(path)
@@ -284,6 +316,51 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
 
 _EXPORT_EXT = {"csv": "csv", "excel": "xlsx", "parquet": "parquet"}
 _EVENT_PRESENCE_MODULES = {"sepsis3_sofa2"}
+_SUPPORTED_COHORT_PRESETS = {
+    "all_icu",
+    "adult_first",
+    "adult_all",
+    "sepsis3",
+    "aki",
+    "ventilation",
+    "vasopressor",
+    "respiratory",
+    "icd",
+}
+_ICD_SUPPORTED_DATABASES = {"miiv", "mimic", "miii", "eicu"}
+_CONCEPT_DERIVED_COHORTS = {
+    "sepsis3": {
+        "concepts": ["sep3_sofa2"],
+        "positive": ["sep3_sofa2", "sep3", "sepsis3_sofa2"],
+    },
+    "aki": {
+        "concepts": ["aki"],
+        "positive": ["aki", "aki_stage"],
+    },
+    "ventilation": {
+        "concepts": ["mech_vent", "vent_ind"],
+        "positive": ["mech_vent", "vent_ind"],
+    },
+    "vasopressor": {
+        "concepts": ["vaso_ind"],
+        "positive": ["vaso_ind", "norepi60", "epi60", "dopa60", "dobu60"],
+        "numeric_positive": ["norepi_rate", "norepi_equiv", "epi_rate", "dopa_rate", "dobu_rate"],
+    },
+    "respiratory": {
+        "concepts": ["adv_resp", "mech_vent", "vent_ind", "pafi", "safi"],
+        "positive": ["adv_resp", "mech_vent", "vent_ind"],
+        "thresholds": {"pafi": ("le", 300.0), "safi": ("le", 315.0)},
+    },
+}
+
+
+class ExportCohortError(ValueError):
+    """Raised when a user-requested extraction cohort cannot be applied honestly."""
+
+    def __init__(self, error: str, detail: Optional[Dict[str, Any]] = None):
+        self.error = error
+        self.detail = {"error": error, **(detail or {})}
+        super().__init__(error)
 
 
 def _write_frame(df: Any, dest: Path, export_format: str) -> int:
@@ -298,6 +375,542 @@ def _write_frame(df: Any, dest: Path, export_format: str) -> int:
     return rows
 
 
+def _safe_slug(value: Any, fallback: str = "export") -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip().lower()).strip("-._")
+    return slug[:64] or fallback
+
+
+def _unique_child_dir(root: Path, name: str) -> Path:
+    candidate = root / name
+    if not candidate.exists():
+        return candidate
+    for i in range(2, 1000):
+        alt = root / f"{name}-{i:03d}"
+        if not alt.exists():
+            return alt
+    raise FileExistsError(f"could not create unique export folder under {root}")
+
+
+def _resolve_export_out_dir(
+    *,
+    out_dir: Optional[str],
+    database: str,
+    export_format: str,
+    create_run_subdir: bool,
+) -> Path:
+    root = Path(out_dir).expanduser() if out_dir else (Path.home() / ".easyicu" / "exports")
+    if not create_run_subdir:
+        return root
+    import time
+
+    label = "easyicu_export_{stamp}_{database}_{fmt}".format(
+        stamp=time.strftime("%Y%m%d_%H%M%S"),
+        database=_safe_slug(database, "database"),
+        fmt=_safe_slug(export_format, "format"),
+    )
+    return _unique_child_dir(root, label)
+
+
+def _render_export_readme(manifest: Dict[str, Any], *, files: List[Dict[str, Any]]) -> str:
+    cohort = manifest.get("cohort_contract") or {}
+    report = manifest.get("cohort_report") or {}
+    modules = [f.get("module") for f in files if f.get("module")]
+    unique_modules = []
+    for module in modules:
+        if module not in unique_modules:
+            unique_modules.append(module)
+
+    lines = [
+        "# EasyICU Export",
+        "",
+        "This folder was generated locally by the EasyICU FastAPI web app.",
+        "No patient rows are included in this README; row-level data are only in the exported module files in this folder.",
+        "",
+        "## Extraction summary",
+        "",
+        f"- Generated: `{manifest.get('generated', '')}`",
+        f"- Database: `{manifest.get('database', '')}`",
+        f"- Source path: `{manifest.get('data_path', '')}`",
+        f"- Export format: `{manifest.get('format', '')}`",
+        f"- Max patients requested: `{manifest.get('max_patients')}`",
+        f"- Cohort preset: `{cohort.get('preset', '')}`",
+        f"- Cohort selected: `{report.get('selected', report.get('cohort_size', ''))}`",
+        f"- Observation window: `{cohort.get('observation_window_hours', '')} hours`",
+        f"- Modules: `{', '.join(unique_modules)}`",
+        "",
+        "## Reproducibility files",
+        "",
+        "- `_manifest.json` contains the machine-readable extraction contract, module files, row counts, and cohort report.",
+        "- Each module file contains the extracted concept table for the same resolved cohort.",
+        "- This `README.md` is a human-readable summary of the same extraction contract.",
+        "",
+        "## Files",
+        "",
+    ]
+    for f in files:
+        lines.append(f"- `{f.get('file')}` — module `{f.get('module', '')}`, rows `{f.get('rows', '')}`")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _coerce_int(value: Any, default: int, min_value: Optional[int] = None, max_value: Optional[int] = None) -> int:
+    try:
+        out = int(float(value))
+    except (TypeError, ValueError):
+        out = default
+    if min_value is not None:
+        out = max(min_value, out)
+    if max_value is not None:
+        out = min(max_value, out)
+    return out
+
+
+def _split_icd_tokens(raw: Any) -> List[str]:
+    import re
+
+    text = str(raw or "").upper().replace("，", ",").replace("；", ";")
+    tokens: List[str] = []
+    for part in re.split(r"[\s,;]+", text):
+        token = part.strip().replace(".", "")
+        if not token:
+            continue
+        if "-" in token:
+            start, end = [p.strip() for p in token.split("-", 1)]
+            if (
+                len(start) == len(end)
+                and len(start) >= 2
+                and start[:-2] == end[:-2]
+                and start[-2:].isdigit()
+                and end[-2:].isdigit()
+            ):
+                prefix = start[:-2]
+                lo, hi = int(start[-2:]), int(end[-2:])
+                if 0 <= hi - lo <= 50:
+                    tokens.extend(f"{prefix}{i:02d}" for i in range(lo, hi + 1))
+                    continue
+        tokens.append(token)
+    seen: Set[str] = set()
+    out: List[str] = []
+    for token in tokens:
+        if token not in seen:
+            seen.add(token)
+            out.append(token)
+    return out[:64]
+
+
+def _normalize_export_cohort(cohort: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    raw = cohort if isinstance(cohort, dict) else {}
+    has_explicit_contract = isinstance(cohort, dict) and bool(cohort)
+    preset = str(raw.get("preset") or ("adult_first" if has_explicit_contract else "all_icu")).strip().lower()
+    if preset not in _SUPPORTED_COHORT_PRESETS:
+        raise ExportCohortError(
+            "unsupported_cohort_preset",
+            {"preset": preset, "supported": sorted(_SUPPORTED_COHORT_PRESETS)},
+        )
+
+    include = _split_icd_tokens(
+        raw.get("icd_include")
+        or raw.get("include_diagnoses")
+        or raw.get("include")
+        or ""
+    )
+    exclude = _split_icd_tokens(
+        raw.get("icd_exclude")
+        or raw.get("exclude_diagnoses")
+        or raw.get("exclude")
+        or ""
+    )
+    icd_enabled = bool(raw.get("icd_enabled")) or preset == "icd"
+    if not icd_enabled:
+        include = []
+        exclude = []
+    if preset == "icd" and not include and not exclude:
+        raise ExportCohortError("empty_icd_filter", {"preset": preset})
+
+    age_min = _coerce_int(raw.get("age_min"), 18 if preset == "adult_first" else 0, 0, 120)
+    age_max = _coerce_int(raw.get("age_max"), 100, 0, 120)
+    if age_min > age_max:
+        age_min, age_max = age_max, age_min
+    if preset == "adult_first":
+        age_min = max(18, age_min)
+    min_los = _coerce_int(raw.get("min_icu_los_hours"), 0, 0, 24 * 30)
+    window = _coerce_int(
+        raw.get("observation_window_hours"),
+        DEFAULT_OBSERVATION_WINDOW_HOURS,
+        1,
+        DEFAULT_OBSERVATION_WINDOW_HOURS,
+    )
+
+    return {
+        "preset": preset,
+        "age_min": age_min,
+        "age_max": age_max,
+        "min_icu_los_hours": min_los,
+        "observation_window_hours": window,
+        "exclude_readmissions": bool(raw.get("exclude_readmissions", preset == "adult_first")),
+        "icd_enabled": icd_enabled,
+        "icd_include": include,
+        "icd_exclude": exclude,
+    }
+
+
+def _database_for_patient_filter(database: str) -> str:
+    if database == "sicdb":
+        return "sic"
+    if database == "miii":
+        return "mimic"
+    return database
+
+
+def _find_table_file(root: Path, table_names: List[str]) -> Optional[Path]:
+    suffixes = (".parquet", ".csv", ".csv.gz")
+    for table in table_names:
+        for suffix in suffixes:
+            direct = root / f"{table}{suffix}"
+            if direct.exists():
+                return direct
+            try:
+                for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+                    if not child.is_dir():
+                        continue
+                    nested = child / f"{table}{suffix}"
+                    if nested.exists():
+                        return nested
+            except OSError:
+                continue
+    return None
+
+
+def _read_table_columns(path: Path, columns: List[str]) -> Any:
+    import pandas as pd
+
+    present = set(_read_columns(path))
+    wanted = [c for c in columns if c in present]
+    if path.suffix == ".parquet":
+        return pd.read_parquet(path, columns=wanted or None)
+    if wanted:
+        return pd.read_csv(path, usecols=wanted)
+    return pd.read_csv(path)
+
+
+def _normal_text_series(series: Any) -> Any:
+    return series.fillna("").astype(str).str.upper().str.replace(".", "", regex=False).str.strip()
+
+
+def _match_mimic_icd_ids(data_path: Path, stay_id_col: str, include: List[str], exclude: List[str]) -> Tuple[Set[Any], Set[Any]]:
+    import pandas as pd
+
+    stays_path = _find_table_file(data_path, ["icustays"])
+    diag_path = _find_table_file(data_path, ["diagnoses_icd", "diagnoses"])
+    if not stays_path or not diag_path:
+        raise ExportCohortError("icd_tables_missing", {"required_tables": ["icustays", "diagnoses_icd"]})
+
+    stays = _read_table_columns(stays_path, [stay_id_col, "stay_id", "icustay_id", "hadm_id"])
+    diag = _read_table_columns(diag_path, ["hadm_id", "icd_code", "icd9_code", "diagnosis"])
+    id_col = stay_id_col if stay_id_col in stays.columns else ("stay_id" if "stay_id" in stays.columns else "icustay_id")
+    if "hadm_id" not in stays.columns or "hadm_id" not in diag.columns or id_col not in stays.columns:
+        raise ExportCohortError("icd_join_columns_missing", {"database": "miiv"})
+
+    code_col = next((c for c in ["icd_code", "icd9_code", "diagnosis"] if c in diag.columns), None)
+    if not code_col:
+        raise ExportCohortError("icd_code_column_missing", {"database": "miiv"})
+
+    joined = diag[["hadm_id", code_col]].merge(stays[["hadm_id", id_col]], on="hadm_id", how="inner")
+    codes = _normal_text_series(joined[code_col])
+
+    def select(tokens: List[str]) -> Set[Any]:
+        if not tokens:
+            return set()
+        mask = pd.Series(False, index=joined.index)
+        for token in tokens:
+            mask = mask | codes.str.startswith(token)
+        return set(joined.loc[mask, id_col].dropna().tolist())
+
+    return select(include), select(exclude)
+
+
+def _match_eicu_icd_ids(data_path: Path, include: List[str], exclude: List[str]) -> Tuple[Set[Any], Set[Any]]:
+    import pandas as pd
+
+    diag_path = _find_table_file(data_path, ["diagnosis"])
+    if not diag_path:
+        raise ExportCohortError("icd_tables_missing", {"required_tables": ["diagnosis"]})
+    diag = _read_table_columns(diag_path, ["patientunitstayid", "icd9code", "diagnosisstring"])
+    if "patientunitstayid" not in diag.columns:
+        raise ExportCohortError("icd_join_columns_missing", {"database": "eicu"})
+    search_cols = [c for c in ["icd9code", "diagnosisstring"] if c in diag.columns]
+    if not search_cols:
+        raise ExportCohortError("icd_code_column_missing", {"database": "eicu"})
+
+    normalized = [_normal_text_series(diag[c]) for c in search_cols]
+
+    def select(tokens: List[str]) -> Set[Any]:
+        if not tokens:
+            return set()
+        mask = pd.Series(False, index=diag.index)
+        for token in tokens:
+            for values in normalized:
+                mask = mask | values.str.contains(token, regex=False)
+        return set(diag.loc[mask, "patientunitstayid"].dropna().tolist())
+
+    return select(include), select(exclude)
+
+
+def _match_icd_ids(data_path: Path, database: str, id_col: str, include: List[str], exclude: List[str]) -> Tuple[Set[Any], Set[Any]]:
+    db = _database_for_patient_filter(database)
+    if db not in _ICD_SUPPORTED_DATABASES:
+        raise ExportCohortError("icd_filter_unsupported_database", {"database": database})
+    if db in {"miiv", "mimic", "miii"}:
+        return _match_mimic_icd_ids(data_path, id_col, include, exclude)
+    return _match_eicu_icd_ids(data_path, include, exclude)
+
+
+def _cohort_id_column(frame: Any, preferred: str) -> Optional[str]:
+    candidates = [
+        preferred,
+        "stay_id",
+        "icustay_id",
+        "patientunitstayid",
+        "admissionid",
+        "patientid",
+        "CaseID",
+    ]
+    return next((col for col in candidates if col in getattr(frame, "columns", [])), None)
+
+
+def _truthy_mask(values: Any) -> Any:
+    import pandas as pd
+
+    if pd.api.types.is_bool_dtype(values):
+        return values.fillna(False)
+    numeric = pd.to_numeric(values, errors="coerce")
+    if numeric.notna().any():
+        return numeric.fillna(0) > 0
+    lowered = values.fillna("").astype(str).str.strip().str.lower()
+    return lowered.isin({"1", "true", "t", "yes", "y", "positive", "present"})
+
+
+def _positive_ids_from_concept_payload(payload: Any, id_col: str, spec: Dict[str, Any]) -> Set[Any]:
+    import pandas as pd
+
+    frames = list(payload.values()) if isinstance(payload, dict) else [payload]
+    matched: Set[Any] = set()
+    for frame in frames:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        frame_id = _cohort_id_column(frame, id_col)
+        if not frame_id:
+            continue
+
+        mask = pd.Series(False, index=frame.index)
+        for col in spec.get("positive", []):
+            if col in frame.columns:
+                mask = mask | _truthy_mask(frame[col])
+        for col in spec.get("numeric_positive", []):
+            if col in frame.columns:
+                numeric = pd.to_numeric(frame[col], errors="coerce")
+                mask = mask | (numeric.fillna(0) > 0)
+        for col, (op, threshold) in (spec.get("thresholds") or {}).items():
+            if col in frame.columns:
+                numeric = pd.to_numeric(frame[col], errors="coerce")
+                if op == "le":
+                    mask = mask | ((numeric > 0) & (numeric <= threshold))
+                elif op == "ge":
+                    mask = mask | (numeric >= threshold)
+        matched.update(frame.loc[mask, frame_id].dropna().tolist())
+    return matched
+
+
+def _match_concept_derived_cohort_ids(
+    api: Any,
+    data_path: str,
+    database: str,
+    id_col: str,
+    base_ids: Set[Any],
+    preset: str,
+    window_hours: int,
+) -> Set[Any]:
+    spec = _CONCEPT_DERIVED_COHORTS.get(preset)
+    if not spec:
+        return set(base_ids)
+    try:
+        payload = api.load_concepts(
+            spec["concepts"],
+            patient_ids={id_col: sorted(base_ids, key=lambda value: str(value))},
+            database=database,
+            data_path=str(data_path),
+            merge=True,
+            verbose=False,
+            win_length=f"{window_hours}h",
+        )
+    except Exception as exc:
+        raise ExportCohortError(
+            "concept_cohort_unavailable",
+            {"preset": preset, "concepts": spec["concepts"], "detail": str(exc)},
+        ) from exc
+
+    matched = _positive_ids_from_concept_payload(payload, id_col, spec)
+    if not matched and base_ids:
+        return set()
+    return set(base_ids) & matched
+
+
+def _resolve_export_cohort(
+    data_path: str,
+    database: str,
+    cohort: Optional[Dict[str, Any]],
+    max_patients: Optional[int],
+    api: Any,
+    progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
+    normalized = _normalize_export_cohort(cohort)
+    max_n = _coerce_int(max_patients, 0, 0, None) if max_patients is not None else 0
+    id_col = api.get_id_col_for_database(_database_for_patient_filter(database))
+    patient_filter_db = _database_for_patient_filter(database)
+
+    def emit(stage: str, **extra: Any) -> None:
+        if progress is not None:
+            progress(stage, extra)
+
+    emit("normalizing", preset=normalized["preset"], window_hours=normalized["observation_window_hours"])
+
+    filters_active = (
+        normalized["preset"] != "all_icu"
+        or normalized["age_min"] > 0
+        or normalized["age_max"] < 100
+        or normalized["min_icu_los_hours"] > 0
+        or normalized["exclude_readmissions"]
+        or normalized["icd_enabled"]
+    )
+
+    if not filters_active:
+        emit("all_icu_ids", preset=normalized["preset"])
+        ids_list, id_col = api.get_all_patient_ids(
+            str(data_path),
+            database=_database_for_patient_filter(database),
+            max_patients=max_n or None,
+        )
+        emit("all_icu_selected", selected=len(ids_list), max_patients_applied=bool(max_n))
+        return {
+            "patient_ids": {id_col: list(ids_list)} if ids_list else None,
+            "cohort_size": len(ids_list),
+            "id_col": id_col,
+            "cohort_contract": normalized,
+            "cohort_report": {
+                "mode": "all_icu",
+                "selected": len(ids_list),
+                "max_patients_applied": bool(max_n),
+                "applied_filters": [],
+            },
+            "load_kwargs": {"win_length": f"{normalized['observation_window_hours']}h"},
+        }
+
+    from easyicu.patient_filter import PatientFilter
+
+    emit(
+        "demographics_filter",
+        preset=normalized["preset"],
+        age_min=normalized["age_min"],
+        age_max=normalized["age_max"],
+        min_icu_los_hours=normalized["min_icu_los_hours"],
+        exclude_readmissions=normalized["exclude_readmissions"],
+    )
+    pf = PatientFilter(database=patient_filter_db, data_path=data_path, verbose=False)
+    filtered = pf.filter(
+        age_min=normalized["age_min"] if normalized["age_min"] > 0 else None,
+        age_max=normalized["age_max"] if normalized["age_max"] < 100 else None,
+        first_icu_stay=normalized["exclude_readmissions"] or normalized["preset"] == "adult_first",
+        los_min=normalized["min_icu_los_hours"] if normalized["min_icu_los_hours"] > 0 else None,
+        los_max=None,
+        has_sepsis=None,
+        return_dataframe=True,
+    )
+    if "patient_id" not in filtered.columns:
+        raise ExportCohortError("cohort_filter_missing_patient_id", {"database": database})
+    selected: Set[Any] = set(filtered["patient_id"].dropna().tolist())
+    before_concept = len(selected)
+    concept_matches: Optional[int] = None
+    before_icd = len(selected)
+    applied = ["demographics"]
+    emit("demographics_selected", selected=before_concept)
+
+    if normalized["preset"] in _CONCEPT_DERIVED_COHORTS:
+        spec = _CONCEPT_DERIVED_COHORTS[normalized["preset"]]
+        emit(
+            "concept_prefilter",
+            preset=normalized["preset"],
+            concepts=spec["concepts"],
+            candidates=before_concept,
+            window_hours=normalized["observation_window_hours"],
+        )
+        selected = _match_concept_derived_cohort_ids(
+            api,
+            str(data_path),
+            database,
+            id_col,
+            selected,
+            normalized["preset"],
+            normalized["observation_window_hours"],
+        )
+        concept_matches = len(selected)
+        before_icd = len(selected)
+        applied.append("concept_prefilter")
+        emit("concept_prefilter_selected", preset=normalized["preset"], selected=concept_matches)
+
+    include_ids: Set[Any] = set()
+    exclude_ids: Set[Any] = set()
+    if normalized["icd_enabled"]:
+        emit(
+            "icd_filter",
+            include_tokens=len(normalized["icd_include"]),
+            exclude_tokens=len(normalized["icd_exclude"]),
+        )
+        include_ids, exclude_ids = _match_icd_ids(
+            Path(data_path).expanduser(),
+            database,
+            id_col,
+            normalized["icd_include"],
+            normalized["icd_exclude"],
+        )
+        if normalized["icd_include"]:
+            selected = selected & include_ids
+        if normalized["icd_exclude"]:
+            selected = selected - exclude_ids
+        applied.append("icd")
+        emit("icd_selected", selected=len(selected), include_matches=len(include_ids), exclude_matches=len(exclude_ids))
+
+    ids = sorted(selected, key=lambda value: str(value))
+    uncapped = len(ids)
+    if max_n and len(ids) > max_n:
+        ids = ids[:max_n]
+    emit("cohort_selected", selected=len(ids), selected_before_cap=uncapped, max_patients_applied=bool(max_n and uncapped > max_n))
+
+    return {
+        "patient_ids": {id_col: ids} if ids else {id_col: []},
+        "cohort_size": len(ids),
+        "id_col": id_col,
+        "cohort_contract": normalized,
+        "cohort_report": {
+            "mode": normalized["preset"],
+            "selected": len(ids),
+            "selected_before_cap": uncapped,
+            "selected_before_concept_prefilter": before_concept,
+            "concept_matches": concept_matches,
+            "selected_before_icd": before_icd,
+            "max_patients_applied": bool(max_n and uncapped > max_n),
+            "applied_filters": applied,
+            "icd": {
+                "enabled": normalized["icd_enabled"],
+                "include_tokens": normalized["icd_include"],
+                "exclude_tokens": normalized["icd_exclude"],
+                "include_matches": len(include_ids),
+                "exclude_matches": len(exclude_ids),
+            },
+        },
+        "load_kwargs": {"win_length": f"{normalized['observation_window_hours']}h"},
+    }
+
+
 def make_export_runner(
     data_path: str,
     database: str,
@@ -305,7 +918,9 @@ def make_export_runner(
     export_format: str = "csv",
     merge: bool = False,
     out_dir: Optional[str] = None,
+    create_run_subdir: bool = False,
     max_patients: Optional[int] = None,
+    cohort: Optional[Dict[str, Any]] = None,
 ) -> Any:
     """Build a job runner that extracts the selected feature modules to disk.
 
@@ -330,36 +945,75 @@ def make_export_runner(
         sel = [m for m in (modules or list(CONCEPT_GROUPS_INTERNAL.keys()))
                if CONCEPT_GROUPS_INTERNAL.get(m)]
         ext = _EXPORT_EXT.get(export_format, "csv")
-        out = Path(out_dir).expanduser() if out_dir else (Path.home() / "easyicu" / "exports" / database)
+        out = _resolve_export_out_dir(
+            out_dir=out_dir,
+            database=database,
+            export_format=export_format,
+            create_run_subdir=create_run_subdir,
+        )
         out.mkdir(parents=True, exist_ok=True)
 
         # Select ONE cohort up front and pass the same patient_ids to every
-        # module, so all files share a consistent cohort. (max_patients alone is
-        # a per-module sampling hint some concept loaders ignore — e.g. outcome
-        # returned the full DB — which would desync the export.)
-        patient_ids = None
-        cohort_size = None
-        if max_patients:
-            # get_all_patient_ids -> (ids_list, id_column_name)
-            ids_list, id_col = api.get_all_patient_ids(
-                str(data_path), database=database, max_patients=max_patients)
-            patient_ids = {id_col: list(ids_list)}
-            cohort_size = len(ids_list)
+        # module, so all files share a consistent cohort. The native UI sends a
+        # cohort contract; unsupported filters fail closed instead of silently
+        # exporting the full database.
+        cohort_progress_total = max(1, len(sel) + 1)
+
+        def emit_cohort_progress(stage: str, extra: Dict[str, Any]) -> None:
+            # Only aggregate counts and configuration labels are emitted; never
+            # patient/stay identifiers or row-level concept payloads.
+            job.emit({
+                "type": "progress",
+                "phase": "cohort",
+                "current": 0,
+                "total": cohort_progress_total,
+                "module": "cohort",
+                "stage": stage,
+                "message": _COHORT_PROGRESS_MESSAGES.get(stage, stage.replace("_", " ")),
+                **extra,
+            })
+
+        cohort_info = _resolve_export_cohort(
+            str(data_path),
+            database,
+            cohort,
+            max_patients,
+            api,
+            progress=emit_cohort_progress,
+        )
+        patient_ids = cohort_info["patient_ids"]
+        cohort_size = cohort_info["cohort_size"]
+        load_kwargs = dict(cohort_info.get("load_kwargs") or {})
+        if getattr(job, "cancel_requested", False):
+            return {
+                "out_dir": str(out),
+                "files": [],
+                "file_count": 0,
+                "total_rows": 0,
+                "manifest": None,
+                "cancelled_at": "cohort",
+            }
 
         job.emit({"type": "start", "modules": sel, "out_dir": str(out),
                   "format": export_format, "max_patients": max_patients,
+                  "cohort_size": cohort_size,
+                  "cohort": cohort_info.get("cohort_report")})
+        job.emit({"type": "progress", "phase": "cohort", "current": 1, "total": cohort_progress_total,
+                  "module": "cohort", "stage": "ready", "message": "Cohort resolved",
                   "cohort_size": cohort_size})
 
         files: List[Dict[str, Any]] = []
         total = len(sel)
         with api.keep_cache(database=database, data_path=str(data_path)):
             for i, mod in enumerate(sel, start=1):
+                if getattr(job, "cancel_requested", False):
+                    break
                 concepts = CONCEPT_GROUPS_INTERNAL[mod]
                 use_sofa2 = any(c.startswith("sofa2") or c == "sep3_sofa2" for c in concepts)
                 df = api.load_concepts(
                     concepts, patient_ids=patient_ids, database=database,
                     data_path=str(data_path), use_sofa2=use_sofa2,
-                    merge=True, verbose=False,
+                    merge=True, verbose=False, **load_kwargs,
                 )
                 written: List[Dict[str, Any]] = []
                 if isinstance(df, dict):
@@ -376,21 +1030,40 @@ def make_export_runner(
                 job.emit({"type": "progress", "current": i, "total": total, "module": mod,
                           "file": written[0]["file"], "rows": sum(w["rows"] for w in written)})
 
+        if getattr(job, "cancel_requested", False):
+            return {
+                "out_dir": str(out),
+                "files": files,
+                "file_count": len(files),
+                "total_rows": sum(f["rows"] for f in files),
+                "manifest": None,
+                "cancelled_at": "modules",
+            }
+
         manifest = {
             "database": database,
             "data_path": str(data_path),
             "format": export_format,
             "max_patients": max_patients,
+            "export_folder": {
+                "path": str(out),
+                "run_subdir": bool(create_run_subdir),
+                "label": out.name,
+            },
+            "cohort_contract": cohort_info.get("cohort_contract"),
+            "cohort_report": cohort_info.get("cohort_report"),
             "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "files": files,
         }
         (out / "_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
+        (out / "README.md").write_text(_render_export_readme(manifest, files=files), encoding="utf-8")
         return {
             "out_dir": str(out),
             "files": files,
             "file_count": len(files),
             "total_rows": sum(f["rows"] for f in files),
             "manifest": "_manifest.json",
+            "readme": "README.md",
         }
 
     return runner

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from easyicu.webserver import agent_outputs
 from easyicu.webserver import dataio
 from easyicu.webserver import numeric_evidence_audit
 from easyicu.webserver import provider_adapter
@@ -37,6 +38,10 @@ class AgentRunConfigError(ValueError):
 _RUN_ARTIFACT_NAMES = [
     "run_context.json",
     "cohort_summary.json",
+    "table1_summary.json",
+    "missingness_audit.json",
+    "roc_curve.json",
+    "calibration_curve.json",
     "quality_gate.json",
     "agent_plan.json",
     "manuscript_draft.json",
@@ -91,6 +96,17 @@ def make_agent_run_runner(
             "uploads": 0,
             "tokens": 0,
         })
+        if getattr(job, "cancel_requested", False):
+            return _cancelled_agent_result(
+                job,
+                run_id=run_id,
+                study_id=study_id,
+                mode=mode,
+                run_type=resolved_run_type,
+                run_dir=run_dir,
+                provider=provider,
+                phase="initializing",
+            )
 
         source = dataio.describe_export_source(export_path)
         if not source.get("ok"):
@@ -103,6 +119,18 @@ def make_agent_run_runner(
             "label": "Source registry resolved",
             "summary": source.get("summary", {}),
         })
+        if getattr(job, "cancel_requested", False):
+            return _cancelled_agent_result(
+                job,
+                run_id=run_id,
+                study_id=study_id,
+                mode=mode,
+                run_type=resolved_run_type,
+                run_dir=run_dir,
+                provider=provider,
+                phase="source",
+                source=source,
+            )
 
         workspace = dataio.summarize_export_workspace(export_path)
         if not workspace.get("ok"):
@@ -119,6 +147,19 @@ def make_agent_run_runner(
             "stays": summary.get("stays"),
             "modules": summary.get("modules"),
         })
+        if getattr(job, "cancel_requested", False):
+            return _cancelled_agent_result(
+                job,
+                run_id=run_id,
+                study_id=study_id,
+                mode=mode,
+                run_type=resolved_run_type,
+                run_dir=run_dir,
+                provider=provider,
+                phase="snapshot",
+                source=source,
+                summary=summary,
+            )
 
         artifacts = {
             "run_context.json": {
@@ -144,8 +185,28 @@ def make_agent_run_runner(
                 "quality": quality,
             },
         }
+        artifacts.update(agent_outputs.build_agent_output_artifacts(
+            export_path=export_path,
+            source=source,
+            summary=summary,
+            cohort=cohort,
+            quality=quality,
+        ))
         strict_audit = None
         numeric_audit = None
+        if getattr(job, "cancel_requested", False):
+            return _cancelled_agent_result(
+                job,
+                run_id=run_id,
+                study_id=study_id,
+                mode=mode,
+                run_type=resolved_run_type,
+                run_dir=run_dir,
+                provider=provider,
+                phase="planning",
+                source=source,
+                summary=summary,
+            )
         if resolved_run_type == "full":
             if provider.get("external"):
                 provider_result = provider_adapter.generate_bound_provider_payload(
@@ -156,6 +217,11 @@ def make_agent_run_runner(
                     summary=summary,
                     cohort=cohort,
                     quality=quality,
+                    output_artifacts={
+                        name: artifacts[name]
+                        for name in agent_outputs.OUTPUT_ARTIFACT_NAMES
+                        if name in artifacts
+                    },
                 )
                 provider.update(provider_result["provider"])
                 full_payload = {
@@ -186,6 +252,19 @@ def make_agent_run_runner(
                 "label": progress_label,
                 "provider": dict(provider),
             })
+            if getattr(job, "cancel_requested", False):
+                return _cancelled_agent_result(
+                    job,
+                    run_id=run_id,
+                    study_id=study_id,
+                    mode=mode,
+                    run_type=resolved_run_type,
+                    run_dir=run_dir,
+                    provider=provider,
+                    phase=progress_step,
+                    source=source,
+                    summary=summary,
+                )
 
         gate, privacy_scan, strict_audit, numeric_audit = _evaluate_gate_with_ledger(
             run_id=run_id,
@@ -208,6 +287,19 @@ def make_agent_run_runner(
             "label": "Evidence gate evaluated",
             "gate": gate,
         })
+        if getattr(job, "cancel_requested", False):
+            return _cancelled_agent_result(
+                job,
+                run_id=run_id,
+                study_id=study_id,
+                mode=mode,
+                run_type=resolved_run_type,
+                run_dir=run_dir,
+                provider=provider,
+                phase="gate",
+                source=source,
+                summary=summary,
+            )
 
         written = []
         for name, payload in artifacts.items():
@@ -574,6 +666,59 @@ def resolve_agent_provider_config(
     return provider
 
 
+def _cancelled_agent_result(
+    job: Any,
+    *,
+    run_id: str,
+    study_id: str,
+    mode: str,
+    run_type: str,
+    run_dir: Path,
+    provider: Dict[str, Any],
+    phase: str,
+    source: Optional[Dict[str, Any]] = None,
+    summary: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Return an honest terminal payload for a cooperatively cancelled run.
+
+    A cancelled native web run is not a resumable Python thread after process
+    shutdown. The safe continuation is to retry from the active export and use
+    local artifact history for completed prior runs.
+    """
+    return {
+        "run_id": run_id,
+        "run_label": run_id.replace("_", " "),
+        "study_id": study_id,
+        "mode": mode,
+        "run_type": normalize_run_type(run_type),
+        "project_dir": str(run_dir),
+        "cancelled": True,
+        "cancelled_at": phase,
+        "cancel_reason": getattr(job, "cancel_reason", None) or "user_requested",
+        "resumable": True,
+        "resume_kind": "restart_from_active_export",
+        "resume_label": "Retry from the active registered export",
+        "source": {
+            "path": (source or {}).get("path"),
+            "label": (source or {}).get("label"),
+            "database": (source or {}).get("database"),
+        },
+        "summary": summary or {},
+        "gate": {
+            "status": "cancelled",
+            "reportable": False,
+            "draft_unlocked": False,
+            "reason": "agent_run_cancelled_before_artifacts",
+            "checks": [],
+        },
+        "provider": provider,
+        "artifacts": [],
+        "uploads": 0,
+        "tokens": 0,
+        "external_calls": int(provider.get("external_calls") or 0),
+    }
+
+
 def _quality_public(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "module": row.get("module"),
@@ -920,6 +1065,9 @@ def _public_review_payloads(payloads: Dict[str, Dict[str, Any]]) -> Dict[str, Di
             "summary": row.get("summary"),
             "cohort": row.get("cohort"),
         }
+    for name in agent_outputs.OUTPUT_ARTIFACT_NAMES:
+        if name in payloads:
+            public[name] = payloads[name]
     if "quality_gate.json" in payloads:
         row = payloads["quality_gate.json"]
         public["quality_gate.json"] = {
