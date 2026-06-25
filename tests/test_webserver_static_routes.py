@@ -3,12 +3,31 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
+from easyicu import concept_catalog as cc
+from easyicu.webserver.app import app
+
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "easyicu" / "webserver" / "static"
 
 
 def _static_js(name: str) -> str:
     return (STATIC_DIR / "js" / name).read_text(encoding="utf-8")
+
+
+def _static_css(name: str) -> str:
+    return (STATIC_DIR / "css" / name).read_text(encoding="utf-8")
+
+
+def _static_html(name: str) -> str:
+    return (STATIC_DIR / name).read_text(encoding="utf-8")
+
+
+def test_native_favicon_request_is_quiet() -> None:
+    response = TestClient(app).get("/favicon.ico")
+
+    assert response.status_code == 204
 
 
 def test_native_static_route_registry_contains_fallback_only_routes() -> None:
@@ -23,6 +42,7 @@ def test_native_static_route_registry_contains_fallback_only_routes() -> None:
         "cohort",
         "crossdb",
         "agent",
+        "ideas",
         "settings",
         "dictionary",
         "states",
@@ -41,6 +61,191 @@ def test_native_hash_router_has_help_alias_and_unknown_hash_fails_safe() -> None
     assert "resolved.fallback" in app_js
 
 
+def test_native_shell_language_icon_is_stateful() -> None:
+    app_js = _static_js("app.js")
+    api_js = _static_js("api.js")
+    i18n_js = _static_js("i18n.js")
+    index_html = _static_html("index.html")
+
+    assert "data-lang-toggle" in app_js
+    assert "window.EU_LANG === 'zh' ? 'en' : 'zh'" in app_js
+    assert "localStorage.getItem('easyicu_lang')" in api_js
+    assert "localStorage.getItem('easyicu_home_data')" in api_js
+    assert "syncPatch.language = browserLang" in api_js
+    assert "syncPatch.data_mode = browserMode" in api_js
+    assert "window.applySettingsState(window.EU_SETTINGS" in api_js
+    assert "window.applySettingsState = function" in i18n_js
+    assert "document.body.setAttribute('data-density', density)" in i18n_js
+    assert "document.body.setAttribute('data-reduce-motion'" in i18n_js
+    assert "window.EU_SETTINGS.language = l" in i18n_js
+    assert "window.EU_API.saveSetting('language', l)" in i18n_js
+    assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
+    assert "js/i18n.js?v=20260625-stage96" in index_html
+    assert "js/api.js?v=20260625-stage100" in index_html
+
+
+def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
+    dock_css = _static_css("dock.css")
+
+    assert "#cpFab{ right: 14px; bottom: calc(76px + env(safe-area-inset-bottom)); }" in dock_css
+
+
+def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agent_guide() -> None:
+    app_js = _static_js("app.js")
+    dock_js = _static_js("copilot-dock.js")
+    extraction_js = _static_js("screens-extraction.js")
+    agent_js = _static_js("screens-agent.js")
+    help_js = _static_js("screens-help.js")
+    index_html = _static_html("index.html")
+
+    assert "Page guide" in app_js
+    assert "页面指南" in app_js
+    assert "window.EUPageGuide || window.EUCopilot" in app_js
+    assert "Guided study" in app_js
+    assert "Agent guide" in agent_js
+    assert "Open EasyICU page guide" in dock_js
+    assert "Page guide" in dock_js
+    assert "页面指南" in dock_js
+    assert "Open Guided Copilot" in dock_js
+    assert "Start Guided study" in extraction_js
+    assert "Continue in Guided study" in agent_js
+    assert "Open Page guide" in help_js
+
+    assert "Quick help" not in app_js
+    assert "Quick help" not in dock_js
+    assert "Quick help" not in help_js
+    assert "title=\"Ask the Copilot\"" not in app_js
+    assert "${t('Copilot','助手')}" not in app_js
+    assert "Open EasyICU Copilot" not in dock_js
+    assert '<div class="cp-name">Copilot</div>' not in dock_js
+    assert "Let Copilot drive" not in extraction_js
+    assert "Continue in Copilot" not in agent_js
+    assert "Open Copilot" not in help_js
+
+    assert "css/dock.css?v=20260625-stage99" in index_html
+    assert "js/app.js?v=20260625-stage99" in index_html
+    assert "js/copilot-dock.js?v=20260625-stage99" in index_html
+    assert "js/screens-extraction.js?v=20260625-stage91" in index_html
+    assert "js/screens-agent.js?v=20260625-stage94" in index_html
+    assert "js/screens-help.js?v=20260625-stage99" in index_html
+
+
+def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
+    guided_js = _static_js("screens-guided.js")
+    dock_js = _static_js("copilot-dock.js")
+    index_html = _static_html("index.html")
+
+    assert "function bi(en, zh)" in guided_js
+    assert "function htmlOf(value)" in guided_js
+    assert "htmlOf(t.html)" in guided_js
+    assert "你好，我是 EasyICU <strong>研究 Copilot</strong>" in guided_js
+    assert "你可以随时停下" in guided_js
+    assert "正在打开 Guided Copilot" in dock_js
+    assert "页面指南会解释当前页面" in dock_js
+    assert "页面指南只支持固定快捷操作" in dock_js
+    assert "htmlOf(t.html)" in dock_js
+    assert "htmlOf(label)" in dock_js
+    assert "js/screens-guided.js?v=20260625-stage102" in index_html
+    assert "js/copilot-dock.js?v=20260625-stage99" in index_html
+
+
+def test_native_page_guide_uses_backend_page_guide_contract() -> None:
+    api_js = _static_js("api.js")
+    dock_js = _static_js("copilot-dock.js")
+    index_html = _static_html("index.html")
+
+    assert "/api/page-guide/sessions" in api_js
+    assert "/api/page-guide/message" in api_js
+    assert "/api/page-guide/action" in api_js
+    assert "/api/page-guide/sessions/list" in api_js
+    assert "createPageGuideSession" in api_js
+    assert "sendPageGuideMessage" in api_js
+    assert "runPageGuideAction" in api_js
+    assert "loadPageGuideSessions" in api_js
+
+    # Old copilot routes remain a compatibility wrapper, but the floating dock
+    # must no longer consume them.
+    assert "/api/copilot/sessions" in api_js
+    assert "/api/copilot/message" in api_js
+    assert "/api/copilot/action" in api_js
+    assert "/api/copilot/sessions/list" in api_js
+    assert "createCopilotSession" in api_js
+    assert "sendCopilotMessage" in api_js
+    assert "runCopilotAction" in api_js
+    assert "loadCopilotSessions" in api_js
+
+    assert "function currentContext()" in dock_js
+    assert "ensureSession()" in dock_js
+    assert "sendBackendMessage" in dock_js
+    assert "runBackendAction" in dock_js
+    assert "data-cp-action" in dock_js
+    assert "selected_source" in dock_js
+    assert "createPageGuideSession" in dock_js
+    assert "sendPageGuideMessage" in dock_js
+    assert "runPageGuideAction" in dock_js
+    assert "createCopilotSession" not in dock_js
+    assert "sendCopilotMessage" not in dock_js
+    assert "runCopilotAction" not in dock_js
+    assert "Page guide backend unavailable, using local fallback" in dock_js
+    assert "js/api.js?v=20260625-stage100" in index_html
+    assert "js/copilot-dock.js?v=20260625-stage99" in index_html
+
+
+def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
+    agent_js = _static_js("screens-agent.js")
+    index_html = _static_html("index.html")
+
+    assert "js/screens-agent.js?v=20260625-stage94" in index_html
+    assert "function artifactsForLive(live)" in agent_js
+    assert "function outputCountForStudy()" in agent_js
+    assert "['outputs', t('Outputs', '产出'), outputCountForStudy()]" in agent_js
+    assert "No real output artifacts yet" in agent_js
+    assert "placeholders are not shown in Real mode" in agent_js
+    assert "It will not show seeded Table 1, missingness, ROC, or calibration placeholders" in agent_js
+    assert 'data-ag-artifact-view="${esc(name)}"' in agent_js
+    assert "artifactTitle(name)" in agent_js
+    assert "Download bundle" in agent_js
+    assert "['outputs', t('Outputs', '产出'), 6]" not in agent_js
+    assert "Seeded demo artifacts." not in agent_js
+    assert "Illustrative outputs for layout" not in agent_js
+
+
+def test_native_settings_controls_are_backend_wired() -> None:
+    api_js = _static_js("api.js")
+    settings_js = _static_js("screens-settings.js")
+    i18n_js = _static_js("i18n.js")
+    tweaks_css = _static_css("tweaks.css")
+    index_html = _static_html("index.html")
+
+    assert "/api/settings/reset" in api_js
+    assert "resetSettings" in settings_js
+    assert "data-setting-path" in settings_js
+    assert "pathCtl('export_dir'" in settings_js
+    assert "pathCtl('working_dir'" not in settings_js
+    assert "openSettingsFolderPicker" in settings_js
+    assert "window.EU_API.listDir" in settings_js
+    assert "data-settings-diagnostics" in settings_js
+    assert "data-settings-jump" in settings_js
+    assert "scrollIntoView({ behavior: 'smooth', block: 'start' })" in settings_js
+    assert 'href="#set-' not in settings_js
+    assert ".set-nav-btn" in _static_css("pages.css")
+    assert "easyicu_settings_diagnostics.json" in settings_js
+    assert "lockedCtl" in settings_js
+    assert "per run in Agent Projects" in settings_js
+    assert "strict enforced" in settings_js
+    assert "There is no telemetry collector" in settings_js
+    assert "data-setting=\"telemetry_enabled\"" not in settings_js
+    assert "data-setting-input=\"token_budget\"" not in settings_js
+    assert "data-setting=\"module_folder_mode\"" not in settings_js
+    assert "if (key === 'data_mode' && val && window.setDataMode)" in settings_js
+    assert "window.applySettingsState(window.EU_SETTINGS, { syncStorage: true })" in api_js
+    assert "body[data-reduce-motion=\"true\"]" in tweaks_css
+    assert "css/tweaks.css?v=20260625-stage96" in index_html
+    assert "js/screens-settings.js?v=20260625-stage96" in index_html
+    assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
+    assert "All controls are demo-interactive" not in settings_js
+
+
 def test_native_extraction_advanced_filters_are_backend_wired() -> None:
     api_js = _static_js("api.js")
     extraction_js = _static_js("screens-extraction.js")
@@ -51,6 +256,541 @@ def test_native_extraction_advanced_filters_are_backend_wired() -> None:
     assert "previewExtractionFilters" in extraction_js
     assert "Real-source filter audit" in extraction_js
     assert "Unsupported filters stay blocked" in extraction_js
+
+
+def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
+    extraction_js = _static_js("screens-extraction.js")
+    extraction_css = _static_css("extraction.css")
+    redesign_css = _static_css("redesign.css")
+    index_html = _static_html("index.html")
+
+    assert "css/extraction.css?v=20260625-stage91" in index_html
+    assert "data-ex-analyze" in extraction_js
+    assert "Analyze folder" in extraction_js
+    assert "Let EasyICU identify the folder" in extraction_js
+    assert "data-ex-manual" in extraction_js
+    assert "Advanced: choose manually" in extraction_js
+    assert "Use this only if automatic detection is wrong" in extraction_js
+    assert "Then tell us what kind of folder it is" not in extraction_js
+    assert ".ex-connect-card" in extraction_css
+    assert ".ex-connect-primary" in extraction_css
+    assert ".ex-connect-actions" in extraction_css
+    assert ".ex-connect-card" not in redesign_css
+    assert ".ex-connect-primary" not in redesign_css
+
+
+def test_native_extraction_custom_modules_default_to_all_with_bulk_actions() -> None:
+    extraction_js = _static_js("screens-extraction.js")
+    extraction_css = _static_css("extraction.css")
+    redesign_css = _static_css("redesign.css")
+
+    assert "let exAdvCohort = false, exAdvExport = false, exShowAllMods = true;" in extraction_js
+    assert "['SOFA-1 scores', 'SOFA-1 评分', 7, true, false]" in extraction_js
+    assert "data-ex-selectall" in extraction_js
+    assert "Select all" in extraction_js
+    assert "data-ex-clearmods" in extraction_js
+    assert "Clear all" in extraction_js
+    assert "Core 6" in extraction_js
+    assert 'data-ex-run="recommended"' in extraction_js
+    assert "function coreModuleKeys()" in extraction_js
+    assert "Select at least one module before extracting." in extraction_js
+    assert ".cohort-preset-grid" in extraction_css
+    assert ".range-ctl" in extraction_css
+    assert ".modgrid" in extraction_css
+    assert ".ex2-summary{ align-self:stretch; min-width:0; }" in extraction_css
+    assert ".sumcard{\n  position:sticky; top:74px; z-index:3;" in extraction_css
+    assert "max-height:calc(100vh - 92px); overflow:auto;" in extraction_css
+    assert ".sumcard{ position:static; max-height:none; overflow:visible; }" in extraction_css
+    assert ".cohort-preset-grid" not in redesign_css
+    assert ".range-ctl" not in redesign_css
+    assert ".ex2-summary" not in redesign_css
+
+
+def test_native_extraction_prefers_parquet_export_by_default() -> None:
+    extraction_js = _static_js("screens-extraction.js")
+
+    assert "let exFormat = 'parquet';" in extraction_js
+    assert 'data-val="parquet">Parquet</button><button class="${exFormat === \'csv\'' in extraction_js
+    assert "~/easyicu/exports/${dataMode()}" not in extraction_js
+    assert "Default export root from Settings" in extraction_js
+    assert "timestamped folder with README.md and _manifest.json" in extraction_js
+    assert "human-readable extraction README" in extraction_js
+
+
+def test_native_ui_does_not_prefill_author_machine_paths() -> None:
+    static_payload = "\n".join(
+        [
+            _static_js("screens-extraction.js"),
+            _static_js("screens-viz.js"),
+            _static_js("screens-guided.js"),
+            _static_js("screens-agent.js"),
+            _static_js("screens-settings.js"),
+        ]
+    )
+
+    for forbidden in [
+        "/Users/haibo",
+        "/Volumes/外置硬盘",
+        "/Volumes/data",
+        "~/easyicu/exports",
+        "~/easyicu/workspace",
+    ]:
+        assert forbidden not in static_payload
+    assert 'value="~/easyicu/projects' not in static_payload
+
+
+def test_native_extraction_module_counts_match_backend_catalog() -> None:
+    extraction_js = _static_js("screens-extraction.js")
+
+    module_block = extraction_js.split("const MODS = [", 1)[1].split("];", 1)[0]
+    key_block = extraction_js.split("const EX_KEYS = {", 1)[1].split("};", 1)[0]
+    entries = re.findall(r"\['([^']+)',\s*'[^']+',\s*(\d+),\s*true,\s*(true|false)\]", module_block)
+    keys = dict(re.findall(r"'([^']+)':\s*'([^']+)'", key_block))
+
+    assert len(entries) == len(cc.CONCEPT_GROUPS_INTERNAL) == 19
+    assert len(cc.CONCEPT_DICTIONARY) == 247
+    assert "function moduleConceptCount(m)" in extraction_js
+    assert "window.EU_CATALOG && window.EU_CATALOG.groupConcepts" in extraction_js
+
+    fallback_total = 0
+    for name, count_text, _is_core in entries:
+        group_key = keys[name]
+        expected = len(cc.CONCEPT_GROUPS_INTERNAL[group_key])
+        count = int(count_text)
+        fallback_total += count
+        assert count == expected, f"{name} fallback count should match {group_key}"
+
+    assert fallback_total == len(cc.CONCEPT_DICTIONARY)
+    assert fallback_total != 219
+
+
+def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
+    app_js = _static_js("app.js")
+    api_js = _static_js("api.js")
+    icons_js = _static_js("icons.js")
+    ideas_js = _static_js("screens-ideas.js")
+    agent_js = _static_js("screens-agent.js")
+    redesign_css = _static_css("redesign.css")
+    ideas_css = _static_css("ideas.css")
+    shell_css = _static_css("shell.css")
+    index_html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert 'data-nav="ideas"' in app_js
+    assert "Find a Study Idea" in app_js
+    assert "Discovery & Plan" in app_js
+    assert "ideas-entry" in app_js
+    assert "paper, PDF, or topic → feasible plan" in app_js
+    assert "Run a Research Project" in app_js
+    assert "Data & Review" in app_js
+    assert "Data Workspace" in app_js
+    assert "Classic Workspace" not in app_js
+    assert "Copilot and Classic share one study" not in app_js
+    assert "Already have data? Start with Extract Data." in app_js
+    assert "wsi-sub" in app_js
+    assert "css/ideas.css?v=20260625-stage84" in index_html
+    assert "css/shell.css?v=20260626-owner" in index_html
+    assert "js/icons.js?v=20260625-stage84" in index_html
+    assert "js/screens-ideas.js?v=20260625-stage90" in index_html
+    assert "/api/ideas/mine" in api_js
+    assert "/api/ideas/resolve-source" in api_js
+    assert "/api/ideas/prior-art" in api_js
+    assert "/api/ideas/handoff" in api_js
+    assert "/api/ideas/create-agent-project" in api_js
+    assert "/api/ideas/agent-projects" in api_js
+    assert "/api/ideas/history" in api_js
+    assert "/api/ideas/run" in api_js
+    assert "S.ideas =" in ideas_js
+    assert "pre_experiment" in ideas_js
+    assert "Freeze handoff for Agent" in ideas_js
+    assert "selectedRecordKey" in ideas_js
+    assert "data-idea-record-key" in ideas_js
+    assert "if (!rows.some(r => String(r.id) === String(current.id)))" in ideas_js
+    assert "Create Agent project" in ideas_js
+    assert "Check prior art" in ideas_js
+    assert "Resolve source" in ideas_js
+    assert "loadIdeaRun" in ideas_js
+    assert "data-idea-record" in ideas_js
+    assert "postLocalJSON('/api/ideas/run'" in ideas_js
+    assert "applyRunPayload(data, recordKey)" in ideas_js
+    assert "upsertHistoryRun(data)" in ideas_js
+    assert "activeStep = 'source';" in ideas_js
+    assert "data-idea-step" in ideas_js
+    assert "Create idea ledger" in ideas_js
+    assert "ideas-advanced" in ideas_js
+    assert "Network and provider opt-in" in ideas_js
+    assert "idea-workbench" in ideas_js
+    assert "ideas-work-grid" in ideas_js
+    assert "Local idea runs" in ideas_js
+    assert "stored on this machine · not Agent analysis runs" in ideas_js
+    assert "Separated from Research Projects" in ideas_js
+    assert "ideas-source-card" in ideas_js
+    assert "idea-ledger-card" in ideas_js
+    assert "idea-ledger-grid" in ideas_js
+    assert "ideas-pre-summary" in ideas_js
+    assert "ideas-feature-row" in ideas_js
+    assert "ideas-compact-details" in ideas_js
+    assert "ideas-prior-card" in ideas_js
+    assert "ideas-query-details" in ideas_js
+    assert "ideas-plan-edits" in ideas_js
+    assert "search: '<circle" in icons_js
+    assert "rail-block" in ideas_js
+    assert "setup-row" in ideas_js
+    assert "rail-title" not in ideas_js
+    assert "rail-kv" not in ideas_js
+    assert "rail-note" not in ideas_js
+    assert "grid4 mt-12" not in ideas_js
+    assert "css/ideas.css" in index_html
+    assert ".idea-workbench" in ideas_css
+    assert ".ideas-primary-grid" in ideas_css
+    assert ".ideas-step-nav" in ideas_css
+    assert ".ideas-advanced" in ideas_css
+    assert ".ideas-source-card" in ideas_css
+    assert ".idea-ledger-card" in ideas_css
+    assert ".idea-ledger-grid" in ideas_css
+    assert ".ideas-pre-summary" in ideas_css
+    assert ".ideas-feature-row" in ideas_css
+    assert ".ideas-query-details" in ideas_css
+    assert ".ideas-prior-card" in ideas_css
+    assert ".ideas-plan-edits" in ideas_css
+    assert "height:auto;" in ideas_css
+    assert "min-height:92px;" in ideas_css
+    assert "grid-template-columns:repeat(2,minmax(0,1fr));" in ideas_css
+    assert "@media (min-width:1680px)" not in ideas_css
+    assert ".idea-workbench .ideas-step-panel .statgrid" in ideas_css
+    assert ".idea-workbench .ideas-step-panel table" in ideas_css
+    assert ".idea-workbench" not in redesign_css
+    assert ".ideas-primary-grid" not in redesign_css
+    assert ".ideas-step-nav" not in redesign_css
+    assert ".ideas-advanced" not in redesign_css
+    assert ".ideas-entry" not in redesign_css
+    assert ".wsi-sub" not in redesign_css
+    assert ".nav-sec" in shell_css
+    assert ".ideas-entry" in shell_css
+    assert ".wsi-sub" in shell_css
+    assert "function validatePayload(payload)" in ideas_js
+    assert "Article metadata" in ideas_js
+    assert "This version does not fetch the URL automatically" in ideas_js
+    assert "Paste a bounded PDF excerpt before mining" in ideas_js
+    assert "not fetch the URL, parse a PDF, or call an external LLM" in ideas_js
+    assert "loadIdeaAgentProjects" in agent_js
+    assert "seedStudy(row)" in agent_js
+    assert "const DEMO_STUDIES" in agent_js
+    assert "const base = realMode() ? [] : DEMO_STUDIES" in agent_js
+    assert "No local projects yet" in agent_js
+    assert "Agent Projects no longer shows fabricated studies in Real mode" in agent_js
+    assert "No active registered export is selected" in agent_js
+    assert 'data-ag-mode' not in agent_js
+    assert "Idea exploration" not in agent_js
+    assert "Open Idea Mining" in agent_js
+
+
+def test_native_extraction_cohort_controls_are_continuous_and_icd_is_empty() -> None:
+    extraction_js = _static_js("screens-extraction.js")
+    icd_js = _static_js("screens-icd.js")
+
+    assert 'data-ex-range="age_min"' in extraction_js
+    assert 'data-ex-range="age_max"' in extraction_js
+    assert "rangeCtl('los_min'" in extraction_js
+    assert "rangeCtl('window'" in extraction_js
+    assert 'type="range"' in extraction_js
+    assert "data-ex-cohort-preset" in extraction_js
+    assert "All ICU stays" in extraction_js
+    assert "AKI / renal dysfunction" in extraction_js
+    assert "Mechanical ventilation" in extraction_js
+    assert "Vasopressor exposure" in extraction_js
+    assert "Diagnosis / ICD cohort" in extraction_js
+    assert "Sepsis-3 positive only" not in extraction_js
+    assert "icd_enabled: exCohortPreset === 'icd'" in extraction_js
+    assert "window.EUIcd.contract" in extraction_js
+    assert "icd_include" in _static_js("screens-icd.js")
+    assert "let icdInclude = '';" in icd_js
+    assert "let icdInclude = 'A41, R65'" not in icd_js
+
+
+def test_native_extraction_exposes_real_cohort_gate_and_recommended_contract() -> None:
+    extraction_js = _static_js("screens-extraction.js")
+
+    assert "const DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30;" in extraction_js
+    assert "let exWindowHours = DEFAULT_OBSERVATION_WINDOW_HOURS;" in extraction_js
+    assert "observation_window_hours: DEFAULT_OBSERVATION_WINDOW_HOURS" in extraction_js
+    assert "MAX_OBSERVATION_WINDOW_HOURS" in extraction_js
+    assert "full available · 30d cap" in extraction_js
+    assert "first 24 hours" not in extraction_js
+    assert "first 24h" not in extraction_js
+    assert (
+        "const REAL_EXPORT_COHORT_PRESETS = new Set(['all_icu', 'adult_first', "
+        "'adult_all', 'sepsis3', 'aki', 'ventilation', 'vasopressor', 'respiratory', 'icd']);"
+    ) in extraction_js
+    assert "planned, not export-ready" in extraction_js
+    assert "concept prefilter, slower" in extraction_js
+    assert "Clinical cohort prefilter" in extraction_js
+    assert "Real export is blocked for this cohort" in extraction_js
+    assert "Add at least one ICD include or exclude token before exporting" in extraction_js
+    assert "const support = runMode === 'recommended' ? { ok: true, reason: 'recommended' } : cohortExportSupport();" in extraction_js
+    assert "cohort: runMode === 'recommended' ? recommendedCohortContract() : cohortContract()" in extraction_js
+    assert "const progressText = p.message" in extraction_js
+    assert "data-ex-cancel" in extraction_js
+    assert "'/api/jobs/' + exportJobId + '/cancel'" in extraction_js
+    assert "Cancel requested. The current database read may finish before the job stops." in extraction_js
+
+
+def test_native_crossdb_restores_distribution_visuals() -> None:
+    api_js = _static_js("api.js")
+    viz_js = _static_js("screens-viz.js")
+    screens_css = _static_css("screens.css")
+
+    assert "startCrossdbRawDistributionJob" in api_js
+    assert "/api/jobs/crossdb-raw-distribution" in api_js
+    assert "Multi-database feature density grid" in viz_js
+    assert "crossRealFeatureDensityByModule" in viz_js
+    assert "crossFeatureDensityPanel" in viz_js
+    assert "loadDemoCrossdb" in viz_js
+    assert "loadCrossdbDemoDistribution" in viz_js
+    assert "legacy_simulated_multidb_feature_frames" in viz_js
+    assert "demoCurvePoints" not in viz_js
+    assert "crossFeatureCurve" in viz_js
+    assert "one subplot per feature" in viz_js
+    assert "['SICdb', true, 'sic']" in viz_js
+    assert "all supported catalog concepts" in viz_js
+    assert "Feature distribution by shared concept" not in viz_js
+    assert "Module coverage distribution by export" not in viz_js
+    assert "xdb-density-panel" in viz_js
+    assert "data-density-module-filter" in viz_js
+    assert "data-density-module" in viz_js
+    assert "data-density-feature-key" in viz_js
+    assert "xdb-density-detail" in viz_js
+    assert "startCrossdbRawDistributionJob" in viz_js
+    assert "new EventSource('/api/jobs/' + r.job_id + '/events')" in viz_js
+    assert "data-crossdb-cancel" in viz_js
+    assert "'/api/jobs/' + crossRawJobId + '/cancel'" in viz_js
+    assert "Queued local raw Cross-DB density job" in viz_js
+    assert "opts.rawRoot" in viz_js
+    assert "easyicu_crossdb_data_root" in viz_js
+    assert "crossdbRunBound" in viz_js
+    assert "crossdbRootBound" in viz_js
+    assert "--xdb-grid-cols" in viz_js
+    assert "xdb-density-svg" in viz_js
+    assert "xdb-density-line" in viz_js
+    assert ".xdb-density-panel" in screens_css
+    assert ".xdb-density-controls" in screens_css
+    assert ".xdb-density-detail" in screens_css
+    assert "grid-template-columns:repeat(var(--xdb-grid-cols, 3)" in screens_css
+    assert ".xdb-density-feature" in screens_css
+    assert ".xdb-density-feature.selected" in screens_css
+    assert ".xdb-density-svg" in screens_css
+    assert ".xdb-density-line" in screens_css
+
+
+def test_native_dictionary_and_states_reference_controls_are_stateful() -> None:
+    dict_js = _static_js("screens-dict.js")
+    states_js = _static_js("screens-states.js")
+
+    assert "dictSearchInput" in dict_js
+    assert "data-dict-clear" in dict_js
+    assert "data-dict-cat" in dict_js
+    assert "matchedRows()" in dict_js
+    assert "data-ctx" in states_js
+    assert "data-mode" in states_js
+    assert "data-state" in states_js
+    assert "actionHtml: `<span class=\"pill\">${icon('eye', 13)} Reference</span>`" in states_js
+    assert 'aria-disabled="true" tabindex="-1"' in states_js
+
+
+def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() -> None:
+    catalog = TestClient(app).get("/api/catalog").json()
+    dict_js = _static_js("screens-dict.js")
+    api_js = _static_js("api.js")
+    data_catalog_js = _static_js("data-catalog.js")
+    deepdive_css = _static_css("deepdive.css")
+    index_html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    assert catalog["conceptCoverage"]["hr"]["kind"] == "audited"
+    assert catalog["conceptCoverage"]["hr"]["databases"] == 6
+    assert catalog["conceptCoverage"]["sofa2_resp"]["kind"] == "derived"
+    assert catalog["conceptCoverage"]["sofa2_resp"]["basis"] == "score_or_rule_component"
+    assert catalog["coverageSummary"]["audited"] + catalog["coverageSummary"]["derived"] + catalog["coverageSummary"]["notAudited"] == catalog["totalConcepts"]
+    assert catalog["activeExportCoverage"]["payload_scope"] == "aggregate_only_no_rows"
+    assert catalog["activeExportCoverage"]["status"] in {"ready", "no_active_source", "invalid_active_source", "unavailable"}
+
+    assert "conceptCoverage = real.conceptCoverage" in api_js
+    assert "coverageSummary = real.coverageSummary" in api_js
+    assert "activeExportCoverage = real.activeExportCoverage" in api_js
+    assert "conceptCoverage" in data_catalog_js
+    assert "coverageSummary" in data_catalog_js
+    assert "activeExportCoverage" in data_catalog_js
+    assert "Object.prototype.hasOwnProperty.call" in dict_js
+    assert "C().cov[k] || 0" not in dict_js
+    assert "coverage unknown" not in dict_js
+    assert "Active export coverage" in dict_js
+    assert "not extracted" in dict_js
+    assert "Current-export coverage is computed after extraction" not in dict_js
+    assert "This column uses the active registered export" in dict_js
+    assert ".dict-catalog-note" in deepdive_css
+    assert ".cov-badge.derived" in deepdive_css
+    assert ".cov-badge.unaudited" in deepdive_css
+    assert "data-catalog.js?v=20260625-stage93" in index_html
+    assert "api.js?v=20260625-stage100" in index_html
+    assert "screens-dict.js?v=20260625-stage93" in index_html
+    assert "deepdive.css?v=20260625-stage85" in index_html
+
+
+def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() -> None:
+    guided_js = _static_js("screens-guided.js")
+    guided_css = _static_css("guided.css")
+    api_js = _static_js("api.js")
+    index_html = _static_html("index.html")
+
+    assert "loadAgentRunHistory({ limit: 20 })" in guided_js
+    assert "loadAgentRunReview(row.project_dir)" in guided_js
+    assert "/api/guided/drafts" in api_js
+    assert "/api/guided/drafts/list" in api_js
+    assert "loadGuidedDrafts({ limit: 20 })" in guided_js
+    assert "createGuidedDraft(payload)" in guided_js
+    assert "/api/guided/session" in api_js
+    assert "/api/guided/project/open" in api_js
+    assert "/api/guided/message" in api_js
+    assert "/api/guided/action" in api_js
+    assert "/api/guided/sessions/list" in api_js
+    assert "createGuidedSession" in guided_js
+    assert "openGuidedProject" in guided_js
+    assert "openGuidedProjectMemory(row, localDraftEl, 'draft')" in guided_js
+    assert "openGuidedProjectMemory(row, localRunEl, 'run')" in guided_js
+    assert "Memory is scoped to" in guided_js
+    assert "Idea Mining and Agent Projects still own their own artifacts" in guided_js
+    assert "sendGuidedMessage" in guided_js
+    assert "runGuidedAction" in guided_js
+    assert "Choose a goal" in guided_js
+    assert "data-guided-goal" in guided_js
+    assert "data-guided-handoff" in guided_js
+    assert "Guided Copilot only routes and prefills" in guided_js
+    assert "Find a Study Idea" in guided_js
+    assert "Prepare Data" in guided_js
+    assert "Run a Research Project" in guided_js
+    assert "Local guided drafts" in guided_js
+    assert "data-localdraft" in guided_js
+    assert "Local runs" in guided_js
+    assert "Start an auditable Agent run" in guided_js
+    assert "existing Agent run folder" in guided_js
+    assert "~/easyicu/projects" in guided_js
+    assert "/Users/haibo" not in guided_js
+    assert "Seeded example · not a local project" in guided_js
+    assert "New study draft" in guided_js
+    assert "Creating a <strong>metadata-only local study folder</strong>" in guided_js
+    assert "Create a local study folder" in guided_js
+    assert "data-createdraft" in guided_js
+    assert "data-draft-title" in guided_js
+    assert "folder_slug" in guided_js
+    assert "createLocalGuidedDraft('New study draft')" not in guided_js
+    assert "Studies · local folders" not in guided_js
+    assert "Creates a new local project folder" not in guided_js
+    assert "Created a new project folder" not in guided_js
+    assert 'class="gd-home-link"' in guided_js
+    assert 'data-open="entry"' in guided_js
+    assert "Back to EasyICU home" in guided_js
+    assert 'class="gd-rail-utils"' in guided_js
+    assert 'data-open="settings"' in guided_js
+    assert "data-lang-toggle" in guided_js
+    assert "Switch language" in guided_js
+    assert "${t('Data workspace', '数据工作台')}" in guided_js
+    assert ".gd-empty-local" in guided_css
+    assert ".gd-sess.draft.active" in guided_css
+    assert ".gd-sess.local.active" in guided_css
+    assert ".gd-sess.example.active" in guided_css
+    assert ".gd-home-link" in guided_css
+    assert ".gd-rail-utils" in guided_css
+    assert ".gd-utilbtn.lang" in guided_css
+    assert ".gd-data-workspace" in guided_css
+    assert ".gd-draft-setup" in guided_css
+    assert ".gd-frontdoor" in guided_css
+    assert ".gdf-card" in guided_css
+    assert ".gd-handoff-ready" in guided_css
+    assert "api.js?v=20260625-stage100" in index_html
+    assert "screens-guided.js?v=20260625-stage102" in index_html
+    assert "guided.css?v=20260625-stage100" in index_html
+    assert '<span class="gd-name">Guided Copilot</span>' in guided_js
+    assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
+    assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
+
+
+def test_native_agent_run_controls_are_reconnectable_and_cancelable() -> None:
+    agent_js = _static_js("screens-agent.js")
+    api_js = _static_js("api.js")
+
+    assert "DeepSeek-compatible" in agent_js
+    assert "Custom / local OpenAI-compatible" in agent_js
+    assert "Custom/local endpoints must be OpenAI-compatible" in agent_js
+    assert "loadJobSnapshot" in api_js
+    assert "cancelJob" in api_js
+    assert "getJSON('/api/jobs/' + encodeURIComponent(jobId || ''))" in api_js
+    assert "postJSON('/api/jobs/' + encodeURIComponent(jobId || '') + '/cancel'" in api_js
+    assert "easyicu.agent.activeJob.v1" in agent_js
+    assert "rememberAgentJob" in agent_js
+    assert "maybeRestoreAgentJob" in agent_js
+    assert "restoreAgentJobFromSnapshot" in agent_js
+    assert "data-ag-cancel-job" in agent_js
+    assert "data-ag-reconnect" in agent_js
+    assert "Resume stream" in agent_js
+    assert "Restart from active export" in agent_js
+    assert "safe continuation is to restart from the active export" in agent_js
+
+
+def test_native_patient_source_radios_are_real_controls() -> None:
+    viz_js = _static_js("screens-viz.js")
+    api_js = _static_js("api.js")
+    i18n_js = _static_js("i18n.js")
+
+    assert 'data-datamode="real"' in viz_js
+    assert 'data-datamode="demo"' in viz_js
+    assert 'Previously exported data' in viz_js
+    assert 'Demo data' in viz_js
+    assert "loadPatientReviewSources" in api_js
+    assert "/api/patient-review/sources" in api_js
+    assert "loadPatientSources" in viz_js
+    assert "Ready to load local export" in viz_js
+    assert "No registered export is active" in viz_js
+    assert "data-patient-export" in viz_js
+    assert "bounded_patient_review_drilldown" in viz_js
+    assert "window.__euVizResetForDataMode" in viz_js
+    assert "window.__euVizResetForDataMode()" in i18n_js
+
+
+def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
+    viz_js = _static_js("screens-viz.js")
+    cohort_css = _static_css("cohort.css")
+    redesign_css = _static_css("redesign.css")
+    index_html = _static_html("index.html")
+
+    assert "css/cohort.css?v=20260625-stage92" in index_html
+    assert "js/screens-viz.js?v=20260625-stage92" in index_html
+    assert "let cohortCompare = 'outcome';" in viz_js
+    assert "let cohortSurvivalOutcome = 'hospital_death';" in viz_js
+    assert "let cohortSurvivalGroup = 'sepsis';" in viz_js
+    assert 'data-cohort-comp="${key}"' in viz_js
+    assert "cohortCompare = b.dataset.cohortComp || 'outcome';" in viz_js
+    assert "data-cohort-surv-outcome" in viz_js
+    assert "data-cohort-surv-group" in viz_js
+    assert "Kaplan-Meier curves and log-rank" in viz_js
+    assert "Number at risk" in viz_js
+    assert "cohortSurvivalDemoBody" in viz_js
+    assert "window.EU_STALE = true;" in viz_js
+    assert "function cohortProfileValue" in viz_js
+    assert "function cohortSurvivalBody" in viz_js
+    assert "function cohortSurvivalChart" in viz_js
+    assert "Aggregate-only group characteristics" in viz_js
+    assert "profileRows.map" in viz_js
+    assert "active.profile" in viz_js
+    assert "SOFA-1 to SOFA-2 movement" in viz_js
+    assert "Worst-ICU severity transition matrix" in viz_js
+    assert "reclass.status === 'ready'" in viz_js
+    assert "Demo threshold uses SOFA ≥ 6" in viz_js
+    assert "Age Groups' overview" not in viz_js
+    assert ".surv-toolbar" in cohort_css
+    assert ".km-chart" in cohort_css
+    assert ".risk-table" in cohort_css
+    assert ".surv-toolbar" not in redesign_css
+    assert ".km-chart" not in redesign_css
+    for key in ["outcome", "age", "sex", "los", "sepsis", "custom"]:
+        assert f"{key}:" in viz_js
 
 
 def test_native_webapp_foreground_interrupt_returns_shell_status(monkeypatch) -> None:

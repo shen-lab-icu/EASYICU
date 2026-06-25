@@ -124,7 +124,7 @@ def collect_route(page: Any, base_url: str, route: str, viewport_name: str, shot
     errors: list[str] = []
     page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
     page.on("pageerror", lambda exc: errors.append(str(exc)))
-    page.goto(base_url + "#" + route, wait_until="networkidle")
+    page.goto(base_url + "#" + route, wait_until="domcontentloaded")
     page.wait_for_timeout(250)
     result = page.evaluate(QA_JS)
     result.update({"route": route, "viewport": viewport_name, "consoleErrors": errors})
@@ -139,7 +139,7 @@ def collect_unknown_hash(page: Any, base_url: str, shot_dir: Path, screenshots: 
     errors: list[str] = []
     page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
     page.on("pageerror", lambda exc: errors.append(str(exc)))
-    page.goto(base_url + "#settings", wait_until="networkidle")
+    page.goto(base_url + "#settings", wait_until="domcontentloaded")
     page.wait_for_timeout(150)
     page.evaluate("location.hash = '#__qa_unknown_hash__'")
     try:

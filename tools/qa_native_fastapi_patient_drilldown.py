@@ -162,26 +162,103 @@ def validate_drilldown_payload(payload: dict[str, Any]) -> None:
         raise AssertionError(f"unexpected selected entity: {selected}")
     if not (selected.get("signals") or []):
         raise AssertionError("selected entity did not return bounded signals")
+    modules = {row.get("module"): row for row in payload.get("module_profiles") or []}
+    if (modules.get("vitals") or {}).get("dynamic_features") != 4:
+        raise AssertionError(f"vitals module profile is not backed by dynamic features: {modules.get('vitals')}")
+    lanes = {row.get("lane"): row for row in payload.get("time_lanes") or []}
+    if (lanes.get("vitals") or {}).get("status") != "ready":
+        raise AssertionError(f"vitals clinical lane is not ready: {lanes.get('vitals')}")
+    other_signals = (lanes.get("other") or {}).get("signals") or []
+    if any(signal.get("feature") == "age" for signal in other_signals):
+        raise AssertionError("static demographic age leaked into time-series lanes")
+    quality_metrics = payload.get("quality_metrics") or {}
+    if quality_metrics.get("payload_scope") != "aggregate_quality_metrics_no_row_payload":
+        raise AssertionError(f"unexpected quality metrics scope: {quality_metrics.get('payload_scope')}")
+    if ((quality_metrics.get("summary") or {}).get("concept_count") or 0) < 8:
+        raise AssertionError(f"quality metrics did not cover expected concepts: {quality_metrics.get('summary')}")
+    data_tables = payload.get("data_tables") or {}
+    if data_tables.get("payload_scope") != "old_data_tables_semantics_without_row_payload":
+        raise AssertionError(f"old Data Tables semantics missing: {data_tables}")
+    if (data_tables.get("detail_gate") or {}).get("title") != "Source records are optional":
+        raise AssertionError(f"Data Tables detail gate missing: {data_tables.get('detail_gate')}")
+    trajectory = payload.get("trajectory_review") or {}
+    if trajectory.get("payload_scope") != "old_timeseries_semantics_bounded":
+        raise AssertionError(f"old Time Series semantics missing: {trajectory}")
+    mode_ids = {row.get("id") for row in trajectory.get("modes") or []}
+    if mode_ids != {"clinical_lanes", "single_entity", "multi_entity_comparison"}:
+        raise AssertionError(f"unexpected trajectory modes: {trajectory.get('modes')}")
+    overview = payload.get("patient_overview") or {}
+    if overview.get("payload_scope") != "old_patient_overview_semantics_pseudonymous":
+        raise AssertionError(f"old Patient Overview semantics missing: {overview}")
+    if (overview.get("data_table") or {}).get("row_preview") != "blocked":
+        raise AssertionError(f"Patient Overview row preview should stay blocked: {overview.get('data_table')}")
+    quality_review = payload.get("quality_review") or {}
+    if quality_review.get("payload_scope") != "old_quality_semantics_aggregate_only":
+        raise AssertionError(f"old Quality semantics missing: {quality_review}")
     text = json.dumps(payload, ensure_ascii=False)
     for marker in ["stay_id", "subject_id", "hadm_id", "tableRows", '"series"']:
         if marker in text:
             raise AssertionError(f"row-level marker leaked from drilldown payload: {marker}")
 
 
+def validate_sources_payload(payload: dict[str, Any]) -> None:
+    if payload.get("mode") != "real" or payload.get("demo") is not False:
+        raise AssertionError(f"unexpected sources mode: {payload.get('mode')} demo={payload.get('demo')}")
+    if payload.get("source_count") != 1 or payload.get("can_load") is not True:
+        raise AssertionError(f"source readiness did not pass: {payload}")
+    active = payload.get("active_source") or {}
+    if active.get("label") != "Patient Drilldown Fixture" or active.get("patient_ready") is not True:
+        raise AssertionError(f"unexpected active source: {active}")
+    summary = active.get("summary") or {}
+    if summary.get("entities") != 3 or summary.get("modules") != 5:
+        raise AssertionError(f"unexpected source summary: {summary}")
+    text = json.dumps(payload, ensure_ascii=False)
+    for marker in ["stay_id", "subject_id", "hadm_id", "tableRows", '"series"']:
+        if marker in text:
+            raise AssertionError(f"row-level marker leaked from source readiness payload: {marker}")
+
+
 def run_browser(base_url: str, run_dir: Path, screenshots: bool) -> dict[str, Any]:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 393, "height": 852})
+        context = browser.new_context(accept_downloads=True, viewport={"width": 393, "height": 852})
+        page = context.new_page()
         errors: list[str] = []
         page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
         page.on("pageerror", lambda exc: errors.append(str(exc)))
-        page.goto(base_url + "#patient", wait_until="networkidle")
-        page.wait_for_function("window.EU_API && window.EU_API.loadPatientReviewDrilldown", timeout=5000)
+        page.goto(base_url + "#patient", wait_until="domcontentloaded")
+        page.wait_for_function(
+            "window.EU_API && window.EU_API.loadPatientReviewSources && window.EU_API.loadPatientReviewDrilldown",
+            timeout=5000,
+        )
         page.evaluate("window.setDataMode && window.setDataMode('real', {force:true})")
-        page.wait_for_timeout(250)
+        page.wait_for_function("document.body.innerText.includes('Ready to load local export')", timeout=8000)
+        source_ready = page.evaluate(
+            """() => {
+              const text = document.body.innerText;
+              return {
+                hasSourceReady: text.includes('Ready to load local export'),
+                hasSourceHash: text.includes('path_hash='),
+              };
+            }"""
+        )
         page.locator("button[data-gen]").last.click()
         page.wait_for_function("document.body.innerText.includes('Local export patient drilldown ready')", timeout=8000)
-        page.locator("[data-ptab='patient']").click()
+        tab_results: dict[str, bool] = {}
+        tab_expectations = {
+            "tables": "Source records are optional",
+            "series": "Trajectory ledger",
+            "patient": "Category View",
+            "quality": "Quality dashboard",
+        }
+        tab_texts: dict[str, str] = {}
+        for tab, marker in tab_expectations.items():
+            page.locator(f"[data-ptab='{tab}']").first.click()
+            page.wait_for_timeout(150)
+            text = page.locator("#ptbody").inner_text(timeout=5000)
+            tab_texts[tab] = text[:600]
+            tab_results[tab] = marker.lower() in text.lower()
+        page.locator("[data-ptab='patient']").first.click()
         page.wait_for_function("document.body.innerText.includes('Pseudonymous drilldown')", timeout=5000)
         entity_two = page.locator("[data-patient-entity]").nth(1)
         if entity_two.count():
@@ -198,17 +275,62 @@ def run_browser(base_url: str, run_dir: Path, screenshots: bool) -> dict[str, An
                 hasRealReady: text.includes('Local export patient drilldown ready'),
                 hasPseudonymous: text.includes('Pseudonymous drilldown'),
                 hasEntity2: text.includes('Entity 2'),
+                hasExportButton: !!document.querySelector('[data-patient-export]'),
+                axisChartCount: document.querySelectorAll('[data-axis-chart="true"]').length,
+                axisLabelCount: document.querySelectorAll('[data-axis-label]').length,
                 hasDemoCopy: /Demo review workspace ready|seeded example|Generate a lightweight demo|Generate and load demo workspace/.test(text),
                 hasRawMarkers: /stay_id|subject_id|hadm_id|tableRows/.test(text),
                 overflowX: Math.max(doc.scrollWidth, body.scrollWidth) - window.innerWidth,
               };
             }"""
         )
+
+        with page.expect_download(timeout=5000) as download_info:
+            page.locator("[data-patient-export]").click()
+        download = download_info.value
+        download_path = run_dir / download.suggested_filename
+        download.save_as(str(download_path))
+        exported = json.loads(download_path.read_text(encoding="utf-8"))
+        export_text = json.dumps(exported, ensure_ascii=False)
+        download_has_raw_markers = any(
+            marker in export_text
+            for marker in ["stay_id", "subject_id", "hadm_id", "tableRows"]
+        )
+        download_ok = (
+            exported.get("payload_scope") == "bounded_patient_review_drilldown"
+            and isinstance(exported.get("patient_review"), dict)
+            and not download_has_raw_markers
+        )
+
+        page.locator(".nextbar [data-nav='cohort']").click()
+        page.wait_for_function("location.hash === '#cohort'", timeout=5000)
+        nav_cohort_ok = "#cohort" == page.evaluate("location.hash")
+        page.evaluate("location.hash = '#patient'")
+        page.wait_for_function("document.body.innerText.includes('Local export patient drilldown ready')", timeout=8000)
+        page.locator(".nextbar [data-nav='agent']").click()
+        page.wait_for_function("location.hash === '#agent'", timeout=5000)
+        nav_agent_ok = "#agent" == page.evaluate("location.hash")
+        page.evaluate("location.hash = '#patient'")
+        page.wait_for_function("document.body.innerText.includes('Local export patient drilldown ready')", timeout=8000)
+        page.locator(".loaded-bar [data-viz-reset]").click()
+        page.wait_for_function("document.body.innerText.includes('Load a review workspace')", timeout=5000)
+        reset_ok = page.evaluate("document.body.innerText.includes('Ready to load local export')")
+        result.update(source_ready)
+        result["tabResults"] = tab_results
+        result["tabTextPreviews"] = tab_texts
+        result["downloadOk"] = download_ok
+        result["downloadFilename"] = download.suggested_filename
+        result["downloadHasRawMarkers"] = download_has_raw_markers
+        result["downloadPath"] = str(download_path)
+        result["navCohortOk"] = nav_cohort_ok
+        result["navAgentOk"] = nav_agent_ok
+        result["resetOk"] = reset_ok
         result["consoleErrors"] = errors
         if screenshots:
             shot = run_dir / "patient_drilldown_mobile.png"
             page.screenshot(path=str(shot), full_page=True)
             result["screenshot"] = str(shot)
+        context.close()
         browser.close()
         return result
 
@@ -232,6 +354,8 @@ def main() -> int:
             "api/workspaces/register",
             {"path": str(fixture), "label": "Patient Drilldown Fixture", "active": True},
         )
+        sources = post_json(base_url, "api/patient-review/sources", {})
+        validate_sources_payload(sources)
         payload = post_json(base_url, "api/patient-review/drilldown", {})
         validate_drilldown_payload(payload)
         browser = run_browser(base_url, run_dir, not args.no_screenshots)
@@ -240,6 +364,11 @@ def main() -> int:
             "run_dir": str(run_dir),
             "registered_active_path": registered.get("active_path"),
             "api": {
+                "source_ready": {
+                    "source_count": sources.get("source_count"),
+                    "can_load": sources.get("can_load"),
+                    "active_source": sources.get("active_source"),
+                },
                 "source": payload.get("source"),
                 "summary": payload.get("summary"),
                 "selected_label": (payload.get("selected") or {}).get("label"),
@@ -254,9 +383,21 @@ def main() -> int:
             failures.append(f"console errors: {browser['consoleErrors']}")
         if browser.get("overflowX", 0) > 1:
             failures.append(f"horizontal overflow: {browser.get('overflowX')}")
-        for key in ["hasRealReady", "hasPseudonymous", "hasEntity2"]:
+        for key in ["hasSourceReady", "hasSourceHash", "hasRealReady", "hasPseudonymous", "hasEntity2", "hasExportButton"]:
             if not browser.get(key):
                 failures.append(f"browser assertion failed: {key}")
+        if (browser.get("axisChartCount") or 0) < 3:
+            failures.append(f"Patient Review rendered too few axis-backed charts: {browser.get('axisChartCount')}")
+        if (browser.get("axisLabelCount") or 0) < 3:
+            failures.append(f"Patient Review rendered too few axis labels: {browser.get('axisLabelCount')}")
+        for tab in ["tables", "series", "patient", "quality"]:
+            if not (browser.get("tabResults") or {}).get(tab):
+                failures.append(f"Patient Review tab did not render expected panel: {tab}")
+        for key in ["downloadOk", "navCohortOk", "navAgentOk", "resetOk"]:
+            if not browser.get(key):
+                failures.append(f"browser action assertion failed: {key}")
+        if browser.get("downloadHasRawMarkers"):
+            failures.append("downloaded Patient Review JSON leaked raw row-level markers")
         if browser.get("hasDemoCopy"):
             failures.append("real Patient Review still showed demo copy")
         if browser.get("hasRawMarkers"):
