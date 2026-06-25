@@ -203,6 +203,9 @@
   function previewExtractionFilters(body) {
     return postJSON('/api/extraction/filter-preview', body || {});
   }
+  function startExtractionJob(body) {
+    return postJSON('/api/jobs/extract', body || {});
+  }
   function loadWorkspaceSummary(path) {
     return postJSON('/api/workspace/summary', { path: path });
   }
@@ -362,6 +365,7 @@
   window.EU_API.scanPath = scanPath;
   window.EU_API.loadExtractionFilterOptions = loadExtractionFilterOptions;
   window.EU_API.previewExtractionFilters = previewExtractionFilters;
+  window.EU_API.startExtractionJob = startExtractionJob;
   window.EU_API.loadWorkspaceSummary = loadWorkspaceSummary;
   window.EU_API.loadPatientReviewSources = loadPatientReviewSources;
   window.EU_API.loadPatientReviewDrilldown = loadPatientReviewDrilldown;

@@ -131,7 +131,7 @@
 
   /* ============== runtime state ============== */
   let branch, depth, dataMode, mods, cohortPhase, extractPhase, runPhase, draftPhase;
-  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath;
+  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedExtract;
   let guidedHistory = { loading: false, error: null, data: null };
   let guidedDrafts = { loading: false, error: null, data: null };
   let guidedCopilot = { loading: false, error: null, session: null, last: null };
@@ -140,11 +140,43 @@
   let studyParams;   // dynamic params extracted from clarify answers + free text
 
   const DEFAULT_MODS = ['Demographics', 'Vital signs', 'Lab — Chemistry', 'SOFA-2 scores', 'Sepsis-3 (SOFA-2)', 'Outcome'];
+  const GUIDED_EXTRACT_WINDOW_HOURS = 24 * 30;
+  const GUIDED_EXTRACT_MODULES = [
+    ['demographics', 'Demographics', '人口统计', 6, true],
+    ['vitals', 'Vital signs', '生命体征', 11, true],
+    ['chemistry', 'Lab — Chemistry', '实验室-生化', 30, true],
+    ['sofa2_score', 'SOFA-2 scores', 'SOFA-2 评分', 7, true],
+    ['sepsis3_sofa2', 'Sepsis-3 (SOFA-2)', 'Sepsis-3 (SOFA-2)', 1, true],
+    ['outcome', 'Outcome', '结局', 10, true],
+    ['sofa1_score', 'SOFA-1 scores', 'SOFA-1 评分', 7, false],
+    ['sepsis3_sofa1', 'Sepsis-3 (SOFA-1)', 'Sepsis-3 (SOFA-1)', 1, false],
+    ['sepsis_shared', 'Sepsis shared', 'Sepsis 共享概念', 5, false],
+    ['respiratory', 'Respiratory', '呼吸系统', 15, false],
+    ['ventilator', 'Ventilator', '呼吸机参数', 12, false],
+    ['blood_gas', 'Blood gas', '血气分析', 9, false],
+    ['hematology', 'Lab — Hematology', '实验室-血液学', 22, false],
+    ['vasopressors', 'Vasopressors', '血管活性药物', 17, false],
+    ['medications', 'Other medications', '其他药物', 49, false],
+    ['renal', 'Renal & urine output', '肾脏与尿量', 22, false],
+    ['neurological', 'Neurological', '神经系统', 11, false],
+    ['circulatory', 'Circulatory', '循环系统', 3, false],
+    ['other_scores', 'Other scores', '其他评分', 9, false],
+  ];
+  const GUIDED_CORE_MODULES = GUIDED_EXTRACT_MODULES.filter(m => m[4]).map(m => m[0]);
+  const GUIDED_COHORT_PRESETS = [
+    ['all_icu', 'All ICU stays', '全部 ICU 住院', 'Broad denominator, no diagnosis filter.', '宽队列，不预设诊断筛选。'],
+    ['adult_first', 'Adult first ICU stay', '成年首次 ICU', 'Default denominator for most extraction workflows.', '多数抽取流程的默认分母。'],
+    ['sepsis3', 'Sepsis-3 / suspected infection', 'Sepsis-3 / 疑似感染', 'Uses Sepsis concepts when available; ICD is not prefilled.', '可用时使用 Sepsis 概念；不会预填 ICD。'],
+    ['aki', 'AKI / renal dysfunction', 'AKI / 肾功能异常', 'Renal cohort starting point.', 'AKI 研究的肾功能队列起点。'],
+    ['ventilation', 'Mechanical ventilation', '机械通气', 'Ventilator exposure cohort starting point.', '机械通气暴露队列起点。'],
+    ['vasopressor', 'Vasopressor exposure', '血管活性药物暴露', 'Shock or pressor cohort starting point.', '休克/升压药队列起点。'],
+    ['respiratory', 'Respiratory failure', '呼吸衰竭', 'Respiratory support and blood-gas focused cohort.', '呼吸支持与血气相关队列。'],
+  ];
   function reset() {
     branch = 'predict'; depth = 'full'; dataMode = 'demo'; mods = DEFAULT_MODS.slice();
     cohortPhase = 'normal'; extractPhase = 'run'; runPhase = 'run'; draftPhase = 'gate';
-    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null;
-    studyParams = { outcome: 'In-hospital mortality', window: 'first 24h', exposure: 'lactate', scope: 'all 19 modules', caught: null };
+    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null;
+    studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
     studyStatus = {}; studyVal = {};
     gen++;
     STUDY.forEach(([id]) => { studyStatus[id] = 'pending'; });
@@ -1043,12 +1075,410 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     renderThread(); renderChips();
   }
 
+  /* ============== inline native data extraction ============== */
+  function guidedModuleConceptCount(key, fallback) {
+    const groups = window.EU_CATALOG && window.EU_CATALOG.groupConcepts;
+    const members = groups && groups[key];
+    return Array.isArray(members) ? members.length : (fallback || 0);
+  }
+  function guidedSelectedConceptCount() {
+    if (!guidedExtract) return 0;
+    return GUIDED_EXTRACT_MODULES
+      .filter(m => guidedExtract.modules.includes(m[0]))
+      .reduce((sum, m) => sum + guidedModuleConceptCount(m[0], m[3]), 0);
+  }
+  function guidedExtractionCohortContract() {
+    const preset = guidedExtract && guidedExtract.cohort ? guidedExtract.cohort : 'adult_first';
+    return {
+      preset,
+      age_min: preset === 'adult_first' ? 18 : 0,
+      age_max: 100,
+      min_icu_los_hours: 0,
+      observation_window_hours: GUIDED_EXTRACT_WINDOW_HOURS,
+      exclude_readmissions: preset === 'adult_first',
+      icd_enabled: false,
+      icd_include: [],
+      icd_exclude: [],
+    };
+  }
+  function resetGuidedExtractionState() {
+    guidedExtract = {
+      path: '',
+      scan: null,
+      scanError: null,
+      scanning: false,
+      cohort: 'adult_first',
+      modules: GUIDED_EXTRACT_MODULES.map(m => m[0]),
+      format: 'parquet',
+      merge: false,
+      maxPatients: 500,
+      running: false,
+      jobId: null,
+      progress: null,
+      result: null,
+      error: null,
+      registered: false,
+    };
+  }
+  function sourceReadyForGuidedExtraction() {
+    const scan = guidedExtract && guidedExtract.scan;
+    return !!(guidedExtract && guidedExtract.path && scan && scan.ok && scan.ready && scan.source !== 'module');
+  }
+  function guidedExtractionStatusText() {
+    if (!guidedExtract) return '';
+    if (guidedExtract.scanning) return t('Analyzing folder structure...', '正在识别文件夹结构...');
+    if (guidedExtract.scanError) return esc(guidedExtract.scanError);
+    if (guidedExtract.scan && guidedExtract.scan.source === 'module') {
+      return t('This is already an EasyICU module export. Register it for review instead of extracting again.', '这是已有 EasyICU 模块导出。应注册后审阅，不需要再次抽取。');
+    }
+    if (guidedExtract.scan && !guidedExtract.scan.ready) {
+      return t('Folder was recognized but is not extraction-ready yet. Use Advanced classic settings for the one-time conversion path.', '已识别该文件夹，但尚未达到可直接抽取状态。请用高级经典设置走一次性转换。');
+    }
+    if (guidedExtract.running && guidedExtract.progress) {
+      const p = guidedExtract.progress;
+      const msg = p.message || p.phase || 'running';
+      const cur = p.current != null && p.total ? ` · ${p.current}/${p.total}` : '';
+      return esc(msg + cur);
+    }
+    if (guidedExtract.running) return t('Starting extraction job...', '正在启动抽取任务...');
+    if (guidedExtract.error) return esc(guidedExtract.error);
+    if (guidedExtract.result) return t('Extraction complete. Output registered as the active local export.', '抽取完成。输出已注册为 active 本地 export。');
+    return sourceReadyForGuidedExtraction()
+      ? t('Ready to run locally. Nothing is uploaded.', '可以在本机运行。不会上传数据。')
+      : t('Paste or choose a local ICU data folder, then analyze it before running.', '先粘贴或选择本机 ICU 数据文件夹，然后识别目录再运行。');
+  }
+  function renderGuidedExtractionCard() {
+    if (!guidedExtract) resetGuidedExtractionState();
+    const ready = sourceReadyForGuidedExtraction();
+    const selected = guidedExtract.modules.length;
+    const concepts = guidedSelectedConceptCount();
+    const scan = guidedExtract.scan || {};
+    const sourceMeta = scan.ok
+      ? `${esc(scan.db || 'Unknown')} · ${esc(scan.source || 'source')} · ${fmtInt(scan.tables, 'n/a')} tables · ${fmtInt(scan.modules, 'n/a')} modules`
+      : t('No path is prefilled because every user machine is different. Paste or choose a local ICU folder.', '不会预填路径，因为每台用户电脑都不同。请粘贴或选择本机 ICU 文件夹。');
+    const progressPct = guidedExtract.progress && guidedExtract.progress.total
+      ? Math.max(0, Math.min(100, Math.round((Number(guidedExtract.progress.current || 0) / Number(guidedExtract.progress.total || 1)) * 100)))
+      : (guidedExtract.result ? 100 : 0);
+    return `
+      <div class="gd-x-card" data-guided-extraction-card>
+        <div class="gdx-head">
+          <span class="gdx-ico">${icon('extract', 15)}</span>
+          <div>
+            <strong>${t('Prepare data inside Copilot', '在 Copilot 内准备/抽取数据')}</strong>
+            <span>${t('Same backend as Classic Data Extraction: cohort, modules, Parquet export, and local job progress.', '复用经典数据抽取同一个后端：队列、模块、Parquet 导出和本地 job 进度。')}</span>
+          </div>
+        </div>
+        <div class="gdx-source ${ready ? '' : 'blocked'}">
+          <span>${icon(ready ? 'check' : 'shield', 12)}</span>
+          <div><strong>${t('Local source', '本地数据源')}</strong><small>${sourceMeta}</small></div>
+        </div>
+        <div class="gdx-pathrow">
+          <label>
+            <span>${t('Data folder path', '数据文件夹路径')}</span>
+            <input data-gx-path value="${attr(guidedExtract.path || '')}" placeholder="${attr(t('Paste or browse to a local ICU folder', '粘贴或选择本机 ICU 文件夹'))}" />
+          </label>
+          <button type="button" class="btn primary" data-gx-analyze ${guidedExtract.scanning ? 'disabled' : ''}>${icon('search', 13)} ${t('Analyze folder', '识别目录')}</button>
+        </div>
+        <div class="gdx-section">
+          <div class="gdx-label">${t('Cohort preset', '队列预设')}</div>
+          <div class="gdx-presets">
+            ${GUIDED_COHORT_PRESETS.map(([key, en, zh, den, dzh]) => `
+              <button type="button" class="gdx-preset ${guidedExtract.cohort === key ? 'on' : ''}" data-gx-cohort="${attr(key)}">
+                <strong>${t(en, zh)}</strong><span>${t(den, dzh)}</span>
+              </button>
+            `).join('')}
+          </div>
+          <div class="gdx-note">${t('Observation window defaults to full available data with a 30-day cap, not first 24h.', '观察窗默认使用全可用数据（30 天上限），不是前 24 小时。')}</div>
+        </div>
+        <div class="gdx-section">
+          <div class="gdx-row">
+            <div><div class="gdx-label">${t('Feature modules', '特征模块')}</div><small>${selected} modules · ${concepts} concepts</small></div>
+            <div class="gdx-tools">
+              <button type="button" class="btn sm" data-gx-module-set="all">${icon('check', 12)} ${t('Select all', '全选')}</button>
+              <button type="button" class="btn sm" data-gx-module-set="none">${icon('x', 12)} ${t('Clear', '清空')}</button>
+              <button type="button" class="btn sm" data-gx-module-set="core">${icon('refresh', 12)} ${t('Core 6', '核心 6')}</button>
+            </div>
+          </div>
+          <div class="gdx-modgrid">
+            ${GUIDED_EXTRACT_MODULES.map(([key, en, zh, fallback]) => {
+              const on = guidedExtract.modules.includes(key);
+              return `<button type="button" class="gdx-module ${on ? 'on' : ''}" data-gx-module="${attr(key)}">
+                <span class="mk">${on ? icon('check', 10, 3) : ''}</span><strong>${t(en, zh)}</strong><span>${guidedModuleConceptCount(key, fallback)}</span>
+              </button>`;
+            }).join('')}
+          </div>
+        </div>
+        <div class="gdx-section compact">
+          <div class="gdx-row">
+            <div><div class="gdx-label">${t('Export', '导出')}</div><small>${t('Parquet is the default. Each run creates a timestamped folder with README.md and _manifest.json.', '默认 Parquet。每次运行创建带时间戳的文件夹，并写入 README.md 和 _manifest.json。')}</small></div>
+            <div class="gdx-seg" role="group" aria-label="Export format">
+              ${['parquet', 'csv', 'excel'].map(fmt => `<button type="button" class="${guidedExtract.format === fmt ? 'on' : ''}" data-gx-format="${fmt}">${fmt === 'parquet' ? 'Parquet' : fmt.toUpperCase()}</button>`).join('')}
+            </div>
+          </div>
+          <div class="gdx-row slim">
+            <span>${t('Cohort size', '队列规模')}</span>
+            <div class="gdx-seg" role="group" aria-label="Cohort size">
+              <button type="button" class="${guidedExtract.maxPatients === 500 ? 'on' : ''}" data-gx-max="500">500 safety cap</button>
+              <button type="button" class="${guidedExtract.maxPatients === null ? 'on' : ''}" data-gx-max="all">${t('All stays', '全量 stays')}</button>
+            </div>
+          </div>
+        </div>
+        <div class="gdx-status ${guidedExtract.error ? 'bad' : guidedExtract.result ? 'ok' : ''}">
+          <span>${icon(guidedExtract.error ? 'x' : guidedExtract.result ? 'check' : 'shield', 12)}</span>
+          <div><strong>${guidedExtractionStatusText()}</strong>${guidedExtract.jobId ? `<small>job ${esc(guidedExtract.jobId)}</small>` : ''}</div>
+        </div>
+        ${(guidedExtract.running || guidedExtract.result) ? `<div class="gdx-bar"><span style="width:${progressPct}%"></span></div>` : ''}
+        ${guidedExtract.result ? `<div class="gdx-result">
+          <span>${t('Output folder', '输出文件夹')}</span>
+          <code>${esc(compactPath(guidedExtract.result.out_dir || guidedExtract.result.path || ''))}</code>
+          <span>${t('Rows', '行数')}</span><strong>${fmtInt(guidedExtract.result.total_rows, 'n/a')}</strong>
+          <span>${t('Files', '文件')}</span><strong>${fmtInt(guidedExtract.result.files_written || guidedExtract.result.files, 'n/a')}</strong>
+        </div>` : ''}
+        <div class="gdx-actions">
+          <button type="button" class="btn primary" data-gx-run ${!ready || !selected || guidedExtract.running ? 'disabled' : ''}>${icon('play', 13)} ${t('Run extraction here', '在这里开始抽取')}</button>
+          ${scan.ok && scan.source === 'module' ? `<button type="button" class="btn primary" data-gx-use-export>${icon('check', 13)} ${t('Register this export', '注册这个导出')}</button>` : ''}
+          <button type="button" class="btn" data-open="extraction">${t('Advanced classic settings', '打开高级经典设置')}</button>
+          ${guidedExtract.result ? `<button type="button" class="btn" data-open="patient">${t('Review export', '审阅导出结果')}</button>` : ''}
+        </div>
+      </div>`;
+  }
+  function startGuidedExtractionFlow(label) {
+    if (label) pushUser(label);
+    resetGuidedExtractionState();
+    dataMode = 'real';
+    setVal({ data: 'choose local folder', concepts: 'all modules', extract: 'inline Copilot' });
+    markThrough('extract', 'active');
+    thread.push({ bot: true, html: bi(
+      `We can do the core extraction flow here in Copilot. Choose a local ICU data folder, I’ll scan it first, then start the same local extraction job Classic uses.`,
+      `核心数据抽取可以直接在 Copilot 里完成。先选择本机 ICU 数据文件夹，我会先识别目录，再启动和经典视图相同的本地抽取任务。`,
+    ) });
+    thread.push({ guidedExtraction: true });
+    chips = [];
+    renderThread();
+    renderChips();
+  }
+  function updateGuidedExtractionModules(mode) {
+    if (!guidedExtract) return;
+    if (mode === 'all') guidedExtract.modules = GUIDED_EXTRACT_MODULES.map(m => m[0]);
+    else if (mode === 'core') guidedExtract.modules = GUIDED_CORE_MODULES.slice();
+    else if (mode === 'none') guidedExtract.modules = [];
+  }
+  function scanGuidedExtractionPath() {
+    if (!guidedExtract || guidedExtract.scanning) return;
+    const path = String(guidedExtract.path || '').trim();
+    if (!path) {
+      guidedExtract.scan = null;
+      guidedExtract.scanError = 'Choose or paste a local folder path first.';
+      guidedExtract.error = null;
+      renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.scanPath) {
+      guidedExtract.scan = null;
+      guidedExtract.scanError = 'Folder scan API is unavailable.';
+      renderThread();
+      return;
+    }
+    guidedExtract.scanning = true;
+    guidedExtract.scan = null;
+    guidedExtract.scanError = null;
+    guidedExtract.error = null;
+    renderThread();
+    window.EU_API.scanPath(path, null).then(r => {
+      guidedExtract.scanning = false;
+      if (r && r.ok) {
+        guidedExtract.path = r.path || path;
+        guidedExtract.scan = r;
+        guidedExtract.scanError = null;
+        setVal({ data: (r.db || 'local ICU') + ' · ' + (r.source || 'source') });
+      } else {
+        guidedExtract.scan = r || null;
+        guidedExtract.scanError = (r && (r.error || r.reason)) || 'Could not recognize this folder.';
+      }
+      renderThread();
+    }).catch(err => {
+      guidedExtract.scanning = false;
+      guidedExtract.scan = null;
+      guidedExtract.scanError = err.message || String(err);
+      renderThread();
+    });
+  }
+  function registerGuidedModuleExport() {
+    if (!guidedExtract || !guidedExtract.path || !window.EU_API || !window.EU_API.registerWorkspaceSource) return;
+    guidedExtract.error = null;
+    window.EU_API.registerWorkspaceSource(guidedExtract.path, { active: true, crossdb: true, label: 'Guided selected export' })
+      .then(() => {
+        guidedExtract.result = { out_dir: guidedExtract.path, total_rows: null, files_written: null };
+        guidedExtract.registered = true;
+        setVal({ data: 'registered export', extract: 'already exported' });
+        markThrough('review', 'active');
+        renderThread();
+      })
+      .catch(err => {
+        guidedExtract.error = err.message || String(err);
+        renderThread();
+      });
+  }
+  function runGuidedExtractionJob() {
+    if (!guidedExtract || guidedExtract.running) return;
+    if (!sourceReadyForGuidedExtraction()) {
+      guidedExtract.error = 'Analyze a prepared local ICU data folder before running extraction.';
+      renderThread();
+      return;
+    }
+    if (!guidedExtract.modules.length) {
+      guidedExtract.error = 'Select at least one feature module before running.';
+      renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.startExtractionJob || !window.EventSource) {
+      guidedExtract.error = 'Extraction backend or browser event stream is unavailable.';
+      renderThread();
+      return;
+    }
+    guidedExtract.running = true;
+    guidedExtract.error = null;
+    guidedExtract.result = null;
+    guidedExtract.progress = null;
+    renderThread();
+    const scan = guidedExtract.scan || {};
+    window.EU_API.startExtractionJob({
+      path: guidedExtract.path,
+      database: scan.db_key || 'miiv',
+      modules: guidedExtract.modules.slice(),
+      format: guidedExtract.format,
+      merge: guidedExtract.merge,
+      max_patients: guidedExtract.maxPatients,
+      cohort: guidedExtractionCohortContract(),
+    }).then(r => {
+      guidedExtract.jobId = r.job_id;
+      renderThread();
+      const es = new EventSource('/api/jobs/' + encodeURIComponent(r.job_id) + '/events');
+      es.onmessage = ev => {
+        let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+        if (m.type === 'progress') {
+          guidedExtract.progress = m;
+          renderThread();
+          return;
+        }
+        if (m.type === 'end') {
+          try { es.close(); } catch (e) {}
+          guidedExtract.running = false;
+          if (m.status === 'done') {
+            guidedExtract.result = m.result || {};
+            window.EU_LAST_EXPORT = guidedExtract.result;
+            const out = guidedExtract.result.out_dir;
+            if (out && window.EU_API && window.EU_API.registerWorkspaceSource) {
+              window.EU_API.registerWorkspaceSource(out, { active: true, crossdb: true, label: 'Guided export' })
+                .then(() => { guidedExtract.registered = true; renderAside(); })
+                .catch(err => { console.warn('[EasyICU] guided export registry update failed:', err); });
+            }
+            setVal({ extract: 'done', data: 'Guided export' });
+            markThrough('review', 'active');
+          } else {
+            guidedExtract.error = (m.error && (m.error.message || m.error.code)) || m.status || 'Extraction failed.';
+          }
+          renderThread();
+        }
+      };
+      es.onerror = () => {
+        try { es.close(); } catch (e) {}
+        guidedExtract.running = false;
+        guidedExtract.error = 'Extraction event stream stopped before completion.';
+        renderThread();
+      };
+    }).catch(err => {
+      guidedExtract.running = false;
+      guidedExtract.error = err.message || String(err);
+      renderThread();
+    });
+  }
+
+  /* ============== local concept definition answers ============== */
+  const CONCEPT_ALIASES = [
+    ['sofa2', ['sofa2', 'sofa-2', 'sofa 2', 'SOFA-2', 'SOFA2']],
+    ['sofa', ['sofa1', 'sofa-1', 'sofa 1', 'traditional sofa']],
+    ['sep3_sofa2', ['sepsis3 sofa2', 'sepsis-3 sofa-2', 'sepsis 3 sofa 2', 'sepsis3']],
+    ['lact', ['lactate', '乳酸']],
+  ];
+  function findLocalConceptQuery(text) {
+    const raw = String(text || '');
+    const lower = raw.toLowerCase();
+    const asks = /定义|怎么定义|是什么|解释|怎么算|如何计算|definition|define|what is|how.*defined/.test(raw + ' ' + lower);
+    if (!asks) return null;
+    for (const [code, aliases] of CONCEPT_ALIASES) {
+      if (aliases.some(a => lower.includes(String(a).toLowerCase()))) return code;
+    }
+    const dict = (window.EU_CATALOG && window.EU_CATALOG.dict) || {};
+    for (const [code, row] of Object.entries(dict)) {
+      const fields = [code].concat(Array.isArray(row) ? row : Object.values(row || {})).join(' ').toLowerCase();
+      if (code.length > 2 && lower.includes(code.toLowerCase())) return code;
+      const name = Array.isArray(row) ? row[0] : (row && (row.name || row.label));
+      if (name && lower.includes(String(name).toLowerCase())) return code;
+    }
+    return null;
+  }
+  function conceptRowsForAnswer(code) {
+    const cat = window.EU_CATALOG || {};
+    const row = (cat.dict || {})[code] || [];
+    const desc = (cat.desc || {})[code] || [];
+    const meta = (cat.cov || {})[code] || {};
+    const active = cat.activeExportCoverage && cat.activeExportCoverage.concepts && cat.activeExportCoverage.concepts[code];
+    const groups = [];
+    Object.entries(cat.groupConcepts || {}).forEach(([group, members]) => {
+      if (Array.isArray(members) && members.includes(code)) groups.push(group);
+    });
+    return {
+      code,
+      name: Array.isArray(row) ? row[0] : (row.name || code),
+      nameZh: Array.isArray(row) ? row[1] : (row.name_zh || row.zh || ''),
+      unit: Array.isArray(row) ? row[2] : (row.unit || ''),
+      desc: Array.isArray(desc) ? desc[0] : (desc.en || desc.description || ''),
+      descZh: Array.isArray(desc) ? desc[1] : (desc.zh || ''),
+      basis: meta.basis || meta.kind || 'EasyICU concept catalog',
+      databases: meta.databases,
+      group: groups.join(', ') || 'catalog',
+      active,
+    };
+  }
+  function answerConceptQuestion(text, code) {
+    pushUser(text);
+    const info = conceptRowsForAnswer(code);
+    const dbLine = info.databases != null
+      ? `${info.databases}/${((window.EU_CATALOG && window.EU_CATALOG.supportedDbs) || []).length || 6} databases`
+      : info.basis;
+    const activeLine = info.active
+      ? `${fmtPct(info.active.coverage_pct)} active-export coverage · ${fmtInt(info.active.observed_entities, 'n/a')} entities`
+      : t('not present in the active export coverage summary', '当前 active export 覆盖统计里没有这个字段');
+    thread.push({ bot: true, html: `
+      <div class="gd-concept-answer">
+        <div class="gca-head">
+          <span>${icon('book', 14)}</span>
+          <div><strong>${esc(info.name)}${info.nameZh ? ` · ${esc(info.nameZh)}` : ''}</strong><small>${esc(info.code)} · ${esc(info.group)}</small></div>
+        </div>
+        <div class="gca-grid">
+          <span>${t('Unit', '单位')}</span><strong>${esc(info.unit || 'n/a')}</strong>
+          <span>${t('Definition', '定义')}</span><p>${esc(t(info.desc || 'No dictionary definition is available.', info.descZh || info.desc || '字典中暂无定义。'))}</p>
+          <span>${t('Dictionary coverage', '字典覆盖')}</span><strong>${esc(dbLine)}</strong>
+          <span>${t('Active export', '当前导出')}</span><strong>${esc(activeLine)}</strong>
+        </div>
+        <div class="gca-note">${t('This answer is local and code-backed: it reads EasyICU concept_catalog through /api/catalog. It does not call an external model or literature search.', '这个回答来自本地代码字典：通过 /api/catalog 读取 EasyICU concept_catalog。没有调用外部模型或文献搜索。')}</div>
+        <div class="gca-actions"><button class="btn sm" data-open="dictionary">${t('Open Data Dictionary', '打开数据字典')}</button></div>
+      </div>` });
+    renderThread();
+  }
+  function isGuidedExtractionIntent(text) {
+    const s = String(text || '').toLowerCase();
+    return /extract|export|prepare data|data extraction|抽取|提取|导出|准备数据|生成数据/.test(s);
+  }
+
   /* ============== DOM render ============== */
   function renderThread() {
     const host = document.getElementById('gdThread');
     if (!host) return;
     host.innerHTML = thread.map(t => {
       if (t.typing) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body"><div class="m-bubble"><div class="typing"><span></span><span></span><span></span></div></div></div></div>`;
+      if (t.guidedExtraction) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedExtractionCard()}</div></div>`;
       if (t.diff) return diffCard();
       if (t.once) return ONCE[t.once] ? ONCE[t.once]() : '';
       if (t.card) {
@@ -1400,6 +1830,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       </div>`;
   }
   function chooseGuidedGoal(goal, label) {
+    if (goal === 'data_extraction') {
+      startGuidedExtractionFlow(label || guidedGoalMeta(goal).label_en);
+      return;
+    }
     if (!window.EU_API || !window.EU_API.runGuidedAction) {
       pushUser(label || goal);
       pushBot(
@@ -2064,6 +2498,55 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           chooseGuidedGoal(guidedGoalEl.dataset.guidedGoal, stripText(guidedGoalEl.textContent));
           return;
         }
+        const gxCohort = e.target.closest('[data-gx-cohort]');
+        if (gxCohort && guidedExtract) {
+          guidedExtract.cohort = gxCohort.dataset.gxCohort || 'adult_first';
+          guidedExtract.error = null;
+          renderThread();
+          return;
+        }
+        const gxModule = e.target.closest('[data-gx-module]');
+        if (gxModule && guidedExtract) {
+          const key = gxModule.dataset.gxModule;
+          guidedExtract.error = null;
+          if (guidedExtract.modules.includes(key)) guidedExtract.modules = guidedExtract.modules.filter(m => m !== key);
+          else guidedExtract.modules.push(key);
+          renderThread();
+          return;
+        }
+        const gxSet = e.target.closest('[data-gx-module-set]');
+        if (gxSet && guidedExtract) {
+          guidedExtract.error = null;
+          updateGuidedExtractionModules(gxSet.dataset.gxModuleSet);
+          renderThread();
+          return;
+        }
+        const gxFormat = e.target.closest('[data-gx-format]');
+        if (gxFormat && guidedExtract) {
+          guidedExtract.format = gxFormat.dataset.gxFormat || 'parquet';
+          guidedExtract.error = null;
+          renderThread();
+          return;
+        }
+        const gxMax = e.target.closest('[data-gx-max]');
+        if (gxMax && guidedExtract) {
+          guidedExtract.maxPatients = gxMax.dataset.gxMax === 'all' ? null : Number(gxMax.dataset.gxMax || 500);
+          guidedExtract.error = null;
+          renderThread();
+          return;
+        }
+        if (e.target.closest('[data-gx-analyze]')) {
+          scanGuidedExtractionPath();
+          return;
+        }
+        if (e.target.closest('[data-gx-use-export]')) {
+          registerGuidedModuleExport();
+          return;
+        }
+        if (e.target.closest('[data-gx-run]')) {
+          runGuidedExtractionJob();
+          return;
+        }
         const guidedHandoffEl = e.target.closest('[data-guided-handoff]');
         if (guidedHandoffEl) {
           runGuidedHandoff(guidedHandoffEl.dataset.guidedHandoff, guidedHandoffEl.dataset.target, stripText(guidedHandoffEl.textContent));
@@ -2188,6 +2671,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       });
 
       shell.addEventListener('input', (e) => {
+        const gxPath = e.target.closest('[data-gx-path]');
+        if (gxPath && guidedExtract) {
+          guidedExtract.path = gxPath.value;
+          guidedExtract.scan = null;
+          guidedExtract.scanError = null;
+          guidedExtract.error = null;
+          return;
+        }
         const title = e.target.closest('[data-draft-title]');
         if (!title) return;
         const box = title.closest('[data-draft-setup]');
@@ -2218,6 +2709,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   /* handle free text (from composer or hint chips) */
   function handleText(v) {
     if (busy) return;
+    const conceptCode = findLocalConceptQuery(v);
+    if (conceptCode) {
+      answerConceptQuestion(v, conceptCode);
+      return;
+    }
+    if (currentId === 'frontdoor' && isGuidedExtractionIntent(v)) {
+      startGuidedExtractionFlow(v);
+      return;
+    }
     if (currentId === 'frontdoor') {
       if (sendGuidedShortcut(v)) return;
     }

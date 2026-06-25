@@ -81,7 +81,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_API.saveSetting('language', l)" in i18n_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260625-stage96" in index_html
-    assert "js/api.js?v=20260625-stage100" in index_html
+    assert "js/api.js?v=20260626-guided-inline-extraction" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -145,7 +145,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "页面指南只支持固定快捷操作" in dock_js
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
-    assert "js/screens-guided.js?v=20260626-folder-flow" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-inline-extraction" in index_html
     assert "js/copilot-dock.js?v=20260625-stage99" in index_html
 
 
@@ -187,8 +187,59 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260625-stage100" in index_html
+    assert "js/api.js?v=20260626-guided-inline-extraction" in index_html
     assert "js/copilot-dock.js?v=20260625-stage99" in index_html
+
+
+def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questions() -> None:
+    guided_js = _static_js("screens-guided.js")
+    api_js = _static_js("api.js")
+    guided_css = _static_css("guided.css")
+    index_html = _static_html("index.html")
+
+    assert "function startGuidedExtractionFlow" in guided_js
+    assert "function renderGuidedExtractionCard" in guided_js
+    assert "function scanGuidedExtractionPath" in guided_js
+    assert "function runGuidedExtractionJob" in guided_js
+    assert "function registerGuidedModuleExport" in guided_js
+    assert "GUIDED_EXTRACT_MODULES" in guided_js
+    assert "GUIDED_EXTRACT_WINDOW_HOURS = 24 * 30" in guided_js
+    assert "data-gx-path" in guided_js
+    assert "data-gx-analyze" in guided_js
+    assert "data-gx-run" in guided_js
+    assert "data-gx-module-set=\"all\"" in guided_js
+    assert "data-gx-module-set=\"none\"" in guided_js
+    assert "format: 'parquet'" in guided_js
+    assert "data-gx-format=\"${fmt}\"" in guided_js
+    assert "window.EU_API.startExtractionJob" in guided_js
+    assert "new EventSource('/api/jobs/' + encodeURIComponent(r.job_id) + '/events')" in guided_js
+    assert "window.EU_API.registerWorkspaceSource(out" in guided_js
+    assert "window.EU_API.scanPath(path, null)" in guided_js
+    assert "source !== 'module'" in guided_js
+    assert "No path is prefilled because every user machine is different" in guided_js
+    assert "goal === 'data_extraction'" in guided_js
+    assert "isGuidedExtractionIntent(v)" in guided_js
+
+    assert "function findLocalConceptQuery" in guided_js
+    assert "function answerConceptQuestion" in guided_js
+    assert "sofa-2" in guided_js
+    assert "window.EU_CATALOG" in guided_js
+    assert "Open Data Dictionary" in guided_js
+    assert "This answer is local and code-backed" in guided_js
+
+    assert "function startExtractionJob" in api_js
+    assert "postJSON('/api/jobs/extract'" in api_js
+    assert "window.EU_API.startExtractionJob = startExtractionJob" in api_js
+
+    assert ".gd-x-card" in guided_css
+    assert ".gdx-pathrow" in guided_css
+    assert ".gdx-modgrid" in guided_css
+    assert ".gdx-presets" in guided_css
+    assert ".gd-concept-answer" in guided_css
+
+    assert "css/guided.css?v=20260626-guided-inline-extraction" in index_html
+    assert "js/api.js?v=20260626-guided-inline-extraction" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-inline-extraction" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -651,7 +702,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260625-stage93" in index_html
-    assert "api.js?v=20260625-stage100" in index_html
+    assert "api.js?v=20260626-guided-inline-extraction" in index_html
     assert "screens-dict.js?v=20260625-stage93" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -733,9 +784,9 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert ".gd-frontdoor" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
-    assert "api.js?v=20260625-stage100" in index_html
-    assert "screens-guided.js?v=20260626-folder-flow" in index_html
-    assert "guided.css?v=20260626-folder-flow" in index_html
+    assert "api.js?v=20260626-guided-inline-extraction" in index_html
+    assert "screens-guided.js?v=20260626-guided-inline-extraction" in index_html
+    assert "guided.css?v=20260626-guided-inline-extraction" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
