@@ -81,7 +81,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_API.saveSetting('language', l)" in i18n_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260625-stage96" in index_html
-    assert "js/api.js?v=20260626-guided-folder-memory" in index_html
+    assert "js/api.js?v=20260626-guided-folder-menu" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -172,7 +172,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "页面指南只支持固定快捷操作" in dock_js
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
-    assert "js/screens-guided.js?v=20260626-guided-folder-memory" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-folder-menu" in index_html
     assert "js/copilot-dock.js?v=20260625-stage99" in index_html
 
 
@@ -214,7 +214,7 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260626-guided-folder-memory" in index_html
+    assert "js/api.js?v=20260626-guided-folder-menu" in index_html
     assert "js/copilot-dock.js?v=20260625-stage99" in index_html
 
 
@@ -308,9 +308,9 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan" in guided_css
     assert ".gd-concept-answer" in guided_css
 
-    assert "css/guided.css?v=20260626-guided-folder-memory" in index_html
-    assert "js/api.js?v=20260626-guided-folder-memory" in index_html
-    assert "js/screens-guided.js?v=20260626-guided-folder-memory" in index_html
+    assert "css/guided.css?v=20260626-guided-folder-menu" in index_html
+    assert "js/api.js?v=20260626-guided-folder-menu" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-folder-menu" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -791,7 +791,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260625-stage93" in index_html
-    assert "api.js?v=20260626-guided-folder-memory" in index_html
+    assert "api.js?v=20260626-guided-folder-menu" in index_html
     assert "screens-dict.js?v=20260625-stage93" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -847,6 +847,14 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert "/Users/haibo" not in guided_js
     assert "Seeded example · not a local project" in guided_js
     assert "New / open study folder" in guided_js
+    assert "gdFolderControls" in guided_js
+    assert "gdFolderDialogHost" in guided_js
+    assert "data-folder-menu-toggle" in guided_js
+    assert "data-folder-choice" in guided_js
+    assert "data-folder-dialog" in guided_js
+    assert "New blank study folder" in guided_js
+    assert "Use existing folder" in guided_js
+    assert "Required setup stays here instead of jumping to Classic Workspace" in guided_js
     assert "Choose a local study folder" in guided_js
     assert "Open existing project folder" in guided_js
     assert "Project folder path" in guided_js
@@ -884,6 +892,10 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert ".gd-utilbtn.lang" in guided_css
     assert ".gd-data-workspace" in guided_css
     assert ".gd-draft-setup" in guided_css
+    assert ".gd-folder-picker" in guided_css
+    assert ".gd-folder-menu" in guided_css
+    assert ".gd-folder-dialog" in guided_css
+    assert ".gd-folder-tabs" in guided_css
     assert ".gds-choice" in guided_css
     assert ".gds-status" in guided_css
     assert ".gds-status.loading" in guided_css
@@ -893,9 +905,9 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert ".gdf-memory" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
-    assert "api.js?v=20260626-guided-folder-memory" in index_html
-    assert "screens-guided.js?v=20260626-guided-folder-memory" in index_html
-    assert "guided.css?v=20260626-guided-folder-memory" in index_html
+    assert "api.js?v=20260626-guided-folder-menu" in index_html
+    assert "screens-guided.js?v=20260626-guided-folder-menu" in index_html
+    assert "guided.css?v=20260626-guided-folder-menu" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js

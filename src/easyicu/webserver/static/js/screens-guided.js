@@ -138,6 +138,9 @@
   let selectedGuidedRun = null;
   let selectedGuidedDraft = null;
   let pendingGuidedGoal = null;
+  let guidedFolderMenuOpen = false;
+  let guidedFolderDialogMode = null;
+  let guidedFolderSeedTitle = 'New local study';
   let guidedSlotSaveTimer = null;
   let studyParams;   // dynamic params extracted from clarify answers + free text
 
@@ -179,6 +182,9 @@
     cohortPhase = 'normal'; extractPhase = 'run'; runPhase = 'run'; draftPhase = 'gate';
     thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null; guidedReview = null; guidedAgent = null; guidedIdea = null;
     pendingGuidedGoal = null;
+    guidedFolderMenuOpen = false;
+    guidedFolderDialogMode = null;
+    guidedFolderSeedTitle = 'New local study';
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
     studyStatus = {}; studyVal = {};
     gen++;
@@ -3000,37 +3006,89 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       .replace(/^[-._]+|[-._]+$/g, '')
       .slice(0, 64) || 'guided-study';
   }
-  function showGuidedDraftSetup(seedTitle) {
-    const title = seedTitle || (BRANCH[branch] && BRANCH[branch].chip) || 'New local study';
+  function renderGuidedFolderControls() {
+    const host = document.getElementById('gdFolderControls');
+    if (!host) return;
+    host.innerHTML = `
+      <div class="gd-folder-picker ${guidedFolderMenuOpen ? 'open' : ''}">
+        <button class="gd-newbtn" type="button" data-newstudy data-folder-menu-toggle aria-haspopup="menu" aria-expanded="${guidedFolderMenuOpen ? 'true' : 'false'}" title="${t('Choose or create a local study folder', '选择或创建本地研究文件夹')}">
+          ${icon('plus', 14)} ${t('New / open study folder', '新建/打开研究文件夹')}
+        </button>
+        ${guidedFolderMenuOpen ? `
+          <div class="gd-folder-menu" role="menu" aria-label="${t('Study folder actions', '研究文件夹操作')}">
+            <button class="gd-folder-menu-item" type="button" role="menuitem" data-folder-choice="new">
+              <span class="gds-ico">${icon('folder', 14)}</span>
+              <span><strong>${t('New blank study folder', '新建空白项目')}</strong><small>${t('Create a metadata-only local folder under the EasyICU projects root.', '在 EasyICU projects 根目录下创建仅元数据的本地文件夹。')}</small></span>
+            </button>
+            <button class="gd-folder-menu-item" type="button" role="menuitem" data-folder-choice="open">
+              <span class="gds-ico">${icon('folder', 14)}</span>
+              <span><strong>${t('Use existing folder', '使用现有文件夹')}</strong><small>${t('Open a Guided, Idea Mining, or Agent project folder as this conversation context.', '把已有 Guided、Idea Mining 或 Agent 项目文件夹作为当前对话上下文打开。')}</small></span>
+            </button>
+          </div>` : ''}
+      </div>`;
+  }
+  function renderGuidedFolderDialog() {
+    const host = document.getElementById('gdFolderDialogHost');
+    if (!host) return;
+    if (!guidedFolderDialogMode) {
+      host.innerHTML = '';
+      return;
+    }
+    const title = guidedFolderSeedTitle || (BRANCH[branch] && BRANCH[branch].chip) || 'New local study';
     const slug = slugifyDraftFolder(title);
-    thread.push({ bot: true, html: `
-      <div class="gd-draft-setup" data-draft-setup>
-        <div class="gds-head">
-          <span class="gds-ico">${icon('folder', 14)}</span>
-          <div><strong>Choose a local study folder</strong><span>Each folder owns its own Guided conversation and memory. Idea Mining and Agent Projects keep their own artifacts in linked folders.</span></div>
+    const mode = guidedFolderDialogMode === 'open' ? 'open' : 'new';
+    host.innerHTML = `
+      <div class="gd-folder-backdrop" data-folder-dialog-close></div>
+      <section class="gd-folder-dialog" data-folder-dialog data-draft-setup role="dialog" aria-modal="true" aria-label="${t('Choose a local study folder', '选择本地研究文件夹')}">
+        <div class="gd-folder-dialog-head">
+          <span class="gds-ico">${icon('folder', 15)}</span>
+          <div>
+            <strong>${t('Choose a local study folder', '选择本地研究文件夹')}</strong>
+            <span>${t('Each folder owns its Guided conversation and memory. Required setup stays here instead of jumping to Classic Workspace.', '每个文件夹拥有自己的 Guided 对话和记忆。必需配置会留在这里完成，而不是强制跳到经典工作台。')}</span>
+          </div>
+          <button class="gd-folder-close" type="button" data-folder-dialog-close aria-label="${t('Close', '关闭')}">×</button>
         </div>
-        <div class="gds-choice">
-          <div class="gds-choice-head"><strong>Open existing project folder</strong><span>Use this when you already have a local Guided, Idea Mining, or Agent project folder.</span></div>
-          <label class="gds-field"><span>Project folder path</span><input data-existing-project-dir placeholder="~/easyicu/projects/my-study or C:\\Users\\you\\easyicu\\projects\\my-study" autocomplete="off" /></label>
-          <div class="row gap-8"><button class="btn sm" data-openprojectfolder>${icon('folder', 13)} Open folder memory</button></div>
-          <div class="gds-status" data-project-open-status hidden></div>
+        <div class="gd-folder-tabs" role="tablist" aria-label="${t('Folder setup mode', '文件夹设置模式')}">
+          <button class="${mode === 'new' ? 'active' : ''}" type="button" data-folder-choice="new">${t('New blank project', '新建空白项目')}</button>
+          <button class="${mode === 'open' ? 'active' : ''}" type="button" data-folder-choice="open">${t('Use existing folder', '使用现有文件夹')}</button>
         </div>
-        <div class="gds-choice">
-          <div class="gds-choice-head"><strong>Create new local study folder</strong><span>Creates a metadata-only folder under the EasyICU projects root. No patient rows, no Agent run, no draft unlock.</span></div>
-          <label class="gds-field"><span>Study title</span><input data-draft-title value="${attr(title)}" autocomplete="off" /></label>
-          <label class="gds-field"><span>Folder name</span><input data-draft-slug value="${attr(slug)}" autocomplete="off" /></label>
-        </div>
-        <div class="gds-path"><span>Scope</span><code>EasyICU projects folder</code><small>Existing folders must live under the local EasyICU projects root. The browser cannot expose arbitrary folder paths, so paste the path shown by Finder, Explorer, or your terminal.</small></div>
-        <div class="row gap-8">
-          <button class="btn primary sm" data-createdraft>${icon('folder', 13)} Create local draft folder</button>
-          <button class="btn sm" data-canceldraft>Cancel</button>
-        </div>
-      </div>` });
-    renderThread();
+        ${mode === 'open' ? `
+          <div class="gds-choice">
+            <div class="gds-choice-head"><strong>${t('Open existing project folder', '打开现有项目文件夹')}</strong><span>${t('Use this when you already have a local Guided, Idea Mining, or Agent project folder.', '已有本地 Guided、Idea Mining 或 Agent 项目文件夹时使用。')}</span></div>
+            <label class="gds-field"><span>${t('Project folder path', '项目文件夹路径')}</span><input data-existing-project-dir placeholder="~/easyicu/projects/my-study or C:\\Users\\you\\easyicu\\projects\\my-study" autocomplete="off" /></label>
+            <div class="gds-path"><span>${t('Scope', '范围')}</span><code>EasyICU projects folder</code><small>${t('The browser cannot expose arbitrary absolute folders here. Paste the path from Finder, Explorer, Terminal, or PowerShell; EasyICU will validate it before opening memory.', '浏览器无法在这里可靠暴露任意绝对路径。请从 Finder、Explorer、Terminal 或 PowerShell 粘贴路径；EasyICU 会先校验再打开记忆。')}</small></div>
+            <div class="row gap-8"><button class="btn primary sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open folder memory', '打开文件夹记忆')}</button><button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
+            <div class="gds-status" data-project-open-status hidden></div>
+          </div>` : `
+          <div class="gds-choice">
+            <div class="gds-choice-head"><strong>${t('Create new local study folder', '创建新的本地研究文件夹')}</strong><span>${t('Creates a metadata-only folder under the EasyICU projects root. No patient rows, no Agent run, no draft unlock.', '在 EasyICU projects 根目录下创建仅元数据文件夹。不会读取患者行、不会创建 Agent run、不会解锁草稿。')}</span></div>
+            <label class="gds-field"><span>${t('Study title', '研究标题')}</span><input data-draft-title value="${attr(title)}" autocomplete="off" /></label>
+            <label class="gds-field"><span>${t('Folder name', '文件夹名称')}</span><input data-draft-slug value="${attr(slug)}" autocomplete="off" /></label>
+            <div class="gds-path"><span>${t('Scope', '范围')}</span><code>EasyICU projects folder</code><small>${t('EasyICU creates the folder under the local projects root so Guided, Idea Mining, and Agent artifacts can be managed by folder.', 'EasyICU 会在本地 projects 根目录下创建文件夹，方便按文件夹管理 Guided、Idea Mining 和 Agent artifacts。')}</small></div>
+            <div class="row gap-8"><button class="btn primary sm" data-createdraft>${icon('folder', 13)} ${t('Create study folder', '创建研究文件夹')}</button><button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
+          </div>`}
+      </section>`;
+  }
+  function openGuidedFolderDialog(mode, seedTitle) {
+    guidedFolderMenuOpen = false;
+    guidedFolderDialogMode = mode === 'open' ? 'open' : 'new';
+    guidedFolderSeedTitle = seedTitle || guidedFolderSeedTitle || 'New local study';
+    renderGuidedFolderControls();
+    renderGuidedFolderDialog();
     setTimeout(() => {
-      const inp = document.querySelector('[data-draft-setup] [data-draft-title]');
-      if (inp) { inp.focus(); inp.select(); }
+      const selector = guidedFolderDialogMode === 'open' ? '[data-existing-project-dir]' : '[data-draft-title]';
+      const inp = document.querySelector(`[data-folder-dialog] ${selector}`);
+      if (inp) { inp.focus(); if (inp.select) inp.select(); }
     }, 80);
+  }
+  function closeGuidedFolderDialog() {
+    guidedFolderMenuOpen = false;
+    guidedFolderDialogMode = null;
+    renderGuidedFolderControls();
+    renderGuidedFolderDialog();
+  }
+  function showGuidedDraftSetup(seedTitle, mode) {
+    openGuidedFolderDialog(mode || 'new', seedTitle || (BRANCH[branch] && BRANCH[branch].chip) || 'New local study');
   }
   function latestGuidedDraftSetupBox(fallback) {
     if (fallback && fallback.matches && fallback.matches('[data-draft-setup]') && fallback.isConnected) return fallback;
@@ -3116,6 +3174,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         project_dir: result.session && result.session.project_dir,
       };
       selectedGuidedRun = null;
+      closeGuidedFolderDialog();
       restoreGuidedProjectThread(result, selectedGuidedDraft, 'draft');
       continuePendingGuidedGoal();
       loadGuidedDrafts(true);
@@ -3164,6 +3223,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       selectedGuidedDraft = draft || selectedGuidedDraft;
       const title = selectedGuidedDraft && selectedGuidedDraft.title ? selectedGuidedDraft.title : text;
       const path = selectedGuidedDraft && selectedGuidedDraft.project_dir ? compactPath(selectedGuidedDraft.project_dir) : '~/easyicu/projects';
+      closeGuidedFolderDialog();
       pushBot(
         `Saved local guided draft <strong>${esc(title)}</strong> at <span class="mono">${esc(path)}</span>. This folder now owns the Guided conversation memory; Agent artifacts are created only when you start an auditable run.`,
         `已保存本地引导草稿 <strong>${esc(title)}</strong> 到 <span class="mono">${esc(path)}</span>。现在这个文件夹拥有本次 Guided 对话记忆；只有启动可审计 run 时才会生成 Agent artifacts。`,
@@ -3517,7 +3577,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         </div>
         <div class="gd-main threecol">
           <aside class="gd-rail">
-            <div class="gd-rail-top"><button class="gd-newbtn" data-newstudy title="Choose or create a local study folder">${icon('plus', 14)} New / open study folder</button></div>
+            <div class="gd-rail-top" id="gdFolderControls"></div>
             <div class="gd-rail-sec">Workspace</div>
             <div class="gd-rail-list" id="gdSessions"></div>
             <div class="gd-rail-foot">
@@ -3548,9 +3608,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             <div class="gd-aside-foot"><div class="note ok" style="padding:9px 11px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t" style="font-size:11.5px;">Evidence-bound</div><div class="d" style="font-size:10.5px;">Draft stays gated until checks pass.</div></div></div></div>
           </aside>
         </div>
+        <div id="gdFolderDialogHost"></div>
       </div>`;
     },
     afterRender(root) {
+      renderGuidedFolderControls();
+      renderGuidedFolderDialog();
       renderAside();
       renderSessions();
       loadGuidedDrafts();
@@ -3589,6 +3652,21 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
 
       const shell = root.querySelector('.gd-shell');
       shell.addEventListener('click', (e) => {
+        const folderToggle = e.target.closest('[data-folder-menu-toggle]');
+        if (folderToggle) {
+          guidedFolderMenuOpen = !guidedFolderMenuOpen;
+          renderGuidedFolderControls();
+          return;
+        }
+        const folderChoice = e.target.closest('[data-folder-choice]');
+        if (folderChoice) {
+          openGuidedFolderDialog(folderChoice.dataset.folderChoice, guidedFolderSeedTitle || 'New local study');
+          return;
+        }
+        if (e.target.closest('[data-folder-dialog-close]')) {
+          closeGuidedFolderDialog();
+          return;
+        }
         // open / close an artifact preview
         const artOpen = e.target.closest('[data-artopen]');
         if (artOpen) { openArtifact(artOpen.dataset.artopen); return; }
@@ -3823,7 +3901,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           return;
         }
         if (e.target.closest('[data-newstudy]')) {
-          showGuidedDraftSetup('New local study');
+          guidedFolderMenuOpen = !guidedFolderMenuOpen;
+          renderGuidedFolderControls();
           return;
         }
         const openProjectFolderEl = e.target.closest('[data-openprojectfolder]');
