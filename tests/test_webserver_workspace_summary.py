@@ -1983,6 +1983,62 @@ def test_export_runner_keeps_legacy_all_icu_default_without_cohort_contract(
     assert manifest["cohort_contract"]["observation_window_hours"] == 720
 
 
+def test_export_runner_honors_module_specific_concept_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import easyicu.api as api_module
+
+    loaded: list[dict[str, object]] = []
+    _patch_export_api(monkeypatch, loaded)
+    monkeypatch.setattr(api_module, "get_all_patient_ids", lambda *_, **__: ([1, 2], "stay_id"))
+
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path),
+        database="miiv",
+        modules=["demographics", "vitals"],
+        concepts={"demographics": ["age"], "vitals": ["hr", "map"]},
+        export_format="csv",
+        out_dir=str(tmp_path / "out"),
+        max_patients=2,
+    )
+
+    result = runner(_ExportJob())
+    manifest = json.loads((tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8"))
+    readme = (tmp_path / "out" / "README.md").read_text(encoding="utf-8")
+
+    assert result["file_count"] == 2
+    assert [row["concepts"] for row in loaded] == [["age"], ["hr", "map"]]
+    assert manifest["concept_selection"]["mode"] == "explicit"
+    assert manifest["concept_selection"]["modules"] == {
+        "demographics": ["age"],
+        "vitals": ["hr", "map"],
+    }
+    assert manifest["files"][0]["concept_ids"] == ["age"]
+    assert manifest["files"][1]["concept_ids"] == ["hr", "map"]
+    assert "Concepts selected: `3`" in readme
+
+
+def test_export_runner_rejects_unknown_selected_concepts(
+    tmp_path: Path,
+) -> None:
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path),
+        database="miiv",
+        modules=["vitals"],
+        concepts={"vitals": ["hr", "not_a_real_concept"]},
+        export_format="csv",
+        out_dir=str(tmp_path / "out"),
+    )
+
+    with pytest.raises(dataio.ExportCohortError) as exc:
+        runner(_ExportJob())
+
+    assert exc.value.detail["error"] == "invalid_selected_concepts"
+    assert exc.value.detail["invalid"] == ["vitals:not_a_real_concept"]
+    assert not (tmp_path / "out").exists()
+
+
 def test_export_runner_can_create_timestamped_run_folder_with_readme(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -273,6 +273,7 @@ def jobs_extract(body: Dict[str, Any]) -> dict:
         data_path=path,
         database=database,
         modules=body.get("modules"),
+        concepts=body.get("concepts"),
         export_format=str(body.get("format") or "csv"),
         merge=bool(body.get("merge")),
         out_dir=out_dir,
