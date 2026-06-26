@@ -248,6 +248,8 @@ def classify(candidate: dict[str, Any]) -> tuple[str, str]:
         return "skip", "disabled"
     attrs = candidate.get("attrs") or {}
     classes = str(candidate.get("classes") or "")
+    if re.search(r"(^| )(gd-send|cp-send)( |$)", classes):
+        return "skip", "requires_text_input"
     if re.search(r"(^| )(active|on)( |$)", classes) and (
         re.search(r"(^| )(radio|tab|chip|wsitem|nav-item|cp-entry)( |$)", classes)
         or any(attr in attrs for attr in ["data-nav", "data-lang", "data-datamode", "data-cohtab", "data-ptab"])
