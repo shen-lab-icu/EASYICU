@@ -2444,6 +2444,39 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (guidedFolderDialogMode) renderGuidedFolderDialog();
     });
   }
+  function removeLocalGuidedDraft(row) {
+    if (!row || !row.id || !window.EU_API || !window.EU_API.removeGuidedDraft) return;
+    const title = row.title || 'Guided draft';
+    const ok = window.confirm(t(
+      `Remove "${title}" from the Guided draft list? The local project folder will not be deleted.`,
+      `从研究引导草稿列表移除“${title}”？本地项目文件夹不会被删除。`,
+    ));
+    if (!ok) return;
+    window.EU_API.removeGuidedDraft({
+      draft_id: row.id,
+      project_dir: row.project_dir,
+      delete_project_folder: false,
+    }).then(result => {
+      if (!result || result.ok === false) {
+        throw new Error((result && (result.reason || result.error)) || 'remove_failed');
+      }
+      if (selectedGuidedDraft && selectedGuidedDraft.id === row.id) selectedGuidedDraft = null;
+      guidedDrafts = { loading: false, error: null, data: result.drafts ? { drafts: result.drafts } : null };
+      loadGuidedDrafts(true);
+      pushBot(
+        `Removed <strong>${esc(title)}</strong> from the Guided draft list. The project folder on disk was left untouched.`,
+        `已从研究引导草稿列表移除 <strong>${esc(title)}</strong>。磁盘上的项目文件夹没有被删除。`,
+      );
+      renderSessions();
+      renderThread();
+    }).catch(err => {
+      pushBot(
+        `I could not remove that draft: <span class="mono">${esc(err.message || String(err))}</span>`,
+        `无法移除这个草稿：<span class="mono">${esc(err.message || String(err))}</span>`,
+      );
+      renderThread();
+    });
+  }
   function loadGuidedHistory(force) {
     if (!window.EU_API || !window.EU_API.loadAgentRunHistory) return;
     if (!force && (guidedHistory.loading || guidedHistory.data || guidedHistory.error)) return;
@@ -3627,15 +3660,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         ? `<div class="gd-empty-local warn"><div class="ss-t">Local drafts unavailable</div><div class="ss-m">${esc(guidedDrafts.error)}</div></div>`
         : drafts.length
           ? drafts.slice(0, 8).map((row, i) => `
-            <button class="gd-sess draft ${selectedGuidedDraft && selectedGuidedDraft.id === row.id ? 'active' : ''}" data-localdraft="${i}">
-              <span class="ss-fold">${icon('file', 15)}</span>
-              <span>
-                <span class="ss-t">${esc(row.title || 'Guided draft')}</span>
-                <span class="ss-m">${esc(row.status || 'metadata_only')} · ${esc(row.depth || 'full')} · ${esc(row.data_mode || 'demo')}</span>
-                <span class="ss-m mono">${row.project_dir ? esc(compactPath(row.project_dir)) : 'legacy registry-only draft'}</span>
-                <span class="ss-m mono">${esc(fmtRunTime(row.updated_at || row.created_at))}</span>
-              </span>
-            </button>`).join('')
+            <div class="gd-sessline">
+              <button class="gd-sess draft ${selectedGuidedDraft && selectedGuidedDraft.id === row.id ? 'active' : ''}" data-localdraft="${i}">
+                <span class="ss-fold">${icon('file', 15)}</span>
+                <span>
+                  <span class="ss-t">${esc(row.title || 'Guided draft')}</span>
+                  <span class="ss-m">${esc(row.status || 'metadata_only')} · ${esc(row.depth || 'full')} · ${esc(row.data_mode || 'demo')}</span>
+                  <span class="ss-m mono">${row.project_dir ? esc(compactPath(row.project_dir)) : 'legacy registry-only draft'}</span>
+                  <span class="ss-m mono">${esc(fmtRunTime(row.updated_at || row.created_at))}</span>
+                </span>
+              </button>
+              <button class="gd-sess-action danger" type="button" data-remove-localdraft="${i}" title="${t('Remove from Guided draft list', '从草稿列表移除')}" aria-label="${t('Remove from Guided draft list', '从草稿列表移除')}">${icon('close', 12)}</button>
+            </div>`).join('')
           : `<div class="gd-empty-local">
               <div class="ss-t">No guided drafts yet</div>
               <div class="ss-m">Use New / open study folder to bind the conversation to a local project folder first.</div>
@@ -3999,6 +4035,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (refreshRuns) { loadGuidedHistory(true); return; }
         const refreshDrafts = e.target.closest('[data-refreshdrafts]');
         if (refreshDrafts) { loadGuidedDrafts(true); return; }
+        const removeDraftEl = e.target.closest('[data-remove-localdraft]');
+        if (removeDraftEl) {
+          const row = localDraftRows()[Number(removeDraftEl.dataset.removeLocaldraft || -1)];
+          if (row) removeLocalGuidedDraft(row);
+          return;
+        }
         const localDraftEl = e.target.closest('[data-localdraft]');
         if (localDraftEl) {
           const row = localDraftRows()[Number(localDraftEl.dataset.localdraft || -1)];

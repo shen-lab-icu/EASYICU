@@ -262,6 +262,9 @@
   function loadGuidedDrafts(body) {
     return postJSON('/api/guided/drafts/list', body || {});
   }
+  function removeGuidedDraft(body) {
+    return postJSON('/api/guided/drafts/remove', body || {});
+  }
   function createGuidedSession(body) {
     return postJSON('/api/guided/session', body || {});
   }
@@ -387,6 +390,7 @@
   window.EU_API.loadAgentRunHistory = loadAgentRunHistory;
   window.EU_API.createGuidedDraft = createGuidedDraft;
   window.EU_API.loadGuidedDrafts = loadGuidedDrafts;
+  window.EU_API.removeGuidedDraft = removeGuidedDraft;
   window.EU_API.createGuidedSession = createGuidedSession;
   window.EU_API.openGuidedProject = openGuidedProject;
   window.EU_API.sendGuidedMessage = sendGuidedMessage;

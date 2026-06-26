@@ -81,7 +81,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_API.saveSetting('language', l)" in i18n_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260625-stage96" in index_html
-    assert "js/api.js?v=20260626-guided-folder-browser" in index_html
+    assert "js/api.js?v=20260626-guided-draft-remove" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -172,7 +172,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "页面指南只支持固定快捷操作" in dock_js
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
-    assert "js/screens-guided.js?v=20260626-guided-folder-browser" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-draft-remove" in index_html
     assert "js/copilot-dock.js?v=20260625-stage99" in index_html
 
 
@@ -214,7 +214,7 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260626-guided-folder-browser" in index_html
+    assert "js/api.js?v=20260626-guided-draft-remove" in index_html
     assert "js/copilot-dock.js?v=20260625-stage99" in index_html
 
 
@@ -308,9 +308,9 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan" in guided_css
     assert ".gd-concept-answer" in guided_css
 
-    assert "css/guided.css?v=20260626-guided-folder-browser" in index_html
-    assert "js/api.js?v=20260626-guided-folder-browser" in index_html
-    assert "js/screens-guided.js?v=20260626-guided-folder-browser" in index_html
+    assert "css/guided.css?v=20260626-guided-draft-remove" in index_html
+    assert "js/api.js?v=20260626-guided-draft-remove" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-draft-remove" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -791,7 +791,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260625-stage93" in index_html
-    assert "api.js?v=20260626-guided-folder-browser" in index_html
+    assert "api.js?v=20260626-guided-draft-remove" in index_html
     assert "screens-dict.js?v=20260625-stage93" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -806,8 +806,14 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert "loadAgentRunReview(row.project_dir)" in guided_js
     assert "/api/guided/drafts" in api_js
     assert "/api/guided/drafts/list" in api_js
+    assert "/api/guided/drafts/remove" in api_js
     assert "loadGuidedDrafts({ limit: 20 })" in guided_js
     assert "createGuidedDraft(payload)" in guided_js
+    assert "removeGuidedDraft" in api_js
+    assert "data-remove-localdraft" in guided_js
+    assert "removeLocalGuidedDraft(row)" in guided_js
+    assert "delete_project_folder: false" in guided_js
+    assert "The project folder on disk was left untouched" in guided_js
     assert "/api/guided/session" in api_js
     assert "/api/guided/project/open" in api_js
     assert "/api/guided/message" in api_js
@@ -897,6 +903,8 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert "Switch language" in guided_js
     assert "${t('Data workspace', '数据工作台')}" in guided_js
     assert ".gd-empty-local" in guided_css
+    assert ".gd-sessline" in guided_css
+    assert ".gd-sess-action" in guided_css
     assert ".gd-sess.draft.active" in guided_css
     assert ".gd-sess.local.active" in guided_css
     assert ".gd-sess.example.active" in guided_css
@@ -924,9 +932,9 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert ".gdf-memory" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
-    assert "api.js?v=20260626-guided-folder-browser" in index_html
-    assert "screens-guided.js?v=20260626-guided-folder-browser" in index_html
-    assert "guided.css?v=20260626-guided-folder-browser" in index_html
+    assert "api.js?v=20260626-guided-draft-remove" in index_html
+    assert "screens-guided.js?v=20260626-guided-draft-remove" in index_html
+    assert "guided.css?v=20260626-guided-draft-remove" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
