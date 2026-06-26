@@ -437,6 +437,7 @@ def _render_export_readme(manifest: Dict[str, Any], *, files: List[Dict[str, Any
         f"- Cohort selected: `{report.get('selected', report.get('cohort_size', ''))}`",
         f"- Observation window: `{cohort.get('observation_window_hours', '')} hours`",
         f"- Modules: `{', '.join(unique_modules)}`",
+        f"- Concepts selected: `{sum(int(f.get('concepts') or 0) for f in files)}`",
         "",
         "## Reproducibility files",
         "",
@@ -451,6 +452,82 @@ def _render_export_readme(manifest: Dict[str, Any], *, files: List[Dict[str, Any
         lines.append(f"- `{f.get('file')}` — module `{f.get('module', '')}`, rows `{f.get('rows', '')}`")
     lines.append("")
     return "\n".join(lines)
+
+
+def _normalize_export_concepts(
+    selected_modules: List[str],
+    concepts: Any,
+    catalog: Dict[str, List[str]],
+) -> Dict[str, List[str]]:
+    """Resolve an optional UI concept selection to a module -> concept list.
+
+    ``concepts`` may be omitted (all concepts in selected modules), a mapping
+    keyed by module name, or a flat concept-id list. Invalid concept/module
+    requests fail closed before any export files are written.
+    """
+    modules = [module for module in selected_modules if catalog.get(module)]
+    module_set = set(modules)
+    if concepts is None:
+        return {module: list(catalog[module]) for module in modules}
+
+    selected: Dict[str, List[str]] = {module: [] for module in modules}
+    invalid: List[str] = []
+
+    if isinstance(concepts, dict):
+        for module, raw_values in concepts.items():
+            module_key = str(module)
+            if module_key not in module_set:
+                invalid.append(module_key)
+                continue
+            allowed = set(catalog[module_key])
+            if raw_values is None:
+                selected[module_key] = list(catalog[module_key])
+                continue
+            if not isinstance(raw_values, list):
+                invalid.append(f"{module_key}:not_a_list")
+                continue
+            seen: Set[str] = set()
+            for value in raw_values:
+                concept = str(value)
+                if concept not in allowed:
+                    invalid.append(f"{module_key}:{concept}")
+                    continue
+                if concept not in seen:
+                    selected[module_key].append(concept)
+                    seen.add(concept)
+    elif isinstance(concepts, list):
+        concept_to_module = {
+            concept: module
+            for module in modules
+            for concept in catalog.get(module, [])
+        }
+        for value in concepts:
+            concept = str(value)
+            module = concept_to_module.get(concept)
+            if not module:
+                invalid.append(concept)
+                continue
+            if concept not in selected[module]:
+                selected[module].append(concept)
+    else:
+        raise ExportCohortError(
+            "invalid_concept_selection",
+            {"detail": "concepts must be a module mapping or a flat concept list"},
+        )
+
+    if invalid:
+        raise ExportCohortError(
+            "invalid_selected_concepts",
+            {"invalid": invalid[:20], "invalid_count": len(invalid)},
+        )
+
+    selected = {module: ids for module, ids in selected.items() if ids}
+    if not selected:
+        raise ExportCohortError(
+            "no_selected_concepts",
+            {"modules": modules},
+        )
+    return selected
 
 
 def _coerce_int(value: Any, default: int, min_value: Optional[int] = None, max_value: Optional[int] = None) -> int:
@@ -915,6 +992,7 @@ def make_export_runner(
     data_path: str,
     database: str,
     modules: Optional[List[str]] = None,
+    concepts: Any = None,
     export_format: str = "csv",
     merge: bool = False,
     out_dir: Optional[str] = None,
@@ -942,8 +1020,10 @@ def make_export_runner(
         import easyicu.api as api
         from easyicu.concept_catalog import CONCEPT_GROUPS_INTERNAL
 
-        sel = [m for m in (modules or list(CONCEPT_GROUPS_INTERNAL.keys()))
-               if CONCEPT_GROUPS_INTERNAL.get(m)]
+        sel_modules = [m for m in (modules or list(CONCEPT_GROUPS_INTERNAL.keys()))
+                       if CONCEPT_GROUPS_INTERNAL.get(m)]
+        concept_plan = _normalize_export_concepts(sel_modules, concepts, CONCEPT_GROUPS_INTERNAL)
+        sel = [m for m in sel_modules if concept_plan.get(m)]
         ext = _EXPORT_EXT.get(export_format, "csv")
         out = _resolve_export_out_dir(
             out_dir=out_dir,
@@ -995,6 +1075,7 @@ def make_export_runner(
             }
 
         job.emit({"type": "start", "modules": sel, "out_dir": str(out),
+                  "concepts": {module: len(concept_plan[module]) for module in sel},
                   "format": export_format, "max_patients": max_patients,
                   "cohort_size": cohort_size,
                   "cohort": cohort_info.get("cohort_report")})
@@ -1008,10 +1089,10 @@ def make_export_runner(
             for i, mod in enumerate(sel, start=1):
                 if getattr(job, "cancel_requested", False):
                     break
-                concepts = CONCEPT_GROUPS_INTERNAL[mod]
-                use_sofa2 = any(c.startswith("sofa2") or c == "sep3_sofa2" for c in concepts)
+                module_concepts = concept_plan[mod]
+                use_sofa2 = any(c.startswith("sofa2") or c == "sep3_sofa2" for c in module_concepts)
                 df = api.load_concepts(
-                    concepts, patient_ids=patient_ids, database=database,
+                    module_concepts, patient_ids=patient_ids, database=database,
                     data_path=str(data_path), use_sofa2=use_sofa2,
                     merge=True, verbose=False, **load_kwargs,
                 )
@@ -1020,12 +1101,12 @@ def make_export_runner(
                     for key, sub in df.items():
                         fname = f"{mod}__{key}.{ext}"
                         rows = _write_frame(sub, out / fname, export_format)
-                        written.append({"file": fname, "module": mod, "rows": rows})
+                        written.append({"file": fname, "module": mod, "concepts": len(module_concepts), "concept_ids": list(module_concepts), "rows": rows})
                 else:
                     fname = f"{mod}.{ext}"
                     rows = _write_frame(df, out / fname, export_format)
                     written.append({"file": fname, "module": mod,
-                                    "concepts": len(concepts), "rows": rows})
+                                    "concepts": len(module_concepts), "concept_ids": list(module_concepts), "rows": rows})
                 files.extend(written)
                 job.emit({"type": "progress", "current": i, "total": total, "module": mod,
                           "file": written[0]["file"], "rows": sum(w["rows"] for w in written)})
@@ -1052,6 +1133,10 @@ def make_export_runner(
             },
             "cohort_contract": cohort_info.get("cohort_contract"),
             "cohort_report": cohort_info.get("cohort_report"),
+            "concept_selection": {
+                "mode": "explicit" if concepts is not None else "all_in_selected_modules",
+                "modules": {module: concept_plan[module] for module in sel},
+            },
             "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "files": files,
         }

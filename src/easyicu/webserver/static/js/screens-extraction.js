@@ -200,6 +200,8 @@
   let exReal = 'connect';   // connect | scanning | scanresult | converting | convfail | ready
   let exPath = '';   // the local folder the user points at; never prefilled
   let exManualSourceOpen = false;
+  let exExpandedMod = 'demographics';
+  let exSelectedConcepts = {};
   let convTimer = null;
   let convDone = 0;         // completed conversion steps (mock fallback only)
   let convJobId = null;     // live convert job id (SSE-driven)
@@ -283,12 +285,80 @@
     const members = groups && groups[moduleKey(m)];
     return Array.isArray(members) ? members.length : (m[2] || 0);
   }
-  function conceptTotal(modules) { return (modules || []).reduce((a, m) => a + moduleConceptCount(m), 0); }
+  function conceptIdsForModuleKey(key) {
+    const groups = window.EU_CATALOG && window.EU_CATALOG.groupConcepts;
+    const members = groups && groups[key];
+    return Array.isArray(members) ? members.slice() : [];
+  }
+  function conceptIdsForModule(m) { return conceptIdsForModuleKey(moduleKey(m)); }
+  function conceptMeta(id) {
+    const dict = window.EU_CATALOG && window.EU_CATALOG.dict;
+    const desc = window.EU_CATALOG && window.EU_CATALOG.desc;
+    const row = dict && dict[id];
+    const note = desc && desc[id];
+    return {
+      id,
+      name: row ? t(row[0], row[1]) : id,
+      unit: row && row[2] ? row[2] : '',
+      desc: note ? t(note[0], note[1]) : '',
+    };
+  }
+  function selectedConceptIdsForModule(m) {
+    const key = moduleKey(m);
+    const ids = conceptIdsForModule(m);
+    if (!ids.length) return [];
+    const saved = Array.isArray(exSelectedConcepts[key]) ? exSelectedConcepts[key] : ids;
+    const savedSet = new Set(saved);
+    return ids.filter(id => savedSet.has(id));
+  }
+  function selectedConceptCount(m) {
+    const ids = conceptIdsForModule(m);
+    if (!ids.length) return m[3] ? moduleConceptCount(m) : 0;
+    return m[3] ? selectedConceptIdsForModule(m).length : 0;
+  }
+  function conceptTotal(modules) { return (modules || []).reduce((a, m) => a + selectedConceptCount(m), 0); }
   function conceptN() { return conceptTotal(selMods()); }
   function coreConceptN() { return conceptTotal(MODS.filter(m => m[4])); }
   function modKeys() { return selMods().map(moduleKey); }
   function coreModuleKeys() { return MODS.filter(m => m[4]).map(moduleKey); }
   function runModuleKeys(mode) { return mode === 'recommended' ? coreModuleKeys() : modKeys(); }
+  function selectedConceptPayload(moduleKeys) {
+    const wanted = new Set(moduleKeys || modKeys());
+    const payload = {};
+    MODS.forEach(m => {
+      const key = moduleKey(m);
+      if (!wanted.has(key)) return;
+      const ids = conceptIdsForModule(m);
+      const selected = ids.length ? selectedConceptIdsForModule(m) : [];
+      if (selected.length) payload[key] = selected;
+    });
+    return payload;
+  }
+  function setModuleConceptSelection(m, ids) {
+    const key = moduleKey(m);
+    const all = conceptIdsForModule(m);
+    const allowed = new Set(all);
+    const clean = (ids || []).filter(id => allowed.has(id));
+    if (!all.length || clean.length === all.length) delete exSelectedConcepts[key];
+    else exSelectedConcepts[key] = clean;
+    m[3] = !all.length ? !!m[3] : clean.length > 0;
+  }
+  function setAllConceptsInModule(m, on) {
+    if (on) {
+      delete exSelectedConcepts[moduleKey(m)];
+      m[3] = true;
+    } else {
+      setModuleConceptSelection(m, []);
+    }
+    window.EU_STALE = true;
+  }
+  function toggleConceptInModule(m, concept) {
+    const selected = new Set(selectedConceptIdsForModule(m));
+    if (selected.has(concept)) selected.delete(concept);
+    else selected.add(concept);
+    setModuleConceptSelection(m, conceptIdsForModule(m).filter(id => selected.has(id)));
+    window.EU_STALE = true;
+  }
   function repaint() { if (window.__euRender) window.__euRender(); }
   function escHtml(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -322,6 +392,10 @@
   window.__euExtractApply = function (modules) {
     if (Array.isArray(modules) && modules.length) {
       MODS.forEach(m => { m[3] = modules.includes(m[0]); });
+    } else if (modules && typeof modules === 'object') {
+      const keys = Array.isArray(modules.modules) ? new Set(modules.modules) : null;
+      if (keys) MODS.forEach(m => { m[3] = keys.has(moduleKey(m)) || keys.has(m[0]); });
+      if (modules.concepts && typeof modules.concepts === 'object') exSelectedConcepts = modules.concepts;
     }
     exView = 'done';
   };
@@ -361,13 +435,16 @@
     exportProg = null; exportResult = null; exportErr = null; exportJobId = null; exportCancelRequested = false;
     exView = 'running'; repaint();
     const database = (exScanResult && exScanResult.db_key) || 'miiv';
+    const conceptSelection = selectedConceptPayload(modules);
     // Real path: only in real mode with a scanned/ready folder + live backend.
     if (real && exPath && window.EU_API && window.EU_API.postJSON && window.EventSource) {
-      window.EU_API.postJSON('/api/jobs/extract', {
+      const payload = {
         path: exPath, database: database, modules: modules,
         format: exFormat, merge: exMerge === 'merged', max_patients: exMaxPatients,
         cohort: runMode === 'recommended' ? recommendedCohortContract() : cohortContract(),
-      }).then(r => {
+      };
+      if (Object.keys(conceptSelection).length) payload.concepts = conceptSelection;
+      window.EU_API.postJSON('/api/jobs/extract', payload).then(r => {
         exportJobId = r.job_id;
         exportES = new EventSource('/api/jobs/' + r.job_id + '/events');
         exportES.onmessage = ev => {
@@ -404,8 +481,8 @@
       setTimeout(() => { exView = 'done'; window.EU_STALE = false; window.EU_HASWORK = true; repaint(); }, 1200);
     }
   }
-  function resetToCore() { MODS.forEach(m => { m[3] = m[4]; }); window.EU_STALE = true; }
-  function setAllModules(on) { MODS.forEach(m => { m[3] = !!on; }); window.EU_STALE = true; }
+  function resetToCore() { MODS.forEach(m => { m[3] = m[4]; }); exSelectedConcepts = {}; window.EU_STALE = true; }
+  function setAllModules(on) { MODS.forEach(m => { m[3] = !!on; }); exSelectedConcepts = {}; window.EU_STALE = true; }
   function cancelExportJob() {
     if (!exportJobId || exportCancelRequested || !window.EU_API || !window.EU_API.postJSON) return;
     exportCancelRequested = true;
@@ -1139,14 +1216,52 @@
   }
 
   /* ---- modules cfg ---- */
+  function conceptRows(m) {
+    const ids = conceptIdsForModule(m);
+    const selected = new Set(selectedConceptIdsForModule(m));
+    if (!ids.length) {
+      return `<div class="mod-empty">${t('Concept catalog is still loading for this module.', '这个模块的特征字典仍在加载。')}</div>`;
+    }
+    return ids.map(id => {
+      const meta = conceptMeta(id);
+      const on = selected.has(id);
+      return `
+        <button class="concept-toggle ${on ? 'on' : ''}" data-ex-concept="${escHtml(id)}" title="${escHtml(meta.desc || meta.name)}">
+          <span class="mk">${on ? icon('check', 10, 3) : ''}</span>
+          <span class="cx-main"><span class="cx-name">${escHtml(meta.name)}</span><span class="cx-id mono">${escHtml(id)}</span></span>
+          ${meta.unit ? `<span class="cx-unit mono">${escHtml(meta.unit)}</span>` : ''}
+        </button>`;
+    }).join('');
+  }
   function modCard(m, i) {
     const on = m[3];
+    const key = moduleKey(m);
+    const total = moduleConceptCount(m);
+    const selected = selectedConceptCount(m);
+    const open = exExpandedMod === key;
     return `
-    <button class="modcard ${on ? 'on' : ''} ${m[4] ? 'core' : ''}" data-ex-mod="${i}">
-      <span class="mk">${on ? icon('check', 11, 3) : ''}</span>
-      <span class="nm">${t(m[0], m[1])}</span>
-      <span class="ct">${moduleConceptCount(m)}</span>
-    </button>`;
+    <article class="modcard ${on ? 'on' : ''} ${open ? 'open' : ''} ${m[4] ? 'core' : ''}" data-ex-mod-card="${i}">
+      <div class="modcard-head">
+        <button class="mod-pick" data-ex-mod="${i}">
+          <span class="mk">${on ? icon('check', 11, 3) : ''}</span>
+          <span class="nm">${t(m[0], m[1])}</span>
+          <span class="ct mono">${selected}/${total}</span>
+        </button>
+        <button class="mod-detail-btn" data-ex-mod-details="${i}" aria-expanded="${open ? 'true' : 'false'}">
+          ${open ? t('Hide features', '收起特征') : t('Choose features', '选择特征')} ${icon('chevdown', 12)}
+        </button>
+      </div>
+      ${open ? `
+        <div class="mod-concepts">
+          <div class="mod-concept-toolbar">
+            <span class="hint">${selected} / ${total} ${t('features selected', '个特征已选')}</span>
+            <span class="spacer"></span>
+            <button class="linkbtn" data-ex-concepts-all="${i}">${t('All in module', '本模块全选')}</button>
+            <button class="linkbtn" data-ex-concepts-clear="${i}">${t('Clear module', '清空本模块')}</button>
+          </div>
+          <div class="concept-list">${conceptRows(m)}</div>
+        </div>` : ''}
+    </article>`;
   }
   function modulesCfg() {
     const shown = exShowAllMods ? MODS : MODS.filter(m => m[4]);
@@ -1436,8 +1551,37 @@
       // module toggle
       const grid = root.querySelector('#exModGrid');
       if (grid) grid.addEventListener('click', e => {
+        const detail = e.target.closest('[data-ex-mod-details]');
+        if (detail) {
+          const i = +detail.dataset.exModDetails;
+          const key = moduleKey(MODS[i]);
+          exExpandedMod = exExpandedMod === key ? null : key;
+          repaint();
+          return;
+        }
+        const allConcepts = e.target.closest('[data-ex-concepts-all]');
+        if (allConcepts) {
+          setAllConceptsInModule(MODS[+allConcepts.dataset.exConceptsAll], true);
+          repaint();
+          return;
+        }
+        const clearConcepts = e.target.closest('[data-ex-concepts-clear]');
+        if (clearConcepts) {
+          setAllConceptsInModule(MODS[+clearConcepts.dataset.exConceptsClear], false);
+          repaint();
+          return;
+        }
+        const concept = e.target.closest('[data-ex-concept]');
+        if (concept) {
+          const card = concept.closest('.modcard');
+          const i = card ? +card.dataset.exModCard : -1;
+          if (i >= 0) toggleConceptInModule(MODS[i], concept.dataset.exConcept);
+          repaint();
+          return;
+        }
         const card = e.target.closest('[data-ex-mod]'); if (!card) return;
-        const i = +card.dataset.exMod; MODS[i][3] = !MODS[i][3];
+        const i = +card.dataset.exMod;
+        MODS[i][3] = !MODS[i][3];
         window.EU_STALE = true;  // selection changed → downstream out of date
         repaint();
       });

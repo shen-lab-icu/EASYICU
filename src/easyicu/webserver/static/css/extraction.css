@@ -150,12 +150,24 @@
 /* Extraction module selection */
 .modgrid{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
 .modcard{
-  display:flex; align-items:center; gap:10px;
-  padding:10px 12px; border:1px solid var(--hair-2); border-radius:var(--r-2);
+  min-width:0;
+  border:1px solid var(--hair-2); border-radius:var(--r-2);
   background:var(--surface); cursor:pointer; transition:border-color .12s, background .12s;
 }
 .modcard:hover{ border-color:var(--hair-3); background:var(--surface-2); }
 .modcard.on{ border-color:var(--accent-border); background:var(--accent-soft); }
+.modcard.open{ grid-column:1 / -1; cursor:default; }
+.modcard-head{ display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px; padding:8px; }
+.mod-pick{
+  min-width:0; display:flex; align-items:center; gap:10px; padding:2px 4px;
+  border:0; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer;
+}
+.mod-detail-btn{
+  display:flex; align-items:center; gap:4px; padding:5px 8px; border:1px solid var(--hair);
+  border-radius:999px; background:color-mix(in srgb,var(--surface) 84%,transparent);
+  color:var(--ink-3); font-size:11px; cursor:pointer;
+}
+.mod-detail-btn:hover{ border-color:var(--accent-border); color:var(--accent-ink); background:var(--surface); }
 .modcard .mk{
   width:18px; height:18px; flex:none; border-radius:5px;
   border:1.5px solid var(--hair-3); display:grid; place-items:center; color:#fff;
@@ -163,6 +175,27 @@
 .modcard.on .mk{ background:var(--accent); border-color:var(--accent); }
 .modcard .nm{ font-size:12.5px; font-weight:600; min-width:0; }
 .modcard .ct{ font-family:var(--font-mono); font-size:10.5px; color:var(--ink-4); margin-left:auto; }
+.mod-concepts{ border-top:1px solid var(--hair); padding:10px 12px 12px; background:color-mix(in srgb,var(--surface) 72%,transparent); border-radius:0 0 var(--r-2) var(--r-2); }
+.mod-concept-toolbar{ display:flex; align-items:center; gap:10px; margin-bottom:9px; }
+.mod-concept-toolbar .hint{ font-size:11.5px; color:var(--ink-3); }
+.mod-concept-toolbar .spacer{ flex:1; }
+.linkbtn{ border:0; background:transparent; padding:2px 0; color:var(--accent-ink); font-size:11.5px; cursor:pointer; }
+.linkbtn:hover{ text-decoration:underline; }
+.concept-list{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+.concept-toggle{
+  min-width:0; display:grid; grid-template-columns:18px minmax(0,1fr) auto; align-items:center; gap:8px;
+  padding:7px 8px; border:1px solid var(--hair); border-radius:8px; background:var(--surface);
+  color:var(--ink); font:inherit; text-align:left; cursor:pointer;
+}
+.concept-toggle:hover{ border-color:var(--hair-3); background:var(--surface-2); }
+.concept-toggle.on{ border-color:var(--accent-border); background:var(--accent-soft); }
+.concept-toggle .mk{ width:16px; height:16px; border-radius:5px; }
+.concept-toggle.on .mk{ background:var(--accent); border-color:var(--accent); }
+.cx-main{ min-width:0; display:flex; flex-direction:column; gap:1px; }
+.cx-name{ font-size:12px; font-weight:600; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cx-id{ font-size:10.5px; color:var(--ink-4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cx-unit{ font-size:10.5px; color:var(--ink-4); white-space:nowrap; }
+.mod-empty{ padding:9px 10px; color:var(--ink-4); font-size:12px; border:1px dashed var(--hair); border-radius:8px; }
 
 /* Sticky extraction summary rail */
 .ex2-summary{ align-self:stretch; min-width:0; }
@@ -185,6 +218,9 @@
 
 @media (max-width:560px){
   .modgrid{ grid-template-columns:1fr; }
+  .concept-list{ grid-template-columns:1fr; }
+  .modcard-head{ grid-template-columns:1fr; align-items:stretch; }
+  .mod-detail-btn{ justify-content:center; }
 }
 
 @media (max-width:980px){

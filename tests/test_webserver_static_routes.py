@@ -435,18 +435,27 @@ def test_native_extraction_custom_modules_default_to_all_with_bulk_actions() -> 
     assert "data-ex-clearmods" in extraction_js
     assert "Clear all" in extraction_js
     assert "Core 6" in extraction_js
+    assert "data-ex-mod-details" in extraction_js
+    assert "data-ex-concept" in extraction_js
+    assert "data-ex-concepts-all" in extraction_js
+    assert "data-ex-concepts-clear" in extraction_js
+    assert "selectedConceptPayload" in extraction_js
+    assert "payload.concepts = conceptSelection" in extraction_js
     assert 'data-ex-run="recommended"' in extraction_js
     assert "function coreModuleKeys()" in extraction_js
     assert "Select at least one module before extracting." in extraction_js
     assert ".cohort-preset-grid" in extraction_css
     assert ".range-ctl" in extraction_css
     assert ".modgrid" in extraction_css
+    assert ".mod-concepts" in extraction_css
+    assert ".concept-toggle" in extraction_css
     assert ".ex2-summary{ align-self:stretch; min-width:0; }" in extraction_css
     assert ".sumcard{\n  position:sticky; top:74px; z-index:3;" in extraction_css
     assert "max-height:calc(100vh - 92px); overflow:auto;" in extraction_css
     assert ".sumcard{ position:static; max-height:none; overflow:visible; }" in extraction_css
     assert ".cohort-preset-grid" not in redesign_css
     assert ".range-ctl" not in redesign_css
+    assert ".concept-toggle" not in redesign_css
     assert ".ex2-summary" not in redesign_css
 
 
