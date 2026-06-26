@@ -475,6 +475,12 @@
   background: var(--warn-soft);
   color: color-mix(in srgb, var(--warn) 72%, var(--ink));
 }
+.gds-path-row{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
 .gds-field{ display: grid; gap: 5px; }
 .gds-field span,
 .gds-path span{
@@ -509,6 +515,137 @@
 }
 .gds-path code{ font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); }
 .gds-path small{ grid-column: 2; color: var(--ink-4); font-size: 10.75px; line-height: 1.35; }
+.gds-browser{
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--accent-soft) 35%, var(--surface));
+}
+.gds-browser-head{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.gds-browser-head strong{
+  display: block;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.gds-browser-head span{
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-4);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.gds-browser-path{
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 7px 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-1);
+  background: var(--surface);
+}
+.gds-browser-path span{
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+}
+.gds-browser-path code{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.gds-browser-shortcuts{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.gds-browser-list{
+  display: grid;
+  gap: 5px;
+  max-height: 250px;
+  overflow: auto;
+}
+.gds-browser-row{
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 7px 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.gds-browser-row:hover{
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--accent-soft) 46%, var(--surface));
+}
+.gds-browser-row strong{
+  display: block;
+  font-size: 12px;
+  line-height: 1.25;
+}
+.gds-browser-row code{
+  display: block;
+  margin-top: 2px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-4);
+}
+.gds-browser-row em{
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--accent-ink);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-pill);
+  padding: 1px 6px;
+  background: var(--accent-soft);
+}
+.gds-browser-message,
+.gds-browser-empty{
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 9px;
+  border: 1px dashed var(--hair);
+  border-radius: var(--r-2);
+  color: var(--ink-4);
+  font-size: 10.75px;
+  line-height: 1.35;
+}
+.gds-browser-message.warn{
+  border-color: color-mix(in srgb, var(--warn) 36%, var(--hair));
+  background: var(--warn-soft);
+  color: color-mix(in srgb, var(--warn) 72%, var(--ink));
+}
+.gds-browser-actions{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .gds-status{
   display: flex;
   align-items: flex-start;
@@ -538,6 +675,19 @@
   border-color: color-mix(in srgb, var(--warn) 46%, var(--hair));
   background: var(--warn-soft);
   color: color-mix(in srgb, var(--warn) 72%, var(--ink));
+}
+@media (max-width: 620px){
+  .gds-path-row{
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .gds-browser-row{
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .gds-browser-row em{
+    grid-column: 2;
+    width: fit-content;
+  }
 }
 
 /* Guided Copilot route-owned native extraction card */
