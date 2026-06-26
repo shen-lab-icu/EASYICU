@@ -418,6 +418,20 @@ def post_guided_drafts_list(body: Dict[str, Any] | None = None) -> dict:
     return guided_sessions.list_guided_drafts(limit=int((body or {}).get("limit") or 20))
 
 
+@app.post("/api/guided/drafts/remove")
+def post_guided_draft_remove(body: Dict[str, Any]) -> dict:
+    """Remove a metadata-only guided draft from the local registry.
+
+    This deliberately does not delete the local project folder. Project folders
+    may contain Idea Mining or Agent artifacts and require separate explicit
+    file-system management.
+    """
+    result = guided_sessions.remove_guided_draft(body or {})
+    if not result.get("ok") and not result.get("blocked"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
 @app.post("/api/guided/session")
 def post_guided_session(body: Dict[str, Any]) -> dict:
     """Create a local metadata-only front-door Guided Copilot session."""

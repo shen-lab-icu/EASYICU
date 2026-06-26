@@ -845,6 +845,58 @@ def list_guided_drafts(limit: int = 20) -> Dict[str, Any]:
     }
 
 
+def remove_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
+    payload = body if isinstance(body, dict) else {}
+    if payload.get("delete_project_folder") is True:
+        return {
+            "ok": False,
+            "blocked": True,
+            "error": "project_folder_delete_not_supported",
+            "reason": "Guided draft removal only unregisters metadata. Local project folders are never deleted by this endpoint.",
+            "storage": "metadata_only",
+            "disk_deleted": False,
+        }
+    draft_id = _clean_text(payload.get("draft_id") or payload.get("id"), max_len=80)
+    project_dir = _safe_project_dir(payload.get("project_dir"))
+    raw = _read_raw()
+    rows = raw.get("drafts") if isinstance(raw.get("drafts"), list) else []
+    kept: List[Dict[str, Any]] = []
+    removed: Dict[str, Any] | None = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        same_id = bool(draft_id and row.get("id") == draft_id)
+        same_project = bool(project_dir and str(row.get("project_dir") or "") == str(project_dir))
+        if same_id or same_project:
+            removed = row
+            continue
+        kept.append(row)
+    if removed is None:
+        return {
+            "ok": False,
+            "blocked": True,
+            "error": "guided_draft_not_found",
+            "reason": "No matching metadata-only Guided draft was found in the local registry.",
+            "storage": "metadata_only",
+            "disk_deleted": False,
+        }
+    raw["schema_version"] = max(2, int(raw.get("schema_version") or 1))
+    raw["updated_at"] = _now()
+    raw["drafts"] = kept[:_MAX_DRAFTS]
+    if not isinstance(raw.get("sessions"), list):
+        raw["sessions"] = []
+    _write_raw(raw)
+    return {
+        "ok": True,
+        "removed": True,
+        "draft_id": removed.get("id"),
+        "project_dir": removed.get("project_dir"),
+        "storage": "metadata_only",
+        "disk_deleted": False,
+        "reason": "Removed from the Guided draft list only; the local project folder was left untouched.",
+    }
+
+
 def create_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
     draft = _normalise_draft(body if isinstance(body, dict) else {})
     project_dir = Path(str(draft["project_dir"]))

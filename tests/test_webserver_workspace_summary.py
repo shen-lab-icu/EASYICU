@@ -377,6 +377,50 @@ def test_guided_draft_registry_writes_metadata_only_without_row_payload(tmp_path
     assert "hadm_id" not in persisted_dump
 
 
+def test_guided_draft_remove_unregisters_only_and_preserves_project_folder(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
+    monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/guided/drafts",
+        json={"title": "Draft to remove", "folder_slug": "remove-me", "data_mode": "real"},
+    )
+    assert created.status_code == 200
+    draft = created.json()["draft"]
+    project_dir = Path(draft["project_dir"])
+    artifact = project_dir / "guided_draft.json"
+    assert artifact.exists()
+
+    dangerous = client.post(
+        "/api/guided/drafts/remove",
+        json={"draft_id": draft["id"], "delete_project_folder": True},
+    )
+    assert dangerous.status_code == 200
+    dangerous_body = dangerous.json()
+    assert dangerous_body["blocked"] is True
+    assert dangerous_body["error"] == "project_folder_delete_not_supported"
+    assert dangerous_body["disk_deleted"] is False
+    assert artifact.exists()
+
+    removed = client.post(
+        "/api/guided/drafts/remove",
+        json={"draft_id": draft["id"], "project_dir": draft["project_dir"], "delete_project_folder": False},
+    )
+    assert removed.status_code == 200
+    removed_body = removed.json()
+    assert removed_body["ok"] is True
+    assert removed_body["removed"] is True
+    assert removed_body["draft_id"] == draft["id"]
+    assert removed_body["disk_deleted"] is False
+    assert artifact.exists()
+
+    listed = client.post("/api/guided/drafts/list", json={"limit": 10})
+    assert listed.status_code == 200
+    assert listed.json()["drafts"] == []
+
+
 def test_guided_copilot_session_routes_locally_and_rejects_row_payload(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
