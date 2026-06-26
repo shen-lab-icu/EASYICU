@@ -70,6 +70,22 @@
     { id: 'agent', label: ['Analyze', '分析'], ico: 'agent' },
   ];
   const L = (v) => Array.isArray(v) ? t(v[0], v[1]) : v;
+  const CRUMB_LABELS = {
+    Home: ['Home', '首页'],
+    'Get Started': ['Get Started', '快速上手'],
+    'Idea Mining': ['Idea Mining', '想法挖掘'],
+    'Data Visualization': ['Data Visualization', '数据可视化'],
+    'Patient Review': ['Patient Review', '患者明细'],
+    'Cohort Statistics': ['Cohort Statistics', '队列统计'],
+    'Cross-DB Benchmark': ['Cross-DB Benchmark', '跨库对比'],
+    Settings: ['Settings', '设置'],
+    'Workspace States': ['Workspace States', '工作区状态'],
+  };
+  const crumbLabel = (c) => L(CRUMB_LABELS[c] || c);
+  const actionHtmlOf = (scr) => {
+    if (!scr) return '';
+    return typeof scr.actionHtml === 'function' ? scr.actionHtml() : (scr.actionHtml || '');
+  };
 
   function screenOf(id) { return window.SCREENS[id]; }
   function sectionOf(id) { return screenOf(id).section; }
@@ -149,13 +165,15 @@
   function topbar() {
     const scr = screenOf(route);
     const crumbs = (scr.crumbs || []).map((c, i, arr) => {
-      if (i === arr.length - 1) return `<span class="cur">${c}</span>`;
+      const label = crumbLabel(c);
+      if (i === arr.length - 1) return `<span class="cur">${label}</span>`;
       let node;
-      if (i === 0) node = `<a data-nav="entry">${c}</a>`;
-      else if (CRUMB_NAV[c]) node = `<a data-nav="${CRUMB_NAV[c]}">${c}</a>`;
-      else node = `<span class="mid">${c}</span>`;
+      if (i === 0) node = `<a data-nav="entry">${label}</a>`;
+      else if (CRUMB_NAV[c]) node = `<a data-nav="${CRUMB_NAV[c]}">${label}</a>`;
+      else node = `<span class="mid">${label}</span>`;
       return `${node}<span class="sep">/</span>`;
     }).join(' ');
+    const actionHtml = actionHtmlOf(scr);
     return `
     <div class="topbar">
       <div class="crumbs">${crumbs}</div>
@@ -170,20 +188,21 @@
         <button class="${window.EU_LANG === 'zh' ? 'on' : ''}" data-lang="zh">中</button>
       </div>
       <button class="btn sm" data-cpopen title="${t('Open page guide for this screen', '打开当前页面指南')}">${icon('spark', 13)} ${t('Page guide','页面指南')}</button>
-      ${scr.actionHtml || ''}
+      ${actionHtml}
     </div>`;
   }
 
   function mobileChrome() {
     const scr = screenOf(route);
-    const title = (scr.crumbs && scr.crumbs[scr.crumbs.length - 1]) || 'EasyICU';
+    const title = scr.crumbs && scr.crumbs.length ? crumbLabel(scr.crumbs[scr.crumbs.length - 1]) : 'EasyICU';
+    const actionHtml = actionHtmlOf(scr);
     const top = `
       <div class="mtopbar">
         <div class="mark" data-nav="entry">${icon('flask', 16)}</div>
         <div class="name">${title}</div>
         <div class="spacer"></div>
         <button class="btn sm icon" data-cpopen title="${t('Page guide', '页面指南')}">${icon('spark', 16)}</button>
-        ${scr.actionHtml || ''}
+        ${actionHtml}
       </div>`;
     const bottom = `
       <nav class="mbottomnav">

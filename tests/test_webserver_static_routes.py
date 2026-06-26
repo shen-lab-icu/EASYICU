@@ -123,11 +123,38 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260625-stage99" in index_html
+    assert "js/app.js?v=20260626-tutorial-i18n" in index_html
     assert "js/copilot-dock.js?v=20260625-stage99" in index_html
     assert "js/screens-extraction.js?v=20260625-stage91" in index_html
     assert "js/screens-agent.js?v=20260625-stage94" in index_html
-    assert "js/screens-help.js?v=20260625-stage99" in index_html
+    assert "js/screens-help.js?v=20260626-tutorial-i18n" in index_html
+
+
+def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> None:
+    app_js = _static_js("app.js")
+    help_js = _static_js("screens-help.js")
+    index_html = _static_html("index.html")
+
+    assert "const CRUMB_LABELS = {" in app_js
+    assert "'Get Started': ['Get Started', '快速上手']" in app_js
+    assert "const actionHtmlOf = (scr) =>" in app_js
+    assert "typeof scr.actionHtml === 'function' ? scr.actionHtml()" in app_js
+    assert "crumbLabel(scr.crumbs[scr.crumbs.length - 1])" in app_js
+
+    assert "actionHtml() {" in help_js
+    assert "t('Start demo', '开始演示')" in help_js
+    assert "t('Get started', '快速上手')" in help_js
+    assert "t('A quiet, reviewable path from data to draft', '从数据到草稿，一条安静、可审阅的路径')" in help_js
+    assert "t('The four stages', '四个阶段')" in help_js
+    assert "t('Common questions', '常见问题')" in help_js
+
+    assert "Get started · 快速上手" not in help_js
+    assert "New here? Take the 2-minute demo tour</div>" not in help_js
+    assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
+    assert "How a study moves through EasyICU</h2>" not in help_js
+
+    assert "js/app.js?v=20260626-tutorial-i18n" in index_html
+    assert "js/screens-help.js?v=20260626-tutorial-i18n" in index_html
 
 
 def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
