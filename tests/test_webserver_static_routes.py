@@ -123,7 +123,7 @@ def test_native_assistant_labels_disambiguate_page_guide_guided_copilot_and_agen
     assert "Open Copilot" not in help_js
 
     assert "css/dock.css?v=20260625-stage99" in index_html
-    assert "js/app.js?v=20260626-data-workspace-count" in index_html
+    assert "js/app.js?v=20260626-scroll-preserve" in index_html
     assert "js/copilot-dock.js?v=20260625-stage99" in index_html
     assert "js/screens-extraction.js?v=20260625-stage91" in index_html
     assert "js/screens-agent.js?v=20260625-stage94" in index_html
@@ -153,7 +153,7 @@ def test_native_tutorial_screen_uses_active_language_without_mixed_copy() -> Non
     assert ">No tokens, no setup, no patient data. The demo generates" not in help_js
     assert "How a study moves through EasyICU</h2>" not in help_js
 
-    assert "js/app.js?v=20260626-data-workspace-count" in index_html
+    assert "js/app.js?v=20260626-scroll-preserve" in index_html
     assert "js/screens-help.js?v=20260626-tutorial-i18n" in index_html
 
 
@@ -529,7 +529,13 @@ def test_native_idea_mining_is_first_class_route_and_backend_wired() -> None:
     assert "Data Workspace" in app_js
     assert "const workspaceIndex = CLASSIC.findIndex(c => c.id === route);" in app_js
     assert "workspaceIndex + 1} / ${CLASSIC.length}" in app_js
+    assert "function render(opts = {})" in app_js
+    assert "const resetScroll = !!opts.resetScroll;" in app_js
+    assert "window.__euRender = function (opts) { render(opts || {}); };" in app_js
+    assert "render({ resetScroll: true });" in app_js
+    assert "render();" in app_js
     assert "Math.min(cur, goal)" not in app_js
+    assert "window.__euRender = render;" not in app_js
     assert "Classic Workspace" not in app_js
     assert "Copilot and Classic share one study" not in app_js
     assert "Already have data? Start with Extract Data." in app_js
