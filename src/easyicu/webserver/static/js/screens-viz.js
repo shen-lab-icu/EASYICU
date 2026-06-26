@@ -36,7 +36,7 @@
   let crossRawProg = null;
   let crossRawCancelRequested = false;
   let crossRawJobStarting = false;
-  let cohortView = 'loaded';  // loaded | loading
+  let cohortView = 'idle';    // idle | loaded | loading
   let cohortPanel = 'groups'; // groups | coverage | snapshot | sofa
   let cohortCompare = 'outcome';
   let cohortSurvivalOutcome = 'hospital_death';
@@ -564,7 +564,7 @@
   window.__euVizResetForDataMode = function () {
     patientView = 'idle';
     crossView = 'idle';
-    cohortView = 'loaded';
+    cohortView = 'idle';
     vizErr = null;
     window.EU_PATIENT_SOURCES = null;
   };
@@ -1912,7 +1912,13 @@
   S.cohort = {
     section: 'viz', nav: 'viz', sub: 'cohort',
     crumbs: ['Home', 'Data Visualization', 'Cohort Statistics'],
-    get actionHtml() { return `<button class="btn primary" data-cohort-run ${cohortView === 'loading' ? 'aria-disabled="true"' : ''}>${icon('refresh', 13)} Re-run</button>`; },
+    get actionHtml() {
+      if (cohortView === 'loaded') {
+        return `<button class="btn" data-viz-reset>${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button><button class="btn primary" data-cohort-run>${icon('refresh', 13)} ${t('Re-run', '重新运行')}</button>`;
+      }
+      const label = window.EU_DATA === 'real' ? t('Load export', '加载导出') : t('Run demo review', '运行演示审阅');
+      return `<button class="btn primary" data-cohort-run ${cohortView === 'loading' ? 'aria-disabled="true"' : ''}>${icon('play', 13)} ${label}</button>`;
+    },
     rail: () => vizRail('cohort'),
     afterRender(root) {
       bindSourceRegistry(root, 'cohort');
@@ -1920,7 +1926,7 @@
         if (cohortView === 'loading') return;
         cohortView = 'loading'; repaintScreen('cohort');
         if (window.EU_DATA === 'real') {
-          loadRealCohort(ok => { cohortView = 'loaded'; if (!ok) cohortView = 'loaded'; repaintScreen('cohort'); });
+          loadRealCohort(ok => { cohortView = ok ? 'loaded' : 'idle'; repaintScreen('cohort'); });
         } else {
           setTimeout(() => { cohortView = 'loaded'; window.EU_HASWORK = true; repaintScreen('cohort'); }, 1300);
         }
@@ -1934,6 +1940,20 @@
       });
       root.querySelectorAll('[data-cohgo]').forEach(b => b.addEventListener('click', () => {
         cohortPanel = b.dataset.cohgo;
+        repaintScreen('cohort');
+      }));
+      root.querySelectorAll('[data-viz-reset]').forEach(b => b.addEventListener('click', () => {
+        cohortView = 'idle';
+        window.EU_COHORT_REVIEW = null;
+        window.EU_VIZ_WORKSPACE = null;
+        repaintScreen('cohort');
+      }));
+      root.querySelectorAll('[data-cohort-use-real]').forEach(b => b.addEventListener('click', () => {
+        cohortView = 'idle';
+        window.EU_DATA = 'real';
+        window.EU_COHORT_REVIEW = null;
+        window.EU_VIZ_WORKSPACE = null;
+        try { localStorage.setItem('easyicu_home_data', 'real'); } catch (e) {}
         repaintScreen('cohort');
       }));
       root.querySelectorAll('[data-cohort-comp]').forEach(b => {
@@ -1967,16 +1987,47 @@
     render() {
       if (window.__euCohortPanel) { cohortPanel = window.__euCohortPanel; window.__euCohortPanel = null; }
       const ws = window.EU_VIZ_WORKSPACE;
+      const loaded = cohortView === 'loaded' && (window.EU_DATA !== 'real' || !!ws);
       const head = `
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">
-        <span>Workspace</span> ${icon('chevron', 11)} <span>${ws ? 'Local export' : 'Demo cohort'}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">Cohort statistics</span>
+        <span>Workspace</span> ${icon('chevron', 11)} <span>${ws ? 'Local export' : (loaded ? 'Demo cohort' : 'Not configured')}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">Cohort statistics</span>
       </div>
       <div class="page-head" style="margin-bottom:16px;">
-        <h1 style="margin-top:0;">${ws ? 'Local export cohort' : 'Sepsis vs Non-sepsis'}</h1>
-        <p class="lead">${ws ? 'Real exported module tables · local-only summary' : 'Group contrast · coverage audit · cohort profile · SOFA reclassification'}</p>
+        <h1 style="margin-top:0;">${loaded ? (ws ? t('Local export cohort', '本地导出队列') : t('Sepsis vs Non-sepsis', 'Sepsis 与非 Sepsis 对照')) : t('Cohort Statistics', '队列统计')}</h1>
+        <p class="lead">${loaded ? (ws ? t('Real exported module tables · local-only summary', '真实导出模块表 · 仅本地汇总') : t('Group contrast · coverage audit · cohort profile · SOFA reclassification', '组间对照 · 覆盖审计 · 队列画像 · SOFA 重分层')) : t('Choose a demo cohort review or load a registered local export before viewing group contrasts, coverage, survival curves, and SOFA reclassification.', '先运行演示队列审阅或加载已注册的本地导出，然后再查看组间对照、覆盖率、生存曲线和 SOFA 重分层。')}</p>
         <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Key terms', '关键术语')}: ${window.gloss('cohort', t('cohort', '队列'))} · ${window.gloss('denominator', t('denominator', '分母'))} · ${window.gloss('SOFA')} · ${window.gloss('Sepsis-3')}</div>
       </div>`;
-      if (window.EU_DATA === 'real' && !ws && cohortView !== 'loading') {
+      if (cohortView !== 'loading' && !loaded) {
+        if (window.EU_DATA !== 'real') {
+          return head + `<div class="card pad" style="max-width:760px;" data-cohort-config-required="true">
+            <div class="panel-head">
+              <div>
+                <div class="eyebrow">${t('Review setup required', '需要先配置审阅')}</div>
+                <div class="panel-title" style="font-size:17px;">${t('Run or load a cohort review first', '请先运行或加载队列审阅')}</div>
+                <div class="panel-sub mt-4">${t('Cohort Statistics no longer opens with preloaded seeded results. Start a demo review intentionally, or switch to Real and load a registered export.', '队列统计不再默认打开预加载的 seeded 结果。请明确启动演示审阅，或切换到真实模式并加载已注册导出。')}</div>
+              </div>
+              <span class="pill demo"><span class="dot"></span>Demo available</span>
+            </div>
+            ${vizErr ? `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d mono" style="font-size:11px;margin:0;">${esc(vizErr)}</div></div></div>` : ''}
+            <div class="note info mt-16">
+              <div class="ico">${icon('shield', 14)}</div>
+              <div class="body">
+                <div class="t">${t('Explicit setup gate', '显式配置门控')}</div>
+                <div class="d">${t('Demo values are seeded UI examples, not findings. Real cohort review is computed from your active local EasyICU export.', '演示值只是 seeded UI 示例，不是研究发现。真实队列审阅会从当前 active 的本地 EasyICU 导出计算。')}</div>
+              </div>
+            </div>
+            <div class="row wrap gap-8 mt-16">
+              <button class="btn primary" data-cohort-run>${icon('play', 13)} ${t('Run demo cohort review', '运行演示队列审阅')}</button>
+              <button class="btn" data-cohort-use-real>${icon('db', 13)} ${t('Use real export', '使用真实导出')}</button>
+              <button class="btn" data-nav="extraction">${icon('extract', 13)} ${t('Open Data Extraction', '打开数据抽取')}</button>
+            </div>
+          </div>
+          <div class="empty mt-16" data-cohort-empty-preview="true">
+            <div class="glyph">${icon('cohort', 22)}</div>
+            <div class="t">${t('Cohort review awaits setup', '队列审阅等待配置')}</div>
+            <div class="d">${t('After setup, this page will show group contrast, KM/log-rank, coverage audit, cohort profile, and SOFA reclassification.', '配置后，这里会显示组间对照、KM/log-rank、生存风险表、覆盖审计、队列画像和 SOFA 重分层。')}</div>
+          </div>`;
+        }
         return head + `<div class="card pad" style="max-width:720px;">
           <div class="panel-title" style="font-size:17px;">Load a local export first</div>
           <div class="panel-sub mt-4">Cohort Statistics uses the same export snapshot as Patient Review.</div>
