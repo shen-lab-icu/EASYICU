@@ -376,6 +376,38 @@ def get_agent_run_provider_status(provider: str = "openai") -> dict:
     }
 
 
+@app.post("/api/agent-runs/provider-config")
+def post_agent_run_provider_config(body: Dict[str, Any]) -> dict:
+    """Persist a private provider config without returning secrets."""
+    provider = str(body.get("provider") or "openai")
+    try:
+        meta = provider_adapter.write_provider_config(
+            provider,
+            api_key=str(body.get("api_key") or ""),
+            base_url=str(body.get("base_url") or ""),
+            model=str(body.get("model") or ""),
+            max_tokens=str(body.get("max_tokens") or ""),
+            json_format_style=str(body.get("json_format_style") or ""),
+            force=True,
+        )
+    except provider_adapter.ProviderAdapterError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+    settings = settings_store.update_settings({
+        "ai_enabled": bool(body.get("enable_ai", True)),
+        "agent_model_mode": "external",
+    })
+    return {
+        **meta,
+        "settings": {**settings, "about": settings_store.about()},
+        "provider_status": provider_adapter.provider_readiness(
+            provider,
+            ai_enabled=bool(settings.get("ai_enabled")),
+        ),
+        "secrets_returned": False,
+    }
+
+
 @app.post("/api/agent-runs/review")
 def post_agent_run_review(body: Dict[str, Any]) -> dict:
     """Read a bounded local artifact bundle for human review."""

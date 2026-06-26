@@ -240,6 +240,9 @@
     const q = provider ? '?provider=' + encodeURIComponent(provider) : '';
     return getJSON('/api/agent-runs/provider-status' + q);
   }
+  function saveAgentProviderConfig(body) {
+    return postJSON('/api/agent-runs/provider-config', body || {});
+  }
   function startAgentRun(body) {
     return postJSON('/api/jobs/agent-run', body || {});
   }
@@ -395,6 +398,7 @@
   window.EU_API.loadCrossdbDemoDistribution = loadCrossdbDemoDistribution;
   window.EU_API.loadCrossdbSummary = loadCrossdbSummary;
   window.EU_API.loadAgentProviderStatus = loadAgentProviderStatus;
+  window.EU_API.saveAgentProviderConfig = saveAgentProviderConfig;
   window.EU_API.startAgentRun = startAgentRun;
   window.EU_API.loadJobSnapshot = loadJobSnapshot;
   window.EU_API.cancelJob = cancelJob;

@@ -434,6 +434,8 @@ def test_guided_draft_registry_writes_metadata_only_without_row_payload(tmp_path
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
     monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
+    parent_dir = tmp_path / "user_chosen_parent"
+    parent_dir.mkdir()
     client = TestClient(app)
 
     created = client.post(
@@ -441,6 +443,7 @@ def test_guided_draft_registry_writes_metadata_only_without_row_payload(tmp_path
         json={
             "title": "AKI onset draft",
             "folder_slug": "aki-onset-review",
+            "parent_dir": str(parent_dir),
             "branch": "quality",
             "depth": "review",
             "data_mode": "real",
@@ -469,8 +472,13 @@ def test_guided_draft_registry_writes_metadata_only_without_row_payload(tmp_path
     assert draft["draft_unlocked"] is False
     assert draft["project_kind"] == "guided_draft_folder"
     assert draft["project_artifact"] == "guided_draft.json"
-    assert draft["project_dir"].startswith(str(tmp_path / "projects" / "guided-aki-onset-review-"))
+    assert draft["project_parent_dir"] == str(parent_dir)
+    assert draft["project_dir"].startswith(str(parent_dir / "guided-aki-onset-review-"))
     assert (Path(draft["project_dir"]) / "guided_draft.json").exists()
+    opened = client.post("/api/guided/project/open", json={"project_dir": draft["project_dir"]})
+    assert opened.status_code == 200
+    assert opened.json()["ok"] is True
+    assert opened.json()["session"]["project_dir"] == draft["project_dir"]
     assert draft["local_first"] == {"uploads": 0, "tokens": 0, "external_calls": 0}
     assert draft["privacy"]["no_patient_rows_persisted"] is True
     assert draft["privacy"]["row_level_markers"] == []
