@@ -88,6 +88,43 @@
   gap: 12px;
   min-width: min(620px, 100%);
 }
+.gdf-memory{
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--r-2);
+  background: var(--accent-soft);
+}
+.gdf-memory.ready{
+  border-color: color-mix(in srgb, var(--ok) 42%, var(--hair));
+  background: var(--ok-soft);
+}
+.gdf-memory > span{
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-1);
+  display: grid;
+  place-items: center;
+  color: var(--accent-ink);
+  background: var(--surface);
+  border: 1px solid var(--hair);
+}
+.gdf-memory.ready > span{ color: var(--ok); }
+.gdf-memory strong{
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.25;
+}
+.gdf-memory small{
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-4);
+  font-size: 10.75px;
+  line-height: 1.35;
+}
 .gdf-head{
   display: grid;
   gap: 4px;

@@ -137,6 +137,7 @@
   let guidedCopilot = { loading: false, error: null, session: null, last: null };
   let selectedGuidedRun = null;
   let selectedGuidedDraft = null;
+  let pendingGuidedGoal = null;
   let studyParams;   // dynamic params extracted from clarify answers + free text
 
   const DEFAULT_MODS = ['Demographics', 'Vital signs', 'Lab — Chemistry', 'SOFA-2 scores', 'Sepsis-3 (SOFA-2)', 'Outcome'];
@@ -176,6 +177,7 @@
     branch = 'predict'; depth = 'full'; dataMode = 'demo'; mods = DEFAULT_MODS.slice();
     cohortPhase = 'normal'; extractPhase = 'run'; runPhase = 'run'; draftPhase = 'gate';
     thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null; guidedReview = null; guidedAgent = null; guidedIdea = null;
+    pendingGuidedGoal = null;
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
     studyStatus = {}; studyVal = {};
     gen++;
@@ -2437,9 +2439,67 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       },
     };
   }
+  function hasGuidedProjectMemory() {
+    const session = guidedCopilot && guidedCopilot.session;
+    if (session && session.project_dir && session.memory_scope === 'project_folder') return true;
+    if (selectedGuidedDraft && selectedGuidedDraft.project_dir) return true;
+    if (selectedGuidedRun && selectedGuidedRun.project_dir) return true;
+    return false;
+  }
+  function rememberPendingGoal(goal, label) {
+    pendingGuidedGoal = goal ? { goal, label: label || (guidedGoalMeta(goal) && guidedGoalMeta(goal).label_en) || goal } : null;
+  }
+  function requireGuidedProjectMemory(goal, label) {
+    if (hasGuidedProjectMemory()) return false;
+    rememberPendingGoal(goal, label);
+    if (label) pushUser(label);
+    thread.push({ bot: true, html: bi(
+      `First choose or create a <strong>local study folder</strong>. Each folder owns a separate Guided conversation and memory, like a Codex/Claude project context.`,
+      `请先选择或创建一个<strong>本地研究文件夹</strong>。每个文件夹都有独立的 Guided 对话和记忆，类似 Codex/Claude 的项目上下文。`,
+    ) });
+    showGuidedDraftSetup(label || 'New local study');
+    chips = [['Open/create study folder', '@foldernew']];
+    renderThread();
+    renderChips();
+    return true;
+  }
+  function bindGuidedDraftMemory(draft) {
+    if (!draft || !draft.project_dir || !window.EU_API || !window.EU_API.openGuidedProject) {
+      return Promise.resolve(null);
+    }
+    return window.EU_API.openGuidedProject({
+      project_dir: draft.project_dir,
+      draft_id: draft.id || null,
+      title: draft.title || 'local study',
+      mode: 'local',
+      context: guidedBackendContext(),
+    }).then(result => {
+      if (result && result.ok) {
+        guidedCopilot = { loading: false, error: null, session: result.session || null, last: result };
+      }
+      return result;
+    });
+  }
+  function continuePendingGuidedGoal() {
+    if (!pendingGuidedGoal) return false;
+    const pending = pendingGuidedGoal;
+    pendingGuidedGoal = null;
+    const meta = guidedGoalMeta(pending.goal);
+    thread.push({ bot: true, html: bi(
+      `Folder memory is ready. Continuing with <strong>${esc(meta.label_en || pending.label || pending.goal)}</strong> inside this project context.`,
+      `文件夹记忆已就绪。现在会在这个项目上下文里继续<strong>${esc(meta.label_zh || pending.label || pending.goal)}</strong>。`,
+    ) });
+    chooseGuidedGoal(pending.goal, null);
+    return true;
+  }
   function ensureGuidedSession(force) {
     if (!window.EU_API || !window.EU_API.createGuidedSession) return Promise.resolve(null);
-    if (!force && guidedCopilot.session && (!selectedGuidedDraft || guidedCopilot.session.project_dir === selectedGuidedDraft.project_dir)) return Promise.resolve(guidedCopilot.session);
+    if (
+      !force &&
+      guidedCopilot.session &&
+      guidedCopilot.session.memory_scope === 'project_folder' &&
+      (!selectedGuidedDraft || guidedCopilot.session.project_dir === selectedGuidedDraft.project_dir)
+    ) return Promise.resolve(guidedCopilot.session);
     if (selectedGuidedDraft && selectedGuidedDraft.project_dir && window.EU_API.openGuidedProject) {
       guidedCopilot = { loading: true, error: null, session: guidedCopilot.session, last: guidedCopilot.last };
       return window.EU_API.openGuidedProject({
@@ -2457,6 +2517,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         return null;
       });
     }
+    if (!force) return Promise.resolve(null);
     guidedCopilot = { loading: true, error: null, session: guidedCopilot.session, last: guidedCopilot.last };
     return window.EU_API.createGuidedSession({
       mode: 'local',
@@ -2564,10 +2625,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     ];
     return `
       <div class="gd-frontdoor" data-guided-frontdoor>
+        <div class="gdf-memory ${hasGuidedProjectMemory() ? 'ready' : ''}">
+          <span>${icon(hasGuidedProjectMemory() ? 'check' : 'folder', 13)}</span>
+          <div><strong>${hasGuidedProjectMemory() ? t('Project memory bound', '已绑定项目记忆') : t('Start by binding a local study folder', '先绑定本地研究文件夹')}</strong>
+          <small>${hasGuidedProjectMemory()
+            ? esc(compactPath((guidedCopilot.session && guidedCopilot.session.project_dir) || (selectedGuidedDraft && selectedGuidedDraft.project_dir) || (selectedGuidedRun && selectedGuidedRun.project_dir) || ''))
+            : t('Required setup stays inside Guided Copilot; every folder has its own conversation, settings, and handoff memory.', '必需配置都在 Guided Copilot 内完成；每个文件夹都有自己的对话、设置和交接记忆。')}</small></div>
+          ${hasGuidedProjectMemory() ? '' : `<button class="btn sm" type="button" data-go="@foldernew">${t('New / open folder', '新建/打开文件夹')}</button>`}
+        </div>
         <div class="gdf-head">
           <span class="gdf-kicker">${t('Choose a goal', '选择目标')}</span>
-          <strong>${t('What do you want EasyICU to help with?', '你想让 EasyICU 帮你做哪件事？')}</strong>
-          <span>${t('Pick a goal. Common extraction, review, KM, and Agent preflight steps can run inside Copilot; Classic remains the expert workspace for deep controls.', '先选目标。常用抽取、审阅、KM 和 Agent 预检可直接在 Copilot 内完成；经典视图保留为高级控制台。')}</span>
+          <strong>${t('What should this local study folder do next?', '这个本地研究文件夹下一步要做什么？')}</strong>
+          <span>${t('Pick a goal. If no folder is bound yet, I will ask you to create or open one first, then continue the selected workflow inside this conversation.', '选择目标。如果还没有绑定文件夹，我会先让你创建或打开一个文件夹，然后在本对话内继续刚才选择的流程。')}</span>
         </div>
         <div class="gdf-grid">
           ${cards.map(([goal, ico, title, body]) => `
@@ -2614,6 +2683,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       </div>`;
   }
   function chooseGuidedGoal(goal, label) {
+    if (requireGuidedProjectMemory(goal, label)) return;
     if (goal === 'idea_mining') {
       startGuidedIdeaFlow(label || guidedGoalMeta(goal).label_en);
       return;
@@ -2653,6 +2723,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     });
   }
   function runGuidedHandoff(goal, target, label) {
+    if (requireGuidedProjectMemory(goal, label)) return;
     ensureGuidedSession().then(session => {
       window.EU_API.runGuidedAction({
         session_id: session && session.id,
@@ -2672,6 +2743,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
   function sendGuidedShortcut(text) {
     if (!window.EU_API || !window.EU_API.sendGuidedMessage) return false;
+    if (!hasGuidedProjectMemory()) {
+      const goal = isGuidedIdeaIntent(text) ? 'idea_mining'
+        : isGuidedExtractionIntent(text) ? 'data_extraction'
+          : isGuidedReviewIntent(text) ? 'review_data'
+            : isGuidedAgentIntent(text) ? 'run_agent'
+              : null;
+      requireGuidedProjectMemory(goal, text);
+      return true;
+    }
     pushUser(text);
     ensureGuidedSession().then(session => {
       window.EU_API.sendGuidedMessage({
@@ -2783,6 +2863,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       };
       selectedGuidedRun = null;
       restoreGuidedProjectThread(result, selectedGuidedDraft, 'draft');
+      continuePendingGuidedGoal();
       loadGuidedDrafts(true);
     }).catch(err => {
       thread = thread.filter(item => !item.typing);
@@ -2814,14 +2895,26 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     window.EU_API.createGuidedDraft(payload).then(result => {
       selectedGuidedDraft = result.draft || null;
       loadGuidedDrafts(true);
+      return bindGuidedDraftMemory(selectedGuidedDraft).then(opened => ({ result, opened }));
+    }).then(({ result, opened }) => {
+      const draft = (opened && opened.session) ? {
+        id: opened.session.draft_id,
+        title: opened.session.project_title,
+        project_dir: opened.session.project_dir,
+      } : (result.draft || selectedGuidedDraft);
+      selectedGuidedDraft = draft || selectedGuidedDraft;
       const title = selectedGuidedDraft && selectedGuidedDraft.title ? selectedGuidedDraft.title : text;
       const path = selectedGuidedDraft && selectedGuidedDraft.project_dir ? compactPath(selectedGuidedDraft.project_dir) : '~/easyicu/projects';
       pushBot(
-        `Saved local guided draft <strong>${esc(title)}</strong> at <span class="mono">${esc(path)}</span>. It is metadata-only; persistent Agent artifacts are created only when you start an auditable run.`,
-        `已保存本地引导草稿 <strong>${esc(title)}</strong> 到 <span class="mono">${esc(path)}</span>。它只保存元数据；只有你启动可审计 run 时才会生成持久 Agent artifacts。`,
+        `Saved local guided draft <strong>${esc(title)}</strong> at <span class="mono">${esc(path)}</span>. This folder now owns the Guided conversation memory; Agent artifacts are created only when you start an auditable run.`,
+        `已保存本地引导草稿 <strong>${esc(title)}</strong> 到 <span class="mono">${esc(path)}</span>。现在这个文件夹拥有本次 Guided 对话记忆；只有启动可审计 run 时才会生成 Agent artifacts。`,
       );
       chips = [['Use active export', '@activeExport'], ['Open Agent Projects', '@openAgent'], ['Continue conversation', '@noop']];
       renderThread(); renderChips();
+      if (!continuePendingGuidedGoal()) {
+        thread.push({ bot: true, html: bi(renderGuidedGoalCards(), renderGuidedGoalCards()) });
+        renderThread();
+      }
     }).catch(err => {
       pushBot(
         `Could not save the guided draft: <span class="mono">${esc(err.message || String(err))}</span>`,
@@ -2878,12 +2971,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       step: 'question',
       bot: () => [
         bi(
-          `Hi — I’m the EasyICU <strong>Guided Copilot</strong>. Pick a goal card first, or type a short shortcut like “find an idea” or “extract my data”.`,
-          `你好，我是 EasyICU <strong>引导式 Copilot</strong>。请先选一个目标卡片，或输入类似“找研究想法”“抽取我的数据”的短指令。`,
+          `Hi — I’m the EasyICU <strong>Guided Copilot</strong>. I can help you finish the common workflows here, but first every conversation is scoped to a local study folder.`,
+          `你好，我是 EasyICU <strong>引导式 Copilot</strong>。常用流程可以在这里完成，但每条对话都必须先绑定到本地研究文件夹。`,
         ),
         bi(renderGuidedGoalCards(), renderGuidedGoalCards()),
       ],
       chips: () => [
+        [t('New / open study folder', '新建/打开研究文件夹'), '@foldernew'],
         [t('Find a Study Idea', '找研究想法'), '@guidedGoal:idea_mining'],
         [t('Prepare Data', '准备/抽取数据'), '@guidedGoal:data_extraction'],
         [t('Review Data', '审阅已有数据'), '@guidedGoal:review_data'],
@@ -3202,7 +3296,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderSessions();
       loadGuidedDrafts();
       loadGuidedHistory();
-      ensureGuidedSession();
       // continue from the dock if we just expanded it
       let bridged = false;
       try {
@@ -3571,20 +3664,24 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return;
     }
     if (currentId === 'frontdoor' && isGuidedIdeaIntent(v)) {
+      if (requireGuidedProjectMemory('idea_mining', v)) return;
       startGuidedIdeaFlow(v);
       guidedIdea.topic = v;
       renderThread();
       return;
     }
     if (currentId === 'frontdoor' && isGuidedExtractionIntent(v)) {
+      if (requireGuidedProjectMemory('data_extraction', v)) return;
       startGuidedExtractionFlow(v);
       return;
     }
     if (currentId === 'frontdoor' && isGuidedReviewIntent(v)) {
+      if (requireGuidedProjectMemory('review_data', v)) return;
       startGuidedReviewFlow(v);
       return;
     }
     if (currentId === 'frontdoor' && isGuidedAgentIntent(v)) {
+      if (requireGuidedProjectMemory('run_agent', v)) return;
       startGuidedAgentFlow(v);
       return;
     }
