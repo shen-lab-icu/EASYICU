@@ -274,6 +274,9 @@
   function runGuidedAction(body) {
     return postJSON('/api/guided/action', body || {});
   }
+  function saveGuidedSlots(body) {
+    return postJSON('/api/guided/action', Object.assign({ action: 'update_slots' }, body || {}));
+  }
   function loadGuidedSessions(body) {
     return postJSON('/api/guided/sessions/list', body || {});
   }
@@ -388,6 +391,7 @@
   window.EU_API.openGuidedProject = openGuidedProject;
   window.EU_API.sendGuidedMessage = sendGuidedMessage;
   window.EU_API.runGuidedAction = runGuidedAction;
+  window.EU_API.saveGuidedSlots = saveGuidedSlots;
   window.EU_API.loadGuidedSessions = loadGuidedSessions;
   window.EU_API.createPageGuideSession = createPageGuideSession;
   window.EU_API.sendPageGuideMessage = sendPageGuideMessage;

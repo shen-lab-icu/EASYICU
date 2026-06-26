@@ -44,6 +44,9 @@ _VALID_ROUTES = {
     "tutorial",
     "guided",
 }
+_MAX_SLOT_DEPTH = 5
+_MAX_SLOT_ITEMS = 80
+_MAX_SLOT_TEXT = 700
 _GOAL_META = {
     "idea_mining": {
         "target_route": "ideas",
@@ -119,6 +122,61 @@ def _source_meta(raw: Any) -> Dict[str, Any] | None:
     if path:
         meta["path_hash"] = hashlib.sha256(path.encode("utf-8")).hexdigest()[:16]
     return meta or None
+
+
+def _slot_key(raw: Any) -> str | None:
+    key = str(raw or "").strip()
+    if not key or key in _ROW_LEVEL_KEYS or len(key) > 48:
+        return None
+    if not re.match(r"^[A-Za-z0-9_.:-]+$", key):
+        return None
+    return key
+
+
+def _bounded_slot_value(value: Any, depth: int = 0) -> Any:
+    if depth > _MAX_SLOT_DEPTH:
+        return None
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        for raw_key, child in list(value.items())[:_MAX_SLOT_ITEMS]:
+            key = _slot_key(raw_key)
+            if key is None:
+                continue
+            bounded = _bounded_slot_value(child, depth + 1)
+            if bounded is not None:
+                out[key] = bounded
+        return out
+    if isinstance(value, list):
+        rows = []
+        for child in value[:_MAX_SLOT_ITEMS]:
+            bounded = _bounded_slot_value(child, depth + 1)
+            if bounded is not None:
+                rows.append(bounded)
+        return rows
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if value == value and abs(value) != float("inf") else None
+    return _clean_text(value, max_len=_MAX_SLOT_TEXT)
+
+
+def _merge_slots(current: Any, patch: Any) -> Dict[str, Any]:
+    base = current if isinstance(current, dict) else {}
+    bounded = _bounded_slot_value(patch if isinstance(patch, dict) else {})
+    update = bounded if isinstance(bounded, dict) else {}
+
+    def merge_dict(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(left)
+        for key, value in right.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = merge_dict(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
+
+    return merge_dict(base, update)
 
 
 def _session_id(seed: str) -> str:
@@ -569,11 +627,47 @@ def execute_guided_action(body: Dict[str, Any]) -> Dict[str, Any]:
     session_id = str(payload.get("session_id") or "")
     with _LOCK:
         session = _find_session(session_id) if session_id else None
+        if session is None and action == "update_slots":
+            return {
+                "ok": False,
+                "blocked": True,
+                "error": "guided_project_session_required",
+                "reason": "Guided Copilot slot updates require an existing project-folder session.",
+                "local_first": {"uploads": 0, "tokens": 0, "external_calls": 0},
+            }
         if session is None:
             created = create_guided_session({"mode": payload.get("mode") or "local", "context": payload.get("context")})
             session = _find_session(created["session"]["id"])
         if session is None:
             return {"ok": False, "error": "session_create_failed"}
+        if action == "update_slots":
+            if session.get("memory_scope") != "project_folder":
+                return {
+                    "ok": False,
+                    "blocked": True,
+                    "error": "guided_project_memory_required",
+                    "reason": "Required Copilot configuration is only persisted inside a local project folder.",
+                    "local_first": {"uploads": 0, "tokens": 0, "external_calls": 0},
+                }
+            now = _now()
+            if payload.get("context") is not None:
+                session["context"] = _sanitize_context(payload.get("context"))
+            if goal in _VALID_GOALS:
+                session["goal"] = goal
+            step = _clean_text(payload.get("step"), max_len=60)
+            if step:
+                session["step"] = step
+            session["slots"] = _merge_slots(session.get("slots"), payload.get("slots"))
+            session["updated_at"] = now
+            _persist_session(session)
+            _upsert_session(session)
+            return {
+                "ok": True,
+                "action": action,
+                "session": _public_session(session),
+                "storage": "metadata_only",
+                "local_first": {"uploads": 0, "tokens": 0, "external_calls": 0},
+            }
         if action == "reset_goal":
             messages = session.get("messages") if isinstance(session.get("messages"), list) else []
             now = _now()

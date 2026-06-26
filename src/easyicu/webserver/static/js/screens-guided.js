@@ -138,6 +138,7 @@
   let selectedGuidedRun = null;
   let selectedGuidedDraft = null;
   let pendingGuidedGoal = null;
+  let guidedSlotSaveTimer = null;
   let studyParams;   // dynamic params extracted from clarify answers + free text
 
   const DEFAULT_MODS = ['Demographics', 'Vital signs', 'Lab — Chemistry', 'SOFA-2 scores', 'Sepsis-3 (SOFA-2)', 'Outcome'];
@@ -1268,6 +1269,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     chips = [];
     renderThread();
     renderChips();
+    scheduleGuidedSlotSave('start_extraction');
   }
   function updateGuidedExtractionModules(mode) {
     if (!guidedExtract) return;
@@ -1308,11 +1310,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         guidedExtract.scanError = (r && (r.error || r.reason)) || 'Could not recognize this folder.';
       }
       renderThread();
+      scheduleGuidedSlotSave('scan_extraction_folder');
     }).catch(err => {
       guidedExtract.scanning = false;
       guidedExtract.scan = null;
       guidedExtract.scanError = err.message || String(err);
       renderThread();
+      scheduleGuidedSlotSave('scan_extraction_folder_error');
     });
   }
   function registerGuidedModuleExport() {
@@ -1325,10 +1329,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         setVal({ data: 'registered export', extract: 'already exported' });
         markThrough('review', 'active');
         renderThread();
+        scheduleGuidedSlotSave('register_module_export');
       })
       .catch(err => {
         guidedExtract.error = err.message || String(err);
         renderThread();
+        scheduleGuidedSlotSave('register_module_export_error');
       });
   }
   function runGuidedExtractionJob() {
@@ -1365,6 +1371,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     }).then(r => {
       guidedExtract.jobId = r.job_id;
       renderThread();
+      scheduleGuidedSlotSave('start_extraction_job');
       const es = new EventSource('/api/jobs/' + encodeURIComponent(r.job_id) + '/events');
       es.onmessage = ev => {
         let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
@@ -1391,6 +1398,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             guidedExtract.error = (m.error && (m.error.message || m.error.code)) || m.status || 'Extraction failed.';
           }
           renderThread();
+          scheduleGuidedSlotSave('finish_extraction_job');
         }
       };
       es.onerror = () => {
@@ -1398,11 +1406,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         guidedExtract.running = false;
         guidedExtract.error = 'Extraction event stream stopped before completion.';
         renderThread();
+        scheduleGuidedSlotSave('extraction_event_stream_error');
       };
     }).catch(err => {
       guidedExtract.running = false;
       guidedExtract.error = err.message || String(err);
       renderThread();
+      scheduleGuidedSlotSave('start_extraction_job_error');
     });
   }
 
@@ -1440,6 +1450,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     chips = [];
     renderThread();
     renderChips();
+    scheduleGuidedSlotSave('start_review');
     loadGuidedReviewData();
   }
   function loadGuidedReviewData(entityRef) {
@@ -1478,10 +1489,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       }
       renderThread();
       renderAside();
+      scheduleGuidedSlotSave('load_review_data');
     }).catch(err => {
       guidedReview.loading = false;
       guidedReview.error = err.message || String(err);
       renderThread();
+      scheduleGuidedSlotSave('load_review_data_error');
     });
   }
   function guidedMetricCard(label, value, sub) {
@@ -1636,6 +1649,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     chips = [];
     renderThread();
     renderChips();
+    scheduleGuidedSlotSave('start_agent');
   }
   function guidedAgentStatusText() {
     if (!guidedAgent) return '';
@@ -1722,6 +1736,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     }).then(r => {
       guidedAgent.jobId = r.job_id;
       renderThread();
+      scheduleGuidedSlotSave('start_agent_preflight');
       const es = new EventSource('/api/jobs/' + encodeURIComponent(r.job_id) + '/events');
       es.onmessage = ev => {
         let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
@@ -1743,6 +1758,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           }
           renderThread();
           renderAside();
+          scheduleGuidedSlotSave('finish_agent_preflight');
         }
       };
       es.onerror = () => {
@@ -1750,11 +1766,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         guidedAgent.running = false;
         guidedAgent.error = 'Agent event stream stopped before completion.';
         renderThread();
+        scheduleGuidedSlotSave('agent_event_stream_error');
       };
     }).catch(err => {
       guidedAgent.running = false;
       guidedAgent.error = err.message || String(err);
       renderThread();
+      scheduleGuidedSlotSave('start_agent_preflight_error');
     });
   }
 
@@ -1798,6 +1816,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     chips = [];
     renderThread();
     renderChips();
+    scheduleGuidedSlotSave('start_idea');
   }
   function guidedIdeaPayload() {
     if (!guidedIdea) resetGuidedIdeaState();
@@ -2033,10 +2052,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (!guidedIdea[key] && suggested[key]) guidedIdea[key] = String(suggested[key]);
       });
       renderThread();
+      scheduleGuidedSlotSave('resolve_idea_source');
     }).catch(err => {
       guidedIdea.resolving = false;
       guidedIdea.error = err.message || String(err);
       renderThread();
+      scheduleGuidedSlotSave('resolve_idea_source_error');
     });
   }
   function runGuidedIdeaMine() {
@@ -2064,10 +2085,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       markThrough('analysis', 'active');
       renderThread();
       renderAside();
+      scheduleGuidedSlotSave('mine_idea');
     }).catch(err => {
       guidedIdea.mining = false;
       guidedIdea.error = err.message || String(err);
       renderThread();
+      scheduleGuidedSlotSave('mine_idea_error');
     });
   }
   function runGuidedIdeaPriorArt() {
@@ -2094,10 +2117,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedIdea.priorArting = false;
       guidedIdea.prior = result;
       renderThread();
+      scheduleGuidedSlotSave('check_idea_prior_art');
     }).catch(err => {
       guidedIdea.priorArting = false;
       guidedIdea.error = err.message || String(err);
       renderThread();
+      scheduleGuidedSlotSave('check_idea_prior_art_error');
     });
   }
   function runGuidedIdeaHandoff() {
@@ -2126,10 +2151,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       setVal({ analysis: 'handoff ready', draft: 'locked' });
       renderThread();
       renderAside();
+      scheduleGuidedSlotSave('handoff_idea');
     }).catch(err => {
       guidedIdea.handoffing = false;
       guidedIdea.error = err.message || String(err);
       renderThread();
+      scheduleGuidedSlotSave('handoff_idea_error');
     });
   }
   function runGuidedIdeaCreateProject() {
@@ -2158,10 +2185,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       setVal({ analysis: 'Agent seed ready', draft: 'locked' });
       renderThread();
       renderAside();
+      scheduleGuidedSlotSave('create_idea_agent_project');
     }).catch(err => {
       guidedIdea.projectCreating = false;
       guidedIdea.error = err.message || String(err);
       renderThread();
+      scheduleGuidedSlotSave('create_idea_agent_project_error');
     });
   }
 
@@ -2439,6 +2468,174 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       },
     };
   }
+  function guidedSessionId() {
+    return guidedCopilot && guidedCopilot.session && guidedCopilot.session.id;
+  }
+  function guidedActiveFlow() {
+    if (guidedIdea) return 'idea_mining';
+    if (guidedExtract) return 'data_extraction';
+    if (guidedReview) return 'review_data';
+    if (guidedAgent) return 'run_agent';
+    return null;
+  }
+  function boundedScan(scan) {
+    if (!scan) return null;
+    return {
+      ok: !!scan.ok,
+      ready: !!scan.ready,
+      source: scan.source || null,
+      db: scan.db || null,
+      db_key: scan.db_key || null,
+      path: scan.path || null,
+      tables: scan.tables == null ? null : Number(scan.tables),
+      modules: scan.modules == null ? null : Number(scan.modules),
+      error: scan.error || null,
+      reason: scan.reason || null,
+    };
+  }
+  function guidedSlotSnapshot() {
+    const src = activeExportSource();
+    const idea = guidedIdea && guidedIdeaSelected ? guidedIdeaSelected() : null;
+    return {
+      active_flow: guidedActiveFlow(),
+      data_mode: dataMode || 'demo',
+      branch,
+      depth,
+      study_params: {
+        outcome: studyParams && studyParams.outcome,
+        window: studyParams && studyParams.window,
+        exposure: studyParams && studyParams.exposure,
+        scope: studyParams && studyParams.scope,
+      },
+      active_export: src ? {
+        label: src.label || src.database || 'active export',
+        database: src.database || null,
+        path: src.path || null,
+        modules: src.summary && src.summary.modules,
+        stays: src.summary && src.summary.stays,
+      } : null,
+      extraction: guidedExtract ? {
+        path: guidedExtract.path || '',
+        cohort: guidedExtract.cohort || 'adult_first',
+        modules: guidedExtract.modules || [],
+        format: guidedExtract.format || 'parquet',
+        merge: !!guidedExtract.merge,
+        max_patients: guidedExtract.maxPatients == null ? null : Number(guidedExtract.maxPatients),
+        scan: boundedScan(guidedExtract.scan),
+        registered: !!guidedExtract.registered,
+        result: guidedExtract.result ? {
+          out_dir: guidedExtract.result.out_dir || guidedExtract.result.path || '',
+          total_rows: guidedExtract.result.total_rows == null ? null : Number(guidedExtract.result.total_rows),
+          files_written: guidedExtract.result.files_written == null ? guidedExtract.result.files : guidedExtract.result.files_written,
+        } : null,
+      } : null,
+      review: guidedReview ? {
+        selected_ref: guidedReview.selectedRef || null,
+        loaded: !!(guidedReview.patient || guidedReview.cohort),
+        source_label: guidedSourceLabel(guidedReview.cohort || guidedReview.patient),
+        cohort_size: guidedReview.cohort && guidedReview.cohort.summary && (guidedReview.cohort.summary.cohort_size || guidedReview.cohort.summary.entities),
+      } : null,
+      agent: guidedAgent ? {
+        question: guidedAgent.question || '',
+        job_id: guidedAgent.jobId || null,
+        result: guidedAgent.result ? {
+          project_dir: guidedAgent.result.project_dir || '',
+          run_type: guidedAgent.result.run_type || '',
+          reportable: !!guidedAgent.result.reportable,
+          gate_status: guidedAgent.result.gate && guidedAgent.result.gate.status,
+        } : null,
+      } : null,
+      idea: guidedIdea ? {
+        source_type: guidedIdea.sourceType || 'manual',
+        topic: guidedIdea.topic || '',
+        excerpt: guidedIdea.excerpt || '',
+        title: guidedIdea.title || '',
+        journal: guidedIdea.journal || '',
+        year: guidedIdea.year || '',
+        doi: guidedIdea.doi || '',
+        pmid: guidedIdea.pmid || '',
+        url: guidedIdea.url || '',
+        allow_network: !!guidedIdea.allowNetwork,
+        plan_edits: guidedIdea.planEdits || '',
+        run_id: guidedIdea.result && guidedIdea.result.run_id,
+        selected_idea_id: idea && idea.idea_id,
+        handoff_id: guidedIdea.handoff && (guidedIdea.handoff.handoff_id || guidedIdea.handoff.run_id),
+        agent_project_dir: guidedIdea.project && guidedIdea.project.project && guidedIdea.project.project.project_dir,
+      } : null,
+    };
+  }
+  function saveGuidedSlotsNow(reason) {
+    if (!window.EU_API || !window.EU_API.saveGuidedSlots) return Promise.resolve(null);
+    const sessionPromise = guidedSessionId() && guidedCopilot.session && guidedCopilot.session.memory_scope === 'project_folder'
+      ? Promise.resolve(guidedCopilot.session)
+      : ensureGuidedSession();
+    return sessionPromise.then(session => {
+      if (!session || session.memory_scope !== 'project_folder') return null;
+      const flow = guidedActiveFlow();
+      return window.EU_API.saveGuidedSlots({
+        session_id: session.id,
+        goal: flow || undefined,
+        step: flow ? `${flow}_configuration` : 'choose_goal',
+        context: guidedBackendContext(),
+        slots: Object.assign({ save_reason: reason || 'state_change' }, guidedSlotSnapshot()),
+      }).then(result => {
+        if (result && result.session) guidedCopilot.session = result.session;
+        return result;
+      });
+    }).catch(err => {
+      console.warn('[EasyICU] Guided slot save failed:', err);
+      return null;
+    });
+  }
+  function scheduleGuidedSlotSave(reason) {
+    clearTimeout(guidedSlotSaveTimer);
+    guidedSlotSaveTimer = setTimeout(() => { saveGuidedSlotsNow(reason); }, 350);
+  }
+  function restoreGuidedSlotsFromSession(session) {
+    const slots = session && session.slots && typeof session.slots === 'object' ? session.slots : {};
+    if (slots.study_params && typeof slots.study_params === 'object') {
+      studyParams = Object.assign({}, studyParams || {}, slots.study_params);
+    }
+    const active = slots.active_flow || session && session.goal;
+    if (slots.extraction && typeof slots.extraction === 'object') {
+      resetGuidedExtractionState();
+      guidedExtract.path = slots.extraction.path || '';
+      guidedExtract.cohort = slots.extraction.cohort || guidedExtract.cohort;
+      guidedExtract.modules = Array.isArray(slots.extraction.modules) ? slots.extraction.modules.slice() : guidedExtract.modules;
+      guidedExtract.format = slots.extraction.format || guidedExtract.format;
+      guidedExtract.merge = !!slots.extraction.merge;
+      guidedExtract.maxPatients = slots.extraction.max_patients == null ? null : Number(slots.extraction.max_patients);
+      guidedExtract.scan = slots.extraction.scan || null;
+      guidedExtract.registered = !!slots.extraction.registered;
+      guidedExtract.result = slots.extraction.result || null;
+    }
+    if (slots.idea && typeof slots.idea === 'object') {
+      resetGuidedIdeaState();
+      guidedIdea.sourceType = slots.idea.source_type || guidedIdea.sourceType;
+      guidedIdea.topic = slots.idea.topic || '';
+      guidedIdea.excerpt = slots.idea.excerpt || '';
+      guidedIdea.title = slots.idea.title || '';
+      guidedIdea.journal = slots.idea.journal || '';
+      guidedIdea.year = slots.idea.year || '';
+      guidedIdea.doi = slots.idea.doi || '';
+      guidedIdea.pmid = slots.idea.pmid || '';
+      guidedIdea.url = slots.idea.url || '';
+      guidedIdea.allowNetwork = !!slots.idea.allow_network;
+      guidedIdea.planEdits = slots.idea.plan_edits || '';
+      if (slots.idea.run_id) guidedIdea.result = { ok: true, run_id: slots.idea.run_id, ideas: [] };
+    }
+    if (slots.agent && typeof slots.agent === 'object') {
+      resetGuidedAgentState();
+      guidedAgent.question = slots.agent.question || guidedAgent.question;
+      guidedAgent.jobId = slots.agent.job_id || null;
+      guidedAgent.result = slots.agent.result || null;
+    }
+    if (slots.review && typeof slots.review === 'object') {
+      resetGuidedReviewState();
+      guidedReview.selectedRef = slots.review.selected_ref || null;
+    }
+    return active || null;
+  }
   function hasGuidedProjectMemory() {
     const session = guidedCopilot && guidedCopilot.session;
     if (session && session.project_dir && session.memory_scope === 'project_folder') return true;
@@ -2545,6 +2742,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function restoreGuidedProjectThread(result, row, kind) {
     const session = result && result.session ? result.session : null;
     guidedCopilot = { loading: false, error: null, session, last: result || guidedCopilot.last };
+    const restoredFlow = restoreGuidedSlotsFromSession(session);
     currentId = 'frontdoor';
     thread = [];
     const title = (session && session.project_title) || (row && (row.title || row.study_id || row.run_label)) || 'local project';
@@ -2559,12 +2757,22 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (restored.length) {
       restored.forEach(item => thread.push(item));
       if (session && session.handoff) thread.push({ bot: true, html: renderGuidedHandoffCard(session.handoff) });
-    } else if (kind === 'run') {
+    }
+    if (restoredFlow && (guidedExtract || guidedIdea || guidedReview || guidedAgent)) {
+      thread.push({ bot: true, html: bi(
+        `Restored the saved setup for this folder. Continue editing here; required configuration stays inside Guided Copilot.`,
+        `已恢复这个文件夹里保存的配置。你可以继续在这里编辑；必需配置仍留在 Guided Copilot 内完成。`,
+      ) });
+      if (restoredFlow === 'data_extraction' && guidedExtract) thread.push({ guidedExtraction: true });
+      else if (restoredFlow === 'idea_mining' && guidedIdea) thread.push({ guidedIdea: true });
+      else if (restoredFlow === 'review_data' && guidedReview) thread.push({ guidedReview: true });
+      else if (restoredFlow === 'run_agent' && guidedAgent) thread.push({ guidedAgent: true });
+    } else if (!restored.length && kind === 'run') {
       thread.push({ bot: true, html: bi(
         `This context is attached to an existing Agent run folder. Review artifacts or open Agent Projects; Guided will not rewrite the run outputs.`,
         `这个上下文关联到已有 Agent run 文件夹。你可以审阅 artifacts 或打开 Agent Projects；Guided 不会改写 run 输出。`,
       ) });
-    } else {
+    } else if (!restored.length) {
       thread.push({ bot: true, html: bi(renderGuidedGoalCards(), renderGuidedGoalCards()) });
     }
     chips = kind === 'run'
@@ -3392,6 +3600,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           guidedExtract.cohort = gxCohort.dataset.gxCohort || 'adult_first';
           guidedExtract.error = null;
           renderThread();
+          scheduleGuidedSlotSave('set_extraction_cohort');
           return;
         }
         const gxModule = e.target.closest('[data-gx-module]');
@@ -3401,6 +3610,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           if (guidedExtract.modules.includes(key)) guidedExtract.modules = guidedExtract.modules.filter(m => m !== key);
           else guidedExtract.modules.push(key);
           renderThread();
+          scheduleGuidedSlotSave('toggle_extraction_module');
           return;
         }
         const gxSet = e.target.closest('[data-gx-module-set]');
@@ -3408,6 +3618,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           guidedExtract.error = null;
           updateGuidedExtractionModules(gxSet.dataset.gxModuleSet);
           renderThread();
+          scheduleGuidedSlotSave('set_extraction_modules');
           return;
         }
         const gxFormat = e.target.closest('[data-gx-format]');
@@ -3415,6 +3626,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           guidedExtract.format = gxFormat.dataset.gxFormat || 'parquet';
           guidedExtract.error = null;
           renderThread();
+          scheduleGuidedSlotSave('set_extraction_format');
           return;
         }
         const gxMax = e.target.closest('[data-gx-max]');
@@ -3422,6 +3634,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           guidedExtract.maxPatients = gxMax.dataset.gxMax === 'all' ? null : Number(gxMax.dataset.gxMax || 500);
           guidedExtract.error = null;
           renderThread();
+          scheduleGuidedSlotSave('set_extraction_max_patients');
           return;
         }
         if (e.target.closest('[data-gx-analyze]')) {
@@ -3454,6 +3667,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           guidedIdea.sourceType = giSource.dataset.giSource || 'manual';
           guidedIdea.error = null;
           renderThread();
+          scheduleGuidedSlotSave('set_idea_source_type');
           return;
         }
         if (e.target.closest('[data-gi-resolve]')) {
@@ -3606,12 +3820,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           guidedExtract.scan = null;
           guidedExtract.scanError = null;
           guidedExtract.error = null;
+          scheduleGuidedSlotSave('edit_extraction_path');
           return;
         }
         const gaQuestion = e.target.closest('[data-ga-question]');
         if (gaQuestion && guidedAgent) {
           guidedAgent.question = gaQuestion.value;
           guidedAgent.error = null;
+          scheduleGuidedSlotSave('edit_agent_question');
           return;
         }
         const giField = e.target.closest('[data-gi-field]');
@@ -3619,6 +3835,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           const key = giField.dataset.giField;
           if (key) guidedIdea[key] = giField.value;
           guidedIdea.error = null;
+          scheduleGuidedSlotSave('edit_idea_field');
           return;
         }
         const title = e.target.closest('[data-draft-title]');
@@ -3633,6 +3850,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           guidedIdea.allowNetwork = !!giNetwork.checked;
           guidedIdea.error = null;
           renderThread();
+          scheduleGuidedSlotSave('toggle_idea_network');
           return;
         }
         const slug = e.target.closest('[data-draft-slug]');

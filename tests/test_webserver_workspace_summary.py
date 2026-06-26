@@ -549,6 +549,96 @@ def test_guided_project_memory_restores_conversation_per_local_folder(tmp_path: 
     assert outside.json()["error"] == "invalid_guided_project_dir"
 
 
+def test_guided_project_memory_persists_bounded_setup_slots(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
+    monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/guided/drafts",
+        json={
+            "title": "Copilot slot study",
+            "folder_slug": "copilot-slot-study",
+            "data_mode": "real",
+        },
+    )
+    draft = created.json()["draft"]
+    opened = client.post("/api/guided/project/open", json={"project_dir": draft["project_dir"]})
+    session = opened.json()["session"]
+
+    update = client.post(
+        "/api/guided/action",
+        json={
+            "session_id": session["id"],
+            "action": "update_slots",
+            "goal": "data_extraction",
+            "step": "data_extraction_configuration",
+            "context": {"route": "guided", "data_mode": "real", "language": "zh"},
+            "slots": {
+                "active_flow": "data_extraction",
+                "extraction": {
+                    "path": str(tmp_path / "raw_miiv"),
+                    "cohort": "adult_first",
+                    "modules": ["demographics", "vitals", "outcome"],
+                    "format": "parquet",
+                    "max_patients": 500,
+                    "scan": {"ok": True, "ready": True, "db": "MIMIC-IV", "tables": 12},
+                    "tableRows": [{"stay_id": 1}],
+                },
+                "agent": {
+                    "question": "Evaluate lactate and mortality.",
+                    "patient": {"subject_id": 123},
+                },
+                "patient": {"hadm_id": 456},
+            },
+        },
+    )
+
+    assert update.status_code == 200
+    body = update.json()
+    assert body["ok"] is True
+    assert body["session"]["memory_scope"] == "project_folder"
+    assert body["session"]["goal"] == "data_extraction"
+    assert body["session"]["step"] == "data_extraction_configuration"
+    slots = body["session"]["slots"]
+    assert slots["active_flow"] == "data_extraction"
+    assert slots["extraction"]["format"] == "parquet"
+    assert slots["extraction"]["modules"] == ["demographics", "vitals", "outcome"]
+    assert slots["extraction"]["scan"]["db"] == "MIMIC-IV"
+    assert slots["agent"]["question"] == "Evaluate lactate and mortality."
+    assert "tableRows" not in slots["extraction"]
+    assert "patient" not in slots
+    assert "patient" not in slots["agent"]
+
+    reopened = client.post("/api/guided/project/open", json={"project_dir": draft["project_dir"]})
+    restored = reopened.json()["session"]["slots"]
+    assert restored["active_flow"] == "data_extraction"
+    assert restored["extraction"]["path"] == str(tmp_path / "raw_miiv")
+    assert restored["agent"]["question"] == "Evaluate lactate and mortality."
+
+    persisted = json.loads((Path(draft["project_dir"]) / "guided_copilot_session.json").read_text(encoding="utf-8"))
+    dumped = json.dumps(persisted)
+    assert "tableRows" not in dumped
+    assert "stay_id" not in dumped
+    assert "subject_id" not in dumped
+    assert "hadm_id" not in dumped
+    assert persisted["privacy"]["no_patient_rows_persisted"] is True
+    assert persisted["privacy"]["row_level_markers"] == []
+
+    missing = client.post(
+        "/api/guided/action",
+        json={
+            "session_id": "missing",
+            "action": "update_slots",
+            "slots": {"active_flow": "run_agent"},
+        },
+    )
+    assert missing.status_code == 200
+    assert missing.json()["blocked"] is True
+    assert missing.json()["error"] == "guided_project_session_required"
+
+
 def test_guided_project_open_accepts_existing_local_folder_without_draft(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
