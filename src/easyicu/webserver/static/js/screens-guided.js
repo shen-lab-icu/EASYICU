@@ -3013,6 +3013,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           <div class="gds-choice-head"><strong>Open existing project folder</strong><span>Use this when you already have a local Guided, Idea Mining, or Agent project folder.</span></div>
           <label class="gds-field"><span>Project folder path</span><input data-existing-project-dir placeholder="~/easyicu/projects/my-study or C:\\Users\\you\\easyicu\\projects\\my-study" autocomplete="off" /></label>
           <div class="row gap-8"><button class="btn sm" data-openprojectfolder>${icon('folder', 13)} Open folder memory</button></div>
+          <div class="gds-status" data-project-open-status hidden></div>
         </div>
         <div class="gds-choice">
           <div class="gds-choice-head"><strong>Create new local study folder</strong><span>Creates a metadata-only folder under the EasyICU projects root. No patient rows, no Agent run, no draft unlock.</span></div>
@@ -3031,27 +3032,62 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (inp) { inp.focus(); inp.select(); }
     }, 80);
   }
-  function openExistingGuidedProject(projectDir) {
+  function latestGuidedDraftSetupBox(fallback) {
+    if (fallback && fallback.matches && fallback.matches('[data-draft-setup]') && fallback.isConnected) return fallback;
+    const boxes = Array.from(document.querySelectorAll('[data-draft-setup]'));
+    return boxes.length ? boxes[boxes.length - 1] : null;
+  }
+  function setGuidedProjectOpenStatus(box, state, html) {
+    const target = latestGuidedDraftSetupBox(box);
+    if (!target) return;
+    const status = target.querySelector('[data-project-open-status]');
+    const button = target.querySelector('[data-openprojectfolder]');
+    if (button) {
+      button.disabled = state === 'loading';
+      button.setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
+    }
+    if (!status) return;
+    if (!html) {
+      status.hidden = true;
+      status.className = 'gds-status';
+      status.innerHTML = '';
+      return;
+    }
+    status.hidden = false;
+    status.className = `gds-status ${state || 'info'}`;
+    status.innerHTML = html;
+  }
+  function openExistingGuidedProject(projectDir, setupBox) {
     const raw = String(projectDir || '').trim();
     if (!raw) {
-      pushBot(
-        `Paste a local EasyICU project folder path first, then I can open the memory scoped to that folder.`,
-        `请先粘贴一个本地 EasyICU 项目文件夹路径，然后我才能打开绑定到该文件夹的记忆。`,
+      setGuidedProjectOpenStatus(
+        setupBox,
+        'error',
+        `${icon('info', 12)} <span>${t('Paste a local EasyICU project folder path first, then I can open the memory scoped to that folder.', '请先粘贴一个本地 EasyICU 项目文件夹路径，然后我才能打开绑定到该文件夹的记忆。')}</span>`,
       );
-      renderThread();
+      const focus = latestGuidedDraftSetupBox(setupBox);
+      const input = focus ? focus.querySelector('[data-existing-project-dir]') : null;
+      if (input) input.focus();
       return;
     }
     pushUser(`Open local project folder: ${raw}`);
     if (!window.EU_API || !window.EU_API.openGuidedProject) {
-      pushBot(
-        `The local project memory endpoint is unavailable, so I cannot open that folder reliably yet.`,
-        `本地项目记忆端点不可用，所以暂时不能可靠打开这个文件夹。`,
-      );
       renderThread();
+      setGuidedProjectOpenStatus(
+        setupBox,
+        'error',
+        `${icon('info', 12)} <span>${t('The local project memory endpoint is unavailable, so I cannot open that folder reliably yet.', '本地项目记忆端点不可用，所以暂时不能可靠打开这个文件夹。')}</span>`,
+      );
       return;
     }
+    setGuidedProjectOpenStatus(
+      setupBox,
+      'loading',
+      `${icon('refresh', 12)} <span>${t('Opening folder memory and restoring this project context...', '正在打开文件夹记忆并恢复这个项目上下文...')}</span>`,
+    );
     thread.push({ typing: true });
     renderThread();
+    setGuidedProjectOpenStatus(setupBox, 'loading', `${icon('refresh', 12)} <span>${t('Opening folder memory and restoring this project context...', '正在打开文件夹记忆并恢复这个项目上下文...')}</span>`);
     window.EU_API.openGuidedProject({
       project_dir: raw,
       mode: 'local',
@@ -3062,8 +3098,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const reason = result && (result.reason || result.error) ? (result.reason || result.error) : 'unknown error';
         pushBot(`Could not open project folder: <span class="mono">${esc(reason)}</span>`, `无法打开项目文件夹：<span class="mono">${esc(reason)}</span>`);
         renderThread();
+        setGuidedProjectOpenStatus(
+          setupBox,
+          'error',
+          `${icon('info', 12)} <span>${t('Folder memory was not opened:', '文件夹记忆没有打开：')} <span class="mono">${esc(reason)}</span></span>`,
+        );
         return;
       }
+      setGuidedProjectOpenStatus(
+        setupBox,
+        'ok',
+        `${icon('check', 12)} <span>${t('Project memory opened. Restoring the conversation...', '项目记忆已打开，正在恢复对话...')}</span>`,
+      );
       selectedGuidedDraft = {
         id: result.session && result.session.draft_id,
         title: result.session && result.session.project_title,
@@ -3080,6 +3126,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         `无法打开项目文件夹：<span class="mono">${esc(err.message || String(err))}</span>`,
       );
       renderThread();
+      setGuidedProjectOpenStatus(
+        setupBox,
+        'error',
+        `${icon('info', 12)} <span>${t('Folder memory was not opened:', '文件夹记忆没有打开：')} <span class="mono">${esc(err.message || String(err))}</span></span>`,
+      );
     });
   }
   function createLocalGuidedDraft(label, folderSlug) {
@@ -3779,7 +3830,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (openProjectFolderEl) {
           const box = openProjectFolderEl.closest('[data-draft-setup]');
           const pathEl = box ? box.querySelector('[data-existing-project-dir]') : null;
-          openExistingGuidedProject(pathEl && pathEl.value);
+          openExistingGuidedProject(pathEl && pathEl.value, box);
           return;
         }
         const createDraftEl = e.target.closest('[data-createdraft]');

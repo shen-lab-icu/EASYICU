@@ -306,6 +306,36 @@
 }
 .gds-path code{ font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); }
 .gds-path small{ grid-column: 2; color: var(--ink-4); font-size: 10.75px; line-height: 1.35; }
+.gds-status{
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-height: 32px;
+  padding: 8px 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--surface-2) 68%, var(--surface));
+  color: var(--ink-3);
+  font-size: 11.25px;
+  line-height: 1.35;
+}
+.gds-status[hidden]{ display: none; }
+.gds-status svg{ flex: none; margin-top: 1px; }
+.gds-status.loading{
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.gds-status.ok{
+  border-color: color-mix(in srgb, var(--ok) 38%, var(--hair));
+  background: var(--ok-soft);
+  color: color-mix(in srgb, var(--ok) 76%, var(--ink));
+}
+.gds-status.error{
+  border-color: color-mix(in srgb, var(--warn) 46%, var(--hair));
+  background: var(--warn-soft);
+  color: color-mix(in srgb, var(--warn) 72%, var(--ink));
+}
 
 /* Guided Copilot route-owned native extraction card */
 .gd-x-card,
