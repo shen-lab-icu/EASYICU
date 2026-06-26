@@ -131,7 +131,7 @@
 
   /* ============== runtime state ============== */
   let branch, depth, dataMode, mods, cohortPhase, extractPhase, runPhase, draftPhase;
-  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedExtract, guidedReview, guidedAgent;
+  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedExtract, guidedReview, guidedAgent, guidedIdea;
   let guidedHistory = { loading: false, error: null, data: null };
   let guidedDrafts = { loading: false, error: null, data: null };
   let guidedCopilot = { loading: false, error: null, session: null, last: null };
@@ -175,7 +175,7 @@
   function reset() {
     branch = 'predict'; depth = 'full'; dataMode = 'demo'; mods = DEFAULT_MODS.slice();
     cohortPhase = 'normal'; extractPhase = 'run'; runPhase = 'run'; draftPhase = 'gate';
-    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null; guidedReview = null; guidedAgent = null;
+    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null; guidedReview = null; guidedAgent = null; guidedIdea = null;
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
     studyStatus = {}; studyVal = {};
     gen++;
@@ -1756,6 +1756,413 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     });
   }
 
+  /* ============== inline Idea Mining ============== */
+  function resetGuidedIdeaState() {
+    guidedIdea = {
+      sourceType: 'manual',
+      topic: '',
+      excerpt: '',
+      title: '',
+      journal: '',
+      year: '',
+      doi: '',
+      pmid: '',
+      url: '',
+      allowNetwork: false,
+      planEdits: '',
+      resolving: false,
+      mining: false,
+      priorArting: false,
+      handoffing: false,
+      projectCreating: false,
+      resolved: null,
+      result: null,
+      prior: null,
+      handoff: null,
+      project: null,
+      error: null,
+    };
+  }
+  function startGuidedIdeaFlow(label) {
+    if (label) pushUser(label);
+    resetGuidedIdeaState();
+    setVal({ question: 'idea mining', analysis: 'not started', draft: 'locked' });
+    markThrough('question', 'active');
+    thread.push({ bot: true, html: bi(
+      `We can mine a research idea here, without leaving Copilot. Paste a paper clue, PDF excerpt, review topic, or manual idea; I’ll create a local evidence-bound idea ledger, check the active export, and prepare a handoff for Agent Projects.`,
+      `可以直接在 Copilot 里挖掘研究想法。粘贴文章线索、PDF 摘录、综述主题或手动想法后，我会生成本地 evidence-bound idea ledger，检查 active export，并准备交接给 Agent Projects。`,
+    ) });
+    thread.push({ guidedIdea: true });
+    chips = [];
+    renderThread();
+    renderChips();
+  }
+  function guidedIdeaPayload() {
+    if (!guidedIdea) resetGuidedIdeaState();
+    return {
+      source_type: guidedIdea.sourceType || 'manual',
+      topic: String(guidedIdea.topic || '').trim(),
+      excerpt: String(guidedIdea.excerpt || '').trim(),
+      title: String(guidedIdea.title || '').trim(),
+      journal: String(guidedIdea.journal || '').trim(),
+      year: String(guidedIdea.year || '').trim(),
+      doi: String(guidedIdea.doi || '').trim(),
+      pmid: String(guidedIdea.pmid || '').trim(),
+      url: String(guidedIdea.url || '').trim(),
+      allow_network: !!guidedIdea.allowNetwork,
+    };
+  }
+  function guidedIdeaHasInput() {
+    const p = guidedIdeaPayload();
+    return !!(p.topic || p.excerpt || p.title || p.url || p.doi || p.pmid);
+  }
+  function guidedIdeaSelected() {
+    const result = guidedIdea && guidedIdea.result;
+    const ideas = result && Array.isArray(result.idea_ledger) ? result.idea_ledger : [];
+    const id = result && result.selected_idea_id;
+    return ideas.find(row => row.idea_id === id) || ideas[0] || null;
+  }
+  function guidedIdeaStatusText() {
+    if (!guidedIdea) return '';
+    if (guidedIdea.resolving) return t('Resolving bounded source metadata...', '正在解析有界来源元数据...');
+    if (guidedIdea.mining) return t('Mining local idea ledger and active-export feasibility...', '正在生成本地 idea ledger 并检查 active export 可行性...');
+    if (guidedIdea.priorArting) return t('Checking prior art under explicit opt-in rules...', '正在按显式 opt-in 规则检查 prior art...');
+    if (guidedIdea.handoffing) return t('Writing local handoff plan...', '正在写入本地 handoff plan...');
+    if (guidedIdea.projectCreating) return t('Creating metadata-only Agent project seed...', '正在创建 metadata-only Agent project seed...');
+    if (guidedIdea.error) return esc(guidedIdea.error);
+    if (guidedIdea.project) return t('Agent project seed created from the idea handoff.', '已从 idea handoff 创建 Agent project seed。');
+    if (guidedIdea.handoff) return t('Handoff written. You can create an Agent project seed next.', 'handoff 已写入。下一步可创建 Agent project seed。');
+    if (guidedIdea.result) return t('Idea ledger and pre-experiment are ready.', 'idea ledger 与预实验已生成。');
+    if (guidedIdea.resolved) return t('Source metadata resolved. Run local mining next.', '来源元数据已解析。下一步运行本地挖掘。');
+    return t('Add a source clue or topic, then run local mining.', '先添加来源线索或主题，然后运行本地挖掘。');
+  }
+  function renderGuidedIdeaSourceFields() {
+    if (!guidedIdea) resetGuidedIdeaState();
+    const tab = guidedIdea.sourceType || 'manual';
+    const tabs = [
+      ['manual', t('Manual idea', '手动想法')],
+      ['url', t('Article URL', '文章链接')],
+      ['pdf', t('PDF excerpt', 'PDF 摘录')],
+      ['frontier', t('Frontier topic', '前沿主题')],
+    ];
+    return `
+      <div class="gdi-tabs" role="group" aria-label="Idea source type">
+        ${tabs.map(([key, label]) => `<button type="button" class="${tab === key ? 'on' : ''}" data-gi-source="${key}">${label}</button>`).join('')}
+      </div>
+      <div class="gdi-form">
+        <label class="gdi-field wide">
+          <span>${t('Research idea / topic', '研究想法 / 主题')}</span>
+          <textarea rows="3" data-gi-field="topic" placeholder="${attr(t('e.g. Does early vasopressor strategy change mortality in septic ICU patients?', '例如：早期升压药策略是否影响脓毒症 ICU 患者死亡率？'))}">${esc(guidedIdea.topic || '')}</textarea>
+        </label>
+        <label class="gdi-field wide">
+          <span>${t('Source quote or PDF excerpt', '来源句子或 PDF 摘录')}</span>
+          <textarea rows="3" data-gi-field="excerpt" placeholder="${attr(t('Paste only the sentence(s) that motivated the idea; do not paste a full paper.', '只粘贴触发想法的句子；不要粘贴全文。'))}">${esc(guidedIdea.excerpt || '')}</textarea>
+        </label>
+        <div class="gdi-meta-grid">
+          <label class="gdi-field"><span>Title</span><input data-gi-field="title" value="${attr(guidedIdea.title || '')}" placeholder="${attr(t('Article or review title', '文章或综述标题'))}" /></label>
+          <label class="gdi-field"><span>Journal</span><input data-gi-field="journal" value="${attr(guidedIdea.journal || '')}" placeholder="e.g. Intensive Care Medicine" /></label>
+          <label class="gdi-field"><span>Year</span><input data-gi-field="year" value="${attr(guidedIdea.year || '')}" placeholder="2026" /></label>
+          <label class="gdi-field"><span>DOI / PMID</span><input data-gi-field="doi" value="${attr(guidedIdea.doi || '')}" placeholder="10.xxxx or PMID" /></label>
+        </div>
+        <label class="gdi-field wide">
+          <span>URL</span>
+          <input data-gi-field="url" value="${attr(guidedIdea.url || '')}" placeholder="https://..." />
+        </label>
+        <label class="gdi-check">
+          <input type="checkbox" data-gi-network ${guidedIdea.allowNetwork ? 'checked' : ''} />
+          <span>${t('Allow one bounded network metadata/prior-art request for this source', '允许针对该来源进行一次有界网络元数据/prior-art 请求')}</span>
+          <em>opt-in</em>
+        </label>
+      </div>`;
+  }
+  function renderGuidedIdeaEvidence(result) {
+    const src = ((result && result.source_evidence) || [])[0] || {};
+    if (!src.source_id && !src.title) return '';
+    return `
+      <div class="gdi-source-card">
+        <div class="gdx-label">${t('Source evidence', '来源证据')}</div>
+        <strong>${esc(src.title || 'Untitled source')}</strong>
+        <small>${[src.year, src.journal, src.doi || src.pmid].filter(Boolean).map(esc).join(' · ') || esc(src.source_type || 'manual')}</small>
+        ${src.evidence_quote ? `<blockquote>${esc(src.evidence_quote)}</blockquote>` : ''}
+        <div class="gdi-muted">${t('Only metadata, a bounded quote, and hashes are persisted.', '仅持久化元数据、有界摘录和哈希。')}</div>
+      </div>`;
+  }
+  function renderGuidedIdeaLedger(idea) {
+    if (!idea) return '';
+    const concepts = (idea.mapped_concepts || []).slice(0, 10);
+    const feasibility = idea.feasibility || {};
+    const prior = idea.prior_art || {};
+    return `
+      <div class="gdi-ledger">
+        <div class="gdi-ledger-title">
+          <div><span class="gdx-label">Idea ledger</span><strong>${esc(idea.idea_title || 'Candidate idea')}</strong></div>
+          <span class="pill ${idea.go_no_go === 'recommend' ? 'ok' : 'warn'}">${esc(idea.go_no_go || 'hold')}</span>
+        </div>
+        <p>${esc(idea.rationale || '')}</p>
+        <div class="gdi-ledger-grid">
+          <div>
+            <span>${t('Mapped concepts', '映射概念')}</span>
+            <div class="gdi-tags">${concepts.map(row => `<code>${esc(row.concept_id || row.label)} · ${esc(row.tier || '')}</code>`).join('') || `<em>${t('No dictionary mapping yet', '暂无字典映射')}</em>`}</div>
+          </div>
+          <div><span>${t('Feasibility', '可行性')}</span><strong>${esc(feasibility.label || feasibility.tier || 'unknown')}</strong><small>${esc(feasibility.reason || '')}</small></div>
+          <div><span>${t('Prior art', '既有研究')}</span><strong>${esc(prior.status || 'not checked')}</strong><small>${esc(prior.reason || '')}</small></div>
+          <div><span>${t('Next action', '下一步')}</span><strong>${esc(idea.next_action || idea.go_no_go_reason || 'review')}</strong></div>
+        </div>
+      </div>`;
+  }
+  function renderGuidedIdeaPreExperiment(result) {
+    const pre = result && result.pre_experiment;
+    if (!pre) return '';
+    const cohort = pre.cohort || {};
+    const stats = (pre.feature_statistics || []).slice(0, 8);
+    return `
+      <div class="gdi-pre">
+        <div class="gdi-ledger-title">
+          <div><span class="gdx-label">${t('Pre-experiment on active export', 'active export 预实验')}</span><strong>${esc(pre.status || 'blocked')}</strong></div>
+          <span class="pill">${esc(pre.payload_scope || 'aggregate')}</span>
+        </div>
+        ${pre.reason ? `<p>${esc(pre.reason)}</p>` : ''}
+        <div class="gdi-stats">
+          ${guidedMetricCard(t('Entities', '实体数'), fmtInt(cohort.entities, 'n/a'))}
+          ${guidedMetricCard(t('Modules', '模块'), fmtInt(cohort.modules, 'n/a'))}
+          ${guidedMetricCard(t('Feature checks', '特征检查'), fmtInt(stats.length, '0'))}
+          ${guidedMetricCard(t('Rows', '行数'), fmtInt(cohort.total_rows, 'n/a'))}
+        </div>
+        ${stats.length ? `<div class="gdi-feature-list">
+          ${stats.map(row => {
+            const coverage = Number(row.coverage_pct || 0);
+            return `<div class="gdi-feature-row">
+              <div><strong>${esc(row.label || row.concept_id)}</strong><small>${esc(row.concept_id || '')} · ${esc(row.module || '')}</small></div>
+              <div class="gdi-feature-bar"><span style="width:${Math.max(0, Math.min(100, coverage))}%"></span></div>
+              <span>${fmtPct(row.coverage_pct)}</span>
+              <small>${esc(row.numeric_summary || row.status || '')}</small>
+            </div>`;
+          }).join('')}
+        </div>` : ''}
+        ${(pre.interpretation || []).length ? `<div class="gdr-note">${pre.interpretation.map(row => esc(row)).join('<br>')}</div>` : ''}
+      </div>`;
+  }
+  function renderGuidedIdeaPrior() {
+    if (!guidedIdea || (!guidedIdea.prior && !guidedIdea.result)) return '';
+    const prior = (guidedIdea.prior && guidedIdea.prior.prior_art) || (guidedIdea.result && guidedIdea.result.prior_art) || {};
+    const queries = prior.queries_to_run || [];
+    const results = prior.results || [];
+    return `
+      <div class="gdi-prior">
+        <div class="gdi-ledger-title">
+          <div><span class="gdx-label">Prior-art check</span><strong>${esc(prior.status || 'not checked')}</strong></div>
+          <button type="button" class="btn sm" data-gi-prior ${guidedIdea.priorArting ? 'disabled' : ''}>${icon('search', 12)} ${t('Check prior art', '检查既有研究')}</button>
+        </div>
+        <p>${esc(prior.reason || t('Optional network metadata search. It stays blocked until you explicitly opt in.', '可选网络元数据搜索。未显式 opt-in 前保持阻断。'))}</p>
+        ${queries.length ? `<div class="gdi-query-list">${queries.slice(0, 4).map(q => `<code>${esc(q)}</code>`).join('')}</div>` : ''}
+        ${results.length ? `<div class="gdi-feature-list">${results.slice(0, 5).map(row => `<div class="gdi-feature-row"><div><strong>${esc(row.title || 'result')}</strong><small>${esc([row.year, row.journal, row.pmid].filter(Boolean).join(' · '))}</small></div><span>${esc(row.database || '')}</span></div>`).join('')}</div>` : ''}
+      </div>`;
+  }
+  function renderGuidedIdeaHandoff() {
+    if (!guidedIdea || !guidedIdea.result) return '';
+    const handoff = guidedIdea.handoff || {};
+    const plan = (handoff.handoff_plan || guidedIdea.result.handoff_plan || {});
+    const steps = plan.analysis_plan || [];
+    return `
+      <div class="gdi-plan">
+        <div class="gdi-ledger-title">
+          <div><span class="gdx-label">${t('Agent handoff', 'Agent 交接')}</span><strong>${esc(plan.research_question || 'Confirm the plan before Agent run')}</strong></div>
+          <span class="pill warn">${t('draft locked', '草稿锁定')}</span>
+        </div>
+        ${steps.length ? `<ol>${steps.map(row => `<li>${esc(row)}</li>`).join('')}</ol>` : ''}
+        <label class="gdi-field wide">
+          <span>${t('Natural-language plan edits', '用自然语言微调计划')}</span>
+          <textarea rows="3" data-gi-field="planEdits" placeholder="${attr(t('e.g. restrict to first ICU stay; compare norepinephrine-equivalent dose groups.', '例如：限制首次 ICU；比较去甲肾上腺素等效剂量分组。'))}">${esc(guidedIdea.planEdits || '')}</textarea>
+        </label>
+        <div class="gdx-actions">
+          <button type="button" class="btn primary" data-gi-handoff ${guidedIdea.handoffing ? 'disabled' : ''}>${icon('lock', 13)} ${t('Freeze handoff for Agent', '冻结交接给 Agent')}</button>
+          <button type="button" class="btn" data-gi-project ${!guidedIdea.handoff || guidedIdea.projectCreating ? 'disabled' : ''}>${icon('agent', 13)} ${t('Create Agent project', '创建 Agent 项目')}</button>
+          ${guidedIdea.project ? `<button type="button" class="btn" data-open="agent">${t('Open Agent Projects', '打开 Agent Projects')}</button>` : ''}
+        </div>
+      </div>`;
+  }
+  function renderGuidedIdeaCard() {
+    if (!guidedIdea) resetGuidedIdeaState();
+    const idea = guidedIdeaSelected();
+    const result = guidedIdea.result;
+    const miningBlocked = guidedIdea.mining || guidedIdea.resolving;
+    return `
+      <div class="gd-idea-card">
+        <div class="gdx-head">
+          <span class="gdx-ico">${icon('spark', 15)}</span>
+          <div>
+            <strong>${t('Mine a study idea inside Copilot', '在 Copilot 内挖掘研究想法')}</strong>
+            <span>${t('Source evidence, dictionary feasibility, pre-experiment, and Agent handoff all stay metadata-only and local-first.', '来源证据、字典可行性、预实验和 Agent 交接均保持 metadata-only 与 local-first。')}</span>
+          </div>
+        </div>
+        ${renderGuidedIdeaSourceFields()}
+        <div class="gdx-status ${guidedIdea.error ? 'bad' : result ? 'ok' : ''}">
+          <span>${icon(guidedIdea.error ? 'x' : result ? 'check' : 'shield', 12)}</span>
+          <div><strong>${guidedIdeaStatusText()}</strong><small>${t('No patient rows, full papers, or external calls unless you explicitly opt in.', '不会返回患者行、全文或外部调用，除非你显式 opt-in。')}</small></div>
+        </div>
+        <div class="gdx-actions">
+          <button type="button" class="btn" data-gi-resolve ${guidedIdea.resolving ? 'disabled' : ''}>${icon('search', 13)} ${t('Resolve source', '解析来源')}</button>
+          <button type="button" class="btn primary" data-gi-mine ${miningBlocked ? 'disabled' : ''}>${icon('play', 13)} ${t('Mine locally', '本地挖掘 idea')}</button>
+          <button type="button" class="btn" data-guided-goal="data_extraction">${t('Prepare data first', '先准备数据')}</button>
+        </div>
+        ${renderGuidedIdeaEvidence(result)}
+        ${renderGuidedIdeaLedger(idea)}
+        ${renderGuidedIdeaPreExperiment(result)}
+        ${renderGuidedIdeaPrior()}
+        ${renderGuidedIdeaHandoff()}
+        ${guidedIdea.project ? `<div class="gdx-status ok"><span>${icon('check', 12)}</span><div><strong>${t('Agent project seed created', 'Agent project seed 已创建')}</strong><small>${esc(compactPath((guidedIdea.project.project || {}).project_dir || (guidedIdea.project.project || {}).study_id || ''))}</small></div></div>` : ''}
+      </div>`;
+  }
+  function runGuidedIdeaResolve() {
+    if (!guidedIdea || guidedIdea.resolving) return;
+    if (!window.EU_API || !window.EU_API.resolveIdeaSource) {
+      guidedIdea.error = 'Idea source backend is unavailable.';
+      renderThread();
+      return;
+    }
+    guidedIdea.resolving = true;
+    guidedIdea.error = null;
+    renderThread();
+    window.EU_API.resolveIdeaSource(guidedIdeaPayload()).then(result => {
+      guidedIdea.resolving = false;
+      guidedIdea.resolved = result;
+      const suggested = (result && result.suggested_payload) || {};
+      ['topic', 'excerpt', 'title', 'journal', 'year', 'doi', 'pmid', 'url'].forEach(key => {
+        if (!guidedIdea[key] && suggested[key]) guidedIdea[key] = String(suggested[key]);
+      });
+      renderThread();
+    }).catch(err => {
+      guidedIdea.resolving = false;
+      guidedIdea.error = err.message || String(err);
+      renderThread();
+    });
+  }
+  function runGuidedIdeaMine() {
+    if (!guidedIdea || guidedIdea.mining) return;
+    if (!guidedIdeaHasInput()) {
+      guidedIdea.error = 'Add a topic, source quote, title, DOI, or URL first.';
+      renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.mineIdeas) {
+      guidedIdea.error = 'Idea mining backend is unavailable.';
+      renderThread();
+      return;
+    }
+    guidedIdea.mining = true;
+    guidedIdea.error = null;
+    renderThread();
+    window.EU_API.mineIdeas(guidedIdeaPayload()).then(result => {
+      guidedIdea.mining = false;
+      guidedIdea.result = result;
+      guidedIdea.handoff = null;
+      guidedIdea.project = null;
+      const idea = guidedIdeaSelected();
+      setVal({ question: idea ? (idea.idea_title || 'idea ledger') : 'idea ledger', analysis: 'pre-experiment' });
+      markThrough('analysis', 'active');
+      renderThread();
+      renderAside();
+    }).catch(err => {
+      guidedIdea.mining = false;
+      guidedIdea.error = err.message || String(err);
+      renderThread();
+    });
+  }
+  function runGuidedIdeaPriorArt() {
+    if (!guidedIdea || guidedIdea.priorArting) return;
+    const idea = guidedIdeaSelected();
+    if (!idea || !guidedIdea.result) {
+      guidedIdea.error = 'Run local idea mining before prior-art check.';
+      renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.checkIdeaPriorArt) {
+      guidedIdea.error = 'Prior-art backend is unavailable.';
+      renderThread();
+      return;
+    }
+    guidedIdea.priorArting = true;
+    guidedIdea.error = null;
+    renderThread();
+    window.EU_API.checkIdeaPriorArt({
+      run_id: guidedIdea.result.run_id,
+      idea_id: idea.idea_id,
+      allow_network: !!guidedIdea.allowNetwork,
+    }).then(result => {
+      guidedIdea.priorArting = false;
+      guidedIdea.prior = result;
+      renderThread();
+    }).catch(err => {
+      guidedIdea.priorArting = false;
+      guidedIdea.error = err.message || String(err);
+      renderThread();
+    });
+  }
+  function runGuidedIdeaHandoff() {
+    if (!guidedIdea || guidedIdea.handoffing) return;
+    const idea = guidedIdeaSelected();
+    if (!idea || !guidedIdea.result) {
+      guidedIdea.error = 'Run local idea mining before creating a handoff.';
+      renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.handoffIdea) {
+      guidedIdea.error = 'Idea handoff backend is unavailable.';
+      renderThread();
+      return;
+    }
+    guidedIdea.handoffing = true;
+    guidedIdea.error = null;
+    renderThread();
+    window.EU_API.handoffIdea({
+      run_id: guidedIdea.result.run_id,
+      idea_id: idea.idea_id,
+      plan_edits: guidedIdea.planEdits || '',
+    }).then(result => {
+      guidedIdea.handoffing = false;
+      guidedIdea.handoff = result;
+      setVal({ analysis: 'handoff ready', draft: 'locked' });
+      renderThread();
+      renderAside();
+    }).catch(err => {
+      guidedIdea.handoffing = false;
+      guidedIdea.error = err.message || String(err);
+      renderThread();
+    });
+  }
+  function runGuidedIdeaCreateProject() {
+    if (!guidedIdea || guidedIdea.projectCreating) return;
+    const idea = guidedIdeaSelected();
+    if (!idea || !guidedIdea.result) {
+      guidedIdea.error = 'Run local idea mining before creating an Agent project.';
+      renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.createIdeaAgentProject) {
+      guidedIdea.error = 'Agent project seed backend is unavailable.';
+      renderThread();
+      return;
+    }
+    guidedIdea.projectCreating = true;
+    guidedIdea.error = null;
+    renderThread();
+    window.EU_API.createIdeaAgentProject({
+      run_id: guidedIdea.result.run_id,
+      idea_id: idea.idea_id,
+      plan_edits: guidedIdea.planEdits || '',
+    }).then(result => {
+      guidedIdea.projectCreating = false;
+      guidedIdea.project = result;
+      setVal({ analysis: 'Agent seed ready', draft: 'locked' });
+      renderThread();
+      renderAside();
+    }).catch(err => {
+      guidedIdea.projectCreating = false;
+      guidedIdea.error = err.message || String(err);
+      renderThread();
+    });
+  }
+
   /* ============== local concept definition answers ============== */
   const CONCEPT_ALIASES = [
     ['sofa2', ['sofa2', 'sofa-2', 'sofa 2', 'SOFA-2', 'SOFA2']],
@@ -1841,6 +2248,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const s = String(text || '').toLowerCase();
     return /agent|analysis|run project|research project|preflight|manuscript|draft|跑研究|运行研究|分析|预检|草稿/.test(s);
   }
+  function isGuidedIdeaIntent(text) {
+    const s = String(text || '').toLowerCase();
+    return /idea|study idea|research idea|paper|article|pdf|literature|frontier|review topic|研究想法|研究问题|挖掘|论文|文章|文献|综述|前沿|选题/.test(s);
+  }
 
   /* ============== DOM render ============== */
   function renderThread() {
@@ -1851,6 +2262,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (t.guidedExtraction) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedExtractionCard()}</div></div>`;
       if (t.guidedReview) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedReviewCard()}</div></div>`;
       if (t.guidedAgent) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedAgentCard()}</div></div>`;
+      if (t.guidedIdea) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedIdeaCard()}</div></div>`;
       if (t.diff) return diffCard();
       if (t.once) return ONCE[t.once] ? ONCE[t.once]() : '';
       if (t.card) {
@@ -2202,6 +2614,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       </div>`;
   }
   function chooseGuidedGoal(goal, label) {
+    if (goal === 'idea_mining') {
+      startGuidedIdeaFlow(label || guidedGoalMeta(goal).label_en);
+      return;
+    }
     if (goal === 'data_extraction') {
       startGuidedExtractionFlow(label || guidedGoalMeta(goal).label_en);
       return;
@@ -2940,6 +3356,33 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           runGuidedAgentPreflight();
           return;
         }
+        const giSource = e.target.closest('[data-gi-source]');
+        if (giSource && guidedIdea) {
+          guidedIdea.sourceType = giSource.dataset.giSource || 'manual';
+          guidedIdea.error = null;
+          renderThread();
+          return;
+        }
+        if (e.target.closest('[data-gi-resolve]')) {
+          runGuidedIdeaResolve();
+          return;
+        }
+        if (e.target.closest('[data-gi-mine]')) {
+          runGuidedIdeaMine();
+          return;
+        }
+        if (e.target.closest('[data-gi-prior]')) {
+          runGuidedIdeaPriorArt();
+          return;
+        }
+        if (e.target.closest('[data-gi-handoff]')) {
+          runGuidedIdeaHandoff();
+          return;
+        }
+        if (e.target.closest('[data-gi-project]')) {
+          runGuidedIdeaCreateProject();
+          return;
+        }
         const guidedHandoffEl = e.target.closest('[data-guided-handoff]');
         if (guidedHandoffEl) {
           runGuidedHandoff(guidedHandoffEl.dataset.guidedHandoff, guidedHandoffEl.dataset.target, stripText(guidedHandoffEl.textContent));
@@ -3078,6 +3521,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           guidedAgent.error = null;
           return;
         }
+        const giField = e.target.closest('[data-gi-field]');
+        if (giField && guidedIdea) {
+          const key = giField.dataset.giField;
+          if (key) guidedIdea[key] = giField.value;
+          guidedIdea.error = null;
+          return;
+        }
         const title = e.target.closest('[data-draft-title]');
         if (!title) return;
         const box = title.closest('[data-draft-setup]');
@@ -3085,6 +3535,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (slug && !slug.dataset.edited) slug.value = slugifyDraftFolder(title.value);
       });
       shell.addEventListener('change', (e) => {
+        const giNetwork = e.target.closest('[data-gi-network]');
+        if (giNetwork && guidedIdea) {
+          guidedIdea.allowNetwork = !!giNetwork.checked;
+          guidedIdea.error = null;
+          renderThread();
+          return;
+        }
         const slug = e.target.closest('[data-draft-slug]');
         if (!slug) return;
         slug.dataset.edited = 'true';
@@ -3111,6 +3568,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const conceptCode = findLocalConceptQuery(v);
     if (conceptCode) {
       answerConceptQuestion(v, conceptCode);
+      return;
+    }
+    if (currentId === 'frontdoor' && isGuidedIdeaIntent(v)) {
+      startGuidedIdeaFlow(v);
+      guidedIdea.topic = v;
+      renderThread();
       return;
     }
     if (currentId === 'frontdoor' && isGuidedExtractionIntent(v)) {
