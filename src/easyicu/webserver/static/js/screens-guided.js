@@ -3694,21 +3694,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
               <div class="ss-t">No local runs found</div>
               <div class="ss-m">Start an auditable Agent run to create a real local study folder.</div>
             </div>`;
-    const examples = [
-      ['ex1', 'Sepsis mortality prediction', 'Seeded example · not a local project'],
-      ['ex2', 'Lactate trajectory · 48h', 'Seeded example · not a local project'],
-      ['ex3', 'AKI onset · MIMIC-IV / eICU', 'Seeded example · not a local project'],
-      ['ex4', 'Vasopressor exposure audit', 'Seeded example · not a local project'],
-    ];
     host.innerHTML = `
       <div class="gd-rail-sec in-list">Local guided drafts <button class="gd-refresh-mini" data-refreshdrafts title="Refresh local drafts">${icon('refresh', 10)}</button></div>
       ${draftHtml}
       <div class="gd-rail-sec in-list">Local runs <button class="gd-refresh-mini" data-refreshruns title="Refresh local runs">${icon('refresh', 10)}</button></div>
-      ${localHtml}
-      <div class="gd-rail-sec in-list">Seeded examples</div>
-      ${examples.map(([id, tt, scope]) =>
-        `<button class="gd-sess example" data-sess="${id}"><span class="ss-fold">${icon('folder', 15)}</span><span><span class="ss-t">${tt}</span><span class="ss-m">${scope}</span></span></button>`
-      ).join('')}`;
+      ${localHtml}`;
   }
 
   /* ============== screen ============== */
@@ -4142,17 +4132,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             `没有创建文件夹。需要把对话绑定到本地项目文件夹时，再使用 <strong>New / open study folder</strong>。`,
           );
           renderThread();
-          return;
-        }
-        const sessEl = e.target.closest('[data-sess]');
-        if (sessEl) {
-          root.querySelectorAll('.gd-sess').forEach(s => s.classList.toggle('active', s === sessEl));
-          pushBot(
-            `That is a seeded example, not a local project. I can use it as a starting pattern, or you can switch to the active local export.`,
-            `这是 seeded 示例，不是真实本地项目。我可以把它当作起点模板，也可以切换到当前 active local export。`,
-          );
-          chips = [['Use this example pattern', '@foldernew'], ['Use active export', '@activeExport'], ['Open Agent Projects', '@openAgent']];
-          renderThread(); renderChips();
           return;
         }
       });
