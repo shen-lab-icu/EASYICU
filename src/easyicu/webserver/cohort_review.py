@@ -29,6 +29,8 @@ _COVERAGE_UNIQUE_STAY_SCAN_ROW_LIMIT = 1_000_000
 _INTERACTIVE_TIME_INDEXED_READ_ROW_LIMIT = 2_000_000
 _INTERACTIVE_SKIP_MODULES = {"sofa1_score", "sofa2_score"}
 _SURVIVAL_INTERACTIVE_ENTITY_LIMIT = 250_000
+_SURVIVAL_DEFAULT_WINDOW_DAYS = 30.0
+_SURVIVAL_28D_WINDOW_DAYS = 28.0
 _SUMMARY_CACHE_MAX = 8
 _SUMMARY_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
 _MAX_COMPARE_FEATURES = 48
@@ -56,6 +58,44 @@ _DEFAULT_COMPARE_FEATURES = (
     "vasopressors:norepi_equiv",
     "ventilator:peep",
 )
+_TREATMENT_PROFILE_GROUPS = (
+    {
+        "id": "vasopressors",
+        "label": "Vasopressors",
+        "label_zh": "血管活性药物",
+        "modules": ("vasopressors", "vasopressor"),
+    },
+    {
+        "id": "ventilation",
+        "label": "Mechanical ventilation",
+        "label_zh": "机械通气",
+        "modules": ("ventilator", "ventilation"),
+    },
+    {
+        "id": "respiratory",
+        "label": "Respiratory support / gas exchange",
+        "label_zh": "呼吸支持 / 血气",
+        "modules": ("respiratory", "blood_gas", "blood_gas_analysis"),
+    },
+    {
+        "id": "renal",
+        "label": "Renal support / urine output",
+        "label_zh": "肾脏支持 / 尿量",
+        "modules": ("renal", "renal_urine_output", "urine_output"),
+    },
+    {
+        "id": "medications",
+        "label": "Other ICU medications",
+        "label_zh": "其他 ICU 用药",
+        "modules": ("other_medications", "medications"),
+    },
+)
+_DIAGNOSIS_PROFILE_GROUP = {
+    "id": "diagnosis_comorbidity",
+    "label": "Diagnoses / comorbidities",
+    "label_zh": "诊断 / 共病",
+    "modules": ("diagnoses", "diagnosis", "icd", "comorbidity", "comorbidities"),
+}
 _MODULE_COLUMNS = {
     "demographics": (
         "stay_id",
@@ -267,10 +307,10 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
             **los_summary,
             "bins": _value_bins(los_by_entity.values(), _LOS_BIN_SPECS),
         },
-        "complexity": _complexity_matrix(age_by_entity, los_by_entity),
         "sepsis3": sepsis_summary,
         "sepsis_pct": sepsis_summary.get("pct"),
     }
+    summary["clinical_profile"] = _clinical_profile_payload(summary, coverage, quality)
     sofa_reclassification = _sofa_reclassification_payload(
         entity_ids=entity_ids,
         sofa1_by_entity=sofa1_by_entity,
@@ -608,6 +648,7 @@ def _coverage_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         status = _quality_status(module, coverage)
         row = {
             "module": module,
+            "metric_kind": dataio._presence_rate_kind(module) or "coverage",
             "rows": rows,
             "column_count": len(item.get("columns") or []),
             "covered_entities": covered,
@@ -1023,7 +1064,7 @@ def _quality_summary(coverage: List[Dict[str, Any]]) -> Dict[str, Any]:
             status = "unknown"
         counts[status] += 1
         pct = row.get("coverage_pct")
-        if isinstance(pct, (int, float)):
+        if isinstance(pct, (int, float)) and status not in {"neutral", "unknown"}:
             values.append(float(pct))
     return {
         "modules_ok": counts["ok"],
@@ -1706,6 +1747,306 @@ def _category_summary(values: List[Any], *, top_n: int = 6) -> Dict[str, Any]:
     return {"count": total, "distinct": len(counts), "bins": bins}
 
 
+def _clinical_profile_payload(
+    summary: Dict[str, Any],
+    coverage: List[Dict[str, Any]],
+    quality: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Clinically interpretable cohort phenotype, aggregate-only.
+
+    The payload intentionally avoids proxy visualizations such as age x LOS
+    crosstabs. It reports dimensions clinicians usually inspect first and
+    clearly marks unavailable diagnosis/treatment modules instead of inventing
+    them from unrelated columns.
+    """
+
+    cohort_size = int(summary.get("cohort_size") or 0)
+    treatment_items = [
+        _module_profile_item(spec, coverage, cohort_size)
+        for spec in _TREATMENT_PROFILE_GROUPS
+    ]
+    diagnosis_item = _module_profile_item(
+        _DIAGNOSIS_PROFILE_GROUP, coverage, cohort_size
+    )
+    coverage_items = _coverage_profile_items(coverage, quality, cohort_size)
+    domains = [
+        {
+            "id": "demographics",
+            "label": "Demographics",
+            "label_zh": "人口统计",
+            "status": "ready" if (summary.get("age") or {}).get("count") else "partial",
+            "items": [
+                _numeric_profile_item(
+                    "age",
+                    "Median age",
+                    "年龄中位数",
+                    summary.get("age") or {},
+                    "years",
+                    "岁",
+                ),
+                _pct_profile_item(
+                    "female",
+                    "Female",
+                    "女性",
+                    (summary.get("sex") or {}).get("female_pct"),
+                    (summary.get("sex") or {}).get("female_count"),
+                    cohort_size,
+                ),
+                _category_profile_item(
+                    "admission",
+                    "Admission source",
+                    "入院来源",
+                    summary.get("admission") or {},
+                ),
+            ],
+        },
+        {
+            "id": "severity_outcome",
+            "label": "Severity and outcomes",
+            "label_zh": "严重程度与结局",
+            "status": "ready",
+            "items": [
+                _numeric_profile_item(
+                    "sofa2",
+                    "Worst SOFA-2",
+                    "最严重 SOFA-2",
+                    summary.get("sofa2") or {},
+                    "points",
+                    "分",
+                ),
+                _pct_profile_item(
+                    "sepsis3",
+                    "Sepsis-3 positive",
+                    "Sepsis-3 阳性",
+                    summary.get("sepsis_pct"),
+                    (summary.get("sepsis3") or {}).get("positive_count"),
+                    cohort_size,
+                    kind="event_rate",
+                ),
+                _pct_profile_item(
+                    "mortality",
+                    "Hospital mortality",
+                    "院内死亡",
+                    summary.get("mortality_pct"),
+                    (summary.get("mortality") or {}).get("deceased_count"),
+                    cohort_size,
+                    kind="event_rate",
+                ),
+                _numeric_profile_item(
+                    "los_icu",
+                    "ICU length of stay",
+                    "ICU 住院时长",
+                    summary.get("los_icu_days") or {},
+                    "days",
+                    "天",
+                ),
+            ],
+        },
+        {
+            "id": "treatments",
+            "label": "Treatments and organ support",
+            "label_zh": "治疗暴露与器官支持",
+            "status": _domain_status(treatment_items),
+            "items": treatment_items,
+        },
+        {
+            "id": "diagnosis",
+            "label": "Diagnoses and comorbidities",
+            "label_zh": "诊断与共病",
+            "status": diagnosis_item.get("status"),
+            "items": [diagnosis_item],
+        },
+        {
+            "id": "data_completeness",
+            "label": "Data completeness",
+            "label_zh": "数据覆盖",
+            "status": "ready" if coverage_items else "unavailable",
+            "items": coverage_items,
+        },
+    ]
+    return {
+        "status": "aggregate_only",
+        "payload_scope": "cohort_aggregate_only_no_patient_rows",
+        "domains": domains,
+        "notes": [
+            {
+                "label": "No patient rows",
+                "label_zh": "不返回患者行",
+                "text": "Treatment and diagnosis cards use module-level entity coverage; detailed rows remain in the local export only.",
+                "text_zh": "治疗和诊断卡片使用模块级实体覆盖；明细行仍只保留在本地导出中。",
+            }
+        ],
+    }
+
+
+def _numeric_profile_item(
+    item_id: str,
+    label: str,
+    label_zh: str,
+    payload: Dict[str, Any],
+    unit: str,
+    unit_zh: str,
+) -> Dict[str, Any]:
+    count = int(payload.get("count") or 0)
+    return {
+        "id": item_id,
+        "label": label,
+        "label_zh": label_zh,
+        "kind": "numeric",
+        "status": "ready" if count else "unavailable",
+        "value": payload.get("median"),
+        "value_label": "median",
+        "value_label_zh": "中位数",
+        "unit": unit,
+        "unit_zh": unit_zh,
+        "count": count,
+        "min": payload.get("min"),
+        "max": payload.get("max"),
+    }
+
+
+def _pct_profile_item(
+    item_id: str,
+    label: str,
+    label_zh: str,
+    pct: Any,
+    count: Any,
+    denominator: int,
+    *,
+    kind: str = "proportion",
+) -> Dict[str, Any]:
+    count_int = int(count or 0) if isinstance(count, (int, float)) else None
+    return {
+        "id": item_id,
+        "label": label,
+        "label_zh": label_zh,
+        "kind": kind,
+        "status": "ready" if isinstance(pct, (int, float)) else "unavailable",
+        "pct": pct,
+        "count": count_int,
+        "denominator": denominator,
+    }
+
+
+def _category_profile_item(
+    item_id: str, label: str, label_zh: str, payload: Dict[str, Any]
+) -> Dict[str, Any]:
+    bins = payload.get("bins") or []
+    return {
+        "id": item_id,
+        "label": label,
+        "label_zh": label_zh,
+        "kind": "category",
+        "status": "ready" if bins else "unavailable",
+        "count": int(payload.get("count") or 0),
+        "distinct": int(payload.get("distinct") or 0),
+        "bins": bins[:4],
+    }
+
+
+def _module_profile_item(
+    spec: Dict[str, Any], coverage: List[Dict[str, Any]], cohort_size: int
+) -> Dict[str, Any]:
+    module_names = {str(name) for name in spec.get("modules") or ()}
+    rows = [
+        row
+        for row in coverage
+        if str(row.get("module") or "") in module_names
+    ]
+    if not rows:
+        return {
+            "id": spec.get("id"),
+            "label": spec.get("label"),
+            "label_zh": spec.get("label_zh"),
+            "kind": "module_coverage",
+            "status": "unavailable",
+            "reason": "module_not_in_current_export",
+            "reason_zh": "当前导出未包含对应模块",
+            "modules": list(spec.get("modules") or ()),
+        }
+    covered_values = [
+        int(row["covered_entities"])
+        for row in rows
+        if isinstance(row.get("covered_entities"), int)
+    ]
+    covered = max(covered_values) if covered_values else None
+    return {
+        "id": spec.get("id"),
+        "label": spec.get("label"),
+        "label_zh": spec.get("label_zh"),
+        "kind": "module_coverage",
+        "status": "ready" if covered is not None else "schema_only",
+        "pct": _pct(covered, cohort_size) if covered is not None else None,
+        "count": covered,
+        "denominator": cohort_size,
+        "rows": sum(int(row.get("rows") or 0) for row in rows),
+        "column_count": sum(int(row.get("column_count") or 0) for row in rows),
+        "modules": [str(row.get("module") or "") for row in rows],
+        "coverage_basis": "max_unique_entity_intersection_across_modules"
+        if covered is not None
+        else "schema_only",
+    }
+
+
+def _coverage_profile_items(
+    coverage: List[Dict[str, Any]],
+    quality: Dict[str, Any],
+    cohort_size: int,
+) -> List[Dict[str, Any]]:
+    items = [
+        {
+            "id": "modules_ok",
+            "label": "Modules ready",
+            "label_zh": "覆盖良好模块",
+            "kind": "count",
+            "status": "ready",
+            "count": int(quality.get("modules_ok") or 0),
+            "denominator": len(coverage),
+        },
+        {
+            "id": "watchlist",
+            "label": "Coverage watchlist",
+            "label_zh": "覆盖率关注项",
+            "kind": "count",
+            "status": "ready",
+            "count": int(quality.get("watchlist_count") or 0),
+            "denominator": len(coverage),
+        },
+    ]
+    weakest = sorted(
+        [
+            row
+            for row in coverage
+            if isinstance(row.get("coverage_pct"), (int, float))
+            and str(row.get("quality_status") or "") not in {"neutral"}
+        ],
+        key=lambda row: float(row.get("coverage_pct") or 0),
+    )[:3]
+    for row in weakest:
+        items.append(
+            {
+                "id": f"coverage_{row.get('module')}",
+                "label": _module_label(str(row.get("module") or "")),
+                "label_zh": _module_label(str(row.get("module") or "")),
+                "kind": "module_coverage",
+                "status": str(row.get("quality_status") or "unknown"),
+                "pct": row.get("coverage_pct"),
+                "count": row.get("covered_entities"),
+                "denominator": cohort_size,
+                "rows": int(row.get("rows") or 0),
+                "modules": [str(row.get("module") or "")],
+            }
+        )
+    return items
+
+
+def _domain_status(items: List[Dict[str, Any]]) -> str:
+    statuses = {str(item.get("status") or "") for item in items}
+    if "ready" in statuses or "schema_only" in statuses:
+        return "partial" if "unavailable" in statuses else "ready"
+    return "unavailable"
+
+
 def _value_bins(values: Iterable[Any], specs: List[tuple]) -> List[Dict[str, Any]]:
     """Bin numeric values into a labelled histogram payload.
 
@@ -1734,43 +2075,6 @@ _LOS_BIN_SPECS: List[tuple] = [
     ("5-10d", lambda v: 5 <= v < 10),
     (">=10d", lambda v: v >= 10),
 ]
-
-
-def _complexity_matrix(
-    age_by_entity: Dict[str, Any], los_by_entity: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Age-group × LOS-group entity counts (bounded crosstab heatmap payload).
-
-    Restores the legacy cohort "complexity heatmap": for entities with both an
-    age and an ICU LOS, count how many fall in each age/LOS cell. Aggregate
-    counts only; no row-level values leave the backend.
-    """
-    age_labels = [label for label, _ in _AGE_BIN_SPECS]
-    los_labels = [label for label, _ in _LOS_BIN_SPECS]
-    z = [[0 for _ in los_labels] for _ in age_labels]
-    total = 0
-    for entity_id, age_value in age_by_entity.items():
-        age_num = dataio._num(age_value)
-        los_num = dataio._num(los_by_entity.get(entity_id))
-        if age_num is None or los_num is None:
-            continue
-        age_idx = next(
-            (i for i, (_, pred) in enumerate(_AGE_BIN_SPECS) if pred(age_num)), None
-        )
-        los_idx = next(
-            (j for j, (_, pred) in enumerate(_LOS_BIN_SPECS) if pred(los_num)), None
-        )
-        if age_idx is None or los_idx is None:
-            continue
-        z[age_idx][los_idx] += 1
-        total += 1
-    return {
-        "age_groups": age_labels,
-        "los_groups": los_labels,
-        "z": z,
-        "total": total,
-        "max": max((max(row) for row in z), default=0),
-    }
 
 
 def _sofa_bins(values: Iterable[Any]) -> List[Dict[str, Any]]:
@@ -1819,6 +2123,8 @@ def _survival_analysis_payload(
             "event_candidates": _HOSP_DEATH_COLUMNS,
             "time_candidates": _HOSP_LOS_COLUMNS,
             "time_label": "Hospital LOS / follow-up days",
+            "display_horizon_days": _SURVIVAL_DEFAULT_WINDOW_DAYS,
+            "window_label": "30-day display window",
         },
         {
             "id": "icu_death",
@@ -1826,13 +2132,20 @@ def _survival_analysis_payload(
             "event_candidates": _ICU_DEATH_COLUMNS,
             "time_candidates": _ICU_LOS_COLUMNS,
             "time_label": "ICU LOS / follow-up days",
+            "display_horizon_days": _SURVIVAL_DEFAULT_WINDOW_DAYS,
+            "window_label": "30-day display window",
         },
         {
             "id": "mort_28d",
             "label": "28-day mortality",
             "event_candidates": _MORT28_COLUMNS,
             "time_candidates": _MORT28_TIME_COLUMNS,
+            "fallback_event_candidates": _HOSP_DEATH_COLUMNS,
+            "fallback_time_candidates": _HOSP_LOS_COLUMNS,
             "time_label": "Days to 28-day death/censoring",
+            "display_horizon_days": _SURVIVAL_28D_WINDOW_DAYS,
+            "window_label": "28-day window",
+            "allow_hospital_time_window_derivation": True,
         },
     ]
     outcomes = [_survival_outcome_option(outcome, spec, entity_ids) for spec in specs]
@@ -1858,6 +2171,11 @@ def _survival_analysis_payload(
             event_by_entity.setdefault(entity_id, False)
         time_by_entity = (
             dataio._stay_numeric(outcome, time_col, "max") if time_col else {}
+        )
+        event_by_entity, time_by_entity = _windowed_survival_vectors(
+            event_by_entity,
+            time_by_entity,
+            horizon_days=dataio._num(option.get("display_horizon_days")),
         )
         for group in group_options:
             if group.get("status") != "ready":
@@ -1886,6 +2204,9 @@ def _survival_analysis_payload(
             )
 
     default_outcome = next(
+        (row["id"] for row in ready_outcomes if row["id"] == "mort_28d"), None
+    )
+    default_outcome = default_outcome or next(
         (row["id"] for row in ready_outcomes if row["id"] == "hospital_death"), None
     )
     default_outcome = default_outcome or (
@@ -1912,7 +2233,8 @@ def _survival_analysis_payload(
         "curves": curves,
         "notes": [
             "Kaplan-Meier/log-rank requires both an event indicator and a time-to-event or censoring time.",
-            "A binary mortality flag alone is shown as blocked rather than converted into a synthetic time axis.",
+            "Hospital mortality is displayed on a 30-day visualization window by default; events after the window are censored at the window boundary.",
+            "28-day mortality can be derived from hospital mortality and hospital LOS when dedicated 28-day columns are absent.",
             "Log-rank is unadjusted and exploratory; manuscript use still needs the evidence-bound agent gate.",
         ],
     }
@@ -1930,6 +2252,10 @@ def _survival_outcome_option(
         "time_label": spec["time_label"],
         "usable_entities": 0,
         "event_count": 0,
+        "event_summary": {
+            "status": "missing",
+            "reason": "Outcome module is not present in the registered export.",
+        },
     }
     if outcome is None or getattr(outcome, "empty", True):
         return {
@@ -1938,17 +2264,56 @@ def _survival_outcome_option(
         }
 
     event_col = _first_column(outcome, spec["event_candidates"])
+    derived_from = None
+    if not event_col and spec.get("allow_hospital_time_window_derivation"):
+        event_col = _first_column(outcome, spec.get("fallback_event_candidates", ()))
+        if event_col:
+            derived_from = "hospital_mortality_time_window"
     if not event_col:
+        if spec["id"] == "icu_death":
+            return {
+                **base,
+                "reason": "ICU mortality is unavailable because this export does not include an ICU-specific event column.",
+                "event_summary": {
+                    "status": "missing",
+                    "reason": "ICU-specific event column is not present in the registered export.",
+                },
+                "expected_event_columns": list(spec["event_candidates"]),
+                "expected_time_columns": list(spec["time_candidates"]),
+            }
         return {
             **base,
             "reason": f"No event column found for {spec['label']}.",
+            "event_summary": {
+                "status": "missing",
+                "reason": f"No event column found for {spec['label']}.",
+            },
             "expected_event_columns": list(spec["event_candidates"]),
         }
     time_col = _first_column(outcome, spec["time_candidates"])
+    if not time_col and spec.get("allow_hospital_time_window_derivation"):
+        time_col = _first_column(outcome, spec.get("fallback_time_candidates", ()))
+    event_summary = _survival_event_summary(
+        outcome,
+        entity_ids,
+        event_col=event_col,
+        time_col=time_col,
+        spec=spec,
+        derived_from=derived_from,
+    )
     if not time_col:
+        if spec["id"] == "icu_death":
+            return {
+                **base,
+                "event_column": event_col,
+                "event_summary": event_summary,
+                "reason": "ICU mortality event rate is available, but KM/log-rank needs ICU-specific time columns.",
+                "expected_time_columns": list(spec["time_candidates"]),
+            }
         return {
             **base,
             "event_column": event_col,
+            "event_summary": event_summary,
             "reason": f"{spec['label']} is available only as an event flag; KM/log-rank needs time-to-event or censoring time.",
             "expected_time_columns": list(spec["time_candidates"]),
         }
@@ -1957,6 +2322,11 @@ def _survival_outcome_option(
     for entity_id in entity_ids:
         event_by_entity.setdefault(entity_id, False)
     time_by_entity = dataio._stay_numeric(outcome, time_col, "max")
+    event_by_entity, time_by_entity = _windowed_survival_vectors(
+        event_by_entity,
+        time_by_entity,
+        horizon_days=dataio._num(spec.get("display_horizon_days")),
+    )
     usable = [
         entity_id
         for entity_id in entity_ids
@@ -1971,6 +2341,7 @@ def _survival_outcome_option(
             **base,
             "event_column": event_col,
             "time_column": time_col,
+            "event_summary": event_summary,
             "usable_entities": len(usable),
             "event_count": event_count,
             "reason": "Fewer than two cohort entities have valid survival time values.",
@@ -1981,9 +2352,81 @@ def _survival_outcome_option(
         "reason": None,
         "event_column": event_col,
         "time_column": time_col,
+        "event_summary": event_summary,
         "usable_entities": len(usable),
         "event_count": event_count,
+        "display_horizon_days": dataio._num(spec.get("display_horizon_days")),
+        "window_label": spec.get("window_label"),
+        "derived_from": derived_from,
     }
+
+
+def _survival_event_summary(
+    outcome: Any,
+    entity_ids: List[str],
+    *,
+    event_col: str,
+    time_col: str | None,
+    spec: Dict[str, Any],
+    derived_from: str | None,
+) -> Dict[str, Any]:
+    event_by_entity = dataio._stay_bool(outcome, event_col, missing_false=True)
+    denominator_ids = list(entity_ids)
+    basis = "event_flag"
+    time_label = None
+    time_column = None
+    if derived_from == "hospital_mortality_time_window" and time_col:
+        time_by_entity = dataio._stay_numeric(outcome, time_col, "max")
+        event_by_entity, windowed_time = _windowed_survival_vectors(
+            event_by_entity,
+            time_by_entity,
+            horizon_days=dataio._num(spec.get("display_horizon_days")),
+        )
+        denominator_ids = [
+            entity_id
+            for entity_id in entity_ids
+            if dataio._num(windowed_time.get(entity_id)) is not None
+        ]
+        basis = "derived_time_window"
+        time_label = spec.get("window_label")
+        time_column = time_col
+    for entity_id in denominator_ids:
+        event_by_entity.setdefault(entity_id, False)
+    denominator = len(denominator_ids)
+    event_count = sum(
+        1 for entity_id in denominator_ids if event_by_entity.get(entity_id) is True
+    )
+    pct = round(event_count / denominator * 100, 1) if denominator else None
+    return {
+        "status": "available" if denominator else "missing",
+        "basis": basis,
+        "event_column": event_col,
+        "time_column": time_column,
+        "time_window_label": time_label,
+        "denominator": denominator,
+        "event_count": event_count,
+        "event_rate_pct": pct,
+    }
+
+
+def _windowed_survival_vectors(
+    event_by_entity: Dict[str, bool],
+    time_by_entity: Dict[str, float],
+    *,
+    horizon_days: float | None,
+) -> Tuple[Dict[str, bool], Dict[str, float]]:
+    if horizon_days is None or horizon_days <= 0:
+        return event_by_entity, time_by_entity
+    windowed_events: Dict[str, bool] = {}
+    windowed_times: Dict[str, float] = {}
+    for entity_id, raw_time in time_by_entity.items():
+        time_value = dataio._num(raw_time)
+        if time_value is None or time_value < 0:
+            continue
+        in_window = time_value <= horizon_days
+        windowed_events[entity_id] = bool(event_by_entity.get(entity_id) is True and in_window)
+        windowed_times[entity_id] = min(float(time_value), float(horizon_days))
+    return windowed_events, windowed_times
 
 
 def _survival_group_options(
@@ -2157,6 +2600,9 @@ def _survival_curve_payload(
         "time_column": outcome_option.get("time_column"),
         "time_label": outcome_option.get("time_label"),
         "time_unit": "days",
+        "display_horizon_days": outcome_option.get("display_horizon_days"),
+        "window_label": outcome_option.get("window_label"),
+        "derived_from": outcome_option.get("derived_from"),
         "scope": "exploratory_unadjusted",
         "reportable": False,
         "groups": [row["payload"] for row in group_records],
@@ -2261,7 +2707,7 @@ def _risk_times(records: List[Tuple[float, bool]]) -> List[float]:
     if not records:
         return [0]
     max_time = max(time_value for time_value, _event in records)
-    base = [0, 1, 3, 7, 14, 28]
+    base = [0, 1, 3, 7, 14, 28, 30]
     times = [float(t) for t in base if t <= max_time]
     rounded_max = _round_time(max_time)
     if max_time > 0 and rounded_max not in times:
@@ -2326,9 +2772,24 @@ def _logrank_payload(
         "observed_events_first_group": round(observed_a, 3),
         "expected_events_first_group": round(expected_a, 3),
         "chi_square": round(chi_square, 4),
-        "p_value": round(p_value, 6),
+        "p_value": p_value,
+        "p_value_label": _scientific_p_value_label(p_value),
         "interpretation": "exploratory_unadjusted_not_reportable",
     }
+
+
+def _scientific_p_value_label(value: float | None) -> str | None:
+    if value is None or not math.isfinite(value):
+        return None
+    if value == 0:
+        return "0"
+    if value < 0:
+        return None
+    if value >= 0.001:
+        return f"{value:.3f}".rstrip("0").rstrip(".")
+    exponent = math.floor(math.log10(value))
+    mantissa = value / (10**exponent)
+    return f"{mantissa:.4g} × 10^{exponent}"
 
 
 def _risk_count_map(
@@ -2486,7 +2947,7 @@ def _first_column(frame: Any, candidates: Tuple[str, ...]) -> str | None:
 def _quality_status(module: str, coverage_pct: float | None) -> str:
     if coverage_pct is None:
         return "unknown"
-    if module in dataio._EVENT_PRESENCE_MODULES:
+    if dataio._is_presence_rate_module(module):
         return "neutral"
     if coverage_pct >= 80:
         return "ok"

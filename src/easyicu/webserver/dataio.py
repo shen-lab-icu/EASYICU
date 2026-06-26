@@ -6,6 +6,9 @@ Two net-new capabilities the design mock did not have (it used hardcoded
 - :func:`list_dir` — a server-side directory browser. A browser ``<input
   type=file>`` can only upload files, never enumerate the user's folders, so
   the local-first FastAPI process lists directories on demand for the picker.
+- :func:`create_dir` — a local mkdir endpoint for picker destinations. Export
+  destinations are folders on this machine; the UI should not require users to
+  leave EasyICU just to create the parent folder.
 - :func:`scan_path` — points the existing extraction logic at a folder and
   reports the database / layout / readiness. Uses the same pure readiness rules
   plus a light database heuristic (mirrors ``DataConverter._detect_database``
@@ -128,6 +131,58 @@ def list_dir(raw_path: Optional[str]) -> Dict[str, Any]:
         "parent": parent,
         "entries": entries,
         "shortcuts": _shortcuts(home),
+    }
+
+
+def create_dir(raw_path: Optional[str]) -> Dict[str, Any]:
+    """Create a local directory for a folder picker destination.
+
+    The operation is intentionally small and local-only: it never deletes or
+    renames anything, and it fails if the requested path already exists as a
+    file. ``parents=True`` lets the user create a nested export parent folder
+    from the Web UI without switching to Finder or a shell.
+    """
+    if not raw_path or not str(raw_path).strip():
+        return {"ok": False, "error": "path_required"}
+
+    target = Path(str(raw_path).strip()).expanduser()
+    try:
+        target = target.resolve(strict=False)
+    except OSError:
+        pass
+
+    if target.exists() and not _safe_dir(target):
+        return {
+            "ok": False,
+            "error": "path_exists_not_directory",
+            "path": str(target),
+        }
+
+    created = not target.exists()
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        return {
+            "ok": False,
+            "error": "permission_denied",
+            "path": str(target),
+            "parent": str(target.parent),
+        }
+    except OSError as exc:
+        return {
+            "ok": False,
+            "error": "mkdir_failed",
+            "message": str(exc),
+            "path": str(target),
+            "parent": str(target.parent),
+        }
+
+    return {
+        "ok": True,
+        "created": created,
+        "path": str(target),
+        "parent": str(target.parent) if str(target) != str(target.parent) else None,
+        "shortcuts": _shortcuts(Path.home()),
     }
 
 
@@ -321,7 +376,29 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
 
 
 _EXPORT_EXT = {"csv": "csv", "excel": "xlsx", "parquet": "parquet"}
-_EVENT_PRESENCE_MODULES = {"sepsis3_sofa2"}
+_EVENT_PRESENCE_MODULES = {"sepsis3_sofa1", "sepsis3_sofa2"}
+_EXPOSURE_PRESENCE_MODULES = {
+    "vasopressor",
+    "vasopressors",
+    "ventilation",
+    "ventilator",
+}
+_PRESENCE_RATE_MODULES = _EVENT_PRESENCE_MODULES | _EXPOSURE_PRESENCE_MODULES
+
+
+def _presence_rate_kind(module: object) -> str | None:
+    normalized = str(module or "").strip().lower()
+    if normalized in _EVENT_PRESENCE_MODULES:
+        return "event_rate"
+    if normalized in _EXPOSURE_PRESENCE_MODULES:
+        return "exposure_rate"
+    return None
+
+
+def _is_presence_rate_module(module: object) -> bool:
+    return _presence_rate_kind(module) is not None
+
+
 _SUPPORTED_COHORT_PRESETS = {
     "all_icu",
     "adult_first",
@@ -366,13 +443,132 @@ _CONCEPT_DERIVED_COHORTS = {
 }
 
 
-def _normalize_sepsis_definition(value: Any) -> Dict[str, Any]:
-    """Record the current Sepsis/SOFA definition convention in export metadata.
+def _choice_str(value: Any, allowed: Set[str], default: str) -> str:
+    choice = str(value or "").strip()
+    return choice if choice in allowed else default
 
-    This is intentionally metadata only. The concept callbacks still own runtime
-    derivation; the manifest note makes the active default auditable.
+
+def _choice_int(value: Any, allowed: Set[int], default: int) -> int:
+    try:
+        choice = int(float(value))
+    except (TypeError, ValueError):
+        return default
+    return choice if choice in allowed else default
+
+
+def _bool_choice(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _normalize_delta_function(value: Any) -> str:
+    aliases = {
+        "delta_cummin": "delta_cummin",
+        "cumulative_minimum": "delta_cummin",
+        "cumulative_minimum_within_si_window": "delta_cummin",
+        "delta_start": "delta_start",
+        "first_observed": "delta_start",
+        "start_value": "delta_start",
+        "delta_min": "delta_min",
+        "sliding_minimum": "delta_min",
+        "windowed_minimum": "delta_min",
+    }
+    return aliases.get(str(value or "").strip(), "delta_cummin")
+
+
+def _normalize_sepsis_definition(value: Any) -> Dict[str, Any]:
+    """Record Sepsis/SOFA detection parameters and runtime callback kwargs.
+
+    These fields mirror ``easyicu.scores.sepsis.susp_inf`` plus
+    ``sep3``/``sep3_sofa2``. Defaults remain the Sepsis-3 main profile; non-
+    default values are preserved as explicit sensitivity/strategy choices.
     """
     raw = value if isinstance(value, dict) else {}
+    profiles = {
+        "sofa2_primary": "SOFA-2",
+        "sofa1_sensitivity": "SOFA-1",
+        "dual_audit": "SOFA-2 + SOFA-1",
+    }
+    score_to_profile = {score: profile for profile, score in profiles.items()}
+    implementation_profile = str(raw.get("implementation_profile") or "").strip()
+    if implementation_profile not in profiles:
+        implementation_profile = score_to_profile.get(
+            str(raw.get("score_family") or "").strip(), "sofa2_primary"
+        )
+    score_family = profiles[implementation_profile]
+
+    raw_si = raw.get("suspected_infection")
+    raw_si = raw_si if isinstance(raw_si, dict) else {}
+    raw_sofa = raw.get("sofa_increase")
+    raw_sofa = raw_sofa if isinstance(raw_sofa, dict) else {}
+
+    si_aliases = {"antibiotic_and_sample": "and", "abx_sample": "and"}
+    si_mode = str(raw_si.get("mode") or "auto").strip()
+    si_mode = si_aliases.get(si_mode, si_mode)
+    si_mode = _choice_str(si_mode, {"auto", "and", "icd_abx", "abx", "samp", "or"}, "auto")
+    abx_win_hours = _choice_int(
+        raw_si.get("abx_win_hours", raw_si.get("antibiotic_to_sample_hours")),
+        {12, 24, 48},
+        24,
+    )
+    samp_win_hours = _choice_int(
+        raw_si.get("samp_win_hours", raw_si.get("sample_to_antibiotic_hours")),
+        {24, 48, 72},
+        72,
+    )
+    abx_count_win_hours = _choice_int(raw_si.get("abx_count_win_hours"), {12, 24, 48}, 24)
+    abx_min_count = _choice_int(raw_si.get("abx_min_count"), {1, 2, 3}, 1)
+    positive_cultures = _bool_choice(raw_si.get("positive_cultures_required"), False)
+
+    si_window_value = raw_sofa.get("si_window")
+    if si_window_value is None:
+        si_window_value = raw_sofa.get("si_event")
+    si_window = _choice_str(str(si_window_value or "first"), {"first", "last", "any"}, "first")
+    window_before = _choice_int(raw_sofa.get("window_before_si_hours"), {24, 48, 72}, 48)
+    window_after = _choice_int(raw_sofa.get("window_after_si_hours"), {12, 24, 48}, 24)
+    delta_function = _normalize_delta_function(raw_sofa.get("delta_function"))
+    threshold = _choice_int(raw_sofa.get("threshold"), {2, 3}, 2)
+    keep_components = _bool_choice(raw_sofa.get("keep_components"), False)
+
+    si_def = {
+        "mode": si_mode,
+        "abx_win_hours": abx_win_hours,
+        "samp_win_hours": samp_win_hours,
+        "abx_count_win_hours": abx_count_win_hours,
+        "abx_min_count": abx_min_count,
+        "positive_cultures_required": positive_cultures,
+    }
+    sofa_def = {
+        "si_window": si_window,
+        "window_before_si_hours": window_before,
+        "window_after_si_hours": window_after,
+        "delta_function": delta_function,
+        "threshold": threshold,
+        "keep_components": keep_components,
+    }
+    runtime_kwargs = {
+        "si_mode": si_mode,
+        "abx_win": f"{abx_win_hours}h",
+        "samp_win": f"{samp_win_hours}h",
+        "abx_count_win": f"{abx_count_win_hours}h",
+        "abx_min_count": abx_min_count,
+        "positive_cultures": positive_cultures,
+        "si_window": si_window,
+        "delta_fun": delta_function,
+        "sofa_thresh": threshold,
+        "si_lwr": f"{window_before}h",
+        "si_upr": f"{window_after}h",
+        "keep_components": keep_components,
+    }
+
     return {
         "record_scope": str(
             raw.get("record_scope") or "metadata_current_runtime_defaults"
@@ -380,31 +576,38 @@ def _normalize_sepsis_definition(value: Any) -> Dict[str, Any]:
         "runtime_profile": str(raw.get("runtime_profile") or "easyicu_ricu_default_v1")[
             :80
         ],
-        "score_family": str(raw.get("score_family") or "selected_modules")[:80],
-        "suspected_infection": {
-            "mode": "antibiotic_and_sample",
-            "antibiotic_to_sample_hours": 24,
-            "sample_to_antibiotic_hours": 72,
-            "positive_cultures_required": False,
-        },
-        "sofa_increase": {
-            "si_event": "first",
-            "window_before_si_hours": 48,
-            "window_after_si_hours": 24,
-            "delta_function": "cumulative_minimum_within_si_window",
-            "threshold": 2,
-        },
+        "implementation_profile": implementation_profile,
+        "score_family": score_family,
+        "suspected_infection": si_def,
+        "sofa_increase": sofa_def,
+        "runtime_kwargs": runtime_kwargs,
         "review_options": {
-            "si_event": ["first", "last", "any"],
-            "delta_function": [
-                "cumulative_minimum",
-                "first_observed",
-                "windowed_minimum",
-            ],
+            "implementation_profile": list(profiles.keys()),
+            "score_family": list(profiles.values()),
+            "si_mode": ["auto", "and", "icd_abx", "abx", "samp", "or"],
+            "abx_win_hours": [12, 24, 48],
+            "samp_win_hours": [24, 48, 72],
+            "abx_count_win_hours": [12, 24, 48],
+            "abx_min_count": [1, 2, 3],
+            "positive_cultures_required": [False, True],
+            "si_window": ["first", "last", "any"],
+            "window_before_si_hours": [24, 48, 72],
+            "window_after_si_hours": [12, 24, 48],
+            "delta_function": ["delta_cummin", "delta_start", "delta_min"],
             "threshold": [2, 3],
-            "score_family": ["SOFA-2", "SOFA-1", "SOFA-2 + SOFA-1"],
+            "keep_components": [False, True],
         },
     }
+
+
+def _sepsis_runtime_kwargs(sepsis_definition: Any) -> Dict[str, Any]:
+    if not isinstance(sepsis_definition, dict):
+        return {}
+    runtime_kwargs = sepsis_definition.get("runtime_kwargs")
+    if isinstance(runtime_kwargs, dict):
+        return dict(runtime_kwargs)
+    normalized = _normalize_sepsis_definition(sepsis_definition)
+    return dict(normalized.get("runtime_kwargs") or {})
 
 
 class ExportCohortError(ValueError):
@@ -492,18 +695,23 @@ def _render_export_readme(
     definition_lines = []
     if isinstance(sepsis_def, dict):
         definition_lines = [
-            f"- Sepsis definition profile: `{sepsis_def.get('runtime_profile', '')}`",
+            f"- Sepsis runtime profile: `{sepsis_def.get('runtime_profile', '')}`",
+            f"- Sepsis implementation profile: `{sepsis_def.get('implementation_profile', '')}`",
             f"- Sepsis score family: `{sepsis_def.get('score_family', '')}`",
             (
                 "- Suspected infection: "
-                f"`{si_def.get('mode', '')}`, ABX->sample `{si_def.get('antibiotic_to_sample_hours', '')}h`, "
-                f"sample->ABX `{si_def.get('sample_to_antibiotic_hours', '')}h`"
+                f"`{si_def.get('mode', '')}`, ABX->sample `{si_def.get('abx_win_hours', '')}h`, "
+                f"sample->ABX `{si_def.get('samp_win_hours', '')}h`, "
+                f"ABX count `≥{si_def.get('abx_min_count', '')}/{si_def.get('abx_count_win_hours', '')}h`, "
+                f"positive cultures `{si_def.get('positive_cultures_required', '')}`"
             ),
             (
                 "- SOFA increase rule: "
-                f"SI event `{sofa_def.get('si_event', '')}`, window `-{sofa_def.get('window_before_si_hours', '')}h/+{sofa_def.get('window_after_si_hours', '')}h`, "
-                f"delta `{sofa_def.get('delta_function', '')}`, threshold `{sofa_def.get('threshold', '')}`"
+                f"SI event `{sofa_def.get('si_window', '')}`, window `-{sofa_def.get('window_before_si_hours', '')}h/+{sofa_def.get('window_after_si_hours', '')}h`, "
+                f"delta `{sofa_def.get('delta_function', '')}`, threshold `{sofa_def.get('threshold', '')}`, "
+                f"keep components `{sofa_def.get('keep_components', '')}`"
             ),
+            f"- Sepsis runtime kwargs: `{sepsis_def.get('runtime_kwargs', {})}`",
             f"- Definition note scope: `{sepsis_def.get('record_scope', '')}`",
         ]
 
@@ -950,10 +1158,14 @@ def _match_concept_derived_cohort_ids(
     base_ids: Set[Any],
     preset: str,
     window_hours: int,
+    sepsis_load_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Set[Any]:
     spec = _CONCEPT_DERIVED_COHORTS.get(preset)
     if not spec:
         return set(base_ids)
+    load_kwargs = {"win_length": f"{window_hours}h"}
+    if _module_uses_sepsis_kwargs(spec["concepts"]):
+        load_kwargs.update(sepsis_load_kwargs or {})
     try:
         payload = api.load_concepts(
             spec["concepts"],
@@ -962,7 +1174,7 @@ def _match_concept_derived_cohort_ids(
             data_path=str(data_path),
             merge=True,
             verbose=False,
-            win_length=f"{window_hours}h",
+            **load_kwargs,
         )
     except Exception as exc:
         raise ExportCohortError(
@@ -985,6 +1197,7 @@ def _resolve_export_cohort(
     progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     normalized = _normalize_export_cohort(cohort)
+    sepsis_load_kwargs = _sepsis_runtime_kwargs(normalized.get("sepsis_definition"))
     max_n = _coerce_int(max_patients, 0, 0, None) if max_patients is not None else 0
     id_col = api.get_id_col_for_database(_database_for_patient_filter(database))
     patient_filter_db = _database_for_patient_filter(database)
@@ -1030,6 +1243,7 @@ def _resolve_export_cohort(
                 "applied_filters": [],
             },
             "load_kwargs": {"win_length": f"{normalized['observation_window_hours']}h"},
+            "sepsis_load_kwargs": sepsis_load_kwargs,
         }
 
     from easyicu.patient_filter import PatientFilter
@@ -1085,6 +1299,7 @@ def _resolve_export_cohort(
             selected,
             normalized["preset"],
             normalized["observation_window_hours"],
+            sepsis_load_kwargs,
         )
         concept_matches = len(selected)
         before_icd = len(selected)
@@ -1156,7 +1371,13 @@ def _resolve_export_cohort(
             },
         },
         "load_kwargs": {"win_length": f"{normalized['observation_window_hours']}h"},
+        "sepsis_load_kwargs": sepsis_load_kwargs,
     }
+
+
+def _module_uses_sepsis_kwargs(concepts: List[str]) -> bool:
+    sepsis_concepts = {"susp_inf", "sep3", "sep3_sofa2"}
+    return any(str(concept) in sepsis_concepts for concept in concepts)
 
 
 def make_export_runner(
@@ -1244,6 +1465,7 @@ def make_export_runner(
         patient_ids = cohort_info["patient_ids"]
         cohort_size = cohort_info["cohort_size"]
         load_kwargs = dict(cohort_info.get("load_kwargs") or {})
+        sepsis_load_kwargs = dict(cohort_info.get("sepsis_load_kwargs") or {})
         if getattr(job, "cancel_requested", False):
             return {
                 "out_dir": str(out),
@@ -1289,6 +1511,9 @@ def make_export_runner(
                 use_sofa2 = any(
                     c.startswith("sofa2") or c == "sep3_sofa2" for c in module_concepts
                 )
+                module_kwargs = dict(load_kwargs)
+                if _module_uses_sepsis_kwargs(module_concepts):
+                    module_kwargs.update(sepsis_load_kwargs)
                 df = api.load_concepts(
                     module_concepts,
                     patient_ids=patient_ids,
@@ -1297,7 +1522,7 @@ def make_export_runner(
                     use_sofa2=use_sofa2,
                     merge=True,
                     verbose=False,
-                    **load_kwargs,
+                    **module_kwargs,
                 )
                 written: List[Dict[str, Any]] = []
                 if isinstance(df, dict):
@@ -2208,12 +2433,13 @@ def _quality_row(
     )
     if coverage is None:
         status = "unknown"
-    elif module in _EVENT_PRESENCE_MODULES:
+    elif _is_presence_rate_module(module):
         status = "neutral"
     else:
         status = "ok" if coverage >= 80 else ("warn" if coverage >= 50 else "bad")
     return {
         "module": module,
+        "metric_kind": _presence_rate_kind(module) or "coverage",
         "file": file_meta.get("file"),
         "rows": rows,
         "columns": len(file_meta.get("columns") or []),

@@ -46,6 +46,10 @@ _RUN_ARTIFACT_NAMES = [
     "quality_gate.json",
     "agent_plan.json",
     "manuscript_draft.json",
+    "benchmark_scorecard.json",
+    "workflow_graph.json",
+    "figure_gallery.json",
+    "source_run_manifest.json",
     "evidence_ledger.json",
     "human_signoff.json",
 ]
@@ -1151,6 +1155,14 @@ def _public_review_payloads(
             "claims": row.get("claims", []),
             "sentences": row.get("sentences", []),
         }
+    for name in (
+        "benchmark_scorecard.json",
+        "workflow_graph.json",
+        "figure_gallery.json",
+        "source_run_manifest.json",
+    ):
+        if name in payloads:
+            public[name] = payloads[name]
     if "evidence_ledger.json" in payloads:
         row = payloads["evidence_ledger.json"]
         public["evidence_ledger.json"] = {

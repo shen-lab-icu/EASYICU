@@ -43,7 +43,13 @@ from ..scores.sofa2 import (
     sofa2_cardio,
     sofa2_cns,
 )
-from ..scores.sepsis import sep3 as sep3_detector, susp_inf as susp_inf_detector
+from ..scores.sepsis import (
+    delta_cummin,
+    delta_min,
+    delta_start,
+    sep3 as sep3_detector,
+    susp_inf as susp_inf_detector,
+)
 from ..scores.sepsis_sofa2 import sep3_sofa2 as sep3_sofa2_detector
 from ..table import ICUTable, WinTbl
 from ..utils import coalesce, compute_patient_ids_hash as _compute_patient_ids_hash  # 🔧 统一的 patient_ids hash 函数
@@ -52,6 +58,54 @@ logger = logging.getLogger(__name__)
 _SUSP_INF_UNSUPPORTED_WARNED: set[str] = set()
 
 from ..utils.unit_conversion import convert_vaso_rate
+
+
+def _callback_timedelta(value: object, default_hours: int) -> pd.Timedelta:
+    if value is None:
+        return pd.Timedelta(hours=default_hours)
+    if isinstance(value, pd.Timedelta):
+        return value
+    if isinstance(value, (int, float)):
+        return pd.Timedelta(hours=float(value))
+    try:
+        return pd.Timedelta(str(value))
+    except (TypeError, ValueError):
+        return pd.Timedelta(hours=default_hours)
+
+
+def _callback_int(value: object, default: int) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _callback_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _sepsis_delta_fun(value: object) -> Callable[[pd.Series], pd.Series]:
+    aliases: Dict[str, Callable[[pd.Series], pd.Series]] = {
+        "delta_cummin": delta_cummin,
+        "cumulative_minimum": delta_cummin,
+        "cumulative_minimum_within_si_window": delta_cummin,
+        "delta_start": delta_start,
+        "first_observed": delta_start,
+        "start_value": delta_start,
+        "delta_min": delta_min,
+        "sliding_minimum": delta_min,
+        "windowed_minimum": delta_min,
+    }
+    return aliases.get(str(value or "delta_cummin").strip(), delta_cummin)
 
 def _standardize_fio2_units(fio2_df: pd.DataFrame, fio2_col: str, database: str) -> pd.DataFrame:
     """将FiO2标准化为百分比形式（0-100）以实现跨数据库兼容性
@@ -5290,11 +5344,22 @@ def _callback_sep3(
     if susp_tbl.index_column and susp_tbl.index_column != index_column and susp_tbl.index_column in susp_data.columns:
         susp_data = susp_data.rename(columns={susp_tbl.index_column: index_column})
 
+    kwargs = ctx.kwargs if ctx and ctx.kwargs else {}
     result = sep3_detector(
         sofa=sofa_data,
         susp_inf=susp_data,
         id_cols=list(id_columns),
         index_col=coalesce(sofa_tbl.index_column, susp_tbl.index_column, index_column),
+        si_window=str(kwargs.get("si_window", "first")),
+        delta_fun=_sepsis_delta_fun(
+            kwargs.get("delta_fun", kwargs.get("delta_function"))
+        ),
+        sofa_thresh=_callback_int(
+            kwargs.get("sofa_thresh", kwargs.get("delta_sofa")), 2
+        ),
+        si_lwr=_callback_timedelta(kwargs.get("si_lwr"), 48),
+        si_upr=_callback_timedelta(kwargs.get("si_upr"), 24),
+        keep_components=_callback_bool(kwargs.get("keep_components"), False),
     )
 
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3")
@@ -5336,11 +5401,22 @@ def _callback_sep3_sofa2(
     if susp_tbl.index_column and susp_tbl.index_column != index_column and susp_tbl.index_column in susp_data.columns:
         susp_data = susp_data.rename(columns={susp_tbl.index_column: index_column})
 
+    kwargs = ctx.kwargs if ctx and ctx.kwargs else {}
     result = sep3_sofa2_detector(
         sofa2=sofa2_data,
         susp_inf_df=susp_data,
         id_cols=list(id_columns),
         index_col=coalesce(sofa2_tbl.index_column, susp_tbl.index_column, index_column),
+        si_window=str(kwargs.get("si_window", "first")),
+        delta_fun=_sepsis_delta_fun(
+            kwargs.get("delta_fun", kwargs.get("delta_function"))
+        ),
+        sofa_thresh=_callback_int(
+            kwargs.get("sofa_thresh", kwargs.get("delta_sofa")), 2
+        ),
+        si_lwr=_callback_timedelta(kwargs.get("si_lwr"), 48),
+        si_upr=_callback_timedelta(kwargs.get("si_upr"), 24),
+        keep_components=_callback_bool(kwargs.get("keep_components"), False),
     )
 
     return _as_icutbl(result, id_columns=id_columns, index_column=index_column, value_column="sep3_sofa2")
@@ -6013,17 +6089,13 @@ def _callback_susp_inf(
         samp_data = samp_data.rename(columns={samp_tbl.index_column: index_column})
     
     # Get other parameters from kwargs
-    abx_win = ctx.kwargs.get("abx_win", pd.Timedelta(hours=24)) if ctx and ctx.kwargs else pd.Timedelta(hours=24)
-    samp_win = ctx.kwargs.get("samp_win", pd.Timedelta(hours=72)) if ctx and ctx.kwargs else pd.Timedelta(hours=72)
-    abx_min_count = ctx.kwargs.get("abx_min_count", 1) if ctx and ctx.kwargs else 1
-    positive_cultures = ctx.kwargs.get("positive_cultures", False) if ctx and ctx.kwargs else False
-    keep_components = ctx.kwargs.get("keep_components", False) if ctx and ctx.kwargs else False
-    
-    # Convert string timedelta if needed
-    if isinstance(abx_win, str):
-        abx_win = pd.Timedelta(abx_win)
-    if isinstance(samp_win, str):
-        samp_win = pd.Timedelta(samp_win)
+    kwargs = ctx.kwargs if ctx and ctx.kwargs else {}
+    abx_count_win = _callback_timedelta(kwargs.get("abx_count_win"), 24)
+    abx_win = _callback_timedelta(kwargs.get("abx_win"), 24)
+    samp_win = _callback_timedelta(kwargs.get("samp_win"), 72)
+    abx_min_count = _callback_int(kwargs.get("abx_min_count"), 1)
+    positive_cultures = _callback_bool(kwargs.get("positive_cultures"), False)
+    keep_components = _callback_bool(kwargs.get("keep_components"), False)
 
     result = susp_inf_detector(
         abx=abx_data,
@@ -6031,6 +6103,7 @@ def _callback_susp_inf(
         id_cols=list(id_columns),
         index_col=index_column,
         si_mode=si_mode,
+        abx_count_win=abx_count_win,
         abx_win=abx_win,
         samp_win=samp_win,
         abx_min_count=abx_min_count,

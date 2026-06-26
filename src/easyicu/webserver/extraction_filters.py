@@ -269,6 +269,7 @@ def _module_options(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         out.append(
             {
                 "module": module,
+                "metric_kind": dataio._presence_rate_kind(module) or "coverage",
                 "table": Path(file_name).stem,
                 "file": file_name,
                 "row_count": int(item.get("rows") or 0),
@@ -298,7 +299,7 @@ def _coverage(path: Path, cohort_size: Any) -> Tuple[float | None, int | None]:
 def _quality_status(module: str, coverage_pct: float | None) -> str:
     if coverage_pct is None:
         return "unknown"
-    if module in dataio._EVENT_PRESENCE_MODULES:
+    if dataio._is_presence_rate_module(module):
         return "neutral"
     if coverage_pct >= 80:
         return "ok"
