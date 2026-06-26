@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from easyicu.webserver import provider_adapter
+from easyicu.webserver import settings as settings_store
 from easyicu.webserver.ideas import mining as idea_mining
 from easyicu.webserver.app import app
 
@@ -154,3 +156,77 @@ def test_idea_literature_discovery_maps_pubmed_candidates_metadata_only(
     assert "stay_id" not in str(payload)
     assert "subject_id" not in str(payload)
     assert "tableRows" not in str(payload)
+
+
+def test_idea_mining_maps_ards_peep_pdf_excerpt_to_respiratory_concepts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path / "idea_runs")
+    monkeypatch.setattr(idea_mining, "_HISTORY_PATH", tmp_path / "idea_history.json")
+    monkeypatch.setattr(idea_mining, "_active_export", lambda: None)
+
+    response = TestClient(app).post(
+        "/api/ideas/mine",
+        json={
+            "source_type": "pdf",
+            "title": "Balancing lung recruitment and venous congestion in ARDS: rethinking PEEP",
+            "journal": "Intensive Care Medicine",
+            "year": 2026,
+            "excerpt": (
+                "Positive end-expiratory pressure (PEEP) is a cornerstone of mechanical "
+                "ventilation in acute respiratory distress syndrome. Ventilator settings "
+                "and oxygenation may be associated with ICU mortality."
+            ),
+            "allow_network": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    idea = payload["idea_ledger"][0]
+    concept_ids = {row["concept_id"] for row in idea["mapped_concepts"]}
+    assert {"mech_vent", "peep", "death"} <= concept_ids
+    assert idea["prior_art"]["status"] == "not_checked_external_search_required"
+    assert payload["pre_experiment"]["status"] == "blocked"
+    assert payload["privacy"]["external_llm_calls"] == 0
+    assert payload["privacy"]["network_calls"] == 0
+    assert "stay_id" not in str(payload)
+    assert "subject_id" not in str(payload)
+
+
+def test_provider_config_route_writes_private_env_without_returning_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_path = tmp_path / "provider.env"
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(provider_adapter, "_DEFAULT_PROVIDER_ENV_FILE", env_path)
+    monkeypatch.setattr(settings_store, "_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(settings_store, "_CONFIG_PATH", settings_path)
+
+    response = TestClient(app).post(
+        "/api/agent-runs/provider-config",
+        json={
+            "provider": "openai",
+            "api_key": "sk-test-provider-config",
+            "base_url": "http://127.0.0.1:8787/v1",
+            "model": "gpt5.4",
+            "enable_ai": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["secrets_returned"] is False
+    assert payload["provider_status"]["ready"] is True
+    assert payload["provider_status"]["credential_present"] is True
+    assert payload["provider_status"]["base_url_present"] is True
+    assert payload["provider_status"]["model_present"] is True
+    assert payload["settings"]["ai_enabled"] is True
+    assert env_path.exists()
+    assert (env_path.stat().st_mode & 0o777) == 0o600
+    assert "sk-test-provider-config" in env_path.read_text(encoding="utf-8")
+    assert "sk-test-provider-config" not in str(payload)
+    assert "http://127.0.0.1:8787/v1" not in str(payload)

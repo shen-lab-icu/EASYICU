@@ -507,6 +507,31 @@ def test_guided_draft_registry_writes_metadata_only_without_row_payload(tmp_path
     assert "hadm_id" not in persisted_dump
 
 
+def test_guided_draft_registry_preserves_unicode_folder_slug(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
+    monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
+    parent_dir = tmp_path / "中文父目录"
+    parent_dir.mkdir()
+    client = TestClient(app)
+
+    created = client.post(
+        "/api/guided/drafts",
+        json={
+            "title": "测试1",
+            "folder_slug": "测试1",
+            "parent_dir": str(parent_dir),
+            "data_mode": "real",
+        },
+    )
+
+    assert created.status_code == 200
+    draft = created.json()["draft"]
+    assert draft["project_parent_dir"] == str(parent_dir)
+    assert draft["project_dir"].startswith(str(parent_dir / "guided-测试1-"))
+    assert (Path(draft["project_dir"]) / "guided_draft.json").exists()
+
+
 def test_guided_draft_remove_unregisters_only_and_preserves_project_folder(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
