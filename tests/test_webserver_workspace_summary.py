@@ -1425,6 +1425,21 @@ def test_idea_mining_web_preserves_vasopressor_fluid_strategy_concept_set(
     assert roles["death"] == "outcome"
     assert "Vasopressor-fluid resuscitation strategy" in idea["idea_title"]
     assert idea["go_no_go"] == "hold"
+    feature_stats = {
+        row["concept_id"]: row
+        for row in body["pre_experiment"]["feature_statistics"]
+    }
+    sep3_stats = feature_stats["sep3_sofa2"]
+    assert sep3_stats["metric_kind"] == "event_rate"
+    assert sep3_stats["event_entities"] == 1
+    assert sep3_stats["non_event_entities"] == 2
+    assert sep3_stats["denominator_entities"] == 3
+    assert sep3_stats["event_rate_pct"] == 33.3
+    assert sep3_stats["missing_pct"] is None
+    assert sep3_stats["low_coverage"] is False
+    assert "boolean/event indicator(s)" in " ".join(
+        body["pre_experiment"]["interpretation"]
+    )
     assert {"vaso_ind", "total_input_ml", "lact"} <= set(
         body["pre_experiment"]["missing_required_concepts"]
     )
@@ -1757,6 +1772,7 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     assert quality_features["hr"]["out_of_physio_pct"] == 0.0
     assert payload["privacy"]["bounded_table_previews"] is True
     assert payload["privacy"]["max_table_preview_rows"] == 24
+    assert payload["privacy"]["max_table_page_size"] == 100
     assert (
         payload["data_tables"]["payload_scope"]
         == "old_data_tables_semantics_with_bounded_pseudonymous_table_previews"
@@ -1766,11 +1782,28 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     )
     table_modules = {row["module"]: row for row in payload["data_tables"]["modules"]}
     assert table_modules["vitals"]["shape"] == "time_indexed"
+    assert table_modules["vitals"]["label_i18n"] == {
+        "en": "Vital Signs",
+        "zh": "生命体征",
+    }
     assert table_modules["vitals"]["preview_features"][0]["feature"] == "hr"
+    assert table_modules["vitals"]["preview_features"][0]["name_i18n"] == {
+        "en": "Heart Rate",
+        "zh": "心率",
+    }
     table_previews = {
         row["module"]: row for row in payload["data_tables"]["table_previews"]
     }
     assert table_previews["demographics"]["display_columns"] == ["entity", "age", "sex"]
+    demographics_labels = {
+        row["column"]: row for row in table_previews["demographics"]["display_column_labels"]
+    }
+    assert demographics_labels["entity"]["label_zh"] == "伪匿名实体"
+    assert demographics_labels["age"]["label_zh"] == "年龄"
+    assert (
+        table_previews["demographics"]["identifier_policy"]
+        == "pseudonymous_entity_token"
+    )
     assert table_previews["demographics"]["rows"][0]["entity"].startswith("ent_")
     assert table_previews["demographics"]["rows"][0]["age"] == 50
     assert table_previews["vitals"]["display_columns"] == [
@@ -1781,7 +1814,23 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
         "spo2",
         "temp",
     ]
+    vitals_labels = {
+        row["column"]: row for row in table_previews["vitals"]["display_column_labels"]
+    }
+    assert vitals_labels["charttime"]["label_zh"] == "记录时间"
+    assert vitals_labels["hr"]["label_en"] == "Heart Rate"
+    assert vitals_labels["hr"]["label_zh"] == "心率"
     assert table_previews["vitals"]["rows"][0]["hr"] == 90
+    assert table_previews["vitals"]["pagination"] == {
+        "page": 1,
+        "page_size": 24,
+        "page_count": 1,
+        "row_start": 1,
+        "row_end": 3,
+        "rows_total": 3,
+        "has_previous": False,
+        "has_next": False,
+    }
     assert table_previews["vitals"]["truncated_rows"] is False
     assert (
         payload["trajectory_review"]["payload_scope"]
@@ -1828,6 +1877,47 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     serialized = json.dumps(payload)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
+
+
+def test_patient_review_drilldown_paginates_module_table_previews(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(
+        str(export_dir), label="Review fixture", active=True, crossdb=True
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/patient-review/drilldown",
+        json={"table_module": "vitals", "table_page": 2, "table_page_size": 1},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    previews = {row["module"]: row for row in payload["data_tables"]["table_previews"]}
+    vitals = previews["vitals"]
+    assert payload["data_tables"]["module_picker"]["default_module"] == "vitals"
+    assert vitals["pagination"] == {
+        "page": 2,
+        "page_size": 1,
+        "page_count": 3,
+        "row_start": 2,
+        "row_end": 2,
+        "rows_total": 3,
+        "has_previous": True,
+        "has_next": True,
+    }
+    assert vitals["row_count"] == 1
+    assert vitals["rows"][0]["hr"] == 95
+    assert vitals["rows"][0]["entity"].startswith("ent_")
+    assert "stay_id" not in vitals["rows"][0]
+    assert "subject_id" not in vitals["rows"][0]
+    assert "hadm_id" not in vitals["rows"][0]
 
 
 def test_patient_review_drilldown_uses_legacy_full_export_counts(
@@ -2022,12 +2112,30 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     assert "admission" in summary
     assert "count" in summary["admission"]
     assert isinstance(summary["admission"]["bins"], list)
-    complexity = summary["complexity"]
-    assert complexity["age_groups"] == ["<40", "40-59", "60-74", ">=75"]
-    assert complexity["los_groups"] == ["<2d", "2-5d", "5-10d", ">=10d"]
-    assert len(complexity["z"]) == 4 and all(len(row) == 4 for row in complexity["z"])
-    assert complexity["total"] == sum(sum(row) for row in complexity["z"])
-    assert complexity["max"] == max(max(row) for row in complexity["z"])
+    assert "complexity" not in summary
+    clinical_profile = summary["clinical_profile"]
+    assert clinical_profile["payload_scope"] == "cohort_aggregate_only_no_patient_rows"
+    domains = {row["id"]: row for row in clinical_profile["domains"]}
+    assert set(domains) >= {
+        "demographics",
+        "severity_outcome",
+        "treatments",
+        "diagnosis",
+        "data_completeness",
+    }
+    severity_items = {
+        row["id"]: row for row in domains["severity_outcome"]["items"]
+    }
+    assert severity_items["sepsis3"]["kind"] == "event_rate"
+    assert severity_items["sepsis3"]["pct"] == 33.3
+    treatment_items = {row["id"]: row for row in domains["treatments"]["items"]}
+    assert treatment_items["vasopressors"]["status"] == "unavailable"
+    assert treatment_items["vasopressors"]["reason"] == "module_not_in_current_export"
+    assert domains["diagnosis"]["items"][0]["status"] == "unavailable"
+    coverage_items = {
+        row["id"]: row for row in domains["data_completeness"]["items"]
+    }
+    assert coverage_items["coverage_vitals"]["pct"] == 66.7
     assert summary["sex"]["female_pct"] == 66.7
     assert summary["sofa2"]["median"] == 6.5
     assert [b["label"] for b in summary["sofa2"]["bins"]] == [
@@ -2052,6 +2160,7 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     modules = {row["module"]: row for row in payload["coverage"]}
     assert modules["demographics"]["coverage_pct"] == 100.0
     assert modules["vitals"]["coverage_pct"] == 66.7
+    assert modules["sepsis3_sofa2"]["metric_kind"] == "event_rate"
     assert modules["sepsis3_sofa2"]["quality_status"] == "neutral"
     assert payload["quality"]["watchlist_count"] == 2
     assert payload["groups"]["comparison_mode"] == "descriptive_only"
@@ -2083,7 +2192,7 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     assert survival_analysis["mode"] == "kaplan_meier_aggregate"
     assert survival_analysis["scope"] == "exploratory_unadjusted"
     assert survival_analysis["reportable"] is False
-    assert survival_analysis["default_outcome"] == "hospital_death"
+    assert survival_analysis["default_outcome"] == "mort_28d"
     hospital = next(
         row for row in survival_analysis["outcomes"] if row["id"] == "hospital_death"
     )
@@ -2092,17 +2201,38 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     assert hospital["time_column"] == "los_hosp"
     assert hospital["usable_entities"] == 3
     assert hospital["event_count"] == 1
+    assert hospital["display_horizon_days"] == 30.0
+    assert hospital["window_label"] == "30-day display window"
+    assert hospital["event_summary"] == {
+        "status": "available",
+        "basis": "event_flag",
+        "event_column": "death",
+        "time_column": None,
+        "time_window_label": None,
+        "denominator": 3,
+        "event_count": 1,
+        "event_rate_pct": 33.3,
+    }
     assert (
         next(row for row in survival_analysis["outcomes"] if row["id"] == "icu_death")[
             "status"
         ]
         == "blocked"
     )
+    mort_28d = next(row for row in survival_analysis["outcomes"] if row["id"] == "mort_28d")
+    assert mort_28d["status"] == "ready"
+    assert mort_28d["derived_from"] == "hospital_mortality_time_window"
+    assert mort_28d["display_horizon_days"] == 28.0
+    assert mort_28d["event_column"] == "death"
+    assert mort_28d["time_column"] == "los_hosp"
+    assert mort_28d["event_summary"]["basis"] == "derived_time_window"
+    assert mort_28d["event_summary"]["event_count"] == 1
+    assert mort_28d["event_summary"]["event_rate_pct"] == 33.3
     assert (
-        next(row for row in survival_analysis["outcomes"] if row["id"] == "mort_28d")[
-            "status"
+        next(row for row in survival_analysis["outcomes"] if row["id"] == "icu_death")[
+            "reason"
         ]
-        == "blocked"
+        == "ICU mortality is unavailable because this export does not include an ICU-specific event column."
     )
     sepsis_curve = next(
         row
@@ -2112,6 +2242,9 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     assert sepsis_curve["logrank"]["status"] == "ready"
     assert sepsis_curve["logrank"]["test"] == "logrank"
     assert sepsis_curve["logrank"]["df"] == 1
+    assert sepsis_curve["display_horizon_days"] == 30.0
+    assert sepsis_curve["logrank"]["p_value"] > 0
+    assert "<" not in sepsis_curve["logrank"]["p_value_label"]
     assert sepsis_curve["number_at_risk"]["times"] == [0.0, 1.0, 3.0, 6]
     risk_rows = {
         row["label"]: row["values"] for row in sepsis_curve["number_at_risk"]["rows"]
@@ -2124,6 +2257,108 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     serialized = json.dumps(payload)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
+
+
+def test_cohort_review_icu_death_event_rate_does_not_require_km_time(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    cohort_review._SUMMARY_CACHE.clear()
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "death": [0, 1, 0],
+            "los_hosp": [4.0, 3.0, 6.0],
+            "icu_mortality": [1, 0, 0],
+        }
+    ).to_csv(export_dir / "outcome.csv", index=False)
+    source_store.register_source(str(export_dir), label="ICU event only", active=True)
+    client = TestClient(app)
+
+    response = client.post("/api/cohort-review/summary", json={})
+
+    assert response.status_code == 200
+    survival = response.json()["survival_analysis"]
+    icu = next(row for row in survival["outcomes"] if row["id"] == "icu_death")
+    assert icu["status"] == "blocked"
+    assert icu["reason"] == (
+        "ICU mortality event rate is available, but KM/log-rank needs "
+        "ICU-specific time columns."
+    )
+    assert icu["event_summary"] == {
+        "status": "available",
+        "basis": "event_flag",
+        "event_column": "icu_mortality",
+        "time_column": None,
+        "time_window_label": None,
+        "denominator": 3,
+        "event_count": 1,
+        "event_rate_pct": 33.3,
+    }
+    assert all(row["outcome_id"] != "icu_death" for row in survival["curves"])
+    serialized = json.dumps(survival)
+    for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
+        assert marker not in serialized
+
+
+def test_cohort_review_presence_rate_modules_are_not_low_coverage(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    cohort_review._SUMMARY_CACHE.clear()
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    extra_tables = {
+        "sepsis3_sofa1": pd.DataFrame({"stay_id": [1], "sep3_sofa1": [1]}),
+        "vasopressors": pd.DataFrame({"stay_id": [2], "vaso_ind": [1]}),
+        "ventilator": pd.DataFrame({"stay_id": [3], "vent_ind": [1]}),
+    }
+    manifest_path = export_dir / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for module, frame in extra_tables.items():
+        file_name = f"{module}.csv"
+        frame.to_csv(export_dir / file_name, index=False)
+        manifest.setdefault("files", []).append(
+            {"file": file_name, "module": module, "rows": len(frame)}
+        )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+    client = TestClient(app)
+
+    response = client.post("/api/cohort-review/summary", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    modules = {row["module"]: row for row in payload["coverage"]}
+    assert modules["sepsis3_sofa1"]["coverage_pct"] == 33.3
+    assert modules["sepsis3_sofa1"]["metric_kind"] == "event_rate"
+    assert modules["sepsis3_sofa1"]["quality_status"] == "neutral"
+    assert modules["vasopressors"]["coverage_pct"] == 33.3
+    assert modules["vasopressors"]["metric_kind"] == "exposure_rate"
+    assert modules["vasopressors"]["quality_status"] == "neutral"
+    assert modules["ventilator"]["coverage_pct"] == 33.3
+    assert modules["ventilator"]["metric_kind"] == "exposure_rate"
+    assert modules["ventilator"]["quality_status"] == "neutral"
+    assert payload["quality"]["watchlist_count"] == 2
+    assert payload["quality"]["modules_neutral"] == 4
+    coverage_domain = {
+        row["id"]: row
+        for row in payload["summary"]["clinical_profile"]["domains"]
+    }["data_completeness"]
+    watchlist_modules = {
+        item["modules"][0]
+        for item in coverage_domain["items"]
+        if item["id"].startswith("coverage_")
+    }
+    assert "sepsis3_sofa1" not in watchlist_modules
+    assert "vasopressors" not in watchlist_modules
+    assert "ventilator" not in watchlist_modules
 
 
 def test_cohort_review_feature_catalog_and_selected_feature_profiles(
@@ -2378,7 +2613,7 @@ def test_cohort_review_large_parquet_export_reuses_active_source_for_km_and_cove
         {
             "stay_id": stay_ids,
             "death": [i % 10 == 0 for i in stay_ids],
-            "los_hosp": [float((i % 28) + 1) for i in stay_ids],
+            "los_hosp": [float((i % 60) + 1) for i in stay_ids],
             "los_icu": [float((i % 14) + 1) for i in stay_ids],
         }
     ).to_parquet(export_dir / "outcome.parquet", index=False)
@@ -2426,8 +2661,17 @@ def test_cohort_review_large_parquet_export_reuses_active_source_for_km_and_cove
     assert modules["outcome"]["coverage_pct"] == 100.0
     survival = payload["survival_analysis"]
     assert survival["status"] == "ready"
-    assert survival["default_outcome"] == "hospital_death"
+    assert survival["default_outcome"] == "mort_28d"
     assert survival["curves"]
+    sepsis_curve = next(
+        row
+        for row in survival["curves"]
+        if row["outcome_id"] == "hospital_death" and row["group_id"] == "sepsis"
+    )
+    assert sepsis_curve["display_horizon_days"] == 30.0
+    assert sepsis_curve["number_at_risk"]["times"][-1] == 30.0
+    assert sepsis_curve["logrank"]["p_value_label"]
+    assert "<" not in sepsis_curve["logrank"]["p_value_label"]
     assert len(json.dumps(survival)) < 80_000
     assert "stay_id" not in json.dumps(survival)
 
@@ -3522,6 +3766,16 @@ def test_crossdb_raw_distribution_job_streams_progress_and_result(
         if event.get("type") == "progress"
     ]
     assert {"resolving", "loading", "finalizing"}.issubset(set(phases))
+    loading_events = [
+        event
+        for event in snap["events"]
+        if event.get("type") == "progress" and event.get("phase") == "loading"
+    ]
+    assert loading_events
+    assert loading_events[-1]["max_patients"] == 40
+    assert loading_events[-1]["sample_size"] == 100
+    assert "max 40 entities/database" in loading_events[-1]["message"]
+    assert "max 100 values/feature" in loading_events[-1]["message"]
     serialized = json.dumps(result)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
@@ -4264,6 +4518,112 @@ def test_agent_run_review_and_local_signoff_write_safe_artifact(
         stale_payload["signoff_integrity"]["tampered_artifacts"][0]["name"]
         == "cohort_summary.json"
     )
+
+
+def test_agent_run_review_exposes_canonical9_import_artifacts(tmp_path: Path) -> None:
+    run_dir = tmp_path / "canonical9" / "run_20260613T004906_66dc3b"
+    run_dir.mkdir(parents=True)
+    payloads = {
+        "run_context.json": {
+            "run_id": "run_20260613T004906_66dc3b",
+            "study_id": "fig2-e1-sepsis3-mortality",
+            "mode": "analysis",
+            "question": "Sepsis-3 prevalence and mortality",
+            "summary": {"stays": 100, "evidence_count": 12},
+            "local_first": {"uploads": 0, "tokens": 0, "imported": True},
+        },
+        "cohort_summary.json": {
+            "summary": {"stays": 100, "evidence_count": 12},
+            "cohort": {"patient_rows_returned": False},
+        },
+        "quality_gate.json": {
+            "gate": {
+                "status": "analysis_only",
+                "reportable": False,
+                "draft_unlocked": False,
+                "checks": [{"id": "human_signoff", "passed": False}],
+            },
+            "quality": [],
+        },
+        "agent_plan.json": {"steps": [{"step_id": "s1", "intent": "summarize run"}]},
+        "manuscript_draft.json": {
+            "run_id": "run_20260613T004906_66dc3b",
+            "status": "locked_canonical9_import",
+            "claims": [],
+            "sentences": [],
+        },
+        "benchmark_scorecard.json": {
+            "kind": "canonical9_benchmark_scorecard",
+            "task_id": "E1_sepsis3_mortality",
+            "tristate": "gate_reportable",
+            "evidence_count": 12,
+            "dimensions": [{"id": "plan", "subscore": 1.0, "level": "Pass"}],
+        },
+        "workflow_graph.json": {
+            "kind": "workflow_graph",
+            "graph": {"nodes": [{"id": "plan"}], "edges": []},
+        },
+        "figure_gallery.json": {
+            "kind": "figure_gallery",
+            "status": "ok",
+            "figures": [
+                {
+                    "label": "Publication figure",
+                    "relative_path": "publication_figures/easyicu_publication_figure.png",
+                    "data_url": "data:image/png;base64,ZmFrZQ==",
+                }
+            ],
+        },
+        "source_run_manifest.json": {
+            "kind": "source_run_manifest",
+            "run_id": "run_20260613T004906_66dc3b",
+            "evidence_count": 12,
+        },
+        "evidence_ledger.json": {
+            "run_id": "run_20260613T004906_66dc3b",
+            "run_type": "canonical9_import",
+            "status": "analysis_only",
+            "artifacts": [],
+            "privacy": {"patient_rows_persisted": False},
+        },
+    }
+    for name, payload in payloads.items():
+        (run_dir / name).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    client = TestClient(app)
+    review = client.post("/api/agent-runs/review", json={"project_dir": str(run_dir)})
+
+    assert review.status_code == 200
+    body = review.json()
+    assert body["ok"] is True
+    assert body["run_type"] == "canonical9_import"
+    assert body["readiness"]["reportable"] is False
+    public_payloads = body["artifact_payloads"]
+    for name in (
+        "benchmark_scorecard.json",
+        "workflow_graph.json",
+        "figure_gallery.json",
+        "source_run_manifest.json",
+    ):
+        assert name in public_payloads
+    assert public_payloads["figure_gallery.json"]["figures"][0][
+        "data_url"
+    ].startswith("data:image/png;base64,")
+    assert {
+        "benchmark_scorecard.json",
+        "workflow_graph.json",
+        "figure_gallery.json",
+        "source_run_manifest.json",
+    } <= {artifact["name"] for artifact in body["artifacts"]}
+
+    artifact = client.post(
+        "/api/agent-runs/artifact",
+        json={"project_dir": str(run_dir), "artifact": "figure_gallery.json"},
+    )
+    assert artifact.status_code == 200
+    artifact_body = artifact.json()
+    assert artifact_body["payload"]["figures"][0]["label"] == "Publication figure"
+    assert artifact_body["privacy_scan"]["passed"] is True
 
 
 def test_agent_run_signoff_requires_all_confirmations(

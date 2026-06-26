@@ -225,7 +225,6 @@
   let exMinLosHours = 0;
   let exWindowHours = DEFAULT_OBSERVATION_WINDOW_HOURS;
   let exExcludeReadmissions = true;
-  const EX_SEPSIS_RUNTIME_PROFILE = 'easyicu_ricu_default_v1';
   let convFail = false;     // demo: conversion hit a recoverable error
 
   const COHORT_PRESETS = [
@@ -836,9 +835,18 @@
   }
   function closePicker() { if (pickerEl) { pickerEl.remove(); pickerEl = null; } document.removeEventListener('keydown', pickerKey); }
   function pickerKey(e) { if (e.key === 'Escape') closePicker(); }
-  function openFolderPicker(startPath, onPick, title) {
+  function cleanFolderName(raw) {
+    return String(raw || '').trim().replace(/[\\/]+/g, '-');
+  }
+  function joinLocalPath(parent, name) {
+    const base = String(parent || '').trim();
+    if (!base) return name;
+    return base + (base.endsWith('/') ? '' : '/') + name;
+  }
+  function openFolderPicker(startPath, onPick, title, options) {
     ensurePickerStyles();
     closePicker();
+    const opts = options || {};
     let cur = startPath || '';
     const pickerTitle = title || t('Choose a data folder', '选择数据文件夹');
     const back = document.createElement('div'); back.className = 'eu-pick-back';
@@ -853,6 +861,12 @@
         <div class="eu-pick-cur" data-pk-cur></div>
         <div class="eu-pick-sc" data-pk-sc></div>
         <div class="eu-pick-list" data-pk-list><div class="eu-pick-empty">${t('Loading…', '加载中…')}</div></div>
+        ${opts.allowCreate ? `
+          <div class="eu-pick-create">
+            <input data-pk-new-name placeholder="${escHtml(t('New folder name', '新文件夹名称'))}" />
+            <button class="btn sm" data-pk-new>${icon('plus', 13)} ${t('Create folder', '创建文件夹')}</button>
+            <div class="eu-pick-msg" data-pk-msg>${t('Create inside the folder shown above, then use it as the export destination.', '会在上方当前目录内创建，并把它作为导出目录。')}</div>
+          </div>` : ''}
         <div class="eu-pick-f">
           <button class="btn ghost sm" data-pk-up>${icon('back', 13)} ${t('Up', '上一级')}</button>
           <span style="flex:1;"></span>
@@ -863,9 +877,59 @@
     const listEl = back.querySelector('[data-pk-list]');
     const curEl = back.querySelector('[data-pk-cur]');
     const scEl = back.querySelector('[data-pk-sc]');
+    const newNameEl = back.querySelector('[data-pk-new-name]');
+    const newBtn = back.querySelector('[data-pk-new]');
+    const msgEl = back.querySelector('[data-pk-msg]');
     back.addEventListener('click', e => { if (e.target === back) closePicker(); });
     back.querySelector('[data-pk-close]').addEventListener('click', closePicker);
     back.querySelector('[data-pk-use]').addEventListener('click', () => { closePicker(); if (cur) onPick(cur); });
+    if (newBtn && newNameEl && msgEl) {
+      newBtn.addEventListener('click', () => {
+        const name = cleanFolderName(newNameEl.value);
+        msgEl.classList.remove('err');
+        if (!cur) {
+          msgEl.textContent = t('Choose a parent folder first.', '请先选择父目录。');
+          msgEl.classList.add('err');
+          return;
+        }
+        if (!name || name === '.' || name === '..') {
+          msgEl.textContent = t('Enter a valid folder name.', '请输入有效的文件夹名称。');
+          msgEl.classList.add('err');
+          return;
+        }
+        if (!(window.EU_API && window.EU_API.createDir)) {
+          msgEl.textContent = t('Folder creation endpoint is unavailable.', '文件夹创建接口不可用。');
+          msgEl.classList.add('err');
+          return;
+        }
+        const target = joinLocalPath(cur, name);
+        newBtn.disabled = true;
+        msgEl.textContent = t('Creating local folder…', '正在创建本地文件夹…');
+        window.EU_API.createDir(target).then(r => {
+          if (!r || !r.ok) throw new Error((r && (r.error || r.message)) || 'mkdir_failed');
+          const createdPath = r.path || target;
+          if (opts.pickCreated) {
+            closePicker();
+            onPick(createdPath);
+          } else {
+            newNameEl.value = '';
+            msgEl.textContent = t('Folder created.', '文件夹已创建。');
+            load(createdPath);
+          }
+        }).catch(err => {
+          msgEl.textContent = String(err && err.message || err);
+          msgEl.classList.add('err');
+        }).finally(() => {
+          if (pickerEl === back) newBtn.disabled = false;
+        });
+      });
+      newNameEl.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          newBtn.click();
+        }
+      });
+    }
     document.addEventListener('keydown', pickerKey);
 
     function load(path) {
@@ -989,43 +1053,13 @@
     if (exAgeMax >= 100) return '≥ ' + exAgeMin;
     return exAgeMin + '–' + exAgeMax;
   }
-  function selectedSepsisScoreFamily() {
-    const keys = new Set(modKeys());
-    const sofa2 = keys.has('sofa2_score') || keys.has('sepsis3_sofa2');
-    const sofa1 = keys.has('sofa1_score') || keys.has('sepsis3_sofa1');
-    if (sofa2 && sofa1) return 'SOFA-2 + SOFA-1';
-    if (sofa2) return 'SOFA-2';
-    if (sofa1) return 'SOFA-1';
-    return t('selected modules', '按已选模块');
-  }
   function sepsisDefinitionRelevant() {
-    return modKeys().some(k => k.startsWith('sepsis3_') || k.startsWith('sofa') || k === 'sepsis_shared');
+    const sepsis = window.EUExtractionSepsis;
+    return sepsis && sepsis.relevant ? sepsis.relevant(modKeys()) : false;
   }
   function sepsisDefinitionContract() {
-    return {
-      record_scope: 'metadata_current_runtime_defaults',
-      runtime_profile: EX_SEPSIS_RUNTIME_PROFILE,
-      score_family: selectedSepsisScoreFamily(),
-      suspected_infection: {
-        mode: 'antibiotic_and_sample',
-        antibiotic_to_sample_hours: 24,
-        sample_to_antibiotic_hours: 72,
-        positive_cultures_required: false,
-      },
-      sofa_increase: {
-        si_event: 'first',
-        window_before_si_hours: 48,
-        window_after_si_hours: 24,
-        delta_function: 'cumulative_minimum_within_si_window',
-        threshold: 2,
-      },
-      review_options: {
-        si_event: ['first', 'last', 'any'],
-        delta_function: ['cumulative_minimum', 'first_observed', 'windowed_minimum'],
-        threshold: [2, 3],
-        score_family: ['SOFA-2', 'SOFA-1', 'SOFA-2 + SOFA-1'],
-      },
-    };
+    const sepsis = window.EUExtractionSepsis;
+    return sepsis && sepsis.contract ? sepsis.contract() : {};
   }
   function cohortContract() {
     const icd = (window.EUIcd && window.EUIcd.contract) ? window.EUIcd.contract() : {};
@@ -1287,51 +1321,11 @@
   }
 
   /* ---- modules cfg ---- */
-  function sepsisDefChip(label, tone) {
-    return `<span class="sepsis-def-chip ${tone || ''}">${escHtml(label)}</span>`;
-  }
   function sepsisDefinitionPanel() {
-    if (!sepsisDefinitionRelevant()) return '';
-    const current = [
-      t('SI = antibiotics + culture/sample', 'SI = 抗菌药 + 培养/采样'),
-      t('sample→ABX 72h / ABX→sample 24h', '采样→抗菌药 72h / 抗菌药→采样 24h'),
-      t('first SI event', '首个 SI 事件'),
-      t('SOFA window −48h/+24h', 'SOFA 窗口 −48h/+24h'),
-      t('delta = cumulative minimum', '增量 = 窗口内累积最小值'),
-      'ΔSOFA ≥ 2',
-    ];
-    const review = [
-      t('first / last / any SI event', 'first / last / any SI 事件'),
-      t('cummin / start / windowed-min delta', '累积最小值 / 起点 / 滑动最小值增量'),
-      t('SOFA-2 vs SOFA-1 sensitivity', 'SOFA-2 与 SOFA-1 敏感性'),
-      t('threshold 2 vs 3', '阈值 2 与 3'),
-    ];
-    return `
-      <div class="sepsis-def-panel">
-        <div class="sepsis-def-head">
-          <span class="sepsis-def-ico">${icon('shield', 15)}</span>
-          <div class="grow">
-            <div class="sepsis-def-kicker">${t('Definition checkpoint', '定义检查点')}</div>
-            <div class="sepsis-def-title">${t('Sepsis-3 timing definition', 'Sepsis-3 时间定义')}</div>
-            <div class="sepsis-def-copy">${t(
-              'SOFA-defined Sepsis-3 is sensitive to the suspected-infection anchor and SOFA delta window. EasyICU records the current runtime default in the export manifest; alternate modes should be fixed in the study protocol before re-deriving concepts.',
-              'SOFA 定义的 Sepsis-3 会受疑似感染锚点和 SOFA 增量窗口影响。EasyICU 会把当前运行默认写入导出 manifest；如果要比较其他模式，需要先在研究方案里固定后再重新派生。'
-            )}</div>
-          </div>
-          <span class="pill mono">${escHtml(selectedSepsisScoreFamily())}</span>
-        </div>
-        <div class="sepsis-def-grid">
-          <div class="sepsis-def-row">
-            <div class="sepsis-def-label">${t('Current extraction default', '当前抽取默认')}</div>
-            <div class="sepsis-def-chips">${current.map(x => sepsisDefChip(x, 'current')).join('')}</div>
-          </div>
-          <div class="sepsis-def-row">
-            <div class="sepsis-def-label">${t('Review before analysis', '分析前确认')}</div>
-            <div class="sepsis-def-chips">${review.map(x => sepsisDefChip(x, 'review')).join('')}</div>
-          </div>
-        </div>
-        <div class="sepsis-def-foot">${icon('file', 12)} ${t('Recorded as cohort.sepsis_definition in the local manifest; it is a definition note, not a silent runtime override.', '记录到本地 manifest 的 cohort.sepsis_definition；这是定义说明，不是静默改写运行参数。')}</div>
-      </div>`;
+    const sepsis = window.EUExtractionSepsis;
+    return sepsis && sepsis.panel
+      ? sepsis.panel({ moduleKeys: modKeys(), t, icon, escHtml })
+      : '';
   }
   function conceptRows(m) {
     const ids = conceptIdsForModule(m);
@@ -1422,6 +1416,7 @@
         <div class="ex-export-destination">
           <div class="path-field ex-export-path"><span class="pf-ico">${icon('folder', 14)}</span><span class="pf-path ${destination ? '' : 'muted'}">${escHtml(exportDestinationLabel())}</span></div>
           <button class="btn sm ghost ex-export-browse" data-ex-export-browse>${icon('folder', 13)} ${t('Browse...', '浏览...')}</button>
+          <button class="btn sm ghost ex-export-create" data-ex-export-create>${icon('plus', 13)} ${t('New folder', '新建目录')}</button>
         </div>
         <div class="note-line mt-8" style="font-size:11px;color:${hintTone};">${icon(destination ? 'shield' : 'alert', 11)} ${exportDestinationHint()}</div>
         <button class="adv-toggle ${exAdvExport ? 'open' : ''}" data-ex-adve>${t('Advanced export options', '高级导出选项')} <span class="chev">${icon('chevdown', 13)}</span></button>
@@ -1598,15 +1593,17 @@
           });
         } else if (pathInput) { pathInput.focus(); pathInput.select(); }
       }));
-      root.querySelectorAll('[data-ex-export-browse]').forEach(browseBtn => browseBtn.addEventListener('click', () => {
+      const openExportDestinationPicker = () => {
         if (window.EU_API && window.EU_API.listDir) {
           openFolderPicker(currentExportDir(), picked => {
             setExportDir(picked);
             repaint();
-          }, t('Choose export destination', '选择导出目录'));
-        } else {
-          browseBtn.focus();
+          }, t('Choose or create export destination', '选择或创建导出目录'), { allowCreate: true, pickCreated: true });
         }
+      };
+      root.querySelectorAll('[data-ex-export-browse], [data-ex-export-create]').forEach(browseBtn => browseBtn.addEventListener('click', () => {
+        if (window.EU_API && window.EU_API.listDir) openExportDestinationPicker();
+        else browseBtn.focus();
       }));
       root.querySelectorAll('[data-ex-src]').forEach(b => b.addEventListener('click', () => {
         if (pathInput) exPath = pathInput.value || exPath;
@@ -1678,6 +1675,12 @@
       root.querySelectorAll('[data-ex-filter-usemods]').forEach(b => b.addEventListener('click', useMatchedFilterModules));
       if (dataMode() === 'real' && exAdvCohort && !exFilterOptions && !exFilterLoading && !exFilterError) {
         setTimeout(loadExtractionFilters, 0);
+      }
+      if (window.EUExtractionSepsis && window.EUExtractionSepsis.bind) {
+        window.EUExtractionSepsis.bind(root, {
+          markStale: () => { window.EU_STALE = true; },
+          repaint,
+        });
       }
       // reset to core
       const core = root.querySelector('[data-ex-core]'); if (core) core.addEventListener('click', () => { resetToCore(); repaint(); });

@@ -1819,11 +1819,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       literatureScanning: false,
       discovering: false,
       mining: false,
+      planning: false,
       priorArting: false,
       handoffing: false,
       projectCreating: false,
       resolved: null,
       result: null,
+      planDraft: null,
       prior: null,
       handoff: null,
       project: null,
@@ -1831,9 +1833,22 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       literatureScan: null,
       discovery: null,
       error: null,
+      apiIntroComplete: false,
+      sourceEditorOpen: true,
+      dataContextConfirmed: false,
     };
     guidedIdeaProvider = createGuidedIdeaProviderState();
     guidedLiteratureBrowser = { open: false, loading: false, error: null, data: null, path: '' };
+  }
+  function clearGuidedIdeaOutputs(clearResolved) {
+    if (!guidedIdea) return;
+    if (clearResolved) guidedIdea.resolved = null;
+    guidedIdea.result = null;
+    guidedIdea.planDraft = null;
+    guidedIdea.prior = null;
+    guidedIdea.handoff = null;
+    guidedIdea.project = null;
+    guidedIdea.dataContextConfirmed = false;
   }
   function startGuidedIdeaFlow(label) {
     if (label) pushUser(label);
@@ -1841,10 +1856,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     setVal({ question: 'idea mining', analysis: 'not started', draft: 'locked' });
     markThrough('question', 'active');
     thread.push({ bot: true, html: bi(
-      `We can mine a research idea here, without leaving Copilot. Choose a local PDF, scan a local literature folder, paste a paper clue, or describe the topic; I’ll create a local evidence-bound idea ledger, check the active export, and prepare a handoff for Agent Projects.`,
-      `可以直接在 Copilot 里挖掘研究想法。选择本地 PDF、扫描本地文献库文件夹、粘贴文章线索，或描述主题后，我会生成本地 evidence-bound idea ledger，检查 active export，并准备交接给 Agent Projects。`,
+      `First I’ll help you confirm API readiness. Local-only idea mining can continue without an API, but AI synthesis and Agent handoff stay blocked until you explicitly configure a provider.`,
+      `第一步先确认 API 就绪状态。本地 idea 挖掘可以不用 API 继续；但 AI 综合和 Agent 交接在你显式配置 provider 前会保持阻断。`,
     ) });
-    thread.push({ guidedIdea: true });
+    thread.push({ guidedIdeaApiSetup: true });
     chips = [];
     renderThread();
     renderChips();
@@ -1906,14 +1921,23 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (guidedIdea.resolving) return t('Resolving bounded source metadata...', '正在解析有界来源元数据...');
     if (guidedIdea.discovering) return t('Searching opt-in PubMed metadata and mapping candidate ideas...', '正在按 opt-in 检索 PubMed 元数据并映射候选 idea...');
     if (guidedIdea.mining) return t('Mining local idea ledger and active-export feasibility...', '正在生成本地 idea ledger 并检查 active export 可行性...');
+    if (guidedIdea.planning) return t('Drafting or revising the pre-Agent study plan...', '正在生成或修订 Agent 前研究计划...');
     if (guidedIdea.priorArting) return t('Checking prior art under explicit opt-in rules...', '正在按显式 opt-in 规则检查 prior art...');
     if (guidedIdea.handoffing) return t('Writing local handoff plan...', '正在写入本地 handoff plan...');
     if (guidedIdea.projectCreating) return t('Creating metadata-only Agent project seed...', '正在创建 metadata-only Agent project seed...');
     if (guidedIdea.error) return esc(guidedIdea.error);
-    if (guidedIdea.project) return t('Agent project seed created from the idea handoff.', '已从 idea handoff 创建 Agent project seed。');
-    if (guidedIdea.handoff) return t('Handoff written. You can create an Agent project seed next.', 'handoff 已写入。下一步可创建 Agent project seed。');
-    if (guidedIdea.result) return t('Local idea ledger and pre-experiment are ready; API-backed checks remain gated until configured.', '本地 idea ledger 与预实验已生成；需要 API 的检查仍会在配置前保持阻断。');
-    if (guidedIdea.resolved) return t('Source metadata resolved. Run local mining next.', '来源元数据已解析。下一步运行本地挖掘。');
+    if (guidedIdea.result && !guidedIdea.dataContextConfirmed) return t('Candidate idea found. Confirm a local export/cohort/module context before pre-experiment or Agent handoff.', '已找到候选 idea。预实验或 Agent 交接前，需要先确认本地导出、队列与模块上下文。');
+    if (guidedIdea.project) return t('Metadata-only Agent project seed created. It is not an analysis run or manuscript claim.', 'metadata-only Agent 项目种子已创建；这还不是分析运行，也不是稿件结论。');
+    if (guidedIdea.handoff) return t('Handoff draft is frozen. Create a project seed only if you want Agent Projects to continue from this confirmed context.', '交接草稿已冻结。只有在你希望 Agent Projects 从这个已确认上下文继续时，才创建项目种子。');
+    if (guidedIdea.result && guidedIdea.dataContextConfirmed) return t('Data context confirmed. Review the pre-experiment and edit the plan before any Agent handoff.', '数据上下文已确认。请先审阅预实验并编辑计划，再做 Agent 交接。');
+    if (guidedIdea.resolved) {
+      const adapter = guidedIdea.resolved.source_adapter || {};
+      const status = String(adapter.status || '');
+      if (status.includes('failed') || status.includes('empty') || status.includes('blocked')) {
+        return `${t('Source resolver returned', '来源解析返回')} ${status}${adapter.reason ? `: ${adapter.reason}` : ''}`;
+      }
+      return t('Source metadata resolved. Run local mining next.', '来源元数据已解析。下一步运行本地挖掘。');
+    }
     return t('Add a source clue or topic, then run local mining.', '先添加来源线索或主题，然后运行本地挖掘。');
   }
   function guidedIdeaProviderContext() {
@@ -1943,6 +1967,33 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
   function renderGuidedIdeaCapabilityPanel() {
     return window.EU_GUIDED_IDEA_PROVIDER.renderCapabilityPanel(guidedIdeaProviderContext());
+  }
+  function renderGuidedIdeaApiSetupCard() {
+    if (!guidedIdea) resetGuidedIdeaState();
+    requestGuidedIdeaProviderStatus(false);
+    return window.EU_GUIDED_IDEA_PROVIDER.renderSetupPrompt(guidedIdeaProviderContext());
+  }
+  function renderGuidedIdeaProviderMiniStatus() {
+    requestGuidedIdeaProviderStatus(false);
+    return window.EU_GUIDED_IDEA_PROVIDER.renderMiniStatus(guidedIdeaProviderContext());
+  }
+  function showGuidedIdeaSourceForm() {
+    if (!guidedIdea) resetGuidedIdeaState();
+    guidedIdea.apiIntroComplete = true;
+    const idx = thread.findIndex(item => item.guidedIdeaApiSetup);
+    if (idx >= 0) thread.splice(idx, 1, { guidedIdea: true });
+    else if (!thread.some(item => item.guidedIdea)) thread.push({ guidedIdea: true });
+    renderThread();
+    scheduleGuidedSlotSave('continue_idea_after_api_setup');
+  }
+  function showGuidedIdeaApiSetup() {
+    if (!guidedIdea) resetGuidedIdeaState();
+    guidedIdea.apiIntroComplete = false;
+    const idx = thread.findIndex(item => item.guidedIdea);
+    if (idx >= 0) thread.splice(idx, 1, { guidedIdeaApiSetup: true });
+    else if (!thread.some(item => item.guidedIdeaApiSetup)) thread.push({ guidedIdeaApiSetup: true });
+    renderThread();
+    scheduleGuidedSlotSave('return_idea_api_setup');
   }
   function renderGuidedIdeaPdfPicker() {
     const pdf = guidedIdea && guidedIdea.pdf;
@@ -2064,38 +2115,90 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       ['literature_folder', t('Literature folder', '文献库文件夹')],
       ['frontier', t('Frontier topic', '前沿主题')],
     ];
+    const optIn = () => `
+      <label class="gdi-check">
+        <input type="checkbox" data-gi-network ${guidedIdea.allowNetwork ? 'checked' : ''} />
+        <span>${t('Allow one bounded network metadata/prior-art request for this source', '允许针对该来源进行一次有界网络元数据/prior-art 请求')}</span>
+        <em>opt-in</em>
+      </label>`;
+    const sourceIntro = (title, body) => `
+      <div class="gdi-source-mode-note">
+        <strong>${title}</strong>
+        <span>${body}</span>
+      </div>`;
+    let body = '';
+    if (tab === 'manual') {
+      body = `
+        ${sourceIntro(t('Manual idea mode', '手动想法模式'), t('Use this when the user already has a clinical hunch. Keep it lightweight: one question plus the sentence that motivated it.', '用于用户已经有临床直觉的情况。这里保持轻量：一个问题，加一句触发它的来源或理由。'))}
+        <label class="gdi-field wide">
+          <span>${t('Candidate research question', '候选研究问题')}</span>
+          <textarea rows="4" data-gi-field="topic" placeholder="${attr(t('e.g. Does early vasopressor strategy change mortality in septic ICU patients?', '例如：早期升压药策略是否影响脓毒症 ICU 患者死亡率？'))}">${esc(guidedIdea.topic || '')}</textarea>
+        </label>
+        <label class="gdi-field wide">
+          <span>${t('Why this is worth testing', '为什么值得检验')}</span>
+          <textarea rows="3" data-gi-field="excerpt" placeholder="${attr(t('Optional: paste the sentence, clinical observation, or rationale that triggered this idea.', '可选：粘贴触发这个想法的句子、临床观察或理由。'))}">${esc(guidedIdea.excerpt || '')}</textarea>
+        </label>`;
+    } else if (tab === 'url') {
+      body = `
+        ${sourceIntro(t('Article URL mode', '文章链接模式'), t('Paste the URL first. With source opt-in, EasyICU resolves bounded metadata; without opt-in, you can still add title/DOI manually.', '先粘贴文章链接。勾选来源 opt-in 后，EasyICU 会解析有界元数据；不勾选也可以手动补标题和 DOI。'))}
+        <label class="gdi-field wide">
+          <span>${t('Article URL', '文章链接')}</span>
+          <input data-gi-field="url" value="${attr(guidedIdea.url || '')}" placeholder="https://www.nejm.org/doi/full/..." />
+        </label>
+        <div class="gdi-meta-grid">
+          <label class="gdi-field"><span>DOI / PMID</span><input data-gi-field="doi" value="${attr(guidedIdea.doi || '')}" placeholder="10.xxxx or PMID" /></label>
+          <label class="gdi-field"><span>Title</span><input data-gi-field="title" value="${attr(guidedIdea.title || '')}" placeholder="${attr(t('Resolved or manually entered title', '解析或手动输入的标题'))}" /></label>
+          <label class="gdi-field"><span>Journal</span><input data-gi-field="journal" value="${attr(guidedIdea.journal || '')}" placeholder="e.g. New England Journal of Medicine" /></label>
+          <label class="gdi-field"><span>Year</span><input data-gi-field="year" value="${attr(guidedIdea.year || '')}" placeholder="2026" /></label>
+        </div>
+        <label class="gdi-field wide">
+          <span>${t('Article insight to translate', '要转化的文章启发')}</span>
+          <textarea rows="3" data-gi-field="excerpt" placeholder="${attr(t('Optional: paste the abstract sentence or trial/review conclusion that should become an ICU-database question.', '可选：粘贴应转化为 ICU 数据库问题的摘要句、试验结论或 review 结论。'))}">${esc(guidedIdea.excerpt || '')}</textarea>
+        </label>
+        ${optIn()}`;
+    } else if (tab === 'pdf') {
+      body = `
+        ${sourceIntro(t('PDF file mode', 'PDF 文件模式'), t('Choose a local PDF. The browser sends only bounded metadata/excerpt plus SHA-256 to the local server; the full paper is not kept.', '选择本地 PDF。浏览器只把有界元数据/摘录和 SHA-256 交给本机服务；不会保留全文。'))}
+        ${renderGuidedIdeaPdfPicker()}
+        <label class="gdi-field wide">
+          <span>${t('Question or reading note', '问题或阅读笔记')}</span>
+          <textarea rows="3" data-gi-field="topic" placeholder="${attr(t('Optional: describe what you want the PDF to inspire.', '可选：说明你希望这篇 PDF 启发什么方向。'))}">${esc(guidedIdea.topic || '')}</textarea>
+        </label>
+        <div class="gdi-meta-grid">
+          <label class="gdi-field"><span>Title</span><input data-gi-field="title" value="${attr(guidedIdea.title || '')}" placeholder="${attr(t('Auto-filled from PDF when available', '可由 PDF 自动填充'))}" /></label>
+          <label class="gdi-field"><span>DOI / PMID</span><input data-gi-field="doi" value="${attr(guidedIdea.doi || '')}" placeholder="10.xxxx or PMID" /></label>
+        </div>
+        <label class="gdi-field wide">
+          <span>${t('Bounded excerpt override', '有界摘录补充')}</span>
+          <textarea rows="3" data-gi-field="excerpt" placeholder="${attr(t('Optional: paste a short passage if the PDF parser did not extract the right motivating sentence.', '可选：如果 PDF 解析没有抽到合适的触发句，可以粘贴一小段。'))}">${esc(guidedIdea.excerpt || '')}</textarea>
+        </label>`;
+    } else if (tab === 'literature_folder') {
+      body = `
+        ${sourceIntro(t('Literature folder mode', '文献库文件夹模式'), t('Point to a local folder of PDFs, scan metadata locally, then choose or mine candidate ideas from that library.', '指向本地 PDF 文献库文件夹，在本地扫描元数据，然后从这批文献里选择或挖掘候选 idea。'))}
+        ${renderGuidedIdeaLiteraturePicker()}
+        <label class="gdi-field wide">
+          <span>${t('Review scope', '综述范围')}</span>
+          <textarea rows="3" data-gi-field="topic" placeholder="${attr(t('e.g. septic shock resuscitation, ARDS ventilation, AKI staging in ICU cohorts', '例如：脓毒性休克复苏、ARDS 通气、ICU 队列中的 AKI 分期。'))}">${esc(guidedIdea.topic || '')}</textarea>
+        </label>`;
+    } else {
+      body = `
+        ${sourceIntro(t('Frontier topic mode', '前沿主题模式'), t('Use this when there is no single source yet. It can prepare queries locally, and only searches PubMed metadata after explicit network opt-in.', '用于还没有单篇来源的情况。它会先在本地准备检索式，只有显式网络 opt-in 后才检索 PubMed 元数据。'))}
+        <label class="gdi-field wide">
+          <span>${t('Frontier topic / journal scope', '前沿主题 / 期刊范围')}</span>
+          <textarea rows="4" data-gi-field="topic" placeholder="${attr(t('e.g. unresolved ICU research questions from recent sepsis or ARDS reviews', '例如：近期脓毒症或 ARDS 综述提出的未解决 ICU 研究问题。'))}">${esc(guidedIdea.topic || '')}</textarea>
+        </label>
+        <div class="gdi-meta-grid">
+          <label class="gdi-field"><span>${t('Journal scope', '期刊范围')}</span><input data-gi-field="journal" value="${attr(guidedIdea.journal || '')}" placeholder="NEJM, ICM, JAMA, Lancet..." /></label>
+          <label class="gdi-field"><span>${t('Year window', '年份窗口')}</span><input data-gi-field="year" value="${attr(guidedIdea.year || '')}" placeholder="2024-2026" /></label>
+        </div>
+        ${optIn()}
+        ${renderGuidedIdeaDiscovery()}`;
+    }
     return `
       <div class="gdi-tabs" role="group" aria-label="Idea source type">
         ${tabs.map(([key, label]) => `<button type="button" class="${tab === key ? 'on' : ''}" data-gi-source="${key}">${label}</button>`).join('')}
       </div>
-      <div class="gdi-form">
-        <label class="gdi-field wide">
-          <span>${t('Research idea / topic', '研究想法 / 主题')}</span>
-          <textarea rows="3" data-gi-field="topic" placeholder="${attr(t('e.g. Does early vasopressor strategy change mortality in septic ICU patients?', '例如：早期升压药策略是否影响脓毒症 ICU 患者死亡率？'))}">${esc(guidedIdea.topic || '')}</textarea>
-        </label>
-        <label class="gdi-field wide">
-          <span>${t('Source quote or PDF excerpt', '来源句子或 PDF 摘录')}</span>
-          <textarea rows="3" data-gi-field="excerpt" placeholder="${attr(t('Paste only the sentence(s) that motivated the idea; do not paste a full paper.', '只粘贴触发想法的句子；不要粘贴全文。'))}">${esc(guidedIdea.excerpt || '')}</textarea>
-        </label>
-        ${tab === 'pdf' ? renderGuidedIdeaPdfPicker() : ''}
-        ${tab === 'literature_folder' ? renderGuidedIdeaLiteraturePicker() : ''}
-        ${tab === 'frontier' ? renderGuidedIdeaDiscovery() : ''}
-        <div class="gdi-meta-grid">
-          <label class="gdi-field"><span>Title</span><input data-gi-field="title" value="${attr(guidedIdea.title || '')}" placeholder="${attr(t('Article or review title', '文章或综述标题'))}" /></label>
-          <label class="gdi-field"><span>Journal</span><input data-gi-field="journal" value="${attr(guidedIdea.journal || '')}" placeholder="e.g. Intensive Care Medicine" /></label>
-          <label class="gdi-field"><span>Year</span><input data-gi-field="year" value="${attr(guidedIdea.year || '')}" placeholder="2026" /></label>
-          <label class="gdi-field"><span>DOI / PMID</span><input data-gi-field="doi" value="${attr(guidedIdea.doi || '')}" placeholder="10.xxxx or PMID" /></label>
-        </div>
-        <label class="gdi-field wide">
-          <span>URL</span>
-          <input data-gi-field="url" value="${attr(guidedIdea.url || '')}" placeholder="https://..." />
-        </label>
-        <label class="gdi-check">
-          <input type="checkbox" data-gi-network ${guidedIdea.allowNetwork ? 'checked' : ''} />
-          <span>${t('Allow one bounded network metadata/prior-art request for this source', '允许针对该来源进行一次有界网络元数据/prior-art 请求')}</span>
-          <em>opt-in</em>
-        </label>
-      </div>`;
+      <div class="gdi-form source-${attr(tab)}">${body}</div>`;
   }
   function renderGuidedIdeaEvidence(result) {
     const src = ((result && result.source_evidence) || [])[0] || {};
@@ -2108,6 +2211,36 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         ${src.evidence_quote ? `<blockquote>${esc(src.evidence_quote)}</blockquote>` : ''}
         <div class="gdi-muted">${t('Only metadata, a bounded quote, and hashes are persisted.', '仅持久化元数据、有界摘录和哈希。')}</div>
       </div>`;
+  }
+  function renderGuidedIdeaSourceSummary(result) {
+    const src = ((result && result.source_evidence) || [])[0] || {};
+    return `
+      <div class="gdx-status ok">
+        <span>${icon('check', 12)}</span>
+        <div>
+          <strong>${esc(src.title || guidedIdea.title || guidedIdea.topic || t('Source locked for this candidate', '当前候选已绑定来源'))}</strong>
+          <small>${esc([src.year || guidedIdea.year, src.journal || guidedIdea.journal, src.doi || guidedIdea.doi || src.pmid || guidedIdea.pmid].filter(Boolean).join(' · ') || t('metadata-only source snapshot', 'metadata-only 来源快照'))}</small>
+        </div>
+        <button type="button" class="btn sm" data-gi-edit-source>${t('Edit source', '修改来源')}</button>
+      </div>`;
+  }
+  function renderGuidedIdeaFlowGuide() {
+    const result = guidedIdea && guidedIdea.result;
+    const confirmed = !!(guidedIdea && guidedIdea.dataContextConfirmed);
+    const planned = !!(guidedIdea && (guidedIdea.planDraft || (guidedIdea.result && guidedIdea.result.idea_plan)));
+    const handoffReady = !!(guidedIdea && guidedIdea.handoff);
+    const projectReady = !!(guidedIdea && guidedIdea.project);
+    const stages = [
+      [t('1 Source clue', '1 来源线索'), result ? 'done' : 'active', t('article / PDF / topic only', '仅文章 / PDF / 主题')],
+      [t('2 Candidate idea', '2 候选 idea'), result ? 'done' : 'locked', t('question + dictionary mapping', '问题 + 字典映射')],
+      [t('3 Data context', '3 数据上下文'), confirmed ? 'done' : result ? 'active' : 'locked', t('export, cohort, modules', '导出、队列、模块')],
+      [t('4 Plan / replan', '4 计划 / replan'), projectReady || handoffReady ? 'done' : planned ? 'done' : confirmed ? 'active' : 'locked', t('draft first, then Agent handoff', '先计划，再交接 Agent')],
+    ];
+    return `<div class="gdi-flow">${stages.map(([label, state, note]) => `
+      <div class="gdi-flow-step ${state}">
+        <span>${state === 'done' ? icon('check', 11, 3) : state === 'locked' ? icon('lock', 10) : icon('spark', 11)}</span>
+        <div><strong>${label}</strong><small>${note}</small></div>
+      </div>`).join('')}</div>`;
   }
   function renderGuidedIdeaLedger(idea) {
     if (!idea) return '';
@@ -2132,6 +2265,52 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         </div>
       </div>`;
   }
+  function guidedIdeaPreExperimentReady(result) {
+    const pre = result && result.pre_experiment;
+    if (!pre) return false;
+    const status = String(pre.status || '').toLowerCase();
+    return !!status && !/(blocked|missing|not_configured|no_active|failed|unavailable)/.test(status);
+  }
+  function guidedIdeaActiveExportText(result) {
+    const pre = result && result.pre_experiment;
+    const cohort = pre && pre.cohort ? pre.cohort : {};
+    const src = activeExportSource && activeExportSource();
+    const label = (src && (src.label || src.database)) || (pre && (pre.export_label || pre.source_label)) || t('active local export', '当前本地导出');
+    const bits = [
+      label,
+      cohort.entities != null ? `${fmtInt(cohort.entities)} ${t('entities', '实体')}` : '',
+      cohort.modules != null ? `${fmtInt(cohort.modules)} ${t('modules', '模块')}` : '',
+      cohort.total_rows != null ? `${fmtInt(cohort.total_rows)} ${t('rows', '行')}` : '',
+    ].filter(Boolean);
+    return bits.join(' · ');
+  }
+  function renderGuidedIdeaDataContext(result, idea) {
+    if (!result) return '';
+    const ready = guidedIdeaPreExperimentReady(result);
+    const confirmed = !!guidedIdea.dataContextConfirmed;
+    const mapped = idea && Array.isArray(idea.mapped_concepts) ? idea.mapped_concepts.length : 0;
+    const pre = result.pre_experiment || {};
+    return `
+      <div class="gdi-pre ${confirmed ? 'ok' : ''}">
+        <div class="gdi-ledger-title">
+          <div><span class="gdx-label">${t('Step 3 · Data context', '第 3 步 · 数据上下文')}</span><strong>${confirmed ? t('Confirmed active export for feasibility review', '已确认使用当前导出做可行性审阅') : t('Not confirmed yet', '尚未确认')}</strong></div>
+          <span class="pill ${confirmed ? 'ok' : ready ? 'warn' : 'bad'}">${confirmed ? t('confirmed', '已确认') : ready ? t('needs user confirmation', '需要用户确认') : t('needs data', '需要数据')}</span>
+        </div>
+        <p>${esc(ready
+          ? t('I detected an active local export and used it only for a feasibility scan. This does not mean the study cohort, feature modules, or final extraction are finished; confirm it only if this is the data context you want to continue with.', '我检测到了当前本地导出，并且只把它用于可行性扫描。这不代表本次研究的队列、特征模块或最终抽取已经完成；只有当你确认要沿用这个数据上下文时才继续。')
+          : t('No usable active export is confirmed for this idea. Prepare or register a local export first, then come back to feasibility review.', '当前 idea 还没有可用且已确认的 active export。请先准备或注册本地导出，再回来做可行性审阅。'))}</p>
+        <div class="gdi-ledger-grid">
+          <div><span>${t('Detected export', '检测到的导出')}</span><strong>${esc(ready ? guidedIdeaActiveExportText(result) : t('none confirmed', '尚未确认'))}</strong></div>
+          <div><span>${t('Mapped concepts', '映射概念')}</span><strong>${fmtInt(mapped, '0')}</strong><small>${t('candidate dictionary links only', '仅候选字典映射')}</small></div>
+          <div><span>${t('Pre-experiment status', '预实验状态')}</span><strong>${esc(pre.status || 'not available')}</strong><small>${esc(pre.reason || t('aggregate-only feasibility; no patient rows shown', '仅聚合可行性；不展示患者行'))}</small></div>
+          <div><span>${t('Agent handoff', 'Agent 交接')}</span><strong>${confirmed ? t('unlocked for plan review', '已解锁计划审阅') : t('locked', '已锁定')}</strong><small>${t('requires explicit data-context confirmation', '需要显式确认数据上下文')}</small></div>
+        </div>
+        <div class="gdx-actions">
+          <button type="button" class="btn primary" data-gi-confirm-data ${ready || confirmed ? '' : 'disabled'}>${icon('check', 13)} ${confirmed ? t('Data context confirmed', '数据上下文已确认') : t('Use this active export for feasibility', '使用当前导出做可行性审阅')}</button>
+          <button type="button" class="btn" data-guided-goal="data_extraction">${icon('folder', 13)} ${t('Prepare or choose data first', '先准备或选择数据')}</button>
+        </div>
+      </div>`;
+  }
   function renderGuidedIdeaPreExperiment(result) {
     const pre = result && result.pre_experiment;
     if (!pre) return '';
@@ -2152,17 +2331,32 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         </div>
         ${stats.length ? `<div class="gdi-feature-list">
           ${stats.map(row => {
-            const coverage = Number(row.coverage_pct || 0);
+            const isEvent = row && row.metric_kind === 'event_rate';
+            const metricValue = isEvent ? Number(row.event_rate_pct || 0) : Number(row.coverage_pct || 0);
+            const metricLabel = isEvent ? t('event rate', '事件率') : t('coverage', '覆盖率');
             return `<div class="gdi-feature-row">
               <div><strong>${esc(row.label || row.concept_id)}</strong><small>${esc(row.concept_id || '')} · ${esc(row.module || '')}</small></div>
-              <div class="gdi-feature-bar"><span style="width:${Math.max(0, Math.min(100, coverage))}%"></span></div>
-              <span>${fmtPct(row.coverage_pct)}</span>
-              <small>${esc(row.numeric_summary || row.status || '')}</small>
+              <div class="gdi-feature-bar"><span style="width:${Math.max(0, Math.min(100, metricValue))}%"></span></div>
+              <span>${metricLabel}: ${fmtPct(isEvent ? row.event_rate_pct : row.coverage_pct)}</span>
+              <small>${esc(guidedFeatureSummary(row))}</small>
             </div>`;
           }).join('')}
         </div>` : ''}
         ${(pre.interpretation || []).length ? `<div class="gdr-note">${pre.interpretation.map(row => esc(row)).join('<br>')}</div>` : ''}
       </div>`;
+  }
+  function guidedFeatureSummary(row) {
+    if (row && row.metric_kind === 'event_rate') {
+      return `${t('events', '事件')} ${fmtInt(row.event_entities ?? row.records, '0')} · ${t('non-events', '非事件')} ${fmtInt(row.non_event_entities, '0')} · ${t('negative cases are not missing', '阴性患者不是缺失')}`;
+    }
+    const summary = row && row.numeric_summary;
+    if (summary && typeof summary === 'object') {
+      if (summary.available) {
+        return `n=${fmtInt(summary.n, '0')} · median ${fmtNum(summary.median, 'n/a')} · ${fmtNum(summary.min, 'n/a')} to ${fmtNum(summary.max, 'n/a')}`;
+      }
+      return t('non-numeric or empty', '非数值或为空');
+    }
+    return String(summary || (row && row.status) || '');
   }
   function renderGuidedIdeaPrior() {
     if (!guidedIdea || (!guidedIdea.prior && !guidedIdea.result)) return '';
@@ -2181,27 +2375,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       </div>`;
   }
   function renderGuidedIdeaHandoff() {
-    if (!guidedIdea || !guidedIdea.result) return '';
-    const handoff = guidedIdea.handoff || {};
-    const plan = (handoff.handoff_plan || guidedIdea.result.handoff_plan || {});
-    const steps = plan.analysis_plan || [];
-    return `
-      <div class="gdi-plan">
-        <div class="gdi-ledger-title">
-          <div><span class="gdx-label">${t('Agent handoff', 'Agent 交接')}</span><strong>${esc(plan.research_question || 'Confirm the plan before Agent run')}</strong></div>
-          <span class="pill warn">${t('draft locked', '草稿锁定')}</span>
-        </div>
-        ${steps.length ? `<ol>${steps.map(row => `<li>${esc(row)}</li>`).join('')}</ol>` : ''}
-        <label class="gdi-field wide">
-          <span>${t('Natural-language plan edits', '用自然语言微调计划')}</span>
-          <textarea rows="3" data-gi-field="planEdits" placeholder="${attr(t('e.g. restrict to first ICU stay; compare norepinephrine-equivalent dose groups.', '例如：限制首次 ICU；比较去甲肾上腺素等效剂量分组。'))}">${esc(guidedIdea.planEdits || '')}</textarea>
-        </label>
-        <div class="gdx-actions">
-          <button type="button" class="btn primary" data-gi-handoff ${guidedIdea.handoffing ? 'disabled' : ''}>${icon('lock', 13)} ${t('Freeze handoff for Agent', '冻结交接给 Agent')}</button>
-          <button type="button" class="btn" data-gi-project ${!guidedIdea.handoff || guidedIdea.projectCreating ? 'disabled' : ''}>${icon('agent', 13)} ${t('Create Agent project', '创建 Agent 项目')}</button>
-          ${guidedIdea.project ? `<button type="button" class="btn" data-open="agent">${t('Open Agent Projects', '打开 Agent Projects')}</button>` : ''}
-        </div>
-      </div>`;
+    if (!window.EU_GUIDED_IDEA_PLAN || !window.EU_GUIDED_IDEA_PLAN.render) return '';
+    return window.EU_GUIDED_IDEA_PLAN.render({
+      getIdea: () => guidedIdea,
+      selectedIdea: guidedIdeaSelected,
+      t,
+      esc,
+      attr,
+      icon,
+    });
   }
   function renderGuidedIdeaCard() {
     if (!guidedIdea) resetGuidedIdeaState();
@@ -2209,32 +2391,35 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const idea = guidedIdeaSelected();
     const result = guidedIdea.result;
     const miningBlocked = guidedIdea.mining || guidedIdea.resolving;
+    const showSourceEditor = !result || guidedIdea.sourceEditorOpen;
     return `
       <div class="gd-idea-card">
         <div class="gdx-head">
           <span class="gdx-ico">${icon('spark', 15)}</span>
           <div>
             <strong>${t('Mine a study idea inside Copilot', '在 Copilot 内挖掘研究想法')}</strong>
-            <span>${t('Source evidence, dictionary feasibility, pre-experiment, and Agent handoff all stay metadata-only and local-first.', '来源证据、字典可行性、预实验和 Agent 交接均保持 metadata-only 与 local-first。')}</span>
+            <span>${t('This only turns a source clue into a candidate research question. Data source, cohort, feature modules, and Agent handoff stay separate guided steps.', '这里仅把来源线索转成候选研究问题。数据源、队列、特征模块和 Agent 交接仍是后续独立引导步骤。')}</span>
           </div>
         </div>
-        ${renderGuidedIdeaCapabilityPanel()}
-        ${renderGuidedIdeaSourceFields()}
+        ${renderGuidedIdeaFlowGuide()}
+        ${renderGuidedIdeaProviderMiniStatus()}
+        ${showSourceEditor ? renderGuidedIdeaSourceFields() : renderGuidedIdeaSourceSummary(result)}
         <div class="gdx-status ${guidedIdea.error ? 'bad' : result ? 'ok' : ''}">
           <span>${icon(guidedIdea.error ? 'x' : result ? 'check' : 'shield', 12)}</span>
           <div><strong>${guidedIdeaStatusText()}</strong><small>${t('No patient rows, full papers, external calls, or provider clients unless you explicitly opt in and provider readiness passes.', '不会返回患者行、全文、外部调用或 provider client，除非你显式 opt-in 且 provider readiness 通过。')}</small></div>
         </div>
-        <div class="gdx-actions">
+        ${showSourceEditor ? `<div class="gdx-actions">
           <button type="button" class="btn" data-gi-resolve ${guidedIdea.resolving ? 'disabled' : ''}>${icon('search', 13)} ${t('Resolve source', '解析来源')}</button>
           <button type="button" class="btn primary" data-gi-mine ${miningBlocked ? 'disabled' : ''}>${icon('play', 13)} ${t('Mine locally', '本地挖掘 idea')}</button>
           <button type="button" class="btn" data-guided-goal="data_extraction">${t('Prepare data first', '先准备数据')}</button>
-        </div>
-        ${renderGuidedIdeaEvidence(result)}
+        </div>` : ''}
+        ${showSourceEditor ? '' : renderGuidedIdeaEvidence(result)}
         ${renderGuidedIdeaLedger(idea)}
-        ${renderGuidedIdeaPreExperiment(result)}
-        ${renderGuidedIdeaPrior()}
+        ${renderGuidedIdeaDataContext(result, idea)}
+        ${guidedIdea.dataContextConfirmed ? renderGuidedIdeaPreExperiment(result) : ''}
+        ${guidedIdea.dataContextConfirmed ? renderGuidedIdeaPrior() : ''}
         ${renderGuidedIdeaHandoff()}
-        ${guidedIdea.project ? `<div class="gdx-status ok"><span>${icon('check', 12)}</span><div><strong>${t('Agent project seed created', 'Agent project seed 已创建')}</strong><small>${esc(compactPath((guidedIdea.project.project || {}).project_dir || (guidedIdea.project.project || {}).study_id || ''))}</small></div></div>` : ''}
+        ${guidedIdea.dataContextConfirmed && guidedIdea.project ? `<div class="gdx-status ok"><span>${icon('check', 12)}</span><div><strong>${t('Agent project seed created', 'Agent project seed 已创建')}</strong><small>${esc(compactPath((guidedIdea.project.project || {}).project_dir || (guidedIdea.project.project || {}).study_id || ''))}</small></div></div>` : ''}
       </div>`;
   }
   function loadGuidedLiteratureBrowser(path) {
@@ -2352,6 +2537,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
   function runGuidedIdeaResolve() {
     if (!guidedIdea || guidedIdea.resolving) return;
+    if (!guidedIdeaHasInput()) {
+      guidedIdea.error = t('Add a topic, source quote, title, DOI, PMID, URL, local PDF, or literature folder first.', '请先添加主题、来源句子、标题、DOI、PMID、URL、本地 PDF 或文献库文件夹。');
+      renderThread();
+      return;
+    }
     if (!window.EU_API || !window.EU_API.resolveIdeaSource) {
       guidedIdea.error = 'Idea source backend is unavailable.';
       renderThread();
@@ -2359,6 +2549,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     }
     guidedIdea.resolving = true;
     guidedIdea.error = null;
+    clearGuidedIdeaOutputs(false);
     renderThread();
     window.EU_API.resolveIdeaSource(guidedIdeaPayload()).then(result => {
       guidedIdea.resolving = false;
@@ -2435,7 +2626,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function runGuidedIdeaMine() {
     if (!guidedIdea || guidedIdea.mining) return;
     if (!guidedIdeaHasInput()) {
-      guidedIdea.error = 'Add a topic, source quote, title, DOI, or URL first.';
+      guidedIdea.error = t('Add a topic, source quote, title, DOI, PMID, URL, local PDF, or literature folder first.', '请先添加主题、来源句子、标题、DOI、PMID、URL、本地 PDF 或文献库文件夹。');
       renderThread();
       return;
     }
@@ -2450,11 +2641,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     window.EU_API.mineIdeas(guidedIdeaPayload()).then(result => {
       guidedIdea.mining = false;
       guidedIdea.result = result;
+      guidedIdea.planDraft = null;
       guidedIdea.handoff = null;
       guidedIdea.project = null;
+      guidedIdea.dataContextConfirmed = false;
+      guidedIdea.sourceEditorOpen = false;
       const idea = guidedIdeaSelected();
-      setVal({ question: idea ? (idea.idea_title || 'idea ledger') : 'idea ledger', analysis: 'pre-experiment' });
-      markThrough('analysis', 'active');
+      setVal({
+        question: idea ? (idea.idea_title || 'idea ledger') : 'idea ledger',
+        data: t('confirm export/context', '确认导出/上下文'),
+        cohort: t('not confirmed', '尚未确认'),
+        concepts: t('candidate mappings only', '仅候选映射'),
+        analysis: t('not started', '未开始'),
+      });
+      markThrough('data', 'active');
       renderThread();
       renderAside();
       scheduleGuidedSlotSave('mine_idea');
@@ -2463,6 +2663,71 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedIdea.error = err.message || String(err);
       renderThread();
       scheduleGuidedSlotSave('mine_idea_error');
+    });
+  }
+  function confirmGuidedIdeaDataContext() {
+    if (!guidedIdea || !guidedIdea.result) return;
+    if (!guidedIdeaPreExperimentReady(guidedIdea.result)) {
+      guidedIdea.error = t('Prepare or register a local EasyICU export before confirming the data context.', '请先准备或注册本地 EasyICU 导出，再确认数据上下文。');
+      renderThread();
+      return;
+    }
+    const idea = guidedIdeaSelected();
+    guidedIdea.dataContextConfirmed = true;
+    guidedIdea.error = null;
+    setVal({
+      data: guidedIdeaActiveExportText(guidedIdea.result),
+      cohort: t('from active export · review denominator next', '来自当前导出 · 下一步审阅分母'),
+      concepts: idea && Array.isArray(idea.mapped_concepts)
+        ? `${fmtInt(idea.mapped_concepts.length)} ${t('candidate mappings', '个候选映射')}`
+        : t('review mapped concepts', '审阅映射概念'),
+      analysis: t('pre-experiment only', '仅预实验'),
+    });
+    markThrough('cohort', 'active');
+    renderThread();
+    renderAside();
+    scheduleGuidedSlotSave('confirm_idea_data_context');
+  }
+  function runGuidedIdeaPlan(mode) {
+    if (!guidedIdea || guidedIdea.planning) return;
+    const idea = guidedIdeaSelected();
+    if (!idea || !guidedIdea.result) {
+      guidedIdea.error = t('Run local idea mining before creating a study plan.', '请先完成本地 idea 挖掘，再生成研究计划。');
+      renderThread();
+      return;
+    }
+    if (!guidedIdea.dataContextConfirmed) {
+      guidedIdea.error = t('Confirm the local export/cohort/module context before drafting a study plan.', '生成研究计划前，请先确认本地导出、队列和模块上下文。');
+      renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.planIdea) {
+      guidedIdea.error = t('Idea planning backend is unavailable.', 'Idea 计划后端不可用。');
+      renderThread();
+      return;
+    }
+    guidedIdea.planning = true;
+    guidedIdea.error = null;
+    renderThread();
+    window.EU_API.planIdea({
+      run_id: guidedIdea.result.run_id,
+      idea_id: idea.idea_id,
+      mode: mode || (guidedIdea.planDraft ? 'replan' : 'plan'),
+      plan_edits: guidedIdea.planEdits || '',
+    }).then(result => {
+      guidedIdea.planning = false;
+      guidedIdea.planDraft = result;
+      guidedIdea.handoff = null;
+      guidedIdea.project = null;
+      setVal({ analysis: t('plan draft ready', '计划草案已生成'), draft: t('locked', '已锁定') });
+      renderThread();
+      renderAside();
+      scheduleGuidedSlotSave(mode === 'replan' ? 'replan_idea' : 'plan_idea');
+    }).catch(err => {
+      guidedIdea.planning = false;
+      guidedIdea.error = err.message || String(err);
+      renderThread();
+      scheduleGuidedSlotSave('plan_idea_error');
     });
   }
   function runGuidedIdeaPriorArt() {
@@ -2505,6 +2770,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderThread();
       return;
     }
+    if (!guidedIdea.dataContextConfirmed) {
+      guidedIdea.error = t('Confirm the local export/cohort/module context before freezing an Agent handoff.', '冻结 Agent 交接前，请先确认本地导出、队列和模块上下文。');
+      renderThread();
+      return;
+    }
+    if (!guidedIdea.planDraft && !(guidedIdea.result && guidedIdea.result.idea_plan)) {
+      guidedIdea.error = t('Generate and review the study plan before freezing an Agent handoff.', '请先生成并审阅研究计划，再冻结交接给 Agent。');
+      renderThread();
+      return;
+    }
     if (!window.EU_API || !window.EU_API.handoffIdea) {
       guidedIdea.error = 'Idea handoff backend is unavailable.';
       renderThread();
@@ -2536,6 +2811,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const idea = guidedIdeaSelected();
     if (!idea || !guidedIdea.result) {
       guidedIdea.error = 'Run local idea mining before creating an Agent project.';
+      renderThread();
+      return;
+    }
+    if (!guidedIdea.dataContextConfirmed) {
+      guidedIdea.error = t('Confirm the local export/cohort/module context before creating an Agent project seed.', '创建 Agent 项目种子前，请先确认本地导出、队列和模块上下文。');
       renderThread();
       return;
     }
@@ -2665,6 +2945,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       if (t.guidedExtraction) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedExtractionCard()}</div></div>`;
       if (t.guidedReview) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedReviewCard()}</div></div>`;
       if (t.guidedAgent) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedAgentCard()}</div></div>`;
+      if (t.guidedIdeaApiSetup) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedIdeaApiSetupCard()}</div></div>`;
       if (t.guidedIdea) return `<div class="msg bot"><div class="m-ava">${icon('spark', 14)}</div><div class="m-body">${renderGuidedIdeaCard()}</div></div>`;
       if (t.diff) return diffCard();
       if (t.once) return ONCE[t.once] ? ONCE[t.once]() : '';
@@ -2947,8 +3228,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         url: guidedIdea.url || '',
         allow_network: !!guidedIdea.allowNetwork,
         plan_edits: guidedIdea.planEdits || '',
+        data_context_confirmed: !!guidedIdea.dataContextConfirmed,
         run_id: guidedIdea.result && guidedIdea.result.run_id,
         selected_idea_id: idea && idea.idea_id,
+        plan_created_at: guidedIdea.planDraft && guidedIdea.planDraft.created_at,
         handoff_id: guidedIdea.handoff && (guidedIdea.handoff.handoff_id || guidedIdea.handoff.run_id),
         agent_project_dir: guidedIdea.project && guidedIdea.project.project && guidedIdea.project.project.project_dir,
       } : null,
@@ -3012,7 +3295,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedIdea.url = slots.idea.url || '';
       guidedIdea.allowNetwork = !!slots.idea.allow_network;
       guidedIdea.planEdits = slots.idea.plan_edits || '';
-      if (slots.idea.run_id) guidedIdea.result = { ok: true, run_id: slots.idea.run_id, ideas: [] };
+      guidedIdea.dataContextConfirmed = !!slots.idea.data_context_confirmed;
+      guidedIdea.sourceEditorOpen = !slots.idea.run_id;
+      if (slots.idea.run_id) {
+        guidedIdea.result = { ok: true, run_id: slots.idea.run_id, idea_ledger: [] };
+        restoreGuidedIdeaArtifacts(slots.idea.run_id);
+      }
     }
     if (slots.agent && typeof slots.agent === 'object') {
       resetGuidedAgentState();
@@ -3025,6 +3313,24 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       guidedReview.selectedRef = slots.review.selected_ref || null;
     }
     return active || null;
+  }
+  function restoreGuidedIdeaArtifacts(runId) {
+    const expectedRun = String(runId || '').trim();
+    if (!expectedRun || !window.EU_API || !window.EU_API.loadIdeaRun) return;
+    window.EU_API.loadIdeaRun({ run_id: expectedRun }).then(data => {
+      if (!guidedIdea || !data || data.run_id !== expectedRun) return;
+      guidedIdea.result = data;
+      guidedIdea.planDraft = data.idea_plan || null;
+      guidedIdea.handoff = data.handoff || null;
+      guidedIdea.prior = data.prior_art_check ? { prior_art: data.prior_art_check } : null;
+      guidedIdea.project = data.agent_project ? { ok: true, project: data.agent_project } : null;
+      const notes = data.handoff && data.handoff.handoff_plan && data.handoff.handoff_plan.human_plan_notes;
+      if (notes) guidedIdea.planEdits = notes;
+      renderThread();
+      renderAside();
+    }).catch(err => {
+      console.warn('[EasyICU] Guided idea artifact restore failed:', err);
+    });
   }
   function hasGuidedProjectMemory() {
     const session = guidedCopilot && guidedCopilot.session;
@@ -3178,7 +3484,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     }
     chips = kind === 'run'
       ? [['Review local artifacts', '@reviewLocalRun'], ['Open Agent Projects', '@openAgent'], ['Use active export for a new run', '@activeExport']]
-      : [['Use active export', '@activeExport'], ['Continue conversation', '@noop'], ['Open Agent Projects', '@openAgent']];
+      : restoredFlow === 'idea_mining'
+        ? []
+        : [['Use active export', '@activeExport'], ['Continue conversation', '@noop'], ['Open Agent Projects', '@openAgent']];
     renderThread(); renderChips();
   }
   function startFreshGuidedProjectThread(title, path) {
@@ -4290,10 +4598,21 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           runGuidedAgentPreflight();
           return;
         }
+        if (e.target.closest('[data-gi-api-continue]')) {
+          showGuidedIdeaSourceForm();
+          return;
+        }
+        if (e.target.closest('[data-gi-api-back]')) {
+          showGuidedIdeaApiSetup();
+          return;
+        }
         const giSource = e.target.closest('[data-gi-source]');
         if (giSource && guidedIdea) {
           guidedIdea.sourceType = giSource.dataset.giSource || 'manual';
           guidedIdea.error = null;
+          guidedIdea.sourceEditorOpen = true;
+          guidedIdea.allowNetwork = false;
+          clearGuidedIdeaOutputs(true);
           renderThread();
           scheduleGuidedSlotSave('set_idea_source_type');
           return;
@@ -4398,6 +4717,27 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         }
         if (e.target.closest('[data-gi-mine]')) {
           runGuidedIdeaMine();
+          return;
+        }
+        if (e.target.closest('[data-gi-edit-source]')) {
+          if (guidedIdea) {
+            guidedIdea.sourceEditorOpen = true;
+            guidedIdea.error = null;
+          }
+          renderThread();
+          scheduleGuidedSlotSave('edit_idea_source_again');
+          return;
+        }
+        if (e.target.closest('[data-gi-confirm-data]')) {
+          confirmGuidedIdeaDataContext();
+          return;
+        }
+        if (e.target.closest('[data-gi-plan]')) {
+          runGuidedIdeaPlan('plan');
+          return;
+        }
+        if (e.target.closest('[data-gi-replan]')) {
+          runGuidedIdeaPlan('replan');
           return;
         }
         if (e.target.closest('[data-gi-prior]')) {
@@ -4634,8 +4974,32 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const giField = e.target.closest('[data-gi-field]');
         if (giField && guidedIdea) {
           const key = giField.dataset.giField;
+          const hadOutputs = !!(guidedIdea.resolved || guidedIdea.result || guidedIdea.prior || guidedIdea.handoff || guidedIdea.project);
           if (key) guidedIdea[key] = giField.value;
           guidedIdea.error = null;
+          if (key !== 'planEdits') {
+            guidedIdea.sourceEditorOpen = true;
+            clearGuidedIdeaOutputs(true);
+          } else {
+            guidedIdea.handoff = null;
+            guidedIdea.project = null;
+          }
+          if (key !== 'planEdits' && hadOutputs) {
+            // Editing the source invalidates the stale result/pre-experiment/
+            // handoff cards, so the thread must re-render. renderThread()
+            // rebuilds the textarea/input being typed in, which drops focus
+            // and caret mid-keystroke — restore both onto the same field.
+            const selStart = giField.selectionStart;
+            const selEnd = giField.selectionEnd;
+            renderThread();
+            const next = shell.querySelector(`[data-gi-field="${key}"]`);
+            if (next) {
+              next.focus();
+              if (selStart != null && typeof next.setSelectionRange === 'function') {
+                try { next.setSelectionRange(selStart, selEnd); } catch (_) { /* unsupported input type */ }
+              }
+            }
+          }
           scheduleGuidedSlotSave('edit_idea_field');
           return;
         }
@@ -4663,6 +5027,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (giNetwork && guidedIdea) {
           guidedIdea.allowNetwork = !!giNetwork.checked;
           guidedIdea.error = null;
+          guidedIdea.prior = null;
           renderThread();
           scheduleGuidedSlotSave('toggle_idea_network');
           return;

@@ -1,0 +1,90 @@
+/* Agent Projects structured question brief. Owner: screens-agent.js / #agent. */
+.ag-wrap .ag-question-brief{
+  display:block;
+  margin-top:16px;
+}
+
+.ag-wrap .ag-question-brief .eyebrow{
+  margin-bottom:12px;
+}
+
+.ag-wrap .ag-q-section{
+  min-width:0;
+}
+
+.ag-wrap .ag-q-section + .ag-q-section{
+  margin-top:12px;
+  padding-top:12px;
+  border-top:1px solid var(--hair);
+}
+
+.ag-wrap .ag-q-kicker{
+  display:block;
+  margin-bottom:6px;
+  font-size:10px;
+  line-height:1.2;
+  font-weight:700;
+  color:var(--ink-4);
+  text-transform:uppercase;
+}
+
+.ag-wrap .ag-q-lead{
+  font-size:14px;
+  line-height:1.5;
+  font-weight:650;
+  color:var(--ink);
+}
+
+.ag-wrap .ag-q-copy p{
+  margin:0;
+  font-size:12.5px;
+  line-height:1.55;
+  color:var(--ink-3);
+}
+
+.ag-wrap .ag-q-copy p + p{
+  margin-top:7px;
+}
+
+.ag-wrap .ag-req-list{
+  counter-reset:agReq;
+  display:grid;
+  gap:8px;
+  margin:0;
+  padding:0;
+  list-style:none;
+}
+
+.ag-wrap .ag-req-list li{
+  counter-increment:agReq;
+  display:grid;
+  grid-template-columns:26px minmax(0, 1fr);
+  align-items:flex-start;
+  gap:9px;
+  min-width:0;
+  padding:8px 9px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface-2);
+}
+
+.ag-wrap .ag-req-list li::before{
+  content:counter(agReq);
+  display:grid;
+  place-items:center;
+  width:22px;
+  height:22px;
+  border-radius:999px;
+  background:var(--surface);
+  border:1px solid var(--hair);
+  font-size:10.5px;
+  font-weight:700;
+  color:var(--ink-2);
+}
+
+.ag-wrap .ag-req-list span{
+  min-width:0;
+  font-size:12.25px;
+  line-height:1.5;
+  color:var(--ink-2);
+}

@@ -150,13 +150,43 @@
 /* Extraction export destination */
 .ex-export-destination{
   display:grid;
-  grid-template-columns:minmax(0,1fr) auto;
+  grid-template-columns:minmax(0,1fr) auto auto;
   gap:8px;
   align-items:center;
   margin-top:12px;
 }
 .ex-export-path{ width:100%; min-width:0; }
-.ex-export-browse{ flex:none; height:34px; }
+.ex-export-browse,
+.ex-export-create{ flex:none; height:34px; }
+
+/* Extraction folder picker destination creation */
+.eu-pick-create{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:8px;
+  align-items:center;
+  padding:10px 16px;
+  border-top:1px solid var(--line,#eef0f4);
+  background:var(--surface-2,#f7f8fb);
+}
+.eu-pick-create input{
+  min-width:0;
+  height:34px;
+  border:1px solid var(--line,#dfe3eb);
+  border-radius:8px;
+  background:var(--surface,#fff);
+  padding:0 10px;
+  font:inherit;
+  font-size:12.5px;
+  color:var(--ink-1,#1a2030);
+}
+.eu-pick-msg{
+  grid-column:1 / -1;
+  min-height:14px;
+  font-size:11px;
+  color:var(--ink-4,#8a91a0);
+}
+.eu-pick-msg.err{ color:var(--bad,#c0392b); }
 
 /* Extraction module selection */
 .modgrid{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
@@ -295,9 +325,15 @@
 }
 .sepsis-def-grid{
   display:grid;
-  grid-template-columns:1fr 1fr;
+  grid-template-columns:repeat(2,minmax(0,1fr));
   gap:10px;
   margin-top:12px;
+}
+.sepsis-def-summary{
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+  margin-top:11px;
 }
 .sepsis-def-row{
   min-width:0;
@@ -311,6 +347,46 @@
   font-size:11px;
   font-weight:650;
   color:var(--ink-2);
+}
+.sepsis-def-control{
+  min-width:0;
+  padding:10px;
+  border:1px solid var(--hair);
+  border-radius:7px;
+  background:color-mix(in srgb,var(--surface) 86%,transparent);
+}
+.sepsis-def-seg{
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+}
+.sepsis-def-seg button{
+  min-height:26px;
+  padding:4px 8px;
+  border:1px solid var(--hair);
+  border-radius:999px;
+  background:var(--surface);
+  color:var(--ink-3);
+  font:inherit;
+  font-size:11px;
+  line-height:1.2;
+  cursor:pointer;
+}
+.sepsis-def-seg button:hover{
+  background:var(--surface-2);
+  border-color:var(--hair-3);
+}
+.sepsis-def-seg button.active{
+  border-color:color-mix(in srgb,var(--accent-border) 64%,var(--hair));
+  background:color-mix(in srgb,var(--accent-soft) 44%,var(--surface));
+  color:var(--accent-ink);
+  font-weight:650;
+}
+.sepsis-def-help{
+  margin-top:6px;
+  font-size:10.5px;
+  line-height:1.35;
+  color:var(--ink-4);
 }
 .sepsis-def-chips{
   display:flex;
@@ -369,6 +445,8 @@
 }
 
 @media (max-width:560px){
+  .ex-export-destination{ grid-template-columns:1fr; }
+  .ex-export-destination .btn{ width:100%; justify-content:center; }
   .modgrid{ grid-template-columns:1fr; }
   .concept-list{ grid-template-columns:1fr; }
   .modcard-head{ grid-template-columns:1fr; align-items:stretch; }

@@ -282,11 +282,103 @@
       `;
   }
 
+  function renderSetupPrompt(ctx) {
+    const current = state(ctx);
+    const st = current.status || {};
+    const ready = !!st.ready;
+    const aiOn = !!st.ai_enabled;
+    const keyReady = !!st.credential_present;
+    const modelReady = !!st.model_present;
+    const providers = [
+      ['openai', 'OpenAI'],
+      ['openrouter', 'OpenRouter'],
+      ['deepseek', 'DeepSeek'],
+      ['custom', 'Custom/local'],
+    ];
+    const showConfig = current.configOpen !== false || !ready;
+    const canEnableSaved = !ready && keyReady && modelReady && !aiOn;
+    const continueLabel = ready
+      ? translate(ctx, 'Continue to idea sources', '继续选择 idea 来源')
+      : translate(ctx, 'Continue local-only for now', '暂时本地模式继续');
+    return `
+      <div class="gd-idea-api-card gd-idea-card">
+        <div class="gdx-head">
+          <span class="gdx-ico">${icon(ctx, 'shield', 15)}</span>
+          <div>
+            <strong>${translate(ctx, 'Step 1 · Configure API access', '第一步 · 配置 API')}</strong>
+            <span>${translate(ctx, 'Idea mining can run local-only, but AI synthesis and Agent handoff need an explicit provider setup first.', 'Idea 挖掘可以先本地运行；AI 综合和 Agent 交接需要先显式配置 provider。')}</span>
+          </div>
+        </div>
+        <div class="gdx-status ${ready ? 'ok' : 'warn'}">
+          <span>${icon(ctx, ready ? 'check' : 'shield', 12)}</span>
+          <div>
+            <strong>${ready ? translate(ctx, 'API provider is ready', 'API provider 已就绪') : translate(ctx, 'API is not ready yet', 'API 还未就绪')}</strong>
+            <small>${ready ? translate(ctx, 'Provider calls still stay opt-in per action.', '后续 provider 调用仍然逐步 opt-in。') : translate(ctx, 'Paste a key and model here, or continue in local-only mode and configure it later.', '可以在这里填写 key 和模型；也可以先用本地模式继续，稍后再配置。')}</small>
+          </div>
+        </div>
+        <div class="gdx-actions">
+          ${providers.map(([p, label]) => `<button type="button" class="btn sm ${current.provider === p ? 'primary' : ''}" data-gi-provider="${p}">${escapeHtml(ctx, label)}</button>`).join('')}
+          <button type="button" class="btn sm" data-gi-provider-refresh>${icon(ctx, 'refresh', 12)} ${translate(ctx, 'Check status', '检查状态')}</button>
+          ${canEnableSaved ? `<button type="button" class="btn sm primary" data-gi-enable-ai>${translate(ctx, 'Enable configured API', '启用已配置 API')}</button>` : ''}
+          <button type="button" class="btn sm" data-gi-provider-config-toggle>${icon(ctx, 'gear', 12)} ${showConfig ? translate(ctx, 'Hide setup', '收起配置') : translate(ctx, 'Show setup', '展开配置')}</button>
+        </div>
+        ${showConfig ? `
+          <div class="gdi-feature-list">
+            <label class="gdi-field wide">
+              <span>${translate(ctx, 'API key', 'API key')}</span>
+              <input type="password" autocomplete="off" data-gi-provider-key placeholder="${attr(ctx, translate(ctx, 'Paste provider key; it will be saved only on this machine', '粘贴 provider key；只保存到本机'))}">
+            </label>
+            <div class="gdi-field-grid">
+              <label class="gdi-field">
+                <span>${translate(ctx, 'Base URL / endpoint', 'Base URL / endpoint')}</span>
+                <input data-gi-provider-base placeholder="http://127.0.0.1:8787/v1">
+              </label>
+              <label class="gdi-field">
+                <span>${translate(ctx, 'Model', '模型')}</span>
+                <input data-gi-provider-model placeholder="gpt5.4">
+              </label>
+            </div>
+            <label class="gdi-check">
+              <input type="checkbox" data-gi-provider-enable ${aiOn ? 'checked' : ''}>
+              <span>${translate(ctx, 'Enable AI/provider opt-in after saving', '保存后启用 AI/provider opt-in')}</span>
+            </label>
+            <div class="gdx-actions">
+              <button type="button" class="btn primary" data-gi-provider-save ${current.saving ? 'disabled' : ''}>${current.saving ? translate(ctx, 'Saving...', '保存中...') : translate(ctx, 'Save API config locally', '本地保存 API 配置')}</button>
+              <span class="muted">${translate(ctx, 'Secrets are written to a local private env file and are never echoed back.', '密钥写入本机私有 env 文件，不会回显。')}</span>
+            </div>
+            ${current.saved ? `<div class="gdx-status ok"><span>${icon(ctx, 'check', 12)}</span><div><strong>${translate(ctx, 'API config saved', 'API 配置已保存')}</strong><small>${translate(ctx, 'You can continue to source selection.', '现在可以继续选择来源。')}</small></div></div>` : ''}
+            ${current.saveError ? `<div class="gdx-status bad"><span>${icon(ctx, 'x', 12)}</span><div><strong>${translate(ctx, 'Could not save API config', 'API 配置保存失败')}</strong><small>${escapeHtml(ctx, current.saveError)}</small></div></div>` : ''}
+          </div>` : ''}
+        <div class="gdx-actions">
+          <button type="button" class="btn primary" data-gi-api-continue>${continueLabel}</button>
+          <span class="muted">${translate(ctx, 'Next step: choose PDF, article clue, literature folder, or frontier topic.', '下一步：选择 PDF、文章线索、文献库文件夹或前沿主题。')}</span>
+        </div>
+      </div>`;
+  }
+
+  function renderMiniStatus(ctx) {
+    const current = state(ctx);
+    const st = current.status || {};
+    const ready = !!st.ready;
+    const missing = Array.isArray(st.missing) ? st.missing : [];
+    const detail = ready
+      ? translate(ctx, 'API-ready; provider calls still require explicit action opt-in.', 'API 已就绪；provider 调用仍需要逐步显式确认。')
+      : `${translate(ctx, 'Local-only mode is active. Configure API before AI synthesis or full Agent provider calls.', '当前为本地模式。AI 综合或 full Agent provider 调用前再配置 API。')}${missing.length ? ' · ' + escapeHtml(ctx, missing.join(', ')) : ''}`;
+    return `
+      <div class="gdx-status ${ready ? 'ok' : 'warn'}">
+        <span>${icon(ctx, ready ? 'check' : 'shield', 12)}</span>
+        <div><strong>${ready ? translate(ctx, 'API ready', 'API 已就绪') : translate(ctx, 'API not configured', 'API 未配置')}</strong><small>${detail}</small></div>
+        <button type="button" class="btn sm" data-gi-api-back>${icon(ctx, 'gear', 12)} ${translate(ctx, 'API setup', '配置 API')}</button>
+      </div>`;
+  }
+
   window.EU_GUIDED_IDEA_PROVIDER = {
     createState,
     requestStatus,
     enableProvider,
     saveConfig,
     renderCapabilityPanel,
+    renderSetupPrompt,
+    renderMiniStatus,
   };
 })();

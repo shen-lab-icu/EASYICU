@@ -90,14 +90,16 @@
   let crossRawRootScan = null;
   let crossRawRootScanPath = '';
   let crossRawRootScanning = false;
+  let crossRawSampleMode = 'quick';
   let cohortView = 'idle';    // idle | loaded | loading
   let cohortPanel = 'groups'; // groups | coverage | snapshot | sofa
   let cohortCompare = 'outcome';
   let cohortFeatureScope = 'recommended'; // recommended | all
   let cohortFeatureModule = 'all';
   let cohortSelectedFeatures = [];
-  let cohortSurvivalOutcome = 'hospital_death';
+  let cohortSurvivalOutcome = 'mort_28d';
   let cohortSurvivalGroup = 'sepsis';
+  let cohortSofaMatrixMode = 'pct'; // pct | count
   let vizErr = null;
 
   function esc(v) {
@@ -112,7 +114,11 @@
   function fmtP(v) {
     if (v == null || Number.isNaN(Number(v))) return '—';
     const n = Number(v);
-    if (n < 0.001) return '<0.001';
+    if (n > 0 && n < 0.001) {
+      const exponent = Math.floor(Math.log10(n));
+      const mantissa = n / Math.pow(10, exponent);
+      return `${mantissa.toLocaleString(undefined, { maximumSignificantDigits: 4 })} × 10^${exponent}`;
+    }
     return n.toLocaleString(undefined, { maximumFractionDigits: 3 });
   }
   function downloadJsonFile(filename, payload) {
@@ -173,6 +179,43 @@
   function selectedCrossDbCount() {
     return CROSS_DBS.filter(d => d[1]).length;
   }
+  function crossRawSampleProfiles() {
+    return [
+      {
+        id: 'quick',
+        label: t('Quick preview', '快速预览'),
+        note: t('Fast first look for module-level density checks.', '优先快速看模块级分布。'),
+        maxPatients: 200,
+        sampleSize: 600,
+      },
+      {
+        id: 'standard',
+        label: t('Standard sample', '标准抽样'),
+        note: t('Balanced default for smoother density curves.', '平衡速度和曲线稳定性。'),
+        maxPatients: 300,
+        sampleSize: 1500,
+      },
+      {
+        id: 'deeper',
+        label: t('Deeper sample', '较深抽样'),
+        note: t('More stable, but can take longer on six raw databases.', '更稳定，但六库原始数据会更慢。'),
+        maxPatients: 800,
+        sampleSize: 3000,
+      },
+    ];
+  }
+  function crossRawSampleProfile() {
+    return crossRawSampleProfiles().find(row => row.id === crossRawSampleMode)
+      || crossRawSampleProfiles()[0];
+  }
+  function crossRawSampleSummary(profile) {
+    const p = profile || crossRawSampleProfile();
+    return `${p.label} · ≤${fmtInt(p.maxPatients)} ${t('entities/db', '实体/库')} · ≤${fmtInt(p.sampleSize)} ${t('values/feature', '值/特征')}`;
+  }
+  function crossRawDbLabel(dbKey) {
+    const row = CROSS_DBS.find(d => d[2] === dbKey);
+    return row ? row[0] : String(dbKey || '');
+  }
   function crossRawPathValue(path) {
     return String(path || '').trim();
   }
@@ -181,15 +224,30 @@
     crossRawRootScanPath = '';
     crossRawRootScanning = false;
   }
-  function crossRawScanReadyFor(path) {
+  function crossRawSelectionStatusFor(path) {
     const rawRoot = crossRawPathValue(path);
-    return !!(
-      rawRoot &&
-      crossRawRootScan &&
-      crossRawRootScanPath === rawRoot &&
-      crossRawRootScan.ok &&
-      crossRawRootScan.runnable
+    const current = rawRoot && crossRawRootScan && crossRawRootScanPath === rawRoot
+      ? crossRawRootScan
+      : null;
+    const selectedKeys = selectedCrossDbKeys();
+    const detectedKeys = new Set(
+      current && current.ok
+        ? (current.detected || []).map(row => row && row.key).filter(Boolean)
+        : []
     );
+    const detectedSelectedKeys = selectedKeys.filter(key => detectedKeys.has(key));
+    const missingSelectedKeys = selectedKeys.filter(key => !detectedKeys.has(key));
+    return {
+      current,
+      selectedKeys,
+      detectedKeys,
+      detectedSelectedKeys,
+      missingSelectedKeys,
+      runnable: !!(rawRoot && current && current.ok && detectedSelectedKeys.length >= 2),
+    };
+  }
+  function crossRawScanReadyFor(path) {
+    return crossRawSelectionStatusFor(path).runnable;
   }
   function crossRawScanCurrentFor(path) {
     const rawRoot = crossRawPathValue(path);
@@ -227,7 +285,7 @@
         vizErr = null;
       }
       repaintScreen('crossdb');
-      return !!(scan && scan.ok && scan.runnable);
+      return crossRawScanReadyFor(rawRoot);
     }).catch(err => {
       crossRawRootScanning = false;
       crossRawRootScan = null;
@@ -284,9 +342,35 @@
     if (typeof v === 'boolean') return v ? 'true' : 'false';
     return String(v);
   }
-  function patientColumnLabel(col) {
+  function patientI18nLabel(meta, fallback) {
+    const row = meta || {};
+    if (window.EU_LANG === 'zh') return row.label_zh || row.zh || row.name_zh || row.label_en || row.en || fallback || '';
+    return row.label_en || row.en || row.name_en || row.label_zh || row.zh || fallback || '';
+  }
+  function patientModuleLabel(row) {
+    return patientI18nLabel(row && row.label_i18n, row && (row.label || row.module));
+  }
+  function patientFeatureLabel(row) {
+    return patientI18nLabel(row && row.name_i18n, row && (row.name || row.feature));
+  }
+  function patientColumnLabelMap(preview) {
+    const out = {};
+    ((preview && preview.display_column_labels) || []).forEach(row => {
+      if (row && row.column) out[row.column] = row;
+    });
+    return out;
+  }
+  function patientColumnLabel(col, preview) {
+    const labels = patientColumnLabelMap(preview);
+    if (labels[col]) return patientI18nLabel(labels[col], col);
     if (col === 'entity') return t('Pseudonymous entity', '伪匿名实体');
-    return col;
+    return String(col || '').replace(/[_-]+/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
+  }
+  function patientShapeLabel(module) {
+    const shape = module && module.shape;
+    if (shape === 'time_indexed') return t('time indexed', '时序');
+    if (shape === 'static') return t('static', '静态');
+    return shape || (module && module.time_indexed ? t('time indexed', '时序') : t('static', '静态'));
   }
   function patientSignalLabel(signal) {
     return (signal && (signal.label || signal.name || signal.feature || signal.key)) || 'signal';
@@ -495,7 +579,7 @@
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px;margin-top:12px;">
           ${rows.map((item, i) => {
-            const label = item.label || item.module || t('Module', '模块');
+            const label = patientModuleLabel(item) || t('Module', '模块');
             const featureCount = item.review_features != null ? item.review_features : item.feature_count;
             const rowCount = Number(item.rows || 0);
             const entityCount = Number(item.entities);
@@ -1077,6 +1161,7 @@
     const rawRootInput = document.querySelector('[data-crossdb-root]');
     const rawRoot = requestedRawRoot || (rawRootInput && rawRootInput.value ? rawRootInput.value.trim() : '');
     const rawDatabases = selectedCrossDbKeys();
+    const sampleProfile = crossRawSampleProfile();
     if (!rawRoot) {
       vizErr = t('Choose a local ICU data root before loading real Cross-DB densities.', '加载真实跨库密度前，请先选择本地 ICU 数据根目录。');
       done && done(false);
@@ -1096,8 +1181,8 @@
         databases: rawDatabases,
         feature_scope: 'all_catalog',
         coverage_min: 2,
-        max_patients: 300,
-        sample_size: 1500,
+        max_patients: sampleProfile.maxPatients,
+        sample_size: sampleProfile.sampleSize,
       }).then(r => {
         if (crossRawCancelRequested) {
           crossRawJobStarting = false;
@@ -1107,7 +1192,12 @@
           return;
         }
         crossRawJobId = r.job_id;
-        crossRawProg = { phase: 'queued', message: t('Queued local raw Cross-DB density job.', '本地原始跨库密度任务已排队。') };
+        crossRawProg = {
+          phase: 'queued',
+          max_patients: sampleProfile.maxPatients,
+          sample_size: sampleProfile.sampleSize,
+          message: `${t('Queued local raw Cross-DB density job.', '本地原始跨库密度任务已排队。')} ${crossRawSampleSummary(sampleProfile)}`,
+        };
         crossRawES = new EventSource('/api/jobs/' + r.job_id + '/events');
         crossRawES.onmessage = ev => {
           let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
@@ -1637,6 +1727,8 @@
       const rowEnd = Number(previewPage.row_end || activePreview && activePreview.row_end || 0);
       const hasPrevious = Boolean(previewPage.has_previous || activePreview && activePreview.has_previous);
       const hasNext = Boolean(previewPage.has_next || activePreview && activePreview.has_next);
+      patientTablePage = page;
+      patientTablePageSize = Number(previewPage.page_size || activePreview && activePreview.page_size || patientTablePageSize || 24);
       const basisScope = drill.demo ? 'catalog-seeded demo aggregate' : 'demographics aggregate';
       const rows = [
         ['Entities', fmtInt(s.entities), drill.demo ? 'seeded demo denominator' : 'cohort denominator from active export'],
@@ -1667,13 +1759,13 @@
       </div>
       ${previews.length ? `
       <div class="row wrap gap-6 mt-12" data-pt-table-picker>
-        ${previews.map(p => `<button type="button" class="chip ${activePreview && p.module === activePreview.module ? 'solid' : ''}" data-pt-table-module="${esc(p.module)}" style="${activePreview && p.module === activePreview.module ? 'border-color:var(--ink);color:var(--ink);' : ''}">${esc(p.label || p.module)} <span class="mono" style="font-size:10.5px;color:var(--ink-4);">${fmtInt(p.rows_total)} ${t('rows', '行')}</span></button>`).join('')}
+        ${previews.map(p => `<button type="button" class="chip ${activePreview && p.module === activePreview.module ? 'solid' : ''}" data-pt-table-module="${esc(p.module)}" style="${activePreview && p.module === activePreview.module ? 'border-color:var(--ink);color:var(--ink);' : ''}">${esc(patientModuleLabel(p))} <span class="mono" style="font-size:10.5px;color:var(--ink-4);">${fmtInt(p.rows_total)} ${t('rows', '行')}</span></button>`).join('')}
       </div>
       <div class="patient-table-frame mt-12">
         <div class="patient-id-note">${drill.demo ? t('Demo entity tokens are seeded UI references.', '演示实体 token 是种子界面引用。') : t('Entity tokens are local pseudonymous references. Direct clinical identifiers stay on disk.', '实体 token 是本地伪匿名引用；直接临床标识符保留在磁盘上。')}</div>
         <div class="patient-table-scroll" data-patient-table-preview style="--pt-cols:${Math.max(6, previewColumns.length)};">
         <table class="eu-table patient-preview-table">
-          <thead><tr>${previewColumns.map(c => `<th${c === 'entity' ? ' class="patient-entity-col"' : ' class="num"'}>${esc(patientColumnLabel(c))}</th>`).join('')}</tr></thead>
+          <thead><tr>${previewColumns.map(c => `<th${c === 'entity' ? ' class="patient-entity-col"' : ' class="num"'}>${esc(patientColumnLabel(c, activePreview))}</th>`).join('')}</tr></thead>
           <tbody>
             ${previewRows.length ? previewRows.map(r => `<tr>${previewColumns.map(c => `<td class="${c === 'entity' ? 'key mono patient-entity-token' : 'num'}">${esc(fmtCell(r[c]))}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${Math.max(1, previewColumns.length)}" class="muted">${esc(activePreview && activePreview.reason ? activePreview.reason : t('No preview rows available for this module.', '这个模块没有可预览行。'))}</td></tr>`}
           </tbody>
@@ -1685,7 +1777,7 @@
         <div class="patient-page-readout">
           <span class="mono">${esc(activePreview && activePreview.module || '')}</span>
           <span>${rowStart && rowEnd ? `${fmtInt(rowStart)}-${fmtInt(rowEnd)}` : fmtInt(activePreview && activePreview.row_count)} / ${fmtInt(activePreview && activePreview.rows_total)} ${t('rows', '行')}</span>
-          <span>${t('page', '第')} ${fmtInt(page)} / ${fmtInt(pageCount)} ${t('page', '页')}</span>
+          <span>${window.EU_LANG === 'zh' ? `第 ${fmtInt(page)} / ${fmtInt(pageCount)} 页` : `Page ${fmtInt(page)} / ${fmtInt(pageCount)}`}</span>
         </div>
         <label class="patient-page-size">${t('Rows', '行数')}
           <select data-pt-page-size>
@@ -1716,23 +1808,23 @@
       <div class="split-320 mt-16" style="grid-template-columns:1fr 310px;">
         <div class="table-wrap table-scroll">
         <table class="eu-table">
-          <thead><tr><th>Module table overview</th><th class="num">Features</th><th class="num">Rows</th><th class="num">Entities</th><th class="num">Coverage</th><th>Shape</th></tr></thead>
+          <thead><tr><th>${t('Module table overview', '模块表格概览')}</th><th class="num">${t('Features', '特征')}</th><th class="num">${t('Rows', '行')}</th><th class="num">${t('Entities', '实体')}</th><th class="num">${t('Coverage', '覆盖率')}</th><th>${t('Shape', '形态')}</th></tr></thead>
           <tbody>
-            ${reviewModules.map(m => `<tr><td class="key">${esc(m.label || m.module)}</td><td class="num">${fmtInt(m.review_features != null ? m.review_features : m.feature_count)}</td><td class="num">${fmtInt(m.rows)}</td><td class="num">${fmtInt(m.entities)}</td><td class="num">${fmtPct(m.coverage_pct)}</td><td>${esc(m.shape || (m.time_indexed ? 'time_indexed' : 'static'))} · ${fmtInt(m.dynamic_features || 0)} dynamic</td></tr>`).join('')}
+            ${reviewModules.map(m => `<tr><td class="key">${esc(patientModuleLabel(m))}</td><td class="num">${fmtInt(m.review_features != null ? m.review_features : m.feature_count)}</td><td class="num">${fmtInt(m.rows)}</td><td class="num">${fmtInt(m.entities)}</td><td class="num">${fmtPct(m.coverage_pct)}</td><td>${esc(patientShapeLabel(m))} · ${fmtInt(m.dynamic_features || 0)} ${t('dynamic', '动态')}</td></tr>`).join('')}
           </tbody>
         </table>
         </div>
         <div class="card pad">
-          <div class="eyebrow">Module at a glance</div>
-          <div style="font-weight:600;font-size:15px;margin-top:6px;">${esc(activeModule.label || activeModule.module || 'Selected module')}</div>
+          <div class="eyebrow">${t('Module at a glance', '模块速览')}</div>
+          <div style="font-weight:600;font-size:15px;margin-top:6px;">${esc(patientModuleLabel(activeModule) || t('Selected module', '已选模块'))}</div>
           <div class="col gap-6 mt-12" style="font-size:12.5px;">
-            <div class="setup-row"><span class="k">Review features</span><span class="vv">${fmtInt(activeModule.review_features != null ? activeModule.review_features : activeModule.feature_count)}</span></div>
-            <div class="setup-row"><span class="k">Share</span><span class="vv">${fmtPct(activeModule.share_pct)}</span></div>
-            <div class="setup-row"><span class="k">Coverage</span><span class="vv">${fmtPct(activeModule.coverage_pct)}</span></div>
-            <div class="setup-row"><span class="k">Status</span><span class="vv">${esc(activeModule.status || 'ready')}</span></div>
+            <div class="setup-row"><span class="k">${t('Review features', '审阅特征')}</span><span class="vv">${fmtInt(activeModule.review_features != null ? activeModule.review_features : activeModule.feature_count)}</span></div>
+            <div class="setup-row"><span class="k">${t('Share', '占比')}</span><span class="vv">${fmtPct(activeModule.share_pct)}</span></div>
+            <div class="setup-row"><span class="k">${t('Coverage', '覆盖率')}</span><span class="vv">${fmtPct(activeModule.coverage_pct)}</span></div>
+            <div class="setup-row"><span class="k">${t('Status', '状态')}</span><span class="vv">${esc(activeModule.status || 'ready')}</span></div>
           </div>
           <div class="row wrap gap-6 mt-12">
-            ${previewFeatures.slice(0, 6).map(f => `<span class="chip">${esc(f.feature || f.name)}${f.unit ? ` · ${esc(f.unit)}` : ''}</span>`).join('') || '<span class="chip">metadata only</span>'}
+            ${previewFeatures.slice(0, 6).map(f => `<span class="chip">${esc(patientFeatureLabel(f))}${f.unit ? ` · ${esc(f.unit)}` : ''}</span>`).join('') || `<span class="chip">${t('metadata only', '仅元数据')}</span>`}
           </div>
         </div>
       </div>` : ''}
@@ -2278,6 +2370,7 @@
       }));
       root.querySelectorAll('[data-gen]').forEach(b => b.addEventListener('click', () => {
         if (patientView === 'loading') return;
+        patientTablePage = 1;
         patientView = 'loading';
         repaintScreen('patient');
         if (window.EU_DATA === 'real') {
@@ -2295,10 +2388,11 @@
         }
       }));
       root.querySelectorAll('[data-viz-reset]').forEach(b => b.addEventListener('click', () => {
-        patientView = 'idle'; window.EU_VIZ_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; repaintScreen('patient');
+        patientView = 'idle'; patientTablePage = 1; window.EU_VIZ_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; repaintScreen('patient');
       }));
       root.querySelectorAll('[data-patient-use-real]').forEach(b => b.addEventListener('click', () => {
         patientView = 'idle';
+        patientTablePage = 1;
         window.EU_DATA = 'real';
         window.EU_VIZ_WORKSPACE = null;
         window.EU_PATIENT_DRILLDOWN = null;
@@ -2464,10 +2558,22 @@
       'Hospital mortality': '院内死亡',
       'ICU mortality': 'ICU 死亡',
       '28-day mortality': '28 天死亡',
+      '30-day display window': '30 天显示窗口',
+      '28-day window': '28 天窗口',
+      'derived from hospital death + LOS': '由院内死亡 + 住院时长派生',
       'Hospital LOS / follow-up days': '住院时长 / 随访天数',
       'Outcome': '结局',
+      'Outcome overview': '结局概览',
       'Grouping': '分组',
       'events': '事件',
+      'No outcome module': '没有结局模块',
+      'not available': '不可用',
+      'KM-ready': '可画 KM',
+      'KM curve endpoint': 'KM 曲线结局',
+      'Event rate summary': '事件率',
+      'rate only': '仅事件率',
+      'time window': '时间窗',
+      'unavailable': '不可用',
       'Survival analysis blocked': '生存分析已拦截',
       'Current export is loaded, but the cohort is above the interactive KM preview limit; continue with an audited local analysis job on this same export.': '当前导出已加载，但队列超过交互式 KM 预览上限；请在同一个导出上继续运行本地审计分析任务。',
       'Exploratory · unadjusted': '探索性 · 未调整',
@@ -2487,14 +2593,25 @@
       'Modules OK': '正常模块',
       'Watchlist': '观察名单',
       'Median coverage': '覆盖率中位数',
-      'Neutral event modules': '中性事件模块',
+      'Neutral event modules': '事件/暴露模块',
+      'Presence-rate modules': '事件/暴露模块',
+      'Event/exposure rows show cohort incidence or exposure prevalence, not missingness coverage; they are excluded from the coverage watchlist.': '事件/暴露行显示队列发生率或暴露率，不是缺失覆盖率；它们不会进入低覆盖观察名单。',
       'Unknown coverage': '未知覆盖率',
       'Module': '模块',
       'Records': '记录数',
       'Fields': '字段数',
       'Covered entities': '覆盖实体',
+      'Entities': '实体数',
       'Coverage': '覆盖率',
+      'Coverage / rate': '覆盖率 / 发生率',
+      'Event rate': '发生率',
+      'Exposure rate': '暴露率',
       'Fail-closed scope': '保守拦截范围',
+      'Interpretation': '解释',
+      'Ready': '正常',
+      'Watch': '观察',
+      'Low coverage': '低覆盖',
+      'Rate only': '仅比例',
       'SOFA reclassification': 'SOFA 重分层',
       'SOFA-2 aggregate review': 'SOFA-2 聚合审阅',
       'Demo SOFA-2 aggregate preview': '演示 SOFA-2 聚合预览',
@@ -2513,6 +2630,13 @@
       'SOFA-2 severity bins': 'SOFA-2 严重度分箱',
       'SOFA-1 to SOFA-2 movement': 'SOFA-1 到 SOFA-2 变化',
       'Worst-ICU severity transition matrix': 'ICU 最严重 SOFA 转移矩阵',
+      'Matrix value': '矩阵数值',
+      'Percent': '百分比',
+      'Count': '人数',
+      'Rows are SOFA-1 severity bands; columns are SOFA-2 bands. Color intensity follows the selected value.': '行是 SOFA-1 严重度分层，列是 SOFA-2 分层；颜色深浅随当前显示值变化。',
+      'Same severity band': '同一严重度层级',
+      'SOFA-2 higher band': 'SOFA-2 更高层级',
+      'SOFA-2 lower band': 'SOFA-2 更低层级',
       'Paired aggregate ready': '配对聚合已就绪',
       'Paired reclassification blocked': '配对重分层已拦截',
       'Cohort profile': '队列画像',
@@ -2601,6 +2725,10 @@
       'Fewer than two cohort entities have valid survival time values.': '有效生存时间值少于两个队列实体。',
       'Demo threshold uses SOFA ≥ 6. Real custom thresholds remain fail-closed until a bounded cohort-builder backend is available.': '演示阈值使用 SOFA ≥ 6。真实自定义阈值会在有界队列构建后端可用前保持保守拦截。',
       'This export does not expose an outcome with both event and time-to-event columns.': '此导出没有同时包含事件列和事件时间列的结局。',
+      'ICU mortality is unavailable because this export does not include ICU-specific event and time columns.': 'ICU 死亡不可用，因为当前导出没有 ICU 专用死亡事件列和 ICU 时间列。',
+      'ICU mortality is unavailable because this export does not include an ICU-specific event column.': 'ICU 死亡不可用，因为当前导出没有 ICU 专用死亡事件列。',
+      'ICU-specific event column is not present in the registered export.': '当前注册导出没有 ICU 专用死亡事件列。',
+      'ICU mortality event rate is available, but KM/log-rank needs ICU-specific time columns.': 'ICU 死亡事件率可用，但 KM/log-rank 需要 ICU 专用时间列。',
       'Unavailable for this export': '此导出不可用',
       'Unavailable': '不可用',
     };
@@ -2677,7 +2805,7 @@
       const cls = row.quality_status === 'ok' || row.quality_status === 'neutral' ? 'solid' : (row.quality_status === 'unknown' ? 'demo' : '');
       const label = row.coverage_basis === 'metadata_row_count_only'
         ? t('manifest rows', '清单行数')
-        : fmtPct(row.coverage_pct);
+        : cohortCoverageMetricValue(row);
       return `<span class="chip ${cls}" title="${esc(row.module)}">${esc(row.module)} <span class="mono" style="font-size:10.5px;color:inherit;opacity:.72;">${label}</span></span>`;
     }).join('');
     return `
@@ -2691,6 +2819,40 @@
         <div class="row wrap gap-6" style="margin-top:10px;">${chips}</div>
         ${metadataRows.length ? `<div style="font-size:11.5px;color:var(--ink-4);margin-top:8px;">${t('Some non-Parquet or very large modules may show manifest-confirmed row counts instead of exact unique-stay coverage; they are still part of this export.', '部分非 Parquet 或超大模块可能显示清单确认的行数，而不是精确唯一 stay 覆盖率；它们仍属于当前导出。')}</div>` : ''}
       </div>`;
+  }
+
+  function cohortCoverageMetricLabel(row) {
+    if (!row || row.coverage_basis === 'metadata_row_count_only') return t('row count only', '仅行数');
+    if (row.metric_kind === 'event_rate') return cohortText('Event rate');
+    if (row.metric_kind === 'exposure_rate') return cohortText('Exposure rate');
+    return cohortText('Coverage');
+  }
+
+  function cohortCoverageMetricValue(row) {
+    if (!row) return '—';
+    if (row.coverage_basis === 'metadata_row_count_only') return t('row count only', '仅行数');
+    return `${cohortCoverageMetricLabel(row)} ${fmtPct(row.coverage_pct)}`;
+  }
+
+  function cohortQualityStatusClass(row) {
+    if (!row) return 'demo';
+    if (row.coverage_basis === 'metadata_row_count_only') return 'ok';
+    if (row.metric_kind === 'event_rate' || row.metric_kind === 'exposure_rate') return 'ok';
+    if (row.quality_status === 'ok' || row.quality_status === 'neutral') return 'ok';
+    if (row.quality_status === 'unknown') return 'demo';
+    return 'warn';
+  }
+
+  function cohortQualityStatusLabel(row) {
+    if (!row) return cohortText('Unknown');
+    if (row.coverage_basis === 'metadata_row_count_only') return t('loaded', '已加载');
+    if (row.metric_kind === 'event_rate') return cohortText('Event rate');
+    if (row.metric_kind === 'exposure_rate') return cohortText('Exposure rate');
+    if (row.quality_status === 'ok') return cohortText('Ready');
+    if (row.quality_status === 'warn') return cohortText('Watch');
+    if (row.quality_status === 'bad') return cohortText('Low coverage');
+    if (row.quality_status === 'neutral') return cohortText('Rate only');
+    return cohortText('Unknown');
   }
 
   function cohortRealFeaturePicker(review) {
@@ -2750,19 +2912,13 @@
     const groups = survival.group_options || [];
     const readyOutcomes = outcomes.filter(row => row.status === 'ready');
     const readyGroups = groups.filter(row => row.status === 'ready');
-    const selectedOutcome = readyOutcomes.some(row => row.id === cohortSurvivalOutcome)
-      ? cohortSurvivalOutcome
-      : (survival.default_outcome || (readyOutcomes[0] && readyOutcomes[0].id));
+    const selectedOutcome = survival.default_outcome || (readyOutcomes[0] && readyOutcomes[0].id) || cohortSurvivalOutcome;
+    cohortSurvivalOutcome = selectedOutcome || cohortSurvivalOutcome;
     const selectedGroup = readyGroups.some(row => row.id === cohortSurvivalGroup)
       ? cohortSurvivalGroup
       : (survival.default_group || (readyGroups[0] && readyGroups[0].id));
     const curve = (survival.curves || []).find(row => row.outcome_id === selectedOutcome && row.group_id === selectedGroup);
-    const outcomeButtons = outcomes.map(row => {
-      const ready = row.status === 'ready';
-      const cls = `seg-btn ${selectedOutcome === row.id ? 'active' : ''} ${ready ? '' : 'disabled'}`;
-      const attr = ready ? `data-cohort-surv-outcome="${esc(row.id)}"` : `aria-disabled="true" title="${esc(cohortReason(row.reason || 'Unavailable'))}"`;
-      return `<button class="${cls}" ${attr}><span>${esc(cohortText(row.label || row.id))}</span>${ready ? `<b>${fmtInt(row.event_count)} ${cohortText('events')}</b>` : `<b>${cohortText('blocked')}</b>`}</button>`;
-    }).join('');
+    const outcomeCards = cohortSurvivalOutcomeCards(outcomes, selectedOutcome);
     const groupButtons = groups.map(row => {
       const ready = row.status === 'ready';
       const cls = `seg-btn ${selectedGroup === row.id ? 'active' : ''} ${ready ? '' : 'disabled'}`;
@@ -2775,7 +2931,7 @@
       return `
       <div class="sec-stack"><div class="lbl">${cohortText('Survival analysis')}</div><h2>${cohortText('Kaplan-Meier module')}</h2></div>
       <div class="surv-toolbar">
-        <div><div class="surv-label">${cohortText('Outcome')}</div><div class="surv-segments">${outcomeButtons}</div></div>
+        <div><div class="surv-label">${cohortText('Outcome overview')}</div>${outcomeCards}</div>
         <div><div class="surv-label">${cohortText('Grouping')}</div><div class="surv-segments">${groupButtons}</div></div>
       </div>
       <div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">${cohortText('Survival analysis blocked')}</div><div class="d">${esc(cohortReason(survival.reason || 'This export does not expose an outcome with both event and time-to-event columns.'))}</div></div></div>
@@ -2783,10 +2939,12 @@
       ${cohortSurvivalBlockedList(blockedOutcomes)}`;
     }
     const logrank = curve.logrank || {};
+    const pValueLabel = logrank.p_value_label || fmtP(logrank.p_value);
+    const windowNote = cohortSurvivalWindowNote(curve);
     return `
       <div class="sec-stack"><div class="lbl">${cohortText('Survival analysis')}</div><h2>${cohortText('Kaplan-Meier curves and log-rank')}</h2></div>
       <div class="surv-toolbar">
-        <div><div class="surv-label">${cohortText('Outcome')}</div><div class="surv-segments">${outcomeButtons}</div></div>
+        <div><div class="surv-label">${cohortText('Outcome overview')}</div>${outcomeCards}</div>
         <div><div class="surv-label">${cohortText('Grouping')}</div><div class="surv-segments">${groupButtons}</div></div>
       </div>
       <div class="surv-card mt-14">
@@ -2795,10 +2953,11 @@
             <div class="eyebrow">${cohortText('Exploratory · unadjusted')}</div>
             <h3>${esc(cohortText(curve.label || 'Kaplan-Meier curve'))}</h3>
             <p>${esc(cohortText(curve.time_label || 'Time-to-event'))} · ${t('event', '事件')} <span class="mono">${esc(curve.event_column || '')}</span> · ${t('time', '时间')} <span class="mono">${esc(curve.time_column || '')}</span></p>
+            ${windowNote ? `<p>${esc(windowNote)}</p>` : ''}
           </div>
           <div class="surv-logrank">
             <span>${cohortText('Log-rank')}</span>
-            <strong>${logrank.status === 'ready' ? `χ² ${fmtNum(logrank.chi_square, 2)} · p ${fmtP(logrank.p_value)}` : cohortText('blocked')}</strong>
+            <strong>${logrank.status === 'ready' ? `χ² ${fmtNum(logrank.chi_square, 2)} · p = ${esc(pValueLabel)}` : cohortText('unavailable')}</strong>
             <small>${logrank.status === 'ready' ? cohortText('df 1 · exploratory only') : esc(cohortReason(logrank.reason || 'not enough events'))}</small>
           </div>
         </div>
@@ -2807,6 +2966,75 @@
       </div>
       <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Not manuscript-ready by itself')}</div><div class="d">${t('KM/log-rank is computed from bounded cohort aggregates and marked exploratory. Any claim still needs the evidence-bound Agent check and human review.', 'KM/log-rank 由有界队列聚合计算，标记为探索性。任何稿件声明仍需要证据绑定 Agent 检查和人工审阅。')}</div></div></div>
       ${cohortSurvivalBlockedList(blockedOutcomes)}`;
+  }
+
+  function cohortSurvivalOutcomeCards(outcomes, selectedOutcome) {
+    const rows = outcomes || [];
+    if (!rows.length) {
+      return `<div class="surv-outcome-grid"><div class="surv-outcome-card muted"><span>${cohortText('No outcome module')}</span><b>${cohortText('not available')}</b></div></div>`;
+    }
+    return `
+      <div class="surv-outcome-grid">
+        ${rows.map(row => {
+          const summary = row.event_summary || {};
+          const hasRate = summary.status === 'available' && summary.event_rate_pct != null;
+          const selected = row.id === selectedOutcome;
+          const cls = `surv-outcome-card ${selected ? 'active' : ''} ${hasRate ? '' : 'muted'}`;
+          const rate = hasRate ? fmtPct(summary.event_rate_pct) : cohortText('not available');
+          const events = hasRate
+            ? `${fmtInt(summary.event_count)} / ${fmtInt(summary.denominator)} ${cohortText('events')}`
+            : cohortReason(summary.reason || row.reason || 'No event column found');
+          const meta = cohortSurvivalOutcomeMeta(row);
+          return `
+            <div class="${cls}">
+              <span>${esc(cohortText(row.label || row.id))}</span>
+              <strong>${esc(rate)}</strong>
+              <b>${esc(events)}</b>
+              ${meta ? `<em>${esc(meta)}</em>` : ''}
+            </div>`;
+        }).join('')}
+      </div>`;
+  }
+
+  function cohortSurvivalOutcomeMeta(row) {
+    if (!row) return '';
+    const parts = [];
+    const summary = row.event_summary || {};
+    if (row.id === 'mort_28d' && row.status === 'ready') {
+      parts.push(cohortText('KM curve endpoint'));
+    } else if (summary.status === 'available') {
+      parts.push(cohortText('Event rate summary'));
+    }
+    if (summary.basis === 'derived_time_window') {
+      parts.push(cohortText(summary.time_window_label || row.window_label || 'time window'));
+    } else if (row.window_label && row.id === 'mort_28d') {
+      parts.push(cohortText(row.window_label));
+    }
+    if (summary.basis === 'derived_time_window' || row.derived_from === 'hospital_mortality_time_window') {
+      parts.push(cohortText('derived from hospital death + LOS'));
+    }
+    return parts.join(' · ');
+  }
+
+  function cohortSurvivalOutcomeUnavailable(row) {
+    const reason = cohortReason(row && row.reason);
+    if (reason.includes('ICU') || reason.includes('专用')) {
+      return t('unavailable · missing ICU event/time columns', '不可用 · 缺少 ICU 事件/时间列');
+    }
+    return cohortText('unavailable');
+  }
+
+  function cohortSurvivalWindowNote(curve) {
+    if (!curve || curve.display_horizon_days == null) return '';
+    const days = fmtNum(curve.display_horizon_days, 0);
+    const base = t(
+      `Displayed on a ${days}-day window; later observations are censored at the window boundary.`,
+      `默认显示 ${days} 天窗口；窗口之后的观测在边界处按删失处理。`
+    );
+    if (curve.derived_from === 'hospital_mortality_time_window') {
+      return `${base} ${t('This 28-day endpoint is derived from hospital death plus hospital LOS because dedicated 28-day columns were not present.', '这个 28 天结局由院内死亡 + 住院时长派生，因为导出中没有单独的 28 天结局列。')}`;
+    }
+    return base;
   }
 
   function cohortSurvivalSourceHint(survival) {
@@ -2948,7 +3176,7 @@
           </div>
           <div class="surv-logrank">
             <span>${cohortText('Log-rank')}</span>
-            <strong>χ² ${fmtNum(logrank.chi_square, 2)} · p ${fmtP(logrank.p_value)}</strong>
+            <strong>χ² ${fmtNum(logrank.chi_square, 2)} · p = ${fmtP(logrank.p_value)}</strong>
             <small>${cohortText('Seeded demo only')}</small>
           </div>
         </div>
@@ -3041,35 +3269,94 @@
     const rows = review.coverage || [];
     const q = review.quality || {};
     const metadataOnlyCount = rows.filter(row => row.coverage_basis === 'metadata_row_count_only').length;
+    const rateRows = rows.filter(row => row.metric_kind === 'event_rate' || row.metric_kind === 'exposure_rate').length;
     return `
       <div class="sec-stack"><div class="lbl">${cohortText('Coverage audit')}</div><h2>${cohortText(opts.demo ? 'Demo module coverage and quality' : 'Real module coverage and quality')}</h2></div>
       ${opts.demo ? cohortDemoPanelNote('coverage') : ''}
       ${metadataOnlyCount ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('Large export coverage optimized', '大导出覆盖率已优化')}</div><div class="d">${t('Some non-Parquet or very large modules are shown with manifest-confirmed row counts first to avoid a slow full stay-id scan. They are loaded modules, not missing modules.', '部分非 Parquet 或超大模块会先显示清单确认的行数，避免缓慢的全量 stay_id 扫描。它们是已加载模块，不是缺失模块。')}</div></div></div>` : ''}
+      ${rateRows ? `<div class="note info mt-12"><div class="ico">${icon('activity', 14)}</div><div class="body"><div class="t">${cohortText('Presence-rate modules')}</div><div class="d">${cohortText('Event/exposure rows show cohort incidence or exposure prevalence, not missingness coverage; they are excluded from the coverage watchlist.')}</div></div></div>` : ''}
       <div class="audit-cards">
         ${[
           ['Modules OK', fmtInt(q.modules_ok)],
           ['Watchlist', fmtInt(q.watchlist_count)],
           ['Median coverage', fmtPct(q.median_coverage_pct)],
-          ['Neutral event modules', fmtInt(q.modules_neutral)],
+          ['Presence-rate modules', fmtInt(q.modules_neutral)],
           ['Unknown coverage', fmtInt(q.modules_unknown)],
         ].map(([k, v]) => `<div class="audit-card"><div class="ac-k">${cohortText(k)}</div><div class="ac-v mono">${v}</div></div>`).join('')}
       </div>
       <div class="table-wrap table-scroll mt-16">
         <table class="eu-table">
-          <thead><tr><th>${cohortText('Module')}</th><th class="num">${cohortText('Records')}</th><th class="num">${cohortText('Fields')}</th><th class="num">${cohortText('Covered entities')}</th><th class="num">${cohortText('Coverage')}</th><th>${cohortText('Status')}</th></tr></thead>
+          <thead><tr><th>${cohortText('Module')}</th><th class="num">${cohortText('Records')}</th><th class="num">${cohortText('Fields')}</th><th class="num">${cohortText('Entities')}</th><th class="num">${cohortText('Coverage / rate')}</th><th>${cohortText('Interpretation')}</th></tr></thead>
           <tbody>
             ${rows.map(row => `<tr>
               <td class="key">${esc(row.module)}</td>
               <td class="num">${fmtInt(row.rows)}</td>
               <td class="num">${fmtInt(row.column_count)}</td>
               <td class="num">${row.coverage_basis === 'metadata_row_count_only' ? t('manifest confirmed', '清单确认') : fmtInt(row.covered_entities)}</td>
-              <td class="num">${row.coverage_basis === 'metadata_row_count_only' ? t('row count only', '仅行数') : fmtPct(row.coverage_pct)}</td>
-              <td><span class="pill ${row.quality_status === 'ok' || row.quality_status === 'neutral' ? 'ok' : 'warn'}" style="height:20px;">${row.coverage_basis === 'metadata_row_count_only' ? t('loaded', '已加载') : esc(row.quality_status || 'unknown')}</span></td>
+              <td class="num">${cohortCoverageMetricValue(row)}</td>
+              <td><span class="pill ${cohortQualityStatusClass(row)}" style="height:20px;">${cohortQualityStatusLabel(row)}</span></td>
             </tr>`).join('')}
           </tbody>
         </table>
       </div>
       <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Fail-closed scope')}</div><div class="d">${t('Coverage is aggregate-only. Row-level filtering, subgroup missingness, and eligibility waterfalls remain blocked until a bounded cohort-builder backend exists.', '覆盖率是仅聚合结果。行级筛选、亚组缺失率和纳排瀑布图会在有界队列构建后端就绪前保持拦截。')}</div></div></div>`;
+  }
+
+  function cohortSofaCellFill(tone, intensity) {
+    const a = Math.max(0.08, Math.min(0.72, 0.12 + intensity * 0.52));
+    if (tone === 'up') return `rgba(190, 76, 76, ${a.toFixed(3)})`;
+    if (tone === 'down') return `rgba(42, 111, 178, ${a.toFixed(3)})`;
+    return `rgba(34, 137, 122, ${a.toFixed(3)})`;
+  }
+
+  function cohortSofaHeatmap(reclass) {
+    const bins = reclass.severity_bins || [];
+    const matrix = reclass.transition_matrix || [];
+    if (!bins.length || !matrix.length) {
+      return `<div class="muted" style="font-size:11px;">${t('No paired SOFA-1/SOFA-2 bins in this export.', '此导出没有配对 SOFA-1/SOFA-2 分箱。')}</div>`;
+    }
+    const mode = cohortSofaMatrixMode === 'count' ? 'count' : 'pct';
+    const maxCount = Math.max(1, ...matrix.flatMap(row => (row.cells || []).map(cell => Number(cell.count) || 0)));
+    const maxPct = Math.max(1, ...matrix.flatMap(row => (row.cells || []).map(cell => Number(cell.pct) || 0)));
+    const corner = `${t('SOFA-1', 'SOFA-1')} \\ ${t('SOFA-2', 'SOFA-2')}`;
+    const headers = bins.map(label => `<div class="sofa-heat-head col">${esc(label)}</div>`).join('');
+    const rows = matrix.map((row, rowIndex) => {
+      const cells = (row.cells || []).map((cell, colIndex) => {
+        const count = Number(cell.count) || 0;
+        const pct = Number(cell.pct) || 0;
+        const value = mode === 'count' ? fmtInt(count) : fmtPct(pct);
+        const intensity = mode === 'count' ? count / maxCount : pct / maxPct;
+        const tone = colIndex > rowIndex ? 'up' : colIndex < rowIndex ? 'down' : 'same';
+        const label = `${row.label} to ${bins[colIndex] || ''}: ${fmtInt(count)} · ${fmtPct(pct)}`;
+        return `<div class="sofa-heat-cell ${tone}" style="--heat-bg:${cohortSofaCellFill(tone, intensity)};" title="${esc(label)}" aria-label="${esc(label)}">
+          <span class="sofa-heat-value mono">${value}</span>
+        </div>`;
+      }).join('');
+      return `<div class="sofa-heat-head row">${esc(row.label)}</div>${cells}`;
+    }).join('');
+    return `
+      <div class="sofa-matrix-head mt-12">
+        <div>
+          <div class="rc-sec-t">${cohortText('Worst-ICU severity transition matrix')}</div>
+          <p>${cohortText('Rows are SOFA-1 severity bands; columns are SOFA-2 bands. Color intensity follows the selected value.')}</p>
+        </div>
+        <div class="sofa-matrix-toggle" role="group" aria-label="${cohortText('Matrix value')}">
+          <button class="${mode === 'pct' ? 'active' : ''}" data-cohort-sofa-matrix-mode="pct" type="button">${cohortText('Percent')}</button>
+          <button class="${mode === 'count' ? 'active' : ''}" data-cohort-sofa-matrix-mode="count" type="button">N</button>
+        </div>
+      </div>
+      <div class="sofa-heat-scroll">
+        <div class="sofa-heatmap" style="--sofa-data-cols:${bins.length};">
+          <div class="sofa-heat-head corner">${esc(corner)}</div>
+          ${headers}
+          ${rows}
+        </div>
+      </div>
+      <div class="sofa-heat-legend">
+        <span><i class="same"></i>${cohortText('Same severity band')}</span>
+        <span><i class="up"></i>${cohortText('SOFA-2 higher band')}</span>
+        <span><i class="down"></i>${cohortText('SOFA-2 lower band')}</span>
+      </div>`;
   }
 
   function cohortSofaBody(review, opts = {}) {
@@ -3080,7 +3367,6 @@
     const maxBin = Math.max(1, ...bins.map(b => b.count || 0));
     const movement = reclass.direction_counts || {};
     const delta = reclass.delta_summary || {};
-    const matrix = reclass.transition_matrix || [];
     const movementCards = reclass.status === 'ready' ? [
       [fmtInt(reclass.paired_count), 'Paired entities', `${fmtPct(reclass.coverage_pct)} ${t('of cohort', '的队列覆盖')}`, 'n'],
       [fmtInt(movement.up && movement.up.count), 'SOFA-2 higher', fmtPct(movement.up && movement.up.pct), 'up'],
@@ -3125,17 +3411,7 @@
                 <div class="rk-hint">${cohortText(hint)}</div>
               </div>`).join('')}
           </div>
-          <div class="rc-sec-t mt-12">${cohortText('Worst-ICU severity transition matrix')}</div>
-          <table class="mini-table">
-            <thead><tr><th>SOFA-1 \\ SOFA-2</th>${(reclass.severity_bins || []).map(label => `<th>${esc(label)}</th>`).join('')}</tr></thead>
-            <tbody>
-              ${matrix.map(row => `
-                <tr>
-                  <td>${esc(row.label)}</td>
-                  ${(row.cells || []).map(cell => `<td><span class="mono">${fmtInt(cell.count)}</span><span class="muted"> ${fmtPct(cell.pct)}</span></td>`).join('')}
-                </tr>`).join('')}
-            </tbody>
-          </table>
+          ${cohortSofaHeatmap(reclass)}
         </div>
         <div class="note ok mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Paired aggregate ready')}</div><div class="d">${t('Worst-ICU SOFA-1/SOFA-2 movement is computed from bounded per-entity score aggregates only. No paired patient rows or inferential statistics are returned.', 'ICU 最严重 SOFA-1/SOFA-2 变化只由有界实体级评分聚合计算；不返回配对患者行或推断统计。')}</div></div></div>
       ` : `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">${cohortText('Paired reclassification blocked')}</div><div class="d">${esc(cohortReason(reclass.reason || 'Paired SOFA-1/SOFA-2 reclassification is not available for this export.'))}</div></div></div>`}`;
@@ -3152,29 +3428,113 @@
     return (rows || []).map(([label, pct]) => `<div class="qrow"><span>${cohortText(label)}</span><div class="qbar"><span style="width:${pct == null ? 0 : Math.max(0, Math.min(100, pct)).toFixed(0)}%"></span></div><span class="qv">${fmtPct(pct)}</span></div>`).join('');
   }
 
-  function cohortComplexityHeatmap(cx) {
-    const ageGroups = (cx && cx.age_groups) || [];
-    const losGroups = (cx && cx.los_groups) || [];
-    const z = (cx && cx.z) || [];
-    if (!ageGroups.length || !losGroups.length || !(cx && cx.total)) {
-      return `<div class="muted" style="font-size:11px;">${t('No age × LOS pairs in this export.', '此导出没有年龄×住院时长配对。')}</div>`;
+  function cohortProfileLabel(row) {
+    const item = row || {};
+    if (window.EU_LANG === 'zh') return item.label_zh || item.zh || item.label || item.id || '';
+    return item.label || item.label_en || item.label_zh || item.id || '';
+  }
+
+  function cohortProfileReason(row) {
+    const item = row || {};
+    if (window.EU_LANG === 'zh') return item.reason_zh || item.text_zh || item.reason || item.text || '';
+    return item.reason || item.text || item.reason_zh || item.text_zh || '';
+  }
+
+  function cohortProfileStatusText(status) {
+    const key = String(status || 'unknown');
+    const labels = {
+      ready: [t('ready', '已就绪')],
+      partial: [t('partial', '部分可用')],
+      unavailable: [t('not in export', '当前导出未提供')],
+      schema_only: [t('schema only', '仅结构可见')],
+      ok: [t('ok', '正常')],
+      warn: [t('watch', '关注')],
+      bad: [t('low', '偏低')],
+      unknown: [t('unknown', '未知')],
+    };
+    return (labels[key] && labels[key][0]) || key;
+  }
+
+  function cohortProfileUnit(item) {
+    const row = item || {};
+    return window.EU_LANG === 'zh' ? (row.unit_zh || row.unit || '') : (row.unit || row.unit_zh || '');
+  }
+
+  function cohortProfileValue(item) {
+    const row = item || {};
+    if (row.kind === 'numeric') {
+      if (row.value == null) return '—';
+      const unit = cohortProfileUnit(row);
+      return `${fmtNum(row.value, 1)}${unit ? ` ${esc(unit)}` : ''}`;
     }
-    const maxN = Math.max(1, Number(cx.max) || 0);
-    const cw = 48, lh = 24, lw = 58, top = 18, padB = 4;
-    const w = lw + losGroups.length * cw, h = top + ageGroups.length * lh + padB;
-    const colHeaders = losGroups.map((lg, j) => `<text x="${lw + j * cw + (cw - 4) / 2}" y="12" text-anchor="middle" class="cxh-axis">${esc(lg)}</text>`).join('');
-    const body = ageGroups.map((ag, i) => {
-      const rowLabel = `<text x="0" y="${top + i * lh + lh / 2 + 3}" class="cxh-axis">${esc(ag)}</text>`;
-      const cells = losGroups.map((lg, j) => {
-        const n = (z[i] && z[i][j]) || 0;
-        const intensity = n / maxN;
-        const fill = `rgba(15,118,110,${(0.06 + intensity * 0.8).toFixed(3)})`;
-        const tx = lw + j * cw + (cw - 4) / 2;
-        return `<rect x="${lw + j * cw}" y="${top + i * lh}" width="${cw - 4}" height="${lh - 4}" rx="3" fill="${fill}"></rect><text x="${tx}" y="${top + i * lh + lh / 2 + 3}" text-anchor="middle" class="cxh-val"${intensity > 0.55 ? ' style="fill:#fff;"' : ''}>${n || ''}</text>`;
-      }).join('');
-      return rowLabel + cells;
-    }).join('');
-    return `<svg class="cxh" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMinYMin meet" role="img" aria-label="${t('Age by ICU LOS complexity heatmap', '年龄与 ICU 住院时长复杂度热力图')}">${colHeaders}${body}</svg>`;
+    if (row.kind === 'proportion' || row.kind === 'event_rate' || row.kind === 'module_coverage') {
+      return row.pct == null ? '—' : fmtPct(row.pct);
+    }
+    if (row.kind === 'count') {
+      return fmtInt(row.count);
+    }
+    if (row.kind === 'category') {
+      const first = (row.bins || [])[0];
+      return first ? `${esc(first.label)} · ${fmtPct(first.pct)}` : '—';
+    }
+    return row.value == null ? '—' : esc(row.value);
+  }
+
+  function cohortProfileDetail(item) {
+    const row = item || {};
+    if (row.status === 'unavailable') return cohortProfileReason(row) || t('Not present in this export.', '当前导出未提供。');
+    if (row.kind === 'numeric') {
+      const unit = cohortProfileUnit(row);
+      return `${t('range', '范围')} ${fmtNum(row.min, 1)}-${fmtNum(row.max, 1)}${unit ? ` ${esc(unit)}` : ''} · n=${fmtInt(row.count)}`;
+    }
+    if (row.kind === 'proportion' || row.kind === 'event_rate' || row.kind === 'module_coverage') {
+      const base = row.count == null ? t('entity denominator unavailable', '实体分母不可用') : `${fmtInt(row.count)} / ${fmtInt(row.denominator)}`;
+      const modules = (row.modules || []).length ? ` · ${esc((row.modules || []).join(', '))}` : '';
+      const records = row.rows ? ` · ${fmtInt(row.rows)} ${t('records', '记录')}` : '';
+      return `${base}${modules}${records}`;
+    }
+    if (row.kind === 'count') {
+      return row.denominator ? `${fmtInt(row.count)} / ${fmtInt(row.denominator)}` : '';
+    }
+    if (row.kind === 'category') {
+      return (row.bins || []).slice(0, 3).map(bin => `${esc(bin.label)} ${fmtPct(bin.pct)}`).join(' · ') || t('No categorical column available.', '没有可用分类列。');
+    }
+    return cohortProfileReason(row);
+  }
+
+  function cohortProfileItem(item) {
+    const row = item || {};
+    const status = String(row.status || 'unknown').replace(/[^a-z0-9_-]/gi, '');
+    const pct = typeof row.pct === 'number' ? Math.max(0, Math.min(100, row.pct)) : null;
+    const bar = pct == null ? '' : `<div class="cprof-bar"><span style="width:${pct.toFixed(1)}%"></span></div>`;
+    return `
+      <div class="cprof-item ${status}">
+        <div class="cprof-k">${esc(cohortProfileLabel(row))}</div>
+        <div class="cprof-v">${cohortProfileValue(row)}</div>
+        ${bar}
+        <div class="cprof-d">${esc(cohortProfileDetail(row))}</div>
+      </div>`;
+  }
+
+  function cohortClinicalProfile(profile) {
+    const domains = (profile && profile.domains) || [];
+    if (!domains.length) return '';
+    return `
+      <div class="cprof-grid">
+        ${domains.map(domain => `
+          <section class="cprof-domain ${esc(String(domain.status || 'unknown'))}">
+            <div class="cprof-head">
+              <div>
+                <div class="eyebrow">${esc(cohortProfileLabel(domain))}</div>
+                <h3>${esc(cohortProfileLabel(domain))}</h3>
+              </div>
+              <span class="pill ${domain.status === 'ready' ? 'ok' : 'dashed'}">${esc(cohortProfileStatusText(domain.status || 'unknown'))}</span>
+            </div>
+            <div class="cprof-items">${(domain.items || []).map(cohortProfileItem).join('')}</div>
+          </section>
+        `).join('')}
+      </div>
+      ${(profile.notes || []).length ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body">${(profile.notes || []).map(note => `<div class="t">${esc(cohortProfileLabel(note))}</div><div class="d">${esc(cohortProfileReason(note))}</div>`).join('')}</div></div>` : ''}`;
   }
 
   function cohortSnapshotBody() {
@@ -3190,6 +3550,10 @@
         <div class="stat"><div class="label">${cohortText('Sepsis-3 +')}</div><div class="val">${fmtPct(s.sepsis_pct)}</div></div>
         <div class="stat"><div class="label">${cohortText('Median SOFA-2')}</div><div class="val">${fmtNum(s.sofa2 && s.sofa2.median, 1)}</div></div>
         <div class="stat accent"><div class="label">${cohortText('Mortality')}</div><div class="val">${fmtPct(s.mortality_pct)}</div></div>
+      </div>
+      <div class="card pad mt-16">
+        <div class="sec-stack mini"><div class="lbl">${t('Clinical phenotype', '临床画像')}</div><h3>${t('Interpretable cohort dimensions', '可解释的队列维度')}</h3></div>
+        ${cohortClinicalProfile(s.clinical_profile)}
       </div>
       <div class="cols-2 mt-16">
         <div class="card pad">
@@ -3216,12 +3580,6 @@
           ${(s.admission && s.admission.bins && s.admission.bins.length) ? `<div class="eyebrow" style="margin:12px 0 8px;">${t('Admission type', '入院类型')}</div>${cohortDistBars(s.admission.bins)}` : ''}
         </div>
       </div>
-      ${(s.complexity && s.complexity.total) ? `
-      <div class="card pad mt-16">
-        <div class="eyebrow" style="margin-bottom:8px;">${t('Age × ICU LOS complexity', '年龄 × ICU 住院时长复杂度')}</div>
-        <div style="overflow-x:auto;">${cohortComplexityHeatmap(s.complexity)}</div>
-        <div style="font-size:11px;color:var(--ink-4);margin-top:6px;">${t('Entity counts per age band × ICU length-of-stay band (bounded aggregate, no rows).', '各年龄段 × ICU 住院时长段的实体计数（有界聚合，不含行级数据）。')}</div>
-      </div>` : ''}
       <div class="cols-2 mt-16">
         <div class="card pad">
           <div class="eyebrow" style="margin-bottom:8px;">${cohortText('Aggregate ranges')}</div>
@@ -3635,16 +3993,16 @@
           }
         });
       });
-      root.querySelectorAll('[data-cohort-surv-outcome]').forEach(b => b.addEventListener('click', () => {
-        if (b.dataset.cohortSurvOutcome === cohortSurvivalOutcome) return;
-        cohortSurvivalOutcome = b.dataset.cohortSurvOutcome || 'hospital_death';
-        window.EU_STALE = true;
-        repaintScreen('cohort');
-      }));
       root.querySelectorAll('[data-cohort-surv-group]').forEach(b => b.addEventListener('click', () => {
         if (b.dataset.cohortSurvGroup === cohortSurvivalGroup) return;
         cohortSurvivalGroup = b.dataset.cohortSurvGroup || 'sepsis';
         window.EU_STALE = true;
+        repaintScreen('cohort');
+      }));
+      root.querySelectorAll('[data-cohort-sofa-matrix-mode]').forEach(b => b.addEventListener('click', () => {
+        const next = b.dataset.cohortSofaMatrixMode === 'count' ? 'count' : 'pct';
+        if (next === cohortSofaMatrixMode) return;
+        cohortSofaMatrixMode = next;
         repaintScreen('cohort');
       }));
       root.querySelectorAll('[data-cohort-feature-module]').forEach(b => b.addEventListener('click', () => {
@@ -3972,7 +4330,7 @@
     if (detected) {
       return {
         cls: selected ? 'ok' : 'dashed',
-        label: selected ? t('detected', '已识别') : t('available', '可用'),
+        label: selected ? t('detected', '已识别') : t('not selected', '未选择'),
         sub: detected.folder_name ? `${t('folder', '文件夹')} ${detected.folder_name}` : t('recognized folder', '已识别文件夹'),
       };
     }
@@ -4009,18 +4367,23 @@
         <div class="body"><div class="t">${t('Folder check failed', '文件夹检查失败')}</div><div class="d">${esc(scan.hint || scan.error || t('Could not check this folder.', '无法检查该文件夹。'))}</div></div>
       </div>`;
     }
+    const status = crossRawSelectionStatusFor(path);
     const detected = scan.detected || [];
-    const missing = scan.missing_selected || [];
+    const selectedDetected = new Set(status.detectedSelectedKeys);
+    const missing = status.missingSelectedKeys.map(key => ({
+      key,
+      label: crossRawDbLabel(key),
+    }));
     const unknown = scan.unrecognized_folders || [];
-    const tone = scan.runnable ? 'ok' : 'warn';
-    const title = scan.runnable ? t('Folder check ready', '文件夹检查通过') : t('Folder check needs attention', '文件夹检查需要处理');
+    const tone = status.runnable ? 'ok' : 'warn';
+    const title = status.runnable ? t('Folder check ready', '文件夹检查通过') : t('Folder check needs attention', '文件夹检查需要处理');
     return `<div class="note ${tone} mt-12">
-      <div class="ico">${icon(scan.runnable ? 'check' : 'alert', 14)}</div>
+      <div class="ico">${icon(status.runnable ? 'check' : 'alert', 14)}</div>
       <div class="body">
         <div class="t">${title}</div>
-        <div class="d">${t('Detected database folders', '已识别数据库文件夹')}: ${fmtInt(detected.length)} · ${t('selected recognized', '已选且识别')}: ${fmtInt(scan.detected_selected_count || 0)}/${fmtInt(scan.selected_count || selectedCrossDbCount())} · ${t('need at least 2', '至少需要 2 个')}.</div>
+        <div class="d">${t('Detected database folders', '已识别数据库文件夹')}: ${fmtInt(detected.length)} · ${t('selected recognized', '已选且识别')}: ${fmtInt(status.detectedSelectedKeys.length)}/${fmtInt(status.selectedKeys.length)} · ${t('need at least 2', '至少需要 2 个')}.</div>
         <div class="row gap-8 mt-8" style="flex-wrap:wrap;">
-          ${detected.length ? detected.map(row => `<span class="chip ${row.selected ? 'solid' : ''}">${esc(row.label || row.key)} · ${esc(row.folder_name || row.key)}</span>`).join('') : `<span class="pill warn">${t('No supported database folders detected', '未识别到支持的数据库文件夹')}</span>`}
+          ${detected.length ? detected.map(row => `<span class="chip ${selectedDetected.has(row.key) ? 'solid' : ''}">${esc(row.label || row.key)} · ${esc(row.folder_name || row.key)}${selectedDetected.has(row.key) ? '' : ` · ${t('not selected', '未选择')}`}</span>`).join('') : `<span class="pill warn">${t('No supported database folders detected', '未识别到支持的数据库文件夹')}</span>`}
         </div>
         ${missing.length ? `<div class="d mt-8">${t('Missing selected database folders', '已选但缺失的数据库文件夹')}: ${missing.map(row => esc(row.label || row.key)).join(', ')}</div>` : ''}
         ${unknown.length ? `<div class="d mt-8">${t('Unrecognized folders', '未识别文件夹')}: ${unknown.map(esc).join(', ')}${scan.unrecognized_count > unknown.length ? ` +${fmtInt(scan.unrecognized_count - unknown.length)}` : ''}</div>` : ''}
@@ -4032,6 +4395,8 @@
     const sel = CROSS_DBS.filter(d => d[1]).length;
     const rawRoot = defaultRawCrossdbRoot();
     const canRun = sel >= 2 && crossRawScanReadyFor(rawRoot);
+    const sampleProfile = crossRawSampleProfile();
+    const sampleProfiles = crossRawSampleProfiles();
     return `
       <div class="note info">
         <div class="ico">${icon('benchmark', 16)}</div>
@@ -4054,6 +4419,26 @@
         </div>
         ${rawCrossdbScanPanel()}
       </div>
+      <div class="card pad mt-16">
+        <div class="row between gap-12" style="align-items:flex-start;">
+          <div>
+            <div class="panel-title">${t('Sampling budget before plotting', '绘图前抽样预算')}</div>
+            <div class="panel-sub mt-4">${t('Raw Cross-DB density uses bounded local sampling so six databases do not trigger an unbounded full-table scan.', '原始跨库密度使用有界本地抽样，避免六个数据库触发无界全表扫描。')}</div>
+          </div>
+          <span class="pill ok">${esc(crossRawSampleSummary(sampleProfile))}</span>
+        </div>
+        <div class="db-grid mt-14" style="grid-template-columns:repeat(3,minmax(0,1fr));">
+          ${sampleProfiles.map(profile => `
+            <button class="db-card ${profile.id === sampleProfile.id ? 'sel' : ''}" type="button" data-crossdb-sample-mode="${esc(profile.id)}" style="text-align:left;">
+              <div style="min-width:0;">
+                <div style="font-weight:650;font-size:12.5px;">${esc(profile.label)}</div>
+                <div class="mono" style="font-size:10.5px;color:var(--ink-4);">≤${fmtInt(profile.maxPatients)} ${t('entities/database', '实体/数据库')} · ≤${fmtInt(profile.sampleSize)} ${t('values/feature', '值/特征')}</div>
+                <div style="font-size:11px;color:var(--ink-3);margin-top:4px;">${esc(profile.note)}</div>
+              </div>
+              <span class="db-mk pill ${profile.id === sampleProfile.id ? 'ok' : 'dashed'}" style="flex:none;height:20px;">${profile.id === sampleProfile.id ? `<span class="dot"></span>${t('selected', '已选择')}` : t('choose', '选择')}</span>
+            </button>`).join('')}
+        </div>
+      </div>
       <div class="sec-stack"><div class="lbl">${crossTerm('Databases')} · <span id="dbcount">${sel}</span> ${crossTerm('selected')}</div></div>
       <div class="db-grid" id="dbgrid">
         ${CROSS_DBS.map(([n, on, key]) => {
@@ -4074,6 +4459,7 @@
       <div class="gate-strip mt-20">
         <span class="pill"><span style="color:var(--ink-3);">${icon('benchmark', 12)}</span> <span id="runhint">${sel} / 6 · ${canRun ? crossTerm('folder check ready') : crossTerm('check folders · need ≥ 2 detected')}</span></span>
         <span class="pill">${crossTerm('all supported catalog concepts')}</span>
+        <span class="pill">${esc(crossRawSampleSummary(sampleProfile))}</span>
         <div class="grow"></div>
         <button class="btn primary" data-run ${canRun ? '' : 'aria-disabled="true"'}>${icon('play', 13)} ${crossTerm('Load real density benchmark')}</button>
       </div>`;
@@ -4411,6 +4797,11 @@
     const cur = p.current || 0;
     const tot = p.total || 0;
     const pct = tot ? Math.round((cur / tot) * 100) : 0;
+    const sampleMax = p.max_patients || p.maxPatients || (window.EU_DATA === 'real' ? crossRawSampleProfile().maxPatients : null);
+    const sampleValues = p.sample_size || p.sampleSize || (window.EU_DATA === 'real' ? crossRawSampleProfile().sampleSize : null);
+    const sampleText = sampleMax && sampleValues
+      ? ` · ≤${fmtInt(sampleMax)} ${t('entities/db', '实体/库')} · ≤${fmtInt(sampleValues)} ${t('values/feature', '值/特征')}`
+      : '';
     const loadingTitle = window.EU_DATA === 'real'
       ? crossProgressMessage('Loading real feature densities from local databases…')
       : crossProgressMessage('Loading seeded frames for selected databases…');
@@ -4420,7 +4811,7 @@
     return `<div class="card pad">
       <div class="load-strip">
         <span class="spin accent"></span>
-        <div class="grow"><div style="font-weight:600;font-size:12.75px;">${loadingTitle}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${crossTerm('local-only · nothing uploaded')}${p.phase ? ` · ${esc(crossStatusLabel(p.phase))}` : ''}</div></div>
+        <div class="grow"><div style="font-weight:600;font-size:12.75px;">${loadingTitle}</div><div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${crossTerm('local-only · nothing uploaded')}${p.phase ? ` · ${esc(crossStatusLabel(p.phase))}` : ''}${sampleText}</div></div>
         ${tot ? `<span class="mono" style="font-size:11px;color:var(--ink-3);">${cur}/${tot}</span>` : ''}
         <button class="btn sm" ${window.EU_DATA === 'real' ? 'data-crossdb-cancel' : 'data-viz-reset'} ${crossRawCancelRequested ? 'disabled' : ''}>${icon('stop', 13)} ${crossRawCancelRequested ? t('Cancel requested', '已请求取消') : t('Cancel', '取消')}</button>
       </div>
@@ -4504,13 +4895,21 @@
         crossDensityFeature = b.dataset.densityFeatureKey || null;
         repaintScreen('crossdb');
       }));
+      root.querySelectorAll('[data-crossdb-sample-mode]').forEach(b => b.addEventListener('click', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        crossRawSampleMode = b.dataset.crossdbSampleMode || 'quick';
+        repaintScreen('crossdb');
+      }));
       const grid = root.querySelector('#dbgrid');
       if (grid) grid.addEventListener('click', e => {
         const card = e.target.closest('[data-db]'); if (!card) return;
         const i = +card.dataset.db;
         CROSS_DBS[i][1] = !CROSS_DBS[i][1];
         if (window.EU_DATA === 'real') {
-          invalidateCrossRawRootScan();
+          // Keep the last folder scan: toggling a database changes selection,
+          // not whether sibling folders were recognized under the same root.
+          vizErr = null;
           repaintScreen('crossdb');
           return;
         }

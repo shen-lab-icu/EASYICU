@@ -41,16 +41,16 @@
       signed: false,
     },
     {
-      id: 'lactate', name: ['Early lactate analysis seed', '早期乳酸分析种子'],
+      id: 'lactate', name: ['Early lactate research idea', '早期乳酸研究想法'],
       mode: 'analysis', status: 'idle', stage: 0,
-      cohort: 'sepsis_mortality_demo', source: ['idea seed · not yet run', '想法种子 · 尚未运行'],
+      cohort: 'sepsis_mortality_demo', source: ['research idea · not yet run', '研究想法 · 尚未运行'],
       question: [
         'Test whether early lactate trajectory adds prognostic information after the idea has been confirmed in Idea Mining.',
         '在 Idea 挖掘确认后,检验早期乳酸轨迹是否提供额外预后信息。',
       ],
       runs: [
-        ['seed 02', ['Feasibility handoff', '可行性交接'], 'complete', '0:41', ['today 13:05', '今天 13:05']],
-        ['seed 01', ['Source check', '来源核查'], 'complete', '0:19', ['today 12:40', '今天 12:40']],
+        ['idea 02', ['Feasibility handoff', '可行性交接'], 'complete', '0:41', ['today 13:05', '今天 13:05']],
+        ['idea 01', ['Source check', '来源核查'], 'complete', '0:19', ['today 12:40', '今天 12:40']],
       ],
       signed: false,
     },
@@ -98,7 +98,7 @@
       icon: 'target',
       desc: ['Capture a paper, PDF, review, or clinical question as the external source for an idea.', '把文章、PDF、综述或临床问题记录为研究想法的外部来源。'],
       inputs: ['paper/PDF/topic', 'source metadata', 'uncertainty statement'],
-      outputs: ['source card', 'bounded excerpt', 'idea seed'],
+      outputs: ['source card', 'bounded excerpt', 'research idea'],
       evidence: ['source id', 'metadata', 'excerpt hash'],
       route: 'ideas',
     },
@@ -109,7 +109,7 @@
       stage: ['Feasibility', '可行性'],
       icon: 'shield',
       desc: ['Check denominator, concept availability, windows, and portability before looking at target outcome differences.', '在查看目标结局差异前，先核查分母、概念可得性、时间窗和跨库可迁移性。'],
-      inputs: ['idea seed', 'candidate concepts', 'database scope'],
+      inputs: ['research idea', 'candidate concepts', 'database scope'],
       outputs: ['feasibility ledger', 'risk plan', 'go/hold call'],
       evidence: ['coverage table', 'denominator summary', 'audit notes'],
       route: 'ideas',
@@ -122,8 +122,8 @@
       icon: 'agent',
       desc: ['Freeze the confirmed study question, cohort recipe, concepts, and analysis boundaries for an Agent run.', '冻结已确认的问题、队列配方、概念和分析边界，供 Agent 运行使用。'],
       inputs: ['confirmed idea', 'cohort recipe', 'allowed claims'],
-      outputs: ['project seed', 'analysis plan', 'run contract'],
-      evidence: ['project_seed.json', 'handoff manifest'],
+      outputs: ['Agent project', 'analysis plan', 'run contract'],
+      evidence: ['handoff package', 'handoff manifest'],
       route: 'agent',
     },
     {
@@ -305,27 +305,39 @@
     const q = row.question || title;
     const pre = row.pre_experiment_summary || {};
     const source = row.source || {};
+    const seedRuns = Array.isArray(row.runs) ? row.runs : [];
+    const reviewRun = seedRuns.find(r => r && r.project_dir) || null;
+    const imported = row.seed_kind === 'canonical9_import' || !!row.benchmark;
     return {
       id: row.study_id || row.id || title,
       name: [title, title],
       mode: 'analysis',
       status: row.status === 'seeded_from_idea' ? 'idle' : (row.status || 'idle'),
       stage: Number(row.stage || 0),
-      cohort: row.study_id || 'idea_seed',
-      source: [
-        `idea seed · ${pre.status || 'pre-experiment'} · ${pre.feature_count || 0} features`,
-        `idea 种子 · ${pre.status || '预实验'} · ${pre.feature_count || 0} 特征`,
-      ],
+      cohort: row.cohort || row.study_id || 'research_idea',
+      source: imported
+        ? [
+          `Fig 2 question · ${pre.status || 'imported'} · ${pre.feature_count || 0} evidence`,
+          `Fig 2 问题 · ${pre.status || '已导入'} · ${pre.feature_count || 0} 条证据`,
+        ]
+        : [
+          `research idea · ${pre.status || 'pre-experiment'} · ${pre.feature_count || 0} features`,
+          `研究想法 · ${pre.status || '预实验'} · ${pre.feature_count || 0} 特征`,
+        ],
       question: [q, q],
-      runs: (row.runs || []).map((r, i) => [
-        r.label || ('seed ' + String(i + 1).padStart(2, '0')),
-        [r.scope || 'metadata seed', r.scope || '元数据种子'],
+      runs: seedRuns.map((r, i) => [
+        r.label || ('package ' + String(i + 1).padStart(2, '0')),
+        [r.scope || 'review package', r.scope || '审阅包'],
         r.status || 'complete',
         '—',
         [r.created_at || 'local', r.created_at || '本地'],
       ]),
       signed: false,
       ideaSeed: row,
+      projectKind: imported ? 'canonical9' : 'idea',
+      seedRuns: seedRuns,
+      reviewProjectDir: reviewRun && reviewRun.project_dir,
+      benchmark: row.benchmark || null,
       sourceArticle: [source.title, source.journal, source.year].filter(Boolean).join(' · '),
     };
   }
@@ -340,7 +352,7 @@
       status: 'idle',
       stage: 0,
       cohort: '—',
-      source: [t('No local project seed', '无本地项目种子'), t('No local project seed', '无本地项目种子')],
+      source: [t('No local project', '无本地项目'), t('No local project', '无本地项目')],
       question: [
         t('Create a project from Idea Mining or start a local Agent run from an active export. Demo studies are hidden in Real mode.', '请从 Idea Mining 创建项目，或基于 active export 启动本地 Agent run。真实模式下不会显示演示研究。'),
         t('Create a project from Idea Mining or start a local Agent run from an active export. Demo studies are hidden in Real mode.', '请从 Idea Mining 创建项目，或基于 active export 启动本地 Agent run。真实模式下不会显示演示研究。'),
@@ -367,6 +379,11 @@
     return s && s.ideaSeed && s.ideaSeed.project_dir
       ? displayPath(s.ideaSeed.project_dir)
       : t('Created when this study is first run', '首次运行时创建');
+  }
+  function studyBadgeLabel(s) {
+    if (s && s.projectKind === 'canonical9') return t('Completed analysis', '已完成分析');
+    if (s && s.ideaSeed) return t('Research idea', '研究想法');
+    return t('Analysis', '分析');
   }
   function requestIdeaAgentProjects(force) {
     if (!window.EU_API || !window.EU_API.loadIdeaAgentProjects) return;
@@ -411,6 +428,232 @@
     const s = study();
     return window.EU_AGENT_LAST_RUN && window.EU_AGENT_LAST_RUN.study_id === s.id ? window.EU_AGENT_LAST_RUN : null;
   }
+  function importedRunForStudy(s) {
+    if (!s || !s.reviewProjectDir) return null;
+    const row = Array.isArray(s.seedRuns) ? s.seedRuns.find(r => r && r.project_dir === s.reviewProjectDir) : null;
+    const b = s.benchmark || {};
+    return {
+      run_id: (row && row.label) || b.task_id || s.id,
+      run_label: (row && row.label) || b.task_id || s.id,
+      study_id: s.id,
+      mode: s.mode || 'analysis',
+      run_type: 'canonical9_import',
+      project_dir: s.reviewProjectDir,
+      source: {},
+      summary: {},
+      gate: {
+        status: b.readiness_status || b.tristate || 'analysis_only',
+        reportable: false,
+        draft_unlocked: false,
+        checks: [],
+      },
+      artifacts: [],
+      imported: true,
+    };
+  }
+  function reviewableRunForStudy() {
+    const live = liveRunForStudy();
+    return live || importedRunForStudy(study());
+  }
+  function isImportedRun(live, s) {
+    return !!(live && (live.imported || live.run_type === 'canonical9_import' || (s && s.projectKind === 'canonical9')));
+  }
+  function runStatusLabel(status) {
+    const key = String(status || '').toLowerCase();
+    const labels = {
+      gate_reportable: t('verification passed', '核验通过'),
+      reportable: t('verification passed', '核验通过'),
+      analysis_only: t('analysis-only', '仅分析'),
+      diagnostic_only: t('diagnostic only', '诊断性'),
+      awaiting_human_signoff: t('awaiting review', '待审阅'),
+      blocked: t('blocked', '已阻断'),
+      imported: t('imported package', '已导入包'),
+    };
+    return labels[key] || status || t('analysis-only', '仅分析');
+  }
+  function readableArtifactText(value) {
+    return String(value || '')
+      .replace(/\bgate_reportable\b/g, runStatusLabel('gate_reportable'))
+      .replace(/\bawaiting_human_signoff\b/g, runStatusLabel('awaiting_human_signoff'))
+      .replace(/\banalysis_only\b/g, runStatusLabel('analysis_only'))
+      .replace(/\bdiagnostic_only\b/g, runStatusLabel('diagnostic_only'));
+  }
+  function questionText(s) {
+    if (!s || !s.question) return '';
+    return Array.isArray(s.question) ? t(s.question[0], s.question[1]) : String(s.question || '');
+  }
+  function questionParts(text) {
+    const raw = String(text || '').replace(/\r\n?/g, '\n').trim();
+    if (!raw) return { lead: '', context: [], requirements: [] };
+    const marked = raw
+      .replace(/[ \t]+/g, ' ')
+      .replace(/([.;:!?])\s+(\d{1,2})[.)、]\s+/g, (_, punct, n) => `${punct}\n${n}. `);
+    const lines = marked.split(/\n+/).map(line => line.trim()).filter(Boolean);
+    const intro = [];
+    const requirements = [];
+    let current = null;
+    lines.forEach(line => {
+      const match = line.match(/^(\d{1,2})[.)、]\s*(.+)$/);
+      if (match) {
+        if (current) requirements.push(current);
+        current = { n: match[1], text: match[2].trim() };
+        return;
+      }
+      if (current) {
+        current.text = `${current.text} ${line}`.trim();
+        return;
+      }
+      intro.push(line);
+    });
+    if (current) requirements.push(current);
+    return {
+      lead: intro.shift() || '',
+      context: intro,
+      requirements,
+    };
+  }
+  function questionTags(s, raw) {
+    const text = String(raw || '').toLowerCase();
+    const tags = [s && s.cohort ? s.cohort : 'analysis_cohort'];
+    if (s && s.id === 'crossdb' || /\bcross[- ]?db\b|multi[- ]database|eicu|aumc|hirid|amsterdamumc/i.test(text)) tags.push('cross_db');
+    else if (/first[- ]?24|24\s*h|24-hour|admission-window|admission window/i.test(text)) tags.push('first_24h');
+    else tags.push('analysis_window');
+    if (/sofa/i.test(text)) tags.push('sofa');
+    else if (/ventilat|mechanical vent/i.test(text)) tags.push('ventilation');
+    else if (/aki|kdigo/i.test(text)) tags.push('kdigo');
+    else if (/lactate/i.test(text)) tags.push('lactate');
+    else if (/sepsis|suspected infection/i.test(text)) tags.push('sepsis');
+    else tags.push('evidence_bound');
+    return tags;
+  }
+  function renderStructuredQuestion(s) {
+    const raw = questionText(s);
+    const parts = questionParts(raw);
+    const paragraphs = parts.context.map(p => `<p>${esc(p)}</p>`).join('');
+    const reqs = parts.requirements.map(row => `<li><span>${esc(row.text)}</span></li>`).join('');
+    const fallback = !parts.lead && !parts.context.length && !parts.requirements.length
+      ? `<div class="ag-q-lead">${esc(raw)}</div>`
+      : '';
+    return `
+      <div class="card pad ag-question-brief">
+        <div class="eyebrow">${t('Research question', '研究问题')}</div>
+        ${parts.lead ? `<section class="ag-q-section"><div class="ag-q-kicker">${t('Core question', '核心问题')}</div><div class="ag-q-lead">${esc(parts.lead)}</div></section>` : fallback}
+        ${paragraphs ? `<section class="ag-q-section"><div class="ag-q-kicker">${t('Data context', '数据上下文')}</div><div class="ag-q-copy">${paragraphs}</div></section>` : ''}
+        ${reqs ? `<section class="ag-q-section"><div class="ag-q-kicker">${t('Analysis requirements', '任务要求')}</div><ol class="ag-req-list">${reqs}</ol></section>` : ''}
+        <div class="row wrap gap-6 mt-12">
+          ${questionTags(s, raw).map(tag => `<span class="chip">@${esc(tag)}</span>`).join('')}
+        </div>
+      </div>`;
+  }
+  function reviewPayload(live, name) {
+    const review = currentLiveReview(live);
+    const payloads = review && review.artifact_payloads ? review.artifact_payloads : {};
+    return payloads[name] || null;
+  }
+  function firstValue() {
+    for (let i = 0; i < arguments.length; i += 1) {
+      const value = arguments[i];
+      if (value !== null && value !== undefined && value !== '') return value;
+    }
+    return null;
+  }
+  function fmtCount(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toLocaleString() : '—';
+  }
+  function evidenceLinkPanel(live, s) {
+    if (!live && !(s && s.benchmark)) return '';
+    const b = (s && s.benchmark) || {};
+    const ledger = reviewPayload(live, 'evidence_ledger.json') || {};
+    const source = reviewPayload(live, 'source_run_manifest.json') || {};
+    const gatePayload = reviewPayload(live, 'quality_gate.json') || {};
+    const draft = reviewPayload(live, 'manuscript_draft.json') || {};
+    const artifacts = Array.isArray(ledger.artifacts) ? ledger.artifacts : artifactsForLive(live);
+    const checks = gatePayload.gate && Array.isArray(gatePayload.gate.checks) ? gatePayload.gate.checks : (live && live.gate && Array.isArray(live.gate.checks) ? live.gate.checks : []);
+    const evidenceCheck = checks.find(c => c && c.id === 'evidence_binding') || {};
+    const readiness = source.readiness || {};
+    const strictAudit = ledger.strict_evidence_audit || {};
+    const privacy = ledger.privacy || source.privacy || {};
+    const evidenceCount = firstValue(b.evidence_count, source.evidence_count, evidenceCheck.evidence_count, strictAudit.evidence_count);
+    const missingEvidence = firstValue(b.missing_evidence, readiness.missing_evidence_count, evidenceCheck.missing_evidence, strictAudit.missing_evidence_count, 0);
+    const claimCount = Array.isArray(draft.claims) ? draft.claims.length : (Array.isArray(draft.sentences) ? draft.sentences.length : 0);
+    const hashCount = artifacts.filter(a => a && a.sha256).length;
+    const privacyClean = privacy.patient_rows_returned === false || privacy.direct_identifiers_returned === false;
+    const linked = Number(missingEvidence || 0) === 0;
+    return `
+      <div class="ag-cap-card evidence">
+        <div class="ag-cap-head">
+          <div>
+            <div class="eyebrow">${t('Evidence Link', '证据链接')}</div>
+            <div class="ag-cap-title">${t('Claim-to-artifact trace is explicit', '论断到产物的追踪是显式的')}</div>
+          </div>
+          <span class="pill ${linked ? 'ok' : 'warn'}" style="height:22px;"><span class="dot"></span>${linked ? t('linked', '已绑定') : t('needs review', '需审阅')}</span>
+        </div>
+        <div class="ag-link-chain" aria-label="${esc(t('Claim to evidence chain', '论断到证据链'))}">
+          <span>${t('Claim', '论断')}</span>
+          <span>${t('Evidence ID', '证据 ID')}</span>
+          <span>${t('SHA-256', 'SHA-256')}</span>
+          <span>${t('Gate', '核验')}</span>
+        </div>
+        <div class="ag-cap-text">${t('Each visible claim can be traced to local artifacts, evidence IDs, hashes, and the quality gate. This is the part to emphasize as the trust layer of the Agent module.', '每条可见论断都能追到本地产物、证据 ID、哈希和质量核验。这就是 Agent 模块的可信层，汇报时应该重点讲。')}</div>
+        <div class="ag-cap-metrics">
+          <div><span>${t('Evidence items', '证据项')}</span><strong>${fmtCount(evidenceCount)}</strong></div>
+          <div><span>${t('Hashed artifacts', '哈希产物')}</span><strong>${fmtCount(hashCount)}</strong></div>
+          <div><span>${t('Locked claims', '锁定论断')}</span><strong>${fmtCount(claimCount)}</strong></div>
+          <div><span>${t('Missing evidence', '缺失证据')}</span><strong>${fmtCount(missingEvidence)}</strong></div>
+        </div>
+        <div class="ag-cap-actions">
+          <button class="btn sm primary" data-ag-artifact-jump="evidence_ledger.json">${icon('shield', 12)} ${t('Open evidence ledger', '打开证据账本')}</button>
+          <button class="btn sm" data-ag-artifact-jump="source_run_manifest.json">${icon('history', 12)} ${t('Open provenance', '打开溯源')}</button>
+          <span class="ag-cap-note">${privacyClean ? t('No patient rows persisted in review artifacts.', '审阅产物不持久化患者行。') : t('Privacy scan is shown in the ledger.', '隐私扫描见证据账本。')}</span>
+        </div>
+      </div>`;
+  }
+  function crossDataPanel(live, s) {
+    if (!s || s.empty) return '';
+    const context = reviewPayload(live, 'run_context.json') || {};
+    const cohort = reviewPayload(live, 'cohort_summary.json') || {};
+    const score = reviewPayload(live, 'benchmark_scorecard.json') || {};
+    const questionText = [context.question, s.question && s.question[0], s.cohort, s.sourceArticle].filter(Boolean).join(' ');
+    const explicitScope = firstValue(s.ideaSeed && s.ideaSeed.cohort, context.source && context.source.database, score.database_scope);
+    const inferredScope = /mimic-iv/i.test(questionText) ? 'MIMIC-IV canonical benchmark universe' : (s.id === 'crossdb' ? 'Cross-DB comparison workspace' : explicitScope || t('Active export scope', '当前导出范围'));
+    const cohortSize = firstValue(score.cohort_size, context.summary && context.summary.stays, cohort.summary && cohort.summary.stays, cohort.cohort && cohort.cohort.entities, s.benchmark && s.benchmark.cohort_size);
+    const modules = firstValue(context.summary && context.summary.modules, cohort.summary && cohort.summary.modules);
+    let crossCount = null;
+    try {
+      crossCount = window.EU_SOURCES && window.EU_SOURCES.crossdbPaths ? window.EU_SOURCES.crossdbPaths().length : null;
+    } catch (_) {
+      crossCount = null;
+    }
+    const isCross = /cross|multi|six|database/i.test(String(inferredScope || '')) && !/mimic-iv canonical/i.test(String(inferredScope || ''));
+    return `
+      <div class="ag-cap-card cross">
+        <div class="ag-cap-head">
+          <div>
+            <div class="eyebrow">${t('Cross-data scope', '跨数据范围')}</div>
+            <div class="ag-cap-title">${isCross ? t('Multi-database analysis context', '多数据库分析上下文') : t('Data scope is declared before claims', '下结论前先声明数据范围')}</div>
+          </div>
+          <span class="pill ${isCross ? 'ok' : 'info'}" style="height:22px;"><span class="dot"></span>${isCross ? t('cross-db', '跨库') : t('scoped', '已限定')}</span>
+        </div>
+        <div class="ag-cap-text">${t('The Agent module should show which data context a run consumed. Cross-DB comparisons are prepared in the Cross-DB workspace, then passed into the same evidence-bound Agent review path.', 'Agent 模块应该显示一次运行消费了哪个数据上下文。跨库比较先在 Cross-DB 工作台准备，再进入同一套证据绑定 Agent 审阅路径。')}</div>
+        <div class="ag-cap-metrics">
+          <div><span>${t('Current scope', '当前范围')}</span><strong>${esc(inferredScope)}</strong></div>
+          <div><span>${t('Denominator', '分母')}</span><strong>${fmtCount(cohortSize)}</strong></div>
+          <div><span>${t('Modules', '模块')}</span><strong>${modules == null ? '—' : fmtCount(modules)}</strong></div>
+          <div><span>${t('Cross-DB exports', '跨库导出')}</span><strong>${crossCount == null ? '—' : fmtCount(crossCount)}</strong></div>
+        </div>
+        <div class="ag-cap-actions">
+          <button class="btn sm" data-nav="crossdb">${icon('benchmark', 12)} ${t('Open Cross-DB workspace', '打开跨库工作台')}</button>
+          <span class="ag-cap-note">${isCross ? t('This project is already using a multi-database context.', '这个项目已经使用多数据库上下文。') : t('Current canonical9 package is scoped; use Cross-DB for six-database comparison.', '当前 canonical9 包是限定范围；六库比较请进入 Cross-DB。')}</span>
+        </div>
+      </div>`;
+  }
+  function capabilityHighlights(live, s) {
+    const evidence = evidenceLinkPanel(live, s);
+    const cross = crossDataPanel(live, s);
+    if (!evidence && !cross) return '';
+    return `<div class="ag-cap-grid">${evidence}${cross}</div>`;
+  }
   function artifactsForLive(live) {
     if (!live) return [];
     const review = currentLiveReview(live);
@@ -420,10 +663,16 @@
   function outputCountForStudy() {
     const live = liveRunForStudy();
     if (live) return artifactsForLive(live).length;
+    const s = study();
+    const imported = s.seedRuns && s.seedRuns.find(r => r && r.project_dir && r.artifact_count != null);
+    if (imported) return Number(imported.artifact_count || 0);
     return 0;
   }
   function artifactKind(name) {
     const n = String(name || '').toLowerCase();
+    if (n.includes('figure')) return 'figure';
+    if (n.includes('scorecard')) return 'score';
+    if (n.includes('workflow')) return 'workflow';
     if (n.includes('cohort')) return 'num';
     if (n.includes('ledger') || n.includes('gate') || n.includes('plan') || n.includes('draft')) return 'table';
     if (n.includes('missing')) return 'heat';
@@ -444,10 +693,68 @@
       'evidence_ledger.json': t('Evidence ledger', '证据账本'),
       'agent_plan.json': t('Agent plan', 'Agent 计划'),
       'manuscript_draft.json': t('Locked manuscript draft', '锁定论文草稿'),
+      'benchmark_scorecard.json': t('Benchmark scorecard', 'Benchmark 记分卡'),
+      'workflow_graph.json': t('Workflow graph', '工作流图谱'),
+      'figure_gallery.json': t('Figure gallery', '图件画廊'),
+      'source_run_manifest.json': t('Source run manifest', '原始运行清单'),
       'human_signoff.json': t('Human sign-off', '人工签署'),
     };
     if (labels[n]) return labels[n];
     return n.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  }
+  function artifactCategory(name) {
+    const n = String(name || '').toLowerCase();
+    if (n === 'figure_gallery.json') return t('Figures', '图件');
+    if (n.includes('scorecard')) return t('Scorecard', '记分卡');
+    if (n.includes('workflow')) return t('Workflow', '流程');
+    if (n.includes('ledger')) return t('Evidence', '证据');
+    if (n.includes('gate')) return t('Quality check', '质量核验');
+    if (n.includes('plan')) return t('Plan', '计划');
+    if (n.includes('draft')) return t('Claims', '论断');
+    if (n.includes('cohort')) return t('Cohort', '队列');
+    if (n.includes('context')) return t('Context', '上下文');
+    if (n.includes('manifest')) return t('Provenance', '溯源');
+    return t('Artifact', '产物');
+  }
+  function artifactSummary(name) {
+    const n = String(name || '').toLowerCase();
+    const labels = {
+      'figure_gallery.json': t('Task-specific figures rendered from this completed run.', '这道问题已渲染出的任务特异图件。'),
+      'benchmark_scorecard.json': t('Plan, code, evidence binding, and safety scores for the question.', '这道问题的计划、代码、证据绑定与安全评分。'),
+      'workflow_graph.json': t('Agent steps and handoffs from question to evidence review.', '从研究问题到证据审阅的 Agent 步骤与交接。'),
+      'evidence_ledger.json': t('Artifact hashes, evidence ids, and privacy-audit status.', '产物哈希、证据 ID 与隐私审计状态。'),
+      'quality_gate.json': t('Automated checks explaining why the run remains analysis-only.', '自动核验结果，说明为何仍保持 analysis-only。'),
+      'agent_plan.json': t('The step-by-step analysis plan used by the Agent.', 'Agent 执行时使用的分步分析计划。'),
+      'manuscript_draft.json': t('Locked claims and evidence ids; not a reportable manuscript.', '锁定论断及其证据 ID；不是可报告论文草稿。'),
+      'run_context.json': t('Question, cohort, source run, and local project metadata.', '研究问题、队列、原始运行与本地项目元数据。'),
+      'cohort_summary.json': t('Denominator, cohort basis, and outcome availability.', '分母、队列依据与结局可用性。'),
+      'source_run_manifest.json': t('Original completed run provenance and import manifest.', '原始完成运行的溯源与导入清单。'),
+    };
+    return labels[n] || t('Whitelisted local artifact opened from the run folder.', '从运行文件夹读取的白名单本地产物。');
+  }
+  function artifactRank(name) {
+    const order = [
+      'figure_gallery.json',
+      'benchmark_scorecard.json',
+      'workflow_graph.json',
+      'quality_gate.json',
+      'evidence_ledger.json',
+      'agent_plan.json',
+      'manuscript_draft.json',
+      'run_context.json',
+      'cohort_summary.json',
+      'source_run_manifest.json',
+    ];
+    const idx = order.indexOf(String(name || ''));
+    return idx === -1 ? order.length : idx;
+  }
+  function defaultArtifactName(artifacts) {
+    const rows = Array.isArray(artifacts) ? artifacts : [];
+    const names = rows.map(a => a && (a.name || a.relative_path || '')).filter(Boolean);
+    return names.find(n => n === 'figure_gallery.json')
+      || names.find(n => n === 'benchmark_scorecard.json')
+      || names[0]
+      || null;
   }
   function requestLiveReview(live) {
     if (!live || !live.project_dir || !window.EU_API || !window.EU_API.loadAgentRunReview) return;
@@ -456,6 +763,11 @@
     window.EU_API.loadAgentRunReview(live.project_dir).then(data => {
       agReview = { projectDir: live.project_dir, loading: false, error: null, data: data, signing: false };
       window.EU_AGENT_RUN_REVIEW = data;
+      const firstArtifact = defaultArtifactName(data && data.artifacts);
+      if (agTab === 'outputs' && firstArtifact && (!agArtifact.name || agArtifact.projectDir !== live.project_dir)) {
+        requestArtifact(live, firstArtifact);
+        return;
+      }
       repaintBody();
     }).catch(err => {
       agReview = { projectDir: live.project_dir, loading: false, error: err.message || String(err), data: null, signing: false };
@@ -512,17 +824,18 @@
       tokens: 0,
     };
   }
-  function openReview(review) {
+  function openReview(review, targetTab) {
     if (!review || !review.ok) return;
     window.EU_AGENT_LAST_RUN = liveRunFromReview(review);
     window.EU_AGENT_RUN_REVIEW = review;
     agReview = { projectDir: review.project_dir, loading: false, error: null, data: review, signing: false };
     agArtifact = { projectDir: null, name: null, loading: false, error: null, data: null };
-    agTab = 'draft';
+    agTab = targetTab || 'draft';
   }
   function requestArtifact(live, name) {
     if (!live || !live.project_dir || !name || !window.EU_API || !window.EU_API.loadAgentRunArtifact) return;
     agArtifact = { projectDir: live.project_dir, name: name, loading: true, error: null, data: null };
+    repaintBody();
     window.EU_API.loadAgentRunArtifact(live.project_dir, name).then(data => {
       agArtifact = { projectDir: live.project_dir, name: name, loading: false, error: null, data: data };
       repaintBody();
@@ -649,12 +962,19 @@
   }
 
   /* ---------------- pipeline ---------------- */
-  function pipeStages(mode) {
+  function pipeStages(mode, projectKind) {
     if (mode === 'idea') return [
       ['Frame', '想法框定', t('source + exposure/outcome', '来源 + 暴露/结局'), 'spark'],
       ['Recipe', '数据配方', t('data recipe', '数据配方'), 'layers'],
       ['Dry-run', '试运行', t('feasibility · no claims', '可行性 · 不下结论'), 'play'],
       ['Recommend', '建议', t('suggested workflow', '建议的研究流程'), 'target'],
+    ];
+    if (projectKind === 'canonical9') return [
+      ['Question', '问题', t('clinical benchmark task', '临床 benchmark 问题'), 'play'],
+      ['Build', '构建', t('cohort + variables', '队列 + 变量'), 'layers'],
+      ['Analyze', '分析', t('figures + checks', '图件 + 校验'), 'viz'],
+      ['Evidence check', '证据核验', t('claims tied to artifacts', '论断绑定产物'), 'shield'],
+      ['Review', '审阅', t('read-only package', '只读审阅包'), 'file'],
     ];
     return [
       ['Plan', '计划', t('question → recipe', '问题 → 配方'), 'play'],
@@ -666,7 +986,7 @@
   }
   function pipeline() {
     const s = study();
-    const stages = pipeStages(s.mode);
+    const stages = pipeStages(s.mode, s.projectKind);
     const now = s.signed ? stages.length - 1 : s.stage;
     let html = '';
     stages.forEach((st, i) => {
@@ -691,12 +1011,12 @@
         <button class="ag-newbtn" data-ag-new>${icon('plus', 13)} ${t('New', '新建')}</button>
       </div>
       <div class="ag-studies">
-        ${agIdeaProjects.loading ? `<div class="empty-mini" style="margin:10px;min-height:80px;">${t('Loading idea project seeds…', '正在加载 idea 项目种子…')}</div>` : ''}
-        ${agIdeaProjects.error ? `<div class="note warn" style="margin:10px;"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Idea project seeds unavailable', 'Idea 项目种子不可用')}</div><div class="d">${esc(agIdeaProjects.error)}</div></div></div>` : ''}
+        ${agIdeaProjects.loading ? `<div class="empty-mini" style="margin:10px;min-height:80px;">${t('Loading local research projects…', '正在加载本地研究项目…')}</div>` : ''}
+        ${agIdeaProjects.error ? `<div class="note warn" style="margin:10px;"><div class="ico">${icon('alert', 13)}</div><div class="body"><div class="t">${t('Local research projects unavailable', '本地研究项目不可用')}</div><div class="d">${esc(agIdeaProjects.error)}</div></div></div>` : ''}
         ${!studies.length && !agIdeaProjects.loading ? `<div class="empty-mini ideas-empty-list" style="margin:10px;min-height:210px;">
           <div>${icon('folder', 22)}</div>
           <h3>${t('No local projects yet', '还没有本地项目')}</h3>
-          <p>${t('Real mode only lists project seeds and runs written on this machine. Create one from Idea Mining, then refresh.', '真实模式只列出写在本机的 project seed 和 run。从 Idea Mining 创建后再刷新。')}</p>
+          <p>${t('Real mode only lists Agent projects and completed runs written on this machine. Create one from Idea Mining, then refresh.', '真实模式只列出写在本机的 Agent 项目和已完成运行。从 Idea Mining 创建后再刷新。')}</p>
           <div class="row gap-8 mt-12" style="justify-content:center;">
             <button class="btn primary sm" data-nav="ideas">${icon('target', 12)} ${t('Open Idea Mining', '打开 Idea Mining')}</button>
             <button class="btn sm" data-ag-refresh-projects>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
@@ -710,7 +1030,7 @@
             <div class="sc-top">
               <span class="sc-dot ${dotCls[s.status] || 'idle'}"></span>
               <span class="sc-name">${t(s.name[0], s.name[1])}</span>
-              <span class="sc-mode analysis">${s.ideaSeed ? t('Idea seed', '想法种子') : t('Analysis', '分析')}</span>
+              <span class="sc-mode analysis">${studyBadgeLabel(s)}</span>
             </div>
             <div class="sc-meta"><span class="sc-folder">${icon('folder', 11)} ${folder}</span></div>
             <div class="sc-meta" style="margin-top:3px;">${s.runs.length ? `${s.runs[0][0]}<span class="mid"></span>${s.runs[0][4][zh ? 1 : 0]}` : t('not run yet', '尚未运行')}</div>
@@ -723,17 +1043,19 @@
   /* ---------------- detail header ---------------- */
   function detailHead() {
     const s = study();
-    const live = liveRunForStudy();
+    const live = reviewableRunForStudy();
     const review = currentLiveReview(live);
     const liveSigned = !!(review && review.signed);
+    const statusKey = s.projectKind === 'canonical9' ? 'imported' : (liveSigned ? 'reviewed' : (s.signed ? 'ready' : s.status));
     const statusPill = {
+      imported: `<span class="pill info"><span class="dot"></span>${t('Read-only review', '只读审阅')}</span>`,
       ready: `<span class="pill ok"><span class="dot"></span>${t('Ready to run', '可运行')}</span>`,
       reviewed: `<span class="pill ok"><span class="dot"></span>${t('Signed analysis-only', '已签署 analysis-only')}</span>`,
       gate: `<span class="pill warn"><span class="dot"></span>${t('Awaiting sign-off', '待签署')}</span>`,
       running: `<span class="pill warn"><span class="dot"></span>${t('Running', '运行中')}</span>`,
       draft: `<span class="pill demo"><span class="dot"></span>${t('Exploring', '探索中')}</span>`,
       idle: `<span class="pill"><span class="dot"></span>${t('Not run yet', '尚未运行')}</span>`,
-    }[liveSigned ? 'reviewed' : (s.signed ? 'ready' : s.status)] || '';
+    }[statusKey] || '';
     return `
     <div class="ag-dhead">
       <div class="ag-dtop">
@@ -750,7 +1072,7 @@
         </div>
         <div class="row gap-8">
           <button class="btn sm" data-ag-tab="workflow">${icon('layers', 13)} ${t('Workflow Blocks', '工作流块')}</button>
-          <button class="btn sm" data-nav="ideas">${icon('target', 13)} ${t('Open Idea Mining', '打开 Idea 挖掘')}</button>
+          ${s.projectKind === 'canonical9' ? '' : `<button class="btn sm" data-nav="ideas">${icon('target', 13)} ${t('Open Idea Mining', '打开 Idea 挖掘')}</button>`}
           <span class="pill ok"><span class="dot"></span>${t('Analysis workspace', '分析运行工作台')}</span>
         </div>
       </div>
@@ -775,7 +1097,7 @@
       ['workflow', t('Workflow Blocks', '工作流块'), workflowBlocks(s).length],
       ['runs', t('Runs', '运行历史'), s.runs.length],
       ['outputs', t('Outputs', '产出'), outputCountForStudy()],
-      ['draft', t('Draft', '草稿'), null],
+      ['draft', s.projectKind === 'canonical9' ? t('Review', '审阅') : t('Draft', '草稿'), null],
     ];
   }
   function tabsRow() {
@@ -934,6 +1256,16 @@
         <button class="btn primary" data-ag-runbtn>${icon('play', 13)} ${t('Run dry-run', '运行试运行')}</button>
       </div>`;
     }
+    if (s.reviewProjectDir) {
+      const b = s.benchmark || {};
+      const status = b.tristate || b.readiness_status || 'imported';
+      return `
+      <div class="nextbar gate">
+        <div class="nb-ico">${icon('history', 16)}</div>
+        <div class="grow"><div class="nb-t">${t('Completed analysis package is ready to review', '已完成分析包可审阅')}</div><div class="nb-d">${esc(runStatusLabel(status))} · ${Number(b.evidence_count || 0).toLocaleString()} ${t('evidence artifacts', '条证据产物')} · <span class="mono">${esc(displayPath(s.reviewProjectDir))}</span></div></div>
+        <button class="btn primary" data-ag-open-seed-run="${esc(s.reviewProjectDir)}">${icon('eye', 13)} ${t('Open results', '查看结果')}</button>
+      </div>`;
+    }
     if (s.signed) {
       return `
       <div class="nextbar">
@@ -976,7 +1308,10 @@
     const s = study();
     const src = activeExportSource();
     const sum = (src && src.summary) || {};
-    const stats = src
+    const b = s.benchmark || null;
+    const stats = b
+      ? [['Cohort', '队列', b.cohort_size == null ? '—' : Number(b.cohort_size).toLocaleString()], ['Evidence', '证据', b.evidence_count == null ? '—' : Number(b.evidence_count).toLocaleString()], ['Warnings', '警告', b.warnings == null ? '—' : String(b.warnings)], ['Status', '状态', runStatusLabel(b.tristate || b.readiness_status || 'analysis_only')]]
+      : src
       ? [['Stays', '住院数', sum.stays == null ? '—' : Number(sum.stays).toLocaleString()], ['Modules', '模块', sum.modules == null ? '—' : String(sum.modules)], ['Rows', '行数', sum.total_rows == null ? '—' : Number(sum.total_rows).toLocaleString()], ['Evidence check', '证据核验', 'strict']]
       : s.id === 'crossdb'
       ? [['Databases', '数据库', '3'], ['Shared concepts', '共享概念', '6'], ['Mortality', '死亡率', '20.0%'], ['Concordance', '一致性', 'high']]
@@ -990,7 +1325,7 @@
       <div class="eyebrow" style="margin:14px 0 8px;">${src ? t('Linked export source', '关联导出源') : t('Linked cohort', '关联队列')}</div>
       <div style="font-weight:600;font-size:13px;">${s.cohort}</div>
       <div class="mono" style="font-size:11px;color:var(--ink-4);margin-top:2px;">${linkedPath || linked}</div>
-      ${s.ideaSeed ? `<div class="note ok mt-12"><div class="ico">${icon('target', 13)}</div><div class="body"><div class="t">${t('Seeded from Idea Mining', '来自 Idea Mining 种子')}</div><div class="d">${esc(s.sourceArticle || '')}</div></div></div>` : ''}
+      ${s.projectKind === 'canonical9' ? `<div class="note ok mt-12"><div class="ico">${icon('shield', 13)}</div><div class="body"><div class="t">${t('Imported completed analysis', '已导入完成分析')}</div><div class="d">${esc(s.sourceArticle || t('Figure 2 benchmark question package', 'Figure 2 基准问题审阅包'))}</div></div></div>` : (s.ideaSeed ? `<div class="note ok mt-12"><div class="ico">${icon('target', 13)}</div><div class="body"><div class="t">${t('Created from Idea Mining', '来自 Idea Mining 的研究想法')}</div><div class="d">${esc(s.sourceArticle || '')}</div></div></div>` : '')}
       <div class="cols-2 mt-12" style="gap:8px;">
         ${stats.map(([en, zh, v]) => `
           <div style="padding:8px 10px;background:var(--surface-2);border-radius:var(--r-2);">
@@ -1002,6 +1337,63 @@
     </div>`;
   }
 
+  function benchmarkPanel(s) {
+    const b = s && s.benchmark;
+    if (!b) return '';
+    const dims = Array.isArray(b.dimensions) ? b.dimensions : [];
+    return `
+      <div class="card pad ag-bench-card">
+        <div class="row" style="justify-content:space-between;align-items:flex-start;gap:12px;">
+          <div>
+            <div class="eyebrow">${t('Figure 2 question package', 'Figure 2 问题包')}</div>
+            <div class="panel-title" style="font-size:15px;margin-top:4px;">${esc(b.task_id || s.id)} · ${esc(runStatusLabel(b.tristate || b.readiness_status || 'analysis_only'))}</div>
+            <div class="panel-sub">${t('Imported from the completed EasyICU aware workflow. The run stays read-only and analysis-only until the Fig 2 freeze decision.', '来自已完成的 EasyICU aware workflow。该运行保持只读和 analysis-only，直到 Fig 2 冻结策略拍板。')}</div>
+          </div>
+          <button class="btn sm primary" data-ag-open-seed-run="${esc(s.reviewProjectDir || '')}">${icon('eye', 12)} ${t('Open results', '查看结果')}</button>
+        </div>
+        <div class="ag-bench-metrics mt-12">
+          ${[
+            ['cohort', t('Cohort', '队列'), b.cohort_size == null ? '—' : Number(b.cohort_size).toLocaleString()],
+            ['evidence', t('Evidence', '证据'), b.evidence_count == null ? '—' : Number(b.evidence_count).toLocaleString()],
+            ['missing', t('Missing evidence', '缺失证据'), b.missing_evidence == null ? '—' : String(b.missing_evidence)],
+            ['errors', t('Errors', '错误'), b.errors == null ? '—' : String(b.errors)],
+          ].map(([key, label, value]) => `<div class="ag-bench-metric ${key}"><span>${label}</span><strong>${esc(value)}</strong></div>`).join('')}
+        </div>
+        <div class="ag-score-grid mt-12">
+          ${dims.map(row => {
+            const score = row.subscore == null ? null : Number(row.subscore);
+            const width = score == null || Number.isNaN(score) ? 0 : Math.max(0, Math.min(100, score * 100));
+            const level = row.level || (score == null ? 'Unscored' : score >= 0.8 ? 'Full' : score >= 0.5 ? 'Partial' : 'Fail');
+            return `<div class="ag-score-row">
+              <div class="ag-score-top"><span>${esc(row.label || row.id)}</span><span class="mono">${score == null || Number.isNaN(score) ? '—' : score.toFixed(2)} · ${esc(level)}</span></div>
+              <div class="ag-score-bar"><span style="width:${width}%"></span></div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+  }
+
+  function presentationSummary(s) {
+    if (!s || s.projectKind !== 'canonical9') return '';
+    const b = s.benchmark || {};
+    const artifactCount = outputCountForStudy();
+    const status = runStatusLabel(b.tristate || b.readiness_status || 'analysis_only');
+    return `
+      <div class="ag-present-brief">
+        <div class="ag-present-main">
+          <div class="eyebrow">${t('Study brief', '汇报摘要')}</div>
+          <div class="ag-present-title">${t(s.name[0], s.name[1])}</div>
+          <div class="ag-present-text">${t('A completed evidence-bound Agent analysis for Figure 2. One clinical question is organized into a plan, figures, scores, and an auditable evidence ledger.', '这是 Figure 2 的一个已完成证据绑定 Agent 分析。一个临床问题在这里被组织为计划、图件、评分和可审计证据账本。')}</div>
+        </div>
+        <div class="ag-present-grid">
+          <div><span>${t('Status', '状态')}</span><strong>${esc(status)}</strong></div>
+          <div><span>${t('Evidence', '证据')}</span><strong>${b.evidence_count == null ? '—' : Number(b.evidence_count).toLocaleString()}</strong></div>
+          <div><span>${t('Outputs', '产出')}</span><strong>${artifactCount || 0}</strong></div>
+          <div><span>${t('Boundary', '边界')}</span><strong>${t('read-only', '只读审阅')}</strong></div>
+        </div>
+      </div>`;
+  }
+
   function tabOverview() {
     const s = study();
     if (s.empty) {
@@ -1009,13 +1401,15 @@
       <div class="state-hero empty-state" style="min-height:360px;">
         <div class="glyph">${icon('folder', 28)}</div>
         <div class="st-t">${t('No local Agent project selected', '尚未选择本地 Agent 项目')}</div>
-        <div class="st-d">${t('Agent Projects no longer shows fabricated studies in Real mode. Create a project seed from Idea Mining, or switch to Demo to inspect examples.', '真实模式下 Agent Projects 不再显示编造研究。请从 Idea Mining 创建 project seed，或切到 Demo 查看示例。')}</div>
+        <div class="st-d">${t('Agent Projects no longer shows fabricated studies in Real mode. Create a research project from Idea Mining, or switch to Demo to inspect examples.', '真实模式下 Agent Projects 不再显示编造研究。请从 Idea Mining 创建研究项目，或切到 Demo 查看示例。')}</div>
         <div class="st-actions">
           <button class="btn primary" data-nav="ideas">${icon('target', 14)} ${t('Create from Idea Mining', '从 Idea Mining 创建')}</button>
           <button class="btn" data-ag-refresh-projects>${icon('refresh', 13)} ${t('Refresh local projects', '刷新本地项目')}</button>
         </div>
       </div>`;
     }
+    const live = reviewableRunForStudy();
+    if (live) requestLiveReview(live);
     const staleBanner = (window.EU_STALE && !agRun.active) ? `
       <div class="stale-banner">
         <span class="sb-ico">${icon('refresh', 16)}</span>
@@ -1024,19 +1418,14 @@
       </div>` : '';
     return `
       ${staleBanner}
+      ${renderStructuredQuestion(s)}
+      ${presentationSummary(s)}
+      ${capabilityHighlights(live, s)}
       ${nextBar()}
-      ${s.mode === 'idea' ? `<div class="idea-band mt-16"><span class="ico">${icon('spark', 16)}</span><div><div style="font-weight:600;font-size:13px;">${t('Legacy feasibility seed', '旧可行性种子')}</div><div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${t('New discovery work starts in Idea Mining. Agent Projects only executes confirmed analysis runs.', '新的发现流程从 Idea 挖掘开始。研究项目只执行已确认的分析运行。')}</div></div></div>` : ''}
+      ${s.mode === 'idea' ? `<div class="idea-band mt-16"><span class="ico">${icon('spark', 16)}</span><div><div style="font-weight:600;font-size:13px;">${t('Legacy feasibility idea', '旧可行性想法')}</div><div style="font-size:12px;color:var(--ink-3);margin-top:2px;">${t('New discovery work starts in Idea Mining. Agent Projects only executes confirmed analysis runs.', '新的发现流程从 Idea 挖掘开始。研究项目只执行已确认的分析运行。')}</div></div></div>` : ''}
       <div class="split-320 mt-16" style="grid-template-columns:1fr 300px;">
         <div class="col gap-16">
-          <div class="card pad">
-            <div class="eyebrow">${t('Research question', '研究问题')}</div>
-            <div class="qbox mt-12" style="font-size:13.5px;line-height:1.5;">${t(s.question[0], s.question[1])}</div>
-            <div class="row wrap gap-6 mt-12">
-              <span class="chip">@${s.cohort}</span>
-              ${s.id === 'crossdb' ? '<span class="chip">@cross_db</span>' : '<span class="chip">@first_24h</span>'}
-              <span class="chip">@${s.id === 'aki' ? 'kdigo' : 'lactate'}</span>
-            </div>
-          </div>
+          ${benchmarkPanel(s)}
           ${planList()}
           ${providerRunPanel()}
         </div>
@@ -1228,10 +1617,36 @@
   function thumb(kind) {
     if (kind === 'num') return `<div class="mono" style="font-size:30px;font-weight:500;color:var(--ink);">10</div>`;
     if (kind === 'file') return `<div style="color:var(--ink-3);">${icon('file', 34, 1.8)}</div>`;
+    if (kind === 'figure') return `<div style="color:var(--accent);">${icon('viz', 34, 1.8)}</div>`;
+    if (kind === 'score') return `<svg width="120" height="64" viewBox="0 0 120 64">${[0, 1, 2, 3, 4].map((r) => `<text x="14" y="${14 + r * 10}" font-size="7" fill="var(--ink-4)">D${r + 1}</text><rect x="34" y="${8 + r * 10}" width="62" height="5" fill="var(--hair-2)" rx="2"/><rect x="34" y="${8 + r * 10}" width="${38 + (r % 2) * 18}" height="5" fill="var(--ok)" opacity=".75" rx="2"/>`).join('')}</svg>`;
+    if (kind === 'workflow') return `<svg width="120" height="64" viewBox="0 0 120 64"><circle cx="22" cy="32" r="7" fill="var(--accent)" opacity=".75"/><circle cx="60" cy="18" r="7" fill="var(--ok)" opacity=".75"/><circle cx="60" cy="46" r="7" fill="var(--warn)" opacity=".75"/><circle cx="98" cy="32" r="7" fill="var(--ink-3)" opacity=".55"/><path d="M29 31 L52 20 M29 33 L52 44 M68 20 L91 31 M68 44 L91 33" stroke="var(--hair-3)" fill="none"/></svg>`;
     if (kind === 'table') return `<svg width="120" height="64" viewBox="0 0 120 64">${[0, 1, 2, 3, 4].map(r => `<rect x="12" y="${8 + r * 11}" width="38" height="5" fill="${r === 0 ? 'var(--ink-3)' : 'var(--hair-3)'}" rx="1"/><rect x="56" y="${8 + r * 11}" width="22" height="5" fill="var(--hair-2)" rx="1"/><rect x="84" y="${8 + r * 11}" width="22" height="5" fill="var(--hair-2)" rx="1"/>`).join('')}</svg>`;
     if (kind === 'roc') return `<svg width="120" height="64" viewBox="0 0 120 64"><line x1="14" y1="54" x2="106" y2="8" stroke="var(--hair-2)" stroke-dasharray="2 3"/><line x1="14" y1="54" x2="14" y2="8" stroke="var(--hair-3)"/><line x1="14" y1="54" x2="106" y2="54" stroke="var(--hair-3)"/><path d="M14 54 Q 30 24 60 16 Q 90 11 106 9" stroke="var(--accent)" stroke-width="1.8" fill="none"/></svg>`;
     if (kind === 'calib') return `<svg width="120" height="64" viewBox="0 0 120 64"><line x1="14" y1="54" x2="106" y2="8" stroke="var(--hair-2)" stroke-dasharray="2 3"/><line x1="14" y1="54" x2="14" y2="8" stroke="var(--hair-3)"/><line x1="14" y1="54" x2="106" y2="54" stroke="var(--hair-3)"/><path d="M14 52 Q 40 40 62 30 Q 86 18 104 10" stroke="var(--ok)" stroke-width="1.8" fill="none"/></svg>`;
     return `<svg width="120" height="64" viewBox="0 0 120 64">${Array.from({ length: 6 }, (_, r) => Array.from({ length: 11 }, (_, c) => { const m = ((r * 7 + c * 3) % 10) > 7; return `<rect x="${10 + c * 9}" y="${8 + r * 7.5}" width="6.5" height="5.5" fill="${m ? 'var(--bad)' : 'var(--hair-3)'}" opacity="${m ? 0.65 : 1}" rx="0.5"/>`; }).join('')).join('')}</svg>`;
+  }
+  function scrubDataUrls(value) {
+    if (Array.isArray(value)) return value.map(scrubDataUrls);
+    if (!value || typeof value !== 'object') return value;
+    const out = {};
+    Object.keys(value).forEach(key => {
+      if (key === 'data_url' || key === 'image_data_url') out[key] = '[embedded image hidden in JSON preview]';
+      else out[key] = scrubDataUrls(value[key]);
+    });
+    return out;
+  }
+  function figureGallery(payload) {
+    const figs = payload && Array.isArray(payload.figures) ? payload.figures : [];
+    const visible = figs.filter(row => row && (row.data_url || row.image_data_url));
+    if (!visible.length) return '';
+    return `
+      <div class="ag-figure-gallery">
+        ${visible.map(row => `
+          <figure>
+            <img src="${esc(row.data_url || row.image_data_url)}" alt="${esc(row.label || row.relative_path || 'figure')}" />
+            <figcaption><strong>${esc(row.label || 'figure')}</strong><span class="mono">${esc(row.relative_path || row.name || '')}</span></figcaption>
+          </figure>`).join('')}
+      </div>`;
   }
   function artifactViewer(live) {
     if (!live || agArtifact.projectDir !== live.project_dir) return '';
@@ -1244,56 +1659,104 @@
     if (!agArtifact.data) return '';
     const data = agArtifact.data || {};
     const artifact = data.artifact || {};
-    const payload = JSON.stringify(data.payload || {}, null, 2);
+    const publicPayload = scrubDataUrls(data.payload || {});
+    const payload = JSON.stringify(publicPayload, null, 2);
     const scan = data.privacy_scan || {};
     return `
     <div class="card pad mt-16">
       <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:10px;">
         <div><div class="eyebrow">${t('Artifact viewer', '产物查看器')}</div><div class="panel-title" style="font-size:14px;margin-top:4px;">${esc(artifact.name || agArtifact.name || 'artifact')}</div></div>
-        <button class="btn sm" data-ag-artifact-download="${esc(artifact.name || agArtifact.name || '')}">${icon('download', 13)} ${t('Download JSON', '下载 JSON')}</button>
+        <button class="btn sm" data-ag-artifact-download="${esc(artifact.name || agArtifact.name || '')}">${icon('download', 13)} ${t('Download artifact', '下载产物')}</button>
       </div>
       <div class="row wrap gap-8">
         <span class="pill ${scan.passed ? 'ok' : 'bad'}" style="height:22px;"><span class="dot"></span>${scan.passed ? t('privacy scan clean', '隐私扫描干净') : t('privacy markers found', '发现隐私标记')}</span>
         <span class="pill" style="height:22px;"><span class="dot"></span>${esc((artifact.sha256 || '').slice(0, 12))}</span>
         <span class="pill" style="height:22px;"><span class="dot"></span>${Number(artifact.bytes || 0).toLocaleString()} B</span>
       </div>
+      ${figureGallery(data.payload || {})}
       <pre class="mono" style="margin-top:12px;max-height:360px;overflow:auto;background:var(--surface-2);border:1px solid var(--hair);border-radius:8px;padding:12px;font-size:11px;line-height:1.5;white-space:pre-wrap;">${esc(payload.slice(0, 12000))}${payload.length > 12000 ? '\n...' : ''}</pre>
     </div>`;
   }
+  function outputBrief(artifacts) {
+    const names = (artifacts || []).map(a => a && (a.name || a.relative_path || '')).filter(Boolean);
+    const quick = [
+      ['figure_gallery.json', t('Open figures', '查看图件'), 'viz'],
+      ['benchmark_scorecard.json', t('Open scorecard', '查看记分卡'), 'list'],
+      ['evidence_ledger.json', t('Open evidence', '查看证据链'), 'shield'],
+    ].filter(([name]) => names.includes(name));
+    return `
+      <div class="ag-output-brief">
+        <div class="ag-output-brief-copy">
+          <div class="ag-output-brief-title">${t('Primary review outputs', '主要审阅产出')}</div>
+          <div class="ag-output-brief-text">${t('Figures, the benchmark scorecard, and the evidence ledger are surfaced first. File names and hashes stay visible as provenance, not as the main story.', '图件、Benchmark 记分卡和证据账本被放在前面。文件名与哈希保留为溯源信息，不再作为主展示内容。')}</div>
+        </div>
+        <div class="row gap-8 wrap">
+          ${quick.map(([name, label, ic]) => `<button class="btn sm" data-ag-artifact-view="${esc(name)}">${icon(ic, 12)} ${label}</button>`).join('')}
+        </div>
+      </div>`;
+  }
+  function featuredFigurePreview(live) {
+    if (!live || agArtifact.projectDir !== live.project_dir || agArtifact.name !== 'figure_gallery.json' || agArtifact.loading || agArtifact.error || !agArtifact.data) return '';
+    const gallery = figureGallery(agArtifact.data.payload || {});
+    if (!gallery) return '';
+    return `
+      <div class="ag-featured-results">
+        <div class="ag-featured-head">
+          <div>
+            <div class="eyebrow">${t('Result figures', '结果图件')}</div>
+            <div class="panel-title" style="font-size:14px;margin-top:3px;">${t('Task-specific figure gallery', '本题图件画廊')}</div>
+          </div>
+          <span class="pill ok" style="height:22px;"><span class="dot"></span>${t('loaded from local artifact', '来自本地产物')}</span>
+        </div>
+        ${gallery}
+      </div>`;
+  }
   function tabOutputs() {
     const s = study();
-    const live = liveRunForStudy();
+    const live = reviewableRunForStudy();
     if (live) {
       requestLiveReview(live);
       const review = currentLiveReview(live);
-      const artifacts = artifactsForLive(live);
+      const artifacts = artifactsForLive(live).slice().sort((a, b) => artifactRank(a.name || a.relative_path || '') - artifactRank(b.name || b.relative_path || ''));
       const integrity = review && review.signoff_integrity ? review.signoff_integrity : null;
       const loadingReview = agReview.projectDir === live.project_dir && agReview.loading;
       return `
       <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:14px;">
-        <div><div class="panel-title" style="font-size:15px;">${t('Outputs', '产出物')}</div><div class="panel-sub">${t('Real local artifacts read from', '真实本地产物读取自')} <span class="mono">${esc(live.project_dir || '')}</span></div></div>
+        <div><div class="panel-title" style="font-size:15px;">${isImportedRun(live, s) ? t('Completed analysis outputs', '已完成分析产出') : t('Outputs', '产出物')}</div><div class="panel-sub">${t('Real local artifacts read from', '真实本地产物读取自')} <span class="mono">${esc(live.project_dir || '')}</span></div></div>
         <div class="row gap-8">
-          <span class="pill ${review && review.signoff_stale ? 'bad' : 'warn'}" style="height:22px;"><span class="dot"></span>${esc(review && review.signoff_stale ? 'signoff_stale' : (live.gate && live.gate.status ? live.gate.status : 'analysis_only'))}</span>
+          <span class="pill ${review && review.signoff_stale ? 'bad' : 'warn'}" style="height:22px;"><span class="dot"></span>${esc(review && review.signoff_stale ? t('stale sign-off', '签署失效') : runStatusLabel(live.gate && live.gate.status ? live.gate.status : 'analysis_only'))}</span>
           ${artifacts.length ? `<button class="btn sm" data-ag-bundle-download>${icon('download', 13)} ${t('Download bundle', '下载打包')}</button>` : ''}
         </div>
       </div>
       ${loadingReview && !artifacts.length ? `<div class="note info mt-12"><div class="ico">${icon('file', 16)}</div><div class="body"><span class="t">${t('Loading local artifacts', '正在加载本地产物')}</span><span class="d">${t('Reading the whitelisted run folder before showing any output cards.', '先读取白名单运行文件夹,再展示产物卡片。')}</span></div></div>` : ''}
       ${artifacts.length ? `
+        ${outputBrief(artifacts)}
+        ${capabilityHighlights(live, s)}
+        ${featuredFigurePreview(live)}
         <div class="outgrid">
           ${artifacts.map((a, i) => {
             const name = a.name || a.relative_path || '';
             const kind = artifactKind(name);
+            const metaBits = [];
+            if (a.sha256) metaBits.push((a.sha256 || '').slice(0, 12));
+            if (a.bytes != null) metaBits.push(Number(a.bytes || 0).toLocaleString() + ' B');
+            const meta = metaBits.join(' · ');
             return `
-            <button class="outcard" data-ag-artifact-view="${esc(name)}" type="button">
+            <button class="outcard ${agArtifact.name === name ? 'on' : ''}" data-ag-artifact-view="${esc(name)}" type="button">
               <div class="outthumb">${thumb(kind)}</div>
-              <div class="outmeta"><div class="od" style="font-size:10px;">${String(i + 1).padStart(2, '0')} · ${esc(a.kind || 'json')}</div><div class="ot">${esc(artifactTitle(name))}</div><div class="od mono">${esc(name)}</div><div class="od mono">${esc((a.sha256 || '').slice(0, 12))}${a.bytes != null ? ' · ' + Number(a.bytes || 0).toLocaleString() + ' B' : ''}</div></div>
+              <div class="outmeta">
+                <div class="od ag-out-kicker">${String(i + 1).padStart(2, '0')} · ${esc(artifactCategory(name))}</div>
+                <div class="ot">${esc(artifactTitle(name))}</div>
+                <div class="outdesc">${esc(artifactSummary(name))}</div>
+                <div class="od mono ag-fileline">${esc(name)}${meta ? ' · ' + esc(meta) : ''}</div>
+              </div>
             </button>`;
           }).join('')}
         </div>` : (!loadingReview ? `
         <div class="state-hero empty-state">
           <div class="glyph">${icon('file', 28)}</div>
           <div class="st-t">${t('No real output artifacts yet', '还没有真实产物')}</div>
-          <div class="st-d">${t('This project has not produced Table 1, missingness, ROC, calibration, or evidence files yet. Run the analysis or open a reviewed local run; placeholders are not shown in Real mode.', '这个项目还没有生成 Table 1、缺失审计、ROC、校准或证据文件。请先运行分析,或打开已有本地运行；真实模式不会显示占位产物。')}</div>
+          <div class="st-d">${isImportedRun(live, s) ? t('The imported review package is registered, but the local artifact scan did not return whitelisted files. Open Run history to inspect the source folder.', '已注册导入审阅包，但本地产物扫描没有返回白名单文件。请打开运行历史检查来源文件夹。') : t('This project has not produced Table 1, missingness, ROC, calibration, or evidence files yet. Run the analysis or open a reviewed local run; placeholders are not shown in Real mode.', '这个项目还没有生成 Table 1、缺失审计、ROC、校准或证据文件。请先运行分析,或打开已有本地运行；真实模式不会显示占位产物。')}</div>
           <div class="st-actions">
             <button class="btn primary" data-ag-tab="overview">${icon('play', 14)} ${t('Run analysis', '运行分析')}</button>
             <button class="btn" data-ag-tab="runs">${icon('history', 14)} ${t('Open Runs', '打开运行历史')}</button>
@@ -1310,7 +1773,7 @@
       <div class="state-hero empty-state">
         <div class="glyph">${icon('file', 28)}</div>
         <div class="st-t">${t('No real output artifacts yet', '还没有真实产物')}</div>
-        <div class="st-d">${t('Outputs are generated only by a local Agent run. This panel will list real JSON/CSV/PNG/HTML files from the run folder and let you open or download them. It will not show seeded Table 1, missingness, ROC, or calibration placeholders.', '产物只来自本地 Agent 运行。这里会列出运行文件夹里的真实 JSON/CSV/PNG/HTML 文件,并允许打开或下载；不会显示种子 Table 1、缺失审计、ROC 或校准占位卡片。')}</div>
+        <div class="st-d">${t('Outputs are generated only by a local Agent run. This panel will list real JSON/CSV/PNG/HTML files from the run folder and let you open or download them. It will not show demo Table 1, missingness, ROC, or calibration placeholders.', '产物只来自本地 Agent 运行。这里会列出运行文件夹里的真实 JSON/CSV/PNG/HTML 文件,并允许打开或下载；不会显示演示 Table 1、缺失审计、ROC 或校准占位卡片。')}</div>
         <div class="st-actions">
           <button class="btn primary" data-ag-tab="overview">${icon('play', 14)} ${t('Run analysis', '运行分析')}</button>
           <button class="btn" data-ag-tab="runs">${icon('history', 14)} ${t('Open Runs', '打开运行历史')}</button>
@@ -1336,9 +1799,10 @@
 
   function tabDraft() {
     const s = study();
-    const live = liveRunForStudy();
+    const live = reviewableRunForStudy();
     if (live) {
       requestLiveReview(live);
+      const imported = isImportedRun(live, s);
       const gate = live.gate || {};
       const checks = Array.isArray(gate.checks) ? gate.checks : [];
       const passed = checks.filter(c => c.passed).length;
@@ -1347,6 +1811,7 @@
       const signed = !!(review && review.signed);
       const artifacts = review && Array.isArray(review.artifacts) ? review.artifacts : (live.artifacts || []);
       const reviewStatus = readiness ? readiness.status : (gate.status || 'analysis_only');
+      const reviewStatusLabel = runStatusLabel(reviewStatus);
       const draft = review && review.artifact_payloads ? review.artifact_payloads['manuscript_draft.json'] : null;
       const draftClaims = draft && Array.isArray(draft.claims) ? draft.claims : [];
       const failures = readiness && Array.isArray(readiness.non_human_failures) ? readiness.non_human_failures : [];
@@ -1360,8 +1825,8 @@
       <div class="split-320" style="grid-template-columns:1fr 300px;">
         <div class="card pad">
           <div class="eyebrow">${t('Evidence check', '证据核验')}</div>
-          <div class="panel-title" style="margin-top:4px;">${signed ? t('Local sign-off recorded · draft locked', '本地签署已记录 · 草稿保持锁定') : t('Preflight complete · draft locked', '预检完成 · 草稿保持锁定')}</div>
-          <div class="panel-sub">${t('This real run is analysis_only. It wrote bounded local evidence artifacts; human sign-off records review but does not make the draft reportable.', '这次真实运行是 analysis_only。它写入有界本地证据产物；人工签署只记录审阅,不会让草稿可报告。')}</div>
+          <div class="panel-title" style="margin-top:4px;">${imported ? t('Read-only review · manuscript not unlocked', '只读审阅 · 不解锁论文草稿') : (signed ? t('Local sign-off recorded · draft locked', '本地签署已记录 · 草稿保持锁定') : t('Preflight complete · draft locked', '预检完成 · 草稿保持锁定'))}</div>
+          <div class="panel-sub">${imported ? t('This is a completed benchmark analysis package imported for presentation and evidence review. It is not a new Agent run, and it will not unlock a reportable manuscript draft.', '这是为展示和证据审阅导入的已完成 benchmark 分析包。它不是新的 Agent 运行，也不会解锁可报告论文草稿。') : t('This real run is analysis_only. It wrote bounded local evidence artifacts; human sign-off records review but does not make the draft reportable.', '这次真实运行是 analysis_only。它写入有界本地证据产物；人工签署只记录审阅,不会让草稿可报告。')}</div>
           <div class="checks2 mt-16">
             ${checks.map((c, i) => `
               <div class="chk ${c.passed ? 'ok' : 'pending'}">
@@ -1374,15 +1839,23 @@
           ${agReview.projectDir === live.project_dir && agReview.loading ? `<div class="note info mt-16"><div class="ico">${icon('shield', 16)}</div><div class="body"><span class="t">${t('Loading local review bundle', '正在加载本地审阅包')}</span><span class="d">${t('Reading whitelisted JSON artifacts only.', '仅读取白名单 JSON 产物。')}</span></div></div>` : ''}
           ${readiness ? `
           <div class="nextbar mt-16 gate" style="background:var(--surface-2);">
-            <span class="pill ${signed ? 'ok' : (failures.length ? 'warn' : 'info')}"><span class="dot"></span>${esc(reviewStatus)}</span>
-            <div class="grow"><div class="nb-t">${signed ? t('Human review artifact written', '人工审阅产物已写入') : (readiness.signable ? t('Ready for local human sign-off', '可进行本地人工签署') : t('Blocked before sign-off', '签署前已阻断'))}</div><div class="nb-d">${t('Reportable remains false and draft_unlocked remains false in this stage.', '当前阶段 reportable 仍为 false,draft_unlocked 仍为 false。')}</div></div>
+            <span class="pill ${signed ? 'ok' : (failures.length ? 'warn' : 'info')}"><span class="dot"></span>${esc(reviewStatusLabel)}</span>
+            <div class="grow"><div class="nb-t">${imported ? t('Read-only package loaded', '只读审阅包已加载') : (signed ? t('Human review artifact written', '人工审阅产物已写入') : (readiness.signable ? t('Ready for local human sign-off', '可进行本地人工签署') : t('Blocked before sign-off', '签署前已阻断')))}</div><div class="nb-d">${imported ? t('Use Outputs for figures, scorecard, workflow graph, and evidence ledger.', '请在“产出”页查看图件、记分卡、工作流图谱和证据账本。') : t('Reportable remains false and draft_unlocked remains false in this stage.', '当前阶段 reportable 仍为 false,draft_unlocked 仍为 false。')}</div></div>
           </div>` : `
           <div class="nextbar mt-16 gate" style="background:var(--surface-2);">
-            <span class="pill warn"><span class="dot"></span>${esc(gate.status || 'analysis_only')}</span>
-            <div class="grow"><div class="nb-t">${t('Manuscript claims remain locked', '论文论断保持锁定')}</div><div class="nb-d">${t('A full agent run must pass its own evidence verification before any draft can unlock.', '只有完整 agent run 通过自己的证据核验后,草稿才可解锁。')}</div></div>
+            <span class="pill warn"><span class="dot"></span>${esc(runStatusLabel(gate.status || 'analysis_only'))}</span>
+            <div class="grow"><div class="nb-t">${imported ? t('Review package remains non-reportable', '审阅包保持不可报告') : t('Manuscript claims remain locked', '论文论断保持锁定')}</div><div class="nb-d">${imported ? t('This imported package is for evidence-chain review; it does not create a new manuscript draft.', '导入包用于审阅证据链；不会创建新的论文草稿。') : t('A full agent run must pass its own evidence verification before any draft can unlock.', '只有完整 agent run 通过自己的证据核验后,草稿才可解锁。')}</div></div>
           </div>`}
           ${readiness && failures.length ? `<div class="note warn mt-16"><div class="ico">${icon('alert', 16)}</div><div class="body"><span class="t">${t('Automated check failures', '自动核验失败项')}</span><span class="d">${esc(failures.join(', '))}</span></div></div>` : ''}
-          ${readiness && readiness.signable ? `<div class="ev-detail mt-16">
+          ${imported ? `<div class="ev-detail mt-16">
+            <div style="font-weight:600;font-size:12.25px;color:var(--ink);margin-bottom:3px;">${t('Review route', '审阅路径')}</div>
+            <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;">${t('The review package centers on output cards, the figure gallery, the benchmark scorecard, and provenance.', '审阅包围绕产出卡片、图件画廊、Benchmark 记分卡和溯源记录组织。')}</div>
+            <div class="row gap-8 mt-12">
+              <button class="btn primary sm" data-ag-tab="outputs">${icon('viz', 12)} ${t('Open outputs', '打开产出')}</button>
+              <button class="btn sm" data-ag-tab="runs">${icon('history', 12)} ${t('Open provenance', '打开溯源')}</button>
+            </div>
+          </div>` : ''}
+          ${!imported && readiness && readiness.signable ? `<div class="ev-detail mt-16">
             <div style="font-weight:600;font-size:12.25px;color:var(--ink);margin-bottom:3px;">${t('Local sign-off confirmations', '本地签署确认项')}</div>
             <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;">${t('This writes human_signoff.json only; it does not unlock a manuscript draft.', '这只会写入 human_signoff.json；不会解锁论文草稿。')}</div>
             <div class="review-todo">
@@ -1397,14 +1870,14 @@
           ${signed && !(integrity && integrity.signoff_stale) ? `<div class="note ok mt-16"><div class="ico">${icon('check', 16)}</div><div class="body"><span class="t">human_signoff.json</span><span class="d" style="display:block;margin-top:2px;">${t('Signed analysis-only review recorded locally; manuscript claims remain locked.', 'analysis-only 审阅签署已在本地记录；论文论断仍保持锁定。')}</span></div></div>` : ''}
           ${draftClaims.length ? `<div class="ev-detail mt-16">
             <div style="font-weight:600;font-size:12.25px;color:var(--ink);margin-bottom:8px;">${t('Evidence-bound draft claims', '证据绑定草稿论断')}</div>
-            ${draftClaims.map(row => `<div style="font-size:12px;line-height:1.55;margin-bottom:8px;"><span class="mono" style="color:var(--ink-4);">${esc(row.claim_id || 'claim')}</span> ${esc(row.text || '')}<div class="mono" style="font-size:10.5px;color:var(--ink-4);">${esc((row.evidence_ids || []).join(', '))}</div></div>`).join('')}
+            ${draftClaims.map(row => `<div style="font-size:12px;line-height:1.55;margin-bottom:8px;"><span class="mono" style="color:var(--ink-4);">${esc(row.claim_id || 'claim')}</span> ${esc(readableArtifactText(row.text || ''))}<div class="mono" style="font-size:10.5px;color:var(--ink-4);">${esc((row.evidence_ids || []).join(', '))}</div></div>`).join('')}
           </div>` : ''}
         </div>
         <div class="card pad" style="align-self:start;">
           <div class="eyebrow">${t('Local artifacts', '本地产物')}</div>
           <div class="col gap-8 mt-12">
             ${artifacts.map(a => `
-              <div class="ledger-row"><span class="ledger-ico">${icon((a.name || '').includes('signoff') ? 'check' : 'shield', 14)}</span><div><div style="font-weight:600;font-size:12.5px;">${esc(a.name || a.relative_path || 'artifact')}</div><div class="mono" style="font-size:10.5px;color:var(--ink-4);">${esc((a.sha256 || '').slice(0, 12))}${a.bytes != null ? ' · ' + Number(a.bytes || 0).toLocaleString() + ' B' : ''}</div></div></div>`).join('')}
+              <div class="ledger-row"><span class="ledger-ico">${icon((a.name || '').includes('signoff') ? 'check' : 'shield', 14)}</span><div><div style="font-weight:600;font-size:12.5px;">${esc(artifactTitle(a.name || a.relative_path || 'artifact'))}</div><div class="mono" style="font-size:10.5px;color:var(--ink-4);">${esc(a.name || a.relative_path || 'artifact')}${a.sha256 ? ' · ' + esc((a.sha256 || '').slice(0, 12)) : ''}${a.bytes != null ? ' · ' + Number(a.bytes || 0).toLocaleString() + ' B' : ''}</div></div></div>`).join('')}
           </div>
           <div class="mt-16 mono" style="font-size:11px;color:var(--ink-4);">${passed}/${checks.length} ${t('checks passed', '项校验通过')}</div>
           <div class="mt-8 mono" style="font-size:10.5px;color:var(--ink-4);">${esc(live.project_dir || '')}</div>
@@ -1414,7 +1887,7 @@
     const checks = [
       [t('Cohort denominators resolved', '队列分母已确定'), true, '01 · ' + t('Cohort summary', '队列摘要'), t('n and outcome rates computed from the frozen cohort frame.', 'n 与结局率由冻结的队列帧计算得出。')],
       [t('Per-concept coverage ≥ threshold', '各概念覆盖率 ≥ 阈值'), true, '03 · ' + t('Missingness', '缺失审计'), t('Per-concept coverage table — every module clears the threshold.', '各概念覆盖率表 —— 每个模块均达阈值。')],
-      [t('Table 1 reproduces from manifest', 'Table 1 可从清单复现'), true, '02 · Table 1', t('Re-generated row-for-row from the run manifest seed.', '依据运行清单种子逐行重新生成。')],
+      [t('Table 1 reproduces from manifest', 'Table 1 可从清单复现'), true, '02 · Table 1', t('Re-generated row-for-row from the run manifest.', '依据运行清单逐行重新生成。')],
       [t('Model card + metrics attached', '模型卡 + 指标已附'), true, '04 · ROC', t('AUC, calibration and a model card are bound to the run.', 'AUC、校准与模型卡已绑定到本次运行。')],
       [t('Reviewer sign-off', '审阅者签署'), s.signed, null, t('Awaiting a human reviewer signature.', '等待人工审阅者签署。')],
     ];
@@ -1493,6 +1966,12 @@
     if (agTab === 'draft') return tabDraft();
     return tabOverview();
   }
+  function focusAgentBody() {
+    window.requestAnimationFrame(() => {
+      const body = document.querySelector('#agHost .ag-body');
+      if (body && body.scrollIntoView) body.scrollIntoView({ block: 'start', behavior: 'auto' });
+    });
+  }
 
   function agShell() {
     return `
@@ -1510,7 +1989,7 @@
   function startRun() {
     const s = study();
     if (s.empty) {
-      agRun.error = t('No local research project is selected. Create an Agent project seed from Idea Mining first.', '尚未选择本地研究项目。请先从 Idea Mining 创建 Agent project seed。');
+      agRun.error = t('No local research project is selected. Create an Agent project from Idea Mining first.', '尚未选择本地研究项目。请先从 Idea Mining 创建 Agent 项目。');
       repaintBody();
       return;
     }
@@ -1532,7 +2011,7 @@
     const opts = arguments.length > 1 && arguments[1] ? arguments[1] : {};
     const s = study();
     if (s.empty) {
-      finishRealRun(s, 'failed', null, t('No local research project is selected. Create an Agent project seed from Idea Mining first.', '尚未选择本地研究项目。请先从 Idea Mining 创建 Agent project seed。'));
+      finishRealRun(s, 'failed', null, t('No local research project is selected. Create an Agent project from Idea Mining first.', '尚未选择本地研究项目。请先从 Idea Mining 创建 Agent 项目。'));
       return;
     }
     closeRunStream();
@@ -1635,9 +2114,9 @@
     const host = root.querySelector('#agHost'); if (!host) return;
     host.querySelectorAll('[data-ag-sel]').forEach(b => b.addEventListener('click', () => {
       closeRunStream(); agRun.active = false;
-      agSel = b.dataset.agSel; agTab = 'overview'; repaintBody();
+      agSel = b.dataset.agSel; agTab = 'overview'; repaintBody(); focusAgentBody();
     }));
-    host.querySelectorAll('[data-ag-tab]').forEach(b => b.addEventListener('click', () => { agTab = b.dataset.agTab; repaintBody(); }));
+    host.querySelectorAll('[data-ag-tab]').forEach(b => b.addEventListener('click', () => { agTab = b.dataset.agTab; repaintBody(); focusAgentBody(); }));
     host.querySelectorAll('[data-ag-block-filter]').forEach(b => b.addEventListener('click', () => { agBlockFamily = b.dataset.agBlockFilter || 'all'; repaintBody(); }));
     host.querySelectorAll('[data-ag-block-select]').forEach(b => b.addEventListener('click', () => { agBlockSelected = b.dataset.agBlockSelect || agBlockSelected; repaintBody(); }));
     host.querySelectorAll('[data-ag-block-add]').forEach(b => b.addEventListener('click', e => {
@@ -1714,6 +2193,21 @@
     }));
     host.querySelectorAll('[data-ag-history-refresh]').forEach(b => b.addEventListener('click', () => requestRunHistory(true)));
     host.querySelectorAll('[data-ag-refresh-projects]').forEach(b => b.addEventListener('click', () => requestIdeaAgentProjects(true)));
+    host.querySelectorAll('[data-ag-open-seed-run]').forEach(b => b.addEventListener('click', () => {
+      const projectDir = b.dataset.agOpenSeedRun || '';
+      if (!projectDir || !window.EU_API || !window.EU_API.loadAgentRunReview) return;
+      agReview = { projectDir: projectDir, loading: true, error: null, data: null, signing: false };
+      agArtifact = { projectDir: null, name: null, loading: false, error: null, data: null };
+      agTab = 'outputs';
+      repaintBody();
+      window.EU_API.loadAgentRunReview(projectDir).then(data => {
+        openReview(data, 'outputs');
+        repaintBody();
+      }).catch(err => {
+        agReview = { projectDir: projectDir, loading: false, error: err.message || String(err), data: null, signing: false };
+        repaintBody();
+      });
+    }));
     host.querySelectorAll('[data-ag-history-open]').forEach(b => b.addEventListener('click', () => {
       const rows = agHistory.data && Array.isArray(agHistory.data.runs) ? agHistory.data.runs : [];
       const row = rows[Number(b.dataset.agHistoryOpen || -1)];
@@ -1722,7 +2216,7 @@
       agTab = 'draft';
       repaintBody();
       window.EU_API.loadAgentRunReview(row.project_dir).then(data => {
-        openReview(data);
+        openReview(data, data && data.run_type === 'canonical9_import' ? 'outputs' : 'draft');
         repaintBody();
       }).catch(err => {
         agReview = { projectDir: row.project_dir, loading: false, error: err.message || String(err), data: null, signing: false };
@@ -1730,12 +2224,17 @@
       });
     }));
     host.querySelectorAll('[data-ag-artifact-view]').forEach(card => card.addEventListener('click', () => {
-      const live = liveRunForStudy();
+      const live = reviewableRunForStudy();
       requestArtifact(live, card.dataset.agArtifactView);
+    }));
+    host.querySelectorAll('[data-ag-artifact-jump]').forEach(b => b.addEventListener('click', () => {
+      const live = reviewableRunForStudy();
+      agTab = 'outputs';
+      requestArtifact(live, b.dataset.agArtifactJump);
     }));
     host.querySelectorAll('[data-ag-artifact-download]').forEach(b => b.addEventListener('click', e => {
       e.stopPropagation();
-      const live = liveRunForStudy();
+      const live = reviewableRunForStudy();
       if (!live || !window.EU_API || !window.EU_API.downloadAgentRunArtifact) return;
       window.EU_API.downloadAgentRunArtifact(live.project_dir, b.dataset.agArtifactDownload).catch(err => {
         agArtifact = { projectDir: live.project_dir, name: b.dataset.agArtifactDownload, loading: false, error: err.message || String(err), data: agArtifact.data };
@@ -1743,7 +2242,7 @@
       });
     }));
     host.querySelectorAll('[data-ag-bundle-download]').forEach(b => b.addEventListener('click', () => {
-      const live = liveRunForStudy();
+      const live = reviewableRunForStudy();
       if (!live || !window.EU_API || !window.EU_API.downloadAgentRunBundle) return;
       window.EU_API.downloadAgentRunBundle(live.project_dir).catch(err => {
         agArtifact = { projectDir: live.project_dir, name: 'bundle', loading: false, error: err.message || String(err), data: null };
