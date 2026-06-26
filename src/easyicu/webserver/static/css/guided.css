@@ -236,6 +236,104 @@
   display: grid; gap: 10px;
   min-width: min(520px, 100%);
 }
+.gd-folder-backdrop{
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+}
+.gd-folder-dialog{
+  position: fixed;
+  z-index: 81;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 104px);
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+.gd-folder-dialog-head{
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: start;
+}
+.gd-folder-dialog-head strong{
+  display: block;
+  font-size: 13.5px;
+  line-height: 1.3;
+}
+.gd-folder-dialog-head span{
+  display: block;
+  margin-top: 3px;
+  color: var(--ink-4);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.gd-folder-close{
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-1);
+  background: var(--surface);
+  color: var(--ink-4);
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.gd-folder-close:hover{
+  color: var(--ink);
+  border-color: var(--hair-2);
+  background: var(--surface-2);
+}
+.gd-folder-tabs{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+}
+.gd-folder-tabs button{
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.gd-folder-tabs button.active{
+  border-color: var(--hair);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-1);
+}
+@media (max-width: 620px){
+  .gd-folder-dialog{
+    top: 54px;
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 74px);
+    padding: 12px;
+  }
+  .gd-folder-dialog-head{
+    grid-template-columns: auto 1fr auto;
+  }
+  .gd-folder-tabs{
+    grid-template-columns: 1fr;
+  }
+}
 .gds-head{
   display: flex; align-items: flex-start; gap: 10px;
   padding: 10px 11px;
@@ -1446,8 +1544,55 @@
 /* left session rail */
 .gd-rail{ border-right: 1px solid var(--hair); background: color-mix(in srgb, var(--rail) 60%, var(--surface)); display: flex; flex-direction: column; min-height: 0; }
 .gd-rail-top{ padding: 12px; }
+.gd-folder-picker{ position: relative; }
 .gd-newbtn{ display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 12px; border: 1px solid var(--hair-2); border-radius: var(--r-2); background: var(--surface); font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink); cursor: pointer; }
-.gd-newbtn:hover{ border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-ink); }
+.gd-newbtn:hover,
+.gd-folder-picker.open .gd-newbtn{ border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-ink); }
+.gd-folder-menu{
+  position: absolute;
+  z-index: 70;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(312px, calc(100vw - 24px));
+  display: grid;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+.gd-folder-menu-item{
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 9px;
+  align-items: start;
+  width: 100%;
+  padding: 9px;
+  border: 1px solid transparent;
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.gd-folder-menu-item:hover{
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.gd-folder-menu-item strong{
+  display: block;
+  font-size: 12px;
+  line-height: 1.25;
+}
+.gd-folder-menu-item small{
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-4);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
 .gd-rail-sec{ font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-4); padding: 10px 14px 6px; }
 .gd-rail-sec.in-list{ padding: 12px 6px 6px; }
 .gd-refresh-mini{ float:right; width:18px; height:18px; border:1px solid var(--hair); border-radius:var(--r-1); background:var(--surface); color:var(--ink-4); display:inline-flex; align-items:center; justify-content:center; padding:0; cursor:pointer; }
