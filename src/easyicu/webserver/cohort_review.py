@@ -267,6 +267,7 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
             **los_summary,
             "bins": _value_bins(los_by_entity.values(), _LOS_BIN_SPECS),
         },
+        "complexity": _complexity_matrix(age_by_entity, los_by_entity),
         "sepsis3": sepsis_summary,
         "sepsis_pct": sepsis_summary.get("pct"),
     }
@@ -1733,6 +1734,43 @@ _LOS_BIN_SPECS: List[tuple] = [
     ("5-10d", lambda v: 5 <= v < 10),
     (">=10d", lambda v: v >= 10),
 ]
+
+
+def _complexity_matrix(
+    age_by_entity: Dict[str, Any], los_by_entity: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Age-group × LOS-group entity counts (bounded crosstab heatmap payload).
+
+    Restores the legacy cohort "complexity heatmap": for entities with both an
+    age and an ICU LOS, count how many fall in each age/LOS cell. Aggregate
+    counts only; no row-level values leave the backend.
+    """
+    age_labels = [label for label, _ in _AGE_BIN_SPECS]
+    los_labels = [label for label, _ in _LOS_BIN_SPECS]
+    z = [[0 for _ in los_labels] for _ in age_labels]
+    total = 0
+    for entity_id, age_value in age_by_entity.items():
+        age_num = dataio._num(age_value)
+        los_num = dataio._num(los_by_entity.get(entity_id))
+        if age_num is None or los_num is None:
+            continue
+        age_idx = next(
+            (i for i, (_, pred) in enumerate(_AGE_BIN_SPECS) if pred(age_num)), None
+        )
+        los_idx = next(
+            (j for j, (_, pred) in enumerate(_LOS_BIN_SPECS) if pred(los_num)), None
+        )
+        if age_idx is None or los_idx is None:
+            continue
+        z[age_idx][los_idx] += 1
+        total += 1
+    return {
+        "age_groups": age_labels,
+        "los_groups": los_labels,
+        "z": z,
+        "total": total,
+        "max": max((max(row) for row in z), default=0),
+    }
 
 
 def _sofa_bins(values: Iterable[Any]) -> List[Dict[str, Any]]:
