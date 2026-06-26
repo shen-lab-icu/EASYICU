@@ -187,6 +187,99 @@ def provider_readiness(
     }
 
 
+def write_provider_config(
+    provider: str,
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    max_tokens: str = "",
+    json_format_style: str = "",
+    force: bool = True,
+) -> Dict[str, Any]:
+    """Write the private provider env file and return sanitized metadata."""
+    provider_text = str(provider or "openai").strip() or "openai"
+    api_key = str(api_key or "").strip()
+    base_url = str(base_url or "").strip()
+    model = str(model or "").strip()
+    if not api_key:
+        raise ProviderAdapterError({
+            "error": "external_provider_api_key_required",
+            "secrets_returned": False,
+        })
+    if not model:
+        raise ProviderAdapterError({
+            "error": "external_provider_model_required",
+            "secrets_returned": False,
+        })
+    if not base_url and not _default_base_url(provider_text):
+        raise ProviderAdapterError({
+            "error": "external_provider_base_url_required",
+            "secrets_returned": False,
+        })
+    entries: Dict[str, str] = {
+        _api_key_env_names(provider_text)[0]: api_key,
+        _model_env_names(provider_text)[0]: model,
+    }
+    if base_url:
+        entries[_base_url_env_names(provider_text)[0]] = base_url
+    max_tokens = str(max_tokens or "").strip()
+    if max_tokens:
+        entries["EASYICU_LLM_MAX_TOKENS"] = max_tokens
+    json_format_style = str(json_format_style or "").strip().lower()
+    if json_format_style in {"chat", "responses", "both"}:
+        entries["EASYICU_LLM_JSON_FORMAT_STYLE"] = json_format_style
+    path = _DEFAULT_PROVIDER_ENV_FILE
+    if path.exists() and not force:
+        raise ProviderAdapterError({
+            "error": "external_provider_env_file_exists",
+            "env_file": str(path),
+            "secrets_returned": False,
+        })
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    lines = [
+        "# EasyICU private external-provider config",
+        "# Created by the local EasyICU FastAPI UI.",
+        "# Keep this file mode 0600. Do not commit it.",
+    ]
+    for key, value in entries.items():
+        if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key):
+            raise ProviderAdapterError({
+                "error": "external_provider_invalid_env_key",
+                "env_key": key,
+                "secrets_returned": False,
+            })
+        lines.append(f"{key}={_quote_env_value(value)}")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except Exception:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+    return {
+        "ok": True,
+        "provider": provider_text,
+        "env_file": {
+            "enabled": True,
+            "status": "written",
+            "present": True,
+            "configured": "default",
+            "mode": "0600",
+            "loaded_keys": sorted(entries),
+            "secrets_returned": False,
+        },
+        "secrets_returned": False,
+    }
+
+
 def _load_external_credentials(
     provider: str,
     *,
@@ -645,6 +738,12 @@ def _parse_env_file(path: Path) -> Dict[str, str]:
             continue
         parsed[key] = _unquote_env_value(value.strip())
     return parsed
+
+
+def _quote_env_value(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_./:@+=,-]+", str(value or "")):
+        return str(value)
+    return json.dumps(str(value or ""))
 
 
 def _unquote_env_value(value: str) -> str:

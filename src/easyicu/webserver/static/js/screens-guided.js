@@ -140,6 +140,8 @@
   let guidedFolderMenuOpen = false;
   let guidedFolderDialogMode = null;
   let guidedFolderSeedTitle = 'New local study';
+  let guidedDraftFolderSlug = '';
+  let guidedDraftParentDir = '~/easyicu/projects';
   let guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
   let guidedKnownProjectsOpen = false;
   let guidedSlotSaveTimer = null;
@@ -186,6 +188,8 @@
     guidedFolderMenuOpen = false;
     guidedFolderDialogMode = null;
     guidedFolderSeedTitle = 'New local study';
+    guidedDraftFolderSlug = '';
+    guidedDraftParentDir = '~/easyicu/projects';
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
     guidedKnownProjectsOpen = false;
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
@@ -1828,7 +1832,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       discovery: null,
       error: null,
     };
-    guidedIdeaProvider = { provider: 'openai', loading: false, error: null, status: null };
+    guidedIdeaProvider = {
+      provider: 'openai',
+      loading: false,
+      saving: false,
+      error: null,
+      saveError: null,
+      saved: false,
+      status: null,
+      configOpen: false,
+    };
     guidedLiteratureBrowser = { open: false, loading: false, error: null, data: null, path: '' };
   }
   function startGuidedIdeaFlow(label) {
@@ -1913,7 +1926,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     return t('Add a source clue or topic, then run local mining.', '先添加来源线索或主题，然后运行本地挖掘。');
   }
   function requestGuidedIdeaProviderStatus(force) {
-    if (!guidedIdeaProvider) guidedIdeaProvider = { provider: 'openai', loading: false, error: null, status: null };
+    if (!guidedIdeaProvider) {
+      guidedIdeaProvider = {
+        provider: 'openai',
+        loading: false,
+        saving: false,
+        error: null,
+        saveError: null,
+        saved: false,
+        status: null,
+        configOpen: false,
+      };
+    }
     if (!window.EU_API || !window.EU_API.loadAgentProviderStatus) return;
     if (!force && (guidedIdeaProvider.loading || guidedIdeaProvider.status || guidedIdeaProvider.error)) return;
     guidedIdeaProvider = Object.assign({}, guidedIdeaProvider, { loading: true, error: null });
@@ -3471,7 +3495,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           <div class="gd-folder-menu" role="menu" aria-label="${t('Study folder actions', '研究文件夹操作')}">
             <button class="gd-folder-menu-item" type="button" role="menuitem" data-folder-choice="new">
               <span class="gds-ico">${icon('folder', 14)}</span>
-              <span><strong>${t('New blank study folder', '新建空白项目')}</strong><small>${t('Create a metadata-only local folder under the EasyICU projects root.', '在 EasyICU projects 根目录下创建仅元数据的本地文件夹。')}</small></span>
+              <span><strong>${t('New blank study folder', '新建空白项目')}</strong><small>${t('Choose a parent folder, then create a metadata-only Guided project subfolder.', '先选择父目录，再创建仅元数据的 Guided 项目子文件夹。')}</small></span>
             </button>
             <button class="gd-folder-menu-item" type="button" role="menuitem" data-folder-choice="open">
               <span class="gds-ico">${icon('folder', 14)}</span>
@@ -3566,7 +3590,19 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         </div>
       </div>`;
   }
+  function captureGuidedDraftDialogState(box) {
+    if (!box) return;
+    const titleEl = box.querySelector('[data-draft-title]');
+    const slugEl = box.querySelector('[data-draft-slug]');
+    const parentEl = box.querySelector('[data-draft-parent-dir]');
+    if (titleEl && titleEl.value.trim()) guidedFolderSeedTitle = titleEl.value.trim();
+    if (slugEl && slugEl.value.trim()) guidedDraftFolderSlug = slugifyDraftFolder(slugEl.value);
+    if (parentEl) guidedDraftParentDir = parentEl.value.trim() || guidedDraftParentDir || '~/easyicu/projects';
+  }
   function loadGuidedFolderBrowser(path) {
+    if (guidedFolderDialogMode === 'new') {
+      captureGuidedDraftDialogState(document.querySelector('[data-folder-dialog][data-draft-setup]'));
+    }
     guidedFolderBrowser.open = true;
     guidedFolderBrowser.loading = true;
     guidedFolderBrowser.error = null;
@@ -3600,7 +3636,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       return;
     }
     const title = guidedFolderSeedTitle || (BRANCH[branch] && BRANCH[branch].chip) || 'New local study';
-    const slug = slugifyDraftFolder(title);
+    const slug = guidedDraftFolderSlug || slugifyDraftFolder(title);
+    const parentDir = guidedDraftParentDir || '~/easyicu/projects';
+    const parentDisplay = compactPath(parentDir).replace(/\/$/, '');
+    const projectPreview = `${parentDisplay}/guided-${slug || 'study'}-...`;
     const mode = guidedFolderDialogMode === 'open' ? 'open' : 'new';
     const openForReview = pendingGuidedGoal && pendingGuidedGoal.goal === 'review_data';
     const openActions = openForReview ? `
@@ -3637,10 +3676,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             <div class="gds-status" data-project-open-status hidden></div>
           </div>` : `
           <div class="gds-choice">
-            <div class="gds-choice-head"><strong>${t('Create new local study folder', '创建新的本地研究文件夹')}</strong><span>${t('Creates a metadata-only folder under the EasyICU projects root. No patient rows, no Agent run, no draft unlock.', '在 EasyICU projects 根目录下创建仅元数据文件夹。不会读取患者行、不会创建 Agent run、不会解锁草稿。')}</span></div>
+            <div class="gds-choice-head"><strong>${t('Create new local study folder', '创建新的本地研究文件夹')}</strong><span>${t('Choose the parent folder first. EasyICU will create a new metadata-only project subfolder there; no patient rows, Agent run, or draft unlock is created.', '先选择父目录。EasyICU 会在其中创建新的仅元数据项目子文件夹；不会读取患者行、不会创建 Agent run、不会解锁草稿。')}</span></div>
             <label class="gds-field"><span>${t('Study title', '研究标题')}</span><input data-draft-title value="${attr(title)}" autocomplete="off" /></label>
             <label class="gds-field"><span>${t('Folder name', '文件夹名称')}</span><input data-draft-slug value="${attr(slug)}" autocomplete="off" /></label>
-            <div class="gds-path"><span>${t('Scope', '范围')}</span><code>EasyICU projects folder</code><small>${t('EasyICU creates the folder under the local projects root so Guided, Idea Mining, and Agent artifacts can be managed by folder.', 'EasyICU 会在本地 projects 根目录下创建文件夹，方便按文件夹管理 Guided、Idea Mining 和 Agent artifacts。')}</small></div>
+            <div class="gds-path-row">
+              <label class="gds-field"><span>${t('Create inside folder', '创建到本地文件夹')}</span><input data-draft-parent-dir value="${attr(parentDir)}" placeholder="${t('Choose or paste a local parent folder', '选择或粘贴本地父目录')}" autocomplete="off" /></label>
+              <button class="btn sm" type="button" data-browsedraftparent>${icon('folder', 13)} ${t('Browse...', '浏览...')}</button>
+            </div>
+            <div class="gds-path"><span>${t('Will create', '将创建')}</span><code>${esc(projectPreview)}</code><small>${t('The selected folder is the parent. The actual project folder gets a guided-* name so existing folders are not overwritten.', '所选文件夹是父目录。实际项目会使用 guided-* 子文件夹名称，避免覆盖已有文件夹。')}</small></div>
+            ${renderGuidedFolderBrowser()}
             <div class="row gap-8"><button class="btn primary sm" data-createdraft>${icon('folder', 13)} ${t('Create study folder', '创建研究文件夹')}</button><button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
           </div>`}
       </section>`;
@@ -3649,6 +3693,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     guidedFolderMenuOpen = false;
     guidedFolderDialogMode = mode === 'open' ? 'open' : 'new';
     guidedFolderSeedTitle = seedTitle || guidedFolderSeedTitle || 'New local study';
+    if (guidedFolderDialogMode === 'new') {
+      guidedDraftFolderSlug = slugifyDraftFolder(guidedFolderSeedTitle);
+      guidedDraftParentDir = guidedDraftParentDir || '~/easyicu/projects';
+    }
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
     guidedKnownProjectsOpen = false;
     renderGuidedFolderControls();
@@ -3829,9 +3877,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       });
     });
   }
-  function createLocalGuidedDraft(label, folderSlug) {
+  function createLocalGuidedDraft(label, folderSlug, parentDir) {
     const text = label || 'New local study';
-    pushUser(`Create local study folder: ${text}`);
+    const parent = String(parentDir || '').trim();
+    pushUser(parent ? `Create local study folder: ${text} in ${parent}` : `Create local study folder: ${text}`);
     if (!window.EU_API || !window.EU_API.createGuidedDraft) {
       pushBot(
         `This browser can draft the conversation, but the local draft registry endpoint is not available yet.`,
@@ -3847,7 +3896,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     renderThread();
     const payload = guidedDraftPayload(text);
     payload.folder_slug = folderSlug || payload.folder_slug;
+    if (parent) payload.parent_dir = parent;
     window.EU_API.createGuidedDraft(payload).then(result => {
+      if (!result || result.ok === false || !result.draft) {
+        throw new Error((result && (result.reason || result.error)) || 'guided_draft_create_failed');
+      }
       selectedGuidedDraft = result.draft || null;
       loadGuidedDrafts(true);
       return bindGuidedDraftMemory(selectedGuidedDraft).then(opened => ({ result, opened }));
@@ -4622,6 +4675,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           loadGuidedFolderBrowser(pathEl && pathEl.value);
           return;
         }
+        if (e.target.closest('[data-browsedraftparent]')) {
+          const box = e.target.closest('[data-draft-setup]');
+          captureGuidedDraftDialogState(box);
+          const parentEl = box ? box.querySelector('[data-draft-parent-dir]') : null;
+          loadGuidedFolderBrowser((parentEl && parentEl.value) || guidedDraftParentDir || '~/easyicu/projects');
+          return;
+        }
         if (e.target.closest('[data-folder-browser-close]')) {
           guidedFolderBrowser.open = false;
           renderGuidedFolderDialog();
@@ -4653,6 +4713,17 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (e.target.closest('[data-folder-browser-use]')) {
           const box = e.target.closest('[data-draft-setup]');
           const path = (guidedFolderBrowser.data && guidedFolderBrowser.data.path) || guidedFolderBrowser.path;
+          const parentEl = box ? box.querySelector('[data-draft-parent-dir]') : null;
+          if (guidedFolderDialogMode === 'new' && parentEl) {
+            captureGuidedDraftDialogState(box);
+            if (path) {
+              guidedDraftParentDir = path;
+              parentEl.value = path;
+            }
+            guidedFolderBrowser.open = false;
+            renderGuidedFolderDialog();
+            return;
+          }
           const pathEl = box ? box.querySelector('[data-existing-project-dir]') : null;
           if (pathEl && path) pathEl.value = path;
           if (pendingGuidedGoal && pendingGuidedGoal.goal === 'review_data') registerExistingExportForReview(path, box);
@@ -4678,9 +4749,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           const box = createDraftEl.closest('[data-draft-setup]');
           const titleEl = box ? box.querySelector('[data-draft-title]') : null;
           const slugEl = box ? box.querySelector('[data-draft-slug]') : null;
+          const parentEl = box ? box.querySelector('[data-draft-parent-dir]') : null;
           const title = (titleEl && titleEl.value || '').trim() || 'New local study';
           const slug = slugifyDraftFolder((slugEl && slugEl.value) || title);
-          createLocalGuidedDraft(title, slug);
+          const parent = (parentEl && parentEl.value || '').trim();
+          guidedFolderSeedTitle = title;
+          guidedDraftFolderSlug = slug;
+          guidedDraftParentDir = parent || guidedDraftParentDir || '~/easyicu/projects';
+          createLocalGuidedDraft(title, slug, guidedDraftParentDir);
           return;
         }
         if (e.target.closest('[data-canceldraft]')) {
@@ -4718,8 +4794,14 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           scheduleGuidedSlotSave('edit_idea_field');
           return;
         }
+        const draftParent = e.target.closest('[data-draft-parent-dir]');
+        if (draftParent) {
+          guidedDraftParentDir = draftParent.value.trim();
+          return;
+        }
         const title = e.target.closest('[data-draft-title]');
         if (!title) return;
+        guidedFolderSeedTitle = title.value.trim() || guidedFolderSeedTitle || 'New local study';
         const box = title.closest('[data-draft-setup]');
         const slug = box ? box.querySelector('[data-draft-slug]') : null;
         if (slug && !slug.dataset.edited) slug.value = slugifyDraftFolder(title.value);
@@ -4744,6 +4826,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (!slug) return;
         slug.dataset.edited = 'true';
         slug.value = slugifyDraftFolder(slug.value);
+        guidedDraftFolderSlug = slug.value;
       });
 
       // composer

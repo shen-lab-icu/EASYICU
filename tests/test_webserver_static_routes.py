@@ -186,7 +186,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "页面指南只支持固定快捷操作" in dock_js
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
-    assert "js/screens-guided.js?v=20260626-idea-discovery" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-parent-folder" in index_html
     assert "js/copilot-dock.js?v=20260626-page-guide-refresh2" in index_html
 
 
@@ -333,7 +333,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 
     assert "css/guided.css?v=20260626-guided-api-boundary" in index_html
     assert "js/api.js?v=20260626-idea-discovery" in index_html
-    assert "js/screens-guided.js?v=20260626-idea-discovery" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-parent-folder" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -939,7 +939,7 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "--xdb-grid-cols" in viz_js
     assert "xdb-density-svg" in viz_js
     assert "xdb-density-line" in viz_js
-    assert "js/screens-viz.js?v=20260626-source-feedback-hidden" in index_html
+    assert "js/screens-viz.js?v=20260626-viz-demo-split" in index_html
     assert "css/crossdb.css?v=20260626-all-features" in index_html
     assert ".xdb-dist-panel" in crossdb_css
     assert ".xdb-dist-row" in crossdb_css
@@ -1132,6 +1132,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "data-folder-choice" in guided_js
     assert "data-folder-dialog" in guided_js
     assert "New blank study folder" in guided_js
+    assert "Choose a parent folder, then create a metadata-only Guided project subfolder" in guided_js
+    assert "Create a metadata-only local folder under the EasyICU projects root" not in guided_js
     assert "Use existing folder" in guided_js
     assert "Required setup stays here instead of jumping to Classic Workspace" in guided_js
     assert "guidedKnownProjectRows" in guided_js
@@ -1171,6 +1173,14 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "openExistingGuidedProject" in guided_js
     assert "Creating a <strong>metadata-only local study folder</strong>" in guided_js
     assert "Create new local study folder" in guided_js
+    assert "Choose the parent folder first" in guided_js
+    assert "data-draft-parent-dir" in guided_js
+    assert "data-browsedraftparent" in guided_js
+    assert "Create inside folder" in guided_js
+    assert "Will create" in guided_js
+    assert "guided-${slug || 'study'}-..." in guided_js
+    assert "payload.parent_dir = parent" in guided_js
+    assert "captureGuidedDraftDialogState(box)" in guided_js
     assert "data-createdraft" in guided_js
     assert "data-draft-title" in guided_js
     assert "folder_slug" in guided_js
@@ -1218,7 +1228,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
     assert "api.js?v=20260626-idea-discovery" in index_html
-    assert "screens-guided.js?v=20260626-idea-discovery" in index_html
+    assert "screens-guided.js?v=20260626-guided-parent-folder" in index_html
     assert "guided.css?v=20260626-guided-api-boundary" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
@@ -1385,7 +1395,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260625-stage92" in index_html
-    assert "js/screens-viz.js?v=20260626-source-feedback-hidden" in index_html
+    assert "js/screens-viz.js?v=20260626-viz-demo-split" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert "data-cohort-config-required=\"true\"" in viz_js
@@ -1513,3 +1523,35 @@ def test_native_home_landing_styles_are_owned_by_home_css() -> None:
     # landing-page styles must not leak back into other transitional buckets
     assert ".home-wrap" not in _static_css("redesign.css")
     assert ".way-card" not in _static_css("app.css")
+
+
+def test_native_viz_demo_layer_is_split_into_owner_file() -> None:
+    """The demo/fixture data layer + catalog accessors are owned by
+    screens-viz-demo.js, not inlined in the screens-viz.js monolith
+    (first owner-file carve-out, 2026-06-26). Main file rebinds them."""
+    viz_js = _static_js("screens-viz.js")
+    demo_js = _static_js("screens-viz-demo.js")
+    index_html = _static_html("index.html")
+
+    # demo generators + catalog accessors are DEFINED in the demo file
+    assert "function demoCatalogModules(" in demo_js
+    assert "function demoRowsForModule(" in demo_js
+    assert "function demoCategorySection(" in demo_js
+    assert "function catalogModuleLabel(" in demo_js
+    assert "function catalogFeatureMeta(" in demo_js
+    assert "window.VIZ_DEMO = {" in demo_js
+
+    # they are NOT re-defined in the main file (no duplicate definitions)
+    assert "function demoCatalogModules(" not in viz_js
+    assert "function catalogModuleLabel(" not in viz_js
+    assert "const DEMO_ENTITY_COUNT" not in viz_js
+
+    # main file rebinds the exports so call sites stay unchanged
+    assert "} = window.VIZ_DEMO;" in viz_js
+    assert "demoCatalogModules" in viz_js  # still called
+
+    # demo file loads BEFORE the main file in index.html
+    demo_pos = index_html.find("screens-viz-demo.js")
+    main_pos = index_html.find("screens-viz.js?")
+    assert demo_pos != -1 and main_pos != -1
+    assert demo_pos < main_pos, "screens-viz-demo.js must load before screens-viz.js"

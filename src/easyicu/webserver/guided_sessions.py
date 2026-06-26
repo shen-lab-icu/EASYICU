@@ -232,7 +232,11 @@ def _upsert_session(session: Dict[str, Any]) -> None:
     _save_sessions(sessions)
 
 
-def _safe_project_dir(value: Any) -> Path | None:
+def _has_guided_project_marker(path: Path) -> bool:
+    return (path / "guided_draft.json").is_file() or (path / "guided_copilot_session.json").is_file()
+
+
+def _safe_project_dir(value: Any, *, allow_marked_external: bool = False) -> Path | None:
     text = str(value or "").strip()
     if not text:
         return None
@@ -243,7 +247,25 @@ def _safe_project_dir(value: Any) -> Path | None:
         return None
     if candidate == root or root in candidate.parents:
         return candidate
+    if allow_marked_external and candidate.is_dir() and _has_guided_project_marker(candidate):
+        return candidate
     return None
+
+
+def _safe_project_parent_dir(value: Any) -> Path | None:
+    text = str(value or "").strip()
+    if not text:
+        return _PROJECTS_ROOT
+    try:
+        candidate = Path(text).expanduser().resolve()
+        root = _PROJECTS_ROOT.expanduser().resolve()
+    except OSError:
+        return None
+    if candidate == root:
+        return candidate
+    if candidate == candidate.parent or not candidate.exists() or not candidate.is_dir():
+        return None
+    return candidate
 
 
 def _find_session_by_project_dir(project_dir: Path) -> Dict[str, Any] | None:
@@ -277,7 +299,7 @@ def _refresh_privacy(session: Dict[str, Any]) -> None:
 
 
 def _persist_session(session: Dict[str, Any]) -> None:
-    project_dir = _safe_project_dir(session.get("project_dir")) or _project_dir_for_session(str(session["id"]))
+    project_dir = _safe_project_dir(session.get("project_dir"), allow_marked_external=True) or _project_dir_for_session(str(session["id"]))
     session["project_dir"] = str(project_dir)
     project_dir.mkdir(parents=True, exist_ok=True)
     _refresh_privacy(session)
@@ -484,13 +506,13 @@ def create_guided_session(body: Dict[str, Any]) -> Dict[str, Any]:
 
 def open_guided_project(body: Dict[str, Any]) -> Dict[str, Any]:
     payload = body if isinstance(body, dict) else {}
-    project_dir = _safe_project_dir(payload.get("project_dir"))
+    project_dir = _safe_project_dir(payload.get("project_dir"), allow_marked_external=True)
     if project_dir is None:
         return {
             "ok": False,
             "blocked": True,
             "error": "invalid_guided_project_dir",
-            "reason": "Guided project memory can only be opened from the local EasyICU projects folder.",
+            "reason": "Guided project memory can only be opened from an EasyICU projects folder or a folder that contains Guided metadata.",
             "storage": "metadata_only",
         }
     if not project_dir.exists():
@@ -784,10 +806,13 @@ def _slug(value: Any, fallback: str = "guided-study") -> str:
     return (text or fallback)[:64].strip("-._") or fallback
 
 
-def _project_dir_for(draft_id: str, title: str, requested_slug: Any = None) -> Path:
+def _project_dir_for(draft_id: str, title: str, requested_slug: Any = None, parent_dir: Any = None) -> Path | None:
     slug = _slug(requested_slug or title)
     suffix = str(draft_id or "")[-6:] or hashlib.sha1(title.encode("utf-8")).hexdigest()[:6]
-    return _PROJECTS_ROOT / f"guided-{slug}-{suffix}"
+    parent = _safe_project_parent_dir(parent_dir)
+    if parent is None:
+        return None
+    return parent / f"guided-{slug}-{suffix}"
 
 
 def _normalise_draft(body: Dict[str, Any], existing_id: str | None = None) -> Dict[str, Any]:
@@ -797,7 +822,9 @@ def _normalise_draft(body: Dict[str, Any], existing_id: str | None = None) -> Di
     depth = _choice(body.get("depth"), _VALID_DEPTHS, "full")
     data_mode = _choice(body.get("data_mode"), _VALID_DATA_MODES, "demo")
     draft_id = existing_id or _draft_id("|".join([created, title, branch, depth]))
-    project_dir = _project_dir_for(draft_id, title, body.get("folder_slug"))
+    project_dir = _project_dir_for(draft_id, title, body.get("folder_slug"), body.get("parent_dir"))
+    if project_dir is None:
+        raise ValueError("invalid_guided_parent_dir")
     payload: Dict[str, Any] = {
         "id": draft_id,
         "kind": "guided_draft",
@@ -812,6 +839,7 @@ def _normalise_draft(body: Dict[str, Any], existing_id: str | None = None) -> Di
         "source": _source_meta(body.get("source")),
         "agent_run_created": False,
         "project_dir": str(project_dir),
+        "project_parent_dir": str(project_dir.parent),
         "project_kind": "guided_draft_folder",
         "project_artifact": "guided_draft.json",
         "run_id": None,
@@ -857,7 +885,7 @@ def remove_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
             "disk_deleted": False,
         }
     draft_id = _clean_text(payload.get("draft_id") or payload.get("id"), max_len=80)
-    project_dir = _safe_project_dir(payload.get("project_dir"))
+    project_dir = _safe_project_dir(payload.get("project_dir"), allow_marked_external=True)
     raw = _read_raw()
     rows = raw.get("drafts") if isinstance(raw.get("drafts"), list) else []
     kept: List[Dict[str, Any]] = []
@@ -898,12 +926,33 @@ def remove_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def create_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
-    draft = _normalise_draft(body if isinstance(body, dict) else {})
+    try:
+        draft = _normalise_draft(body if isinstance(body, dict) else {})
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "blocked": True,
+            "error": str(exc) or "invalid_guided_parent_dir",
+            "reason": "Choose an existing local folder where the new Guided project folder should be created.",
+            "storage": "metadata_only",
+            "persisted": False,
+        }
     project_dir = Path(str(draft["project_dir"]))
-    project_dir.mkdir(parents=True, exist_ok=True)
-    (project_dir / "guided_draft.json").write_text(
-        json.dumps(draft, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    try:
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "guided_draft.json").write_text(
+            json.dumps(draft, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as exc:
+        return {
+            "ok": False,
+            "blocked": True,
+            "error": "guided_project_folder_create_failed",
+            "reason": str(exc),
+            "project_parent_dir": draft.get("project_parent_dir"),
+            "storage": "metadata_only",
+            "persisted": False,
+        }
     raw = _read_raw()
     current = raw.get("drafts") if isinstance(raw.get("drafts"), list) else []
     drafts = [row for row in current if isinstance(row, dict) and row.get("id") != draft["id"]]
