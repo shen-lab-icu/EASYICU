@@ -8,7 +8,7 @@
     DEMO_ENTITY_COUNT, DEMO_DURATION_HOURS, DEMO_CLINICAL_LANES, DEMO_THRESHOLDS,
     demoCatalogModules, demoIsTimeIndexed, demoFeatureModule, demoCoverageForFeature,
     demoRowsForModule, demoReviewStatus, demoQualityStatus, demoRateTone,
-    demoThresholds, demoBaseValue, demoSignal, demoTimeLanes, demoSignalDelta,
+    demoThresholds, demoBaseValue, demoTableValue, demoCharttimeAt, demoSignal, demoTimeLanes, demoSignalDelta,
     demoFeatureTone, demoCategorySection, demoQualityPanelRows,
   } = window.VIZ_DEMO;
 
@@ -1536,14 +1536,9 @@
       const displayColumns = ['entity'].concat(timeIndexed ? ['charttime'] : []).concat(features);
       const previewRows = Array.from({ length: 5 }, (_, idx) => {
         const out = { entity: `demo_ent_${idx + 1}` };
-        if (timeIndexed) out.charttime = `2026-01-01 ${String(idx).padStart(2, '0')}:00`;
+        if (timeIndexed) out.charttime = demoCharttimeAt(idx);
         features.forEach((feature, featureIdx) => {
-          const meta = catalogFeatureMeta(feature);
-          if (meta.unit === 'boolean' || ['abx', 'cort', 'rrt', 'mech_vent', 'vent_ind'].includes(feature)) {
-            out[feature] = (idx + featureIdx + moduleIdx) % 3 === 0;
-          } else {
-            out[feature] = Number(demoBaseValue(feature, idx + featureIdx + moduleIdx).toFixed(2));
-          }
+          out[feature] = demoTableValue(feature, idx + featureIdx + moduleIdx);
         });
         return out;
       });
