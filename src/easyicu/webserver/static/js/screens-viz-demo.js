@@ -109,28 +109,98 @@
   function demoThresholds(feature) {
     return (DEMO_THRESHOLDS[feature] || []).map(row => ({ value: row[0], label: row[1] }));
   }
+  const DEMO_BOOLEAN_FEATURES = new Set([
+    'abx', 'cort', 'rrt', 'mech_vent', 'vent_ind', 'vaso_ind',
+    'sep3_sofa1', 'sep3_sofa2', 'susp_inf', 'infection_icd', 'death',
+    'mort_icu', 'mort_hosp', 'mort_28d',
+  ]);
+  const DEMO_INTEGER_TOTAL_SCORES = new Set(['sofa', 'sofa2', 'qsofa', 'sirs', 'gcs', 'mews', 'news']);
+  const DEMO_SCORED_COMPONENTS = new Set([
+    'sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal',
+    'sofa2_resp', 'sofa2_coag', 'sofa2_liver', 'sofa2_cardio', 'sofa2_cns', 'sofa2_renal',
+  ]);
+  const DEMO_CHART_HOURS = [0, 1, 2, 3, 4, 6, 8, 12, 18, 24, 36, 48];
+
+  function demoIsBooleanFeature(feature, unit) {
+    const key = String(feature || '').toLowerCase();
+    return String(unit || '').toLowerCase() === 'boolean'
+      || DEMO_BOOLEAN_FEATURES.has(key)
+      || key.endsWith('_ind')
+      || key.endsWith('60')
+      || key.endsWith('90');
+  }
+  function demoIsIntegerFeature(feature) {
+    const key = String(feature || '').toLowerCase();
+    return DEMO_INTEGER_TOTAL_SCORES.has(key) || DEMO_SCORED_COMPONENTS.has(key);
+  }
+  function demoClamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+  function demoNormalizeValue(feature, raw, unit) {
+    const key = String(feature || '').toLowerCase();
+    if (demoIsBooleanFeature(key, unit)) return raw >= 0.5 ? 1 : 0;
+    if (DEMO_SCORED_COMPONENTS.has(key)) return demoClamp(Math.round(raw), 0, 4);
+    if (key === 'qsofa') return demoClamp(Math.round(raw), 0, 3);
+    if (key === 'sirs') return demoClamp(Math.round(raw), 0, 4);
+    if (key === 'gcs') return demoClamp(Math.round(raw), 3, 15);
+    if (key === 'sofa' || key === 'sofa2') return demoClamp(Math.round(raw), 0, 24);
+    if (key === 'mews' || key === 'news') return demoClamp(Math.round(raw), 0, 20);
+    if (demoIsIntegerFeature(key)) return Math.round(raw);
+    if (key === 'ph' || Math.abs(raw) < 1) return Number(raw.toFixed(2));
+    return Number(raw.toFixed(1));
+  }
+  function demoCharttimeAt(rowIndex) {
+    const idx = Math.max(0, Number(rowIndex) || 0);
+    const cycle = Math.floor(idx / DEMO_CHART_HOURS.length);
+    const hour = DEMO_CHART_HOURS[idx % DEMO_CHART_HOURS.length] + cycle * DEMO_DURATION_HOURS;
+    return Number(hour.toFixed(2));
+  }
+  function demoBaselineDrift(feature, base, entityIndex) {
+    const idx = Math.max(0, Number(entityIndex) || 0);
+    const key = String(feature || '').toLowerCase();
+    if (demoIsIntegerFeature(key)) return (idx % 3) - 1;
+    if (key === 'ph') return ((idx % 4) - 1.5) * 0.02;
+    if (key === 'temp') return ((idx % 4) - 1.5) * 0.08;
+    if (Math.abs(base) < 1) return ((idx % 4) - 1.5) * 0.01;
+    if (['spo2', 'fio2', 'peep'].includes(key)) return (idx % 4) * 0.4;
+    return (idx % 4) * 0.45;
+  }
   function demoBaseValue(feature, entityIndex) {
     const idx = entityIndex || 0;
+    const key = String(feature || '').toLowerCase();
     const map = {
       hr: 88, map: 74, sbp: 112, dbp: 61, pulse_pressure: 51, temp: 37.1, spo2: 96, resp: 20,
       lact: 2.3, crea: 1.25, bili: 1.1, plt: 168, hgb: 10.2, wbc: 11.5, inr_pt: 1.25,
       glu: 146, k: 4.1, na: 138, alb: 3.0, crp: 82, tnt: 0.03, ph: 7.38, po2: 86, pco2: 42,
       fio2: 42, peep: 8, norepi_rate: 0.08, epi_rate: 0.02, dopa_rate: 3.0, dobu_rate: 2.0, ins: 2.4,
       sofa: 6, sofa2: 7, qsofa: 2, sirs: 3, gcs: 12, mews: 5, news: 6, pafi: 214, safi: 246,
+      sofa_resp: 2, sofa_coag: 1, sofa_liver: 1, sofa_cardio: 3, sofa_cns: 1, sofa_renal: 2,
+      sofa2_resp: 2, sofa2_coag: 1, sofa2_liver: 1, sofa2_cardio: 3, sofa2_cns: 1, sofa2_renal: 2,
       abx: 1, cort: 1, rrt: 0, mech_vent: 1, vent_ind: 1,
+      sep3_sofa1: 1, sep3_sofa2: 1, susp_inf: 1, infection_icd: 1, death: 0,
     };
-    const base = Object.prototype.hasOwnProperty.call(map, feature) ? map[feature] : 1 + ((feature || '').length % 9);
-    return base + (idx % 4) * 0.45;
+    const base = Object.prototype.hasOwnProperty.call(map, key) ? map[key] : 1 + (key.length % 9);
+    const drift = demoBaselineDrift(key, base, idx);
+    return demoNormalizeValue(key, base + drift, catalogFeatureMeta(key).unit);
+  }
+  function demoTableValue(feature, entityIndex) {
+    const meta = catalogFeatureMeta(feature);
+    const key = String(feature || '').toLowerCase();
+    if (demoIsBooleanFeature(key, meta.unit)) {
+      return ((entityIndex || 0) + key.length) % 3 === 0;
+    }
+    return demoBaseValue(key, entityIndex);
   }
   function demoSignal(feature, entityIndex) {
     const meta = catalogFeatureMeta(feature);
+    const key = String(feature || '').toLowerCase();
     const values = Array.from({ length: 12 }, (_, i) => {
       const base = demoBaseValue(feature, entityIndex);
-      if (meta.unit === 'boolean') return (i + (entityIndex || 0)) % 5 === 0 ? 0 : 1;
+      if (demoIsBooleanFeature(key, meta.unit)) return (i + (entityIndex || 0)) % 5 === 0 ? 0 : 1;
       const wave = Math.sin((i + 1 + (entityIndex || 0)) / 2.1);
       const drift = (i - 5) * 0.06;
       const scale = Math.max(0.08, Math.abs(base) * 0.045);
-      return Number((base + wave * scale + drift).toFixed(feature === 'ph' || base < 1 ? 2 : 1));
+      return demoNormalizeValue(key, base + wave * scale + drift, meta.unit);
     });
     return {
       key: feature,
@@ -206,7 +276,7 @@
     DEMO_ENTITY_COUNT, DEMO_DURATION_HOURS, DEMO_CLINICAL_LANES, DEMO_THRESHOLDS,
     demoCatalogModules, demoIsTimeIndexed, demoFeatureModule, demoCoverageForFeature,
     demoRowsForModule, demoReviewStatus, demoQualityStatus, demoRateTone,
-    demoThresholds, demoBaseValue, demoSignal, demoTimeLanes, demoSignalDelta,
+    demoThresholds, demoBaseValue, demoTableValue, demoCharttimeAt, demoSignal, demoTimeLanes, demoSignalDelta,
     demoFeatureTone, demoCategorySection, demoQualityPanelRows,
   };
 })();
