@@ -923,7 +923,16 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20260625-stage92" in index_html
-    assert "js/screens-viz.js?v=20260625-stage92" in index_html
+    assert "js/screens-viz.js?v=20260626-cohort-setup-gate" in index_html
+    assert "let cohortView = 'idle';" in viz_js
+    assert "data-cohort-config-required=\"true\"" in viz_js
+    assert "Cohort Statistics no longer opens with preloaded seeded results" in viz_js
+    assert "Run demo cohort review" in viz_js
+    assert "data-cohort-use-real" in viz_js
+    assert "cohortView = ok ? 'loaded' : 'idle';" in viz_js
+    assert "cohortView = 'idle';" in viz_js
+    assert "window.EU_COHORT_REVIEW = null;" in viz_js
+    assert "data-viz-reset" in viz_js
     assert "let cohortCompare = 'outcome';" in viz_js
     assert "let cohortSurvivalOutcome = 'hospital_death';" in viz_js
     assert "let cohortSurvivalGroup = 'sepsis';" in viz_js
