@@ -141,6 +141,7 @@
   let guidedFolderMenuOpen = false;
   let guidedFolderDialogMode = null;
   let guidedFolderSeedTitle = 'New local study';
+  let guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
   let guidedSlotSaveTimer = null;
   let studyParams;   // dynamic params extracted from clarify answers + free text
 
@@ -185,6 +186,7 @@
     guidedFolderMenuOpen = false;
     guidedFolderDialogMode = null;
     guidedFolderSeedTitle = 'New local study';
+    guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
     studyStatus = {}; studyVal = {};
     gen++;
@@ -3071,6 +3073,70 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           </button>`).join('')}</div>` : ''}
       </div>`;
   }
+  function renderGuidedFolderBrowser() {
+    if (!guidedFolderBrowser.open) return '';
+    const data = guidedFolderBrowser.data || {};
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    const shortcuts = Array.isArray(data.shortcuts) ? data.shortcuts : [];
+    const currentPath = data.path || guidedFolderBrowser.path || '';
+    const parent = data.parent || '';
+    const failed = guidedFolderBrowser.error || (data && data.ok === false ? data.error : '');
+    return `
+      <div class="gds-browser" data-guided-folder-browser>
+        <div class="gds-browser-head">
+          <div>
+            <strong>${t('Folder picker', '文件夹选择器')}</strong>
+            <span>${t('Browse folders through the local EasyICU server; nothing is uploaded.', '通过本机 EasyICU 服务浏览文件夹；不会上传任何内容。')}</span>
+          </div>
+          <button class="btn sm ghost" type="button" data-folder-browser-close>${icon('close', 12)}</button>
+        </div>
+        <div class="gds-browser-path"><span>${t('Current', '当前')}</span><code>${esc(compactPath(currentPath) || t('Home folder', '主目录'))}</code></div>
+        ${shortcuts.length ? `<div class="gds-browser-shortcuts">${shortcuts.map((item, i) => `
+          <button class="btn sm" type="button" data-folder-browser-shortcut="${i}">${esc(item.name || 'Folder')}</button>`).join('')}</div>` : ''}
+        ${failed ? `<div class="gds-browser-message warn">${icon('info', 12)} <span>${esc(String(failed))}</span></div>` : ''}
+        <div class="gds-browser-list">
+          ${guidedFolderBrowser.loading ? `<div class="gds-browser-empty">${icon('refresh', 13)} ${t('Loading folders...', '正在加载文件夹...')}</div>` : ''}
+          ${!guidedFolderBrowser.loading && !entries.length ? `<div class="gds-browser-empty">${t('No child folders here. You can still choose the current folder if it is the project folder.', '这里没有下级文件夹。如果当前目录就是项目文件夹，也可以直接选择当前文件夹。')}</div>` : ''}
+          ${!guidedFolderBrowser.loading && entries.map((entry, i) => `
+            <button class="gds-browser-row" type="button" data-folder-browser-entry="${i}">
+              <span class="gds-ico">${icon('folder', 13)}</span>
+              <span><strong>${esc(entry.name || 'Folder')}</strong><code>${esc(compactPath(entry.path || ''))}</code></span>
+              ${entry.hint ? `<em>${esc(entry.hint)}</em>` : ''}
+            </button>`).join('')}
+        </div>
+        <div class="gds-browser-actions">
+          <button class="btn sm" type="button" data-folder-browser-up ${parent ? '' : 'disabled'}>${icon('back', 12)} ${t('Up', '上一级')}</button>
+          <span class="grow"></span>
+          <button class="btn primary sm" type="button" data-folder-browser-use ${currentPath ? '' : 'disabled'}>${icon('check', 12)} ${t('Use this folder', '选择此文件夹')}</button>
+        </div>
+      </div>`;
+  }
+  function loadGuidedFolderBrowser(path) {
+    guidedFolderBrowser.open = true;
+    guidedFolderBrowser.loading = true;
+    guidedFolderBrowser.error = null;
+    guidedFolderBrowser.path = String(path || guidedFolderBrowser.path || '');
+    renderGuidedFolderDialog();
+    if (!window.EU_API || !window.EU_API.listDir) {
+      guidedFolderBrowser.loading = false;
+      guidedFolderBrowser.error = t('Local folder picker API is unavailable.', '本地文件夹选择 API 不可用。');
+      renderGuidedFolderDialog();
+      return;
+    }
+    window.EU_API.listDir(guidedFolderBrowser.path)
+      .then(result => {
+        guidedFolderBrowser.loading = false;
+        guidedFolderBrowser.data = result || {};
+        guidedFolderBrowser.path = (result && result.path) || guidedFolderBrowser.path || '';
+        guidedFolderBrowser.error = result && result.ok === false ? (result.error || 'folder_error') : null;
+        renderGuidedFolderDialog();
+      })
+      .catch(err => {
+        guidedFolderBrowser.loading = false;
+        guidedFolderBrowser.error = String(err && err.message || err || 'folder_error');
+        renderGuidedFolderDialog();
+      });
+  }
   function renderGuidedFolderDialog() {
     const host = document.getElementById('gdFolderDialogHost');
     if (!host) return;
@@ -3100,8 +3166,12 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           <div class="gds-choice">
             <div class="gds-choice-head"><strong>${t('Open existing project folder', '打开现有项目文件夹')}</strong><span>${t('Use this when you already have a local Guided, Idea Mining, or Agent project folder.', '已有本地 Guided、Idea Mining 或 Agent 项目文件夹时使用。')}</span></div>
             ${renderGuidedKnownProjectPicker()}
-            <label class="gds-field"><span>${t('Project folder path', '项目文件夹路径')}</span><input data-existing-project-dir placeholder="~/easyicu/projects/my-study or C:\\Users\\you\\easyicu\\projects\\my-study" autocomplete="off" /></label>
-            <div class="gds-path"><span>${t('Scope', '范围')}</span><code>EasyICU projects folder</code><small>${t('If the folder is listed above, choose it directly. Path paste is only an advanced fallback because browsers do not expose arbitrary absolute folder paths.', '如果文件夹已在上方列出，请直接选择。路径粘贴只是高级 fallback，因为浏览器不会暴露任意绝对文件夹路径。')}</small></div>
+            <div class="gds-path-row">
+              <label class="gds-field"><span>${t('Project folder path', '项目文件夹路径')}</span><input data-existing-project-dir placeholder="~/easyicu/projects/my-study or C:\\Users\\you\\easyicu\\projects\\my-study" autocomplete="off" /></label>
+              <button class="btn sm" type="button" data-browseprojectfolder>${icon('folder', 13)} ${t('Browse...', '浏览...')}</button>
+            </div>
+            <div class="gds-path"><span>${t('Scope', '范围')}</span><code>EasyICU projects folder</code><small>${t('Use Browse to choose a folder. Path paste remains an advanced fallback for terminal workflows.', '请使用“浏览”选择文件夹。路径粘贴只作为终端工作流的高级 fallback。')}</small></div>
+            ${renderGuidedFolderBrowser()}
             <div class="row gap-8"><button class="btn primary sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open folder memory', '打开文件夹记忆')}</button><button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
             <div class="gds-status" data-project-open-status hidden></div>
           </div>` : `
@@ -3118,6 +3188,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     guidedFolderMenuOpen = false;
     guidedFolderDialogMode = mode === 'open' ? 'open' : 'new';
     guidedFolderSeedTitle = seedTitle || guidedFolderSeedTitle || 'New local study';
+    guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
     renderGuidedFolderControls();
     renderGuidedFolderDialog();
     setTimeout(() => {
@@ -3129,6 +3200,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function closeGuidedFolderDialog() {
     guidedFolderMenuOpen = false;
     guidedFolderDialogMode = null;
+    guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
     renderGuidedFolderControls();
     renderGuidedFolderDialog();
   }
@@ -3961,6 +4033,48 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           if (!row) return;
           const box = knownProjectEl.closest('[data-draft-setup]');
           openExistingGuidedProject(row.project_dir, box);
+          return;
+        }
+        if (e.target.closest('[data-browseprojectfolder]')) {
+          const box = e.target.closest('[data-draft-setup]');
+          const pathEl = box ? box.querySelector('[data-existing-project-dir]') : null;
+          loadGuidedFolderBrowser(pathEl && pathEl.value);
+          return;
+        }
+        if (e.target.closest('[data-folder-browser-close]')) {
+          guidedFolderBrowser.open = false;
+          renderGuidedFolderDialog();
+          return;
+        }
+        const browserShortcut = e.target.closest('[data-folder-browser-shortcut]');
+        if (browserShortcut) {
+          const shortcuts = guidedFolderBrowser.data && Array.isArray(guidedFolderBrowser.data.shortcuts)
+            ? guidedFolderBrowser.data.shortcuts
+            : [];
+          const row = shortcuts[Number(browserShortcut.dataset.folderBrowserShortcut || -1)];
+          if (row && row.path) loadGuidedFolderBrowser(row.path);
+          return;
+        }
+        const browserEntry = e.target.closest('[data-folder-browser-entry]');
+        if (browserEntry) {
+          const entries = guidedFolderBrowser.data && Array.isArray(guidedFolderBrowser.data.entries)
+            ? guidedFolderBrowser.data.entries
+            : [];
+          const row = entries[Number(browserEntry.dataset.folderBrowserEntry || -1)];
+          if (row && row.path) loadGuidedFolderBrowser(row.path);
+          return;
+        }
+        if (e.target.closest('[data-folder-browser-up]')) {
+          const parent = guidedFolderBrowser.data && guidedFolderBrowser.data.parent;
+          if (parent) loadGuidedFolderBrowser(parent);
+          return;
+        }
+        if (e.target.closest('[data-folder-browser-use]')) {
+          const box = e.target.closest('[data-draft-setup]');
+          const path = (guidedFolderBrowser.data && guidedFolderBrowser.data.path) || guidedFolderBrowser.path;
+          const pathEl = box ? box.querySelector('[data-existing-project-dir]') : null;
+          if (pathEl && path) pathEl.value = path;
+          openExistingGuidedProject(path, box);
           return;
         }
         const openProjectFolderEl = e.target.closest('[data-openprojectfolder]');

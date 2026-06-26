@@ -81,7 +81,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_API.saveSetting('language', l)" in i18n_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260625-stage96" in index_html
-    assert "js/api.js?v=20260626-guided-folder-picker" in index_html
+    assert "js/api.js?v=20260626-guided-folder-browser" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -172,7 +172,7 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "页面指南只支持固定快捷操作" in dock_js
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
-    assert "js/screens-guided.js?v=20260626-guided-folder-picker" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-folder-browser" in index_html
     assert "js/copilot-dock.js?v=20260625-stage99" in index_html
 
 
@@ -214,7 +214,7 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260626-guided-folder-picker" in index_html
+    assert "js/api.js?v=20260626-guided-folder-browser" in index_html
     assert "js/copilot-dock.js?v=20260625-stage99" in index_html
 
 
@@ -308,9 +308,9 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan" in guided_css
     assert ".gd-concept-answer" in guided_css
 
-    assert "css/guided.css?v=20260626-guided-folder-picker" in index_html
-    assert "js/api.js?v=20260626-guided-folder-picker" in index_html
-    assert "js/screens-guided.js?v=20260626-guided-folder-picker" in index_html
+    assert "css/guided.css?v=20260626-guided-folder-browser" in index_html
+    assert "js/api.js?v=20260626-guided-folder-browser" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-folder-browser" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -791,7 +791,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260625-stage93" in index_html
-    assert "api.js?v=20260626-guided-folder-picker" in index_html
+    assert "api.js?v=20260626-guided-folder-browser" in index_html
     assert "screens-dict.js?v=20260625-stage93" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -813,6 +813,7 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert "/api/guided/message" in api_js
     assert "/api/guided/action" in api_js
     assert "/api/guided/sessions/list" in api_js
+    assert "window.EU_API.listDir = listDir" in api_js
     assert "createGuidedSession" in guided_js
     assert "openGuidedProject" in guided_js
     assert "openGuidedProjectMemory(row, localDraftEl, 'draft')" in guided_js
@@ -859,7 +860,14 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert "Detected local project folders" in guided_js
     assert "data-known-project" in guided_js
     assert "data-refreshfolderchoices" in guided_js
-    assert "Path paste is only an advanced fallback" in guided_js
+    assert "Path paste remains an advanced fallback" in guided_js
+    assert "data-browseprojectfolder" in guided_js
+    assert "loadGuidedFolderBrowser" in guided_js
+    assert "data-guided-folder-browser" in guided_js
+    assert "data-folder-browser-entry" in guided_js
+    assert "data-folder-browser-shortcut" in guided_js
+    assert "data-folder-browser-use" in guided_js
+    assert "Use Browse to choose a folder" in guided_js
     assert "Choose a local study folder" in guided_js
     assert "Open existing project folder" in guided_js
     assert "Project folder path" in guided_js
@@ -904,6 +912,9 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert ".gds-known" in guided_css
     assert ".gds-known-row" in guided_css
     assert ".gds-known-empty" in guided_css
+    assert ".gds-browser" in guided_css
+    assert ".gds-browser-row" in guided_css
+    assert ".gds-browser-actions" in guided_css
     assert ".gds-choice" in guided_css
     assert ".gds-status" in guided_css
     assert ".gds-status.loading" in guided_css
@@ -913,9 +924,9 @@ def test_native_guided_local_runs_are_real_history_and_examples_stay_seeded() ->
     assert ".gdf-memory" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
-    assert "api.js?v=20260626-guided-folder-picker" in index_html
-    assert "screens-guided.js?v=20260626-guided-folder-picker" in index_html
-    assert "guided.css?v=20260626-guided-folder-picker" in index_html
+    assert "api.js?v=20260626-guided-folder-browser" in index_html
+    assert "screens-guided.js?v=20260626-guided-folder-browser" in index_html
+    assert "guided.css?v=20260626-guided-folder-browser" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
     assert "[t('Review Data', '审阅已有数据'), '@guidedGoal:review_data']" in guided_js
