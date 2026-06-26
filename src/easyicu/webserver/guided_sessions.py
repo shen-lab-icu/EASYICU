@@ -12,6 +12,7 @@ import hashlib
 import json
 import re
 import threading
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -800,8 +801,8 @@ def _draft_id(seed: str) -> str:
 
 
 def _slug(value: Any, fallback: str = "guided-study") -> str:
-    text = str(value or "").strip().lower()
-    text = re.sub(r"[^a-z0-9._-]+", "-", text)
+    text = unicodedata.normalize("NFKC", str(value or "").strip().lower())
+    text = "".join(ch if (ch.isalnum() or ch in "._-") else "-" for ch in text)
     text = re.sub(r"-{2,}", "-", text).strip("-._")
     return (text or fallback)[:64].strip("-._") or fallback
 

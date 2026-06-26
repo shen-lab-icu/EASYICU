@@ -1832,16 +1832,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       discovery: null,
       error: null,
     };
-    guidedIdeaProvider = {
-      provider: 'openai',
-      loading: false,
-      saving: false,
-      error: null,
-      saveError: null,
-      saved: false,
-      status: null,
-      configOpen: false,
-    };
+    guidedIdeaProvider = createGuidedIdeaProviderState();
     guidedLiteratureBrowser = { open: false, loading: false, error: null, data: null, path: '' };
   }
   function startGuidedIdeaFlow(label) {
@@ -1925,106 +1916,33 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (guidedIdea.resolved) return t('Source metadata resolved. Run local mining next.', '来源元数据已解析。下一步运行本地挖掘。');
     return t('Add a source clue or topic, then run local mining.', '先添加来源线索或主题，然后运行本地挖掘。');
   }
+  function guidedIdeaProviderContext() {
+    return {
+      getState: () => guidedIdeaProvider,
+      setState: next => { guidedIdeaProvider = next; },
+      getIdea: () => guidedIdea,
+      api: () => window.EU_API || {},
+      t,
+      esc,
+      attr,
+      icon,
+      renderThread,
+    };
+  }
+  function createGuidedIdeaProviderState(overrides) {
+    return window.EU_GUIDED_IDEA_PROVIDER.createState(overrides);
+  }
   function requestGuidedIdeaProviderStatus(force) {
-    if (!guidedIdeaProvider) {
-      guidedIdeaProvider = {
-        provider: 'openai',
-        loading: false,
-        saving: false,
-        error: null,
-        saveError: null,
-        saved: false,
-        status: null,
-        configOpen: false,
-      };
-    }
-    if (!window.EU_API || !window.EU_API.loadAgentProviderStatus) return;
-    if (!force && (guidedIdeaProvider.loading || guidedIdeaProvider.status || guidedIdeaProvider.error)) return;
-    guidedIdeaProvider = Object.assign({}, guidedIdeaProvider, { loading: true, error: null });
-    window.EU_API.loadAgentProviderStatus(guidedIdeaProvider.provider || 'openai').then(data => {
-      guidedIdeaProvider = Object.assign({}, guidedIdeaProvider, {
-        loading: false,
-        error: null,
-        status: (data && data.provider_status) || data || null,
-      });
-      renderThread();
-    }).catch(err => {
-      guidedIdeaProvider = Object.assign({}, guidedIdeaProvider, {
-        loading: false,
-        error: err && err.message ? err.message : String(err || 'provider_status_error'),
-        status: null,
-      });
-      renderThread();
-    });
+    window.EU_GUIDED_IDEA_PROVIDER.requestStatus(guidedIdeaProviderContext(), force);
+  }
+  function enableGuidedIdeaProvider() {
+    window.EU_GUIDED_IDEA_PROVIDER.enableProvider(guidedIdeaProviderContext());
+  }
+  function saveGuidedIdeaProviderConfig(root) {
+    window.EU_GUIDED_IDEA_PROVIDER.saveConfig(guidedIdeaProviderContext(), root);
   }
   function renderGuidedIdeaCapabilityPanel() {
-    if (!guidedIdeaProvider) guidedIdeaProvider = { provider: 'openai', loading: false, error: null, status: null };
-    const st = guidedIdeaProvider.status || {};
-    const envFile = st.env_file || {};
-    const missing = Array.isArray(st.missing) ? st.missing : [];
-    const ready = !!st.ready;
-    const aiOn = !!st.ai_enabled;
-    const keyReady = !!st.credential_present;
-    const modelReady = !!st.model_present;
-    const envStatus = envFile.status || 'not_loaded';
-    const blocked = missing.length ? missing.join(', ') : (ready ? '' : t('provider not ready', 'provider 未就绪'));
-    const providers = [
-      ['openai', 'OpenAI'],
-      ['openrouter', 'OpenRouter'],
-      ['deepseek', 'DeepSeek'],
-      ['custom', 'Custom/local'],
-    ];
-    return `
-      <div class="gdx-status ${ready ? 'ok' : 'warn'}">
-        <span>${icon(ready ? 'check' : 'shield', 12)}</span>
-        <div>
-          <strong>${t('Capability boundary', '能力边界')}</strong>
-          <small>${t('Local source parsing, dictionary matching, active-export feasibility, and handoff can run without an API. Prior-art search and AI synthesis require explicit opt-in and provider readiness.', '本地来源解析、字典匹配、active export 可行性和交接不需要 API。既有研究检索和 AI 综合必须显式 opt-in 且 provider 就绪。')}</small>
-        </div>
-      </div>
-      <div class="gdi-feature-list">
-        <div class="gdi-feature-row">
-          <div><strong>${t('Local deterministic mining', '本地确定性挖掘')}</strong><small>${t('PDF/folder bounded excerpt, dictionary feasibility, pre-experiment, Agent handoff seed', 'PDF/文件夹有界摘录、字典可行性、预实验、Agent 交接种子')}</small></div>
-          <span class="pill ok">${t('available now', '当前可用')}</span>
-        </div>
-        <div class="gdi-feature-row">
-          <div><strong>${t('Network prior-art check', '联网既有研究检查')}</strong><small>${t('Runs only after the per-source network checkbox is selected; no request is made otherwise.', '只有勾选当前来源的网络 opt-in 后才会请求；否则不会联网。')}</small></div>
-          <span class="pill ${guidedIdea && guidedIdea.allowNetwork ? 'warn' : 'dashed'}">${guidedIdea && guidedIdea.allowNetwork ? t('armed for one request', '已允许一次请求') : t('blocked until opt-in', '等待 opt-in')}</span>
-        </div>
-        <div class="gdi-feature-row">
-          <div><strong>${t('AI synthesis / full Agent provider', 'AI 综合 / full Agent provider')}</strong><small>${ready ? t('Provider readiness passed. A later Agent run still needs per-run confirmation and evidence checks.', 'provider 已就绪。后续 Agent run 仍需要逐次确认和证据核验。') : t('Blocked: configure AI opt-in, API key, model, and endpoint before any provider call.', '已阻断：需要配置 AI opt-in、API key、模型和端点后才允许 provider 调用。')}</small></div>
-          <span class="pill ${ready ? 'ok' : 'warn'}">${ready ? t('ready', '就绪') : esc(blocked)}</span>
-        </div>
-      </div>
-      <div class="gdi-feature-list">
-        <div class="gdi-feature-row">
-          <div><strong>${t('Provider', 'Provider')}</strong><small>${esc(guidedIdeaProvider.provider || st.provider || 'openai')}</small></div>
-          <span>${guidedIdeaProvider.loading ? t('checking...', '检查中...') : ready ? t('ready', '就绪') : t('blocked', '受阻')}</span>
-        </div>
-        <div class="gdi-feature-row">
-          <div><strong>${t('Readiness flags', '就绪标记')}</strong><small>${t('Only variable names and booleans are shown; secret values and base URL values are never returned.', '只显示变量名和布尔值；密钥值和 base URL 值不会返回。')}</small></div>
-          <span class="gdi-tags">
-            <code>AI ${aiOn ? 'on' : 'off'}</code>
-            <code>key ${keyReady ? 'present' : 'missing'}</code>
-            <code>model ${modelReady ? 'present' : 'missing'}</code>
-          </span>
-        </div>
-        <div class="gdi-feature-row">
-          <div><strong>${t('Env sources', '环境变量来源')}</strong><small>${t('Sanitized provider status from Agent provider readiness.', '来自 Agent provider readiness 的脱敏状态。')}</small></div>
-          <span class="gdi-tags">
-            <code>${esc(st.credential_source || (st.credential_env_candidates || [])[0] || 'credential env')}</code>
-            <code>${esc(st.model_source || (st.model_env_candidates || [])[0] || 'model env')}</code>
-            <code>${esc(st.base_url_source || (st.base_url_env_candidates || [])[0] || 'base_url env')}</code>
-            <code>${esc(envStatus)}</code>
-          </span>
-        </div>
-        ${guidedIdeaProvider.error ? `<div class="gdi-feature-row"><div><strong>${t('Provider status unavailable', 'provider 状态不可用')}</strong><small>${esc(guidedIdeaProvider.error)}</small></div><span class="pill warn">error</span></div>` : ''}
-      </div>
-      <div class="gdx-actions">
-        ${providers.map(([p, label]) => `<button type="button" class="btn sm ${guidedIdeaProvider.provider === p ? 'primary' : ''}" data-gi-provider="${p}">${esc(label)}</button>`).join('')}
-        <button type="button" class="btn sm" data-gi-provider-refresh>${icon('refresh', 12)} ${t('Check API status', '检查 API 状态')}</button>
-        <button type="button" class="btn sm" data-open="settings">${icon('gear', 12)} ${t('Configure in Settings', '去设置中配置')}</button>
-      </div>`;
+    return window.EU_GUIDED_IDEA_PROVIDER.renderCapabilityPanel(guidedIdeaProviderContext());
   }
   function renderGuidedIdeaPdfPicker() {
     const pdf = guidedIdea && guidedIdea.pdf;
@@ -2300,8 +2218,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
             <span>${t('Source evidence, dictionary feasibility, pre-experiment, and Agent handoff all stay metadata-only and local-first.', '来源证据、字典可行性、预实验和 Agent 交接均保持 metadata-only 与 local-first。')}</span>
           </div>
         </div>
-        ${renderGuidedIdeaSourceFields()}
         ${renderGuidedIdeaCapabilityPanel()}
+        ${renderGuidedIdeaSourceFields()}
         <div class="gdx-status ${guidedIdea.error ? 'bad' : result ? 'ok' : ''}">
           <span>${icon(guidedIdea.error ? 'x' : result ? 'check' : 'shield', 12)}</span>
           <div><strong>${guidedIdeaStatusText()}</strong><small>${t('No patient rows, full papers, external calls, or provider clients unless you explicitly opt in and provider readiness passes.', '不会返回患者行、全文、外部调用或 provider client，除非你显式 opt-in 且 provider readiness 通过。')}</small></div>
@@ -3263,6 +3181,35 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       : [['Use active export', '@activeExport'], ['Continue conversation', '@noop'], ['Open Agent Projects', '@openAgent']];
     renderThread(); renderChips();
   }
+  function startFreshGuidedProjectThread(title, path) {
+    currentId = 'frontdoor';
+    pendingGuidedGoal = null;
+    busy = false;
+    outputsReady = false;
+    diffExpanded = false;
+    liveAgentRun = null;
+    workspaceSnapshot = null;
+    workspaceSnapshotPath = null;
+    guidedExtract = null;
+    guidedReview = null;
+    guidedAgent = null;
+    guidedIdea = null;
+    guidedLiteratureBrowser = null;
+    thread = [];
+    thread.push({ bot: true, html: bi(
+      `Created <strong>${esc(title)}</strong> at <span class="mono">${esc(path)}</span>. A new Guided conversation has started for this project; previous chat content stays with the previous project.`,
+      `已创建 <strong>${esc(title)}</strong> 到 <span class="mono">${esc(path)}</span>。这个项目的新 Guided 对话已开始；之前的聊天内容仍归属之前的项目。`,
+    ) });
+    thread.push({ bot: true, html: bi(renderGuidedGoalCards(), renderGuidedGoalCards()) });
+    chips = [
+      [t('Find a Study Idea', '找研究想法'), '@guidedGoal:idea_mining'],
+      [t('Prepare Data', '准备/抽取数据'), '@guidedGoal:data_extraction'],
+      [t('Review Data', '审阅已有数据'), '@guidedGoal:review_data'],
+      [t('Run a Research Project', '运行研究项目'), '@guidedGoal:run_agent'],
+    ];
+    renderThread();
+    renderChips();
+  }
   function openGuidedProjectMemory(row, el, kind) {
     if (!row || !row.project_dir || !window.EU_API || !window.EU_API.openGuidedProject) {
       pushBot(
@@ -3477,8 +3424,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     };
   }
   function slugifyDraftFolder(text) {
-    return String(text || 'guided-study').trim().toLowerCase()
-      .replace(/[^a-z0-9._-]+/g, '-')
+    return String(text || 'guided-study').normalize('NFKC').trim().toLowerCase()
+      .replace(/[^\p{L}\p{N}._-]+/gu, '-')
       .replace(/-{2,}/g, '-')
       .replace(/^[-._]+|[-._]+$/g, '')
       .slice(0, 64) || 'guided-study';
@@ -3914,16 +3861,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       const title = selectedGuidedDraft && selectedGuidedDraft.title ? selectedGuidedDraft.title : text;
       const path = selectedGuidedDraft && selectedGuidedDraft.project_dir ? compactPath(selectedGuidedDraft.project_dir) : '~/easyicu/projects';
       closeGuidedFolderDialog();
-      pushBot(
-        `Saved local guided draft <strong>${esc(title)}</strong> at <span class="mono">${esc(path)}</span>. This folder now owns the Guided conversation memory; Agent artifacts are created only when you start an auditable run.`,
-        `已保存本地引导草稿 <strong>${esc(title)}</strong> 到 <span class="mono">${esc(path)}</span>。现在这个文件夹拥有本次 Guided 对话记忆；只有启动可审计 run 时才会生成 Agent artifacts。`,
-      );
-      chips = [['Use active export', '@activeExport'], ['Open Agent Projects', '@openAgent'], ['Continue conversation', '@noop']];
-      renderThread(); renderChips();
-      if (!continuePendingGuidedGoal()) {
-        thread.push({ bot: true, html: bi(renderGuidedGoalCards(), renderGuidedGoalCards()) });
-        renderThread();
-      }
+      startFreshGuidedProjectThread(title, path);
     }).catch(err => {
       pushBot(
         `Could not save the guided draft: <span class="mono">${esc(err.message || String(err))}</span>`,
@@ -4493,15 +4431,31 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         }
         const giProvider = e.target.closest('[data-gi-provider]');
         if (giProvider) {
-          guidedIdeaProvider = {
+          guidedIdeaProvider = createGuidedIdeaProviderState({
             provider: giProvider.dataset.giProvider || 'openai',
-            loading: false,
-            error: null,
-            status: null,
-          };
+            configOpen: !!(guidedIdeaProvider && guidedIdeaProvider.configOpen),
+          });
           requestGuidedIdeaProviderStatus(true);
           renderThread();
           scheduleGuidedSlotSave('set_idea_provider');
+          return;
+        }
+        if (e.target.closest('[data-gi-provider-config-toggle]')) {
+          if (!guidedIdeaProvider) guidedIdeaProvider = { provider: 'openai' };
+          guidedIdeaProvider = Object.assign({}, guidedIdeaProvider, {
+            configOpen: !guidedIdeaProvider.configOpen,
+            saveError: null,
+          });
+          renderThread();
+          return;
+        }
+        if (e.target.closest('[data-gi-enable-ai]')) {
+          enableGuidedIdeaProvider();
+          return;
+        }
+        if (e.target.closest('[data-gi-provider-save]')) {
+          const card = e.target.closest('.gd-idea-card') || document;
+          saveGuidedIdeaProviderConfig(card);
           return;
         }
         if (e.target.closest('[data-gi-provider-refresh]')) {

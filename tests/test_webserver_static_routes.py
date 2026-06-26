@@ -92,7 +92,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "window.EU_API.saveSetting('data_mode', m)" in i18n_js
     assert "js/i18n.js?v=20260626-language-refresh-dock" in index_html
-    assert "js/api.js?v=20260626-idea-discovery" in index_html
+    assert "js/api.js?v=20260626-guided-provider-config" in index_html
 
 
 def test_native_mobile_page_guide_fab_does_not_cover_bottom_nav() -> None:
@@ -186,7 +186,8 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "页面指南只支持固定快捷操作" in dock_js
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
-    assert "js/screens-guided.js?v=20260626-guided-parent-folder" in index_html
+    assert "js/screens-guided-idea-provider.js?v=20260626-guided-provider-split" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-provider-split" in index_html
     assert "js/copilot-dock.js?v=20260626-page-guide-refresh2" in index_html
 
 
@@ -228,12 +229,13 @@ def test_native_page_guide_uses_backend_page_guide_contract() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "Page guide backend unavailable, using local fallback" in dock_js
-    assert "js/api.js?v=20260626-idea-discovery" in index_html
+    assert "js/api.js?v=20260626-guided-provider-config" in index_html
     assert "js/copilot-dock.js?v=20260626-page-guide-refresh2" in index_html
 
 
 def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questions() -> None:
     guided_js = _static_js("screens-guided.js")
+    provider_js = _static_js("screens-guided-idea-provider.js")
     api_js = _static_js("api.js")
     guided_css = _static_css("guided.css")
     index_html = _static_html("index.html")
@@ -288,7 +290,10 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "window.EU_API.resolveIdeaSource" in guided_js
     assert "window.EU_API.ingestIdeaPdf" in guided_js
     assert "window.EU_API.scanIdeaLiteratureFolder" in guided_js
-    assert "window.EU_API.loadAgentProviderStatus" in guided_js
+    assert "window.EU_GUIDED_IDEA_PROVIDER.requestStatus" in guided_js
+    assert "loadAgentProviderStatus" in provider_js
+    assert "window.EU_API.saveAgentProviderConfig" in _static_js("api.js")
+    assert "saveAgentProviderConfig" in provider_js
     assert "window.EU_API.checkIdeaPriorArt" in guided_js
     assert "window.EU_API.handoffIdea" in guided_js
     assert "window.EU_API.createIdeaAgentProject" in guided_js
@@ -298,9 +303,19 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "data-gi-pdf-file" in guided_js
     assert "data-gi-lit-browse" in guided_js
     assert "data-gi-lit-scan" in guided_js
-    assert "data-gi-provider-refresh" in guided_js
+    assert "data-gi-provider-refresh" in provider_js
+    assert "data-gi-provider-config-toggle" in provider_js
+    assert "data-gi-provider-key" in provider_js
+    assert "data-gi-provider-base" in provider_js
+    assert "data-gi-provider-model" in provider_js
+    assert "data-gi-provider-save" in guided_js
+    assert "data-gi-enable-ai" in guided_js
+    assert "function saveGuidedIdeaProviderConfig" in guided_js
     assert "function requestGuidedIdeaProviderStatus" in guided_js
-    assert "Capability boundary" in guided_js
+    assert "API setup gate" in provider_js
+    assert "API setup gate" not in guided_js
+    assert "window.EU_GUIDED_IDEA_PROVIDER = {" in provider_js
+    assert "function renderCapabilityPanel(" in provider_js
     assert "data-gi-handoff" in guided_js
     assert "data-gi-project" in guided_js
 
@@ -332,8 +347,12 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gd-concept-answer" in guided_css
 
     assert "css/guided.css?v=20260626-guided-api-boundary" in index_html
-    assert "js/api.js?v=20260626-idea-discovery" in index_html
-    assert "js/screens-guided.js?v=20260626-guided-parent-folder" in index_html
+    assert "js/api.js?v=20260626-guided-provider-config" in index_html
+    provider_pos = index_html.find("screens-guided-idea-provider.js")
+    guided_pos = index_html.find("screens-guided.js?")
+    assert provider_pos != -1 and guided_pos != -1
+    assert provider_pos < guided_pos
+    assert "js/screens-guided.js?v=20260626-guided-provider-split" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -1013,7 +1032,7 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage() ->
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20260625-stage93" in index_html
-    assert "api.js?v=20260626-idea-discovery" in index_html
+    assert "api.js?v=20260626-guided-provider-config" in index_html
     assert "screens-dict.js?v=20260626-dictionary-db-coverage" in index_html
     assert "deepdive.css?v=20260625-stage85" in index_html
 
@@ -1181,6 +1200,14 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "guided-${slug || 'study'}-..." in guided_js
     assert "payload.parent_dir = parent" in guided_js
     assert "captureGuidedDraftDialogState(box)" in guided_js
+    assert "normalize('NFKC')" in guided_js
+    assert "\\p{L}\\p{N}" in guided_js
+    assert "[^a-z0-9._-]" not in guided_js
+    assert "function startFreshGuidedProjectThread(title, path)" in guided_js
+    assert "A new Guided conversation has started for this project" in guided_js
+    assert "pendingGuidedGoal = null;" in guided_js
+    assert "startFreshGuidedProjectThread(title, path)" in guided_js
+    assert "if (!continuePendingGuidedGoal())" not in guided_js
     assert "data-createdraft" in guided_js
     assert "data-draft-title" in guided_js
     assert "folder_slug" in guided_js
@@ -1227,8 +1254,9 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gdf-memory" in guided_css
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
-    assert "api.js?v=20260626-idea-discovery" in index_html
-    assert "screens-guided.js?v=20260626-guided-parent-folder" in index_html
+    assert "api.js?v=20260626-guided-provider-config" in index_html
+    assert "screens-guided-idea-provider.js?v=20260626-guided-provider-split" in index_html
+    assert "screens-guided.js?v=20260626-guided-provider-split" in index_html
     assert "guided.css?v=20260626-guided-api-boundary" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
