@@ -6,7 +6,7 @@ import json
 
 import pandas as pd
 
-from easyicu.concept_availability_signal import ConceptAvailabilityRecord
+from easyicu.concept.availability_signal import ConceptAvailabilityRecord
 
 
 def test_mcp_initialize_and_tools_list(ra):

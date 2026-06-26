@@ -62,7 +62,7 @@ def test_callback_name_matches_window(cdict, name, window):
 @pytest.mark.parametrize("name,_w", UO_CONCEPTS, ids=[c[0] for c in UO_CONCEPTS])
 def test_callback_is_dispatchable(name, _w):
     """The declared callback name must resolve in the registry."""
-    from easyicu.concept_callbacks import CALLBACK_REGISTRY  # type: ignore
+    from easyicu.concept.callbacks import CALLBACK_REGISTRY  # type: ignore
     assert name in CALLBACK_REGISTRY, (
         f"{name} callback not registered in CALLBACK_REGISTRY dispatch"
     )
@@ -70,7 +70,7 @@ def test_callback_is_dispatchable(name, _w):
 
 @pytest.mark.parametrize("name,_w", UO_CONCEPTS, ids=[c[0] for c in UO_CONCEPTS])
 def test_registered_in_webapp_catalog(name, _w):
-    from easyicu.concept_catalog import (
+    from easyicu.concept.catalog import (
         CONCEPT_DB_COVERAGE,
         CONCEPT_DICTIONARY,
     )

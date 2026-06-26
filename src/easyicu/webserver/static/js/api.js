@@ -224,6 +224,9 @@
   function loadCrossdbRawDistribution(body) {
     return postJSON('/api/crossdb-review/raw-distribution', body || {});
   }
+  function scanCrossdbRawRoot(body) {
+    return postJSON('/api/crossdb-review/raw-root-scan', body || {});
+  }
   function startCrossdbRawDistributionJob(body) {
     return postJSON('/api/jobs/crossdb-raw-distribution', body || {});
   }
@@ -313,6 +316,15 @@
   function resolveIdeaSource(body) {
     return postJSON('/api/ideas/resolve-source', body || {});
   }
+  function discoverIdeas(body) {
+    return postJSON('/api/ideas/discover', body || {});
+  }
+  function ingestIdeaPdf(body) {
+    return postJSON('/api/ideas/ingest-pdf', body || {});
+  }
+  function scanIdeaLiteratureFolder(body) {
+    return postJSON('/api/ideas/literature-folder', body || {});
+  }
   function checkIdeaPriorArt(body) {
     return postJSON('/api/ideas/prior-art', body || {});
   }
@@ -378,6 +390,7 @@
   window.EU_API.loadCohortReviewSummary = loadCohortReviewSummary;
   window.EU_API.loadCrossdbReviewSummary = loadCrossdbReviewSummary;
   window.EU_API.loadCrossdbRawDistribution = loadCrossdbRawDistribution;
+  window.EU_API.scanCrossdbRawRoot = scanCrossdbRawRoot;
   window.EU_API.startCrossdbRawDistributionJob = startCrossdbRawDistributionJob;
   window.EU_API.loadCrossdbDemoDistribution = loadCrossdbDemoDistribution;
   window.EU_API.loadCrossdbSummary = loadCrossdbSummary;
@@ -407,6 +420,9 @@
   window.EU_API.loadCopilotSessions = loadCopilotSessions;
   window.EU_API.mineIdeas = mineIdeas;
   window.EU_API.resolveIdeaSource = resolveIdeaSource;
+  window.EU_API.discoverIdeas = discoverIdeas;
+  window.EU_API.ingestIdeaPdf = ingestIdeaPdf;
+  window.EU_API.scanIdeaLiteratureFolder = scanIdeaLiteratureFolder;
   window.EU_API.checkIdeaPriorArt = checkIdeaPriorArt;
   window.EU_API.handoffIdea = handoffIdea;
   window.EU_API.createIdeaAgentProject = createIdeaAgentProject;

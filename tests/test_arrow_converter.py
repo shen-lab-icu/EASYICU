@@ -42,7 +42,7 @@ def _write_csv(path: Path, header: list[str], rows: list[list]) -> None:
 
 def _make_converter(tmp_path: Path, **overrides):
     """Build a DataConverter rooted at *tmp_path* with no env coupling."""
-    from easyicu.data_converter import DataConverter
+    from easyicu.io.data_converter import DataConverter
 
     # Make sure no parent env steers compression unless the test does.
     os.environ.pop("EASYICU_PARQUET_COMPRESSION", None)
@@ -232,7 +232,7 @@ def test_manifest_record_with_hash(tmp_path):
 
 def test_parquet_compression_defaults_to_zstd(tmp_path, monkeypatch):
     monkeypatch.delenv("EASYICU_PARQUET_COMPRESSION", raising=False)
-    from easyicu.data_converter import DataConverter
+    from easyicu.io.data_converter import DataConverter
 
     c = DataConverter(tmp_path, database="eicu", parallel_workers=1, verbose=False)
     assert c.parquet_compression == "zstd"
@@ -240,7 +240,7 @@ def test_parquet_compression_defaults_to_zstd(tmp_path, monkeypatch):
 
 def test_parquet_compression_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("EASYICU_PARQUET_COMPRESSION", "snappy")
-    from easyicu.data_converter import DataConverter
+    from easyicu.io.data_converter import DataConverter
 
     c = DataConverter(tmp_path, database="eicu", parallel_workers=1, verbose=False)
     assert c.parquet_compression == "snappy"

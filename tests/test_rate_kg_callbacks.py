@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import easyicu.concept_callbacks as concept_callbacks
-from easyicu.callback_utils import aumc_rate_kg, eicu_rate_kg_callback, hirid_rate_kg
-from easyicu.concept_callbacks import ConceptCallbackContext
+import easyicu.concept.callbacks as concept_callbacks
+from easyicu.utils.callback_utils import aumc_rate_kg, eicu_rate_kg_callback, hirid_rate_kg
+from easyicu.concept.callbacks import ConceptCallbackContext
 from easyicu.table import ICUTable
 
 

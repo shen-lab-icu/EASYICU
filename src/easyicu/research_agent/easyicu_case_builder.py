@@ -21,7 +21,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Uni
 
 import pandas as pd
 
-from easyicu.parquet_reader import parquet_metadata, read_parquet
+from easyicu.io.parquet_reader import parquet_metadata, read_parquet
 
 
 ID_COL = "stay_id"

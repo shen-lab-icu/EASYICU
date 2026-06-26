@@ -11,8 +11,8 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List
 
-from easyicu import concept_catalog as concept_catalog
-from easyicu.data_paths import DATABASE_ALIASES, find_database_path
+from easyicu.concept import catalog as concept_catalog
+from easyicu.io.data_paths import DATABASE_ALIASES, _path_looks_like_database, find_database_path
 from easyicu.webserver import cohort_review
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
@@ -336,6 +336,96 @@ def crossdb_raw_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def crossdb_raw_root_scan(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Preflight a local raw ICU root without loading patient rows.
+
+    The UI asks the user for one parent folder, but that folder still has to
+    contain recognizable database subfolders. This scan makes the implicit
+    alias matching visible before an expensive Cross-DB density job can start.
+    """
+    raw = str(body.get("data_root") or body.get("root") or "").strip()
+    requested = _requested_raw_database_keys(body) or list(_RAW_DB_LABELS)
+    base = {
+        "mode": "real",
+        "source_type": "raw_database_root",
+        "selected_databases": requested,
+        "selected_count": len(requested),
+        "minimum_required": 2,
+        "aliases": _raw_database_aliases_payload(),
+        "privacy": _privacy_payload(),
+    }
+    if not raw:
+        return {
+            **base,
+            "ok": False,
+            "error": "raw_data_root_required",
+            "hint": "Choose a local ICU data root containing database subfolders before running Cross-DB.",
+            "detected": [],
+            "missing_selected": _raw_missing_database_payload(requested),
+            "unrecognized_folders": [],
+            "detected_selected_count": 0,
+            "runnable": False,
+        }
+
+    path = Path(raw).expanduser()
+    if not path.exists() or not path.is_dir():
+        return {
+            **base,
+            "ok": False,
+            "error": "raw_data_root_not_found",
+            "root_hash": _hash(raw),
+            "hint": "The requested ICU data root does not exist or is not a directory.",
+            "detected": [],
+            "missing_selected": _raw_missing_database_payload(requested),
+            "unrecognized_folders": [],
+            "detected_selected_count": 0,
+            "runnable": False,
+        }
+
+    root = _normalize_raw_root(path)
+    detected = []
+    recognized_top_folders = set()
+    for db in _RAW_DB_LABELS:
+        entry = _raw_database_scan_entry(root, db)
+        if entry is None:
+            continue
+        entry["selected"] = db in requested
+        detected.append(entry)
+        top = str(entry.get("folder_name") or "").lower()
+        if top:
+            recognized_top_folders.add(top)
+
+    detected_keys = {entry["key"] for entry in detected}
+    detected_selected = [entry for entry in detected if entry["key"] in requested]
+    missing = _raw_missing_database_payload([db for db in requested if db not in detected_keys])
+    unrecognized = _unrecognized_raw_child_folders(root, recognized_top_folders)
+    direct_unrecognized = (
+        bool(_path_looks_like_database(str(root)))
+        and not detected
+        and root.name
+    )
+    if direct_unrecognized and root.name not in unrecognized:
+        unrecognized.insert(0, root.name)
+    runnable = len(detected_selected) >= 2
+    return {
+        **base,
+        "ok": True,
+        "root_hash": _hash(str(root)),
+        "detected": detected,
+        "detected_databases": [entry["key"] for entry in detected],
+        "detected_selected_count": len(detected_selected),
+        "missing_selected": missing,
+        "unrecognized_folders": unrecognized[:20],
+        "unrecognized_count": len(unrecognized),
+        "runnable": runnable,
+        "hint": (
+            "Run is available after at least two selected database folders are recognized."
+            if not runnable
+            else "At least two selected database folders were recognized; the loader will validate files during run."
+        ),
+    }
+
+
 def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
     """Build a background-job runner for raw Cross-DB density aggregation.
 
@@ -515,20 +605,26 @@ def _resolve_demo_features(body: Dict[str, Any]) -> List[str]:
     requested = body.get("features") or body.get("concepts")
     if isinstance(requested, str):
         requested = [item.strip() for item in requested.split(",")]
-    supported = set().union(*[set(specs) for specs in _DEMO_MULTIDB_FEATURE_SPECS.values()])
+    catalog_features = _catalog_features_in_order()
+    catalog_set = set(catalog_features)
     if isinstance(requested, list) and requested:
         candidates = [str(item).strip() for item in requested if str(item).strip()]
+    elif str(body.get("feature_scope") or "").strip() == "legacy_demo_supported_features":
+        supported = _legacy_demo_supported_features()
+        candidates = [feature for feature in catalog_features if feature in supported]
     else:
-        candidates = []
-        for module_features in concept_catalog.CONCEPT_GROUPS_INTERNAL.values():
-            candidates.extend(module_features)
-        candidates.extend(sorted(supported))
+        candidates = catalog_features
 
-    max_features = _bounded_int(body.get("max_features"), default=len(supported), minimum=1, maximum=len(supported))
+    max_features = _bounded_int(
+        body.get("max_features"),
+        default=len(candidates) or len(catalog_features),
+        minimum=1,
+        maximum=len(catalog_features),
+    )
     out = []
     seen = set()
     for feature in candidates:
-        if feature in supported and feature in concept_catalog.CONCEPT_DICTIONARY and feature not in seen:
+        if feature in catalog_set and feature not in seen:
             seen.add(feature)
             out.append(feature)
         if len(out) >= max_features:
@@ -536,7 +632,7 @@ def _resolve_demo_features(body: Dict[str, Any]) -> List[str]:
     if not out:
         raise CrossdbReviewError({
             "error": "no_supported_demo_features_requested",
-            "supported_feature_count": len(supported),
+            "supported_feature_count": len(catalog_features),
             "privacy": _privacy_payload(),
         })
     return out
@@ -557,18 +653,106 @@ def _generate_demo_multidb_feature_frames(
         specs = _DEMO_MULTIDB_FEATURE_SPECS.get(db) or {}
         rows = []
         for feature in features:
-            spec = specs.get(feature)
-            if not spec:
-                continue
-            mean, std = spec
-            values = rng.normal(float(mean), float(std), int(records_per_feature))
-            low, high = _DEMO_FEATURE_BOUNDS.get(feature, (float(mean) - 4 * float(std), float(mean) + 4 * float(std)))
-            values = np.clip(values, low, high)
-            if feature == "sofa2" or feature.startswith("sofa2_"):
+            mean, std, low, high, integer_like = _demo_feature_profile(db, feature, specs.get(feature))
+            if integer_like and low == 0 and high == 1:
+                p = max(0.02, min(0.98, float(mean)))
+                values = rng.binomial(1, p, int(records_per_feature))
+            else:
+                values = rng.normal(float(mean), float(std), int(records_per_feature))
+                values = np.clip(values, low, high)
+            if integer_like:
                 values = np.rint(values).astype(int)
             rows.extend({"concept": feature, "value": float(value)} for value in values)
         result[db] = pd.DataFrame(rows, columns=["concept", "value"])
     return result
+
+
+def _legacy_demo_supported_features() -> set:
+    return set().union(*[set(specs) for specs in _DEMO_MULTIDB_FEATURE_SPECS.values()])
+
+
+def _catalog_features_in_order() -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for features in concept_catalog.CONCEPT_GROUPS_INTERNAL.values():
+        for feature in features:
+            if feature in concept_catalog.CONCEPT_DICTIONARY and feature not in seen:
+                seen.add(feature)
+                out.append(feature)
+    for feature in concept_catalog.CONCEPT_DICTIONARY:
+        if feature not in seen:
+            seen.add(feature)
+            out.append(feature)
+    return out
+
+
+def _demo_feature_profile(db: str, feature: str, explicit: Any = None) -> tuple:
+    """Return deterministic demo mean/std/bounds for any catalog concept."""
+    if explicit:
+        mean, std = explicit
+        low, high = _DEMO_FEATURE_BOUNDS.get(feature, (float(mean) - 4 * float(std), float(mean) + 4 * float(std)))
+        integer_like = feature in {"sex", "death", "adm"} or feature.startswith(("sofa", "aki_stage", "sep3_")) or _catalog_unit(feature).lower() == "boolean"
+        return float(mean), float(std), float(low), float(high), integer_like
+
+    low, high, integer_like = _demo_feature_bounds(feature)
+    span = max(float(high) - float(low), 1.0)
+    digest = hashlib.sha256(f"{db}:{feature}".encode("utf-8")).digest()
+    feature_offset = int.from_bytes(digest[:2], "big") / 65535.0
+    db_index = _DEMO_MULTIDB_DATABASES.index(db) if db in _DEMO_MULTIDB_DATABASES else 0
+    db_offset = (db_index - (len(_DEMO_MULTIDB_DATABASES) - 1) / 2) * 0.035
+
+    if integer_like and low == 0 and high == 1:
+        mean = min(0.92, max(0.03, 0.08 + feature_offset * 0.68 + db_offset))
+        return mean, 0.35, low, high, True
+
+    center = 0.28 + feature_offset * 0.48 + db_offset
+    mean = float(low) + span * min(0.82, max(0.12, center))
+    std = max(span * (0.055 + (digest[2] / 255.0) * 0.055), 0.05)
+    return mean, std, float(low), float(high), integer_like
+
+
+def _demo_feature_bounds(feature: str) -> tuple:
+    if feature in _DEMO_FEATURE_BOUNDS:
+        low, high = _DEMO_FEATURE_BOUNDS[feature]
+        return float(low), float(high), feature.startswith(("sofa", "aki_stage", "sep3_"))
+
+    unit = _catalog_unit(feature).lower()
+    integer_like = False
+    if unit == "boolean" or feature.endswith("_ind") or feature.endswith("60") or feature.startswith(("sep3_", "infection_")):
+        return 0.0, 1.0, True
+    if unit.startswith("0-"):
+        try:
+            return 0.0, float(unit.split("-", 1)[1]), True
+        except ValueError:
+            pass
+    if "datetime" in unit or "time" in feature:
+        return 0.0, 168.0, False
+    if "years" in unit or feature == "age":
+        return 18.0, 95.0, False
+    if "kg/m" in unit or feature == "bmi":
+        return 12.0, 60.0, False
+    if unit in {"", "score"} and feature in {"sex", "adm", "avpu"}:
+        return 0.0, 3.0, True
+    if "hours" in unit or feature.endswith("_dur"):
+        return 0.0, 96.0, False
+    if "days" in unit or feature.startswith("los_"):
+        return 0.0, 30.0, False
+    if "ml/kg/h" in unit:
+        return 0.0, 4.0, False
+    if "ml" in unit:
+        return 0.0, 5000.0, False
+    if "mcg" in unit or "units" in unit:
+        return 0.0, 3.0, False
+    if "%" in unit:
+        return 0.0, 100.0, False
+    return 0.0, 100.0, False
+
+
+def _catalog_unit(feature: str) -> str:
+    meta = concept_catalog.CONCEPT_DICTIONARY.get(feature)
+    if isinstance(meta, (list, tuple)) and len(meta) >= 3:
+        return str(meta[2] or "")
+    return ""
 
 
 def _resolve_raw_data_root(body: Dict[str, Any]) -> Path:
@@ -621,6 +805,13 @@ def _normalize_raw_root(path: Path) -> Path:
 
 
 def _resolve_raw_databases(data_root: Path, body: Dict[str, Any]) -> List[str]:
+    requested = _requested_raw_database_keys(body)
+    if requested:
+        return [db for db in requested if _raw_database_exists(data_root, db)]
+    return _detect_raw_databases(data_root)
+
+
+def _requested_raw_database_keys(body: Dict[str, Any]) -> List[str]:
     requested = body.get("databases") or body.get("database_keys") or []
     if isinstance(requested, str):
         requested = [item.strip() for item in requested.split(",")]
@@ -631,8 +822,29 @@ def _resolve_raw_databases(data_root: Path, body: Dict[str, Any]) -> List[str]:
             db = _normalize_database_key(str(item))
             if db in allowed and db not in normalized:
                 normalized.append(db)
-        return [db for db in normalized if _raw_database_exists(data_root, db)]
-    return _detect_raw_databases(data_root)
+        return normalized
+    return []
+
+
+def _raw_database_aliases_payload() -> Dict[str, Dict[str, Any]]:
+    return {
+        db: {
+            "label": label,
+            "aliases": [str(alias) for alias in DATABASE_ALIASES.get(db, [db])],
+        }
+        for db, label in _RAW_DB_LABELS.items()
+    }
+
+
+def _raw_missing_database_payload(databases: List[str]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "key": db,
+            "label": _RAW_DB_LABELS.get(db, db),
+            "aliases": [str(alias) for alias in DATABASE_ALIASES.get(db, [db])],
+        }
+        for db in databases
+    ]
 
 
 def _normalize_database_key(value: str) -> str:
@@ -655,23 +867,87 @@ def _detect_raw_databases(root: Path) -> List[str]:
 
 
 def _raw_database_exists(root: Path, db: str) -> bool:
+    return _raw_database_resolved_path(root, db) is not None
+
+
+def _raw_database_resolved_path(root: Path, db: str) -> Path | None:
     try:
         resolved = Path(find_database_path(str(root), db)).expanduser()
     except Exception:
-        return False
+        return None
     if not resolved.exists() or not resolved.is_dir():
-        return False
+        return None
     try:
         same = resolved.resolve() == root.resolve()
     except OSError:
         same = resolved == root
     if not same:
-        return True
+        return resolved
     # A direct database path is valid only for the matching database key; do
     # not let a single raw DB folder masquerade as every supported database.
     name = root.name.lower()
     aliases = DATABASE_ALIASES.get(db, [db])
-    return name in aliases or any(alias in name for alias in aliases)
+    if name in aliases or any(alias in name for alias in aliases):
+        return resolved
+    return None
+
+
+def _raw_database_scan_entry(root: Path, db: str) -> Dict[str, Any] | None:
+    resolved = _raw_database_resolved_path(root, db)
+    if resolved is None:
+        return None
+    folder_name = resolved.name
+    version_folder = None
+    try:
+        rel = resolved.resolve().relative_to(root.resolve())
+        if rel.parts:
+            folder_name = rel.parts[0]
+            if len(rel.parts) > 1:
+                version_folder = rel.parts[-1]
+    except (OSError, ValueError):
+        pass
+    payload = {
+        "key": db,
+        "label": _RAW_DB_LABELS.get(db, db),
+        "folder_name": folder_name,
+        "path_hash": _hash(str(resolved)),
+        "aliases": [str(alias) for alias in DATABASE_ALIASES.get(db, [db])],
+    }
+    if version_folder and version_folder != folder_name:
+        payload["version_folder"] = version_folder
+    return payload
+
+
+def _unrecognized_raw_child_folders(root: Path, recognized_top_folders: set[str]) -> List[str]:
+    try:
+        children = sorted(
+            [child for child in root.iterdir() if child.is_dir()],
+            key=lambda child: child.name.lower(),
+        )
+    except OSError:
+        return []
+    unrecognized = []
+    for child in children:
+        name = child.name
+        if name.lower() in recognized_top_folders:
+            continue
+        if _raw_child_name_matches_known_alias(name):
+            continue
+        unrecognized.append(name)
+    return unrecognized
+
+
+def _raw_child_name_matches_known_alias(name: str) -> bool:
+    lower = name.lower()
+    normalized = lower.replace("_", "-")
+    for aliases in DATABASE_ALIASES.values():
+        for alias in aliases:
+            alias_norm = str(alias).lower().replace("_", "-")
+            if lower == alias_norm or normalized == alias_norm:
+                return True
+            if alias_norm and (alias_norm in normalized or normalized.startswith(alias_norm)):
+                return True
+    return False
 
 
 def _resolve_raw_features(body: Dict[str, Any]) -> List[str]:
@@ -680,6 +956,8 @@ def _resolve_raw_features(body: Dict[str, Any]) -> List[str]:
         requested = [item.strip() for item in requested.split(",")]
     if isinstance(requested, list) and requested:
         features = [str(item).strip() for item in requested if str(item).strip()]
+    elif str(body.get("feature_scope") or "").strip() == "all_catalog":
+        features = _catalog_features_in_order()
     else:
         min_coverage = _bounded_int(body.get("coverage_min"), default=2, minimum=1, maximum=6)
         features = [
@@ -687,7 +965,12 @@ def _resolve_raw_features(body: Dict[str, Any]) -> List[str]:
             for concept in concept_catalog.CONCEPT_DICTIONARY
             if int(concept_catalog.CONCEPT_DB_COVERAGE.get(concept, 0)) >= min_coverage
         ]
-    max_features = _bounded_int(body.get("max_features"), default=120, minimum=1, maximum=180)
+    max_features = _bounded_int(
+        body.get("max_features"),
+        default=len(features) or len(concept_catalog.CONCEPT_DICTIONARY),
+        minimum=1,
+        maximum=len(concept_catalog.CONCEPT_DICTIONARY),
+    )
     seen = set()
     out = []
     for feature in features:
@@ -1474,25 +1757,14 @@ def _density_points(values: List[float], max_bins: int = 32) -> List[Dict[str, f
             {"x": round(center, 6), "density": 1.0},
             {"x": round(center + spread, 6), "density": 0.0},
         ]
-    try:
-        from scipy import stats
-
-        arr = np.asarray(values, dtype=float)
+    arr = np.asarray(values, dtype=float)
+    if len(arr) >= 10:
         q1, q99 = np.percentile(arr, [1, 99])
-        arr = arr[(arr >= q1) & (arr <= q99)]
-        if len(arr) >= 10:
-            kde = stats.gaussian_kde(arr, bw_method="scott")
-            x = np.linspace(float(arr.min()), float(arr.max()), 64)
-            y = kde(x)
-            return [
-                {"x": round(float(px), 6), "density": round(float(py), 8)}
-                for px, py in zip(x, y)
-                if np.isfinite(px) and np.isfinite(py)
-            ]
-    except Exception:
-        pass
+        trimmed = arr[(arr >= q1) & (arr <= q99)]
+        if len(trimmed) >= 6 and float(trimmed.min()) != float(trimmed.max()):
+            arr = trimmed
     bins = max(6, min(max_bins, int(math.sqrt(len(values))) + 2))
-    counts, edges = np.histogram(np.asarray(values, dtype=float), bins=bins, density=True)
+    counts, edges = np.histogram(arr, bins=bins, density=True)
     if len(counts) >= 3:
         counts = np.convolve(counts, np.array([0.25, 0.5, 0.25]), mode="same")
     centers = (edges[:-1] + edges[1:]) / 2

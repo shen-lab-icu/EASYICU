@@ -11,8 +11,10 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
+from easyicu import concept_catalog
 from easyicu.webserver.app import app
 from easyicu.webserver import agent_runs
+from easyicu.webserver import cohort_review
 from easyicu.webserver import copilot_sessions
 from easyicu.webserver import numeric_evidence_audit
 from easyicu.webserver.agent_runs import _scan_artifact_payloads
@@ -117,6 +119,93 @@ def _write_csv_export(root: Path, database: str = "miiv") -> Path:
     return root
 
 
+def _write_legacy_full_parquet_export(root: Path, database: str = "miiv") -> Path:
+    root.mkdir()
+    tables = {
+        "demographics_age_bmi_height_sex_etc2.parquet": pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4],
+                "age": [50, 70, 60, 65],
+                "bmi": [23.1, 31.5, 27.0, 29.2],
+                "height": [160, 175, 168, 171],
+                "sex": ["F", "M", "F", "M"],
+                "weight": [60, 96, 76, 85],
+            }
+        ),
+        "outcome_death_los_icu_los_hosp_persistent_critical_illness_etc5.parquet": pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3, 4],
+                "death": [0, 1, 0, 0],
+                "los_icu": [2.0, 5.0, 1.0, 3.0],
+                "los_hosp": [4.0, 3.0, 6.0, 7.0],
+                "persistent_critical_illness": [0, 0, 0, 1],
+            }
+        ),
+        "sofa2_score_sofa2_sofa2_resp_sofa2_coag_sofa2_liver_etc3.parquet": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 2, 3, 4],
+                "charttime": ["2026-01-01 00:00", "2026-01-01 01:00", "2026-01-01 00:00", "2026-01-01 00:00", "2026-01-01 00:00"],
+                "sofa2": [4, 5, 8, 3, 6],
+                "sofa2_resp": [1, 1, 2, 0, 1],
+                "sofa2_coag": [0, 0, 1, 0, 0],
+                "sofa2_liver": [0, 0, 0, 0, 1],
+            }
+        ),
+        "sepsis3_sofa2_sep3_sofa2.parquet": pd.DataFrame(
+            {
+                "stay_id": [1, 2],
+                "sep3_sofa2": [True, False],
+            }
+        ),
+        "vitals_hr_map_sbp_dbp_etc7.parquet": pd.DataFrame(
+            {
+                "stay_id": [1, 1, 2, 4],
+                "charttime": ["2026-01-01 00:00", "2026-01-01 01:00", "2026-01-01 00:00", "2026-01-01 00:00"],
+                "hr": [90, 95, 80, 88],
+                "map": [70, 72, 75, 76],
+                "sbp": [110, 112, 118, 120],
+                "dbp": [65, 66, 70, 68],
+                "spo2": [97, 98, 96, 95],
+                "temp": [37.0, 37.2, 36.8, 37.1],
+            }
+        ),
+        "chemistry_alb_alp_alt_ast_etc26.parquet": pd.DataFrame(
+            {
+                "stay_id": [1, 2, 3],
+                "alb": [3.1, 2.8, 3.4],
+                "alp": [80, 120, 95],
+                "alt": [22, 34, 18],
+                "ast": [30, 45, 20],
+            }
+        ),
+    }
+    for file_name, frame in tables.items():
+        frame.to_parquet(root / file_name, index=False)
+
+    (root / "easyicu_export_manifest.json").write_text(
+        json.dumps(
+            {
+                "easyicu_version": "unknown",
+                "exported_at": "2026-06-22T17:38:52.993877+00:00",
+                "database": database,
+                "patient_count": 4,
+                "entry_mode": "module_grouped_full_export",
+                "modules": [
+                    {
+                        "group": "sepsis3_sofa2",
+                        "file": "sepsis3_sofa2_sep3_sofa2.parquet",
+                        "rows": 2,
+                        "feature_cols": 1,
+                    }
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
 def test_catalog_active_export_coverage_uses_registered_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     export = _write_csv_export(tmp_path / "export")
     monkeypatch.setattr(source_store, "load_registry", lambda: {"active_path": str(export)})
@@ -132,6 +221,39 @@ def test_catalog_active_export_coverage_uses_registered_source(tmp_path: Path, m
     assert active["concepts"]["sep3_sofa2"]["kind"] == "active_event"
     assert active["concepts"]["sep3_sofa2"]["coverage_pct"] == 33.3
     assert "hgb" not in active["concepts"]
+    assert "stay_id" not in json.dumps(active)
+
+
+def test_catalog_active_export_coverage_large_export_is_schema_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export = _write_legacy_full_parquet_export(tmp_path / "legacy_full")
+    desc = describe_export_source(str(export))
+    desc["summary"]["total_rows"] = 2_000_001
+
+    def fail_fast_stay_ids(*args, **kwargs):
+        raise AssertionError("large catalog coverage must not read stay_id columns")
+
+    def fail_file_coverage(*args, **kwargs):
+        raise AssertionError("large catalog coverage must not read concept columns")
+
+    monkeypatch.setattr(source_store, "load_registry", lambda: {"active_path": str(export)})
+    monkeypatch.setattr(dataio, "describe_export_source", lambda _path: desc)
+    monkeypatch.setattr(dataio, "_fast_stay_ids", fail_fast_stay_ids)
+    monkeypatch.setattr(catalog_module, "_file_concept_coverage", fail_file_coverage)
+
+    catalog = catalog_module.build_catalog()
+    active = catalog["activeExportCoverage"]
+
+    assert active["status"] == "ready"
+    assert active["mode"] == "schema_only"
+    assert active["denominator"] == 4
+    assert active["coverage_basis"] == "column_present_in_export_schema"
+    assert active["summary"]["schemaOnly"] >= 10
+    assert active["concepts"]["age"]["coverage_pct"] is None
+    assert active["concepts"]["age"]["basis"] == "column_present_in_export_schema"
+    assert active["concepts"]["hr"]["module"] == "vitals"
     assert "stay_id" not in json.dumps(active)
 
 
@@ -419,6 +541,25 @@ def test_guided_draft_remove_unregisters_only_and_preserves_project_folder(tmp_p
     listed = client.post("/api/guided/drafts/list", json={"limit": 10})
     assert listed.status_code == 200
     assert listed.json()["drafts"] == []
+
+    created_again = client.post(
+        "/api/guided/drafts",
+        json={"title": "Cached delete caller", "folder_slug": "cached-delete", "data_mode": "real"},
+    )
+    assert created_again.status_code == 200
+    draft_again = created_again.json()["draft"]
+    artifact_again = Path(draft_again["project_dir"]) / "guided_draft.json"
+    assert artifact_again.exists()
+
+    removed_again = client.request(
+        "DELETE",
+        "/api/guided/drafts/remove",
+        json={"draft_id": draft_again["id"], "project_dir": draft_again["project_dir"]},
+    )
+    assert removed_again.status_code == 200
+    assert removed_again.json()["ok"] is True
+    assert removed_again.json()["disk_deleted"] is False
+    assert artifact_again.exists()
 
 
 def test_guided_copilot_session_routes_locally_and_rejects_row_payload(tmp_path: Path, monkeypatch) -> None:
@@ -1182,6 +1323,38 @@ def test_describe_export_source_uses_manifest_and_schema_without_full_table_read
     assert result["files"][0]["columns"]
 
 
+def test_describe_export_source_scans_legacy_full_export_inventory(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    export_dir = _write_legacy_full_parquet_export(tmp_path / "legacy_full")
+
+    def fail_read_stay_ids(path: Path):
+        raise AssertionError(f"patient_count should avoid stay-id reads: {path}")
+
+    monkeypatch.setattr(dataio, "_read_stay_ids", fail_read_stay_ids)
+
+    result = describe_export_source(str(export_dir))
+
+    assert result["ok"] is True
+    assert result["database"] == "miiv"
+    assert result["generated"] == "2026-06-22T17:38:52.993877+00:00"
+    assert result["summary"] == {"stays": 4, "modules": 6, "file_count": 6, "total_rows": 22}
+    assert set(result["modules"]) == {
+        "chemistry",
+        "demographics",
+        "outcome",
+        "sepsis3_sofa2",
+        "sofa2_score",
+        "vitals",
+    }
+    files_by_name = {row["file"]: row for row in result["files"]}
+    assert files_by_name["demographics_age_bmi_height_sex_etc2.parquet"]["module"] == "demographics"
+    assert files_by_name["chemistry_alb_alp_alt_ast_etc26.parquet"]["module"] == "chemistry"
+    assert files_by_name["sofa2_score_sofa2_sofa2_resp_sofa2_coag_sofa2_liver_etc3.parquet"]["module"] == "sofa2_score"
+    assert files_by_name["sepsis3_sofa2_sep3_sofa2.parquet"]["rows"] == 2
+
+
 def test_data_scan_auto_classifies_supported_folder_layouts(tmp_path: Path) -> None:
     module_export = _write_csv_export(tmp_path / "module_export")
     module_result = dataio.scan_path(str(module_export))
@@ -1240,7 +1413,7 @@ def test_workspace_summary_endpoint_returns_snapshot_and_rejects_bad_paths(tmp_p
     assert bad.json()["detail"]["error"] == "not_a_directory"
 
 
-def test_patient_review_drilldown_uses_active_source_without_row_payload(
+def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1297,28 +1470,66 @@ def test_patient_review_drilldown_uses_active_source_without_row_payload(
     assert quality_features["hr"]["coverage_pct"] == 66.7
     assert quality_features["hr"]["missing_pct"] == 33.3
     assert quality_features["hr"]["out_of_physio_pct"] == 0.0
-    assert payload["data_tables"]["payload_scope"] == "old_data_tables_semantics_without_row_payload"
-    assert payload["data_tables"]["detail_gate"]["title"] == "Source records are optional"
+    assert payload["privacy"]["bounded_table_previews"] is True
+    assert payload["privacy"]["max_table_preview_rows"] == 24
+    assert payload["data_tables"]["payload_scope"] == "old_data_tables_semantics_with_bounded_pseudonymous_table_previews"
+    assert payload["data_tables"]["detail_gate"]["title"] == "Bounded local table previews"
     table_modules = {row["module"]: row for row in payload["data_tables"]["modules"]}
     assert table_modules["vitals"]["shape"] == "time_indexed"
     assert table_modules["vitals"]["preview_features"][0]["feature"] == "hr"
-    assert payload["trajectory_review"]["payload_scope"] == "old_timeseries_semantics_bounded"
+    table_previews = {row["module"]: row for row in payload["data_tables"]["table_previews"]}
+    assert table_previews["demographics"]["display_columns"] == ["entity", "age", "sex"]
+    assert table_previews["demographics"]["rows"][0]["entity"].startswith("ent_")
+    assert table_previews["demographics"]["rows"][0]["age"] == 50
+    assert table_previews["vitals"]["display_columns"] == ["entity", "charttime", "hr", "map", "spo2", "temp"]
+    assert table_previews["vitals"]["rows"][0]["hr"] == 90
+    assert table_previews["vitals"]["truncated_rows"] is False
+    assert payload["trajectory_review"]["payload_scope"] == "feature_matrix_semantics_bounded"
     assert {row["id"] for row in payload["trajectory_review"]["modes"]} == {
-        "clinical_lanes",
+        "feature_matrix",
         "single_entity",
         "multi_entity_comparison",
     }
     assert payload["trajectory_review"]["contract"][0]["label"] == "Entity scope"
+    assert payload["trajectory_review"]["contract"][2]["label"] == "Feature matrices"
     assert payload["patient_overview"]["payload_scope"] == "old_patient_overview_semantics_pseudonymous"
     assert payload["patient_overview"]["navigator"]["actions"] == ["first", "previous", "next", "last", "random"]
     assert payload["patient_overview"]["category_view"]["sections"][0]["title"] == "Vital Signs Snapshot"
-    assert payload["patient_overview"]["data_table"]["row_preview"] == "blocked"
+    assert payload["patient_overview"]["data_table"]["row_preview"] == "available_in_data_tables"
     assert payload["quality_review"]["payload_scope"] == "old_quality_semantics_aggregate_only"
     assert {row["id"] for row in payload["quality_review"]["panels"]} == {"missingness", "outliers", "temporal"}
     assert any(item["id"] == "raw_identifier_table" for item in payload["blocked_features"])
     serialized = json.dumps(payload)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
+
+
+def test_patient_review_drilldown_uses_legacy_full_export_counts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_legacy_full_parquet_export(tmp_path / "miiv_full", database="miiv")
+    source_store.register_source(str(export_dir), label="Full fixture", active=True, crossdb=True)
+    client = TestClient(app)
+
+    response = client.post("/api/patient-review/drilldown", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["entities"] == 4
+    assert payload["summary"]["modules"] == 6
+    assert payload["summary"]["file_count"] == 6
+    assert payload["summary"]["total_rows"] == 22
+    assert payload["summary"]["review_scope"] == "full_entity_set"
+    modules = {row["module"]: row for row in payload["module_profiles"]}
+    assert modules["chemistry"]["rows"] == 3
+    assert modules["chemistry"]["feature_count"] == 4
+    assert modules["demographics"]["feature_count"] >= 2
+    assert payload["data_tables"]["loaded_summary"]["entities"] == 4
+    assert payload["source"]["label"] == "Full fixture"
 
 
 def test_patient_review_sources_lists_registered_exports_without_row_payload(
@@ -1520,6 +1731,46 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
         assert marker not in serialized
 
 
+def test_cohort_review_feature_catalog_and_selected_feature_profiles(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    cohort_review._SUMMARY_CACHE.clear()
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), label="Feature catalog fixture", active=True, crossdb=True)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/cohort-review/summary",
+        json={"selected_features": ["vitals:hr", "vitals:map", "outcome:los_hosp", "missing:nope"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    catalog = payload["feature_catalog"]
+    assert catalog["total_modules"] == 5
+    assert catalog["total_features"] >= 11
+    modules = {row["module"]: row for row in catalog["modules"]}
+    vitals_features = {row["id"]: row for row in modules["vitals"]["features"]}
+    assert {"vitals:hr", "vitals:map", "vitals:spo2", "vitals:temp"}.issubset(vitals_features)
+    assert vitals_features["vitals:hr"]["selected"] is True
+    assert payload["feature_selection"]["selected_count"] == 3
+    assert payload["feature_selection"]["ignored"] == ["missing:nope"]
+
+    survival = next(row for row in payload["groups"]["supported"] if row["id"] == "survival")
+    feature_rows = {row["feature_id"]: row for row in survival["profile"]["rows"] if row.get("feature_id")}
+    assert set(feature_rows) == {"vitals:hr", "vitals:map", "outcome:los_hosp"}
+    assert feature_rows["vitals:hr"]["kind"] == "numeric"
+    assert feature_rows["vitals:hr"]["values"] == [92.5, 80.0, None]
+    assert feature_rows["outcome:los_hosp"]["values"] == [5.0, 3.0, None]
+    serialized = json.dumps(payload)
+    assert "mapping" not in serialized
+    assert "stay_id" not in serialized
+
+
 def test_cohort_review_sofa_reclassification_uses_paired_aggregate_without_row_payload(
     tmp_path: Path,
     monkeypatch,
@@ -1649,6 +1900,163 @@ def test_cohort_review_summary_does_not_read_full_export_tables(
 
     assert response.status_code == 200
     assert response.json()["summary"]["cohort_size"] == 3
+
+
+def test_cohort_review_large_coverage_uses_metadata_without_stay_id_scan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    manifest_path = export_dir / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["stays"] = 3
+    for row in manifest["files"]:
+        row["rows"] = 1_000_001
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+
+    def fail_read_stay_ids(path: Path):
+        raise AssertionError(f"large coverage must not scan stay_id columns: {path}")
+
+    monkeypatch.setattr(dataio, "_read_stay_ids", fail_read_stay_ids)
+    client = TestClient(app)
+
+    response = client.post("/api/cohort-review/summary", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["cohort_size"] == 3
+    modules = {row["module"]: row for row in payload["coverage"]}
+    assert modules["demographics"]["coverage_basis"] == "metadata_row_count_only"
+    assert modules["demographics"]["coverage_pct"] is None
+    assert modules["demographics"]["covered_entities"] is None
+    assert modules["demographics"]["skipped_reason"] == "unique_stay_scan_skipped_large_module"
+    assert payload["quality"]["modules_unknown"] >= 5
+
+
+def test_cohort_review_large_parquet_export_reuses_active_source_for_km_and_coverage(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = tmp_path / "large_parquet"
+    export_dir.mkdir()
+    n = 25_000
+    stay_ids = list(range(1, n + 1))
+    pd.DataFrame({
+        "stay_id": stay_ids,
+        "age": [50 + (i % 30) for i in stay_ids],
+        "sex": ["F" if i % 2 else "M" for i in stay_ids],
+    }).to_parquet(export_dir / "demographics.parquet", index=False)
+    pd.DataFrame({
+        "stay_id": stay_ids,
+        "death": [i % 10 == 0 for i in stay_ids],
+        "los_hosp": [float((i % 28) + 1) for i in stay_ids],
+        "los_icu": [float((i % 14) + 1) for i in stay_ids],
+    }).to_parquet(export_dir / "outcome.parquet", index=False)
+    pd.DataFrame({
+        "stay_id": stay_ids,
+        "sep3_sofa2": [i % 3 == 0 for i in stay_ids],
+    }).to_parquet(export_dir / "sepsis3_sofa2.parquet", index=False)
+    (export_dir / "_manifest.json").write_text(
+        json.dumps({
+            "database": "miiv",
+            "generated": "2026-06-26T12:00:00",
+            "files": [
+                {"file": "demographics.parquet", "module": "demographics", "rows": 1_000_001},
+                {"file": "outcome.parquet", "module": "outcome", "rows": 1_000_001},
+                {"file": "sepsis3_sofa2.parquet", "module": "sepsis3_sofa2", "rows": 1_000_001},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    source_store.register_source(str(export_dir), label="Large parquet", active=True, crossdb=True)
+    client = TestClient(app)
+
+    response = client.post("/api/cohort-review/summary", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["cohort_size"] == n
+    modules = {row["module"]: row for row in payload["coverage"]}
+    assert modules["demographics"]["coverage_basis"] == "unique_entity_intersection"
+    assert modules["demographics"]["coverage_pct"] == 100.0
+    assert modules["outcome"]["coverage_pct"] == 100.0
+    survival = payload["survival_analysis"]
+    assert survival["status"] == "ready"
+    assert survival["default_outcome"] == "hospital_death"
+    assert survival["curves"]
+    assert len(json.dumps(survival)) < 80_000
+    assert "stay_id" not in json.dumps(survival)
+
+
+def test_cohort_review_summary_reuses_cached_payload_for_same_export(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    cohort_review._SUMMARY_CACHE.clear()
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    source_store.register_source(str(export_dir), label="Cached cohort", active=True, crossdb=True)
+    client = TestClient(app)
+
+    first = client.post("/api/cohort-review/summary", json={})
+    assert first.status_code == 200
+
+    def fail_selected_columns(*args, **kwargs):
+        raise AssertionError("cached cohort summary should not re-read module files")
+
+    monkeypatch.setattr(cohort_review, "_read_selected_columns", fail_selected_columns)
+    second = client.post("/api/cohort-review/summary", json={})
+
+    assert second.status_code == 200
+    assert second.json()["summary"] == first.json()["summary"]
+
+
+def test_cohort_review_skips_large_time_indexed_sofa_for_interactive_summary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    manifest_path = export_dir / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["stays"] = 3
+    for row in manifest["files"]:
+        if row["module"] == "sofa2_score":
+            row["rows"] = 2_000_001
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    source_store.register_source(str(export_dir), active=True, crossdb=True)
+
+    original_read_csv = pd.read_csv
+
+    def guarded_read_csv(*args, **kwargs):
+        if "sofa2_score" in str(args[0]):
+            raise AssertionError(f"large SOFA module should be deferred: {args[0]}")
+        return original_read_csv(*args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_csv", guarded_read_csv)
+    client = TestClient(app)
+
+    response = client.post("/api/cohort-review/summary", json={})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["cohort_size"] == 3
+    assert payload["summary"]["sofa2"]["median"] is None
+    assert payload["sofa_reclassification"]["status"] == "blocked"
+    modules = {row["module"]: row for row in payload["coverage"]}
+    assert modules["sofa2_score"]["coverage_basis"] == "metadata_row_count_only"
+    assert modules["sofa2_score"]["coverage_pct"] is None
 
 
 def test_data_scan_recognizes_native_manifest_export_as_module_source(tmp_path: Path) -> None:
@@ -2462,6 +2870,53 @@ def test_crossdb_raw_distribution_uses_real_loader_without_row_payload(
         assert marker not in serialized
 
 
+def test_crossdb_raw_root_scan_reports_detected_missing_and_unrecognized(tmp_path: Path) -> None:
+    root = tmp_path / "databases"
+    (root / "mimiciv").mkdir(parents=True)
+    (root / "eicu").mkdir()
+    (root / "custom_named_icu").mkdir()
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/crossdb-review/raw-root-scan",
+        json={"data_root": str(root), "databases": ["miiv", "eicu", "sic"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["source_type"] == "raw_database_root"
+    assert payload["runnable"] is True
+    assert payload["detected_selected_count"] == 2
+    assert set(payload["detected_databases"]) == {"miiv", "eicu"}
+    assert [row["key"] for row in payload["missing_selected"]] == ["sic"]
+    assert "custom_named_icu" in payload["unrecognized_folders"]
+    assert "miiv" in payload["aliases"]
+    assert payload["aliases"]["miiv"]["aliases"][:2] == ["mimiciv", "mimic-iv"]
+    serialized = json.dumps(payload)
+    assert str(root) not in serialized
+    assert payload["privacy"]["raw_rows_returned"] is False
+
+
+def test_crossdb_raw_root_scan_blocks_until_two_selected_databases(tmp_path: Path) -> None:
+    root = tmp_path / "databases"
+    (root / "mimiciv").mkdir(parents=True)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/crossdb-review/raw-root-scan",
+        json={"data_root": str(root), "databases": ["miiv", "eicu"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["runnable"] is False
+    assert payload["detected_selected_count"] == 1
+    assert payload["detected_databases"] == ["miiv"]
+    assert [row["key"] for row in payload["missing_selected"]] == ["eicu"]
+
+
 def test_crossdb_raw_distribution_job_streams_progress_and_result(
     tmp_path: Path,
     monkeypatch,
@@ -2612,6 +3067,27 @@ def test_crossdb_demo_distribution_uses_legacy_simulated_frames_without_row_payl
     serialized = json.dumps(payload)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
+
+
+def test_crossdb_demo_all_catalog_scope_resolves_every_module_and_feature() -> None:
+    features = crossdb_review._resolve_demo_features({"feature_scope": "all_catalog"})
+    assert len(features) == len(concept_catalog.CONCEPT_DICTIONARY)
+    assert features[:7] == concept_catalog.CONCEPT_GROUPS_INTERNAL["sofa2_score"]
+
+    module_map = {
+        feature: module
+        for module, module_features in concept_catalog.CONCEPT_GROUPS_INTERNAL.items()
+        for feature in module_features
+    }
+    assert {module_map[feature] for feature in features} == set(concept_catalog.CONCEPT_GROUPS_INTERNAL)
+
+    frames = crossdb_review._generate_demo_multidb_feature_frames(
+        databases=["miiv", "eicu"],
+        features=features,
+        records_per_feature=24,
+    )
+    assert int(frames["miiv"]["concept"].nunique()) == len(features)
+    assert int(frames["eicu"]["concept"].nunique()) == len(features)
 
 
 def test_crossdb_raw_distribution_fails_closed_until_two_raw_databases(

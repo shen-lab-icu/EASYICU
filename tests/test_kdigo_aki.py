@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from easyicu.kdigo_aki import _calculate_uo_rates_simple, kdigo_stages, kdigo_uo
+from easyicu.scores.kdigo_aki import _calculate_uo_rates_simple, kdigo_stages, kdigo_uo
 
 
 def test_kdigo_uo_requires_minimum_documented_window_hours():

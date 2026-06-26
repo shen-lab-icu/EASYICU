@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from easyicu.data_converter import DataConverter
+from easyicu.io.data_converter import DataConverter
 
 
 def test_data_converter_writes_conversion_manifest_and_evidence(tmp_path: Path) -> None:

@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 from easyicu.callbacks import _urine_window_avg
-from easyicu.concept_callbacks import (
+from easyicu.concept.callbacks import (
     ConceptCallbackContext,
     _callback_urine_mlkgph,
 )

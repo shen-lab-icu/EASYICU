@@ -25,14 +25,14 @@ from helpers import (  # type: ignore  # tests dir on sys.path via conftest
     require_ricu_fixtures,
 )
 
-from easyicu.pooling import (
+from easyicu.runtime.pooling import (
     PoolingDecision,
     compute_pooling_decision,
     should_pool_raw,
 )
-from easyicu.concept_callbacks import ConceptCallbackContext, _callback_vent_ind
+from easyicu.concept.callbacks import ConceptCallbackContext, _callback_vent_ind
 from easyicu.table import ICUTable
-from easyicu.time_units import (
+from easyicu.utils.time_units import (
     MINUTES_PER_HOUR,
     minutes_to_hours,
     minutes_to_hours_series,

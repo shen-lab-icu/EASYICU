@@ -271,7 +271,7 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
     finishes fast."""
 
     def runner(job: Any) -> Dict[str, Any]:
-        from easyicu.data_converter import ConversionStatus, DataConverter
+        from easyicu.io.data_converter import ConversionStatus, DataConverter
 
         # Construction can raise ValueError on a bad path/database — let it
         # propagate so JobManager marks the job failed with the message.
@@ -354,6 +354,39 @@ _CONCEPT_DERIVED_COHORTS = {
 }
 
 
+def _normalize_sepsis_definition(value: Any) -> Dict[str, Any]:
+    """Record the current Sepsis/SOFA definition convention in export metadata.
+
+    This is intentionally metadata only. The concept callbacks still own runtime
+    derivation; the manifest note makes the active default auditable.
+    """
+    raw = value if isinstance(value, dict) else {}
+    return {
+        "record_scope": str(raw.get("record_scope") or "metadata_current_runtime_defaults")[:80],
+        "runtime_profile": str(raw.get("runtime_profile") or "easyicu_ricu_default_v1")[:80],
+        "score_family": str(raw.get("score_family") or "selected_modules")[:80],
+        "suspected_infection": {
+            "mode": "antibiotic_and_sample",
+            "antibiotic_to_sample_hours": 24,
+            "sample_to_antibiotic_hours": 72,
+            "positive_cultures_required": False,
+        },
+        "sofa_increase": {
+            "si_event": "first",
+            "window_before_si_hours": 48,
+            "window_after_si_hours": 24,
+            "delta_function": "cumulative_minimum_within_si_window",
+            "threshold": 2,
+        },
+        "review_options": {
+            "si_event": ["first", "last", "any"],
+            "delta_function": ["cumulative_minimum", "first_observed", "windowed_minimum"],
+            "threshold": [2, 3],
+            "score_family": ["SOFA-2", "SOFA-1", "SOFA-2 + SOFA-1"],
+        },
+    }
+
+
 class ExportCohortError(ValueError):
     """Raised when a user-requested extraction cohort cannot be applied honestly."""
 
@@ -414,11 +447,31 @@ def _resolve_export_out_dir(
 def _render_export_readme(manifest: Dict[str, Any], *, files: List[Dict[str, Any]]) -> str:
     cohort = manifest.get("cohort_contract") or {}
     report = manifest.get("cohort_report") or {}
+    sepsis_def = cohort.get("sepsis_definition") if isinstance(cohort, dict) else None
+    si_def = sepsis_def.get("suspected_infection", {}) if isinstance(sepsis_def, dict) else {}
+    sofa_def = sepsis_def.get("sofa_increase", {}) if isinstance(sepsis_def, dict) else {}
     modules = [f.get("module") for f in files if f.get("module")]
     unique_modules = []
     for module in modules:
         if module not in unique_modules:
             unique_modules.append(module)
+    definition_lines = []
+    if isinstance(sepsis_def, dict):
+        definition_lines = [
+            f"- Sepsis definition profile: `{sepsis_def.get('runtime_profile', '')}`",
+            f"- Sepsis score family: `{sepsis_def.get('score_family', '')}`",
+            (
+                "- Suspected infection: "
+                f"`{si_def.get('mode', '')}`, ABX->sample `{si_def.get('antibiotic_to_sample_hours', '')}h`, "
+                f"sample->ABX `{si_def.get('sample_to_antibiotic_hours', '')}h`"
+            ),
+            (
+                "- SOFA increase rule: "
+                f"SI event `{sofa_def.get('si_event', '')}`, window `-{sofa_def.get('window_before_si_hours', '')}h/+{sofa_def.get('window_after_si_hours', '')}h`, "
+                f"delta `{sofa_def.get('delta_function', '')}`, threshold `{sofa_def.get('threshold', '')}`"
+            ),
+            f"- Definition note scope: `{sepsis_def.get('record_scope', '')}`",
+        ]
 
     lines = [
         "# EasyICU Export",
@@ -438,6 +491,7 @@ def _render_export_readme(manifest: Dict[str, Any], *, files: List[Dict[str, Any
         f"- Observation window: `{cohort.get('observation_window_hours', '')} hours`",
         f"- Modules: `{', '.join(unique_modules)}`",
         f"- Concepts selected: `{sum(int(f.get('concepts') or 0) for f in files)}`",
+        *definition_lines,
         "",
         "## Reproducibility files",
         "",
@@ -628,6 +682,7 @@ def _normalize_export_cohort(cohort: Optional[Dict[str, Any]]) -> Dict[str, Any]
         "icd_enabled": icd_enabled,
         "icd_include": include,
         "icd_exclude": exclude,
+        "sepsis_definition": _normalize_sepsis_definition(raw.get("sepsis_definition")),
     }
 
 
@@ -1018,7 +1073,7 @@ def make_export_runner(
         # trips the low-mem path; force the fast in-process path (see CLAUDE.md).
         os.environ.setdefault("EASYICU_FORCE_INPROCESS_BATCH", "1")
         import easyicu.api as api
-        from easyicu.concept_catalog import CONCEPT_GROUPS_INTERNAL
+        from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
 
         sel_modules = [m for m in (modules or list(CONCEPT_GROUPS_INTERNAL.keys()))
                        if CONCEPT_GROUPS_INTERNAL.get(m)]
@@ -1444,11 +1499,9 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
     """Return a compact registry-safe description of an export folder.
 
     Unlike :func:`summarize_export_workspace`, this reads only manifest metadata,
-    file schemas, and a stay-id column when available. It does not load full
-    export tables for registry rendering.
+    parquet/csv schemas, and a stay-id column only when no manifest denominator
+    is available. It does not load full export tables for registry rendering.
     """
-    import json
-
     path = Path(raw_path).expanduser()
     try:
         path = path.resolve()
@@ -1457,13 +1510,7 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
     if not _safe_dir(path):
         return {"ok": False, "error": "not_a_directory", "path": str(path)}
 
-    manifest_path = path / "_manifest.json"
-    manifest: Dict[str, Any] = {}
-    if manifest_path.exists():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            manifest = {}
+    manifest = _read_export_manifest(path)
 
     files = _export_file_inventory(path, manifest)
     if not files:
@@ -1471,34 +1518,92 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
 
     modules = sorted({f.get("module") for f in files if f.get("module")})
     label = str(manifest.get("database") or path.name or "local").upper()
-    stay_ids = _fast_stay_ids(path, files)
+    manifest_stays = _manifest_stay_count(manifest)
+    stay_ids = None if manifest_stays is not None else _fast_stay_ids(path, files)
     summary = {
-        "stays": len(stay_ids) if stay_ids is not None else None,
+        "stays": manifest_stays if manifest_stays is not None else (len(stay_ids) if stay_ids is not None else None),
         "modules": len(modules),
         "file_count": len(files),
-        "total_rows": (
-            _cohort_total_rows(path, files, stay_ids)
-            if stay_ids is not None
-            else sum(int(f.get("rows") or 0) for f in files)
-        ),
+        "total_rows": sum(int(f.get("rows") or 0) for f in files),
     }
     return {
         "ok": True,
         "path": str(path),
         "label": label,
         "database": manifest.get("database"),
-        "generated": manifest.get("generated"),
+        "generated": manifest.get("generated") or manifest.get("exported_at"),
         "modules": modules,
         "files": files,
         "summary": summary,
     }
 
 
+def _read_export_manifest(path: Path) -> Dict[str, Any]:
+    import json
+
+    for name in ("_manifest.json", "easyicu_export_manifest.json"):
+        manifest_path = path / name
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(manifest, dict):
+            manifest["_manifest_file"] = name
+            return manifest
+    return {}
+
+
+def _manifest_file_entries(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
+    files = manifest.get("files")
+    if isinstance(files, list):
+        return [dict(row) for row in files if isinstance(row, dict) and row.get("file")]
+
+    # Older full exports wrote ``easyicu_export_manifest.json`` with a short
+    # ``modules`` list. Treat those rows as hints, but still scan the folder
+    # because the manifest may be incomplete.
+    modules = manifest.get("modules")
+    if not isinstance(modules, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for row in modules:
+        if not isinstance(row, dict) or not row.get("file"):
+            continue
+        entry = dict(row)
+        if "module" not in entry and row.get("group"):
+            entry["module"] = row.get("group")
+        out.append(entry)
+    return out
+
+
+def _manifest_stay_count(manifest: Dict[str, Any]) -> Optional[int]:
+    cohort_report = manifest.get("cohort_report")
+    if isinstance(cohort_report, dict):
+        for key in ("selected", "cohort_size", "stays"):
+            value = _positive_int(cohort_report.get(key))
+            if value is not None:
+                return value
+    for key in ("patient_count", "cohort_size", "stays"):
+        value = _positive_int(manifest.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _positive_int(value: Any) -> Optional[int]:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
 def _export_file_inventory(path: Path, manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
-    manifest_files = {f.get("file"): f for f in manifest.get("files", []) if f.get("file")}
+    manifest_files = {f.get("file"): f for f in _manifest_file_entries(manifest) if f.get("file")}
     out: List[Dict[str, Any]] = []
     for f in sorted(path.iterdir(), key=lambda p: p.name):
-        if f.name.startswith(".") or f.name == "_manifest.json" or not f.is_file():
+        if f.name.startswith(".") or f.name in _MODULE_MANIFESTS or not f.is_file():
             continue
         if f.suffix.lower() not in {".csv", ".parquet", ".xlsx"}:
             continue
@@ -1506,12 +1611,26 @@ def _export_file_inventory(path: Path, manifest: Dict[str, Any]) -> List[Dict[st
         if "file" not in meta:
             meta["file"] = f.name
         if "module" not in meta:
-            meta["module"] = f.stem.split("__", 1)[0]
+            meta["module"] = _infer_export_module(f)
         if "rows" not in meta:
             meta["rows"] = _count_rows(f)
         meta["columns"] = _read_columns(f)
         out.append(meta)
     return out
+
+
+def _infer_export_module(path: Path) -> str:
+    stem = path.stem
+    try:
+        from easyicu.concept import catalog as concept_catalog
+
+        groups = sorted(concept_catalog.CONCEPT_GROUPS_INTERNAL, key=len, reverse=True)
+    except Exception:
+        groups = []
+    for group in groups:
+        if stem == group or stem.startswith(group + "_") or stem.startswith(group + "__"):
+            return group
+    return stem.split("__", 1)[0]
 
 
 def _fast_stay_count(path: Path, files: List[Dict[str, Any]]) -> Optional[int]:
@@ -1886,7 +2005,7 @@ def _check_data_status(path: Path, db_key: str) -> Dict[str, Any]:
 def _mappable_modules() -> int:
     """Number of feature-module groups EasyICU can map (the 19 catalog groups)."""
     try:
-        from easyicu.concept_catalog import CONCEPT_GROUPS_INTERNAL
+        from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
 
         return len(CONCEPT_GROUPS_INTERNAL)
     except Exception:

@@ -45,7 +45,7 @@
       const inner = `
         <div class="home-inner" style="max-width:1180px;">
           <h1 class="home-h1">${t('Welcome to EasyICU', '欢迎使用 EasyICU')}</h1>
-          <p class="home-sub">${t('Your local-first ICU research workspace. Pick how you want to work — start a Guided study, or drive the panels yourself. Both go from question to a gated draft; nothing is uploaded.', '本地优先的 ICU 研究工作台。选一种你习惯的方式 —— 开始研究引导,或自己操作面板。两者都能从问题走到受闸草稿;不上传任何数据。')}</p>
+          <p class="home-sub">${t('Your local-first ICU research workspace. Pick how you want to work — start a Guided study, or drive the panels yourself. Both go from question to a review-ready draft; nothing is uploaded.', '本地优先的 ICU 研究工作台。选一种你习惯的方式 —— 开始研究引导,或自己操作面板。两者都能从问题走到待核验草稿;不上传任何数据。')}</p>
           <div class="entry-firsttime" id="firstTimeNudge" hidden>
             <span class="ft-ico">${icon('play', 13)}</span>
             <span>${t('New here?', '第一次使用?')} <b>${t('Take the 2-minute demo', '先跑 2 分钟演示')}</b> ${t('— no setup, no data, fully explorable.', '—— 无需配置、无需数据,全程可探索。')}</span>
@@ -70,7 +70,7 @@
             <div class="home-col col-copilot">
               <div class="col-head"><div class="col-mk">${icon('spark', 17)}</div><div><div class="col-t">${t('Guided study', '研究引导')}</div><div class="col-sub">${t('talk it through · easiest way to start', '对话引导 · 最推荐的入口')}</div></div><span class="col-badge">${t('Recommended', '推荐')}</span></div>
               <div class="col-body">
-                <p class="col-lead">${t('Describe your study in a sentence — I frame it, pull the cohort, run the analysis, and prepare a gated draft.', '用一句话描述你的研究 —— 我来框定问题、筛取队列、运行分析,并准备一份受证据约束的草稿。')}</p>
+                <p class="col-lead">${t('Describe your study in a sentence — I frame it, pull the cohort, run the analysis, and prepare a review-ready draft.', '用一句话描述你的研究 —— 我来框定问题、筛取队列、运行分析,并准备一份待证据核验的草稿。')}</p>
                 <div class="col-prompt">
                   <textarea class="hp-input" id="homeInput" rows="3" placeholder="${t('e.g. Among Sepsis-3 patients, does early lactate predict in-hospital mortality, and does adding it to SOFA improve the model?', '例如:在脓毒症(Sepsis-3)患者中,早期乳酸能否预测院内死亡?把它加入 SOFA 是否提升模型?')}" autocomplete="off" aria-label="Describe your study"></textarea>
                   <div class="hp-bar">
@@ -94,7 +94,7 @@
                   ${[
                     ['extraction', 'extract', t('Data Extraction', '数据抽取'), t('One click to analysis-ready tables', '一键得到可分析的数据表')],
                     ['patient', 'viz', t('Data Visualization', '数据可视化'), t('Patient review · cohort stats · cross-DB', '患者审阅 · 队列统计 · 跨库')],
-                    ['agent', 'agent', t('Agent Projects', '研究项目'), t('Auditable runs → gated manuscript', '可审计运行 → 受闸草稿')],
+                    ['agent', 'agent', t('Agent Projects', '研究项目'), t('Auditable runs → review-ready manuscript', '可审计运行 → 待核验草稿')],
                   ].map(([nav, ic, ti, d]) => `
                     <button class="col-entry" data-nav="${nav}">
                       <span class="ce-ico">${icon(ic, 15)}</span>
@@ -197,6 +197,7 @@
   let exAdvCohort = false, exAdvExport = false, exShowAllMods = true;
   let exFormat = 'parquet';     // parquet | csv | excel
   let exMerge = 'separate';
+  let exExportDir = null;
   let exReal = 'connect';   // connect | scanning | scanresult | converting | convfail | ready
   let exPath = '';   // the local folder the user points at; never prefilled
   let exManualSourceOpen = false;
@@ -224,6 +225,7 @@
   let exMinLosHours = 0;
   let exWindowHours = DEFAULT_OBSERVATION_WINDOW_HOURS;
   let exExcludeReadmissions = true;
+  const EX_SEPSIS_RUNTIME_PROFILE = 'easyicu_ricu_default_v1';
   let convFail = false;     // demo: conversion hit a recoverable error
 
   const COHORT_PRESETS = [
@@ -373,13 +375,33 @@
     }
   }
   function exportDestinationLabel() {
-    return t('Default export root from Settings', '使用设置中的默认导出目录');
+    return currentExportDir() || t('No export destination selected', '尚未选择导出目录');
   }
   function exportDestinationHint() {
+    if (currentExportDir()) {
+      return t(
+        'Each extraction creates a timestamped folder inside the selected destination.',
+        '每次抽取都会在所选目录下创建带时间戳的文件夹。'
+      );
+    }
     return t(
-      'Each extraction creates a timestamped folder with README.md and _manifest.json.',
-      '每次抽取都会创建带时间戳的文件夹，并写入 README.md 与 _manifest.json。'
+      'Choose an export destination before extraction starts.',
+      '开始抽取前必须先选择导出目录。'
     );
+  }
+  function exportDestinationRequiredMessage() {
+    return t('Choose an export destination before extracting.', '请先选择导出目录再开始抽取。');
+  }
+  function currentExportDir() {
+    return exExportDir || (window.EU_SETTINGS && window.EU_SETTINGS.export_dir) || '';
+  }
+  function setExportDir(path) {
+    exExportDir = path || null;
+    if (window.EU_API && window.EU_API.saveSetting) {
+      window.EU_API.saveSetting('export_dir', exExportDir).catch(err => {
+        console.warn('[EasyICU] export_dir setting save failed:', err);
+      });
+    }
   }
   function preparedDestinationHint() {
     return t('local prepared-data folder', '本地预处理数据文件夹');
@@ -414,6 +436,12 @@
     const runMode = mode === 'recommended' ? 'recommended' : 'custom';
     const modules = runModuleKeys(runMode);
     if (!modules.length) return;
+    const outDir = currentExportDir();
+    if (!outDir) {
+      exAdvExport = true;
+      repaint();
+      return;
+    }
     const real = dataMode() === 'real';
     const support = runMode === 'recommended' ? { ok: true, reason: 'recommended' } : cohortExportSupport();
     if (real && !support.ok) {
@@ -443,6 +471,7 @@
         format: exFormat, merge: exMerge === 'merged', max_patients: exMaxPatients,
         cohort: runMode === 'recommended' ? recommendedCohortContract() : cohortContract(),
       };
+      payload.out_dir = outDir;
       if (Object.keys(conceptSelection).length) payload.concepts = conceptSelection;
       window.EU_API.postJSON('/api/jobs/extract', payload).then(r => {
         exportJobId = r.job_id;
@@ -807,16 +836,17 @@
   }
   function closePicker() { if (pickerEl) { pickerEl.remove(); pickerEl = null; } document.removeEventListener('keydown', pickerKey); }
   function pickerKey(e) { if (e.key === 'Escape') closePicker(); }
-  function openFolderPicker(startPath, onPick) {
+  function openFolderPicker(startPath, onPick, title) {
     ensurePickerStyles();
     closePicker();
     let cur = startPath || '';
+    const pickerTitle = title || t('Choose a data folder', '选择数据文件夹');
     const back = document.createElement('div'); back.className = 'eu-pick-back';
     back.innerHTML = `
-      <div class="eu-pick" role="dialog" aria-label="${t('Choose a data folder', '选择数据文件夹')}">
+      <div class="eu-pick" role="dialog" aria-label="${escHtml(pickerTitle)}">
         <div class="eu-pick-h">
           <span style="color:var(--ink-3);">${icon('folder', 16)}</span>
-          <span class="t">${t('Choose a data folder', '选择数据文件夹')}</span>
+          <span class="t">${escHtml(pickerTitle)}</span>
           <span class="grow" style="flex:1;"></span>
           <button class="btn sm ghost" data-pk-close>${icon('close', 13)}</button>
         </div>
@@ -907,6 +937,7 @@
 
   /* ---- the express recommended card ---- */
   function expressCard() {
+    const exportReady = !!currentExportDir();
     return `
     <div class="express">
       <div class="express-grid">
@@ -925,8 +956,8 @@
           </div>
         </div>
         <div class="express-cta">
-          <button class="btn primary lg" data-ex-run="recommended">${icon('play', 16)} ${t('Run recommended extraction', '运行推荐抽取')}</button>
-          <div class="note-line">${icon('shield', 12)} ${dataMode() === 'demo' ? t('reproducible · no tokens', '可复现 · 不消耗 token') : t('local-only · nothing uploaded', '仅本地 · 不上传')}</div>
+          <button class="btn primary lg" data-ex-run="recommended" ${exportReady ? '' : 'disabled'}>${icon('play', 16)} ${t('Run recommended extraction', '运行推荐抽取')}</button>
+          <div class="note-line" style="${exportReady ? '' : 'color:var(--warn,#a66a00);'}">${icon(exportReady ? 'shield' : 'alert', 12)} ${exportReady ? (dataMode() === 'demo' ? t('reproducible · no tokens', '可复现 · 不消耗 token') : t('local-only · nothing uploaded', '仅本地 · 不上传')) : exportDestinationRequiredMessage()}</div>
         </div>
       </div>
     </div>`;
@@ -958,6 +989,44 @@
     if (exAgeMax >= 100) return '≥ ' + exAgeMin;
     return exAgeMin + '–' + exAgeMax;
   }
+  function selectedSepsisScoreFamily() {
+    const keys = new Set(modKeys());
+    const sofa2 = keys.has('sofa2_score') || keys.has('sepsis3_sofa2');
+    const sofa1 = keys.has('sofa1_score') || keys.has('sepsis3_sofa1');
+    if (sofa2 && sofa1) return 'SOFA-2 + SOFA-1';
+    if (sofa2) return 'SOFA-2';
+    if (sofa1) return 'SOFA-1';
+    return t('selected modules', '按已选模块');
+  }
+  function sepsisDefinitionRelevant() {
+    return modKeys().some(k => k.startsWith('sepsis3_') || k.startsWith('sofa') || k === 'sepsis_shared');
+  }
+  function sepsisDefinitionContract() {
+    return {
+      record_scope: 'metadata_current_runtime_defaults',
+      runtime_profile: EX_SEPSIS_RUNTIME_PROFILE,
+      score_family: selectedSepsisScoreFamily(),
+      suspected_infection: {
+        mode: 'antibiotic_and_sample',
+        antibiotic_to_sample_hours: 24,
+        sample_to_antibiotic_hours: 72,
+        positive_cultures_required: false,
+      },
+      sofa_increase: {
+        si_event: 'first',
+        window_before_si_hours: 48,
+        window_after_si_hours: 24,
+        delta_function: 'cumulative_minimum_within_si_window',
+        threshold: 2,
+      },
+      review_options: {
+        si_event: ['first', 'last', 'any'],
+        delta_function: ['cumulative_minimum', 'first_observed', 'windowed_minimum'],
+        threshold: [2, 3],
+        score_family: ['SOFA-2', 'SOFA-1', 'SOFA-2 + SOFA-1'],
+      },
+    };
+  }
   function cohortContract() {
     const icd = (window.EUIcd && window.EUIcd.contract) ? window.EUIcd.contract() : {};
     return {
@@ -968,6 +1037,7 @@
       observation_window_hours: exWindowHours,
       exclude_readmissions: exExcludeReadmissions,
       icd_enabled: exCohortPreset === 'icd',
+      sepsis_definition: sepsisDefinitionContract(),
       ...icd,
     };
   }
@@ -980,6 +1050,7 @@
       observation_window_hours: DEFAULT_OBSERVATION_WINDOW_HOURS,
       exclude_readmissions: true,
       icd_enabled: false,
+      sepsis_definition: sepsisDefinitionContract(),
     };
   }
   function cohortExportSupport() {
@@ -1216,6 +1287,52 @@
   }
 
   /* ---- modules cfg ---- */
+  function sepsisDefChip(label, tone) {
+    return `<span class="sepsis-def-chip ${tone || ''}">${escHtml(label)}</span>`;
+  }
+  function sepsisDefinitionPanel() {
+    if (!sepsisDefinitionRelevant()) return '';
+    const current = [
+      t('SI = antibiotics + culture/sample', 'SI = 抗菌药 + 培养/采样'),
+      t('sample→ABX 72h / ABX→sample 24h', '采样→抗菌药 72h / 抗菌药→采样 24h'),
+      t('first SI event', '首个 SI 事件'),
+      t('SOFA window −48h/+24h', 'SOFA 窗口 −48h/+24h'),
+      t('delta = cumulative minimum', '增量 = 窗口内累积最小值'),
+      'ΔSOFA ≥ 2',
+    ];
+    const review = [
+      t('first / last / any SI event', 'first / last / any SI 事件'),
+      t('cummin / start / windowed-min delta', '累积最小值 / 起点 / 滑动最小值增量'),
+      t('SOFA-2 vs SOFA-1 sensitivity', 'SOFA-2 与 SOFA-1 敏感性'),
+      t('threshold 2 vs 3', '阈值 2 与 3'),
+    ];
+    return `
+      <div class="sepsis-def-panel">
+        <div class="sepsis-def-head">
+          <span class="sepsis-def-ico">${icon('shield', 15)}</span>
+          <div class="grow">
+            <div class="sepsis-def-kicker">${t('Definition checkpoint', '定义检查点')}</div>
+            <div class="sepsis-def-title">${t('Sepsis-3 timing definition', 'Sepsis-3 时间定义')}</div>
+            <div class="sepsis-def-copy">${t(
+              'SOFA-defined Sepsis-3 is sensitive to the suspected-infection anchor and SOFA delta window. EasyICU records the current runtime default in the export manifest; alternate modes should be fixed in the study protocol before re-deriving concepts.',
+              'SOFA 定义的 Sepsis-3 会受疑似感染锚点和 SOFA 增量窗口影响。EasyICU 会把当前运行默认写入导出 manifest；如果要比较其他模式，需要先在研究方案里固定后再重新派生。'
+            )}</div>
+          </div>
+          <span class="pill mono">${escHtml(selectedSepsisScoreFamily())}</span>
+        </div>
+        <div class="sepsis-def-grid">
+          <div class="sepsis-def-row">
+            <div class="sepsis-def-label">${t('Current extraction default', '当前抽取默认')}</div>
+            <div class="sepsis-def-chips">${current.map(x => sepsisDefChip(x, 'current')).join('')}</div>
+          </div>
+          <div class="sepsis-def-row">
+            <div class="sepsis-def-label">${t('Review before analysis', '分析前确认')}</div>
+            <div class="sepsis-def-chips">${review.map(x => sepsisDefChip(x, 'review')).join('')}</div>
+          </div>
+        </div>
+        <div class="sepsis-def-foot">${icon('file', 12)} ${t('Recorded as cohort.sepsis_definition in the local manifest; it is a definition note, not a silent runtime override.', '记录到本地 manifest 的 cohort.sepsis_definition；这是定义说明，不是静默改写运行参数。')}</div>
+      </div>`;
+  }
   function conceptRows(m) {
     const ids = conceptIdsForModule(m);
     const selected = new Set(selectedConceptIdsForModule(m));
@@ -1281,6 +1398,7 @@
         <div class="modgrid" id="exModGrid">
           ${shown.map(m => modCard(m, MODS.indexOf(m))).join('')}
         </div>
+        ${sepsisDefinitionPanel()}
         ${selectedCount === 0 ? `<div class="note mt-12" style="padding:10px 12px;background:color-mix(in srgb,var(--warn,#b45309) 8%,transparent);border-color:color-mix(in srgb,var(--warn,#b45309) 22%,transparent);"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${t('Select at least one module before extracting.', '抽取前至少选择一个模块。')}</div></div></div>` : ''}
         <button class="adv-toggle ${exShowAllMods ? 'open' : ''}" data-ex-allmods>${exShowAllMods ? t('Show core modules only', '仅显示核心模块') : t('Show all ' + MODS.length + ' modules', '显示全部 ' + MODS.length + ' 个模块')} <span class="chev">${icon('chevdown', 13)}</span></button>
       </div>
@@ -1290,6 +1408,8 @@
   /* ---- export cfg ---- */
   function exportCfg() {
     const fmtSeg = `<div class="seg" data-ex-fmt><button class="${exFormat === 'parquet' ? 'active' : ''}" data-val="parquet">Parquet</button><button class="${exFormat === 'csv' ? 'active' : ''}" data-val="csv">CSV</button><button class="${exFormat === 'excel' ? 'active' : ''}" data-val="excel">Excel</button></div>`;
+    const destination = currentExportDir();
+    const hintTone = destination ? 'var(--ink-4)' : 'var(--warn,#a66a00)';
     return `
     <div class="cfg">
       <div class="cfg-head">
@@ -1299,8 +1419,11 @@
       </div>
       <div class="cfg-body">
         ${advRow(t('Format', '格式'), fmtSeg)}
-        <div class="path-field" style="width:100%;margin-top:12px;"><span class="pf-ico">${icon('folder', 14)}</span><span class="pf-path">${exportDestinationLabel()}</span></div>
-        <div class="note-line mt-8" style="font-size:11px;color:var(--ink-4);">${icon('shield', 11)} ${exportDestinationHint()}</div>
+        <div class="ex-export-destination">
+          <div class="path-field ex-export-path"><span class="pf-ico">${icon('folder', 14)}</span><span class="pf-path ${destination ? '' : 'muted'}">${escHtml(exportDestinationLabel())}</span></div>
+          <button class="btn sm ghost ex-export-browse" data-ex-export-browse>${icon('folder', 13)} ${t('Browse...', '浏览...')}</button>
+        </div>
+        <div class="note-line mt-8" style="font-size:11px;color:${hintTone};">${icon(destination ? 'shield' : 'alert', 11)} ${exportDestinationHint()}</div>
         <button class="adv-toggle ${exAdvExport ? 'open' : ''}" data-ex-adve>${t('Advanced export options', '高级导出选项')} <span class="chev">${icon('chevdown', 13)}</span></button>
         <div class="adv-body" ${exAdvExport ? '' : 'hidden'}>
           <div class="col gap-12">
@@ -1317,7 +1440,9 @@
   /* ---- summary rail ---- */
   function summaryRail() {
     const support = cohortExportSupport();
-    const extractDisabled = !selMods().length || !support.ok;
+    const exportReady = !!currentExportDir();
+    const extractDisabled = !selMods().length || !support.ok || !exportReady;
+    const summaryMessage = !exportReady ? exportDestinationRequiredMessage() : (support.ok ? t('local-only · reproducible manifest', '仅本地 · 可复现清单') : support.message);
     return `
     <div class="ex2-summary">
       <div class="sumcard">
@@ -1328,7 +1453,7 @@
         <div class="sum-row"><span class="k">${t('Concepts', '概念')}</span><span class="v" id="exSumConc">${conceptN()}</span></div>
         <div class="sum-row"><span class="k">${t('Format', '格式')}</span><span class="v">${exFormat.toUpperCase()}</span></div>
         <button class="btn primary block mt-16" data-ex-run="custom" ${extractDisabled ? 'disabled' : ''}>${icon('download', 14)} ${t('Extract', '开始抽取')}</button>
-        <div class="note-line mt-8" style="font-size:11px;color:${support.ok ? 'var(--ink-4)' : 'var(--warn,#a66a00)'};text-align:center;">${icon(support.ok ? 'shield' : 'alert', 11)} ${support.ok ? t('local-only · reproducible manifest', '仅本地 · 可复现清单') : support.message}</div>
+        <div class="note-line mt-8" style="font-size:11px;color:${support.ok && exportReady ? 'var(--ink-4)' : 'var(--warn,#a66a00)'};text-align:center;">${icon(support.ok && exportReady ? 'shield' : 'alert', 11)} ${summaryMessage}</div>
       </div>
     </div>`;
   }
@@ -1472,6 +1597,16 @@
             repaint();
           });
         } else if (pathInput) { pathInput.focus(); pathInput.select(); }
+      }));
+      root.querySelectorAll('[data-ex-export-browse]').forEach(browseBtn => browseBtn.addEventListener('click', () => {
+        if (window.EU_API && window.EU_API.listDir) {
+          openFolderPicker(currentExportDir(), picked => {
+            setExportDir(picked);
+            repaint();
+          }, t('Choose export destination', '选择导出目录'));
+        } else {
+          browseBtn.focus();
+        }
       }));
       root.querySelectorAll('[data-ex-src]').forEach(b => b.addEventListener('click', () => {
         if (pathInput) exPath = pathInput.value || exPath;

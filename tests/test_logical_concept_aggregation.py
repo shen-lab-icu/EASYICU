@@ -4,12 +4,12 @@ import pandas as pd
 
 from easyicu.config import DataSourceConfig
 from easyicu.concept import ConceptResolver
-from easyicu.concept_callbacks import CALLBACK_REGISTRY, register_callback
-from easyicu.concept_expr_parser import _default_aggregator_for_dtype
-from easyicu.concept_parser import default_aggregator_for_dtype
-from easyicu.concept_schema import ConceptDefinition, ConceptDictionary, ConceptSource
+from easyicu.concept.callbacks import CALLBACK_REGISTRY, register_callback
+from easyicu.concept.expr_parser import _default_aggregator_for_dtype
+from easyicu.concept.parser import default_aggregator_for_dtype
+from easyicu.concept.schema import ConceptDefinition, ConceptDictionary, ConceptSource
 from easyicu.table import ICUTable
-from easyicu.ts_utils import change_interval
+from easyicu.io.ts_utils import change_interval
 
 
 def test_auto_aggregator_for_bool_uses_any_semantics() -> None:

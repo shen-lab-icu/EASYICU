@@ -43,7 +43,7 @@ import pandas as pd
 import pytest
 
 from easyicu.concept import ConceptSource, _apply_callback
-from easyicu.concept_callbacks import CALLBACK_REGISTRY
+from easyicu.concept.callbacks import CALLBACK_REGISTRY
 
 
 # ---------------------------------------------------------------------------

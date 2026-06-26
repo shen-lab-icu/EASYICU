@@ -48,7 +48,7 @@ import numpy as np
 import pandas as pd
 
 from . import load_concepts
-from .project_config import (
+from .runtime.project_config import (
     DEFAULT_PATIENTS_AUMC,
     DEFAULT_PATIENTS_EICU,
     DEFAULT_PATIENTS_HIRID,
@@ -58,7 +58,7 @@ from .project_config import (
     PRODUCTION_DATA_HIRID,
     PRODUCTION_DATA_PATH,
 )
-from .runtime_defaults import resolve_loader_defaults
+from .runtime.runtime_defaults import resolve_loader_defaults
 
 # Import shared configuration from modules_config
 from .modules_config import (

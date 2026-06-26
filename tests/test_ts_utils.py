@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from easyicu.api import _get_auto_chunk_strategy
-from easyicu.ts_utils import locb, locf, slide
+from easyicu.io.ts_utils import locb, locf, slide
 
 
 def test_locf_sorts_by_time_before_fill_when_unsorted_and_no_max_gap():
@@ -56,7 +56,7 @@ def test_numeric_charttime_slide_uses_hours_for_long_cohorts():
 
 def test_sofa_auto_chunk_size_is_capped_for_large_cohorts(monkeypatch):
     monkeypatch.setenv("EASYICU_AUTO_CHUNK_SIZE", "8000")
-    monkeypatch.setattr("easyicu.memory_manager.get_available_memory_mb", lambda: 16 * 1024)
+    monkeypatch.setattr("easyicu.runtime.memory_manager.get_available_memory_mb", lambda: 16 * 1024)
 
     strategy = _get_auto_chunk_strategy(
         ["sofa"],

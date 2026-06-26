@@ -7,8 +7,8 @@ import pandas as pd
 import easyicu.concept as concept_module
 from easyicu.config import DataSourceConfig
 from easyicu.concept import ConceptResolver
-from easyicu.concept_availability_signal import ConceptAvailabilityRecord
-from easyicu.concept_schema import ConceptDefinition, ConceptDictionary, ConceptSource
+from easyicu.concept.availability_signal import ConceptAvailabilityRecord
+from easyicu.concept.schema import ConceptDefinition, ConceptDictionary, ConceptSource
 from easyicu.table import ICUTable
 
 

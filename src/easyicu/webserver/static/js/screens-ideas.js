@@ -7,6 +7,7 @@
   let srcType = 'manual';
   let mining = false;
   let resolving = false;
+  let discovering = false;
   let priorArting = false;
   let handoffing = false;
   let projectCreating = false;
@@ -14,6 +15,7 @@
   let err = null;
   let result = null;
   let sourceResolved = null;
+  let discovery = null;
   let priorArt = null;
   let projectSeed = null;
   let selectedRunId = null;
@@ -116,12 +118,16 @@
     if (window.EU_API && window.EU_API.loadIdeaRun) return window.EU_API.loadIdeaRun(body);
     return postLocalJSON('/api/ideas/run', body || {});
   }
+  function discoverIdeasApi(body) {
+    if (window.EU_API && window.EU_API.discoverIdeas) return window.EU_API.discoverIdeas(body);
+    return postLocalJSON('/api/ideas/discover', body || {});
+  }
   function sourceTabs() {
     const rows = [
       ['manual', 'Manual idea', '手动输入', 'Paste a topic, article metadata, or excerpt.'],
       ['url', 'Article metadata', '文章元数据', 'Paste title/abstract/excerpt; the URL is citation metadata until live fetch is enabled.'],
       ['pdf', 'PDF excerpt', 'PDF 摘录', 'Paste bounded text now; full PDF parsing comes later.'],
-      ['frontier', 'Frontier prompt', '前沿主题', 'Describe journals/topics now; live journal search needs opt-in.'],
+      ['frontier', 'Frontier search', '前沿检索', 'Describe journals/topics; PubMed metadata search requires opt-in.'],
     ];
     return `
       <div class="modeswitch ideas-source-switch" data-ideas-tabs>
@@ -160,7 +166,7 @@
       return t('PDF mode currently accepts pasted bounded excerpts. Full PDF parsing and upload handling are still blocked behind a separate parser/opt-in stage.', 'PDF 模式目前只接受粘贴的有界摘录。完整 PDF 解析和上传处理仍需单独 parser/opt-in 阶段。');
     }
     if (srcType === 'frontier') {
-      return t('Frontier mode currently creates a local plan from your prompt. Live journal/review search and prior-art checking require explicit network/provider opt-in.', '前沿主题模式目前只基于你的描述生成本地计划。真实期刊/review 检索和 prior-art 检查需要明确网络/provider opt-in。');
+      return t('Frontier mode can prepare queries without network access. If you opt in, it searches bounded PubMed metadata/abstracts, maps candidate ideas to the EasyICU dictionary, then lets you choose one for the local ledger.', '前沿模式在未联网时只准备检索式；如果你 opt-in，会检索有界 PubMed 元数据/摘要，把候选 idea 映射到 EasyICU 字典，并让你选择其中一个生成本地台账。');
     }
     return t('Manual mode creates a local, evidence-bound idea ledger from the text you provide.', '手动模式会根据你提供的文本生成本地、证据绑定的 idea 台账。');
   }
@@ -210,6 +216,50 @@
     sourceResolved = null;
     err = null;
     activeStep = window.EU_IDEA_HANDOFF || projectSeed ? 'handoff' : data ? 'ledger' : 'source';
+  }
+  function runIdeaDiscovery() {
+    if (discovering) return;
+    const payload = collectPayload(document);
+    if (!payload.topic && !payload.title) {
+      err = t('Describe a frontier topic or journal scope before literature discovery.', '请先描述前沿主题或期刊范围，再做文献发现。');
+      repaint();
+      return;
+    }
+    discovering = true;
+    err = null;
+    repaint();
+    discoverIdeasApi(Object.assign({}, payload, { limit: 8 })).then(data => {
+      discovery = data;
+      sourceResolved = null;
+      const suggested = data && data.status !== 'blocked_network_opt_in_required' ? data.suggested_payload : null;
+      if (suggested) {
+        draft = Object.assign({}, draft, Object.fromEntries(Object.entries(suggested).filter(([, v]) => v != null && v !== '')));
+      }
+    }).catch(e => {
+      err = e.message || String(e);
+    }).finally(() => {
+      discovering = false;
+      repaint();
+    });
+  }
+  function useDiscoveryCandidate(index) {
+    const rows = discovery && Array.isArray(discovery.idea_candidates) ? discovery.idea_candidates : [];
+    const row = rows[Number(index || 0)];
+    if (!row) return;
+    draft = Object.assign({}, draft, Object.fromEntries(Object.entries(row.suggested_payload || {}).filter(([, v]) => v != null && v !== '')));
+    sourceResolved = {
+      ok: true,
+      mode: 'frontier_discovery_candidate',
+      resolved_source: row.source || null,
+      suggested_payload: row.suggested_payload || {},
+      source_adapter: {
+        status: 'pubmed_candidate_selected',
+        network_calls: discovery.network_calls || 0,
+        external_llm_calls: 0,
+      },
+    };
+    err = null;
+    repaint();
   }
   function historyRowFromRun(data) {
     const source = ((data && data.source_evidence) || [])[0] || {};
@@ -285,6 +335,32 @@
         </div>
       </div>`;
   }
+  function discoveryPanel() {
+    if (srcType !== 'frontier' && !discovery) return '';
+    const candidates = discovery && Array.isArray(discovery.idea_candidates) ? discovery.idea_candidates.slice(0, 6) : [];
+    const queries = discovery && Array.isArray(discovery.queries_to_run) ? discovery.queries_to_run.slice(0, 4) : [];
+    return `
+      <div class="ideas-discovery mt-12">
+        <div class="ideas-prior-top">
+          <div>
+            <h3>${t('Frontier literature discovery', '前沿文献发现')}</h3>
+            <p>${esc((discovery && discovery.reason) || t('Searches PubMed metadata/abstracts only after explicit network opt-in; then maps each article into an EasyICU idea candidate.', '只有明确网络 opt-in 后才检索 PubMed 元数据/摘要；随后把每篇文章映射成 EasyICU idea 候选。'))}</p>
+          </div>
+          <button class="btn ${fieldValue('allow_network') === true || fieldValue('allow_network') === 'true' ? 'primary' : ''}" data-idea-discover ${discovering ? 'aria-disabled="true"' : ''}>${discovering ? '<span class="spin"></span>' : icon('search', 13)} ${t('Discover papers', '检索文章')}</button>
+        </div>
+        ${queries.length ? `<div class="ideas-query-list">${queries.map(q => `<code>${esc(q)}</code>`).join('')}</div>` : ''}
+        ${candidates.length ? `<div class="ideas-feature-list mt-10">${candidates.map((row, i) => {
+          const idea = row.idea || {};
+          const source = row.source || {};
+          const feas = idea.feasibility || {};
+          return `<div class="ideas-feature-row">
+            <div class="ideas-feature-name"><b>${esc(idea.idea_title || source.title || 'Candidate idea')}</b><span class="mono">${esc([source.year, source.journal, source.pmid ? 'PMID ' + source.pmid : ''].filter(Boolean).join(' · '))}</span></div>
+            <span class="pill ${feas.tier === 'executable' ? 'ok' : 'warn'}">${esc(feas.tier || idea.go_no_go || 'review')}</span>
+            <button class="btn sm" data-idea-use-discovery="${i}">${t('Use', '使用')}</button>
+          </div>`;
+        }).join('')}</div>` : ''}
+      </div>`;
+  }
   function sourceForm() {
     return `
       <div class="card pad ideas-compose ideas-core-card">
@@ -320,6 +396,7 @@
           </label>
           <div class="muted mt-8">${t('This pass does not fetch the URL, parse a PDF, or call an external LLM unless you explicitly opt in and a provider is configured.', '除非你明确 opt-in 且 provider 已配置，否则这一版不会抓取链接、解析 PDF 或调用外部 LLM。')}</div>
         </details>
+        ${discoveryPanel()}
         ${!result ? `<div class="ideas-zero-line mt-12">${icon('clock', 13)} <span>${t('No idea ledger yet', '还没有 idea 台账')}</span><b>${t('Next: create one local, auditable record.', '下一步：生成一条本地、可审计记录。')}</b></div>` : ''}
         <div class="row gap-8 mt-16 ideas-actions">
           <button class="btn" data-idea-resolve ${resolving ? 'aria-disabled="true"' : ''}>${resolving ? '<span class="spin"></span>' : icon('search', 14)} ${t('Resolve source', '解析来源')}</button>
@@ -509,7 +586,7 @@
           <span class="sec-ico">${icon('agent', 14)}</span>
           <div><h2>${t('Plan handoff', '计划交接')}</h2><p>${t('Confirm or edit the plan before sending it to Agent Projects. This does not unlock a manuscript draft.', '交给 Agent Projects 前先确认或微调计划。这里不会解锁论文草稿。')}</p></div>
         </div>
-        <div class="note ok mt-8"><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${esc(plan.research_question || '')}</div><div class="d">${t('Draft analysis plan is locked until human confirmation and evidence gates pass.', '分析计划草稿在人工确认和证据闸通过前保持锁定。')}</div></div></div>
+        <div class="note ok mt-8"><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${esc(plan.research_question || '')}</div><div class="d">${t('Draft analysis plan is locked until human confirmation and evidence checks pass.', '分析计划草稿在人工确认和证据核验通过前保持锁定。')}</div></div></div>
         <div class="ledger compact mt-12">
           ${(plan.analysis_plan || []).map((x, i) => `<div class="ledger-row"><span class="ledger-ico">${String(i + 1).padStart(2, '0')}</span><div>${esc(x)}</div></div>`).join('')}
         </div>
@@ -686,7 +763,7 @@
       repaint();
     }));
     root.querySelectorAll('[data-idea-new]').forEach(btn => btn.addEventListener('click', () => {
-      result = null; err = null; planEdits = ''; sourceResolved = null; priorArt = null; projectSeed = null; selectedRunId = null; selectedRecordKey = null; draft = {}; activeStep = 'source'; window.EU_IDEA_HANDOFF = null; repaint();
+      result = null; err = null; planEdits = ''; sourceResolved = null; discovery = null; priorArt = null; projectSeed = null; selectedRunId = null; selectedRecordKey = null; draft = {}; activeStep = 'source'; window.EU_IDEA_HANDOFF = null; repaint();
     }));
     const resolveBtn = root.querySelector('[data-idea-resolve]');
     if (resolveBtn) resolveBtn.addEventListener('click', () => {
@@ -700,6 +777,13 @@
         draft = Object.assign({}, draft, Object.fromEntries(Object.entries(s).filter(([, v]) => v != null && v !== '')));
       }).catch(e => { err = e.message || String(e); }).finally(() => { resolving = false; repaint(); });
     });
+    const discoverBtn = root.querySelector('[data-idea-discover]');
+    if (discoverBtn) discoverBtn.addEventListener('click', () => {
+      runIdeaDiscovery();
+    });
+    root.querySelectorAll('[data-idea-use-discovery]').forEach(btn => btn.addEventListener('click', () => {
+      useDiscoveryCandidate(btn.dataset.ideaUseDiscovery || 0);
+    }));
     const mineBtn = root.querySelector('[data-idea-mine]');
     if (mineBtn) mineBtn.addEventListener('click', () => {
       if (mining || !(window.EU_API && window.EU_API.mineIdeas)) return;

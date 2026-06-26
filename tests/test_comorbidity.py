@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu.comorbidity import (
+from easyicu.scores.comorbidity import (
     CHARLSON_WEIGHTS,
     ELIXHAUSER_VW_WEIGHTS,
     flag_comorbidities,
@@ -84,7 +84,7 @@ def test_empty_input_returns_empty():
 
 
 def test_weight_tables_cover_all_conditions():
-    from easyicu.comorbidity import CHARLSON, ELIXHAUSER
+    from easyicu.scores.comorbidity import CHARLSON, ELIXHAUSER
     assert set(CHARLSON) == set(CHARLSON_WEIGHTS)
     assert set(ELIXHAUSER) == set(ELIXHAUSER_VW_WEIGHTS)
     assert len(CHARLSON) == 17
@@ -111,7 +111,7 @@ def test_charlson_prevalence_on_real_mimiciv():
 
 @pytest.mark.needs_real_data
 def test_load_comorbidity_per_stay_real():
-    from easyicu.comorbidity import load_comorbidity
+    from easyicu.scores.comorbidity import load_comorbidity
 
     out = load_comorbidity("miiv", system="charlson")
     assert not out.empty
@@ -123,7 +123,7 @@ def test_load_comorbidity_per_stay_real():
 
 @pytest.mark.needs_real_data
 def test_load_comorbidity_na_for_hirid():
-    from easyicu.comorbidity import load_comorbidity
+    from easyicu.scores.comorbidity import load_comorbidity
 
     # HiRID has no ICD diagnosis source -> empty, not an error.
     assert load_comorbidity("hirid", system="charlson").empty

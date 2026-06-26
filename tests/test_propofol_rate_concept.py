@@ -132,20 +132,20 @@ def test_demo_mirrors_full_eicu_and_mimic(propofol_rate_entry):
 
 def test_registered_in_window_concepts():
     """Rate concepts must expand into time-series windows just like norepi_rate."""
-    from easyicu.compat import WINDOW_CONCEPTS
+    from easyicu.utils.compat import WINDOW_CONCEPTS
 
     assert "propofol_rate" in WINDOW_CONCEPTS, (
         "propofol_rate must be in WINDOW_CONCEPTS so the loader expands rates "
         "across their administration intervals."
     )
     # Must NOT be in point/duration sets.
-    from easyicu.compat import DURATION_CONCEPTS, POINT_EVENT_CONCEPTS
+    from easyicu.utils.compat import DURATION_CONCEPTS, POINT_EVENT_CONCEPTS
     assert "propofol_rate" not in POINT_EVENT_CONCEPTS
     assert "propofol_rate" not in DURATION_CONCEPTS
 
 
 def test_registered_in_webapp_catalog():
-    from easyicu.concept_catalog import (
+    from easyicu.concept.catalog import (
         CONCEPT_DB_COVERAGE,
         CONCEPT_DICTIONARY,
     )

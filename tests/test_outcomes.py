@@ -19,7 +19,7 @@ import pytest
     ("aumc", 0.05, 0.20),
 ])
 def test_horizon_mortality_plausible_and_monotonic(database, lo28, hi28):
-    from easyicu.outcomes import load_outcomes
+    from easyicu.scores.outcomes import load_outcomes
 
     out = load_outcomes(database)
     assert not out.empty
@@ -37,14 +37,14 @@ def test_horizon_mortality_plausible_and_monotonic(database, lo28, hi28):
 def test_no_followup_returns_empty(database):
     # eICU is excluded: it has no horizon mortality but DOES expose a native
     # ventilator-free-days endpoint (see test_eicu_ventilator_free_days).
-    from easyicu.outcomes import load_outcomes
+    from easyicu.scores.outcomes import load_outcomes
 
     assert load_outcomes(database).empty
 
 
 @pytest.mark.needs_real_data
 def test_icu_readmission_present_for_mimic():
-    from easyicu.outcomes import load_outcomes
+    from easyicu.scores.outcomes import load_outcomes
 
     out = load_outcomes("miiv")
     assert "icu_readmission" in out.columns
@@ -63,7 +63,7 @@ def test_outcomes_via_load_concepts():
 
 @pytest.mark.needs_real_data
 def test_eicu_ventilator_free_days():
-    from easyicu.outcomes import load_outcomes
+    from easyicu.scores.outcomes import load_outcomes
 
     out = load_outcomes("eicu")
     assert not out.empty
@@ -79,7 +79,7 @@ def test_eicu_ventilator_free_days():
 @pytest.mark.needs_real_data
 def test_vent_free_days_not_supported_for_mimic():
     # MIMIC mech_vent is too fragmented for a defensible VFD -> not exposed.
-    from easyicu.outcomes import load_outcomes
+    from easyicu.scores.outcomes import load_outcomes
 
     out = load_outcomes("miiv")
     assert "vent_free_days_28" not in out.columns

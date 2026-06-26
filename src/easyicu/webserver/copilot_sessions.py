@@ -240,7 +240,7 @@ def _reply_for_intent(intent: str, route: str) -> Dict[str, Any]:
         },
         "how": {
             "en": "Use Idea Mining to form a feasible question, Data Workspace to extract/review, then Agent Projects to run an evidence-gated analysis.",
-            "zh": "先用 Idea Mining 形成可行问题，再用数据工作台抽取/审阅，最后用研究项目运行受证据闸约束的分析。",
+            "zh": "先用 Idea Mining 形成可行问题，再用数据工作台抽取/审阅，最后用研究项目运行受证据核验约束的分析。",
         },
     }
     if intent == "route":

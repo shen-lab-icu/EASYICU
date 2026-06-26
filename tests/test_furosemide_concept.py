@@ -125,7 +125,7 @@ def test_all_sources_use_set_val_true_callback(furosemide_entry):
 
 
 def test_furosemide_registered_as_point_event_concept():
-    from easyicu.compat import POINT_EVENT_CONCEPTS
+    from easyicu.utils.compat import POINT_EVENT_CONCEPTS
 
     assert "furosemide" in POINT_EVENT_CONCEPTS, (
         "furosemide must be in POINT_EVENT_CONCEPTS so the loader does not "
@@ -134,7 +134,7 @@ def test_furosemide_registered_as_point_event_concept():
 
 
 def test_furosemide_in_webapp_concept_catalog():
-    from easyicu.concept_catalog import (
+    from easyicu.concept.catalog import (
         CONCEPT_DB_COVERAGE,
         CONCEPT_DICTIONARY,
     )

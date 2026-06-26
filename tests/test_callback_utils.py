@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from easyicu.callback_utils import (
+from easyicu.utils.callback_utils import (
     apply_map,
     binary_op,
     combine_callbacks,

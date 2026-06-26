@@ -56,7 +56,7 @@ def test_sofa2_import_state_is_consistent() -> None:
 
 
 def test_data_env_imports_with_datasource_config_alias() -> None:
-    import easyicu.data_env as data_env
+    import easyicu.io.data_env as data_env
 
     assert data_env.SrcEnv.__name__ == "SrcEnv"
     assert data_env.DataEnv.__name__ == "DataEnv"
@@ -65,7 +65,7 @@ def test_data_env_imports_with_datasource_config_alias() -> None:
 def test_known_duplicate_top_level_functions_are_collapsed() -> None:
     assert (
         _module_function_count(
-            REPO_ROOT / "src" / "easyicu" / "concept_callbacks.py",
+            REPO_ROOT / "src" / "easyicu" / "concept" / "callbacks.py",
             "_callback_miiv_icu_patients_filter",
         )
         == 1
@@ -84,7 +84,7 @@ def test_project_config_import_does_not_create_project_dirs(tmp_path: Path) -> N
         [
             sys.executable,
             "-c",
-            "import easyicu.project_config as c; print(c.OUTPUT_DIR); print(c.CACHE_DIR); print(c.LOGS_DIR)",
+            "import easyicu.runtime.project_config as c; print(c.OUTPUT_DIR); print(c.CACHE_DIR); print(c.LOGS_DIR)",
         ],
         cwd=REPO_ROOT,
         env=env,

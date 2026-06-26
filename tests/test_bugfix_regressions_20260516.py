@@ -70,7 +70,7 @@ def test_mimic_chartevents_value_stays_varchar(tmp_path):
     pure numeric, the last row is the text value. Without the
     MIXED_TYPE_COLUMNS override the text row becomes NULL.
     """
-    from easyicu.data_converter import ConversionStatus, DataConverter
+    from easyicu.io.data_converter import ConversionStatus, DataConverter
 
     # Build tiny CSV.gz with the mimic-iii chartevents column shape
     csv_text = "row_id,subject_id,hadm_id,icustay_id,itemid,charttime,value,valuenum\n"
@@ -114,7 +114,7 @@ def test_truncated_shard_is_rejected(tmp_path):
     scan happily marked the table as "converted". The footer check (last 4
     bytes == ``PAR1``) catches that.
     """
-    from easyicu.data_converter import DataConverter
+    from easyicu.io.data_converter import DataConverter
 
     # Build a real shard layout: <table>/1.parquet ... 3.parquet
     table_dir = tmp_path / "vitalperiodic"
@@ -149,7 +149,7 @@ def test_expand_tolerates_mixed_numeric_and_datetime():
     After the fix the function falls back to a NA-only mask without raising
     (and the caller can keep raw rows for downstream use).
     """
-    from easyicu.ts_utils import expand
+    from easyicu.io.ts_utils import expand
 
     df = pd.DataFrame({
         "stay_id": [1, 1, 2],
