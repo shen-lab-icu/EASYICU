@@ -635,6 +635,12 @@ def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
         data_root = _resolve_raw_data_root(request_body)
         databases = _resolve_raw_databases(data_root, request_body)
         features = _resolve_raw_features(request_body)
+        max_patients = _bounded_int(
+            request_body.get("max_patients"), default=300, minimum=20, maximum=2000
+        )
+        sample_size = _bounded_int(
+            request_body.get("sample_size"), default=1500, minimum=100, maximum=10000
+        )
         cancelled = _cancelled("resolving")
         if cancelled is not None:
             return cancelled
@@ -646,9 +652,13 @@ def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
                 "total": len(databases),
                 "databases": databases,
                 "feature_count": len(features),
+                "max_patients": max_patients,
+                "sample_size": sample_size,
                 "message": (
-                    f"Loading aggregate feature distributions for {len(databases)} "
-                    f"local databases and {len(features)} concepts."
+                    f"Loading sampled aggregate feature distributions for "
+                    f"{len(databases)} local databases and {len(features)} concepts "
+                    f"(max {max_patients} entities/database, max {sample_size} "
+                    "values/feature)."
                 ),
             }
         )

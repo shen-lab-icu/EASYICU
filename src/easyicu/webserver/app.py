@@ -92,6 +92,15 @@ def fs_list(path: str | None = None) -> dict:
     return dataio.list_dir(path)
 
 
+@app.post("/api/fs/mkdir")
+def fs_mkdir(body: Dict[str, Any]) -> dict:
+    """Create a local directory for picker destinations."""
+    result = dataio.create_dir(body.get("path"))
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
 @app.post("/api/data/scan")
 def data_scan(body: Dict[str, Any]) -> dict:
     """Inspect a folder: detect database, layout, and extraction readiness."""
@@ -649,6 +658,15 @@ def post_ideas_prior_art(body: Dict[str, Any]) -> dict:
     """Run or prepare an opt-in bounded prior-art check for an idea."""
     try:
         return idea_mining_web.check_prior_art(body)
+    except idea_mining_web.IdeaMiningWebError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/ideas/plan")
+def post_ideas_plan(body: Dict[str, Any]) -> dict:
+    """Create or revise the pre-Agent study plan for an idea."""
+    try:
+        return idea_mining_web.plan_idea(body)
     except idea_mining_web.IdeaMiningWebError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 

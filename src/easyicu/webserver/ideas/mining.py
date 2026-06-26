@@ -71,6 +71,8 @@ _SEVERITY_PRIORITY = (
     "uo_6h",
     "mech_vent",
 )
+_EVENT_TRUE_STRINGS = {"1", "true", "t", "yes", "y", "positive", "present"}
+_EVENT_FALSE_STRINGS = {"0", "false", "f", "no", "n", "negative", "absent"}
 
 
 class IdeaMiningWebError(ValueError):
@@ -226,6 +228,7 @@ def mine_ideas(body: Dict[str, Any]) -> Dict[str, Any]:
     evidence quote, hashes, ledger rows, feasibility decisions, and aggregate
     active-export statistics.
     """
+    _require_source_seed(body)
     source = _source_record(body)
     text = _source_text(body)
     concept_hits = _match_concepts(text)
@@ -270,6 +273,7 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
     endpoint still returns a parseable source record and the exact blocked
     reason so the UI button is real rather than decorative.
     """
+    _require_source_seed(body)
     source = _source_record(body)
     source_type = str(source.get("source_type") or "manual")
     allow_network = bool(body.get("allow_network"))
@@ -281,12 +285,16 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
         "fetch_performed": False,
         "full_text_stored": False,
     }
+    supplied_title = _clean(body.get("title") or "", 220)
+    supplied_topic = _clean(
+        body.get("topic") or body.get("research_question") or "", 600
+    )
     suggestion = {
-        "topic": _clean(body.get("topic") or source.get("title") or "", 600),
+        "topic": supplied_topic,
         "excerpt": _clean(
             body.get("excerpt") or source.get("evidence_quote") or "", _MAX_SOURCE_QUOTE
         ),
-        "title": source.get("title"),
+        "title": supplied_title or None,
         "journal": source.get("journal"),
         "year": source.get("year"),
         "doi": source.get("doi"),
@@ -305,15 +313,27 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
                 "status": fetched.get("status"),
                 "network_calls": fetched.get("network_calls", 0),
                 "fetch_performed": fetched.get("network_calls", 0) > 0,
+                "metadata_source": fetched.get("metadata_source"),
                 "reason": fetched.get("reason"),
             }
         )
         if fetched.get("title") and not suggestion.get("title"):
             suggestion["title"] = fetched["title"]
+            source["title"] = fetched["title"]
+        if fetched.get("title") and not suggestion.get("topic"):
+            suggestion["topic"] = fetched["title"]
+        if fetched.get("journal") and not suggestion.get("journal"):
+            suggestion["journal"] = fetched["journal"]
+            source["journal"] = fetched["journal"]
+        if fetched.get("year") and not suggestion.get("year"):
+            suggestion["year"] = fetched["year"]
+            source["year"] = fetched["year"]
         if fetched.get("description") and not suggestion.get("excerpt"):
             suggestion["excerpt"] = fetched["description"]
+            source["evidence_quote"] = fetched["description"]
         if fetched.get("doi") and not suggestion.get("doi"):
             suggestion["doi"] = fetched["doi"]
+            source["doi"] = fetched["doi"]
     elif source_type == "pdf" and body.get("source_file_sha256"):
         adapter["status"] = "local_pdf_excerpt_ready"
         adapter["reason"] = (
@@ -579,6 +599,68 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def plan_idea(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Create or revise the study plan draft for an idea-mining run.
+
+    This is the missing middle stage between an idea ledger and an Agent
+    project seed.  It deliberately produces a metadata-only plan artifact: no
+    Agent run, no row-level data, no manuscript claim.
+    """
+
+    run_id = str(body.get("run_id") or "").strip()
+    idea_id = str(body.get("idea_id") or "").strip()
+    payload = _load_run(run_id)
+    if not payload:
+        raise IdeaMiningWebError({"error": "idea_run_not_found", "run_id": run_id})
+    idea = _selected_idea(payload, idea_id)
+    if not idea:
+        raise IdeaMiningWebError({"error": "idea_not_found", "idea_id": idea_id})
+    edits = str(body.get("plan_edits") or "").strip()
+    mode = str(body.get("mode") or ("replan" if edits else "plan")).strip().lower()
+    source = ((payload.get("source_evidence") or [{}])[0]) or {}
+    pre = payload.get("pre_experiment") or {}
+    prior = _load_prior_art(run_id)
+    plan = _analysis_plan_draft(source, idea, pre, prior, edits=edits, mode=mode)
+    out = {
+        "ok": True,
+        "schema_version": "easyicu.web_idea_plan/1",
+        "created_at": _now(),
+        "run_id": run_id,
+        "idea_id": idea.get("idea_id"),
+        "mode": mode if mode in {"plan", "replan"} else "plan",
+        "planner": {
+            "stage": "idea_mining_plan_before_agent",
+            "engine": "local_agent_style_planner",
+            "uses_research_agent_contract": True,
+            "agent_run_created": False,
+            "draft_unlocked": False,
+            "notes": (
+                "This is a pre-Agent plan draft assembled from the idea ledger, "
+                "active-export feasibility summary, and optional prior-art metadata."
+            ),
+        },
+        "plan": plan,
+        "privacy": {
+            "source_text_stored": False,
+            "full_text_stored": False,
+            "patient_rows_returned": False,
+            "direct_identifiers_returned": False,
+            "network_calls": 0,
+            "external_llm_calls": 0,
+            "agent_run_created": False,
+            "reportable": False,
+            "draft_unlocked": False,
+        },
+    }
+    _assert_no_row_payload(out)
+    run_dir = _run_dir(run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "idea_plan.json").write_text(
+        json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return out
+
+
 def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
     """Freeze an idea-mining plan for the downstream Agent module."""
     run_id = str(body.get("run_id") or "").strip()
@@ -594,10 +676,19 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
     if not idea:
         raise IdeaMiningWebError({"error": "idea_not_found", "idea_id": idea_id})
     edits = str(body.get("plan_edits") or "").strip()
-    plan = dict(payload.get("handoff_plan") or {})
+    plan_artifact = _load_plan(run_id)
+    plan = dict(
+        (plan_artifact or {}).get("plan")
+        or payload.get("handoff_plan")
+        or {}
+    )
     if edits:
         plan["human_plan_notes"] = edits[:1200]
         plan["selection_mode"] = "human_curated_with_text_edits"
+        plan["plan_status"] = "replanned_requires_final_confirmation"
+    elif plan_artifact:
+        plan["selection_mode"] = plan.get("selection_mode") or "planned_before_agent_handoff"
+        plan["plan_status"] = plan.get("plan_status") or "planned_requires_final_confirmation"
     handoff = {
         "ok": True,
         "schema_version": "easyicu.web_idea_handoff/1",
@@ -720,6 +811,9 @@ def get_run(body: Dict[str, Any] | None = None) -> Dict[str, Any]:
     prior = _load_prior_art(run_id)
     if prior:
         out["prior_art_check"] = prior
+    plan = _load_plan(run_id)
+    if plan:
+        out["idea_plan"] = plan
     project = _project_for_run(run_id)
     if project:
         out["agent_project"] = project
@@ -785,6 +879,31 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             record["literature_pdf_count"] = 0
     return record
+
+
+def _require_source_seed(body: Dict[str, Any]) -> None:
+    fields = (
+        "topic",
+        "research_question",
+        "excerpt",
+        "source_quote",
+        "title",
+        "abstract",
+        "notes",
+        "url",
+        "doi",
+        "pmid",
+        "source_file_sha256",
+        "literature_folder",
+    )
+    if any(str(body.get(field) or "").strip() for field in fields):
+        return
+    raise IdeaMiningWebError(
+        {
+            "error": "idea_source_required",
+            "reason": "Add a topic, source quote, title, DOI, PMID, URL, local PDF, or literature folder before running Idea Mining.",
+        }
+    )
 
 
 def _source_text(body: Dict[str, Any]) -> str:
@@ -1123,6 +1242,204 @@ def _handoff_plan(
     }
 
 
+def _analysis_plan_draft(
+    source: Dict[str, Any],
+    idea: Dict[str, Any],
+    pre_experiment: Dict[str, Any],
+    prior_art: Optional[Dict[str, Any]],
+    *,
+    edits: str = "",
+    mode: str = "plan",
+) -> Dict[str, Any]:
+    base = _handoff_plan(source, idea, pre_experiment)
+    family = str(idea.get("analysis_family") or "association")
+    concepts = idea.get("mapped_concepts") or []
+    source_type = str(source.get("source_type") or "manual")
+    plan = dict(base)
+    plan.update(
+        {
+            "selection_mode": (
+                "agent_style_replan_requires_human_confirmation"
+                if mode == "replan" or edits
+                else "agent_style_plan_requires_human_confirmation"
+            ),
+            "plan_status": "draft_plan_requires_user_review",
+            "analysis_family": family,
+            "source_input_type": source_type,
+            "reference_strategy": (
+                "Use high-impact ICU paper method motifs as planning checklists "
+                "only; do not copy another study path or claim novelty without "
+                "bounded prior-art review."
+            ),
+            "reference_analysis_patterns": _reference_analysis_patterns(family, concepts),
+            "clinical_icu_constraints": _clinical_icu_constraints(idea, concepts),
+            "required_user_confirmations": _required_plan_confirmations(
+                pre_experiment, prior_art
+            ),
+            "agent_boundary": {
+                "can_create_agent_seed_after_confirmation": True,
+                "agent_run_created": False,
+                "draft_unlocked": False,
+                "reportable": False,
+                "reason": (
+                    "Planning produces a handoff object only. Agent Projects must still "
+                    "run planner/replanner/coder/analyzer/writer and evidence checks."
+                ),
+            },
+        }
+    )
+    plan["analysis_plan"] = _agent_style_steps(family, concepts)
+    if edits:
+        plan["human_plan_notes"] = _clean(edits, 1200)
+        plan["replan_summary"] = (
+            "Human notes were captured for Agent replanning; downstream Agent "
+            "Projects should treat them as constraints, not completed analysis."
+        )
+    return plan
+
+
+def _agent_style_steps(
+    family: str, concepts: List[Dict[str, Any]]
+) -> List[str]:
+    concept_ids = {str(row.get("concept_id") or "") for row in concepts}
+    treatment_strategy = bool(
+        concept_ids & {"vaso_ind", "norepi_equiv", "norepi_rate", "norepi_dur"}
+    ) and bool(
+        concept_ids
+        & {"total_input_ml", "fluid_balance", "fluid_balance_cumulative"}
+    )
+    steps = [
+        "Lock the clinical question, denominator, exposure/index time, outcome, and analysis window before reading any effect estimate.",
+        "Confirm the active EasyICU export, cohort denominator, selected modules, and concept dictionary mappings with the user.",
+        "Run an outcome-blind feasibility review: concept availability, joint completeness, time-index availability, and missingness structure.",
+    ]
+    if treatment_strategy:
+        steps.extend(
+            [
+                "Translate the source into an ICU treatment-strategy comparison with explicit timing anchors; flag indication bias and immortal-time risk before modeling.",
+                "Plan descriptive balance and sensitivity checks before any adjusted association model.",
+            ]
+        )
+    elif family == "prediction":
+        steps.extend(
+            [
+                "Define predictor window, target outcome window, train/validation split, calibration, and minimum display set before fitting a model.",
+                "Audit leakage, class balance, missingness handling, and transportability across ICU sources when available.",
+            ]
+        )
+    elif family == "trajectory":
+        steps.extend(
+            [
+                "Define repeated-measure anchors, aggregation rules, and trajectory summaries before comparing groups.",
+                "Separate measurement frequency effects from clinical change using coverage and sensitivity checks.",
+            ]
+        )
+    else:
+        steps.extend(
+            [
+                "Use a descriptive association workflow first; add adjusted or time-to-event models only after assumptions and covariates are confirmed.",
+                "Predefine subgroup, sensitivity, and missingness checks instead of adding them after seeing results.",
+            ]
+        )
+    steps.extend(
+        [
+            "Run prior-art review only after explicit network/provider opt-in, then update the plan if the literature shows the question is already answered or the comparator is wrong.",
+            "Create an Agent Projects seed only after the user confirms the plan; keep manuscript claims blocked until evidence IDs and human sign-off pass.",
+        ]
+    )
+    return steps
+
+
+def _reference_analysis_patterns(
+    family: str, concepts: List[Dict[str, Any]]
+) -> List[Dict[str, str]]:
+    concept_ids = {str(row.get("concept_id") or "") for row in concepts}
+    if concept_ids & {"vaso_ind", "norepi_equiv", "norepi_rate", "norepi_dur"}:
+        return [
+            {
+                "pattern": "critical-care treatment strategy",
+                "use_for": "exposure timing, comparator definition, baseline balance, and sensitivity design",
+                "guardrail": "Observational ICU data can support exploratory association, not causal treatment claims without a causal audit.",
+            },
+            {
+                "pattern": "target-trial-style translation",
+                "use_for": "index time, eligibility window, follow-up window, and estimand wording",
+                "guardrail": "Do not import trial eligibility wholesale; adapt to what EasyICU concepts can actually observe.",
+            },
+        ]
+    if family == "prediction":
+        return [
+            {
+                "pattern": "ICU prediction model reporting",
+                "use_for": "predictor window, outcome horizon, validation split, discrimination, calibration, and decision boundary",
+                "guardrail": "Do not let feature availability or post-outcome measurements leak into predictors.",
+            }
+        ]
+    if family == "trajectory":
+        return [
+            {
+                "pattern": "longitudinal ICU trajectory analysis",
+                "use_for": "anchor selection, repeated-measure summaries, time-varying missingness, and subgroup display",
+                "guardrail": "Measurement frequency is informative in ICU data and must not be mistaken for physiologic trajectory alone.",
+            }
+        ]
+    return [
+        {
+            "pattern": "descriptive ICU cohort comparison",
+            "use_for": "Table 1, denominator transparency, missingness display, crude association, and sensitivity checks",
+            "guardrail": "Treat this as hypothesis-generating until adjustment strategy and prior art are reviewed.",
+        }
+    ]
+
+
+def _clinical_icu_constraints(
+    idea: Dict[str, Any], concepts: List[Dict[str, Any]]
+) -> List[str]:
+    constraints = [
+        "Use ICU stays/entities from the confirmed EasyICU export; do not assume the extraction is complete merely because an idea was mined.",
+        "Keep cohort definition, exposure/index time, outcome horizon, and feature modules user-confirmed before Agent execution.",
+        "Report denominators and concept coverage for every comparison.",
+        "Keep claims exploratory unless the Agent evidence checks and human sign-off pass.",
+    ]
+    concept_ids = {str(row.get("concept_id") or "") for row in concepts}
+    if "sep3_sofa2" in concept_ids or "susp_inf" in concept_ids:
+        constraints.append(
+            "For Sepsis-3, preserve the suspected-infection anchor and SOFA delta settings from the extraction manifest."
+        )
+    if "death" in concept_ids:
+        constraints.append(
+            "Name the mortality endpoint and time horizon explicitly; do not conflate hospital, ICU, and 28-day mortality."
+        )
+    if concept_ids & {"vaso_ind", "norepi_equiv", "norepi_rate", "norepi_dur"}:
+        constraints.append(
+            "For vasopressor exposure, handle indication bias, dose/timing definitions, and immortal-time risk before estimating associations."
+        )
+    if idea.get("go_no_go") != "recommend":
+        constraints.append(
+            "Current feasibility is not recommend; re-extract missing modules or revise the idea before Agent execution."
+        )
+    return constraints
+
+
+def _required_plan_confirmations(
+    pre_experiment: Dict[str, Any], prior_art: Optional[Dict[str, Any]]
+) -> List[str]:
+    confirmations = [
+        "local export / database source",
+        "cohort denominator and inclusion/exclusion criteria",
+        "feature modules and mapped concepts",
+        "outcome and time window",
+        "analysis family and reporting boundary",
+    ]
+    status = str(pre_experiment.get("status") or "").lower()
+    if not status or "blocked" in status:
+        confirmations.insert(0, "prepare or register a usable EasyICU export")
+    prior = (prior_art or {}).get("prior_art") or {}
+    if not prior.get("search_performed"):
+        confirmations.append("prior-art review opt-in or explicit decision to skip")
+    return confirmations
+
+
 def _active_export() -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
     registry = source_store.load_registry()
     active = str(registry.get("active_path") or "")
@@ -1202,8 +1519,42 @@ def _feature_stats(
         if frame.empty or concept_id not in frame.columns:
             continue
         entity_col = frame["stay_id"].map(dataio._norm_id)
-        non_null = frame[frame[concept_id].notna()].copy()
-        observed_entities = int(entity_col[frame[concept_id].notna()].nunique())
+        is_event_rate = _is_event_rate_concept(concept_id)
+        non_null_mask = frame[concept_id].notna()
+        non_null = frame[non_null_mask].copy()
+        observed_entities = int(entity_col[non_null_mask].nunique())
+        if is_event_rate:
+            event_mask = _event_positive_mask(frame[concept_id])
+            event_entities = int(entity_col[event_mask].nunique())
+            event_records = int(event_mask.sum())
+            event_rate = round(event_entities / denominator * 100, 1)
+            out.append(
+                {
+                    "concept_id": concept_id,
+                    "label": _concept_label(concept_id),
+                    "module": str(item.get("module") or ""),
+                    "metric_kind": "event_rate",
+                    "records": event_records,
+                    "observed_entities": event_entities,
+                    "event_entities": event_entities,
+                    "non_event_entities": max(denominator - event_entities, 0),
+                    "denominator_entities": denominator,
+                    "event_rate_pct": event_rate,
+                    "coverage_pct": event_rate,
+                    "missing_pct": None,
+                    "low_coverage": False,
+                    "time_indexed": any(col in frame.columns for col in _TIME_COLUMNS),
+                    "numeric_summary": {
+                        "available": False,
+                        "kind": "event_indicator",
+                    },
+                    "summary_label": "Binary/event indicator; non-events are not missing.",
+                    "status": "ready",
+                }
+            )
+            if len(out) >= _MAX_FEATURE_STATS:
+                break
+            continue
         records = int(len(non_null))
         nums = dataio._numeric_values(non_null[concept_id])[:10000]
         coverage = round(observed_entities / denominator * 100, 1)
@@ -1212,10 +1563,13 @@ def _feature_stats(
                 "concept_id": concept_id,
                 "label": _concept_label(concept_id),
                 "module": str(item.get("module") or ""),
+                "metric_kind": "coverage",
                 "records": records,
                 "observed_entities": observed_entities,
+                "denominator_entities": denominator,
                 "coverage_pct": coverage,
                 "missing_pct": round(100 - coverage, 1),
+                "low_coverage": coverage < 50,
                 "time_indexed": any(col in frame.columns for col in _TIME_COLUMNS),
                 "numeric_summary": _numeric_summary(nums),
                 "status": "ready" if records else "missing",
@@ -1224,6 +1578,38 @@ def _feature_stats(
         if len(out) >= _MAX_FEATURE_STATS:
             break
     return out
+
+
+def _concept_unit(concept_id: str) -> str:
+    entry = concept_catalog.CONCEPT_DICTIONARY.get(concept_id)
+    if not entry or len(entry) < 3:
+        return ""
+    return str(entry[2] or "").strip().lower()
+
+
+def _is_event_rate_concept(concept_id: str) -> bool:
+    """Boolean concepts represent positive indicators, not missingness.
+
+    Many EasyICU boolean exports are sparse event/indicator tables: negative
+    patients may be absent from the concept file.  Treating absent negatives as
+    missing coverage recreates the classic Sepsis-3 pitfall.
+    """
+
+    return _concept_unit(concept_id) == "boolean"
+
+
+def _event_positive_mask(series: Any) -> Any:
+    import pandas as pd
+
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False)
+    numeric = pd.to_numeric(series, errors="coerce")
+    numeric_mask = numeric.notna()
+    lowered = series.astype("string").str.strip().str.lower()
+    truthy = lowered.isin(_EVENT_TRUE_STRINGS)
+    falsy = lowered.isin(_EVENT_FALSE_STRINGS)
+    positive = (numeric_mask & (numeric > 0)) | truthy
+    return positive & ~falsy
 
 
 def _concept_feasibility(
@@ -1366,6 +1752,15 @@ def _load_handoff(run_id: str) -> Optional[Dict[str, Any]]:
     if not run_id:
         return None
     path = _run_dir(run_id) / "idea_handoff.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_plan(run_id: str) -> Optional[Dict[str, Any]]:
+    if not run_id:
+        return None
+    path = _run_dir(run_id) / "idea_plan.json"
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
@@ -1677,31 +2072,129 @@ def _fetch_url_metadata(url: str) -> Dict[str, Any]:
             "network_calls": 0,
             "reason": "URL must start with http:// or https://.",
         }
+    doi_hint = _doi_from_text(parse.unquote(url))
+    calls = 0
+    fetch_error = ""
+    title = ""
+    description = ""
+    doi = doi_hint or ""
+    raw = b""
     try:
         req = request.Request(
             url, headers={"User-Agent": "EasyICU-local-metadata-resolver/1.0"}
         )
         with request.urlopen(req, timeout=_NETWORK_TIMEOUT_SEC) as resp:
+            calls += 1
             raw = resp.read(_MAX_FETCH_BYTES)
         text = raw.decode("utf-8", errors="replace")
     except Exception as exc:
-        return {"status": "fetch_failed", "network_calls": 1, "reason": str(exc)[:240]}
-    title = _html_title(text)
-    description = _html_meta(text, "description") or _html_meta(text, "og:description")
-    doi = _doi_from_text(text)
+        calls += 1
+        fetch_error = str(exc)[:240]
+        text = ""
+    if text:
+        title = _html_title(text) or ""
+        description = (
+            _html_meta(text, "description") or _html_meta(text, "og:description") or ""
+        )
+        doi = _doi_from_text(text) or doi
+    if not (title or description) and doi:
+        doi_meta = _fetch_doi_metadata(doi)
+        calls += int(doi_meta.get("network_calls") or 0)
+        if doi_meta.get("title") or doi_meta.get("journal") or doi_meta.get("year"):
+            reason = doi_meta.get("reason") or "Resolved bounded DOI metadata."
+            if fetch_error:
+                reason = f"URL HTML fetch failed ({fetch_error}); {reason}"
+            return {
+                "status": "metadata_fetched",
+                "metadata_source": doi_meta.get("metadata_source") or "doi",
+                "network_calls": calls,
+                "title": doi_meta.get("title"),
+                "description": _clean(
+                    doi_meta.get("description") or description, _MAX_SOURCE_QUOTE
+                ),
+                "doi": doi_meta.get("doi") or doi,
+                "journal": doi_meta.get("journal"),
+                "year": doi_meta.get("year"),
+                "bytes_read": min(len(raw), _MAX_FETCH_BYTES),
+                "reason": reason,
+            }
+        if not fetch_error and doi_meta.get("reason"):
+            fetch_error = str(doi_meta.get("reason") or "")[:240]
     return {
         "status": (
             "metadata_fetched"
             if title or description or doi
-            else "metadata_fetch_empty"
+            else ("fetch_failed" if fetch_error else "metadata_fetch_empty")
         ),
-        "network_calls": 1,
+        "metadata_source": "html" if title or description else None,
+        "network_calls": calls,
         "title": title,
         "description": _clean(description, _MAX_SOURCE_QUOTE),
         "doi": doi,
         "bytes_read": min(len(raw), _MAX_FETCH_BYTES),
-        "reason": "Stored bounded metadata only; full HTML was not persisted.",
+        "reason": (
+            fetch_error
+            if fetch_error and not (title or description or doi)
+            else "Stored bounded metadata only; full HTML was not persisted."
+        ),
     }
+
+
+def _fetch_doi_metadata(doi: str) -> Dict[str, Any]:
+    doi = _clean(doi, 180)
+    if not doi:
+        return {"status": "invalid_doi", "network_calls": 0}
+    url = "https://api.crossref.org/works/" + parse.quote(doi, safe="")
+    try:
+        req = request.Request(
+            url, headers={"User-Agent": "EasyICU-local-metadata-resolver/1.0"}
+        )
+        with request.urlopen(req, timeout=_NETWORK_TIMEOUT_SEC) as resp:
+            data = json.loads(
+                resp.read(_MAX_FETCH_BYTES).decode("utf-8", errors="replace")
+            )
+    except Exception as exc:
+        return {
+            "status": "doi_fetch_failed",
+            "network_calls": 1,
+            "reason": str(exc)[:240],
+        }
+    message = data.get("message") or {}
+    title = _first_text(message.get("title"))
+    journal = _first_text(message.get("container-title"))
+    abstract = _clean(_strip_tags(message.get("abstract") or ""), _MAX_SOURCE_QUOTE)
+    year = _crossref_year(message)
+    return {
+        "status": (
+            "metadata_fetched" if title or journal or year else "metadata_fetch_empty"
+        ),
+        "metadata_source": "crossref",
+        "network_calls": 1,
+        "title": title,
+        "journal": journal,
+        "year": year,
+        "description": abstract,
+        "doi": _clean(message.get("DOI") or doi, 180),
+        "reason": "Resolved bounded DOI metadata through Crossref; full text was not fetched or stored.",
+    }
+
+
+def _first_text(value: Any) -> Optional[str]:
+    if isinstance(value, list):
+        value = next((item for item in value if item), "")
+    return _clean(value or "", 260) or None
+
+
+def _crossref_year(message: Dict[str, Any]) -> Optional[int]:
+    for key in ("published-print", "published-online", "published", "issued"):
+        parts = ((message.get(key) or {}).get("date-parts") or [[]])[0]
+        if parts:
+            return _year(parts[0])
+    return None
+
+
+def _strip_tags(value: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", " ", str(value or "")))
 
 
 def _html_title(text: str) -> Optional[str]:
@@ -1849,7 +2342,7 @@ def _pick_outcome(text: str, hits: List[Dict[str, Any]]) -> Optional[Dict[str, A
     if any(tok in low for tok in ["death", "mortality", "survival", "死亡", "病死"]):
         return _concept_hit("death")
     for row in hits:
-        if row.get("concept_id") in {"death", "los_icu", "aki", "sep3_sofa2"}:
+        if row.get("concept_id") in {"death", "los_icu", "aki"}:
             return row
     return _concept_hit("death")
 
@@ -2084,13 +2577,23 @@ def _pre_experiment_interpretation(stats: List[Dict[str, Any]]) -> List[str]:
         return [
             "No mapped feature is present in the active export; run extraction with the needed modules first."
         ]
-    low = [row for row in stats if float(row.get("coverage_pct") or 0) < 50]
+    low = [
+        row
+        for row in stats
+        if row.get("metric_kind") != "event_rate"
+        and float(row.get("coverage_pct") or 0) < 50
+    ]
+    event_rows = [row for row in stats if row.get("metric_kind") == "event_rate"]
     notes = [f"{len(stats)} mapped feature(s) were summarized from the active export."]
+    if event_rows:
+        notes.append(
+            f"{len(event_rows)} boolean/event indicator(s) are reported as positive rates; negative patients are not treated as missing."
+        )
     if low:
         notes.append(
-            f"{len(low)} feature(s) have <50% entity coverage and should be treated as feasibility risks."
+            f"{len(low)} measured feature(s) have <50% entity coverage and should be treated as feasibility risks."
         )
-    else:
+    elif not event_rows:
         notes.append(
             "Mapped features have at least 50% entity coverage in this pre-experiment summary."
         )

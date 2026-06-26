@@ -23,6 +23,7 @@ _MAX_REVIEW_SIGNALS = 24
 _MAX_TABLE_PREVIEW_ROWS = 24
 _MAX_TABLE_PREVIEW_COLUMNS = 14
 _MAX_TABLE_PREVIEW_MODULES = 32
+_MAX_TABLE_PAGE_SIZE = 100
 _READ_MODULES = ("demographics", "outcome", "sofa2_score", "sepsis3_sofa2", "vitals")
 _SIGNAL_SPECS = (
     ("hr", "Heart rate", "bpm"),
@@ -154,6 +155,7 @@ def patient_review_sources(body: Dict[str, Any] | None = None) -> Dict[str, Any]
 def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
     """Return a real, bounded Patient Review payload for one registered export."""
     source, desc = _resolve_registered_source(body)
+    table_paging = _table_preview_paging(body)
     path = Path(str(desc.get("path") or source.get("path") or "")).expanduser()
     demo = _read_module_frame(path, desc, "demographics")
     if demo is None or getattr(demo, "empty", True):
@@ -273,7 +275,9 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
     time_lanes = _time_lane_payloads(review_frames, selected_id)
     quality_metrics = _quality_metrics_payload(review_frames, entity_set)
     quality = _quality_from_module_profiles(module_profiles)
-    data_tables = _data_table_review_payload(path, desc, module_profiles, summary)
+    data_tables = _data_table_review_payload(
+        path, desc, module_profiles, summary, table_paging
+    )
     trajectory_review = _trajectory_review_payload(
         time_lanes, selected, entities, quality_metrics
     )
@@ -304,6 +308,7 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
             "max_points_per_signal": _MAX_SIGNAL_POINTS,
             "max_table_preview_rows": _MAX_TABLE_PREVIEW_ROWS,
             "max_table_preview_columns": _MAX_TABLE_PREVIEW_COLUMNS,
+            "max_table_page_size": _MAX_TABLE_PAGE_SIZE,
             "bounded_table_previews": True,
             "payload_tables_are_aggregated": False,
             "payload_tables_are_bounded": True,
@@ -462,6 +467,28 @@ def _is_number_like(value: Any) -> bool:
         return False
 
 
+def _table_preview_paging(body: Dict[str, Any]) -> Dict[str, Any]:
+    module = str(body.get("table_module") or "").strip()
+    return {
+        "module": module,
+        "page": _bounded_int(body.get("table_page"), 1, 1, 100000),
+        "page_size": _bounded_int(
+            body.get("table_page_size"),
+            _MAX_TABLE_PREVIEW_ROWS,
+            1,
+            _MAX_TABLE_PAGE_SIZE,
+        ),
+    }
+
+
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
 def _read_review_frames(
     path: Path, desc: Dict[str, Any], entity_set: set[str]
 ) -> List[Dict[str, Any]]:
@@ -599,6 +626,7 @@ def _module_profiles(
             {
                 "module": module,
                 "label": _module_label(module),
+                "label_i18n": _module_label_i18n(module),
                 "rows": rows,
                 "feature_count": len(features),
                 "observed_features": observed_features,
@@ -618,11 +646,74 @@ def _module_label(module: str) -> str:
     return _plain_label(label)
 
 
+def _module_label_i18n(module: str) -> Dict[str, str]:
+    labels = concept_catalog.CONCEPT_GROUP_NAMES.get(module, (module, module))
+    return {
+        "en": _plain_label(labels[0] if len(labels) > 0 else module),
+        "zh": _plain_label(labels[1] if len(labels) > 1 else module),
+    }
+
+
 def _plain_label(label: str) -> str:
     text = str(label or "").strip()
     while text and not (text[0].isalnum() or "\u4e00" <= text[0] <= "\u9fff"):
         text = text[1:].lstrip()
     return text or str(label or "")
+
+
+def _concept_label_i18n(feature: str) -> Dict[str, str]:
+    entry = concept_catalog.CONCEPT_DICTIONARY.get(feature)
+    if entry:
+        return {
+            "en": str(entry[0] or feature),
+            "zh": (
+                str(entry[1] or entry[0] or feature)
+                if len(entry) > 1
+                else str(entry[0] or feature)
+            ),
+        }
+    fallback = _human_column_label(feature)
+    return {"en": fallback, "zh": fallback}
+
+
+def _column_label_i18n(column: str) -> Dict[str, Any]:
+    key = str(column or "")
+    lowered = key.lower()
+    if key == "entity":
+        return {
+            "column": key,
+            "label_en": "Pseudonymous entity",
+            "label_zh": "伪匿名实体",
+            "unit": "",
+        }
+    time_labels = {
+        "charttime": ("Chart time", "记录时间"),
+        "time": ("Time", "时间"),
+        "datetime": ("Date time", "日期时间"),
+        "timestamp": ("Timestamp", "时间戳"),
+        "starttime": ("Start time", "开始时间"),
+        "endtime": ("End time", "结束时间"),
+        "storetime": ("Stored time", "存储时间"),
+    }
+    if lowered in time_labels:
+        en, zh = time_labels[lowered]
+        return {"column": key, "label_en": en, "label_zh": zh, "unit": ""}
+    concept = _concept_label_i18n(lowered)
+    unit = _concept_unit(lowered)
+    if lowered in concept_catalog.CONCEPT_DICTIONARY:
+        return {
+            "column": key,
+            "label_en": concept["en"],
+            "label_zh": concept["zh"],
+            "unit": unit,
+        }
+    fallback = _human_column_label(key)
+    return {"column": key, "label_en": fallback, "label_zh": fallback, "unit": unit}
+
+
+def _human_column_label(column: str) -> str:
+    text = str(column or "").replace("_", " ").replace("-", " ").strip()
+    return " ".join(part.capitalize() for part in text.split()) or str(column or "")
 
 
 def _time_lane_payloads(
@@ -831,6 +922,7 @@ def _data_table_review_payload(
     desc: Dict[str, Any],
     module_profiles: List[Dict[str, Any]],
     summary: Dict[str, Any],
+    table_paging: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Mirror the old Data Tables review contract with bounded local previews."""
     module_count = len(
@@ -850,6 +942,8 @@ def _data_table_review_payload(
             {
                 "module": row.get("module"),
                 "label": row.get("label"),
+                "label_i18n": row.get("label_i18n")
+                or _module_label_i18n(str(row.get("module") or "")),
                 "review_features": feature_count_row,
                 "observed_features": int(row.get("observed_features") or 0),
                 "rows": int(row.get("rows") or 0),
@@ -867,14 +961,25 @@ def _data_table_review_payload(
                     {
                         "feature": feature,
                         "name": _concept_name(str(feature)),
+                        "name_i18n": _concept_label_i18n(str(feature)),
                         "unit": _concept_unit(str(feature)),
                         "group": _concept_group_label(str(feature)),
+                        "group_i18n": _module_label_i18n(
+                            _concept_group_key(str(feature))
+                        ),
                     }
                     for feature in (row.get("preview_features") or [])[:6]
                 ],
                 "status": _module_review_status(coverage, feature_count_row),
             }
         )
+    requested_module = str(table_paging.get("module") or "")
+    default_module = (
+        requested_module
+        if requested_module
+        and any(row.get("module") == requested_module for row in modules)
+        else (modules[0]["module"] if modules else None)
+    )
     return {
         "loaded_summary": {
             "entities": summary.get("entities"),
@@ -884,7 +989,7 @@ def _data_table_review_payload(
             "source_count": 1,
         },
         "module_picker": {
-            "default_module": modules[0]["module"] if modules else None,
+            "default_module": default_module,
             "module_count": len(modules),
             "selection_mode": "module_then_feature",
         },
@@ -899,7 +1004,9 @@ def _data_table_review_payload(
             ],
         },
         "modules": modules,
-        "table_previews": _table_preview_payloads(path, desc, module_profiles),
+        "table_previews": _table_preview_payloads(
+            path, desc, module_profiles, table_paging, default_module
+        ),
         "payload_scope": "old_data_tables_semantics_with_bounded_pseudonymous_table_previews",
     }
 
@@ -908,6 +1015,8 @@ def _table_preview_payloads(
     path: Path,
     desc: Dict[str, Any],
     module_profiles: List[Dict[str, Any]],
+    table_paging: Dict[str, Any],
+    default_module: str | None,
 ) -> List[Dict[str, Any]]:
     profile_by_module = {str(row.get("module") or ""): row for row in module_profiles}
     previews: List[Dict[str, Any]] = []
@@ -924,17 +1033,34 @@ def _table_preview_payloads(
             columns
         )
         profile = profile_by_module.get(module) or {}
+        selected_for_page = module == default_module
+        page_size = int(table_paging.get("page_size") or _MAX_TABLE_PREVIEW_ROWS)
+        rows_total = int(item.get("rows") or profile.get("rows") or 0)
+        page_count = max(1, (rows_total + page_size - 1) // page_size)
+        requested_page = int(table_paging.get("page") or 1) if selected_for_page else 1
+        page = max(1, min(page_count, requested_page))
+        offset = (page - 1) * page_size
         base = {
             "module": module,
             "label": profile.get("label") or _module_label(module),
+            "label_i18n": profile.get("label_i18n") or _module_label_i18n(module),
             "file": item.get("file"),
-            "rows_total": int(item.get("rows") or profile.get("rows") or 0),
+            "rows_total": rows_total,
             "columns_total": len(columns),
             "display_columns": display_columns,
+            "display_column_labels": [
+                _column_label_i18n(column) for column in display_columns
+            ],
             "hidden_columns": hidden_count,
             "row_cap": _MAX_TABLE_PREVIEW_ROWS,
+            "page_size_cap": _MAX_TABLE_PAGE_SIZE,
             "column_cap": _MAX_TABLE_PREVIEW_COLUMNS,
             "pseudonymous_entity_column": bool(id_col),
+            "identifier_policy": "pseudonymous_entity_token",
+            "page": page,
+            "page_size": page_size,
+            "page_count": page_count,
+            "row_offset": offset,
         }
         if not read_columns:
             previews.append(
@@ -951,7 +1077,8 @@ def _table_preview_payloads(
             frame = _read_table_preview(
                 path / str(item.get("file") or ""),
                 read_columns,
-                _MAX_TABLE_PREVIEW_ROWS,
+                page_size,
+                offset,
             )
         except Exception as exc:
             previews.append(
@@ -965,13 +1092,29 @@ def _table_preview_payloads(
             )
             continue
         rows = _public_preview_rows(path, frame, id_col, display_columns)
+        row_start = offset + 1 if rows else 0
+        row_end = offset + len(rows) if rows else 0
         previews.append(
             {
                 **base,
                 "status": "ready" if rows else "empty",
                 "rows": rows,
                 "row_count": len(rows),
-                "truncated_rows": int(base["rows_total"]) > len(rows),
+                "row_start": row_start,
+                "row_end": row_end,
+                "has_previous": page > 1,
+                "has_next": row_end < rows_total,
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "page_count": page_count,
+                    "row_start": row_start,
+                    "row_end": row_end,
+                    "rows_total": rows_total,
+                    "has_previous": page > 1,
+                    "has_next": row_end < rows_total,
+                },
+                "truncated_rows": row_end < rows_total,
                 "truncated_columns": hidden_count > 0,
                 "payload_scope": "bounded_pseudonymous_module_table_preview",
             }
@@ -1008,7 +1151,9 @@ def _is_direct_identifier_column(column: str) -> bool:
     return key in _DIRECT_IDENTIFIER_COLUMN_KEYS
 
 
-def _read_table_preview(path: Path, columns: List[str], nrows: int) -> Any:
+def _read_table_preview(
+    path: Path, columns: List[str], nrows: int, offset: int = 0
+) -> Any:
     import pandas as pd
 
     suffix = path.suffix.lower()
@@ -1017,16 +1162,35 @@ def _read_table_preview(path: Path, columns: List[str], nrows: int) -> Any:
             import pyarrow.parquet as pq
 
             parquet = pq.ParquetFile(path)
+            remaining_skip = max(0, offset)
+            remaining_take = max(0, nrows)
+            frames = []
             for batch in parquet.iter_batches(
-                batch_size=max(nrows, 1), columns=columns
+                batch_size=max(nrows, min(1024, remaining_skip + remaining_take), 1),
+                columns=columns,
             ):
-                return batch.to_pandas().head(nrows)
-            return pd.DataFrame(columns=columns)
+                frame = batch.to_pandas()
+                if remaining_skip >= len(frame):
+                    remaining_skip -= len(frame)
+                    continue
+                if remaining_skip:
+                    frame = frame.iloc[remaining_skip:]
+                    remaining_skip = 0
+                piece = frame.head(remaining_take)
+                frames.append(piece)
+                remaining_take -= len(piece)
+                if remaining_take <= 0:
+                    break
+            if not frames:
+                return pd.DataFrame(columns=columns)
+            return pd.concat(frames, ignore_index=True)
         except Exception:
-            return pd.read_parquet(path, columns=columns).head(nrows)
+            return pd.read_parquet(path, columns=columns).iloc[offset : offset + nrows]
     if suffix == ".xlsx":
-        return pd.read_excel(path, usecols=columns, nrows=nrows)
-    return pd.read_csv(path, usecols=columns, nrows=nrows)
+        skiprows = range(1, offset + 1) if offset else None
+        return pd.read_excel(path, usecols=columns, nrows=nrows, skiprows=skiprows)
+    skiprows = range(1, offset + 1) if offset else None
+    return pd.read_csv(path, usecols=columns, nrows=nrows, skiprows=skiprows)
 
 
 def _public_preview_rows(
@@ -1048,8 +1212,6 @@ def _public_preview_rows(
                 continue
             public[col] = _json_cell(row.get(col))
         rows.append(public)
-        if len(rows) >= _MAX_TABLE_PREVIEW_ROWS:
-            break
     return rows
 
 
@@ -1500,10 +1662,17 @@ def _quality_panel_rows(
 
 
 def _concept_group_label(feature: str) -> str:
+    group = _concept_group_key(feature)
+    if group != "other":
+        return _module_label(group)
+    return "Other"
+
+
+def _concept_group_key(feature: str) -> str:
     for group, features in concept_catalog.CONCEPT_GROUPS_INTERNAL.items():
         if feature in features:
-            return _module_label(group)
-    return "Other"
+            return group
+    return "other"
 
 
 def _module_review_status(coverage: Any, feature_count: int) -> str:
@@ -1713,6 +1882,7 @@ def _quality_from_module_profiles(
         out.append(
             {
                 "module": module,
+                "metric_kind": dataio._presence_rate_kind(module) or "coverage",
                 "rows": item.get("rows"),
                 "column_count": item.get("feature_count"),
                 "covered_entities": item.get("entities"),
@@ -1743,6 +1913,7 @@ def _quality_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         out.append(
             {
                 "module": module,
+                "metric_kind": dataio._presence_rate_kind(module) or "coverage",
                 "rows": rows,
                 "column_count": len(columns),
                 "covered_entities": covered,
@@ -1770,7 +1941,7 @@ def _bounded_covered_entities(
 def _quality_status(module: str, coverage_pct: float | None) -> str:
     if coverage_pct is None:
         return "unknown"
-    if module in dataio._EVENT_PRESENCE_MODULES:
+    if dataio._is_presence_rate_module(module):
         return "neutral"
     if coverage_pct >= 80:
         return "ok"
