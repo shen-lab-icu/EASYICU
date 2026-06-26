@@ -213,8 +213,14 @@
     return { top, bottom };
   }
 
-  function render() {
-    window.__euRender = render;  // expose so api.js can re-render after live data loads
+  function render(opts = {}) {
+    const resetScroll = !!opts.resetScroll;
+    const priorContent = app.querySelector('.content');
+    const scrollState = {
+      x: window.scrollX || 0,
+      y: window.scrollY || 0,
+      contentTop: priorContent ? priorContent.scrollTop : 0,
+    };
     const scr = screenOf(route);
     if (scr.full) {
       app.innerHTML = scr.render();
@@ -232,13 +238,17 @@
         </div>`;
     }
     if (scr.afterRender) scr.afterRender(app);
-    // restore scroll top
     const c = app.querySelector('.content');
-    if (c) c.scrollTop = 0;
-    window.scrollTo(0, 0);
+    if (resetScroll) {
+      if (c) c.scrollTop = 0;
+      window.scrollTo(0, 0);
+    } else {
+      if (c) c.scrollTop = scrollState.contentTop;
+      window.scrollTo(scrollState.x, scrollState.y);
+    }
   }
 
-  window.__euRender = render;
+  window.__euRender = function (opts) { render(opts || {}); };
 
   app.addEventListener('click', (e) => {
     const langEl = e.target.closest('[data-lang]');
@@ -263,7 +273,7 @@
       if (window.SCREENS[id]) {
         route = id;
         location.hash = '#' + id;
-        render();
+        render({ resetScroll: true });
         return;
       }
     }
@@ -274,12 +284,12 @@
     const resolved = resolveRoute(rawRouteFromHash(), { rewrite: true });
     let r = resolved.id;
     const alias = window.__euAlias; window.__euAlias = false;
-    if (window.SCREENS[r] && (r !== route || alias || resolved.fallback)) { route = r; render(); }
+    if (window.SCREENS[r] && (r !== route || alias || resolved.fallback)) { route = r; render({ resetScroll: true }); }
   });
 
   /* ---- global keyboard shortcuts (advertised on Get Started) ---- */
   const SHORTCUT_SECTIONS = ['ideas', 'extraction', 'patient', 'crossdb', 'agent'];
-  function goto(id) { if (window.SCREENS[id]) { route = id; location.hash = '#' + id; render(); } }
+  function goto(id) { if (window.SCREENS[id]) { route = id; location.hash = '#' + id; render({ resetScroll: true }); } }
   document.addEventListener('keydown', (e) => {
     const tgt = e.target;
     const typing = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable);
@@ -297,5 +307,5 @@
     if (e.key === 'l' || e.key === 'L') { if (window.setLang) window.setLang(window.EU_LANG === 'zh' ? 'en' : 'zh'); }
   });
 
-  render();
+  render({ resetScroll: true });
 })();
