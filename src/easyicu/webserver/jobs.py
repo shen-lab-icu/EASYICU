@@ -13,6 +13,7 @@ extract/export job (3c) and the research-agent run (Stage 5) drive the same
 Local-first: jobs run in the user's own server process; nothing leaves the
 machine. State is intentionally in-memory — a job does not outlive the process.
 """
+
 from __future__ import annotations
 
 import threading
@@ -27,7 +28,7 @@ class Job:
     def __init__(self, job_id: str, kind: str) -> None:
         self.id = job_id
         self.kind = kind
-        self.status = "running"            # running | done | failed | cancelled
+        self.status = "running"  # running | done | failed | cancelled
         self.created = time.time()
         self.events: List[Dict[str, Any]] = []
         self.result: Optional[Dict[str, Any]] = None
@@ -40,7 +41,9 @@ class Job:
         event.setdefault("seq", len(self.events))
         self.events.append(event)
 
-    def finish(self, status: str, result: Any = None, error: Optional[str] = None) -> None:
+    def finish(
+        self, status: str, result: Any = None, error: Optional[str] = None
+    ) -> None:
         """Record terminal state. Emits the closing ``end`` event BEFORE flipping
         ``status`` so the SSE tailer always flushes it before breaking."""
         self.result = result

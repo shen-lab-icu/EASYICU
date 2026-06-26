@@ -6,6 +6,7 @@ external model client, reading patient rows, or creating manuscript artifacts.
 The backend owns session metadata, shortcut classification, allowed UI actions,
 and fail-closed blockers.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -42,7 +43,12 @@ _ROW_LEVEL_KEYS = {"tableRows", "series", "patient", "stay_id", "subject_id", "h
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _clean_text(value: Any, fallback: str = "", max_len: int = 500) -> str:
@@ -109,12 +115,18 @@ def _sanitize_context(raw: Any) -> Dict[str, Any]:
     route = _choice(context.get("route"), _VALID_ROUTES, "entry")
     data_mode = _choice(context.get("data_mode"), {"demo", "real"}, "demo")
     language = _choice(context.get("language"), {"en", "zh"}, "en")
-    selected_source = context.get("selected_source") if isinstance(context.get("selected_source"), dict) else {}
+    selected_source = (
+        context.get("selected_source")
+        if isinstance(context.get("selected_source"), dict)
+        else {}
+    )
     source_meta: Dict[str, Any] = {}
     if selected_source.get("label"):
         source_meta["label"] = _clean_text(selected_source.get("label"), max_len=100)
     if selected_source.get("database"):
-        source_meta["database"] = _clean_text(selected_source.get("database"), max_len=40)
+        source_meta["database"] = _clean_text(
+            selected_source.get("database"), max_len=40
+        )
     path = str(selected_source.get("path") or "").strip()
     if path:
         source_meta["path_hash"] = hashlib.sha256(path.encode("utf-8")).hexdigest()[:16]
@@ -133,11 +145,13 @@ def _load_sessions() -> List[Dict[str, Any]]:
 
 
 def _save_sessions(sessions: List[Dict[str, Any]]) -> None:
-    _write_raw({
-        "schema_version": 1,
-        "updated_at": _now(),
-        "sessions": sessions[:_MAX_SESSIONS],
-    })
+    _write_raw(
+        {
+            "schema_version": 1,
+            "updated_at": _now(),
+            "sessions": sessions[:_MAX_SESSIONS],
+        }
+    )
 
 
 def _find_session(session_id: str) -> Dict[str, Any] | None:
@@ -176,37 +190,88 @@ def _route_intro(route: str) -> Dict[str, str]:
             "zh": "设置是本地优先的。只有已由原生运行逻辑承接的控件可以编辑。",
         },
     }
-    return intros.get(route, {
-        "en": "This page guide can explain the current screen, navigate the workspace, or open Guided Copilot. Actions are local and bounded.",
-        "zh": "这个页面指南可以解释当前页面、导航工作区，或打开 Guided Copilot。所有动作都是本地且有边界的。",
-    })
+    return intros.get(
+        route,
+        {
+            "en": "This page guide can explain the current screen, navigate the workspace, or open Guided Copilot. Actions are local and bounded.",
+            "zh": "这个页面指南可以解释当前页面、导航工作区，或打开 Guided Copilot。所有动作都是本地且有边界的。",
+        },
+    )
 
 
 def _chips_for_route(route: str) -> List[Dict[str, str]]:
     common = [
-        {"label_en": "Start guided study", "label_zh": "开始研究引导", "action": "open_guided"},
-        {"label_en": "Privacy boundary", "label_zh": "隐私边界", "action": "explain_privacy"},
+        {
+            "label_en": "Start guided study",
+            "label_zh": "开始研究引导",
+            "action": "open_guided",
+        },
+        {
+            "label_en": "Privacy boundary",
+            "label_zh": "隐私边界",
+            "action": "explain_privacy",
+        },
     ]
     route_chips: Dict[str, List[Dict[str, str]]] = {
         "extraction": [
-            {"label_en": "Explain extraction", "label_zh": "解释抽取", "action": "explain_extraction"},
-            {"label_en": "Open Data Extraction", "label_zh": "打开数据抽取", "action": "open_extraction"},
+            {
+                "label_en": "Explain extraction",
+                "label_zh": "解释抽取",
+                "action": "explain_extraction",
+            },
+            {
+                "label_en": "Open Data Extraction",
+                "label_zh": "打开数据抽取",
+                "action": "open_extraction",
+            },
         ],
         "patient": [
-            {"label_en": "Open Patient Review", "label_zh": "打开患者审阅", "action": "open_patient"},
-            {"label_en": "Explain review tabs", "label_zh": "解释审阅标签", "action": "explain_patient"},
+            {
+                "label_en": "Open Patient Review",
+                "label_zh": "打开患者审阅",
+                "action": "open_patient",
+            },
+            {
+                "label_en": "Explain review tabs",
+                "label_zh": "解释审阅标签",
+                "action": "explain_patient",
+            },
         ],
         "crossdb": [
-            {"label_en": "Open Cross-DB Compare", "label_zh": "打开跨库比较", "action": "open_crossdb"},
-            {"label_en": "Explain compatibility", "label_zh": "解释兼容性", "action": "explain_crossdb"},
+            {
+                "label_en": "Open Cross-DB Compare",
+                "label_zh": "打开跨库比较",
+                "action": "open_crossdb",
+            },
+            {
+                "label_en": "Explain compatibility",
+                "label_zh": "解释兼容性",
+                "action": "explain_crossdb",
+            },
         ],
         "agent": [
-            {"label_en": "Open Agent Projects", "label_zh": "打开研究项目", "action": "open_agent"},
-            {"label_en": "Why draft is locked", "label_zh": "为什么草稿锁定", "action": "explain_gate"},
+            {
+                "label_en": "Open Agent Projects",
+                "label_zh": "打开研究项目",
+                "action": "open_agent",
+            },
+            {
+                "label_en": "Why draft is locked",
+                "label_zh": "为什么草稿锁定",
+                "action": "explain_gate",
+            },
         ],
         "settings": [
-            {"label_en": "Open Settings", "label_zh": "打开设置", "action": "open_settings"},
-            {"label_en": "Explain local settings", "label_zh": "解释本地设置", "action": "explain_settings"},
+            {
+                "label_en": "Open Settings",
+                "label_zh": "打开设置",
+                "action": "open_settings",
+            },
+            {
+                "label_en": "Explain local settings",
+                "label_zh": "解释本地设置",
+                "action": "explain_settings",
+            },
         ],
     }
     return route_chips.get(route, common[:1]) + common
@@ -245,33 +310,57 @@ def _reply_for_intent(intent: str, route: str) -> Dict[str, Any]:
     }
     if intent == "route":
         return {"reply": _route_intro(route), "chips": _chips_for_route(route)}
-    return {"reply": answers.get(intent, answers["how"]), "chips": _chips_for_route(route)}
+    return {
+        "reply": answers.get(intent, answers["how"]),
+        "chips": _chips_for_route(route),
+    }
 
 
 def _classify(text: str, route: str) -> tuple[str, List[Dict[str, Any]]]:
     value = text.lower()
     actions: List[Dict[str, Any]] = []
-    if any(token in value for token in ("guided", "引导", "全流程", "带我", "run it", "whole")):
-        actions.append({"type": "navigate", "target": "guided", "requires_user_confirm": False})
+    if any(
+        token in value
+        for token in ("guided", "引导", "全流程", "带我", "run it", "whole")
+    ):
+        actions.append(
+            {"type": "navigate", "target": "guided", "requires_user_confirm": False}
+        )
         return "route", actions
-    if any(token in value for token in ("privacy", "upload", "local", "phi", "隐私", "上传", "本地")):
+    if any(
+        token in value
+        for token in ("privacy", "upload", "local", "phi", "隐私", "上传", "本地")
+    ):
         return "privacy", actions
-    if any(token in value for token in ("gate", "lock", "draft", "sign", "证据", "草稿", "锁定")):
+    if any(
+        token in value
+        for token in ("gate", "lock", "draft", "sign", "证据", "草稿", "锁定")
+    ):
         return "gate", actions
     if any(token in value for token in ("extract", "export", "抽取", "导出")):
-        actions.append({"type": "navigate", "target": "extraction", "requires_user_confirm": False})
+        actions.append(
+            {"type": "navigate", "target": "extraction", "requires_user_confirm": False}
+        )
         return "extraction", actions
     if any(token in value for token in ("patient", "患者", "drill")):
-        actions.append({"type": "navigate", "target": "patient", "requires_user_confirm": False})
+        actions.append(
+            {"type": "navigate", "target": "patient", "requires_user_confirm": False}
+        )
         return "patient", actions
     if any(token in value for token in ("cross", "database", "跨库", "数据库")):
-        actions.append({"type": "navigate", "target": "crossdb", "requires_user_confirm": False})
+        actions.append(
+            {"type": "navigate", "target": "crossdb", "requires_user_confirm": False}
+        )
         return "crossdb", actions
     if any(token in value for token in ("agent", "run", "analysis", "项目", "分析")):
-        actions.append({"type": "navigate", "target": "agent", "requires_user_confirm": False})
+        actions.append(
+            {"type": "navigate", "target": "agent", "requires_user_confirm": False}
+        )
         return "gate", actions
     if any(token in value for token in ("setting", "设置")):
-        actions.append({"type": "navigate", "target": "settings", "requires_user_confirm": False})
+        actions.append(
+            {"type": "navigate", "target": "settings", "requires_user_confirm": False}
+        )
         return "settings", actions
     if route in {"extraction", "patient", "crossdb", "agent", "settings"}:
         return route if route != "agent" else "gate", actions
@@ -284,7 +373,11 @@ def create_session(body: Dict[str, Any]) -> Dict[str, Any]:
     now = _now()
     session_id = _session_id("|".join([now, scope, context["route"]]))
     project_dir = _project_dir_for(session_id, context["route"], scope)
-    project_kind = "page_guide_session_folder" if scope == "page_guide" else "guided_copilot_session_folder"
+    project_kind = (
+        "page_guide_session_folder"
+        if scope == "page_guide"
+        else "guided_copilot_session_folder"
+    )
     session = {
         "id": session_id,
         "scope": scope,
@@ -301,10 +394,16 @@ def create_session(body: Dict[str, Any]) -> Dict[str, Any]:
     session["privacy"] = {
         "no_patient_rows_persisted": not markers,
         "row_level_markers": markers,
-        "scan": "page_guide_session_json_keys" if scope == "page_guide" else "copilot_session_json_keys",
+        "scan": (
+            "page_guide_session_json_keys"
+            if scope == "page_guide"
+            else "copilot_session_json_keys"
+        ),
     }
     project_dir.mkdir(parents=True, exist_ok=True)
-    artifact_name = "page_guide_session.json" if scope == "page_guide" else "copilot_session.json"
+    artifact_name = (
+        "page_guide_session.json" if scope == "page_guide" else "copilot_session.json"
+    )
     (project_dir / artifact_name).write_text(
         json.dumps(session, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -343,26 +442,36 @@ def post_message(body: Dict[str, Any]) -> Dict[str, Any]:
     with _LOCK:
         session = _find_session(session_id) if session_id else None
         if session is None:
-            created = create_session({"scope": body.get("scope") or "page_guide", "context": context})
+            created = create_session(
+                {"scope": body.get("scope") or "page_guide", "context": context}
+            )
             session = _find_session(created["session"]["id"])
         if session is None:
             return {"ok": False, "error": "session_create_failed"}
 
-        route = context.get("route") or (session.get("context") or {}).get("route") or "entry"
+        route = (
+            context.get("route")
+            or (session.get("context") or {}).get("route")
+            or "entry"
+        )
         intent, actions = _classify(text, route)
         response = _reply_for_intent(intent, route)
         now = _now()
-        messages = session.get("messages") if isinstance(session.get("messages"), list) else []
-        messages.extend([
-            {"role": "user", "text": text, "created_at": now},
-            {
-                "role": "assistant",
-                "intent": intent,
-                "reply": response["reply"],
-                "actions": actions,
-                "created_at": now,
-            },
-        ])
+        messages = (
+            session.get("messages") if isinstance(session.get("messages"), list) else []
+        )
+        messages.extend(
+            [
+                {"role": "user", "text": text, "created_at": now},
+                {
+                    "role": "assistant",
+                    "intent": intent,
+                    "reply": response["reply"],
+                    "actions": actions,
+                    "created_at": now,
+                },
+            ]
+        )
         session["messages"] = messages[-_MAX_MESSAGES:]
         session["context"] = context
         session["updated_at"] = now
@@ -370,10 +479,18 @@ def post_message(body: Dict[str, Any]) -> Dict[str, Any]:
         session["privacy"] = {
             "no_patient_rows_persisted": not markers,
             "row_level_markers": markers,
-            "scan": "page_guide_session_json_keys" if session.get("scope") == "page_guide" else "copilot_session_json_keys",
+            "scan": (
+                "page_guide_session_json_keys"
+                if session.get("scope") == "page_guide"
+                else "copilot_session_json_keys"
+            ),
         }
         Path(str(session["project_dir"])).mkdir(parents=True, exist_ok=True)
-        artifact_name = "page_guide_session.json" if session.get("scope") == "page_guide" else "copilot_session.json"
+        artifact_name = (
+            "page_guide_session.json"
+            if session.get("scope") == "page_guide"
+            else "copilot_session.json"
+        )
         (Path(str(session["project_dir"])) / artifact_name).write_text(
             json.dumps(session, indent=2, ensure_ascii=False), encoding="utf-8"
         )
@@ -439,7 +556,10 @@ def execute_action(body: Dict[str, Any]) -> Dict[str, Any]:
 def list_sessions(limit: int = 20) -> Dict[str, Any]:
     with _LOCK:
         rows = _load_sessions()
-    rows.sort(key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
+    rows.sort(
+        key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
+        reverse=True,
+    )
     cap = max(1, min(int(limit or 20), 100))
     return {
         "ok": True,

@@ -33,7 +33,6 @@ from easyicu.webserver.dataio import (
 )
 from easyicu.webserver.ideas import mining as idea_mining_web
 
-
 SIGNOFF_CONFIRMATIONS = [
     "evidence_reviewed",
     "claims_remain_locked",
@@ -78,7 +77,11 @@ def _write_csv_export(root: Path, database: str = "miiv") -> Path:
         "sofa2_score": pd.DataFrame(
             {
                 "stay_id": [1, 1, 2],
-                "charttime": ["2026-01-01 00:00", "2026-01-01 01:00", "2026-01-01 00:00"],
+                "charttime": [
+                    "2026-01-01 00:00",
+                    "2026-01-01 01:00",
+                    "2026-01-01 00:00",
+                ],
                 "sofa2": [4, 5, 8],
             }
         ),
@@ -91,7 +94,11 @@ def _write_csv_export(root: Path, database: str = "miiv") -> Path:
         "vitals": pd.DataFrame(
             {
                 "stay_id": [1, 1, 2],
-                "charttime": ["2026-01-01 00:00", "2026-01-01 01:00", "2026-01-01 00:00"],
+                "charttime": [
+                    "2026-01-01 00:00",
+                    "2026-01-01 01:00",
+                    "2026-01-01 00:00",
+                ],
                 "hr": [90, 95, 80],
                 "map": [70, 72, 75],
                 "spo2": [97, 98, 96],
@@ -144,7 +151,13 @@ def _write_legacy_full_parquet_export(root: Path, database: str = "miiv") -> Pat
         "sofa2_score_sofa2_sofa2_resp_sofa2_coag_sofa2_liver_etc3.parquet": pd.DataFrame(
             {
                 "stay_id": [1, 1, 2, 3, 4],
-                "charttime": ["2026-01-01 00:00", "2026-01-01 01:00", "2026-01-01 00:00", "2026-01-01 00:00", "2026-01-01 00:00"],
+                "charttime": [
+                    "2026-01-01 00:00",
+                    "2026-01-01 01:00",
+                    "2026-01-01 00:00",
+                    "2026-01-01 00:00",
+                    "2026-01-01 00:00",
+                ],
                 "sofa2": [4, 5, 8, 3, 6],
                 "sofa2_resp": [1, 1, 2, 0, 1],
                 "sofa2_coag": [0, 0, 1, 0, 0],
@@ -160,7 +173,12 @@ def _write_legacy_full_parquet_export(root: Path, database: str = "miiv") -> Pat
         "vitals_hr_map_sbp_dbp_etc7.parquet": pd.DataFrame(
             {
                 "stay_id": [1, 1, 2, 4],
-                "charttime": ["2026-01-01 00:00", "2026-01-01 01:00", "2026-01-01 00:00", "2026-01-01 00:00"],
+                "charttime": [
+                    "2026-01-01 00:00",
+                    "2026-01-01 01:00",
+                    "2026-01-01 00:00",
+                    "2026-01-01 00:00",
+                ],
                 "hr": [90, 95, 80, 88],
                 "map": [70, 72, 75, 76],
                 "sbp": [110, 112, 118, 120],
@@ -206,9 +224,13 @@ def _write_legacy_full_parquet_export(root: Path, database: str = "miiv") -> Pat
     return root
 
 
-def test_catalog_active_export_coverage_uses_registered_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_catalog_active_export_coverage_uses_registered_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     export = _write_csv_export(tmp_path / "export")
-    monkeypatch.setattr(source_store, "load_registry", lambda: {"active_path": str(export)})
+    monkeypatch.setattr(
+        source_store, "load_registry", lambda: {"active_path": str(export)}
+    )
 
     catalog = catalog_module.build_catalog()
     active = catalog["activeExportCoverage"]
@@ -238,7 +260,9 @@ def test_catalog_active_export_coverage_large_export_is_schema_only(
     def fail_file_coverage(*args, **kwargs):
         raise AssertionError("large catalog coverage must not read concept columns")
 
-    monkeypatch.setattr(source_store, "load_registry", lambda: {"active_path": str(export)})
+    monkeypatch.setattr(
+        source_store, "load_registry", lambda: {"active_path": str(export)}
+    )
     monkeypatch.setattr(dataio, "describe_export_source", lambda _path: desc)
     monkeypatch.setattr(dataio, "_fast_stay_ids", fail_fast_stay_ids)
     monkeypatch.setattr(catalog_module, "_file_concept_coverage", fail_file_coverage)
@@ -301,7 +325,8 @@ def _drop_export_module(root: Path, module: str) -> None:
     manifest_path = root / "_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["files"] = [
-        row for row in manifest.get("files", [])
+        row
+        for row in manifest.get("files", [])
         if row.get("module") != module and row.get("file") != f"{module}.csv"
     ]
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -342,9 +367,13 @@ def test_native_static_assets_are_served_no_store() -> None:
     assert js_res.headers["pragma"] == "no-cache"
 
 
-def test_settings_update_and_reset_are_local_and_whitelisted(tmp_path: Path, monkeypatch) -> None:
+def test_settings_update_and_reset_are_local_and_whitelisted(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(settings_store, "_CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(settings_store, "_CONFIG_PATH", tmp_path / "cfg" / "settings.json")
+    monkeypatch.setattr(
+        settings_store, "_CONFIG_PATH", tmp_path / "cfg" / "settings.json"
+    )
     client = TestClient(app)
 
     updated = client.post(
@@ -408,7 +437,9 @@ def test_settings_store_salvages_tail_corruption_and_rewrites_atomically(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(settings_store, "_CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(settings_store, "_CONFIG_PATH", tmp_path / "cfg" / "settings.json")
+    monkeypatch.setattr(
+        settings_store, "_CONFIG_PATH", tmp_path / "cfg" / "settings.json"
+    )
     settings_store._CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     settings_store._CONFIG_PATH.write_text(
         '{"language":"zh","data_mode":"real","density":"compact"}e\\n}}',
@@ -430,9 +461,13 @@ def test_settings_store_salvages_tail_corruption_and_rewrites_atomically(
     assert repaired["reduce_motion"] is True
 
 
-def test_guided_draft_registry_writes_metadata_only_without_row_payload(tmp_path: Path, monkeypatch) -> None:
+def test_guided_draft_registry_writes_metadata_only_without_row_payload(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
+    monkeypatch.setattr(
+        guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json"
+    )
     monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
     parent_dir = tmp_path / "user_chosen_parent"
     parent_dir.mkdir()
@@ -475,7 +510,9 @@ def test_guided_draft_registry_writes_metadata_only_without_row_payload(tmp_path
     assert draft["project_parent_dir"] == str(parent_dir)
     assert draft["project_dir"].startswith(str(parent_dir / "guided-aki-onset-review-"))
     assert (Path(draft["project_dir"]) / "guided_draft.json").exists()
-    opened = client.post("/api/guided/project/open", json={"project_dir": draft["project_dir"]})
+    opened = client.post(
+        "/api/guided/project/open", json={"project_dir": draft["project_dir"]}
+    )
     assert opened.status_code == 200
     assert opened.json()["ok"] is True
     assert opened.json()["session"]["project_dir"] == draft["project_dir"]
@@ -499,7 +536,9 @@ def test_guided_draft_registry_writes_metadata_only_without_row_payload(tmp_path
     assert listed_body["drafts"][0]["id"] == draft["id"]
     assert listed_body["drafts"][0]["project_dir"] == draft["project_dir"]
 
-    persisted = json.loads((tmp_path / "cfg" / "guided.json").read_text(encoding="utf-8"))
+    persisted = json.loads(
+        (tmp_path / "cfg" / "guided.json").read_text(encoding="utf-8")
+    )
     persisted_dump = json.dumps(persisted)
     assert "tableRows" not in persisted_dump
     assert "stay_id" not in persisted_dump
@@ -507,9 +546,13 @@ def test_guided_draft_registry_writes_metadata_only_without_row_payload(tmp_path
     assert "hadm_id" not in persisted_dump
 
 
-def test_guided_draft_registry_preserves_unicode_folder_slug(tmp_path: Path, monkeypatch) -> None:
+def test_guided_draft_registry_preserves_unicode_folder_slug(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
+    monkeypatch.setattr(
+        guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json"
+    )
     monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
     parent_dir = tmp_path / "中文父目录"
     parent_dir.mkdir()
@@ -532,15 +575,23 @@ def test_guided_draft_registry_preserves_unicode_folder_slug(tmp_path: Path, mon
     assert (Path(draft["project_dir"]) / "guided_draft.json").exists()
 
 
-def test_guided_draft_remove_unregisters_only_and_preserves_project_folder(tmp_path: Path, monkeypatch) -> None:
+def test_guided_draft_remove_unregisters_only_and_preserves_project_folder(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
+    monkeypatch.setattr(
+        guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json"
+    )
     monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
     client = TestClient(app)
 
     created = client.post(
         "/api/guided/drafts",
-        json={"title": "Draft to remove", "folder_slug": "remove-me", "data_mode": "real"},
+        json={
+            "title": "Draft to remove",
+            "folder_slug": "remove-me",
+            "data_mode": "real",
+        },
     )
     assert created.status_code == 200
     draft = created.json()["draft"]
@@ -561,7 +612,11 @@ def test_guided_draft_remove_unregisters_only_and_preserves_project_folder(tmp_p
 
     removed = client.post(
         "/api/guided/drafts/remove",
-        json={"draft_id": draft["id"], "project_dir": draft["project_dir"], "delete_project_folder": False},
+        json={
+            "draft_id": draft["id"],
+            "project_dir": draft["project_dir"],
+            "delete_project_folder": False,
+        },
     )
     assert removed.status_code == 200
     removed_body = removed.json()
@@ -577,7 +632,11 @@ def test_guided_draft_remove_unregisters_only_and_preserves_project_folder(tmp_p
 
     created_again = client.post(
         "/api/guided/drafts",
-        json={"title": "Cached delete caller", "folder_slug": "cached-delete", "data_mode": "real"},
+        json={
+            "title": "Cached delete caller",
+            "folder_slug": "cached-delete",
+            "data_mode": "real",
+        },
     )
     assert created_again.status_code == 200
     draft_again = created_again.json()["draft"]
@@ -595,9 +654,13 @@ def test_guided_draft_remove_unregisters_only_and_preserves_project_folder(tmp_p
     assert artifact_again.exists()
 
 
-def test_guided_copilot_session_routes_locally_and_rejects_row_payload(tmp_path: Path, monkeypatch) -> None:
+def test_guided_copilot_session_routes_locally_and_rejects_row_payload(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
+    monkeypatch.setattr(
+        guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json"
+    )
     monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
     client = TestClient(app)
 
@@ -635,7 +698,11 @@ def test_guided_copilot_session_routes_locally_and_rejects_row_payload(tmp_path:
 
     fallback = client.post(
         "/api/guided/message",
-        json={"session_id": session["id"], "message": "随便聊聊一个很模糊的请求", "context": {"route": "guided"}},
+        json={
+            "session_id": session["id"],
+            "message": "随便聊聊一个很模糊的请求",
+            "context": {"route": "guided"},
+        },
     )
     assert fallback.status_code == 200
     fallback_body = fallback.json()
@@ -646,7 +713,11 @@ def test_guided_copilot_session_routes_locally_and_rejects_row_payload(tmp_path:
 
     message = client.post(
         "/api/guided/message",
-        json={"session_id": session["id"], "message": "我想找一篇文章里的研究 idea", "context": {"route": "guided"}},
+        json={
+            "session_id": session["id"],
+            "message": "我想找一篇文章里的研究 idea",
+            "context": {"route": "guided"},
+        },
     )
     assert message.status_code == 200
     message_body = message.json()
@@ -657,7 +728,11 @@ def test_guided_copilot_session_routes_locally_and_rejects_row_payload(tmp_path:
 
     review_message = client.post(
         "/api/guided/message",
-        json={"session_id": session["id"], "message": "review data and patient view", "context": {"route": "guided"}},
+        json={
+            "session_id": session["id"],
+            "message": "review data and patient view",
+            "context": {"route": "guided"},
+        },
     )
     assert review_message.status_code == 200
     review_body = review_message.json()
@@ -666,23 +741,37 @@ def test_guided_copilot_session_routes_locally_and_rejects_row_payload(tmp_path:
 
     action = client.post(
         "/api/guided/action",
-        json={"session_id": session["id"], "action": "handoff_to_module", "goal": "data_extraction"},
+        json={
+            "session_id": session["id"],
+            "action": "handoff_to_module",
+            "goal": "data_extraction",
+        },
     )
     assert action.status_code == 200
     action_body = action.json()
     assert action_body["result"]["target"] == "extraction"
     assert action_body["result"]["prefill"]["goal"] == "data_extraction"
-    assert action_body["local_first"] == {"uploads": 0, "tokens": 0, "external_calls": 0}
+    assert action_body["local_first"] == {
+        "uploads": 0,
+        "tokens": 0,
+        "external_calls": 0,
+    }
 
     blocked = client.post(
         "/api/guided/action",
-        json={"session_id": session["id"], "action": "handoff_to_module", "goal": "free_chat_anything"},
+        json={
+            "session_id": session["id"],
+            "action": "handoff_to_module",
+            "goal": "free_chat_anything",
+        },
     )
     assert blocked.status_code == 200
     assert blocked.json()["blocked"] is True
     assert blocked.json()["error"] == "unsupported_guided_goal"
 
-    persisted = json.loads((tmp_path / "cfg" / "guided.json").read_text(encoding="utf-8"))
+    persisted = json.loads(
+        (tmp_path / "cfg" / "guided.json").read_text(encoding="utf-8")
+    )
     persisted_dump = json.dumps(persisted)
     assert "tableRows" not in persisted_dump
     assert "stay_id" not in persisted_dump
@@ -690,9 +779,13 @@ def test_guided_copilot_session_routes_locally_and_rejects_row_payload(tmp_path:
     assert "hadm_id" not in persisted_dump
 
 
-def test_guided_project_memory_restores_conversation_per_local_folder(tmp_path: Path, monkeypatch) -> None:
+def test_guided_project_memory_restores_conversation_per_local_folder(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
+    monkeypatch.setattr(
+        guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json"
+    )
     monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
     client = TestClient(app)
 
@@ -744,16 +837,29 @@ def test_guided_project_memory_restores_conversation_per_local_folder(tmp_path: 
 
     reopened = client.post(
         "/api/guided/project/open",
-        json={"project_dir": draft["project_dir"], "context": {"route": "guided", "language": "zh"}},
+        json={
+            "project_dir": draft["project_dir"],
+            "context": {"route": "guided", "language": "zh"},
+        },
     )
     restored = reopened.json()["session"]
     restored_messages = restored["messages"]
     assert reopened.json()["messages_restored"] >= 2
-    assert any(row["role"] == "user" and row.get("text") == "我想审阅已有数据" for row in restored_messages)
-    assert any(row["role"] == "assistant" and row.get("goal") == "review_data" for row in restored_messages)
+    assert any(
+        row["role"] == "user" and row.get("text") == "我想审阅已有数据"
+        for row in restored_messages
+    )
+    assert any(
+        row["role"] == "assistant" and row.get("goal") == "review_data"
+        for row in restored_messages
+    )
     assert (Path(draft["project_dir"]) / "guided_copilot_session.json").exists()
 
-    persisted = json.loads((Path(draft["project_dir"]) / "guided_copilot_session.json").read_text(encoding="utf-8"))
+    persisted = json.loads(
+        (Path(draft["project_dir"]) / "guided_copilot_session.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert persisted["id"] == session["id"]
     persisted_dump = json.dumps(persisted)
     assert "tableRows" not in persisted_dump
@@ -761,15 +867,21 @@ def test_guided_project_memory_restores_conversation_per_local_folder(tmp_path: 
     assert "subject_id" not in persisted_dump
     assert "hadm_id" not in persisted_dump
 
-    outside = client.post("/api/guided/project/open", json={"project_dir": str(tmp_path / "outside")})
+    outside = client.post(
+        "/api/guided/project/open", json={"project_dir": str(tmp_path / "outside")}
+    )
     assert outside.status_code == 200
     assert outside.json()["blocked"] is True
     assert outside.json()["error"] == "invalid_guided_project_dir"
 
 
-def test_guided_project_memory_persists_bounded_setup_slots(tmp_path: Path, monkeypatch) -> None:
+def test_guided_project_memory_persists_bounded_setup_slots(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
+    monkeypatch.setattr(
+        guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json"
+    )
     monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
     client = TestClient(app)
 
@@ -782,7 +894,9 @@ def test_guided_project_memory_persists_bounded_setup_slots(tmp_path: Path, monk
         },
     )
     draft = created.json()["draft"]
-    opened = client.post("/api/guided/project/open", json={"project_dir": draft["project_dir"]})
+    opened = client.post(
+        "/api/guided/project/open", json={"project_dir": draft["project_dir"]}
+    )
     session = opened.json()["session"]
 
     update = client.post(
@@ -829,13 +943,19 @@ def test_guided_project_memory_persists_bounded_setup_slots(tmp_path: Path, monk
     assert "patient" not in slots
     assert "patient" not in slots["agent"]
 
-    reopened = client.post("/api/guided/project/open", json={"project_dir": draft["project_dir"]})
+    reopened = client.post(
+        "/api/guided/project/open", json={"project_dir": draft["project_dir"]}
+    )
     restored = reopened.json()["session"]["slots"]
     assert restored["active_flow"] == "data_extraction"
     assert restored["extraction"]["path"] == str(tmp_path / "raw_miiv")
     assert restored["agent"]["question"] == "Evaluate lactate and mortality."
 
-    persisted = json.loads((Path(draft["project_dir"]) / "guided_copilot_session.json").read_text(encoding="utf-8"))
+    persisted = json.loads(
+        (Path(draft["project_dir"]) / "guided_copilot_session.json").read_text(
+            encoding="utf-8"
+        )
+    )
     dumped = json.dumps(persisted)
     assert "tableRows" not in dumped
     assert "stay_id" not in dumped
@@ -857,9 +977,13 @@ def test_guided_project_memory_persists_bounded_setup_slots(tmp_path: Path, monk
     assert missing.json()["error"] == "guided_project_session_required"
 
 
-def test_guided_project_open_accepts_existing_local_folder_without_draft(tmp_path: Path, monkeypatch) -> None:
+def test_guided_project_open_accepts_existing_local_folder_without_draft(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(guided_sessions, "_CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json")
+    monkeypatch.setattr(
+        guided_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "guided.json"
+    )
     monkeypatch.setattr(guided_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
     project_dir = tmp_path / "projects" / "existing-study"
     project_dir.mkdir(parents=True)
@@ -889,7 +1013,9 @@ def test_guided_project_open_accepts_existing_local_folder_without_draft(tmp_pat
 
     outside = tmp_path / "not-projects" / "other-study"
     outside.mkdir(parents=True)
-    blocked = client.post("/api/guided/project/open", json={"project_dir": str(outside)})
+    blocked = client.post(
+        "/api/guided/project/open", json={"project_dir": str(outside)}
+    )
     assert blocked.status_code == 200
     assert blocked.json()["blocked"] is True
     assert blocked.json()["error"] == "invalid_guided_project_dir"
@@ -899,7 +1025,9 @@ def test_page_guide_session_backend_is_metadata_only_and_drives_actions(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(copilot_sessions, "_CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(copilot_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "page-guide.json")
+    monkeypatch.setattr(
+        copilot_sessions, "_CONFIG_PATH", tmp_path / "cfg" / "page-guide.json"
+    )
     monkeypatch.setattr(copilot_sessions, "_PROJECTS_ROOT", tmp_path / "projects")
     client = TestClient(app)
 
@@ -970,7 +1098,10 @@ def test_page_guide_session_backend_is_metadata_only_and_drives_actions(
 
     compat = client.post(
         "/api/copilot/sessions",
-        json={"scope": "quick_help", "context": {"route": "settings", "language": "en"}},
+        json={
+            "scope": "quick_help",
+            "context": {"route": "settings", "language": "en"},
+        },
     )
     assert compat.status_code == 200
     assert compat.json()["session"]["scope"] == "page_guide"
@@ -991,15 +1122,23 @@ def test_idea_mining_web_run_creates_ledger_preexperiment_and_handoff(
     monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
     monkeypatch.setattr(idea_mining_web, "_CONFIG_DIR", tmp_path / "idea_cfg")
     monkeypatch.setattr(idea_mining_web, "_RUN_ROOT", tmp_path / "idea_cfg" / "runs")
-    monkeypatch.setattr(idea_mining_web, "_HISTORY_PATH", tmp_path / "idea_cfg" / "history.json")
-    monkeypatch.setattr(idea_mining_web, "_AGENT_PROJECTS_ROOT", tmp_path / "idea_cfg" / "agent_projects")
+    monkeypatch.setattr(
+        idea_mining_web, "_HISTORY_PATH", tmp_path / "idea_cfg" / "history.json"
+    )
+    monkeypatch.setattr(
+        idea_mining_web,
+        "_AGENT_PROJECTS_ROOT",
+        tmp_path / "idea_cfg" / "agent_projects",
+    )
     monkeypatch.setattr(
         idea_mining_web,
         "_AGENT_PROJECTS_PATH",
         tmp_path / "idea_cfg" / "agent_projects.json",
     )
     export_dir = _write_csv_export(tmp_path / "idea_export")
-    source_store.register_source(str(export_dir), label="Idea fixture", active=True, crossdb=True)
+    source_store.register_source(
+        str(export_dir), label="Idea fixture", active=True, crossdb=True
+    )
     client = TestClient(app)
 
     mined = client.post(
@@ -1072,7 +1211,13 @@ def test_idea_mining_web_run_creates_ledger_preexperiment_and_handoff(
     assert seed["reportable"] is False
     assert seed["draft_unlocked"] is False
     assert seed["question"] == handoff_body["handoff_plan"]["research_question"]
-    assert (tmp_path / "idea_cfg" / "agent_projects" / seed["study_id"] / "project_seed.json").exists()
+    assert (
+        tmp_path
+        / "idea_cfg"
+        / "agent_projects"
+        / seed["study_id"]
+        / "project_seed.json"
+    ).exists()
 
     projects = client.post("/api/ideas/agent-projects", json={"limit": 5})
     assert projects.status_code == 200
@@ -1090,7 +1235,10 @@ def test_idea_mining_web_run_creates_ledger_preexperiment_and_handoff(
     assert loaded_body["selected_idea_id"] == body["selected_idea_id"]
     assert loaded_body["idea_ledger"][0]["idea_id"] == body["selected_idea_id"]
     assert loaded_body["handoff"]["idea_id"] == body["selected_idea_id"]
-    assert loaded_body["prior_art_check"]["prior_art"]["status"] == "blocked_network_opt_in_required"
+    assert (
+        loaded_body["prior_art_check"]["prior_art"]["status"]
+        == "blocked_network_opt_in_required"
+    )
     assert loaded_body["agent_project"]["study_id"] == seed["study_id"]
     assert loaded_body["privacy"]["patient_rows_returned"] is False
     assert loaded_body["privacy"]["external_llm_calls"] == 0
@@ -1104,15 +1252,23 @@ def test_idea_mining_repeated_same_source_keeps_distinct_local_records(
     monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
     monkeypatch.setattr(idea_mining_web, "_CONFIG_DIR", tmp_path / "idea_cfg")
     monkeypatch.setattr(idea_mining_web, "_RUN_ROOT", tmp_path / "idea_cfg" / "runs")
-    monkeypatch.setattr(idea_mining_web, "_HISTORY_PATH", tmp_path / "idea_cfg" / "history.json")
-    monkeypatch.setattr(idea_mining_web, "_AGENT_PROJECTS_ROOT", tmp_path / "idea_cfg" / "agent_projects")
+    monkeypatch.setattr(
+        idea_mining_web, "_HISTORY_PATH", tmp_path / "idea_cfg" / "history.json"
+    )
+    monkeypatch.setattr(
+        idea_mining_web,
+        "_AGENT_PROJECTS_ROOT",
+        tmp_path / "idea_cfg" / "agent_projects",
+    )
     monkeypatch.setattr(
         idea_mining_web,
         "_AGENT_PROJECTS_PATH",
         tmp_path / "idea_cfg" / "agent_projects.json",
     )
     export_dir = _write_csv_export(tmp_path / "idea_export")
-    source_store.register_source(str(export_dir), label="Idea fixture", active=True, crossdb=True)
+    source_store.register_source(
+        str(export_dir), label="Idea fixture", active=True, crossdb=True
+    )
     client = TestClient(app)
     payload = {
         "source_type": "manual",
@@ -1138,27 +1294,44 @@ def test_idea_mining_repeated_same_source_keeps_distinct_local_records(
     assert history_ids == [second_body["run_id"], first_body["run_id"]]
     history_keys = [row["history_key"] for row in history_rows[:2]]
     assert len(set(history_keys)) == 2
-    assert all(key.startswith(f"{run_id}::") for key, run_id in zip(history_keys, history_ids))
+    assert all(
+        key.startswith(f"{run_id}::") for key, run_id in zip(history_keys, history_ids)
+    )
 
     first_project = client.post(
         "/api/ideas/create-agent-project",
-        json={"run_id": first_body["run_id"], "idea_id": first_body["selected_idea_id"]},
+        json={
+            "run_id": first_body["run_id"],
+            "idea_id": first_body["selected_idea_id"],
+        },
     )
     second_project = client.post(
         "/api/ideas/create-agent-project",
-        json={"run_id": second_body["run_id"], "idea_id": second_body["selected_idea_id"]},
+        json={
+            "run_id": second_body["run_id"],
+            "idea_id": second_body["selected_idea_id"],
+        },
     )
     assert first_project.status_code == 200
     assert second_project.status_code == 200
-    assert first_project.json()["project"]["study_id"] != second_project.json()["project"]["study_id"]
+    assert (
+        first_project.json()["project"]["study_id"]
+        != second_project.json()["project"]["study_id"]
+    )
 
 
 def test_idea_mining_lists_only_existing_local_runs_and_projects(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setattr(idea_mining_web, "_RUN_ROOT", tmp_path / "idea_cfg" / "runs")
-    monkeypatch.setattr(idea_mining_web, "_HISTORY_PATH", tmp_path / "idea_cfg" / "history.json")
-    monkeypatch.setattr(idea_mining_web, "_AGENT_PROJECTS_ROOT", tmp_path / "idea_cfg" / "agent_projects")
+    monkeypatch.setattr(
+        idea_mining_web, "_HISTORY_PATH", tmp_path / "idea_cfg" / "history.json"
+    )
+    monkeypatch.setattr(
+        idea_mining_web,
+        "_AGENT_PROJECTS_ROOT",
+        tmp_path / "idea_cfg" / "agent_projects",
+    )
     monkeypatch.setattr(
         idea_mining_web,
         "_AGENT_PROJECTS_PATH",
@@ -1182,7 +1355,10 @@ def test_idea_mining_lists_only_existing_local_runs_and_projects(
     (tmp_path / "idea_cfg" / "agent_projects.json").write_text(
         json.dumps(
             [
-                {"study_id": "missing_project", "project_dir": str(tmp_path / "missing_project")},
+                {
+                    "study_id": "missing_project",
+                    "project_dir": str(tmp_path / "missing_project"),
+                },
                 {"study_id": "real_project", "project_dir": str(project_dir)},
             ]
         ),
@@ -1209,9 +1385,13 @@ def test_idea_mining_web_preserves_vasopressor_fluid_strategy_concept_set(
     monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
     monkeypatch.setattr(idea_mining_web, "_CONFIG_DIR", tmp_path / "idea_cfg")
     monkeypatch.setattr(idea_mining_web, "_RUN_ROOT", tmp_path / "idea_cfg" / "runs")
-    monkeypatch.setattr(idea_mining_web, "_HISTORY_PATH", tmp_path / "idea_cfg" / "history.json")
+    monkeypatch.setattr(
+        idea_mining_web, "_HISTORY_PATH", tmp_path / "idea_cfg" / "history.json"
+    )
     export_dir = _write_csv_export(tmp_path / "idea_export")
-    source_store.register_source(str(export_dir), label="Idea fixture", active=True, crossdb=True)
+    source_store.register_source(
+        str(export_dir), label="Idea fixture", active=True, crossdb=True
+    )
     client = TestClient(app)
 
     mined = client.post(
@@ -1256,7 +1436,10 @@ def test_idea_mining_web_preserves_vasopressor_fluid_strategy_concept_set(
     )
     assert handoff.status_code == 200
     variables = handoff.json()["handoff_plan"]["variables"]
-    assert any(row["concept_id"] == "vaso_ind" and row["role"] == "exposure" for row in variables)
+    assert any(
+        row["concept_id"] == "vaso_ind" and row["role"] == "exposure"
+        for row in variables
+    )
     assert handoff.json()["agent_seed"]["reportable"] is False
 
 
@@ -1288,7 +1471,9 @@ def test_idea_mining_source_resolution_is_bounded_and_fail_closed_without_opt_in
         assert marker not in dumped
 
 
-def test_summarize_export_workspace_builds_bounded_real_snapshot(tmp_path: Path) -> None:
+def test_summarize_export_workspace_builds_bounded_real_snapshot(
+    tmp_path: Path,
+) -> None:
     export_dir = _write_csv_export(tmp_path / "export")
 
     result = summarize_export_workspace(str(export_dir))
@@ -1304,13 +1489,39 @@ def test_summarize_export_workspace_builds_bounded_real_snapshot(tmp_path: Path)
     assert result["summary"]["sepsis_pct"] == 33.3
     assert result["summary"]["median_sofa2"] == 6.5
     assert result["tableRows"] == [
-        {"stay_id": "1", "age": 50.0, "sex": "F", "sofa2": 5.0, "los_icu": 2.0, "outcome": "Survived"},
-        {"stay_id": "2", "age": 70.0, "sex": "M", "sofa2": 8.0, "los_icu": 5.0, "outcome": "Deceased"},
-        {"stay_id": "3", "age": 60.0, "sex": "F", "sofa2": None, "los_icu": 1.0, "outcome": "Survived"},
+        {
+            "stay_id": "1",
+            "age": 50.0,
+            "sex": "F",
+            "sofa2": 5.0,
+            "los_icu": 2.0,
+            "outcome": "Survived",
+        },
+        {
+            "stay_id": "2",
+            "age": 70.0,
+            "sex": "M",
+            "sofa2": 8.0,
+            "los_icu": 5.0,
+            "outcome": "Deceased",
+        },
+        {
+            "stay_id": "3",
+            "age": 60.0,
+            "sex": "F",
+            "sofa2": None,
+            "los_icu": 1.0,
+            "outcome": "Survived",
+        },
     ]
     assert result["patient"]["stay_id"] == "1"
     assert result["patient"]["sepsis3"] is True
-    assert [series["key"] for series in result["series"]] == ["hr", "map", "spo2", "temp"]
+    assert [series["key"] for series in result["series"]] == [
+        "hr",
+        "map",
+        "spo2",
+        "temp",
+    ]
     assert result["series"][0]["values"] == [90.0, 95.0]
     quality = {row["module"]: row for row in result["quality"]}
     assert quality["vitals"]["unique_stays"] == 2
@@ -1319,7 +1530,9 @@ def test_summarize_export_workspace_builds_bounded_real_snapshot(tmp_path: Path)
     assert quality["sepsis3_sofa2"]["status"] == "neutral"
 
 
-def test_cohort_summary_uses_full_loaded_cohort_not_preview_rows(tmp_path: Path) -> None:
+def test_cohort_summary_uses_full_loaded_cohort_not_preview_rows(
+    tmp_path: Path,
+) -> None:
     export_dir = _write_preview_trap_export(tmp_path / "export")
 
     result = summarize_export_workspace(str(export_dir))
@@ -1352,7 +1565,12 @@ def test_describe_export_source_uses_manifest_and_schema_without_full_table_read
     result = describe_export_source(str(export_dir))
 
     assert result["ok"] is True
-    assert result["summary"] == {"stays": 3, "modules": 5, "file_count": 5, "total_rows": 14}
+    assert result["summary"] == {
+        "stays": 3,
+        "modules": 5,
+        "file_count": 5,
+        "total_rows": 14,
+    }
     assert result["files"][0]["columns"]
 
 
@@ -1372,7 +1590,12 @@ def test_describe_export_source_scans_legacy_full_export_inventory(
     assert result["ok"] is True
     assert result["database"] == "miiv"
     assert result["generated"] == "2026-06-22T17:38:52.993877+00:00"
-    assert result["summary"] == {"stays": 4, "modules": 6, "file_count": 6, "total_rows": 22}
+    assert result["summary"] == {
+        "stays": 4,
+        "modules": 6,
+        "file_count": 6,
+        "total_rows": 22,
+    }
     assert set(result["modules"]) == {
         "chemistry",
         "demographics",
@@ -1382,9 +1605,20 @@ def test_describe_export_source_scans_legacy_full_export_inventory(
         "vitals",
     }
     files_by_name = {row["file"]: row for row in result["files"]}
-    assert files_by_name["demographics_age_bmi_height_sex_etc2.parquet"]["module"] == "demographics"
-    assert files_by_name["chemistry_alb_alp_alt_ast_etc26.parquet"]["module"] == "chemistry"
-    assert files_by_name["sofa2_score_sofa2_sofa2_resp_sofa2_coag_sofa2_liver_etc3.parquet"]["module"] == "sofa2_score"
+    assert (
+        files_by_name["demographics_age_bmi_height_sex_etc2.parquet"]["module"]
+        == "demographics"
+    )
+    assert (
+        files_by_name["chemistry_alb_alp_alt_ast_etc26.parquet"]["module"]
+        == "chemistry"
+    )
+    assert (
+        files_by_name[
+            "sofa2_score_sofa2_sofa2_resp_sofa2_coag_sofa2_liver_etc3.parquet"
+        ]["module"]
+        == "sofa2_score"
+    )
     assert files_by_name["sepsis3_sofa2_sep3_sofa2.parquet"]["rows"] == 2
 
 
@@ -1432,12 +1666,16 @@ def test_data_scan_auto_classifies_supported_folder_layouts(tmp_path: Path) -> N
     assert unknown_result["privacy"]["raw_rows_read"] is False
 
 
-def test_workspace_summary_endpoint_returns_snapshot_and_rejects_bad_paths(tmp_path: Path) -> None:
+def test_workspace_summary_endpoint_returns_snapshot_and_rejects_bad_paths(
+    tmp_path: Path,
+) -> None:
     export_dir = _write_csv_export(tmp_path / "export")
     client = TestClient(app)
 
     ok = client.post("/api/workspace/summary", json={"path": str(export_dir)})
-    bad = client.post("/api/workspace/summary", json={"path": str(tmp_path / "missing")})
+    bad = client.post(
+        "/api/workspace/summary", json={"path": str(tmp_path / "missing")}
+    )
 
     assert ok.status_code == 200
     assert ok.json()["summary"]["stays"] == 3
@@ -1458,7 +1696,9 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     demographics["subject_id"] = [101, 102, 103]
     demographics["hadm_id"] = [201, 202, 203]
     demographics.to_csv(export_dir / "demographics.csv", index=False)
-    source_store.register_source(str(export_dir), label="Review fixture", active=True, crossdb=True)
+    source_store.register_source(
+        str(export_dir), label="Review fixture", active=True, crossdb=True
+    )
     client = TestClient(app)
 
     response = client.post("/api/patient-review/drilldown", json={})
@@ -1480,7 +1720,10 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     assert payload["selected"]["label"] == "Entity 1"
     assert payload["selected"]["demographics"] == {"age": 50.0, "sex": "F"}
     assert payload["selected"]["scores"] == {"sofa2_max": 5.0, "sepsis3_sofa2": True}
-    assert payload["selected"]["outcomes"] == {"status": "Survived", "icu_los_days": 2.0}
+    assert payload["selected"]["outcomes"] == {
+        "status": "Survived",
+        "icu_los_days": 2.0,
+    }
     signals = {row["key"]: row for row in payload["selected"]["signals"]}
     assert signals["hr"]["values"] == [90.0, 95.0]
     assert signals["hr"]["bounded"] is True
@@ -1492,11 +1735,20 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     assert modules["demographics"]["static_features"] == 2
     lanes = {row["lane"]: row for row in payload["time_lanes"]}
     assert lanes["vitals"]["status"] == "ready"
-    assert {row["feature"] for row in lanes["vitals"]["signals"]} == {"hr", "map", "spo2", "temp"}
+    assert {row["feature"] for row in lanes["vitals"]["signals"]} == {
+        "hr",
+        "map",
+        "spo2",
+        "temp",
+    }
     assert lanes["scores"]["signals"][0]["feature"] == "sofa2"
-    assert not any(row["feature"] == "age" for row in lanes.get("other", {}).get("signals", []))
+    assert not any(
+        row["feature"] == "age" for row in lanes.get("other", {}).get("signals", [])
+    )
     quality_metrics = payload["quality_metrics"]
-    assert quality_metrics["payload_scope"] == "aggregate_quality_metrics_no_row_payload"
+    assert (
+        quality_metrics["payload_scope"] == "aggregate_quality_metrics_no_row_payload"
+    )
     assert quality_metrics["summary"]["concept_count"] >= 8
     assert quality_metrics["summary"]["denominator_entities"] == 3
     quality_features = {row["feature"]: row for row in quality_metrics["features"]}
@@ -1505,19 +1757,36 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     assert quality_features["hr"]["out_of_physio_pct"] == 0.0
     assert payload["privacy"]["bounded_table_previews"] is True
     assert payload["privacy"]["max_table_preview_rows"] == 24
-    assert payload["data_tables"]["payload_scope"] == "old_data_tables_semantics_with_bounded_pseudonymous_table_previews"
-    assert payload["data_tables"]["detail_gate"]["title"] == "Bounded local table previews"
+    assert (
+        payload["data_tables"]["payload_scope"]
+        == "old_data_tables_semantics_with_bounded_pseudonymous_table_previews"
+    )
+    assert (
+        payload["data_tables"]["detail_gate"]["title"] == "Bounded local table previews"
+    )
     table_modules = {row["module"]: row for row in payload["data_tables"]["modules"]}
     assert table_modules["vitals"]["shape"] == "time_indexed"
     assert table_modules["vitals"]["preview_features"][0]["feature"] == "hr"
-    table_previews = {row["module"]: row for row in payload["data_tables"]["table_previews"]}
+    table_previews = {
+        row["module"]: row for row in payload["data_tables"]["table_previews"]
+    }
     assert table_previews["demographics"]["display_columns"] == ["entity", "age", "sex"]
     assert table_previews["demographics"]["rows"][0]["entity"].startswith("ent_")
     assert table_previews["demographics"]["rows"][0]["age"] == 50
-    assert table_previews["vitals"]["display_columns"] == ["entity", "charttime", "hr", "map", "spo2", "temp"]
+    assert table_previews["vitals"]["display_columns"] == [
+        "entity",
+        "charttime",
+        "hr",
+        "map",
+        "spo2",
+        "temp",
+    ]
     assert table_previews["vitals"]["rows"][0]["hr"] == 90
     assert table_previews["vitals"]["truncated_rows"] is False
-    assert payload["trajectory_review"]["payload_scope"] == "feature_matrix_semantics_bounded"
+    assert (
+        payload["trajectory_review"]["payload_scope"]
+        == "feature_matrix_semantics_bounded"
+    )
     assert {row["id"] for row in payload["trajectory_review"]["modes"]} == {
         "feature_matrix",
         "single_entity",
@@ -1525,13 +1794,37 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     }
     assert payload["trajectory_review"]["contract"][0]["label"] == "Entity scope"
     assert payload["trajectory_review"]["contract"][2]["label"] == "Feature matrices"
-    assert payload["patient_overview"]["payload_scope"] == "old_patient_overview_semantics_pseudonymous"
-    assert payload["patient_overview"]["navigator"]["actions"] == ["first", "previous", "next", "last", "random"]
-    assert payload["patient_overview"]["category_view"]["sections"][0]["title"] == "Vital Signs Snapshot"
-    assert payload["patient_overview"]["data_table"]["row_preview"] == "available_in_data_tables"
-    assert payload["quality_review"]["payload_scope"] == "old_quality_semantics_aggregate_only"
-    assert {row["id"] for row in payload["quality_review"]["panels"]} == {"missingness", "outliers", "temporal"}
-    assert any(item["id"] == "raw_identifier_table" for item in payload["blocked_features"])
+    assert (
+        payload["patient_overview"]["payload_scope"]
+        == "old_patient_overview_semantics_pseudonymous"
+    )
+    assert payload["patient_overview"]["navigator"]["actions"] == [
+        "first",
+        "previous",
+        "next",
+        "last",
+        "random",
+    ]
+    assert (
+        payload["patient_overview"]["category_view"]["sections"][0]["title"]
+        == "Vital Signs Snapshot"
+    )
+    assert (
+        payload["patient_overview"]["data_table"]["row_preview"]
+        == "available_in_data_tables"
+    )
+    assert (
+        payload["quality_review"]["payload_scope"]
+        == "old_quality_semantics_aggregate_only"
+    )
+    assert {row["id"] for row in payload["quality_review"]["panels"]} == {
+        "missingness",
+        "outliers",
+        "temporal",
+    }
+    assert any(
+        item["id"] == "raw_identifier_table" for item in payload["blocked_features"]
+    )
     serialized = json.dumps(payload)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
@@ -1544,8 +1837,12 @@ def test_patient_review_drilldown_uses_legacy_full_export_counts(
     monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
     monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
-    export_dir = _write_legacy_full_parquet_export(tmp_path / "miiv_full", database="miiv")
-    source_store.register_source(str(export_dir), label="Full fixture", active=True, crossdb=True)
+    export_dir = _write_legacy_full_parquet_export(
+        tmp_path / "miiv_full", database="miiv"
+    )
+    source_store.register_source(
+        str(export_dir), label="Full fixture", active=True, crossdb=True
+    )
     client = TestClient(app)
 
     response = client.post("/api/patient-review/drilldown", json={})
@@ -1573,7 +1870,9 @@ def test_patient_review_sources_lists_registered_exports_without_row_payload(
     monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
     monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
     export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
-    source_store.register_source(str(export_dir), label="Review fixture", active=True, crossdb=True)
+    source_store.register_source(
+        str(export_dir), label="Review fixture", active=True, crossdb=True
+    )
     client = TestClient(app)
 
     response = client.post("/api/patient-review/sources", json={})
@@ -1615,7 +1914,9 @@ def test_patient_review_drilldown_selects_pseudonymous_entity_ref(
     first = client.post("/api/patient-review/drilldown", json={})
     assert first.status_code == 200
     second_ref = first.json()["entities"][1]["ref"]
-    selected = client.post("/api/patient-review/drilldown", json={"entity_ref": second_ref})
+    selected = client.post(
+        "/api/patient-review/drilldown", json={"entity_ref": second_ref}
+    )
 
     assert selected.status_code == 200
     payload = selected.json()
@@ -1685,7 +1986,9 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     demographics["subject_id"] = [101, 102, 103]
     demographics["hadm_id"] = [201, 202, 203]
     demographics.to_csv(export_dir / "demographics.csv", index=False)
-    source_store.register_source(str(export_dir), label="Cohort fixture", active=True, crossdb=True)
+    source_store.register_source(
+        str(export_dir), label="Cohort fixture", active=True, crossdb=True
+    )
     client = TestClient(app)
 
     response = client.post("/api/cohort-review/summary", json={})
@@ -1704,10 +2007,40 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     assert summary["mortality"]["deceased_count"] == 1
     assert summary["mortality"]["survived_count"] == 2
     assert summary["mortality_pct"] == 33.3
-    assert summary["age"] == {"count": 3, "mean": 60.0, "median": 60.0, "min": 50.0, "max": 70.0}
+    assert summary["age"]["count"] == 3
+    assert summary["age"]["mean"] == 60.0
+    assert summary["age"]["median"] == 60.0
+    assert summary["age"]["min"] == 50.0
+    assert summary["age"]["max"] == 70.0
+    assert [b["label"] for b in summary["age"]["bins"]] == [
+        "<40",
+        "40-59",
+        "60-74",
+        ">=75",
+    ]
+    assert [b["count"] for b in summary["age"]["bins"]] == [0, 1, 2, 0]
+    assert "admission" in summary
+    assert "count" in summary["admission"]
+    assert isinstance(summary["admission"]["bins"], list)
     assert summary["sex"]["female_pct"] == 66.7
     assert summary["sofa2"]["median"] == 6.5
+    assert [b["label"] for b in summary["sofa2"]["bins"]] == [
+        "0-5",
+        "6-8",
+        "9-11",
+        ">=12",
+    ]
     assert summary["los_icu_days"]["median"] == 2.0
+    assert [b["label"] for b in summary["los_icu_days"]["bins"]] == [
+        "<2d",
+        "2-5d",
+        "5-10d",
+        ">=10d",
+    ]
+    assert (
+        sum(b["count"] for b in summary["los_icu_days"]["bins"])
+        == summary["los_icu_days"]["count"]
+    )
     assert summary["sepsis3"]["positive_count"] == 1
     assert summary["sepsis_pct"] == 33.3
     modules = {row["module"]: row for row in payload["coverage"]}
@@ -1717,8 +2050,16 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     assert payload["quality"]["watchlist_count"] == 2
     assert payload["groups"]["comparison_mode"] == "descriptive_only"
     assert payload["groups"]["inferential_statistics_allowed"] is False
-    assert {row["id"] for row in payload["groups"]["supported"]} >= {"survival", "age", "sex", "los", "sepsis"}
-    survival = next(row for row in payload["groups"]["supported"] if row["id"] == "survival")
+    assert {row["id"] for row in payload["groups"]["supported"]} >= {
+        "survival",
+        "age",
+        "sex",
+        "los",
+        "sepsis",
+    }
+    survival = next(
+        row for row in payload["groups"]["supported"] if row["id"] == "survival"
+    )
     assert survival["profile"]["status"] == "descriptive_aggregate_only"
     assert survival["profile"]["inferential_statistics_allowed"] is False
     assert survival["profile"]["columns"] == ["Survived", "Deceased", "Unknown"]
@@ -1737,23 +2078,38 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     assert survival_analysis["scope"] == "exploratory_unadjusted"
     assert survival_analysis["reportable"] is False
     assert survival_analysis["default_outcome"] == "hospital_death"
-    hospital = next(row for row in survival_analysis["outcomes"] if row["id"] == "hospital_death")
+    hospital = next(
+        row for row in survival_analysis["outcomes"] if row["id"] == "hospital_death"
+    )
     assert hospital["status"] == "ready"
     assert hospital["event_column"] == "death"
     assert hospital["time_column"] == "los_hosp"
     assert hospital["usable_entities"] == 3
     assert hospital["event_count"] == 1
-    assert next(row for row in survival_analysis["outcomes"] if row["id"] == "icu_death")["status"] == "blocked"
-    assert next(row for row in survival_analysis["outcomes"] if row["id"] == "mort_28d")["status"] == "blocked"
+    assert (
+        next(row for row in survival_analysis["outcomes"] if row["id"] == "icu_death")[
+            "status"
+        ]
+        == "blocked"
+    )
+    assert (
+        next(row for row in survival_analysis["outcomes"] if row["id"] == "mort_28d")[
+            "status"
+        ]
+        == "blocked"
+    )
     sepsis_curve = next(
-        row for row in survival_analysis["curves"]
+        row
+        for row in survival_analysis["curves"]
         if row["outcome_id"] == "hospital_death" and row["group_id"] == "sepsis"
     )
     assert sepsis_curve["logrank"]["status"] == "ready"
     assert sepsis_curve["logrank"]["test"] == "logrank"
     assert sepsis_curve["logrank"]["df"] == 1
     assert sepsis_curve["number_at_risk"]["times"] == [0.0, 1.0, 3.0, 6]
-    risk_rows = {row["label"]: row["values"] for row in sepsis_curve["number_at_risk"]["rows"]}
+    risk_rows = {
+        row["label"]: row["values"] for row in sepsis_curve["number_at_risk"]["rows"]
+    }
     assert risk_rows["Non-sepsis"] == [2, 2, 2, 1]
     assert risk_rows["Sepsis"] == [1, 1, 1, 0]
     assert all("stay_id" not in json.dumps(row) for row in survival_analysis["curves"])
@@ -1773,12 +2129,21 @@ def test_cohort_review_feature_catalog_and_selected_feature_profiles(
     monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
     cohort_review._SUMMARY_CACHE.clear()
     export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
-    source_store.register_source(str(export_dir), label="Feature catalog fixture", active=True, crossdb=True)
+    source_store.register_source(
+        str(export_dir), label="Feature catalog fixture", active=True, crossdb=True
+    )
     client = TestClient(app)
 
     response = client.post(
         "/api/cohort-review/summary",
-        json={"selected_features": ["vitals:hr", "vitals:map", "outcome:los_hosp", "missing:nope"]},
+        json={
+            "selected_features": [
+                "vitals:hr",
+                "vitals:map",
+                "outcome:los_hosp",
+                "missing:nope",
+            ]
+        },
     )
 
     assert response.status_code == 200
@@ -1788,13 +2153,21 @@ def test_cohort_review_feature_catalog_and_selected_feature_profiles(
     assert catalog["total_features"] >= 11
     modules = {row["module"]: row for row in catalog["modules"]}
     vitals_features = {row["id"]: row for row in modules["vitals"]["features"]}
-    assert {"vitals:hr", "vitals:map", "vitals:spo2", "vitals:temp"}.issubset(vitals_features)
+    assert {"vitals:hr", "vitals:map", "vitals:spo2", "vitals:temp"}.issubset(
+        vitals_features
+    )
     assert vitals_features["vitals:hr"]["selected"] is True
     assert payload["feature_selection"]["selected_count"] == 3
     assert payload["feature_selection"]["ignored"] == ["missing:nope"]
 
-    survival = next(row for row in payload["groups"]["supported"] if row["id"] == "survival")
-    feature_rows = {row["feature_id"]: row for row in survival["profile"]["rows"] if row.get("feature_id")}
+    survival = next(
+        row for row in payload["groups"]["supported"] if row["id"] == "survival"
+    )
+    feature_rows = {
+        row["feature_id"]: row
+        for row in survival["profile"]["rows"]
+        if row.get("feature_id")
+    }
     assert set(feature_rows) == {"vitals:hr", "vitals:map", "outcome:los_hosp"}
     assert feature_rows["vitals:hr"]["kind"] == "numeric"
     assert feature_rows["vitals:hr"]["values"] == [92.5, 80.0, None]
@@ -1813,7 +2186,9 @@ def test_cohort_review_sofa_reclassification_uses_paired_aggregate_without_row_p
     monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
     export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
     _add_sofa1_module(export_dir)
-    source_store.register_source(str(export_dir), label="Cohort fixture", active=True, crossdb=True)
+    source_store.register_source(
+        str(export_dir), label="Cohort fixture", active=True, crossdb=True
+    )
     client = TestClient(app)
 
     response = client.post("/api/cohort-review/summary", json={})
@@ -1843,7 +2218,9 @@ def test_cohort_review_sofa_reclassification_uses_paired_aggregate_without_row_p
         "first24h": "blocked",
         "time_aligned": "blocked",
     }
-    assert "paired_sofa_reclassification" not in {row["id"] for row in payload["blocked_features"]}
+    assert "paired_sofa_reclassification" not in {
+        row["id"] for row in payload["blocked_features"]
+    }
     serialized = json.dumps(payload)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
@@ -1966,7 +2343,10 @@ def test_cohort_review_large_coverage_uses_metadata_without_stay_id_scan(
     assert modules["demographics"]["coverage_basis"] == "metadata_row_count_only"
     assert modules["demographics"]["coverage_pct"] is None
     assert modules["demographics"]["covered_entities"] is None
-    assert modules["demographics"]["skipped_reason"] == "unique_stay_scan_skipped_large_module"
+    assert (
+        modules["demographics"]["skipped_reason"]
+        == "unique_stay_scan_skipped_large_module"
+    )
     assert payload["quality"]["modules_unknown"] >= 5
 
 
@@ -1981,34 +2361,52 @@ def test_cohort_review_large_parquet_export_reuses_active_source_for_km_and_cove
     export_dir.mkdir()
     n = 25_000
     stay_ids = list(range(1, n + 1))
-    pd.DataFrame({
-        "stay_id": stay_ids,
-        "age": [50 + (i % 30) for i in stay_ids],
-        "sex": ["F" if i % 2 else "M" for i in stay_ids],
-    }).to_parquet(export_dir / "demographics.parquet", index=False)
-    pd.DataFrame({
-        "stay_id": stay_ids,
-        "death": [i % 10 == 0 for i in stay_ids],
-        "los_hosp": [float((i % 28) + 1) for i in stay_ids],
-        "los_icu": [float((i % 14) + 1) for i in stay_ids],
-    }).to_parquet(export_dir / "outcome.parquet", index=False)
-    pd.DataFrame({
-        "stay_id": stay_ids,
-        "sep3_sofa2": [i % 3 == 0 for i in stay_ids],
-    }).to_parquet(export_dir / "sepsis3_sofa2.parquet", index=False)
+    pd.DataFrame(
+        {
+            "stay_id": stay_ids,
+            "age": [50 + (i % 30) for i in stay_ids],
+            "sex": ["F" if i % 2 else "M" for i in stay_ids],
+        }
+    ).to_parquet(export_dir / "demographics.parquet", index=False)
+    pd.DataFrame(
+        {
+            "stay_id": stay_ids,
+            "death": [i % 10 == 0 for i in stay_ids],
+            "los_hosp": [float((i % 28) + 1) for i in stay_ids],
+            "los_icu": [float((i % 14) + 1) for i in stay_ids],
+        }
+    ).to_parquet(export_dir / "outcome.parquet", index=False)
+    pd.DataFrame(
+        {
+            "stay_id": stay_ids,
+            "sep3_sofa2": [i % 3 == 0 for i in stay_ids],
+        }
+    ).to_parquet(export_dir / "sepsis3_sofa2.parquet", index=False)
     (export_dir / "_manifest.json").write_text(
-        json.dumps({
-            "database": "miiv",
-            "generated": "2026-06-26T12:00:00",
-            "files": [
-                {"file": "demographics.parquet", "module": "demographics", "rows": 1_000_001},
-                {"file": "outcome.parquet", "module": "outcome", "rows": 1_000_001},
-                {"file": "sepsis3_sofa2.parquet", "module": "sepsis3_sofa2", "rows": 1_000_001},
-            ],
-        }),
+        json.dumps(
+            {
+                "database": "miiv",
+                "generated": "2026-06-26T12:00:00",
+                "files": [
+                    {
+                        "file": "demographics.parquet",
+                        "module": "demographics",
+                        "rows": 1_000_001,
+                    },
+                    {"file": "outcome.parquet", "module": "outcome", "rows": 1_000_001},
+                    {
+                        "file": "sepsis3_sofa2.parquet",
+                        "module": "sepsis3_sofa2",
+                        "rows": 1_000_001,
+                    },
+                ],
+            }
+        ),
         encoding="utf-8",
     )
-    source_store.register_source(str(export_dir), label="Large parquet", active=True, crossdb=True)
+    source_store.register_source(
+        str(export_dir), label="Large parquet", active=True, crossdb=True
+    )
     client = TestClient(app)
 
     response = client.post("/api/cohort-review/summary", json={})
@@ -2037,7 +2435,9 @@ def test_cohort_review_summary_reuses_cached_payload_for_same_export(
     monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
     cohort_review._SUMMARY_CACHE.clear()
     export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
-    source_store.register_source(str(export_dir), label="Cached cohort", active=True, crossdb=True)
+    source_store.register_source(
+        str(export_dir), label="Cached cohort", active=True, crossdb=True
+    )
     client = TestClient(app)
 
     first = client.post("/api/cohort-review/summary", json={})
@@ -2092,7 +2492,9 @@ def test_cohort_review_skips_large_time_indexed_sofa_for_interactive_summary(
     assert modules["sofa2_score"]["coverage_pct"] is None
 
 
-def test_data_scan_recognizes_native_manifest_export_as_module_source(tmp_path: Path) -> None:
+def test_data_scan_recognizes_native_manifest_export_as_module_source(
+    tmp_path: Path,
+) -> None:
     export_dir = _write_csv_export(tmp_path / "export")
 
     result = dataio.scan_path(str(export_dir), source_hint="module")
@@ -2196,7 +2598,10 @@ def test_extraction_advanced_filters_fixture_e2e_register_options_and_preview(
     payload = preview.json()
     assert payload["source"]["id"] == options.json()["source"]["id"]
     assert payload["match_count"] == 2
-    assert {row["module"] for row in payload["matched_modules"]} == {"sofa2_score", "vitals"}
+    assert {row["module"] for row in payload["matched_modules"]} == {
+        "sofa2_score",
+        "vitals",
+    }
     assert payload["aggregate"]["cohort_size"] == 3
     serialized = json.dumps(payload)
     for marker in ["stay_id", "subject_id", "hadm_id", "tableRows", '"series"']:
@@ -2322,7 +2727,9 @@ class _ExportJob:
         self.events.append(payload)
 
 
-def _patch_export_api(monkeypatch: pytest.MonkeyPatch, loaded: list[dict[str, object]]) -> None:
+def _patch_export_api(
+    monkeypatch: pytest.MonkeyPatch, loaded: list[dict[str, object]]
+) -> None:
     from contextlib import contextmanager
     import easyicu.api as api_module
 
@@ -2346,7 +2753,9 @@ def test_export_runner_applies_native_cohort_contract_to_patient_ids(
     import easyicu.patient_filter as patient_filter_module
 
     class FakePatientFilter:
-        def __init__(self, database: str, data_path: str, verbose: bool = False) -> None:
+        def __init__(
+            self, database: str, data_path: str, verbose: bool = False
+        ) -> None:
             self.database = database
             self.data_path = data_path
             self.verbose = verbose
@@ -2381,7 +2790,9 @@ def test_export_runner_applies_native_cohort_contract_to_patient_ids(
     )
 
     result = runner(_ExportJob())
-    manifest = json.loads((tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8")
+    )
 
     assert result["file_count"] == 1
     assert loaded[0]["kwargs"]["patient_ids"] == {"stay_id": [2]}
@@ -2408,7 +2819,9 @@ def test_export_runner_applies_icd_include_exclude_before_loading_concepts(
     ).to_csv(tmp_path / "diagnoses_icd.csv", index=False)
 
     class FakePatientFilter:
-        def __init__(self, database: str, data_path: str, verbose: bool = False) -> None:
+        def __init__(
+            self, database: str, data_path: str, verbose: bool = False
+        ) -> None:
             pass
 
         def filter(self, **kwargs):
@@ -2433,7 +2846,9 @@ def test_export_runner_applies_icd_include_exclude_before_loading_concepts(
     )
 
     runner(_ExportJob())
-    manifest = json.loads((tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8")
+    )
 
     assert loaded[0]["kwargs"]["patient_ids"] == {"stay_id": [1]}
     assert manifest["cohort_report"]["icd"]["include_matches"] == 2
@@ -2448,7 +2863,9 @@ def test_export_runner_keeps_legacy_all_icu_default_without_cohort_contract(
 
     loaded: list[dict[str, object]] = []
     _patch_export_api(monkeypatch, loaded)
-    monkeypatch.setattr(api_module, "get_all_patient_ids", lambda *_, **__: ([3, 4], "stay_id"))
+    monkeypatch.setattr(
+        api_module, "get_all_patient_ids", lambda *_, **__: ([3, 4], "stay_id")
+    )
 
     runner = dataio.make_export_runner(
         data_path=str(tmp_path),
@@ -2463,7 +2880,9 @@ def test_export_runner_keeps_legacy_all_icu_default_without_cohort_contract(
 
     assert loaded[0]["kwargs"]["patient_ids"] == {"stay_id": [3, 4]}
     assert loaded[0]["kwargs"]["win_length"] == "720h"
-    manifest = json.loads((tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8")
+    )
     assert manifest["cohort_contract"]["preset"] == "all_icu"
     assert manifest["cohort_contract"]["observation_window_hours"] == 720
 
@@ -2476,7 +2895,9 @@ def test_export_runner_honors_module_specific_concept_selection(
 
     loaded: list[dict[str, object]] = []
     _patch_export_api(monkeypatch, loaded)
-    monkeypatch.setattr(api_module, "get_all_patient_ids", lambda *_, **__: ([1, 2], "stay_id"))
+    monkeypatch.setattr(
+        api_module, "get_all_patient_ids", lambda *_, **__: ([1, 2], "stay_id")
+    )
 
     runner = dataio.make_export_runner(
         data_path=str(tmp_path),
@@ -2489,7 +2910,9 @@ def test_export_runner_honors_module_specific_concept_selection(
     )
 
     result = runner(_ExportJob())
-    manifest = json.loads((tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8")
+    )
     readme = (tmp_path / "out" / "README.md").read_text(encoding="utf-8")
 
     assert result["file_count"] == 2
@@ -2533,7 +2956,9 @@ def test_export_runner_can_create_timestamped_run_folder_with_readme(
     root = tmp_path / "exports"
     loaded: list[dict[str, object]] = []
     _patch_export_api(monkeypatch, loaded)
-    monkeypatch.setattr(api_module, "get_all_patient_ids", lambda *_, **__: ([7, 8], "stay_id"))
+    monkeypatch.setattr(
+        api_module, "get_all_patient_ids", lambda *_, **__: ([7, 8], "stay_id")
+    )
 
     runner = dataio.make_export_runner(
         data_path=str(tmp_path / "source"),
@@ -2572,7 +2997,9 @@ def test_export_runner_ignores_stale_icd_tokens_when_preset_is_not_icd(
     import easyicu.patient_filter as patient_filter_module
 
     class FakePatientFilter:
-        def __init__(self, database: str, data_path: str, verbose: bool = False) -> None:
+        def __init__(
+            self, database: str, data_path: str, verbose: bool = False
+        ) -> None:
             pass
 
         def filter(self, **kwargs):
@@ -2597,7 +3024,9 @@ def test_export_runner_ignores_stale_icd_tokens_when_preset_is_not_icd(
     )
 
     runner(_ExportJob())
-    manifest = json.loads((tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8")
+    )
 
     assert loaded[0]["kwargs"]["patient_ids"] == {"stay_id": [1, 2]}
     assert loaded[0]["kwargs"]["win_length"] == "720h"
@@ -2613,7 +3042,11 @@ def test_export_runner_ignores_stale_icd_tokens_when_preset_is_not_icd(
         ("aki", ["aki"], "aki"),
         ("ventilation", ["mech_vent", "vent_ind"], "mech_vent"),
         ("vasopressor", ["vaso_ind"], "vaso_ind"),
-        ("respiratory", ["adv_resp", "mech_vent", "vent_ind", "pafi", "safi"], "adv_resp"),
+        (
+            "respiratory",
+            ["adv_resp", "mech_vent", "vent_ind", "pafi", "safi"],
+            "adv_resp",
+        ),
     ],
 )
 def test_export_runner_applies_concept_derived_cohort_prefilter(
@@ -2628,7 +3061,9 @@ def test_export_runner_applies_concept_derived_cohort_prefilter(
     import easyicu.patient_filter as patient_filter_module
 
     class FakePatientFilter:
-        def __init__(self, database: str, data_path: str, verbose: bool = False) -> None:
+        def __init__(
+            self, database: str, data_path: str, verbose: bool = False
+        ) -> None:
             pass
 
         def filter(self, **kwargs):
@@ -2663,21 +3098,32 @@ def test_export_runner_applies_concept_derived_cohort_prefilter(
 
     job = _ExportJob()
     runner(job)
-    manifest = json.loads((tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (tmp_path / "out" / "_manifest.json").read_text(encoding="utf-8")
+    )
 
     assert loaded[0]["concepts"] == concepts
     assert loaded[0]["kwargs"]["patient_ids"] == {"stay_id": [1, 2, 3]}
     assert loaded[0]["kwargs"]["win_length"] == "72h"
     assert loaded[1]["kwargs"]["patient_ids"] == {"stay_id": [2, 3]}
-    assert manifest["cohort_report"]["applied_filters"] == ["demographics", "concept_prefilter"]
+    assert manifest["cohort_report"]["applied_filters"] == [
+        "demographics",
+        "concept_prefilter",
+    ]
     assert manifest["cohort_report"]["concept_matches"] == 2
-    stages = [event.get("stage") for event in job.events if event.get("phase") == "cohort"]
+    stages = [
+        event.get("stage") for event in job.events if event.get("phase") == "cohort"
+    ]
     assert "concept_prefilter" in stages
     assert "cohort_selected" in stages
-    assert all("patient_ids" not in event and "stay_id" not in event for event in job.events)
+    assert all(
+        "patient_ids" not in event and "stay_id" not in event for event in job.events
+    )
 
 
-def test_export_runner_fails_closed_for_unsupported_native_cohort_preset(tmp_path: Path) -> None:
+def test_export_runner_fails_closed_for_unsupported_native_cohort_preset(
+    tmp_path: Path,
+) -> None:
     runner = dataio.make_export_runner(
         data_path=str(tmp_path),
         database="miiv",
@@ -2692,7 +3138,9 @@ def test_export_runner_fails_closed_for_unsupported_native_cohort_preset(tmp_pat
     assert exc.value.detail["error"] == "unsupported_cohort_preset"
 
 
-def test_crossdb_summary_requires_two_valid_exports_and_compares_metrics(tmp_path: Path) -> None:
+def test_crossdb_summary_requires_two_valid_exports_and_compares_metrics(
+    tmp_path: Path,
+) -> None:
     miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
     eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
 
@@ -2701,7 +3149,13 @@ def test_crossdb_summary_requires_two_valid_exports_and_compares_metrics(tmp_pat
     assert result["ok"] is True
     assert result["source_count"] == 2
     assert [source["label"] for source in result["sources"]] == ["MIIV", "EICU"]
-    assert result["shared_modules"] == ["demographics", "outcome", "sepsis3_sofa2", "sofa2_score", "vitals"]
+    assert result["shared_modules"] == [
+        "demographics",
+        "outcome",
+        "sepsis3_sofa2",
+        "sofa2_score",
+        "vitals",
+    ]
     assert result["compatibility_gate"]["status"] == "compatible"
     assert result["compatibility_gate"]["comparison_mode"] == "descriptive_only"
     assert result["compatibility_gate"]["matched_cohort"] is False
@@ -2718,7 +3172,9 @@ def test_crossdb_summary_requires_two_valid_exports_and_compares_metrics(tmp_pat
     assert "p_value" not in json.dumps(result).lower()
 
 
-def test_crossdb_summary_fails_closed_when_core_modules_are_not_comparable(tmp_path: Path) -> None:
+def test_crossdb_summary_fails_closed_when_core_modules_are_not_comparable(
+    tmp_path: Path,
+) -> None:
     miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
     eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
     _drop_export_module(eicu, "outcome")
@@ -2732,12 +3188,16 @@ def test_crossdb_summary_fails_closed_when_core_modules_are_not_comparable(tmp_p
     assert gate["comparison_mode"] == "descriptive_only"
     assert gate["matched_cohort_ready"] is False
     assert gate["inferential_statistics_allowed"] is False
-    core_check = next(check for check in gate["checks"] if check["id"] == "core_modules_shared")
+    core_check = next(
+        check for check in gate["checks"] if check["id"] == "core_modules_shared"
+    )
     assert core_check["passed"] is False
     assert core_check["missing_modules"] == ["outcome"]
 
 
-def test_crossdb_summary_endpoint_is_fail_closed_until_two_exports(tmp_path: Path) -> None:
+def test_crossdb_summary_endpoint_is_fail_closed_until_two_exports(
+    tmp_path: Path,
+) -> None:
     miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
     eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
     no_outcome = _write_csv_export(tmp_path / "no_outcome", database="aumc")
@@ -2745,9 +3205,16 @@ def test_crossdb_summary_endpoint_is_fail_closed_until_two_exports(tmp_path: Pat
     client = TestClient(app)
 
     one = client.post("/api/workspaces/crossdb-summary", json={"paths": [str(miiv)]})
-    two = client.post("/api/workspaces/crossdb-summary", json={"paths": [str(miiv), str(eicu)]})
-    invalid = client.post("/api/workspaces/crossdb-summary", json={"paths": [str(miiv), str(tmp_path / "missing")]})
-    incompatible = client.post("/api/workspaces/crossdb-summary", json={"paths": [str(miiv), str(no_outcome)]})
+    two = client.post(
+        "/api/workspaces/crossdb-summary", json={"paths": [str(miiv), str(eicu)]}
+    )
+    invalid = client.post(
+        "/api/workspaces/crossdb-summary",
+        json={"paths": [str(miiv), str(tmp_path / "missing")]},
+    )
+    incompatible = client.post(
+        "/api/workspaces/crossdb-summary", json={"paths": [str(miiv), str(no_outcome)]}
+    )
 
     assert one.status_code == 400
     assert one.json()["detail"]["error"] == "need_two_exports"
@@ -2757,7 +3224,9 @@ def test_crossdb_summary_endpoint_is_fail_closed_until_two_exports(tmp_path: Pat
     assert invalid.json()["detail"]["error"] == "invalid_export"
     assert incompatible.status_code == 400
     assert incompatible.json()["detail"]["error"] == "crossdb_incompatible"
-    assert incompatible.json()["detail"]["compatibility_gate"]["status"] == "incompatible"
+    assert (
+        incompatible.json()["detail"]["compatibility_gate"]["status"] == "incompatible"
+    )
 
 
 def test_crossdb_review_summary_uses_registered_sources_without_row_payload(
@@ -2774,8 +3243,12 @@ def test_crossdb_review_summary_uses_registered_sources_without_row_payload(
         demographics["subject_id"] = [101, 102, 103]
         demographics["hadm_id"] = [201, 202, 203]
         demographics.to_csv(export_dir / "demographics.csv", index=False)
-    source_store.register_source(str(miiv), label="Primary MIIV", active=True, crossdb=True)
-    source_store.register_source(str(eicu), label="Comparator eICU", active=False, crossdb=True)
+    source_store.register_source(
+        str(miiv), label="Primary MIIV", active=True, crossdb=True
+    )
+    source_store.register_source(
+        str(eicu), label="Comparator eICU", active=False, crossdb=True
+    )
     client = TestClient(app)
 
     response = client.post("/api/crossdb-review/summary", json={})
@@ -2786,10 +3259,19 @@ def test_crossdb_review_summary_uses_registered_sources_without_row_payload(
     assert payload["mode"] == "real"
     assert payload["demo"] is False
     assert payload["source_count"] == 2
-    assert [source["label"] for source in payload["sources"]] == ["Primary MIIV", "Comparator eICU"]
+    assert [source["label"] for source in payload["sources"]] == [
+        "Primary MIIV",
+        "Comparator eICU",
+    ]
     assert all("path" not in source for source in payload["sources"])
     assert all(len(source["path_hash"]) == 12 for source in payload["sources"])
-    assert payload["shared_modules"] == ["demographics", "outcome", "sepsis3_sofa2", "sofa2_score", "vitals"]
+    assert payload["shared_modules"] == [
+        "demographics",
+        "outcome",
+        "sepsis3_sofa2",
+        "sofa2_score",
+        "vitals",
+    ]
     gate = payload["compatibility_gate"]
     assert gate["status"] == "compatible"
     assert gate["comparison_mode"] == "descriptive_only"
@@ -2804,21 +3286,34 @@ def test_crossdb_review_summary_uses_registered_sources_without_row_payload(
     assert availability["demographics"]["values"][0]["coverage_pct"] == 100.0
     density = {row["module"]: row for row in payload["feature_density"]}
     assert density["demographics"]["feature_count"] == 2
-    assert [row["feature"] for row in density["demographics"]["features"]] == ["age", "sex"]
+    assert [row["feature"] for row in density["demographics"]["features"]] == [
+        "age",
+        "sex",
+    ]
     vitals_features = {row["feature"]: row for row in density["vitals"]["features"]}
     assert {"hr", "map", "spo2", "temp"} <= set(vitals_features)
     assert vitals_features["hr"]["values"][0]["density_per_100_entities"] == 100.0
     assert vitals_features["hr"]["values"][0]["coverage_pct"] == 66.7
     distributions = {row["module"]: row for row in payload["feature_distributions"]}
     assert distributions["demographics"]["feature_count"] == 2
-    age_dist = next(row for row in distributions["demographics"]["features"] if row["feature"] == "age")
+    age_dist = next(
+        row
+        for row in distributions["demographics"]["features"]
+        if row["feature"] == "age"
+    )
     assert age_dist["values"][0]["kind"] == "numeric"
     assert age_dist["values"][0]["non_null"] == 3
     assert len(age_dist["values"][0]["points"]) >= 3
-    sex_dist = next(row for row in distributions["demographics"]["features"] if row["feature"] == "sex")
+    sex_dist = next(
+        row
+        for row in distributions["demographics"]["features"]
+        if row["feature"] == "sex"
+    )
     assert sex_dist["values"][0]["kind"] == "categorical"
     assert sex_dist["values"][0]["categories"]
-    hr_dist = next(row for row in distributions["vitals"]["features"] if row["feature"] == "hr")
+    hr_dist = next(
+        row for row in distributions["vitals"]["features"] if row["feature"] == "hr"
+    )
     assert hr_dist["values"][0]["kind"] == "numeric"
     assert len(hr_dist["values"][0]["points"]) >= 3
     assert payload["provenance"]["payload_scope"] == "cross_database_aggregate_only"
@@ -2903,7 +3398,9 @@ def test_crossdb_raw_distribution_uses_real_loader_without_row_payload(
         assert marker not in serialized
 
 
-def test_crossdb_raw_root_scan_reports_detected_missing_and_unrecognized(tmp_path: Path) -> None:
+def test_crossdb_raw_root_scan_reports_detected_missing_and_unrecognized(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "databases"
     (root / "mimiciv").mkdir(parents=True)
     (root / "eicu").mkdir()
@@ -2931,7 +3428,9 @@ def test_crossdb_raw_root_scan_reports_detected_missing_and_unrecognized(tmp_pat
     assert payload["privacy"]["raw_rows_returned"] is False
 
 
-def test_crossdb_raw_root_scan_blocks_until_two_selected_databases(tmp_path: Path) -> None:
+def test_crossdb_raw_root_scan_blocks_until_two_selected_databases(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "databases"
     (root / "mimiciv").mkdir(parents=True)
     client = TestClient(app)
@@ -2972,8 +3471,12 @@ def test_crossdb_raw_distribution_job_streams_progress_and_result(
         assert max_patients == 40
         assert sample_size == 100
         return {
-            "miiv": pd.DataFrame({"concept": ["hr", "hr", "sbp", "sbp"], "value": [70, 90, 110, 130]}),
-            "eicu": pd.DataFrame({"concept": ["hr", "hr", "sbp", "sbp"], "value": [80, 100, 120, 140]}),
+            "miiv": pd.DataFrame(
+                {"concept": ["hr", "hr", "sbp", "sbp"], "value": [70, 90, 110, 130]}
+            ),
+            "eicu": pd.DataFrame(
+                {"concept": ["hr", "hr", "sbp", "sbp"], "value": [80, 100, 120, 140]}
+            ),
         }
 
     monkeypatch.setattr(crossdb_review, "_load_raw_feature_data", fake_loader)
@@ -3007,7 +3510,11 @@ def test_crossdb_raw_distribution_job_streams_progress_and_result(
     assert result["ok"] is True
     assert result["source_type"] == "raw_database_root"
     assert result["source_count"] == 2
-    phases = [event.get("phase") for event in snap["events"] if event.get("type") == "progress"]
+    phases = [
+        event.get("phase")
+        for event in snap["events"]
+        if event.get("type") == "progress"
+    ]
     assert {"resolving", "loading", "finalizing"}.issubset(set(phases))
     serialized = json.dumps(result)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
@@ -3063,7 +3570,9 @@ def test_crossdb_raw_distribution_job_can_be_cancelled(
     assert any(event.get("type") == "cancel_requested" for event in snap["events"])
 
 
-def test_crossdb_demo_distribution_uses_legacy_simulated_frames_without_row_payload() -> None:
+def test_crossdb_demo_distribution_uses_legacy_simulated_frames_without_row_payload() -> (
+    None
+):
     client = TestClient(app)
 
     response = client.post(
@@ -3112,7 +3621,9 @@ def test_crossdb_demo_all_catalog_scope_resolves_every_module_and_feature() -> N
         for module, module_features in concept_catalog.CONCEPT_GROUPS_INTERNAL.items()
         for feature in module_features
     }
-    assert {module_map[feature] for feature in features} == set(concept_catalog.CONCEPT_GROUPS_INTERNAL)
+    assert {module_map[feature] for feature in features} == set(
+        concept_catalog.CONCEPT_GROUPS_INTERNAL
+    )
 
     frames = crossdb_review._generate_demo_multidb_feature_frames(
         databases=["miiv", "eicu"],
@@ -3134,7 +3645,11 @@ def test_crossdb_raw_distribution_fails_closed_until_two_raw_databases(
 
     response = client.post(
         "/api/crossdb-review/raw-distribution",
-        json={"data_root": str(root), "databases": ["miiv", "eicu"], "features": ["hr"]},
+        json={
+            "data_root": str(root),
+            "databases": ["miiv", "eicu"],
+            "features": ["hr"],
+        },
     )
 
     assert response.status_code == 400
@@ -3190,7 +3705,11 @@ def test_crossdb_review_summary_rejects_incompatible_missing_core_modules(
     detail = response.json()["detail"]
     assert detail["error"] == "crossdb_incompatible"
     assert detail["compatibility_gate"]["status"] == "incompatible"
-    core_check = next(check for check in detail["compatibility_gate"]["checks"] if check["id"] == "core_modules_shared")
+    core_check = next(
+        check
+        for check in detail["compatibility_gate"]["checks"]
+        if check["id"] == "core_modules_shared"
+    )
     assert core_check["missing_modules"] == ["outcome"]
     serialized = json.dumps(detail)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
@@ -3268,7 +3787,9 @@ def test_crossdb_review_summary_does_not_read_full_export_tables(
     assert response.json()["source_count"] == 2
 
 
-def test_export_source_registry_describes_and_persists_sources(tmp_path: Path, monkeypatch) -> None:
+def test_export_source_registry_describes_and_persists_sources(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
     monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
@@ -3277,10 +3798,20 @@ def test_export_source_registry_describes_and_persists_sources(tmp_path: Path, m
 
     desc = describe_export_source(str(miiv))
     assert desc["ok"] is True
-    assert desc["summary"] == {"stays": 3, "modules": 5, "file_count": 5, "total_rows": 14}
+    assert desc["summary"] == {
+        "stays": 3,
+        "modules": 5,
+        "file_count": 5,
+        "total_rows": 14,
+    }
 
     registered = source_store.register_source(str(miiv), active=True, crossdb=True)
-    saved = source_store.save_registry({"sources": [{"path": str(eicu), "label": "External eICU"}], "crossdb_paths": [str(miiv), str(eicu)]})
+    saved = source_store.save_registry(
+        {
+            "sources": [{"path": str(eicu), "label": "External eICU"}],
+            "crossdb_paths": [str(miiv), str(eicu)],
+        }
+    )
 
     assert registered["ok"] is True
     assert saved["active_path"] == str(miiv)
@@ -3288,7 +3819,9 @@ def test_export_source_registry_describes_and_persists_sources(tmp_path: Path, m
     assert [s["label"] for s in saved["sources"]] == ["External eICU", "MIIV"]
 
 
-def test_export_source_registry_endpoint_registers_and_rejects_invalid_paths(tmp_path: Path, monkeypatch) -> None:
+def test_export_source_registry_endpoint_registers_and_rejects_invalid_paths(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
     monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
@@ -3296,7 +3829,9 @@ def test_export_source_registry_endpoint_registers_and_rejects_invalid_paths(tmp
     client = TestClient(app)
 
     ok = client.post("/api/workspaces/register", json={"path": str(miiv)})
-    bad = client.post("/api/workspaces/register", json={"path": str(tmp_path / "missing")})
+    bad = client.post(
+        "/api/workspaces/register", json={"path": str(tmp_path / "missing")}
+    )
     reg = client.get("/api/workspaces/registry")
 
     assert ok.status_code == 200
@@ -3327,7 +3862,9 @@ def test_export_source_registry_autodiscovery_skips_unreadable_children(
             raise PermissionError("cannot inspect this folder")
         return {"ok": False}
 
-    monkeypatch.setattr(source_store.dataio, "describe_export_source", describe_or_raise)
+    monkeypatch.setattr(
+        source_store.dataio, "describe_export_source", describe_or_raise
+    )
 
     result = source_store.load_registry()
 
@@ -3336,12 +3873,16 @@ def test_export_source_registry_autodiscovery_skips_unreadable_children(
     assert result["active_path"] is None
 
 
-def test_export_source_registry_rename_and_remove_are_metadata_only(tmp_path: Path, monkeypatch) -> None:
+def test_export_source_registry_rename_and_remove_are_metadata_only(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
     miiv = _write_csv_export(tmp_path / "miiv", database="miiv")
     eicu = _write_csv_export(tmp_path / "eicu", database="eicu")
-    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [str(miiv), str(eicu)])
+    monkeypatch.setattr(
+        source_store, "_autodiscovered_paths", lambda: [str(miiv), str(eicu)]
+    )
 
     renamed = source_store.rename_source(str(miiv), "Primary MIIV")
     removed = source_store.remove_source(str(miiv))
@@ -3350,7 +3891,10 @@ def test_export_source_registry_rename_and_remove_are_metadata_only(tmp_path: Pa
     assert renamed["ok"] is True
     assert renamed["action"] == "renamed_source_metadata"
     assert renamed["disk_touched"] is False
-    assert any(s["path"] == str(miiv) and s["label"] == "Primary MIIV" for s in renamed["sources"])
+    assert any(
+        s["path"] == str(miiv) and s["label"] == "Primary MIIV"
+        for s in renamed["sources"]
+    )
     assert removed["ok"] is True
     assert removed["action"] == "unregistered_source_only"
     assert removed["disk_deleted"] is False
@@ -3360,10 +3904,15 @@ def test_export_source_registry_rename_and_remove_are_metadata_only(tmp_path: Pa
     assert all(s["path"] != str(miiv) for s in reloaded["sources"])
     assert reloaded["active_path"] == str(eicu)
 
-    restored = source_store.register_source(str(miiv), label="Restored MIIV", active=True, crossdb=True)
+    restored = source_store.register_source(
+        str(miiv), label="Restored MIIV", active=True, crossdb=True
+    )
 
     assert restored["active_path"] == str(miiv)
-    assert any(s["path"] == str(miiv) and s["label"] == "Restored MIIV" for s in restored["sources"])
+    assert any(
+        s["path"] == str(miiv) and s["label"] == "Restored MIIV"
+        for s in restored["sources"]
+    )
 
 
 def test_export_source_registry_endpoint_renames_and_removes_without_deleting_files(
@@ -3379,12 +3928,19 @@ def test_export_source_registry_endpoint_renames_and_removes_without_deleting_fi
 
     client.post("/api/workspaces/register", json={"path": str(miiv)})
     client.post("/api/workspaces/register", json={"path": str(eicu)})
-    rename = client.post("/api/workspaces/rename", json={"path": str(miiv), "label": "Primary source"})
+    rename = client.post(
+        "/api/workspaces/rename", json={"path": str(miiv), "label": "Primary source"}
+    )
     remove = client.post("/api/workspaces/remove", json={"path": str(miiv)})
-    missing = client.post("/api/workspaces/remove", json={"path": str(tmp_path / "missing")})
+    missing = client.post(
+        "/api/workspaces/remove", json={"path": str(tmp_path / "missing")}
+    )
 
     assert rename.status_code == 200
-    assert any(s["path"] == str(miiv) and s["label"] == "Primary source" for s in rename.json()["sources"])
+    assert any(
+        s["path"] == str(miiv) and s["label"] == "Primary source"
+        for s in rename.json()["sources"]
+    )
     assert remove.status_code == 200
     assert remove.json()["disk_deleted"] is False
     assert miiv.exists()
@@ -3421,7 +3977,9 @@ def test_agent_run_job_uses_active_registry_and_writes_bounded_artifacts(
     job_id = start.json()["job_id"]
     snapshot = _wait_for_job(client, job_id)
     assert snapshot["status"] == "done"
-    assert [event["type"] for event in snapshot["events"] if event["type"] != "end"] == [
+    assert [
+        event["type"] for event in snapshot["events"] if event["type"] != "end"
+    ] == [
         "start",
         "progress",
         "progress",
@@ -3439,7 +3997,9 @@ def test_agent_run_job_uses_active_registry_and_writes_bounded_artifacts(
     assert gate_checks["source_valid"]["evidence"] == "registry description"
     assert gate_checks["no_patient_rows_persisted"]["passed"] is True
     assert gate_checks["no_patient_rows_persisted"]["evidence"] == "artifact_json_scan"
-    assert gate_checks["no_patient_rows_persisted"]["scanned_artifacts"] == len(AGENT_PREFLIGHT_ARTIFACTS)
+    assert gate_checks["no_patient_rows_persisted"]["scanned_artifacts"] == len(
+        AGENT_PREFLIGHT_ARTIFACTS
+    )
     assert gate_checks["no_patient_rows_persisted"]["row_level_markers"] == []
     artifact_paths = [Path(item["path"]) for item in result["artifacts"]]
     assert {path.name for path in artifact_paths} == AGENT_PREFLIGHT_ARTIFACTS
@@ -3454,7 +4014,9 @@ def test_agent_run_job_uses_active_registry_and_writes_bounded_artifacts(
         for path in artifact_paths
     }
     assert artifact_payloads["table1_summary.json"]["status"] == "ok"
-    assert {row["feature"] for row in artifact_payloads["table1_summary.json"]["variables"]} >= {
+    assert {
+        row["feature"] for row in artifact_payloads["table1_summary.json"]["variables"]
+    } >= {
         "age",
         "sofa2",
         "los_icu",
@@ -3462,7 +4024,9 @@ def test_agent_run_job_uses_active_registry_and_writes_bounded_artifacts(
     missing_rows = artifact_payloads["missingness_audit.json"]["rows"]
     assert artifact_payloads["missingness_audit.json"]["status"] == "ok"
     assert {row["feature"] for row in missing_rows} >= {"age", "death", "sofa2", "hr"}
-    assert all(row["coverage_basis"] == "entity_non_missing_presence" for row in missing_rows)
+    assert all(
+        row["coverage_basis"] == "entity_non_missing_presence" for row in missing_rows
+    )
     roc = artifact_payloads["roc_curve.json"]
     assert roc["kind"] == "roc_curve"
     assert roc["status"] == "ok"
@@ -3470,10 +4034,16 @@ def test_agent_run_job_uses_active_registry_and_writes_bounded_artifacts(
     calibration = artifact_payloads["calibration_curve.json"]
     assert calibration["kind"] == "calibration_curve"
     assert calibration["status"] in {"ok", "not_available"}
-    ledger = json.loads((Path(result["project_dir"]) / "evidence_ledger.json").read_text(encoding="utf-8"))
+    ledger = json.loads(
+        (Path(result["project_dir"]) / "evidence_ledger.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert ledger["privacy"]["patient_rows_persisted"] is False
     assert ledger["privacy"]["artifact_scan"]["passed"] is True
-    assert ledger["privacy"]["artifact_scan"]["scanned_artifacts"] == len(AGENT_PREFLIGHT_ARTIFACTS)
+    assert ledger["privacy"]["artifact_scan"]["scanned_artifacts"] == len(
+        AGENT_PREFLIGHT_ARTIFACTS
+    )
 
 
 def test_agent_run_job_can_be_cancelled_and_reports_restart_resume(
@@ -3565,7 +4135,9 @@ def test_agent_run_review_and_local_signoff_write_safe_artifact(
     assert review_payload["readiness"]["signable"] is True
     assert review_payload["readiness"]["reportable"] is False
     assert review_payload["readiness"]["draft_unlocked"] is False
-    assert "human_signoff.json" not in {item["name"] for item in review_payload["artifacts"]}
+    assert "human_signoff.json" not in {
+        item["name"] for item in review_payload["artifacts"]
+    }
 
     signoff = client.post(
         "/api/agent-runs/signoff",
@@ -3583,7 +4155,9 @@ def test_agent_run_review_and_local_signoff_write_safe_artifact(
     assert signed_payload["readiness"]["status"] == "signed_analysis_only"
     assert signed_payload["readiness"]["reportable"] is False
     assert signed_payload["readiness"]["draft_unlocked"] is False
-    assert "human_signoff.json" in {item["name"] for item in signed_payload["artifacts"]}
+    assert "human_signoff.json" in {
+        item["name"] for item in signed_payload["artifacts"]
+    }
 
     signoff_path = run_dir / "human_signoff.json"
     assert signoff_path.exists()
@@ -3594,18 +4168,25 @@ def test_agent_run_review_and_local_signoff_write_safe_artifact(
     assert signoff_payload["uploads"] == 0
     assert signoff_payload["tokens"] == 0
     assert signoff_payload["external_calls"] == 0
-    signed_artifacts = {item["name"]: item for item in signoff_payload["signed_artifacts"]}
+    signed_artifacts = {
+        item["name"]: item for item in signoff_payload["signed_artifacts"]
+    }
     assert set(signed_artifacts) == AGENT_PREFLIGHT_ARTIFACTS
     for item in signed_artifacts.values():
         assert len(item["sha256"]) == 64
         assert item["bytes"] > 0
-    assert _scan_artifact_payloads({"human_signoff.json": signoff_payload})["passed"] is True
+    assert (
+        _scan_artifact_payloads({"human_signoff.json": signoff_payload})["passed"]
+        is True
+    )
     text = signoff_path.read_text(encoding="utf-8")
     assert "tableRows" not in text
     assert '"stay_id"' not in text
     assert '"patient"' not in text
 
-    gate = json.loads((run_dir / "quality_gate.json").read_text(encoding="utf-8"))["gate"]
+    gate = json.loads((run_dir / "quality_gate.json").read_text(encoding="utf-8"))[
+        "gate"
+    ]
     gate_checks = {check["id"]: check for check in gate["checks"]}
     assert gate_checks["human_signoff"]["passed"] is False
     assert gate["reportable"] is False
@@ -3662,7 +4243,9 @@ def test_agent_run_review_and_local_signoff_write_safe_artifact(
     cohort_payload["summary"]["stays"] = 999
     cohort_path.write_text(json.dumps(cohort_payload, indent=2), encoding="utf-8")
 
-    stale_review = client.post("/api/agent-runs/review", json={"project_dir": str(run_dir)})
+    stale_review = client.post(
+        "/api/agent-runs/review", json={"project_dir": str(run_dir)}
+    )
     assert stale_review.status_code == 200
     stale_payload = stale_review.json()
     assert stale_payload["signed"] is True
@@ -3671,7 +4254,10 @@ def test_agent_run_review_and_local_signoff_write_safe_artifact(
     assert stale_payload["readiness"]["reportable"] is False
     assert stale_payload["readiness"]["draft_unlocked"] is False
     assert stale_payload["signoff_integrity"]["status"] == "stale"
-    assert stale_payload["signoff_integrity"]["tampered_artifacts"][0]["name"] == "cohort_summary.json"
+    assert (
+        stale_payload["signoff_integrity"]["tampered_artifacts"][0]["name"]
+        == "cohort_summary.json"
+    )
 
 
 def test_agent_run_signoff_requires_all_confirmations(
@@ -3807,7 +4393,10 @@ def test_numeric_evidence_audit_fails_mismatch_ghost_and_missing_evidence() -> N
     assert mismatch["passed"] is False
     assert mismatch["failures"][0]["reason"] == "numeric_value_not_bound"
     assert ghost["passed"] is False
-    assert {failure["reason"] for failure in ghost["failures"]} >= {"missing_evidence", "numeric_value_not_bound"}
+    assert {failure["reason"] for failure in ghost["failures"]} >= {
+        "missing_evidence",
+        "numeric_value_not_bound",
+    }
     assert missing["passed"] is False
     assert missing["failures"][0]["reason"] == "numeric_claim_missing_evidence_id"
     assert missing["sentences_passed"] is False
@@ -3844,7 +4433,9 @@ def test_full_agent_mock_run_writes_locked_strict_evidence_artifacts(
     assert start.status_code == 200
     snapshot = _wait_for_job(client, start.json()["job_id"])
     assert snapshot["status"] == "done"
-    assert [event["type"] for event in snapshot["events"] if event["type"] != "end"] == [
+    assert [
+        event["type"] for event in snapshot["events"] if event["type"] != "end"
+    ] == [
         "start",
         "progress",
         "progress",
@@ -3860,7 +4451,10 @@ def test_full_agent_mock_run_writes_locked_strict_evidence_artifacts(
     assert result["provider"]["credentials_attempted"] is False
     assert result["provider"]["client_constructed"] is False
     assert result["provider"]["provider_gate"] == "offline_mock"
-    assert result["provider"]["canonical_opt_in_source"] == provider_gate.CANONICAL_OPT_IN_SOURCE
+    assert (
+        result["provider"]["canonical_opt_in_source"]
+        == provider_gate.CANONICAL_OPT_IN_SOURCE
+    )
     assert result["provider"]["canonical_opt_in_passed"] is True
     assert result["provider"]["mock_calls"] == 1
     assert result["gate"]["status"] == "analysis_only"
@@ -3878,19 +4472,29 @@ def test_full_agent_mock_run_writes_locked_strict_evidence_artifacts(
         "agent_plan.json",
         "manuscript_draft.json",
     }
-    assert checks["no_patient_rows_persisted"]["scanned_artifacts"] == len(expected_artifacts)
+    assert checks["no_patient_rows_persisted"]["scanned_artifacts"] == len(
+        expected_artifacts
+    )
 
-    artifact_paths = {Path(item["path"]).name: Path(item["path"]) for item in result["artifacts"]}
+    artifact_paths = {
+        Path(item["path"]).name: Path(item["path"]) for item in result["artifacts"]
+    }
     assert set(artifact_paths) == expected_artifacts
-    draft = json.loads(artifact_paths["manuscript_draft.json"].read_text(encoding="utf-8"))
+    draft = json.loads(
+        artifact_paths["manuscript_draft.json"].read_text(encoding="utf-8")
+    )
     assert draft["status"] == "locked_until_human_signoff"
     assert all(row.get("evidence_ids") for row in draft["claims"])
     assert all(row.get("evidence_ids") for row in draft["sentences"])
-    ledger = json.loads(artifact_paths["evidence_ledger.json"].read_text(encoding="utf-8"))
+    ledger = json.loads(
+        artifact_paths["evidence_ledger.json"].read_text(encoding="utf-8")
+    )
     assert ledger["strict_evidence_audit"]["claims_passed"] is True
     assert ledger["numeric_evidence_audit"]["passed"] is True
     assert ledger["numeric_evidence_audit"]["numeric_mention_count"] == 4
-    assert ledger["privacy"]["artifact_scan"]["scanned_artifacts"] == len(expected_artifacts)
+    assert ledger["privacy"]["artifact_scan"]["scanned_artifacts"] == len(
+        expected_artifacts
+    )
 
 
 def test_full_agent_numeric_evidence_gate_blocks_mismatched_mock_claim(
@@ -3907,8 +4511,12 @@ def test_full_agent_numeric_evidence_gate_blocks_mismatched_mock_claim(
 
     def mismatched_payload(**kwargs):
         payload = original_payload(**kwargs)
-        payload["manuscript_draft"]["claims"][0]["text"] = "Mortality was 13.2% in the active export."
-        payload["manuscript_draft"]["claims"][0]["evidence_ids"] = ["cohort_summary.json"]
+        payload["manuscript_draft"]["claims"][0][
+            "text"
+        ] = "Mortality was 13.2% in the active export."
+        payload["manuscript_draft"]["claims"][0]["evidence_ids"] = [
+            "cohort_summary.json"
+        ]
         return payload
 
     monkeypatch.setattr(agent_runs, "_mock_full_agent_payload", mismatched_payload)
@@ -3938,10 +4546,12 @@ def test_full_agent_numeric_evidence_gate_blocks_mismatched_mock_claim(
     assert checks["numeric_evidence_value_binding"]["passed"] is False
     assert checks["numeric_evidence_value_binding"]["failure_count"] == 1
     assert result["numeric_evidence_audit"]["failures"][0]["number"] == "13.2%"
-    serialized = json.dumps({
-        "numeric_evidence_audit": result["numeric_evidence_audit"],
-        "numeric_gate_check": checks["numeric_evidence_value_binding"],
-    })
+    serialized = json.dumps(
+        {
+            "numeric_evidence_audit": result["numeric_evidence_audit"],
+            "numeric_gate_check": checks["numeric_evidence_value_binding"],
+        }
+    )
     for marker in ["stay_id", "subject_id", "hadm_id", "tableRows", '"series"']:
         assert marker not in serialized
 
@@ -3960,7 +4570,11 @@ def test_full_agent_external_provider_requires_explicit_opt_in(
 
     response = client.post(
         "/api/jobs/agent-run",
-        json={"run_type": "full", "llm_provider": "openai", "external_llm_opt_in": False},
+        json={
+            "run_type": "full",
+            "llm_provider": "openai",
+            "external_llm_opt_in": False,
+        },
     )
 
     assert response.status_code == 400
@@ -3992,7 +4606,11 @@ def test_full_agent_external_provider_requires_per_run_opt_in_after_canonical_ga
 
     response = client.post(
         "/api/jobs/agent-run",
-        json={"run_type": "full", "llm_provider": "openai", "external_llm_opt_in": False},
+        json={
+            "run_type": "full",
+            "llm_provider": "openai",
+            "external_llm_opt_in": False,
+        },
     )
 
     assert response.status_code == 400
@@ -4138,7 +4756,9 @@ def test_agent_provider_status_rejects_insecure_private_env_file(
     assert "gpt-insecure" not in serialized
 
 
-def test_provider_gate_calls_canonical_opt_in_before_per_run_and_credentials(monkeypatch) -> None:
+def test_provider_gate_calls_canonical_opt_in_before_per_run_and_credentials(
+    monkeypatch,
+) -> None:
     calls = []
 
     def fake_check(choice, *, ai_enabled, language):
@@ -4181,7 +4801,11 @@ def test_full_agent_external_provider_requires_credentials_after_opt_in(
 
     response = client.post(
         "/api/jobs/agent-run",
-        json={"run_type": "full", "llm_provider": "openai", "external_llm_opt_in": True},
+        json={
+            "run_type": "full",
+            "llm_provider": "openai",
+            "external_llm_opt_in": True,
+        },
     )
 
     assert response.status_code == 400
@@ -4247,7 +4871,10 @@ def test_full_agent_external_provider_uses_adapter_after_opt_in_and_credentials(
                                         {
                                             "id": "s1",
                                             "text": "This locked analysis-only draft is bound to local artifacts.",
-                                            "evidence_ids": ["run_context.json", "quality_gate.json"],
+                                            "evidence_ids": [
+                                                "run_context.json",
+                                                "quality_gate.json",
+                                            ],
                                         }
                                     ],
                                 },
@@ -4294,7 +4921,10 @@ def test_full_agent_external_provider_uses_adapter_after_opt_in_and_credentials(
     assert result["gate"]["status"] == "analysis_only"
     checks = {check["id"]: check for check in result["gate"]["checks"]}
     assert checks["provider_opt_in"]["passed"] is True
-    assert checks["provider_opt_in"]["evidence"] == "external_provider_adapter_after_opt_in"
+    assert (
+        checks["provider_opt_in"]["evidence"]
+        == "external_provider_adapter_after_opt_in"
+    )
     assert checks["strict_evidence_bound_claims"]["passed"] is True
     assert checks["strict_evidence_bound_sentences"]["passed"] is True
     assert captured["url"] == "http://127.0.0.1:9999/v1/chat/completions"
@@ -4306,8 +4936,12 @@ def test_full_agent_external_provider_uses_adapter_after_opt_in_and_credentials(
     assert captured["request"]["easyicu_policy"]["max_external_calls_per_run"] == 1
     assert captured["request"]["easyicu_policy"]["max_output_tokens"] == 768
     assert captured["request"]["easyicu_policy"]["json_format_style"] == "chat"
-    artifact_paths = {Path(item["path"]).name: Path(item["path"]) for item in result["artifacts"]}
-    draft = json.loads(artifact_paths["manuscript_draft.json"].read_text(encoding="utf-8"))
+    artifact_paths = {
+        Path(item["path"]).name: Path(item["path"]) for item in result["artifacts"]
+    }
+    draft = json.loads(
+        artifact_paths["manuscript_draft.json"].read_text(encoding="utf-8")
+    )
     assert draft["status"] == "locked_until_human_signoff"
     assert "http://127.0.0.1:9999/v1" not in json.dumps(result, ensure_ascii=False)
 
@@ -4324,7 +4958,12 @@ def test_provider_adapter_can_use_responses_json_format_style() -> None:
                     "message": {
                         "content": json.dumps(
                             {
-                                "agent_plan": [{"id": "step_001", "title": "Review aggregate snapshot"}],
+                                "agent_plan": [
+                                    {
+                                        "id": "step_001",
+                                        "title": "Review aggregate snapshot",
+                                    }
+                                ],
                                 "manuscript_draft": {
                                     "claims": [
                                         {
@@ -4390,7 +5029,10 @@ def test_provider_adapter_can_use_responses_json_format_style() -> None:
         "quality_gate.json",
     ]
     assert "response_format" not in captured["request"]
-    assert "agent_plan must be an object, not an array" in captured["request"]["messages"][0]["content"]
+    assert (
+        "agent_plan must be an object, not an array"
+        in captured["request"]["messages"][0]["content"]
+    )
     assert captured["request"]["easyicu_policy"]["json_format_style"] == "responses"
     assert result["agent_plan"]["steps"][0]["id"] == "step_001"
     assert result["provider"]["json_format_style"] == "responses"
@@ -4420,7 +5062,11 @@ def test_full_agent_external_provider_strict_gate_blocks_unbound_claims(
                                 "agent_plan": {"steps": []},
                                 "manuscript_draft": {
                                     "claims": [
-                                        {"id": "c1", "text": "Unbound claim", "evidence_ids": []}
+                                        {
+                                            "id": "c1",
+                                            "text": "Unbound claim",
+                                            "evidence_ids": [],
+                                        }
                                     ],
                                     "sentences": [
                                         {
@@ -4463,7 +5109,9 @@ def test_full_agent_external_provider_strict_gate_blocks_unbound_claims(
     assert audit["claims_passed"] is False
     assert audit["sentences_passed"] is False
     assert audit["unbound_claims"] == ["Unbound claim"]
-    assert {"owner": "sentence", "evidence_id": "ghost.json"} in audit["missing_evidence"]
+    assert {"owner": "sentence", "evidence_id": "ghost.json"} in audit[
+        "missing_evidence"
+    ]
     checks = {check["id"]: check for check in gate["checks"]}
     assert checks["provider_opt_in"]["passed"] is True
     assert checks["strict_evidence_bound_claims"]["passed"] is False
@@ -4565,7 +5213,9 @@ def test_agent_run_signoff_rejects_blocked_strict_gate(
     assert not (run_dir / "human_signoff.json").exists()
 
 
-def test_agent_run_endpoint_rejects_missing_active_export(tmp_path: Path, monkeypatch) -> None:
+def test_agent_run_endpoint_rejects_missing_active_export(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
     monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])

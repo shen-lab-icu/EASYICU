@@ -4,6 +4,7 @@ The existing strict evidence gate checks that claims cite known artifacts. This
 module checks the next safety layer: numeric claims must match concrete numeric
 values inside the cited artifacts, within an explicit rounding tolerance.
 """
+
 from __future__ import annotations
 
 import math
@@ -45,8 +46,29 @@ _STOPWORDS = {
     "were",
     "with",
 }
-_PERCENT_TOKENS = {"pct", "percent", "percentage", "rate", "mortality", "female", "sepsis", "coverage"}
-_COUNT_TOKENS = {"count", "counts", "n", "row", "rows", "stay", "stays", "module", "modules", "entities", "entity"}
+_PERCENT_TOKENS = {
+    "pct",
+    "percent",
+    "percentage",
+    "rate",
+    "mortality",
+    "female",
+    "sepsis",
+    "coverage",
+}
+_COUNT_TOKENS = {
+    "count",
+    "counts",
+    "n",
+    "row",
+    "rows",
+    "stay",
+    "stays",
+    "module",
+    "modules",
+    "entities",
+    "entity",
+}
 _SYNONYMS = {
     "deceased": {"death", "mortality"},
     "death": {"deceased", "mortality"},
@@ -72,7 +94,9 @@ _SYNONYMS = {
 
 def audit_numeric_evidence(artifacts: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Validate numeric claims in ``manuscript_draft.json`` against artifacts."""
-    draft = artifacts.get("manuscript_draft.json") if isinstance(artifacts, dict) else {}
+    draft = (
+        artifacts.get("manuscript_draft.json") if isinstance(artifacts, dict) else {}
+    )
     if not isinstance(draft, dict):
         draft = {}
     facts = _collect_numeric_facts(artifacts)
@@ -95,7 +119,9 @@ def audit_numeric_evidence(artifacts: Dict[str, Dict[str, Any]]) -> Dict[str, An
             else:
                 numeric_sentence_count += 1
             owner = _row_owner(row, row_type)
-            evidence_ids = [str(item) for item in row.get("evidence_ids") or [] if str(item)]
+            evidence_ids = [
+                str(item) for item in row.get("evidence_ids") or [] if str(item)
+            ]
             if not evidence_ids:
                 failure = {
                     "owner": owner,
@@ -114,45 +140,55 @@ def audit_numeric_evidence(artifacts: Dict[str, Dict[str, Any]]) -> Dict[str, An
             row_failed = False
             for evidence_id in evidence_ids:
                 if evidence_id not in artifacts:
-                    failures.append({
-                        "owner": owner,
-                        "row_type": row_type,
-                        "reason": "missing_evidence",
-                        "evidence_id": evidence_id,
-                    })
+                    failures.append(
+                        {
+                            "owner": owner,
+                            "row_type": row_type,
+                            "reason": "missing_evidence",
+                            "evidence_id": evidence_id,
+                        }
+                    )
                     row_failed = True
                 elif evidence_id in _EXCLUDED_EVIDENCE:
-                    failures.append({
-                        "owner": owner,
-                        "row_type": row_type,
-                        "reason": "artifact_not_numeric_evidence_source",
-                        "evidence_id": evidence_id,
-                    })
+                    failures.append(
+                        {
+                            "owner": owner,
+                            "row_type": row_type,
+                            "reason": "artifact_not_numeric_evidence_source",
+                            "evidence_id": evidence_id,
+                        }
+                    )
                     row_failed = True
-            evidence_facts = [fact for fact in facts if fact["artifact"] in evidence_ids]
+            evidence_facts = [
+                fact for fact in facts if fact["artifact"] in evidence_ids
+            ]
             context_tokens = _context_tokens(text)
             for mention in mentions:
                 mention_count += 1
                 match = _match_mention(mention, evidence_facts, context_tokens)
                 if match:
-                    matches.append({
-                        "owner": owner,
-                        "row_type": row_type,
-                        "number": mention["raw"],
-                        "evidence_id": match["artifact"],
-                        "evidence_path": match["path"],
-                        "evidence_value": match["value"],
-                        "tolerance": match["tolerance"],
-                    })
+                    matches.append(
+                        {
+                            "owner": owner,
+                            "row_type": row_type,
+                            "number": mention["raw"],
+                            "evidence_id": match["artifact"],
+                            "evidence_path": match["path"],
+                            "evidence_value": match["value"],
+                            "tolerance": match["tolerance"],
+                        }
+                    )
                 else:
-                    failures.append({
-                        "owner": owner,
-                        "row_type": row_type,
-                        "reason": "numeric_value_not_bound",
-                        "number": mention["raw"],
-                        "evidence_ids": evidence_ids,
-                        "context_tokens": sorted(context_tokens)[:12],
-                    })
+                    failures.append(
+                        {
+                            "owner": owner,
+                            "row_type": row_type,
+                            "reason": "numeric_value_not_bound",
+                            "number": mention["raw"],
+                            "evidence_ids": evidence_ids,
+                            "context_tokens": sorted(context_tokens)[:12],
+                        }
+                    )
                     row_failed = True
             if row_failed:
                 if row_type == "claim":
@@ -212,12 +248,18 @@ def _extract_numeric_mentions(text: str) -> List[Dict[str, Any]]:
         number_text = raw_number.replace(",", "")
         decimals = len(number_text.split(".", 1)[1]) if "." in number_text else 0
         unit = (match.group("unit") or "").lower()
-        mentions.append({
-            "raw": raw,
-            "value": value,
-            "decimals": decimals,
-            "unit": "percent" if unit in {"%", "percent", "percentage", "pct"} else "number",
-        })
+        mentions.append(
+            {
+                "raw": raw,
+                "value": value,
+                "decimals": decimals,
+                "unit": (
+                    "percent"
+                    if unit in {"%", "percent", "percentage", "pct"}
+                    else "number"
+                ),
+            }
+        )
     return mentions
 
 
@@ -233,7 +275,9 @@ def _is_embedded_label_number(text: str, start: int, end: int) -> bool:
     return False
 
 
-def _collect_numeric_facts(artifacts: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _collect_numeric_facts(
+    artifacts: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     facts: List[Dict[str, Any]] = []
     for artifact, payload in (artifacts or {}).items():
         if artifact in _EXCLUDED_EVIDENCE:
@@ -248,13 +292,15 @@ def _walk_numeric_facts(value: Any, artifact: str, path: str) -> List[Dict[str, 
         return facts
     if isinstance(value, (int, float)) and math.isfinite(float(value)):
         tokens = _context_tokens(path)
-        facts.append({
-            "artifact": artifact,
-            "path": path,
-            "value": float(value),
-            "tokens": tokens,
-            "unit": _fact_unit(tokens),
-        })
+        facts.append(
+            {
+                "artifact": artifact,
+                "path": path,
+                "value": float(value),
+                "tokens": tokens,
+                "unit": _fact_unit(tokens),
+            }
+        )
     elif isinstance(value, dict):
         for key, child in value.items():
             facts.extend(_walk_numeric_facts(child, artifact, f"{path}.{key}"))
@@ -268,7 +314,11 @@ def _context_tokens(text: str) -> set[str]:
     tokens = set()
     for match in _WORD_RE.finditer(text or ""):
         tokens.update(_token_parts(match.group(0)))
-    tokens = {token for token in tokens if token and token not in _STOPWORDS and token != "json"}
+    tokens = {
+        token
+        for token in tokens
+        if token and token not in _STOPWORDS and token != "json"
+    }
     expanded = set(tokens)
     for token in list(tokens):
         expanded.update(_SYNONYMS.get(token, set()))
@@ -314,7 +364,9 @@ def _match_mention(
             continue
         context_candidates.append({**fact, "tolerance": tolerance})
     if context_candidates:
-        return sorted(context_candidates, key=lambda item: (item["artifact"], item["path"]))[0]
+        return sorted(
+            context_candidates, key=lambda item: (item["artifact"], item["path"])
+        )[0]
     return None
 
 
@@ -328,13 +380,19 @@ def _unit_compatible(mention: Dict[str, Any], fact: Dict[str, Any]) -> bool:
     return True
 
 
-def _numeric_tolerance(mention: Dict[str, Any], fact: Dict[str, Any]) -> tuple[float, float]:
+def _numeric_tolerance(
+    mention: Dict[str, Any], fact: Dict[str, Any]
+) -> tuple[float, float]:
     fact_value = float(fact["value"])
-    if mention.get("unit") == "percent" and fact.get("unit") != "percent" and 0 <= fact_value <= 1:
+    if (
+        mention.get("unit") == "percent"
+        and fact.get("unit") != "percent"
+        and 0 <= fact_value <= 1
+    ):
         fact_value = fact_value * 100
     decimals = int(mention.get("decimals") or 0)
     if decimals > 0:
-        tolerance = 0.5 * (10 ** -decimals) + 1e-9
+        tolerance = 0.5 * (10**-decimals) + 1e-9
     elif float(fact["value"]).is_integer():
         tolerance = 0.0
     else:

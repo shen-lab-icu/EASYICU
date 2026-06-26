@@ -14,6 +14,7 @@ Two net-new capabilities the design mock did not have (it used hardcoded
 Everything runs locally; nothing is uploaded. Conversion is an SSE job that
 drives ``DataConverter.convert_all(progress_callback=...)`` directly.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -162,7 +163,10 @@ def _detect_database(path: Path) -> str:
 
     names = []
     try:
-        names = [p.name.lower() for p in list(path.glob("*.csv*")) + list(path.glob("*.parquet"))]
+        names = [
+            p.name.lower()
+            for p in list(path.glob("*.csv*")) + list(path.glob("*.parquet"))
+        ]
         for sub in path.iterdir():
             if sub.is_dir():
                 names.append(sub.name.lower() + "/")
@@ -289,17 +293,19 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
             else:
                 counts["converted"] += 1
             res = info.get("result") or {}
-            job.emit({
-                "type": "progress",
-                "current": info.get("current"),
-                "total": info.get("total"),
-                "file": info.get("file"),
-                "status": st,
-                "rows": res.get("row_count"),
-                "shards": res.get("shards"),
-                "error": res.get("error"),
-                "counts": dict(counts),
-            })
+            job.emit(
+                {
+                    "type": "progress",
+                    "current": info.get("current"),
+                    "total": info.get("total"),
+                    "file": info.get("file"),
+                    "status": st,
+                    "rows": res.get("row_count"),
+                    "shards": res.get("shards"),
+                    "error": res.get("error"),
+                    "counts": dict(counts),
+                }
+            )
 
         results = converter.convert_all(force=False, progress_callback=cb)
         nothing = counts["converted"] == 0 and counts["failed"] == 0
@@ -344,7 +350,13 @@ _CONCEPT_DERIVED_COHORTS = {
     "vasopressor": {
         "concepts": ["vaso_ind"],
         "positive": ["vaso_ind", "norepi60", "epi60", "dopa60", "dobu60"],
-        "numeric_positive": ["norepi_rate", "norepi_equiv", "epi_rate", "dopa_rate", "dobu_rate"],
+        "numeric_positive": [
+            "norepi_rate",
+            "norepi_equiv",
+            "epi_rate",
+            "dopa_rate",
+            "dobu_rate",
+        ],
     },
     "respiratory": {
         "concepts": ["adv_resp", "mech_vent", "vent_ind", "pafi", "safi"],
@@ -362,8 +374,12 @@ def _normalize_sepsis_definition(value: Any) -> Dict[str, Any]:
     """
     raw = value if isinstance(value, dict) else {}
     return {
-        "record_scope": str(raw.get("record_scope") or "metadata_current_runtime_defaults")[:80],
-        "runtime_profile": str(raw.get("runtime_profile") or "easyicu_ricu_default_v1")[:80],
+        "record_scope": str(
+            raw.get("record_scope") or "metadata_current_runtime_defaults"
+        )[:80],
+        "runtime_profile": str(raw.get("runtime_profile") or "easyicu_ricu_default_v1")[
+            :80
+        ],
         "score_family": str(raw.get("score_family") or "selected_modules")[:80],
         "suspected_infection": {
             "mode": "antibiotic_and_sample",
@@ -380,7 +396,11 @@ def _normalize_sepsis_definition(value: Any) -> Dict[str, Any]:
         },
         "review_options": {
             "si_event": ["first", "last", "any"],
-            "delta_function": ["cumulative_minimum", "first_observed", "windowed_minimum"],
+            "delta_function": [
+                "cumulative_minimum",
+                "first_observed",
+                "windowed_minimum",
+            ],
             "threshold": [2, 3],
             "score_family": ["SOFA-2", "SOFA-1", "SOFA-2 + SOFA-1"],
         },
@@ -409,7 +429,9 @@ def _write_frame(df: Any, dest: Path, export_format: str) -> int:
 
 
 def _safe_slug(value: Any, fallback: str = "export") -> str:
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip().lower()).strip("-._")
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip().lower()).strip(
+        "-._"
+    )
     return slug[:64] or fallback
 
 
@@ -431,7 +453,11 @@ def _resolve_export_out_dir(
     export_format: str,
     create_run_subdir: bool,
 ) -> Path:
-    root = Path(out_dir).expanduser() if out_dir else (Path.home() / ".easyicu" / "exports")
+    root = (
+        Path(out_dir).expanduser()
+        if out_dir
+        else (Path.home() / ".easyicu" / "exports")
+    )
     if not create_run_subdir:
         return root
     import time
@@ -444,12 +470,20 @@ def _resolve_export_out_dir(
     return _unique_child_dir(root, label)
 
 
-def _render_export_readme(manifest: Dict[str, Any], *, files: List[Dict[str, Any]]) -> str:
+def _render_export_readme(
+    manifest: Dict[str, Any], *, files: List[Dict[str, Any]]
+) -> str:
     cohort = manifest.get("cohort_contract") or {}
     report = manifest.get("cohort_report") or {}
     sepsis_def = cohort.get("sepsis_definition") if isinstance(cohort, dict) else None
-    si_def = sepsis_def.get("suspected_infection", {}) if isinstance(sepsis_def, dict) else {}
-    sofa_def = sepsis_def.get("sofa_increase", {}) if isinstance(sepsis_def, dict) else {}
+    si_def = (
+        sepsis_def.get("suspected_infection", {})
+        if isinstance(sepsis_def, dict)
+        else {}
+    )
+    sofa_def = (
+        sepsis_def.get("sofa_increase", {}) if isinstance(sepsis_def, dict) else {}
+    )
     modules = [f.get("module") for f in files if f.get("module")]
     unique_modules = []
     for module in modules:
@@ -503,7 +537,9 @@ def _render_export_readme(manifest: Dict[str, Any], *, files: List[Dict[str, Any
         "",
     ]
     for f in files:
-        lines.append(f"- `{f.get('file')}` — module `{f.get('module', '')}`, rows `{f.get('rows', '')}`")
+        lines.append(
+            f"- `{f.get('file')}` — module `{f.get('module', '')}`, rows `{f.get('rows', '')}`"
+        )
     lines.append("")
     return "\n".join(lines)
 
@@ -551,9 +587,7 @@ def _normalize_export_concepts(
                     seen.add(concept)
     elif isinstance(concepts, list):
         concept_to_module = {
-            concept: module
-            for module in modules
-            for concept in catalog.get(module, [])
+            concept: module for module in modules for concept in catalog.get(module, [])
         }
         for value in concepts:
             concept = str(value)
@@ -584,7 +618,12 @@ def _normalize_export_concepts(
     return selected
 
 
-def _coerce_int(value: Any, default: int, min_value: Optional[int] = None, max_value: Optional[int] = None) -> int:
+def _coerce_int(
+    value: Any,
+    default: int,
+    min_value: Optional[int] = None,
+    max_value: Optional[int] = None,
+) -> int:
     try:
         out = int(float(value))
     except (TypeError, ValueError):
@@ -632,7 +671,13 @@ def _split_icd_tokens(raw: Any) -> List[str]:
 def _normalize_export_cohort(cohort: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     raw = cohort if isinstance(cohort, dict) else {}
     has_explicit_contract = isinstance(cohort, dict) and bool(cohort)
-    preset = str(raw.get("preset") or ("adult_first" if has_explicit_contract else "all_icu")).strip().lower()
+    preset = (
+        str(
+            raw.get("preset") or ("adult_first" if has_explicit_contract else "all_icu")
+        )
+        .strip()
+        .lower()
+    )
     if preset not in _SUPPORTED_COHORT_PRESETS:
         raise ExportCohortError(
             "unsupported_cohort_preset",
@@ -658,7 +703,9 @@ def _normalize_export_cohort(cohort: Optional[Dict[str, Any]]) -> Dict[str, Any]
     if preset == "icd" and not include and not exclude:
         raise ExportCohortError("empty_icd_filter", {"preset": preset})
 
-    age_min = _coerce_int(raw.get("age_min"), 18 if preset == "adult_first" else 0, 0, 120)
+    age_min = _coerce_int(
+        raw.get("age_min"), 18 if preset == "adult_first" else 0, 0, 120
+    )
     age_max = _coerce_int(raw.get("age_max"), 100, 0, 120)
     if age_min > age_max:
         age_min, age_max = age_max, age_min
@@ -678,7 +725,9 @@ def _normalize_export_cohort(cohort: Optional[Dict[str, Any]]) -> Dict[str, Any]
         "age_max": age_max,
         "min_icu_los_hours": min_los,
         "observation_window_hours": window,
-        "exclude_readmissions": bool(raw.get("exclude_readmissions", preset == "adult_first")),
+        "exclude_readmissions": bool(
+            raw.get("exclude_readmissions", preset == "adult_first")
+        ),
         "icd_enabled": icd_enabled,
         "icd_include": include,
         "icd_exclude": exclude,
@@ -726,28 +775,54 @@ def _read_table_columns(path: Path, columns: List[str]) -> Any:
 
 
 def _normal_text_series(series: Any) -> Any:
-    return series.fillna("").astype(str).str.upper().str.replace(".", "", regex=False).str.strip()
+    return (
+        series.fillna("")
+        .astype(str)
+        .str.upper()
+        .str.replace(".", "", regex=False)
+        .str.strip()
+    )
 
 
-def _match_mimic_icd_ids(data_path: Path, stay_id_col: str, include: List[str], exclude: List[str]) -> Tuple[Set[Any], Set[Any]]:
+def _match_mimic_icd_ids(
+    data_path: Path, stay_id_col: str, include: List[str], exclude: List[str]
+) -> Tuple[Set[Any], Set[Any]]:
     import pandas as pd
 
     stays_path = _find_table_file(data_path, ["icustays"])
     diag_path = _find_table_file(data_path, ["diagnoses_icd", "diagnoses"])
     if not stays_path or not diag_path:
-        raise ExportCohortError("icd_tables_missing", {"required_tables": ["icustays", "diagnoses_icd"]})
+        raise ExportCohortError(
+            "icd_tables_missing", {"required_tables": ["icustays", "diagnoses_icd"]}
+        )
 
-    stays = _read_table_columns(stays_path, [stay_id_col, "stay_id", "icustay_id", "hadm_id"])
-    diag = _read_table_columns(diag_path, ["hadm_id", "icd_code", "icd9_code", "diagnosis"])
-    id_col = stay_id_col if stay_id_col in stays.columns else ("stay_id" if "stay_id" in stays.columns else "icustay_id")
-    if "hadm_id" not in stays.columns or "hadm_id" not in diag.columns or id_col not in stays.columns:
+    stays = _read_table_columns(
+        stays_path, [stay_id_col, "stay_id", "icustay_id", "hadm_id"]
+    )
+    diag = _read_table_columns(
+        diag_path, ["hadm_id", "icd_code", "icd9_code", "diagnosis"]
+    )
+    id_col = (
+        stay_id_col
+        if stay_id_col in stays.columns
+        else ("stay_id" if "stay_id" in stays.columns else "icustay_id")
+    )
+    if (
+        "hadm_id" not in stays.columns
+        or "hadm_id" not in diag.columns
+        or id_col not in stays.columns
+    ):
         raise ExportCohortError("icd_join_columns_missing", {"database": "miiv"})
 
-    code_col = next((c for c in ["icd_code", "icd9_code", "diagnosis"] if c in diag.columns), None)
+    code_col = next(
+        (c for c in ["icd_code", "icd9_code", "diagnosis"] if c in diag.columns), None
+    )
     if not code_col:
         raise ExportCohortError("icd_code_column_missing", {"database": "miiv"})
 
-    joined = diag[["hadm_id", code_col]].merge(stays[["hadm_id", id_col]], on="hadm_id", how="inner")
+    joined = diag[["hadm_id", code_col]].merge(
+        stays[["hadm_id", id_col]], on="hadm_id", how="inner"
+    )
     codes = _normal_text_series(joined[code_col])
 
     def select(tokens: List[str]) -> Set[Any]:
@@ -761,13 +836,19 @@ def _match_mimic_icd_ids(data_path: Path, stay_id_col: str, include: List[str], 
     return select(include), select(exclude)
 
 
-def _match_eicu_icd_ids(data_path: Path, include: List[str], exclude: List[str]) -> Tuple[Set[Any], Set[Any]]:
+def _match_eicu_icd_ids(
+    data_path: Path, include: List[str], exclude: List[str]
+) -> Tuple[Set[Any], Set[Any]]:
     import pandas as pd
 
     diag_path = _find_table_file(data_path, ["diagnosis"])
     if not diag_path:
-        raise ExportCohortError("icd_tables_missing", {"required_tables": ["diagnosis"]})
-    diag = _read_table_columns(diag_path, ["patientunitstayid", "icd9code", "diagnosisstring"])
+        raise ExportCohortError(
+            "icd_tables_missing", {"required_tables": ["diagnosis"]}
+        )
+    diag = _read_table_columns(
+        diag_path, ["patientunitstayid", "icd9code", "diagnosisstring"]
+    )
     if "patientunitstayid" not in diag.columns:
         raise ExportCohortError("icd_join_columns_missing", {"database": "eicu"})
     search_cols = [c for c in ["icd9code", "diagnosisstring"] if c in diag.columns]
@@ -788,10 +869,14 @@ def _match_eicu_icd_ids(data_path: Path, include: List[str], exclude: List[str])
     return select(include), select(exclude)
 
 
-def _match_icd_ids(data_path: Path, database: str, id_col: str, include: List[str], exclude: List[str]) -> Tuple[Set[Any], Set[Any]]:
+def _match_icd_ids(
+    data_path: Path, database: str, id_col: str, include: List[str], exclude: List[str]
+) -> Tuple[Set[Any], Set[Any]]:
     db = _database_for_patient_filter(database)
     if db not in _ICD_SUPPORTED_DATABASES:
-        raise ExportCohortError("icd_filter_unsupported_database", {"database": database})
+        raise ExportCohortError(
+            "icd_filter_unsupported_database", {"database": database}
+        )
     if db in {"miiv", "mimic", "miii"}:
         return _match_mimic_icd_ids(data_path, id_col, include, exclude)
     return _match_eicu_icd_ids(data_path, include, exclude)
@@ -807,7 +892,9 @@ def _cohort_id_column(frame: Any, preferred: str) -> Optional[str]:
         "patientid",
         "CaseID",
     ]
-    return next((col for col in candidates if col in getattr(frame, "columns", [])), None)
+    return next(
+        (col for col in candidates if col in getattr(frame, "columns", [])), None
+    )
 
 
 def _truthy_mask(values: Any) -> Any:
@@ -822,7 +909,9 @@ def _truthy_mask(values: Any) -> Any:
     return lowered.isin({"1", "true", "t", "yes", "y", "positive", "present"})
 
 
-def _positive_ids_from_concept_payload(payload: Any, id_col: str, spec: Dict[str, Any]) -> Set[Any]:
+def _positive_ids_from_concept_payload(
+    payload: Any, id_col: str, spec: Dict[str, Any]
+) -> Set[Any]:
     import pandas as pd
 
     frames = list(payload.values()) if isinstance(payload, dict) else [payload]
@@ -904,7 +993,11 @@ def _resolve_export_cohort(
         if progress is not None:
             progress(stage, extra)
 
-    emit("normalizing", preset=normalized["preset"], window_hours=normalized["observation_window_hours"])
+    emit(
+        "normalizing",
+        preset=normalized["preset"],
+        window_hours=normalized["observation_window_hours"],
+    )
 
     filters_active = (
         normalized["preset"] != "all_icu"
@@ -922,7 +1015,9 @@ def _resolve_export_cohort(
             database=_database_for_patient_filter(database),
             max_patients=max_n or None,
         )
-        emit("all_icu_selected", selected=len(ids_list), max_patients_applied=bool(max_n))
+        emit(
+            "all_icu_selected", selected=len(ids_list), max_patients_applied=bool(max_n)
+        )
         return {
             "patient_ids": {id_col: list(ids_list)} if ids_list else None,
             "cohort_size": len(ids_list),
@@ -951,14 +1046,21 @@ def _resolve_export_cohort(
     filtered = pf.filter(
         age_min=normalized["age_min"] if normalized["age_min"] > 0 else None,
         age_max=normalized["age_max"] if normalized["age_max"] < 100 else None,
-        first_icu_stay=normalized["exclude_readmissions"] or normalized["preset"] == "adult_first",
-        los_min=normalized["min_icu_los_hours"] if normalized["min_icu_los_hours"] > 0 else None,
+        first_icu_stay=normalized["exclude_readmissions"]
+        or normalized["preset"] == "adult_first",
+        los_min=(
+            normalized["min_icu_los_hours"]
+            if normalized["min_icu_los_hours"] > 0
+            else None
+        ),
         los_max=None,
         has_sepsis=None,
         return_dataframe=True,
     )
     if "patient_id" not in filtered.columns:
-        raise ExportCohortError("cohort_filter_missing_patient_id", {"database": database})
+        raise ExportCohortError(
+            "cohort_filter_missing_patient_id", {"database": database}
+        )
     selected: Set[Any] = set(filtered["patient_id"].dropna().tolist())
     before_concept = len(selected)
     concept_matches: Optional[int] = None
@@ -987,7 +1089,11 @@ def _resolve_export_cohort(
         concept_matches = len(selected)
         before_icd = len(selected)
         applied.append("concept_prefilter")
-        emit("concept_prefilter_selected", preset=normalized["preset"], selected=concept_matches)
+        emit(
+            "concept_prefilter_selected",
+            preset=normalized["preset"],
+            selected=concept_matches,
+        )
 
     include_ids: Set[Any] = set()
     exclude_ids: Set[Any] = set()
@@ -1009,13 +1115,23 @@ def _resolve_export_cohort(
         if normalized["icd_exclude"]:
             selected = selected - exclude_ids
         applied.append("icd")
-        emit("icd_selected", selected=len(selected), include_matches=len(include_ids), exclude_matches=len(exclude_ids))
+        emit(
+            "icd_selected",
+            selected=len(selected),
+            include_matches=len(include_ids),
+            exclude_matches=len(exclude_ids),
+        )
 
     ids = sorted(selected, key=lambda value: str(value))
     uncapped = len(ids)
     if max_n and len(ids) > max_n:
         ids = ids[:max_n]
-    emit("cohort_selected", selected=len(ids), selected_before_cap=uncapped, max_patients_applied=bool(max_n and uncapped > max_n))
+    emit(
+        "cohort_selected",
+        selected=len(ids),
+        selected_before_cap=uncapped,
+        max_patients_applied=bool(max_n and uncapped > max_n),
+    )
 
     return {
         "patient_ids": {id_col: ids} if ids else {id_col: []},
@@ -1075,9 +1191,14 @@ def make_export_runner(
         import easyicu.api as api
         from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
 
-        sel_modules = [m for m in (modules or list(CONCEPT_GROUPS_INTERNAL.keys()))
-                       if CONCEPT_GROUPS_INTERNAL.get(m)]
-        concept_plan = _normalize_export_concepts(sel_modules, concepts, CONCEPT_GROUPS_INTERNAL)
+        sel_modules = [
+            m
+            for m in (modules or list(CONCEPT_GROUPS_INTERNAL.keys()))
+            if CONCEPT_GROUPS_INTERNAL.get(m)
+        ]
+        concept_plan = _normalize_export_concepts(
+            sel_modules, concepts, CONCEPT_GROUPS_INTERNAL
+        )
         sel = [m for m in sel_modules if concept_plan.get(m)]
         ext = _EXPORT_EXT.get(export_format, "csv")
         out = _resolve_export_out_dir(
@@ -1097,16 +1218,20 @@ def make_export_runner(
         def emit_cohort_progress(stage: str, extra: Dict[str, Any]) -> None:
             # Only aggregate counts and configuration labels are emitted; never
             # patient/stay identifiers or row-level concept payloads.
-            job.emit({
-                "type": "progress",
-                "phase": "cohort",
-                "current": 0,
-                "total": cohort_progress_total,
-                "module": "cohort",
-                "stage": stage,
-                "message": _COHORT_PROGRESS_MESSAGES.get(stage, stage.replace("_", " ")),
-                **extra,
-            })
+            job.emit(
+                {
+                    "type": "progress",
+                    "phase": "cohort",
+                    "current": 0,
+                    "total": cohort_progress_total,
+                    "module": "cohort",
+                    "stage": stage,
+                    "message": _COHORT_PROGRESS_MESSAGES.get(
+                        stage, stage.replace("_", " ")
+                    ),
+                    **extra,
+                }
+            )
 
         cohort_info = _resolve_export_cohort(
             str(data_path),
@@ -1129,14 +1254,30 @@ def make_export_runner(
                 "cancelled_at": "cohort",
             }
 
-        job.emit({"type": "start", "modules": sel, "out_dir": str(out),
-                  "concepts": {module: len(concept_plan[module]) for module in sel},
-                  "format": export_format, "max_patients": max_patients,
-                  "cohort_size": cohort_size,
-                  "cohort": cohort_info.get("cohort_report")})
-        job.emit({"type": "progress", "phase": "cohort", "current": 1, "total": cohort_progress_total,
-                  "module": "cohort", "stage": "ready", "message": "Cohort resolved",
-                  "cohort_size": cohort_size})
+        job.emit(
+            {
+                "type": "start",
+                "modules": sel,
+                "out_dir": str(out),
+                "concepts": {module: len(concept_plan[module]) for module in sel},
+                "format": export_format,
+                "max_patients": max_patients,
+                "cohort_size": cohort_size,
+                "cohort": cohort_info.get("cohort_report"),
+            }
+        )
+        job.emit(
+            {
+                "type": "progress",
+                "phase": "cohort",
+                "current": 1,
+                "total": cohort_progress_total,
+                "module": "cohort",
+                "stage": "ready",
+                "message": "Cohort resolved",
+                "cohort_size": cohort_size,
+            }
+        )
 
         files: List[Dict[str, Any]] = []
         total = len(sel)
@@ -1145,26 +1286,56 @@ def make_export_runner(
                 if getattr(job, "cancel_requested", False):
                     break
                 module_concepts = concept_plan[mod]
-                use_sofa2 = any(c.startswith("sofa2") or c == "sep3_sofa2" for c in module_concepts)
+                use_sofa2 = any(
+                    c.startswith("sofa2") or c == "sep3_sofa2" for c in module_concepts
+                )
                 df = api.load_concepts(
-                    module_concepts, patient_ids=patient_ids, database=database,
-                    data_path=str(data_path), use_sofa2=use_sofa2,
-                    merge=True, verbose=False, **load_kwargs,
+                    module_concepts,
+                    patient_ids=patient_ids,
+                    database=database,
+                    data_path=str(data_path),
+                    use_sofa2=use_sofa2,
+                    merge=True,
+                    verbose=False,
+                    **load_kwargs,
                 )
                 written: List[Dict[str, Any]] = []
                 if isinstance(df, dict):
                     for key, sub in df.items():
                         fname = f"{mod}__{key}.{ext}"
                         rows = _write_frame(sub, out / fname, export_format)
-                        written.append({"file": fname, "module": mod, "concepts": len(module_concepts), "concept_ids": list(module_concepts), "rows": rows})
+                        written.append(
+                            {
+                                "file": fname,
+                                "module": mod,
+                                "concepts": len(module_concepts),
+                                "concept_ids": list(module_concepts),
+                                "rows": rows,
+                            }
+                        )
                 else:
                     fname = f"{mod}.{ext}"
                     rows = _write_frame(df, out / fname, export_format)
-                    written.append({"file": fname, "module": mod,
-                                    "concepts": len(module_concepts), "concept_ids": list(module_concepts), "rows": rows})
+                    written.append(
+                        {
+                            "file": fname,
+                            "module": mod,
+                            "concepts": len(module_concepts),
+                            "concept_ids": list(module_concepts),
+                            "rows": rows,
+                        }
+                    )
                 files.extend(written)
-                job.emit({"type": "progress", "current": i, "total": total, "module": mod,
-                          "file": written[0]["file"], "rows": sum(w["rows"] for w in written)})
+                job.emit(
+                    {
+                        "type": "progress",
+                        "current": i,
+                        "total": total,
+                        "module": mod,
+                        "file": written[0]["file"],
+                        "rows": sum(w["rows"] for w in written),
+                    }
+                )
 
         if getattr(job, "cancel_requested", False):
             return {
@@ -1189,14 +1360,20 @@ def make_export_runner(
             "cohort_contract": cohort_info.get("cohort_contract"),
             "cohort_report": cohort_info.get("cohort_report"),
             "concept_selection": {
-                "mode": "explicit" if concepts is not None else "all_in_selected_modules",
+                "mode": (
+                    "explicit" if concepts is not None else "all_in_selected_modules"
+                ),
                 "modules": {module: concept_plan[module] for module in sel},
             },
             "generated": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "files": files,
         }
-        (out / "_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
-        (out / "README.md").write_text(_render_export_readme(manifest, files=files), encoding="utf-8")
+        (out / "_manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False)
+        )
+        (out / "README.md").write_text(
+            _render_export_readme(manifest, files=files), encoding="utf-8"
+        )
         return {
             "out_dir": str(out),
             "files": files,
@@ -1218,6 +1395,7 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
     disk and returns summary tables, not raw full frames.
     """
     import json
+
     path = Path(raw_path).expanduser()
     try:
         path = path.resolve()
@@ -1243,9 +1421,16 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
 
     demo = frames.get("demographics")
     if demo is None or demo.empty:
-        first = next((f for f in frames.values() if f is not None and not f.empty), None)
+        first = next(
+            (f for f in frames.values() if f is not None and not f.empty), None
+        )
         if first is None or "stay_id" not in first.columns:
-            return {"ok": False, "error": "no_stay_id", "path": str(path), "files": files}
+            return {
+                "ok": False,
+                "error": "no_stay_id",
+                "path": str(path),
+                "files": files,
+            }
         demo = first[["stay_id"]].drop_duplicates().head(100).copy()
 
     demo = demo.copy()
@@ -1272,18 +1457,28 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
     for _, row in demo.iterrows():
         sid = str(row.get("stay_id", ""))
         dead = death_by_stay.get(sid)
-        cohort_rows.append({
-            "stay_id": sid,
-            "age": _num(row.get("age")),
-            "sex": _clean(row.get("sex")),
-            "sofa2": _num(sofa_by_stay.get(sid)),
-            "los_icu": _num(los_by_stay.get(sid)),
-            "outcome": "Deceased" if dead is True else ("Survived" if dead is False else "Unknown"),
-        })
+        cohort_rows.append(
+            {
+                "stay_id": sid,
+                "age": _num(row.get("age")),
+                "sex": _clean(row.get("sex")),
+                "sofa2": _num(sofa_by_stay.get(sid)),
+                "los_icu": _num(los_by_stay.get(sid)),
+                "outcome": (
+                    "Deceased"
+                    if dead is True
+                    else ("Survived" if dead is False else "Unknown")
+                ),
+            }
+        )
     table_rows = cohort_rows[:12]
 
     first_id = table_rows[0]["stay_id"] if table_rows else next(iter(stay_ids), "")
-    patient = next((r for r in table_rows if r["stay_id"] == first_id), {}) if table_rows else {}
+    patient = (
+        next((r for r in table_rows if r["stay_id"] == first_id), {})
+        if table_rows
+        else {}
+    )
     patient = {
         **patient,
         "sepsis3": bool(sep_by_stay.get(first_id)) if first_id in sep_by_stay else None,
@@ -1303,7 +1498,9 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
     }
 
     cohort = _cohort_summary(cohort_rows)
-    quality = [_quality_row(path / str(f["file"]), f, stay_ids) for f in files if f.get("file")]
+    quality = [
+        _quality_row(path / str(f["file"]), f, stay_ids) for f in files if f.get("file")
+    ]
 
     return {
         "ok": True,
@@ -1344,32 +1541,45 @@ def summarize_crossdb_workspaces(raw_paths: List[str]) -> Dict[str, Any]:
     for path in paths:
         result = summarize_export_workspace(path)
         if not result.get("ok"):
-            errors.append({"path": path, "error": result.get("error"), "detail": result})
+            errors.append(
+                {"path": path, "error": result.get("error"), "detail": result}
+            )
             continue
         label = _crossdb_label(result)
         count = label_counts.get(label, 0) + 1
         label_counts[label] = count
         if count > 1:
             label = f"{label}-{count}"
-        modules = sorted({f.get("module") for f in result.get("files", []) if f.get("module")})
-        sources.append({
-            "label": label,
-            "database": result.get("database"),
-            "path": result.get("path"),
-            "summary": result.get("summary", {}),
-            "modules": modules,
-            "files": len(result.get("files", [])),
-        })
+        modules = sorted(
+            {f.get("module") for f in result.get("files", []) if f.get("module")}
+        )
+        sources.append(
+            {
+                "label": label,
+                "database": result.get("database"),
+                "path": result.get("path"),
+                "summary": result.get("summary", {}),
+                "modules": modules,
+                "files": len(result.get("files", [])),
+            }
+        )
 
     if errors:
-        return {"ok": False, "error": "invalid_export", "sources": sources, "errors": errors}
+        return {
+            "ok": False,
+            "error": "invalid_export",
+            "sources": sources,
+            "errors": errors,
+        }
     if len(sources) < 2:
         return {"ok": False, "error": "need_two_exports", "sources": sources}
 
     module_sets = [set(s["modules"]) for s in sources]
     shared_modules = sorted(set.intersection(*module_sets)) if module_sets else []
     all_modules = sorted(set.union(*module_sets)) if module_sets else []
-    compatibility_gate = _crossdb_compatibility_gate(sources, shared_modules, all_modules)
+    compatibility_gate = _crossdb_compatibility_gate(
+        sources, shared_modules, all_modules
+    )
     if compatibility_gate["status"] != "compatible":
         return {
             "ok": False,
@@ -1397,14 +1607,18 @@ def summarize_crossdb_workspaces(raw_paths: List[str]) -> Dict[str, Any]:
             continue
         values = [s["summary"].get(key) for s in sources]
         numeric = [float(v) for v in values if isinstance(v, (int, float))]
-        delta = round(max(numeric) - min(numeric), digits) if len(numeric) >= 2 else None
-        rows.append({
-            "key": key,
-            "label": label,
-            "values": values,
-            "delta": delta,
-            "comparison": "descriptive_range",
-        })
+        delta = (
+            round(max(numeric) - min(numeric), digits) if len(numeric) >= 2 else None
+        )
+        rows.append(
+            {
+                "key": key,
+                "label": label,
+                "values": values,
+                "delta": delta,
+                "comparison": "descriptive_range",
+            }
+        )
 
     return {
         "ok": True,
@@ -1429,40 +1643,63 @@ def _crossdb_compatibility_gate(
     checks: List[Dict[str, Any]] = []
 
     enough_sources = len(sources) >= 2
-    checks.append({"id": "source_count", "passed": enough_sources, "value": len(sources), "minimum": 2})
+    checks.append(
+        {
+            "id": "source_count",
+            "passed": enough_sources,
+            "value": len(sources),
+            "minimum": 2,
+        }
+    )
     if not enough_sources:
-        reasons.append({"id": "need_two_exports", "detail": "At least two valid exports are required."})
+        reasons.append(
+            {
+                "id": "need_two_exports",
+                "detail": "At least two valid exports are required.",
+            }
+        )
 
     denominators = [
         {"label": s.get("label"), "stays": (s.get("summary") or {}).get("stays")}
         for s in sources
     ]
-    denominator_ok = all(isinstance(row["stays"], (int, float)) and row["stays"] > 0 for row in denominators)
-    checks.append({"id": "denominator_present", "passed": denominator_ok, "sources": denominators})
+    denominator_ok = all(
+        isinstance(row["stays"], (int, float)) and row["stays"] > 0
+        for row in denominators
+    )
+    checks.append(
+        {"id": "denominator_present", "passed": denominator_ok, "sources": denominators}
+    )
     if not denominator_ok:
         reasons.append({"id": "missing_denominator", "sources": denominators})
 
     missing_core = sorted(required_core - shared)
-    checks.append({
-        "id": "core_modules_shared",
-        "passed": not missing_core,
-        "required_modules": sorted(required_core),
-        "shared_modules": shared_modules,
-        "missing_modules": missing_core,
-    })
+    checks.append(
+        {
+            "id": "core_modules_shared",
+            "passed": not missing_core,
+            "required_modules": sorted(required_core),
+            "shared_modules": shared_modules,
+            "missing_modules": missing_core,
+        }
+    )
     if missing_core:
         per_source = [
             {
                 "label": s.get("label"),
-                "missing_core_modules": sorted(required_core - set(s.get("modules") or [])),
+                "missing_core_modules": sorted(
+                    required_core - set(s.get("modules") or [])
+                ),
             }
             for s in sources
         ]
-        reasons.append({
-            "id": "core_modules_not_shared",
-            "missing_shared_modules": missing_core,
-            "sources": per_source,
-        })
+        reasons.append(
+            {
+                "id": "core_modules_not_shared",
+                "missing_shared_modules": missing_core,
+                "sources": per_source,
+            }
+        )
 
     comparable_metrics = ["stays", "mean_age", "female_pct", "mortality"]
     if "sepsis3_sofa2" in shared:
@@ -1473,11 +1710,13 @@ def _crossdb_compatibility_gate(
     warnings = []
     missing_optional = sorted((optional_modules & set(all_modules)) - shared)
     if missing_optional:
-        warnings.append({
-            "id": "optional_modules_not_shared",
-            "modules": missing_optional,
-            "effect": "dependent metrics are omitted from descriptive rows",
-        })
+        warnings.append(
+            {
+                "id": "optional_modules_not_shared",
+                "modules": missing_optional,
+                "effect": "dependent metrics are omitted from descriptive rows",
+            }
+        )
 
     compatible = all(check["passed"] for check in checks)
     return {
@@ -1521,7 +1760,11 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
     manifest_stays = _manifest_stay_count(manifest)
     stay_ids = None if manifest_stays is not None else _fast_stay_ids(path, files)
     summary = {
-        "stays": manifest_stays if manifest_stays is not None else (len(stay_ids) if stay_ids is not None else None),
+        "stays": (
+            manifest_stays
+            if manifest_stays is not None
+            else (len(stay_ids) if stay_ids is not None else None)
+        ),
         "modules": len(modules),
         "file_count": len(files),
         "total_rows": sum(int(f.get("rows") or 0) for f in files),
@@ -1599,8 +1842,12 @@ def _positive_int(value: Any) -> Optional[int]:
     return number if number >= 0 else None
 
 
-def _export_file_inventory(path: Path, manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
-    manifest_files = {f.get("file"): f for f in _manifest_file_entries(manifest) if f.get("file")}
+def _export_file_inventory(
+    path: Path, manifest: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    manifest_files = {
+        f.get("file"): f for f in _manifest_file_entries(manifest) if f.get("file")
+    }
     out: List[Dict[str, Any]] = []
     for f in sorted(path.iterdir(), key=lambda p: p.name):
         if f.name.startswith(".") or f.name in _MODULE_MANIFESTS or not f.is_file():
@@ -1628,7 +1875,11 @@ def _infer_export_module(path: Path) -> str:
     except Exception:
         groups = []
     for group in groups:
-        if stem == group or stem.startswith(group + "_") or stem.startswith(group + "__"):
+        if (
+            stem == group
+            or stem.startswith(group + "_")
+            or stem.startswith(group + "__")
+        ):
             return group
     return stem.split("__", 1)[0]
 
@@ -1797,7 +2048,12 @@ def _truthy(value: Any) -> Optional[bool]:
 
 
 def _stay_bool(frame: Any, column: str, missing_false: bool = False) -> Dict[str, bool]:
-    if frame is None or frame.empty or "stay_id" not in frame.columns or column not in frame.columns:
+    if (
+        frame is None
+        or frame.empty
+        or "stay_id" not in frame.columns
+        or column not in frame.columns
+    ):
         return {}
     out: Dict[str, bool] = {}
     for sid, vals in frame.groupby("stay_id")[column]:
@@ -1811,7 +2067,12 @@ def _stay_bool(frame: Any, column: str, missing_false: bool = False) -> Dict[str
 
 
 def _stay_numeric(frame: Any, column: str, mode: str) -> Dict[str, float]:
-    if frame is None or frame.empty or "stay_id" not in frame.columns or column not in frame.columns:
+    if (
+        frame is None
+        or frame.empty
+        or "stay_id" not in frame.columns
+        or column not in frame.columns
+    ):
         return {}
     numeric = frame[["stay_id", column]].copy()
     import pandas as pd
@@ -1876,9 +2137,24 @@ def _cohort_summary(table_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         return round(sum(vals) / len(vals), 2) if vals else None
 
     characteristics = [
-        ["Age, mean", mean(table_rows, "age"), mean(survived, "age"), mean(deceased, "age")],
-        ["SOFA-2, mean", mean(table_rows, "sofa2"), mean(survived, "sofa2"), mean(deceased, "sofa2")],
-        ["ICU LOS, mean", mean(table_rows, "los_icu"), mean(survived, "los_icu"), mean(deceased, "los_icu")],
+        [
+            "Age, mean",
+            mean(table_rows, "age"),
+            mean(survived, "age"),
+            mean(deceased, "age"),
+        ],
+        [
+            "SOFA-2, mean",
+            mean(table_rows, "sofa2"),
+            mean(survived, "sofa2"),
+            mean(deceased, "sofa2"),
+        ],
+        [
+            "ICU LOS, mean",
+            mean(table_rows, "los_icu"),
+            mean(survived, "los_icu"),
+            mean(deceased, "los_icu"),
+        ],
     ]
     return {
         "survived": len(survived),
@@ -1887,7 +2163,9 @@ def _cohort_summary(table_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _cohort_total_rows(path: Path, files: List[Dict[str, Any]], stay_ids: set[str]) -> int:
+def _cohort_total_rows(
+    path: Path, files: List[Dict[str, Any]], stay_ids: set[str]
+) -> int:
     total = 0
     for file_meta in files:
         file_name = file_meta.get("file")
@@ -1915,13 +2193,19 @@ def _count_matching_stay_rows(path: Path, stay_ids: set[str]) -> int:
     return int(frame["stay_id"].map(_norm_id).isin(stay_ids).sum())
 
 
-def _quality_row(path: Path, file_meta: Dict[str, Any], stay_ids: set[str]) -> Dict[str, Any]:
+def _quality_row(
+    path: Path, file_meta: Dict[str, Any], stay_ids: set[str]
+) -> Dict[str, Any]:
     module = file_meta.get("module")
     rows = int(file_meta.get("rows") or 0)
     denominator = len(stay_ids)
     file_stays = _read_stay_ids(path)
     unique_stays = len(file_stays & stay_ids) if file_stays is not None else None
-    coverage = round(unique_stays / denominator * 100, 1) if denominator and unique_stays is not None else None
+    coverage = (
+        round(unique_stays / denominator * 100, 1)
+        if denominator and unique_stays is not None
+        else None
+    )
     if coverage is None:
         status = "unknown"
     elif module in _EVENT_PRESENCE_MODULES:
@@ -1959,7 +2243,15 @@ def _series_payload(vitals: Any, stay_id: str) -> List[Dict[str, Any]]:
             continue
         vals = _numeric_values(one[col].head(12))
         if vals:
-            out.append({"key": col, "name": name, "unit": unit, "current": vals[-1], "values": vals})
+            out.append(
+                {
+                    "key": col,
+                    "name": name,
+                    "unit": unit,
+                    "current": vals[-1],
+                    "values": vals,
+                }
+            )
     return out
 
 
@@ -1983,7 +2275,8 @@ def _check_data_status(path: Path, db_key: str) -> Dict[str, Any]:
         pass
 
     csv_files = [
-        f for f in list(path.glob("*.csv")) + list(path.glob("*.csv.gz"))
+        f
+        for f in list(path.glob("*.csv")) + list(path.glob("*.csv.gz"))
         if not f.name.startswith(".")
     ]
 
@@ -2025,8 +2318,8 @@ def _estimate_size(path: Path) -> Optional[str]:
         return None
     if total <= 0:
         return None
-    gb = total / (1024 ** 3)
+    gb = total / (1024**3)
     if gb >= 1:
         return f"~{gb:.1f} GB"
-    mb = total / (1024 ** 2)
+    mb = total / (1024**2)
     return f"~{mb:.0f} MB"

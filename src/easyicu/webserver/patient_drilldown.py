@@ -5,6 +5,7 @@ summary endpoint returns preview row structures used by early migration stages;
 Patient Review now needs a real, fail-closed path that exposes only aggregate
 metadata plus one pseudonymous entity drilldown.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -96,18 +97,20 @@ def patient_review_sources(body: Dict[str, Any] | None = None) -> Dict[str, Any]
         summary = desc.get("summary") or source.get("summary") or {}
         source_norm = _norm_path(raw_path)
         public = _source_provenance(source, desc)
-        public.update({
-            "active": source_norm == active_norm,
-            "path": raw_path,
-            "path_hash": _hash(source_norm),
-            "patient_ready": _is_patient_ready(desc),
-            "summary": {
-                "entities": _int_or_none(summary.get("stays")),
-                "modules": _int_or_none(summary.get("modules")),
-                "file_count": _int_or_none(summary.get("file_count")),
-                "total_rows": _int_or_none(summary.get("total_rows")),
-            },
-        })
+        public.update(
+            {
+                "active": source_norm == active_norm,
+                "path": raw_path,
+                "path_hash": _hash(source_norm),
+                "patient_ready": _is_patient_ready(desc),
+                "summary": {
+                    "entities": _int_or_none(summary.get("stays")),
+                    "modules": _int_or_none(summary.get("modules")),
+                    "file_count": _int_or_none(summary.get("file_count")),
+                    "total_rows": _int_or_none(summary.get("total_rows")),
+                },
+            }
+        )
         sources.append(public)
 
     active_source = next((item for item in sources if item.get("active")), None)
@@ -194,7 +197,9 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
             sepsis_by_entity.setdefault(entity_id, False)
     death_by_entity_all = dataio._stay_bool(outcome_all, "death", missing_false=True)
     los_by_entity_all = dataio._stay_numeric(outcome_all, "los_icu", "median")
-    sepsis_by_entity_all = dataio._stay_bool(sepsis_all, "sep3_sofa2", missing_false=True)
+    sepsis_by_entity_all = dataio._stay_bool(
+        sepsis_all, "sep3_sofa2", missing_false=True
+    )
     for entity_id in entity_ids:
         if outcome_all is not None and not outcome_all.empty:
             death_by_entity_all.setdefault(entity_id, False)
@@ -208,7 +213,9 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         selected_id = entity_ids[0]
 
     demo_by_id = demo.set_index("stay_id", drop=False)
-    selected_row = demo_by_id.loc[selected_id] if selected_id in demo_by_id.index else {}
+    selected_row = (
+        demo_by_id.loc[selected_id] if selected_id in demo_by_id.index else {}
+    )
     entities = [
         _entity_option(path, entity_id, ordinal, death_by_entity, sofa_by_entity)
         for ordinal, entity_id in enumerate(entity_ids[:_MAX_ENTITIES], start=1)
@@ -232,23 +239,47 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         "total_rows": int((desc.get("summary") or {}).get("total_rows") or 0),
         "review_entities": len(review_entity_ids),
         "review_entity_cap": _MAX_REVIEW_ENTITIES,
-        "review_scope": "browser_bounded_entity_sample" if len(review_entity_ids) < len(entity_ids) else "full_entity_set",
+        "review_scope": (
+            "browser_bounded_entity_sample"
+            if len(review_entity_ids) < len(entity_ids)
+            else "full_entity_set"
+        ),
         "static_aggregate_scope": "full_entity_set",
-        "dynamic_aggregate_scope": "browser_bounded_entity_sample" if len(review_entity_ids) < len(entity_ids) else "full_entity_set",
-        "mean_age": dataio._series_mean(demo.get("age")) if "age" in demo.columns else None,
-        "female_pct": dataio._sex_pct(demo.get("sex"), "female") if "sex" in demo.columns else None,
-        "mortality": dataio._bool_pct(list((death_by_entity_all or death_by_entity).values())),
-        "median_los_icu": dataio._median(list((los_by_entity_all or los_by_entity).values())),
+        "dynamic_aggregate_scope": (
+            "browser_bounded_entity_sample"
+            if len(review_entity_ids) < len(entity_ids)
+            else "full_entity_set"
+        ),
+        "mean_age": (
+            dataio._series_mean(demo.get("age")) if "age" in demo.columns else None
+        ),
+        "female_pct": (
+            dataio._sex_pct(demo.get("sex"), "female")
+            if "sex" in demo.columns
+            else None
+        ),
+        "mortality": dataio._bool_pct(
+            list((death_by_entity_all or death_by_entity).values())
+        ),
+        "median_los_icu": dataio._median(
+            list((los_by_entity_all or los_by_entity).values())
+        ),
         "median_sofa2": dataio._median(list(sofa_by_entity.values())),
-        "sepsis_pct": dataio._bool_pct(list((sepsis_by_entity_all or sepsis_by_entity).values())),
+        "sepsis_pct": dataio._bool_pct(
+            list((sepsis_by_entity_all or sepsis_by_entity).values())
+        ),
     }
     module_profiles = _module_profiles(desc, review_frames, entity_set)
     time_lanes = _time_lane_payloads(review_frames, selected_id)
     quality_metrics = _quality_metrics_payload(review_frames, entity_set)
     quality = _quality_from_module_profiles(module_profiles)
     data_tables = _data_table_review_payload(path, desc, module_profiles, summary)
-    trajectory_review = _trajectory_review_payload(time_lanes, selected, entities, quality_metrics)
-    patient_overview = _patient_overview_payload(selected, entities, time_lanes, quality_metrics)
+    trajectory_review = _trajectory_review_payload(
+        time_lanes, selected, entities, quality_metrics
+    )
+    patient_overview = _patient_overview_payload(
+        selected, entities, time_lanes, quality_metrics
+    )
     quality_review = _quality_review_payload(quality, quality_metrics)
 
     return {
@@ -308,54 +339,85 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _resolve_registered_source(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _resolve_registered_source(
+    body: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     registry = source_store.load_registry()
     sources = [s for s in registry.get("sources") or [] if isinstance(s, dict)]
     requested = body.get("source_path") or body.get("path")
     if requested:
         norm = _norm_path(str(requested))
-        source = next((s for s in sources if _norm_path(str(s.get("path") or "")) == norm), None)
+        source = next(
+            (s for s in sources if _norm_path(str(s.get("path") or "")) == norm), None
+        )
         if source is None:
-            raise PatientReviewError({"error": "source_not_registered", "path_hash": _hash(norm)})
+            raise PatientReviewError(
+                {"error": "source_not_registered", "path_hash": _hash(norm)}
+            )
     else:
         active = registry.get("active_path")
         if not active:
             raise PatientReviewError({"error": "no_active_export"})
         active_norm = _norm_path(str(active))
-        source = next((s for s in sources if _norm_path(str(s.get("path") or "")) == active_norm), None)
+        source = next(
+            (s for s in sources if _norm_path(str(s.get("path") or "")) == active_norm),
+            None,
+        )
         if source is None:
-            raise PatientReviewError({"error": "active_source_not_registered", "path_hash": _hash(active_norm)})
+            raise PatientReviewError(
+                {
+                    "error": "active_source_not_registered",
+                    "path_hash": _hash(active_norm),
+                }
+            )
 
     desc = dataio.describe_export_source(str(source.get("path") or ""))
     if not desc.get("ok"):
-        raise PatientReviewError({"error": "invalid_export", "detail": desc.get("error")})
+        raise PatientReviewError(
+            {"error": "invalid_export", "detail": desc.get("error")}
+        )
     return source, desc
 
 
-def _read_module_frame(path: Path, desc: Dict[str, Any], module: str, stay_ids: set[str] | None = None) -> Any:
-    file_meta = next((f for f in desc.get("files") or [] if f.get("module") == module), None)
+def _read_module_frame(
+    path: Path, desc: Dict[str, Any], module: str, stay_ids: set[str] | None = None
+) -> Any:
+    file_meta = next(
+        (f for f in desc.get("files") or [] if f.get("module") == module), None
+    )
     if not file_meta:
         return None
     file_name = str(file_meta.get("file") or "")
-    columns = [c for c in _MODULE_COLUMNS[module] if c in (file_meta.get("columns") or [])]
+    columns = [
+        c for c in _MODULE_COLUMNS[module] if c in (file_meta.get("columns") or [])
+    ]
     if "stay_id" not in columns:
         return None
     return _read_selected_columns(path / file_name, columns, stay_ids=stay_ids)
 
 
 def _fallback_entity_frame(path: Path, desc: Dict[str, Any]) -> Any:
-    file_meta = next((f for f in desc.get("files") or [] if "stay_id" in (f.get("columns") or [])), None)
+    file_meta = next(
+        (f for f in desc.get("files") or [] if "stay_id" in (f.get("columns") or [])),
+        None,
+    )
     if not file_meta:
         return None
     return _read_selected_columns(path / str(file_meta.get("file") or ""), ["stay_id"])
 
 
-def _read_selected_columns(path: Path, columns: List[str], stay_ids: set[str] | None = None) -> Any:
+def _read_selected_columns(
+    path: Path, columns: List[str], stay_ids: set[str] | None = None
+) -> Any:
     import pandas as pd
 
     suffix = path.suffix.lower()
     if suffix == ".parquet":
-        filters = _stay_id_filters(path, stay_ids) if stay_ids and "stay_id" in columns else None
+        filters = (
+            _stay_id_filters(path, stay_ids)
+            if stay_ids and "stay_id" in columns
+            else None
+        )
         if filters:
             return pd.read_parquet(path, columns=columns, filters=filters)
         return pd.read_parquet(path, columns=columns)
@@ -370,7 +432,9 @@ def _read_selected_columns(path: Path, columns: List[str], stay_ids: set[str] | 
     return frame
 
 
-def _stay_id_filters(path: Path, stay_ids: set[str]) -> List[Tuple[str, str, List[Any]]] | None:
+def _stay_id_filters(
+    path: Path, stay_ids: set[str]
+) -> List[Tuple[str, str, List[Any]]] | None:
     values: List[Any]
     try:
         import pyarrow.parquet as pq
@@ -398,7 +462,9 @@ def _is_number_like(value: Any) -> bool:
         return False
 
 
-def _read_review_frames(path: Path, desc: Dict[str, Any], entity_set: set[str]) -> List[Dict[str, Any]]:
+def _read_review_frames(
+    path: Path, desc: Dict[str, Any], entity_set: set[str]
+) -> List[Dict[str, Any]]:
     """Read bounded columns needed for Patient Review charts.
 
     The old Streamlit Patient Review computed module previews, clinical-lane
@@ -418,10 +484,18 @@ def _read_review_frames(path: Path, desc: Dict[str, Any], entity_set: set[str]) 
         if len(selected_columns) <= 1:
             continue
         try:
-            frame = _read_selected_columns(path / str(item.get("file") or ""), selected_columns, stay_ids=entity_set)
+            frame = _read_selected_columns(
+                path / str(item.get("file") or ""),
+                selected_columns,
+                stay_ids=entity_set,
+            )
         except Exception:
             continue
-        if frame is None or getattr(frame, "empty", True) or "stay_id" not in frame.columns:
+        if (
+            frame is None
+            or getattr(frame, "empty", True)
+            or "stay_id" not in frame.columns
+        ):
             continue
         frame = frame.copy()
         frame["stay_id"] = frame["stay_id"].map(dataio._norm_id)
@@ -439,7 +513,9 @@ def _read_review_frames(path: Path, desc: Dict[str, Any], entity_set: set[str]) 
             "entity_overlap": int(frame["stay_id"].nunique()),
         }
         current = best_by_module.get(module)
-        if current is None or candidate["entity_overlap"] > int(current.get("entity_overlap") or 0):
+        if current is None or candidate["entity_overlap"] > int(
+            current.get("entity_overlap") or 0
+        ):
             best_by_module[module] = candidate
     return list(best_by_module.values())
 
@@ -492,7 +568,10 @@ def _module_profiles(
         item = item_by_module[module]
         frame_item = frame_by_module.get(module)
         columns = [str(col) for col in ((frame_item or item).get("columns") or [])]
-        features = [str(col) for col in ((frame_item or {}).get("features") or _feature_columns(columns))]
+        features = [
+            str(col)
+            for col in ((frame_item or {}).get("features") or _feature_columns(columns))
+        ]
         frame = frame_item.get("frame") if frame_item else None
         time_col = frame_item.get("time_col") if frame_item else None
         rows = int((frame_item or item).get("rows") or 0)
@@ -501,7 +580,9 @@ def _module_profiles(
         static_features = 0
         observed_features = 0
         if frame is not None and not frame.empty:
-            entities = int(frame["stay_id"].nunique()) if "stay_id" in frame.columns else None
+            entities = (
+                int(frame["stay_id"].nunique()) if "stay_id" in frame.columns else None
+            )
             for feature in [f for f in features if f in frame.columns]:
                 if frame[feature].notna().any():
                     observed_features += 1
@@ -509,20 +590,26 @@ def _module_profiles(
                         dynamic_features += 1
                     else:
                         static_features += 1
-        coverage = round(entities / len(entity_set) * 100, 1) if entities is not None and entity_set else None
-        profiles.append({
-            "module": module,
-            "label": _module_label(module),
-            "rows": rows,
-            "feature_count": len(features),
-            "observed_features": observed_features,
-            "entities": entities,
-            "coverage_pct": coverage,
-            "time_indexed": bool(time_col),
-            "dynamic_features": dynamic_features,
-            "static_features": static_features,
-            "preview_features": features[:6],
-        })
+        coverage = (
+            round(entities / len(entity_set) * 100, 1)
+            if entities is not None and entity_set
+            else None
+        )
+        profiles.append(
+            {
+                "module": module,
+                "label": _module_label(module),
+                "rows": rows,
+                "feature_count": len(features),
+                "observed_features": observed_features,
+                "entities": entities,
+                "coverage_pct": coverage,
+                "time_indexed": bool(time_col),
+                "dynamic_features": dynamic_features,
+                "static_features": static_features,
+                "preview_features": features[:6],
+            }
+        )
     return profiles
 
 
@@ -538,7 +625,9 @@ def _plain_label(label: str) -> str:
     return text or str(label or "")
 
 
-def _time_lane_payloads(review_frames: List[Dict[str, Any]], entity_id: str) -> List[Dict[str, Any]]:
+def _time_lane_payloads(
+    review_frames: List[Dict[str, Any]], entity_id: str
+) -> List[Dict[str, Any]]:
     by_feature: Dict[str, Dict[str, Any]] = {}
     for item in review_frames:
         frame = item.get("frame")
@@ -558,20 +647,23 @@ def _time_lane_payloads(review_frames: List[Dict[str, Any]], entity_id: str) -> 
             values = dataio._numeric_values(one[feature])
             if not values:
                 continue
-            by_feature.setdefault(feature, {
-                "feature": feature,
-                "name": _concept_name(feature),
-                "unit": _concept_unit(feature),
-                "module": item.get("module"),
-                "time_indexed": bool(time_col),
-                "values": values[:_MAX_SIGNAL_POINTS],
-                "point_count": len(values),
-                "current": values[min(len(values), _MAX_SIGNAL_POINTS) - 1],
-                "min": round(min(values), 3),
-                "max": round(max(values), 3),
-                "mean": round(sum(values) / len(values), 3),
-                "thresholds": _threshold_payload(feature),
-            })
+            by_feature.setdefault(
+                feature,
+                {
+                    "feature": feature,
+                    "name": _concept_name(feature),
+                    "unit": _concept_unit(feature),
+                    "module": item.get("module"),
+                    "time_indexed": bool(time_col),
+                    "values": values[:_MAX_SIGNAL_POINTS],
+                    "point_count": len(values),
+                    "current": values[min(len(values), _MAX_SIGNAL_POINTS) - 1],
+                    "min": round(min(values), 3),
+                    "max": round(max(values), 3),
+                    "mean": round(sum(values) / len(values), 3),
+                    "thresholds": _threshold_payload(feature),
+                },
+            )
             if len(by_feature) >= _MAX_REVIEW_SIGNALS:
                 break
         if len(by_feature) >= _MAX_REVIEW_SIGNALS:
@@ -582,22 +674,26 @@ def _time_lane_payloads(review_frames: List[Dict[str, Any]], entity_id: str) -> 
     for lane, features in concept_catalog.CLINICAL_LANES.items():
         lane_signals = [by_feature[f] for f in features if f in by_feature]
         used.update(row["feature"] for row in lane_signals)
-        lanes.append({
-            "lane": lane,
-            "label": lane.replace("_", " ").title(),
-            "signal_count": len(lane_signals),
-            "signals": lane_signals,
-            "status": "ready" if lane_signals else "unavailable",
-        })
+        lanes.append(
+            {
+                "lane": lane,
+                "label": lane.replace("_", " ").title(),
+                "signal_count": len(lane_signals),
+                "signals": lane_signals,
+                "status": "ready" if lane_signals else "unavailable",
+            }
+        )
     other = [row for key, row in by_feature.items() if key not in used]
     if other:
-        lanes.append({
-            "lane": "other",
-            "label": "Other signals",
-            "signal_count": len(other),
-            "signals": other,
-            "status": "ready",
-        })
+        lanes.append(
+            {
+                "lane": "other",
+                "label": "Other signals",
+                "signal_count": len(other),
+                "signals": other,
+                "status": "ready",
+            }
+        )
     return lanes
 
 
@@ -624,14 +720,18 @@ def _threshold_payload(feature: str) -> List[Dict[str, Any]]:
     labels = thresholds.get("labels") or []
     out = []
     for idx, value in enumerate(lines):
-        out.append({
-            "value": dataio._num(value),
-            "label": labels[idx] if idx < len(labels) else "clinical threshold",
-        })
+        out.append(
+            {
+                "value": dataio._num(value),
+                "label": labels[idx] if idx < len(labels) else "clinical threshold",
+            }
+        )
     return out
 
 
-def _quality_metrics_payload(review_frames: List[Dict[str, Any]], entity_set: set[str]) -> Dict[str, Any]:
+def _quality_metrics_payload(
+    review_frames: List[Dict[str, Any]], entity_set: set[str]
+) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     total_records = 0
     missing_weight = 0.0
@@ -648,11 +748,16 @@ def _quality_metrics_payload(review_frames: List[Dict[str, Any]], entity_set: se
         for feature in item.get("features") or []:
             if feature not in frame.columns:
                 continue
-            observed = frame[["stay_id", feature] + ([time_col] if time_col and time_col in frame.columns else [])].copy()
+            observed = frame[
+                ["stay_id", feature]
+                + ([time_col] if time_col and time_col in frame.columns else [])
+            ].copy()
             non_null = observed[observed[feature].notna()]
             records = int(len(non_null))
             entities = int(non_null["stay_id"].nunique()) if records else 0
-            missing_pct = round((1 - entities / denominator) * 100, 1) if denominator else None
+            missing_pct = (
+                round((1 - entities / denominator) * 100, 1) if denominator else None
+            )
             outlier_pct = _out_of_physio_pct(feature, non_null[feature])
             duplicate_pct = _duplicate_time_pct(non_null, time_col)
             density = round(records / max(denominator, 1), 3) if denominator else None
@@ -661,28 +766,46 @@ def _quality_metrics_payload(review_frames: List[Dict[str, Any]], entity_set: se
                 missing_weight += missing_pct * max(records, 1)
             outlier_weight += outlier_pct * max(records, 1)
             duplicate_weight += duplicate_pct * max(records, 1)
-            rows.append({
-                "feature": feature,
-                "name": _concept_name(feature),
-                "module": module,
-                "records": records,
-                "entities": entities,
-                "coverage_pct": round(entities / denominator * 100, 1) if denominator else None,
-                "missing_pct": missing_pct,
-                "out_of_physio_pct": outlier_pct,
-                "duplicate_time_pct": duplicate_pct,
-                "density_per_entity": density,
-                "time_indexed": bool(time_col),
-                "status": _quality_feature_status(missing_pct, outlier_pct, duplicate_pct),
-            })
+            rows.append(
+                {
+                    "feature": feature,
+                    "name": _concept_name(feature),
+                    "module": module,
+                    "records": records,
+                    "entities": entities,
+                    "coverage_pct": (
+                        round(entities / denominator * 100, 1) if denominator else None
+                    ),
+                    "missing_pct": missing_pct,
+                    "out_of_physio_pct": outlier_pct,
+                    "duplicate_time_pct": duplicate_pct,
+                    "density_per_entity": density,
+                    "time_indexed": bool(time_col),
+                    "status": _quality_feature_status(
+                        missing_pct, outlier_pct, duplicate_pct
+                    ),
+                }
+            )
 
     weight_denominator = sum(max(int(row.get("records") or 0), 1) for row in rows)
     summary = {
         "concept_count": len(rows),
         "total_records": total_records,
-        "weighted_missing_pct": round(missing_weight / weight_denominator, 1) if weight_denominator else None,
-        "weighted_out_of_physio_pct": round(outlier_weight / weight_denominator, 1) if weight_denominator else None,
-        "weighted_duplicate_time_pct": round(duplicate_weight / weight_denominator, 1) if weight_denominator else None,
+        "weighted_missing_pct": (
+            round(missing_weight / weight_denominator, 1)
+            if weight_denominator
+            else None
+        ),
+        "weighted_out_of_physio_pct": (
+            round(outlier_weight / weight_denominator, 1)
+            if weight_denominator
+            else None
+        ),
+        "weighted_duplicate_time_pct": (
+            round(duplicate_weight / weight_denominator, 1)
+            if weight_denominator
+            else None
+        ),
         "denominator_entities": denominator,
     }
     top_issues = sorted(
@@ -710,38 +833,48 @@ def _data_table_review_payload(
     summary: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Mirror the old Data Tables review contract with bounded local previews."""
-    module_count = len([row for row in module_profiles if int(row.get("feature_count") or 0) > 0])
+    module_count = len(
+        [row for row in module_profiles if int(row.get("feature_count") or 0) > 0]
+    )
     feature_count = sum(int(row.get("feature_count") or 0) for row in module_profiles)
-    selected_count = sum(int(row.get("observed_features") or 0) for row in module_profiles)
+    selected_count = sum(
+        int(row.get("observed_features") or 0) for row in module_profiles
+    )
     modules = []
     for row in module_profiles:
         feature_count_row = int(row.get("feature_count") or 0)
         if feature_count_row <= 0:
             continue
         coverage = row.get("coverage_pct")
-        modules.append({
-            "module": row.get("module"),
-            "label": row.get("label"),
-            "review_features": feature_count_row,
-            "observed_features": int(row.get("observed_features") or 0),
-            "rows": int(row.get("rows") or 0),
-            "entities": row.get("entities"),
-            "coverage_pct": coverage,
-            "share_pct": round(feature_count_row / feature_count * 100, 1) if feature_count else None,
-            "shape": "time_indexed" if row.get("time_indexed") else "static",
-            "dynamic_features": int(row.get("dynamic_features") or 0),
-            "static_features": int(row.get("static_features") or 0),
-            "preview_features": [
-                {
-                    "feature": feature,
-                    "name": _concept_name(str(feature)),
-                    "unit": _concept_unit(str(feature)),
-                    "group": _concept_group_label(str(feature)),
-                }
-                for feature in (row.get("preview_features") or [])[:6]
-            ],
-            "status": _module_review_status(coverage, feature_count_row),
-        })
+        modules.append(
+            {
+                "module": row.get("module"),
+                "label": row.get("label"),
+                "review_features": feature_count_row,
+                "observed_features": int(row.get("observed_features") or 0),
+                "rows": int(row.get("rows") or 0),
+                "entities": row.get("entities"),
+                "coverage_pct": coverage,
+                "share_pct": (
+                    round(feature_count_row / feature_count * 100, 1)
+                    if feature_count
+                    else None
+                ),
+                "shape": "time_indexed" if row.get("time_indexed") else "static",
+                "dynamic_features": int(row.get("dynamic_features") or 0),
+                "static_features": int(row.get("static_features") or 0),
+                "preview_features": [
+                    {
+                        "feature": feature,
+                        "name": _concept_name(str(feature)),
+                        "unit": _concept_unit(str(feature)),
+                        "group": _concept_group_label(str(feature)),
+                    }
+                    for feature in (row.get("preview_features") or [])[:6]
+                ],
+                "status": _module_review_status(coverage, feature_count_row),
+            }
+        )
     return {
         "loaded_summary": {
             "entities": summary.get("entities"),
@@ -759,7 +892,11 @@ def _data_table_review_payload(
             "title": "Bounded local table previews",
             "default_open": False,
             "reason": "The browser renders capped module table previews with pseudonymous entity tokens; direct identifiers and full tables stay on disk.",
-            "available_detail_modes": ["module_table_preview", "module_glance", "single_feature_metadata"],
+            "available_detail_modes": [
+                "module_table_preview",
+                "module_glance",
+                "single_feature_metadata",
+            ],
         },
         "modules": modules,
         "table_previews": _table_preview_payloads(path, desc, module_profiles),
@@ -783,7 +920,9 @@ def _table_preview_payloads(
         if len(previews) >= _MAX_TABLE_PREVIEW_MODULES:
             break
         columns = [str(col) for col in (item.get("columns") or [])]
-        id_col, read_columns, display_columns, hidden_count = _table_preview_columns(columns)
+        id_col, read_columns, display_columns, hidden_count = _table_preview_columns(
+            columns
+        )
         profile = profile_by_module.get(module) or {}
         base = {
             "module": module,
@@ -798,46 +937,66 @@ def _table_preview_payloads(
             "pseudonymous_entity_column": bool(id_col),
         }
         if not read_columns:
-            previews.append({
-                **base,
-                "status": "unavailable",
-                "rows": [],
-                "row_count": 0,
-                "reason": "No displayable columns after direct identifiers are removed.",
-            })
+            previews.append(
+                {
+                    **base,
+                    "status": "unavailable",
+                    "rows": [],
+                    "row_count": 0,
+                    "reason": "No displayable columns after direct identifiers are removed.",
+                }
+            )
             continue
         try:
-            frame = _read_table_preview(path / str(item.get("file") or ""), read_columns, _MAX_TABLE_PREVIEW_ROWS)
+            frame = _read_table_preview(
+                path / str(item.get("file") or ""),
+                read_columns,
+                _MAX_TABLE_PREVIEW_ROWS,
+            )
         except Exception as exc:
-            previews.append({
-                **base,
-                "status": "unavailable",
-                "rows": [],
-                "row_count": 0,
-                "reason": str(exc)[:160],
-            })
+            previews.append(
+                {
+                    **base,
+                    "status": "unavailable",
+                    "rows": [],
+                    "row_count": 0,
+                    "reason": str(exc)[:160],
+                }
+            )
             continue
         rows = _public_preview_rows(path, frame, id_col, display_columns)
-        previews.append({
-            **base,
-            "status": "ready" if rows else "empty",
-            "rows": rows,
-            "row_count": len(rows),
-            "truncated_rows": int(base["rows_total"]) > len(rows),
-            "truncated_columns": hidden_count > 0,
-            "payload_scope": "bounded_pseudonymous_module_table_preview",
-        })
+        previews.append(
+            {
+                **base,
+                "status": "ready" if rows else "empty",
+                "rows": rows,
+                "row_count": len(rows),
+                "truncated_rows": int(base["rows_total"]) > len(rows),
+                "truncated_columns": hidden_count > 0,
+                "payload_scope": "bounded_pseudonymous_module_table_preview",
+            }
+        )
     return previews
 
 
-def _table_preview_columns(columns: List[str]) -> Tuple[str | None, List[str], List[str], int]:
+def _table_preview_columns(
+    columns: List[str],
+) -> Tuple[str | None, List[str], List[str], int]:
     id_col = next((col for col in columns if _is_direct_identifier_column(col)), None)
     non_id = [col for col in columns if not _is_direct_identifier_column(col)]
     time_cols = [col for col in _TIME_COLUMNS if col in non_id]
     feature_cols = [col for col in _feature_columns(non_id) if col not in time_cols]
-    other_cols = [col for col in non_id if col not in time_cols and col not in feature_cols and col not in _METADATA_COLUMNS]
+    other_cols = [
+        col
+        for col in non_id
+        if col not in time_cols
+        and col not in feature_cols
+        and col not in _METADATA_COLUMNS
+    ]
     source_display = _ordered_unique([*time_cols, *feature_cols, *other_cols])
-    source_display = source_display[: max(0, _MAX_TABLE_PREVIEW_COLUMNS - (1 if id_col else 0))]
+    source_display = source_display[
+        : max(0, _MAX_TABLE_PREVIEW_COLUMNS - (1 if id_col else 0))
+    ]
     read_columns = _ordered_unique(([id_col] if id_col else []) + source_display)
     display_columns = (["entity"] if id_col else []) + source_display
     hidden_count = max(0, len([col for col in non_id if col not in source_display]))
@@ -858,7 +1017,9 @@ def _read_table_preview(path: Path, columns: List[str], nrows: int) -> Any:
             import pyarrow.parquet as pq
 
             parquet = pq.ParquetFile(path)
-            for batch in parquet.iter_batches(batch_size=max(nrows, 1), columns=columns):
+            for batch in parquet.iter_batches(
+                batch_size=max(nrows, 1), columns=columns
+            ):
                 return batch.to_pandas().head(nrows)
             return pd.DataFrame(columns=columns)
         except Exception:
@@ -922,7 +1083,9 @@ def _trajectory_review_payload(
     quality_metrics: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Build bounded time-window feature-matrix review metadata."""
-    ready_lanes = [row for row in time_lanes if row.get("status") == "ready" and row.get("signals")]
+    ready_lanes = [
+        row for row in time_lanes if row.get("status") == "ready" and row.get("signals")
+    ]
     signal_count = sum(int(row.get("signal_count") or 0) for row in ready_lanes)
     selected_signals = []
     for lane in ready_lanes:
@@ -1002,10 +1165,30 @@ def _patient_overview_payload(
     """Mirror old Patient Overview dashboard/category/table modes."""
     signal_index = _selected_signal_index(time_lanes)
     category_sections = [
-        _category_section("vitals", "Vital Signs Snapshot", ("hr", "map", "sbp", "dbp", "resp", "temp", "spo2"), signal_index),
-        _category_section("labs", "Key Laboratory Snapshot", ("lact", "lac", "crea", "plt", "wbc", "hgb", "bili"), signal_index),
-        _category_section("scores", "Scores and sepsis flags", ("sofa", "sofa2", "qsofa", "sirs", "gcs", "sep3_sofa1", "sep3_sofa2"), signal_index),
-        _category_section("support", "Support and therapies", ("mech_vent", "vent_ind", "rrt", "vaso_ind", "norepi_rate", "epi_rate"), signal_index),
+        _category_section(
+            "vitals",
+            "Vital Signs Snapshot",
+            ("hr", "map", "sbp", "dbp", "resp", "temp", "spo2"),
+            signal_index,
+        ),
+        _category_section(
+            "labs",
+            "Key Laboratory Snapshot",
+            ("lact", "lac", "crea", "plt", "wbc", "hgb", "bili"),
+            signal_index,
+        ),
+        _category_section(
+            "scores",
+            "Scores and sepsis flags",
+            ("sofa", "sofa2", "qsofa", "sirs", "gcs", "sep3_sofa1", "sep3_sofa2"),
+            signal_index,
+        ),
+        _category_section(
+            "support",
+            "Support and therapies",
+            ("mech_vent", "vent_ind", "rrt", "vaso_ind", "norepi_rate", "epi_rate"),
+            signal_index,
+        ),
     ]
     available_features = {
         str(row.get("feature"))
@@ -1031,7 +1214,8 @@ def _patient_overview_payload(
             "mode": "Dashboard",
             "summary_cards": _patient_summary_cards(selected),
             "trend_panels": [
-                section for section in category_sections
+                section
+                for section in category_sections
                 if section.get("available_count")
             ][:3],
             "sofa_comparator": _sofa_comparator(signal_index),
@@ -1057,16 +1241,53 @@ def _quality_review_payload(
     """Mirror old Quality page summary, contract and three panels."""
     summary = quality_metrics.get("summary") or {}
     features = quality_metrics.get("features") or []
-    missing = sorted(features, key=lambda row: float(row.get("missing_pct") or 0), reverse=True)[:10]
-    outliers = sorted(features, key=lambda row: float(row.get("out_of_physio_pct") or 0), reverse=True)[:10]
-    temporal = sorted(features, key=lambda row: float(row.get("duplicate_time_pct") or 0), reverse=True)[:10]
+    missing = sorted(
+        features, key=lambda row: float(row.get("missing_pct") or 0), reverse=True
+    )[:10]
+    outliers = sorted(
+        features, key=lambda row: float(row.get("out_of_physio_pct") or 0), reverse=True
+    )[:10]
+    temporal = sorted(
+        features,
+        key=lambda row: float(row.get("duplicate_time_pct") or 0),
+        reverse=True,
+    )[:10]
     return {
         "summary_cards": [
-            {"label": "QC concepts", "value": summary.get("concept_count"), "tone": "ok"},
-            {"label": "Records", "value": summary.get("total_records"), "tone": "accent"},
-            {"label": "Weighted missing", "value": summary.get("weighted_missing_pct"), "unit": "%", "tone": _rate_tone(summary.get("weighted_missing_pct"), warn=5, danger=20)},
-            {"label": "Out-of-physio", "value": summary.get("weighted_out_of_physio_pct"), "unit": "%", "tone": _rate_tone(summary.get("weighted_out_of_physio_pct"), warn=1, danger=5)},
-            {"label": "Duplicate TS", "value": summary.get("weighted_duplicate_time_pct"), "unit": "%", "tone": _rate_tone(summary.get("weighted_duplicate_time_pct"), warn=0.5, danger=2)},
+            {
+                "label": "QC concepts",
+                "value": summary.get("concept_count"),
+                "tone": "ok",
+            },
+            {
+                "label": "Records",
+                "value": summary.get("total_records"),
+                "tone": "accent",
+            },
+            {
+                "label": "Weighted missing",
+                "value": summary.get("weighted_missing_pct"),
+                "unit": "%",
+                "tone": _rate_tone(
+                    summary.get("weighted_missing_pct"), warn=5, danger=20
+                ),
+            },
+            {
+                "label": "Out-of-physio",
+                "value": summary.get("weighted_out_of_physio_pct"),
+                "unit": "%",
+                "tone": _rate_tone(
+                    summary.get("weighted_out_of_physio_pct"), warn=1, danger=5
+                ),
+            },
+            {
+                "label": "Duplicate TS",
+                "value": summary.get("weighted_duplicate_time_pct"),
+                "unit": "%",
+                "tone": _rate_tone(
+                    summary.get("weighted_duplicate_time_pct"), warn=0.5, danger=2
+                ),
+            },
         ],
         "contract": [
             {
@@ -1079,25 +1300,43 @@ def _quality_review_payload(
                 "index": "02",
                 "label": "Missingness gate",
                 "detail": f"{summary.get('weighted_missing_pct')}% weighted missing",
-                "status": _rate_tone(summary.get("weighted_missing_pct"), warn=5, danger=20),
+                "status": _rate_tone(
+                    summary.get("weighted_missing_pct"), warn=5, danger=20
+                ),
             },
             {
                 "index": "03",
                 "label": "Physiologic range",
                 "detail": f"{summary.get('weighted_out_of_physio_pct')}% out-of-range values",
-                "status": _rate_tone(summary.get("weighted_out_of_physio_pct"), warn=1, danger=5),
+                "status": _rate_tone(
+                    summary.get("weighted_out_of_physio_pct"), warn=1, danger=5
+                ),
             },
             {
                 "index": "04",
                 "label": "Temporal integrity",
                 "detail": f"{summary.get('weighted_duplicate_time_pct')}% duplicate time rows",
-                "status": _rate_tone(summary.get("weighted_duplicate_time_pct"), warn=0.5, danger=2),
+                "status": _rate_tone(
+                    summary.get("weighted_duplicate_time_pct"), warn=0.5, danger=2
+                ),
             },
         ],
         "panels": [
-            {"id": "missingness", "label": "Missingness", "rows": _quality_panel_rows(missing, "missing_pct")},
-            {"id": "outliers", "label": "Out-of-Physio", "rows": _quality_panel_rows(outliers, "out_of_physio_pct")},
-            {"id": "temporal", "label": "Temporal Integrity", "rows": _quality_panel_rows(temporal, "duplicate_time_pct")},
+            {
+                "id": "missingness",
+                "label": "Missingness",
+                "rows": _quality_panel_rows(missing, "missing_pct"),
+            },
+            {
+                "id": "outliers",
+                "label": "Out-of-Physio",
+                "rows": _quality_panel_rows(outliers, "out_of_physio_pct"),
+            },
+            {
+                "id": "temporal",
+                "label": "Temporal Integrity",
+                "rows": _quality_panel_rows(temporal, "duplicate_time_pct"),
+            },
         ],
         "top_issues": quality_metrics.get("top_issues") or [],
         "module_coverage": quality,
@@ -1105,9 +1344,12 @@ def _quality_review_payload(
     }
 
 
-def _comparison_feature_payload(quality_metrics: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _comparison_feature_payload(
+    quality_metrics: Dict[str, Any],
+) -> List[Dict[str, Any]]:
     features = [
-        row for row in (quality_metrics.get("features") or [])
+        row
+        for row in (quality_metrics.get("features") or [])
         if row.get("time_indexed") and int(row.get("records") or 0) > 0
     ]
     features = sorted(
@@ -1132,7 +1374,9 @@ def _comparison_feature_payload(quality_metrics: Dict[str, Any]) -> List[Dict[st
     ]
 
 
-def _selected_signal_index(time_lanes: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def _selected_signal_index(
+    time_lanes: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
     index: Dict[str, Dict[str, Any]] = {}
     for lane in time_lanes:
         for signal in lane.get("signals") or []:
@@ -1154,16 +1398,18 @@ def _category_section(
         if not signal:
             continue
         current = dataio._num(signal.get("current"))
-        cards.append({
-            "feature": feature,
-            "label": signal.get("name") or _concept_name(feature),
-            "unit": signal.get("unit") or _concept_unit(feature),
-            "current": current,
-            "delta": _signal_delta(signal.get("values") or []),
-            "tone": _patient_feature_tone(feature, current),
-            "values": (signal.get("values") or [])[:_MAX_SIGNAL_POINTS],
-            "thresholds": signal.get("thresholds") or [],
-        })
+        cards.append(
+            {
+                "feature": feature,
+                "label": signal.get("name") or _concept_name(feature),
+                "unit": signal.get("unit") or _concept_unit(feature),
+                "current": current,
+                "delta": _signal_delta(signal.get("values") or []),
+                "tone": _patient_feature_tone(feature, current),
+                "values": (signal.get("values") or [])[:_MAX_SIGNAL_POINTS],
+                "thresholds": signal.get("thresholds") or [],
+            }
+        )
     return {
         "id": section_id,
         "title": title,
@@ -1189,7 +1435,11 @@ def _patient_summary_cards(selected: Dict[str, Any]) -> List[Dict[str, Any]]:
         },
         {
             "label": "Sepsis-3",
-            "value": "Positive" if scores.get("sepsis3_sofa2") is True else ("Negative" if scores.get("sepsis3_sofa2") is False else "unknown"),
+            "value": (
+                "Positive"
+                if scores.get("sepsis3_sofa2") is True
+                else ("Negative" if scores.get("sepsis3_sofa2") is False else "unknown")
+            ),
             "tone": "warn" if scores.get("sepsis3_sofa2") is True else "ok",
         },
         {
@@ -1232,7 +1482,9 @@ def _sofa_comparator(signal_index: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _quality_panel_rows(rows: List[Dict[str, Any]], metric: str) -> List[Dict[str, Any]]:
+def _quality_panel_rows(
+    rows: List[Dict[str, Any]], metric: str
+) -> List[Dict[str, Any]]:
     return [
         {
             "feature": row.get("feature"),
@@ -1331,16 +1583,24 @@ def _out_of_physio_pct(feature: str, values: Any) -> float:
 
 
 def _duplicate_time_pct(frame: Any, time_col: str | None) -> float:
-    if not time_col or time_col not in getattr(frame, "columns", []) or "stay_id" not in getattr(frame, "columns", []):
+    if (
+        not time_col
+        or time_col not in getattr(frame, "columns", [])
+        or "stay_id" not in getattr(frame, "columns", [])
+    ):
         return 0.0
     observed = frame.dropna(subset=[time_col])
     if observed.empty:
         return 0.0
-    duplicates = int(observed.duplicated(subset=["stay_id", time_col], keep="first").sum())
+    duplicates = int(
+        observed.duplicated(subset=["stay_id", time_col], keep="first").sum()
+    )
     return round(duplicates / len(observed) * 100, 1)
 
 
-def _quality_feature_status(missing_pct: float | None, outlier_pct: float, duplicate_pct: float) -> str:
+def _quality_feature_status(
+    missing_pct: float | None, outlier_pct: float, duplicate_pct: float
+) -> str:
     missing = float(missing_pct or 0.0)
     if missing >= 50 or outlier_pct >= 5 or duplicate_pct >= 2:
         return "bad"
@@ -1362,7 +1622,9 @@ def _entity_option(
         "ref": _entity_ref(path, entity_id),
         "label": f"Entity {ordinal}",
         "ordinal": ordinal,
-        "outcome": "Deceased" if dead is True else ("Survived" if dead is False else "Unknown"),
+        "outcome": (
+            "Deceased" if dead is True else ("Survived" if dead is False else "Unknown")
+        ),
         "severity": None if sofa is None else f"SOFA-2 {sofa:g}",
     }
 
@@ -1393,7 +1655,11 @@ def _selected_payload(
             "sepsis3_sofa2": bool(sepsis) if sepsis is not None else None,
         },
         "outcomes": {
-            "status": "Deceased" if dead is True else ("Survived" if dead is False else "Unknown"),
+            "status": (
+                "Deceased"
+                if dead is True
+                else ("Survived" if dead is False else "Unknown")
+            ),
             "icu_los_days": dataio._num(los_by_entity.get(entity_id)),
         },
         "signals": _signals_payload(vitals, entity_id),
@@ -1422,32 +1688,40 @@ def _signals_payload(vitals: Any, entity_id: str) -> List[Dict[str, Any]]:
         values = dataio._numeric_values(one[key])
         bounded = values[:_MAX_SIGNAL_POINTS]
         if bounded:
-            out.append({
-                "key": key,
-                "name": name,
-                "unit": unit,
-                "current": bounded[-1],
-                "values": bounded,
-                "point_count": len(values),
-                "bounded": True,
-                "max_points": _MAX_SIGNAL_POINTS,
-            })
+            out.append(
+                {
+                    "key": key,
+                    "name": name,
+                    "unit": unit,
+                    "current": bounded[-1],
+                    "values": bounded,
+                    "point_count": len(values),
+                    "bounded": True,
+                    "max_points": _MAX_SIGNAL_POINTS,
+                }
+            )
     return out
 
 
-def _quality_from_module_profiles(module_profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _quality_from_module_profiles(
+    module_profiles: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for item in module_profiles:
         module = str(item.get("module") or "")
         coverage = item.get("coverage_pct")
-        out.append({
-            "module": module,
-            "rows": item.get("rows"),
-            "column_count": item.get("feature_count"),
-            "covered_entities": item.get("entities"),
-            "coverage_pct": coverage,
-            "quality_status": _quality_status(module, coverage if isinstance(coverage, (int, float)) else None),
-        })
+        out.append(
+            {
+                "module": module,
+                "rows": item.get("rows"),
+                "column_count": item.get("feature_count"),
+                "covered_entities": item.get("entities"),
+                "coverage_pct": coverage,
+                "quality_status": _quality_status(
+                    module, coverage if isinstance(coverage, (int, float)) else None
+                ),
+            }
+        )
     return out
 
 
@@ -1461,19 +1735,27 @@ def _quality_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         columns = item.get("columns") or []
         rows = int(item.get("rows") or 0)
         covered = _bounded_covered_entities(path, item, cohort_size)
-        coverage = round(covered / cohort_size * 100, 1) if isinstance(cohort_size, int) and cohort_size else None
-        out.append({
-            "module": module,
-            "rows": rows,
-            "column_count": len(columns),
-            "covered_entities": covered,
-            "coverage_pct": coverage,
-            "quality_status": _quality_status(module, coverage),
-        })
+        coverage = (
+            round(covered / cohort_size * 100, 1)
+            if isinstance(cohort_size, int) and cohort_size
+            else None
+        )
+        out.append(
+            {
+                "module": module,
+                "rows": rows,
+                "column_count": len(columns),
+                "covered_entities": covered,
+                "coverage_pct": coverage,
+                "quality_status": _quality_status(module, coverage),
+            }
+        )
     return out
 
 
-def _bounded_covered_entities(path: Path, item: Dict[str, Any], cohort_size: Any) -> int | None:
+def _bounded_covered_entities(
+    path: Path, item: Dict[str, Any], cohort_size: Any
+) -> int | None:
     if not isinstance(cohort_size, int) or cohort_size <= 0:
         return None
     file_name = str(item.get("file") or "")
@@ -1501,7 +1783,9 @@ def _is_patient_ready(desc: Dict[str, Any]) -> bool:
     modules = {str(item.get("module") or "") for item in desc.get("files") or []}
     if "demographics" in modules:
         return True
-    return any("stay_id" in (item.get("columns") or []) for item in desc.get("files") or [])
+    return any(
+        "stay_id" in (item.get("columns") or []) for item in desc.get("files") or []
+    )
 
 
 def _source_provenance(source: Dict[str, Any], desc: Dict[str, Any]) -> Dict[str, Any]:

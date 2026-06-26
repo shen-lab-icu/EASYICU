@@ -7,6 +7,7 @@ machine.
 Invariant: ``ai_enabled`` (the external-LLM opt-in gate) defaults to
 **False**. Any code path about to make an external LLM call must check it.
 """
+
 from __future__ import annotations
 
 import json
@@ -23,10 +24,10 @@ _LOCK = threading.RLock()
 
 # Only these keys are accepted from the client; unknown keys are ignored.
 DEFAULTS: Dict[str, Any] = {
-    "ai_enabled": False,          # external-LLM opt-in gate — OFF by default
-    "language": "en",             # "en" | "zh"
-    "data_mode": "demo",          # "demo" | "real"
-    "evidence_gate": "strict",    # "strict" | "standard"
+    "ai_enabled": False,  # external-LLM opt-in gate — OFF by default
+    "language": "en",  # "en" | "zh"
+    "data_mode": "demo",  # "demo" | "real"
+    "evidence_gate": "strict",  # "strict" | "standard"
     "demo_patients": 20,
     "demo_duration": "24h",
     "working_dir": None,
@@ -47,6 +48,7 @@ def _optional_path(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
 
 _CHOICES = {
     "language": {"en", "zh"},

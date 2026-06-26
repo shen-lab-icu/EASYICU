@@ -12,14 +12,17 @@ import tempfile
 from typing import Sequence
 import urllib.request
 
-
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
 
 def _runtime_dir() -> Path:
     override = os.environ.get("EASYICU_RUNTIME_DIR")
-    runtime_dir = Path(override).expanduser() if override else Path(tempfile.gettempdir()) / "easyicu"
+    runtime_dir = (
+        Path(override).expanduser()
+        if override
+        else Path(tempfile.gettempdir()) / "easyicu"
+    )
     runtime_dir.mkdir(parents=True, exist_ok=True)
     return runtime_dir
 
@@ -92,7 +95,12 @@ def _find_easyicu_webserver_processes_on_port(port: int) -> list[int]:
                     if hasattr(proc, "net_connections")
                     else proc.connections(kind="inet")
                 )
-            except (psutil.NoSuchProcess, psutil.AccessDenied, PermissionError, NotImplementedError):
+            except (
+                psutil.NoSuchProcess,
+                psutil.AccessDenied,
+                PermissionError,
+                NotImplementedError,
+            ):
                 continue
 
             cmdline = " ".join(proc.info.get("cmdline") or [])
@@ -101,14 +109,22 @@ def _find_easyicu_webserver_processes_on_port(port: int) -> list[int]:
 
             for conn in proc_connections:
                 try:
-                    if conn.laddr and conn.laddr.port == port and conn.status == psutil.CONN_LISTEN:
+                    if (
+                        conn.laddr
+                        and conn.laddr.port == port
+                        and conn.status == psutil.CONN_LISTEN
+                    ):
                         pids.append(int(proc.info["pid"]))
                 except Exception:
                     continue
     else:
         for conn in inet_connections:
             try:
-                if not conn.laddr or conn.laddr.port != port or conn.status != psutil.CONN_LISTEN:
+                if (
+                    not conn.laddr
+                    or conn.laddr.port != port
+                    or conn.status != psutil.CONN_LISTEN
+                ):
                     continue
             except Exception:
                 continue
@@ -127,7 +143,9 @@ def _find_easyicu_webserver_processes_on_port(port: int) -> list[int]:
     return list(dict.fromkeys(pids))
 
 
-def run_app(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, background: bool = False) -> int:
+def run_app(
+    host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, background: bool = False
+) -> int:
     cmd = _uvicorn_cmd(host, port)
     if background:
         log_path = _log_file()
@@ -177,7 +195,9 @@ def stop_app(port: int = DEFAULT_PORT) -> int:
             continue
 
     if pids:
-        print(f"Stopped {len(pids)} EasyICU native WebApp process{'es' if len(pids) != 1 else ''}.")
+        print(
+            f"Stopped {len(pids)} EasyICU native WebApp process{'es' if len(pids) != 1 else ''}."
+        )
     elif not stopped:
         print("No EasyICU native WebApp process was found.")
     return 0
@@ -193,7 +213,9 @@ def status_app(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the native EasyICU FastAPI WebApp.")
+    parser = argparse.ArgumentParser(
+        description="Run the native EasyICU FastAPI WebApp."
+    )
     parser.add_argument(
         "command",
         nargs="?",
@@ -201,9 +223,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["run", "stop", "status"],
         help="Action to perform.",
     )
-    parser.add_argument("--host", default=DEFAULT_HOST, help="Host interface to bind or probe.")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port to bind or probe.")
-    parser.add_argument("--background", action="store_true", help="Run in the background.")
+    parser.add_argument(
+        "--host", default=DEFAULT_HOST, help="Host interface to bind or probe."
+    )
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help="Port to bind or probe."
+    )
+    parser.add_argument(
+        "--background", action="store_true", help="Run in the background."
+    )
     return parser
 
 

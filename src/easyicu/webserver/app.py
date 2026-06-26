@@ -8,6 +8,7 @@ Runs locally to preserve the local-first contract (no data upload, local
 filesystem access for data roots). This module is Stage 0+1: it serves the
 frontend and the first real read-only endpoint, ``/api/catalog``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -329,7 +330,9 @@ def jobs_agent_run(body: Dict[str, Any]) -> dict:
     if not desc.get("ok"):
         raise HTTPException(status_code=400, detail=desc)
 
-    run_type = str(body.get("run_type") or ("full" if body.get("full_run") else "preflight"))
+    run_type = str(
+        body.get("run_type") or ("full" if body.get("full_run") else "preflight")
+    )
     llm_provider = str(body.get("llm_provider") or body.get("provider") or "mock")
     external_llm_opt_in = bool(body.get("external_llm_opt_in"))
     settings = settings_store.load_settings()
@@ -393,10 +396,12 @@ def post_agent_run_provider_config(body: Dict[str, Any]) -> dict:
     except provider_adapter.ProviderAdapterError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
-    settings = settings_store.update_settings({
-        "ai_enabled": bool(body.get("enable_ai", True)),
-        "agent_model_mode": "external",
-    })
+    settings = settings_store.update_settings(
+        {
+            "ai_enabled": bool(body.get("enable_ai", True)),
+            "agent_model_mode": "external",
+        }
+    )
     return {
         **meta,
         "settings": {**settings, "about": settings_store.about()},
@@ -423,7 +428,11 @@ def post_agent_run_signoff(body: Dict[str, Any]) -> dict:
     result = agent_runs.create_human_signoff(
         str(body.get("project_dir") or ""),
         reviewer=body.get("reviewer"),
-        confirmations=body.get("confirmations") if isinstance(body.get("confirmations"), list) else [],
+        confirmations=(
+            body.get("confirmations")
+            if isinstance(body.get("confirmations"), list)
+            else []
+        ),
         note=body.get("note"),
     )
     if not result.get("ok"):
@@ -456,7 +465,9 @@ def post_guided_draft(body: Dict[str, Any]) -> dict:
 @app.post("/api/guided/drafts/list")
 def post_guided_drafts_list(body: Dict[str, Any] | None = None) -> dict:
     """List metadata-only guided Copilot drafts from local settings storage."""
-    return guided_sessions.list_guided_drafts(limit=int((body or {}).get("limit") or 20))
+    return guided_sessions.list_guided_drafts(
+        limit=int((body or {}).get("limit") or 20)
+    )
 
 
 def _guided_draft_remove_response(body: Dict[str, Any] | None) -> dict:
@@ -519,7 +530,9 @@ def post_guided_action(body: Dict[str, Any]) -> dict:
 @app.post("/api/guided/sessions/list")
 def post_guided_sessions_list(body: Dict[str, Any] | None = None) -> dict:
     """List local metadata-only Guided Copilot session folders."""
-    return guided_sessions.list_guided_sessions(limit=int((body or {}).get("limit") or 20))
+    return guided_sessions.list_guided_sessions(
+        limit=int((body or {}).get("limit") or 20)
+    )
 
 
 @app.post("/api/copilot/sessions")

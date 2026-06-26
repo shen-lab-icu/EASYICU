@@ -5,6 +5,7 @@ credentials. Its only job is to classify a requested provider, reuse the
 canonical EasyICU opt-in check, and decide whether the downstream credential
 adapter is allowed to run.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -54,22 +55,26 @@ def resolve_provider_gate(
     except AIOptInError as exc:
         provider["canonical_opt_in_passed"] = False
         provider["provider_gate_order"].append("canonical_opt_in_blocked")
-        raise ProviderGateError({
-            **provider,
-            "error": "external_llm_opt_in_required",
-            "run_type": resolved_run_type,
-            "blocked_by": "canonical_ai_opt_in",
-            "message": str(exc),
-        }) from exc
+        raise ProviderGateError(
+            {
+                **provider,
+                "error": "external_llm_opt_in_required",
+                "run_type": resolved_run_type,
+                "blocked_by": "canonical_ai_opt_in",
+                "message": str(exc),
+            }
+        ) from exc
 
     if not provider["per_run_opt_in"]:
         provider["provider_gate_order"].append("per_run_opt_in_blocked")
-        raise ProviderGateError({
-            **provider,
-            "error": "external_llm_opt_in_required",
-            "run_type": resolved_run_type,
-            "blocked_by": "per_run_external_llm_opt_in",
-        })
+        raise ProviderGateError(
+            {
+                **provider,
+                "error": "external_llm_opt_in_required",
+                "run_type": resolved_run_type,
+                "blocked_by": "per_run_external_llm_opt_in",
+            }
+        )
 
     provider["provider_gate_order"].append("per_run_opt_in_passed")
     provider["provider_gate_order"].append("credential_lookup_allowed")
@@ -92,7 +97,9 @@ def _base_provider_info(
         "canonical_opt_in_source": CANONICAL_OPT_IN_SOURCE,
         "canonical_opt_in_passed": False if external else True,
         "client": "MockLLMClient" if not external else None,
-        "provider_gate": "offline_mock" if not external else "blocked_before_client_construction",
+        "provider_gate": (
+            "offline_mock" if not external else "blocked_before_client_construction"
+        ),
         "provider_gate_order": ["classify_provider"],
         "credentials_loaded": False,
         "credentials_attempted": False,

@@ -10,6 +10,7 @@ All of that data already exists, hand-curated for the UI, in
 truth for the migration's first read-only endpoint — it just reshapes
 those dicts; it does not recompute anything.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -21,7 +22,9 @@ from easyicu.concept import catalog as cc
 _ACTIVE_COVERAGE_FULL_READ_ROW_LIMIT = 1_000_000
 
 
-def _coverage_metadata(concept_dict: Dict[str, Any]) -> tuple[Dict[str, Dict[str, Any]], Dict[str, int]]:
+def _coverage_metadata(
+    concept_dict: Dict[str, Any],
+) -> tuple[Dict[str, Dict[str, Any]], Dict[str, int]]:
     """Classify catalog coverage without inventing database support counts."""
     cov = dict(cc.CONCEPT_DB_COVERAGE)
     supported_count = len(cc.SUPPORTED_DB_KEYS)
@@ -101,7 +104,12 @@ def _active_export_coverage(concept_dict: Dict[str, Any]) -> Dict[str, Any]:
         from easyicu.webserver import dataio
         from easyicu.webserver import sources
     except Exception as exc:  # noqa: BLE001 - catalog must still render.
-        return {"status": "unavailable", "reason": str(exc), "concepts": {}, "summary": {}}
+        return {
+            "status": "unavailable",
+            "reason": str(exc),
+            "concepts": {},
+            "summary": {},
+        }
 
     registry = sources.load_registry()
     active_path = registry.get("active_path")
@@ -180,7 +188,9 @@ def _active_export_coverage(concept_dict: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _active_export_schema_coverage(desc: Dict[str, Any], concept_dict: Dict[str, Any]) -> Dict[str, Any]:
+def _active_export_schema_coverage(
+    desc: Dict[str, Any], concept_dict: Dict[str, Any]
+) -> Dict[str, Any]:
     path = Path(str(desc.get("path") or "local")).expanduser()
     try:
         path = path.resolve()
@@ -192,16 +202,25 @@ def _active_export_schema_coverage(desc: Dict[str, Any], concept_dict: Dict[str,
     for file_meta in desc.get("files", []) or []:
         module = str(file_meta.get("module") or "")
         file_name = str(file_meta.get("file") or "")
-        for concept in [str(c) for c in file_meta.get("columns") or [] if str(c) in concept_keys]:
-            coverage.setdefault(concept, {
-                "kind": "active_event_schema" if _event_like_concept(module, concept) else "active_export_schema",
-                "module": module,
-                "file": file_name,
-                "coverage_pct": None,
-                "observed_entities": None,
-                "denominator": denominator,
-                "basis": "column_present_in_export_schema",
-            })
+        for concept in [
+            str(c) for c in file_meta.get("columns") or [] if str(c) in concept_keys
+        ]:
+            coverage.setdefault(
+                concept,
+                {
+                    "kind": (
+                        "active_event_schema"
+                        if _event_like_concept(module, concept)
+                        else "active_export_schema"
+                    ),
+                    "module": module,
+                    "file": file_name,
+                    "coverage_pct": None,
+                    "observed_entities": None,
+                    "denominator": denominator,
+                    "basis": "column_present_in_export_schema",
+                },
+            )
     return {
         "status": "ready",
         "mode": "schema_only",
@@ -283,7 +302,9 @@ def _file_concept_coverage(
             present_mask = present_mask & series.astype(str).str.strip().ne("")
         observed = int(valid_frame.loc[present_mask, "_easyicu_stay_id"].nunique())
         pct = round(observed / denom * 100, 1) if denom else None
-        kind = "active_event" if _event_like_concept(module, concept) else "active_export"
+        kind = (
+            "active_event" if _event_like_concept(module, concept) else "active_export"
+        )
         out[concept] = {
             "kind": kind,
             "module": module,
@@ -338,7 +359,9 @@ def build_catalog() -> Dict[str, Any]:
         [gk, *cc.CONCEPT_GROUP_NAMES.get(gk, (gk, gk))]
         for gk in cc.CONCEPT_GROUPS_INTERNAL
     ]
-    group_concepts = {gk: list(members) for gk, members in cc.CONCEPT_GROUPS_INTERNAL.items()}
+    group_concepts = {
+        gk: list(members) for gk, members in cc.CONCEPT_GROUPS_INTERNAL.items()
+    }
 
     # dict[k] = [name_en, name_zh, unit]; tuples -> lists for JSON.
     concept_dict = {k: list(v) for k, v in cc.CONCEPT_DICTIONARY.items()}

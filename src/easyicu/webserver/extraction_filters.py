@@ -4,6 +4,7 @@ The endpoints backed by this module describe and preview filters over a
 registered EasyICU export source. They intentionally return module/file
 metadata and aggregate coverage only, never row-level values.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -48,7 +49,9 @@ def filter_options(body: Dict[str, Any]) -> Dict[str, Any]:
     """Return bounded filter options for the active or explicit registered source."""
     source, desc = _resolve_registered_source(body)
     modules = _module_options(desc)
-    row_counts = [m["row_count"] for m in modules if isinstance(m.get("row_count"), int)]
+    row_counts = [
+        m["row_count"] for m in modules if isinstance(m.get("row_count"), int)
+    ]
     coverages = [
         m["coverage_pct"]
         for m in modules
@@ -95,12 +98,36 @@ def filter_options(body: Dict[str, Any]) -> Dict[str, Any]:
         "filters": {
             "supported": [
                 {"id": "database", "status": "supported", "basis": "manifest.database"},
-                {"id": "modules", "status": "supported", "basis": "manifest.files.module"},
-                {"id": "required_columns", "status": "supported", "basis": "file_schemas_without_identifier_columns"},
-                {"id": "min_rows", "status": "supported", "basis": "manifest.rows_or_file_metadata"},
-                {"id": "max_rows", "status": "supported", "basis": "manifest.rows_or_file_metadata"},
-                {"id": "min_coverage_pct", "status": "supported", "basis": "bounded_identifier_coverage"},
-                {"id": "quality_statuses", "status": "supported", "basis": "coverage_thresholds"},
+                {
+                    "id": "modules",
+                    "status": "supported",
+                    "basis": "manifest.files.module",
+                },
+                {
+                    "id": "required_columns",
+                    "status": "supported",
+                    "basis": "file_schemas_without_identifier_columns",
+                },
+                {
+                    "id": "min_rows",
+                    "status": "supported",
+                    "basis": "manifest.rows_or_file_metadata",
+                },
+                {
+                    "id": "max_rows",
+                    "status": "supported",
+                    "basis": "manifest.rows_or_file_metadata",
+                },
+                {
+                    "id": "min_coverage_pct",
+                    "status": "supported",
+                    "basis": "bounded_identifier_coverage",
+                },
+                {
+                    "id": "quality_statuses",
+                    "status": "supported",
+                    "basis": "coverage_thresholds",
+                },
             ],
             "unsupported": [
                 {"id": key, "status": "unsupported", "reason": reason}
@@ -138,7 +165,8 @@ def filter_preview(body: Dict[str, Any]) -> Dict[str, Any]:
     required_columns = {str(v).lower() for v in _list(filters.get("required_columns"))}
     if required_columns:
         modules = [
-            m for m in modules
+            m
+            for m in modules
             if required_columns <= {str(c).lower() for c in m.get("columns") or []}
         ]
 
@@ -153,11 +181,15 @@ def filter_preview(body: Dict[str, Any]) -> Dict[str, Any]:
     min_coverage = _number(filters.get("min_coverage_pct"))
     if min_coverage is not None:
         modules = [
-            m for m in modules
-            if isinstance(m.get("coverage_pct"), (int, float)) and m["coverage_pct"] >= min_coverage
+            m
+            for m in modules
+            if isinstance(m.get("coverage_pct"), (int, float))
+            and m["coverage_pct"] >= min_coverage
         ]
 
-    quality_filter = {str(v) for v in _list(filters.get("quality_statuses")) if str(v) != "all"}
+    quality_filter = {
+        str(v) for v in _list(filters.get("quality_statuses")) if str(v) != "all"
+    }
     if quality_filter:
         modules = [m for m in modules if str(m.get("quality_status")) in quality_filter]
 
@@ -179,33 +211,46 @@ def filter_preview(body: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _resolve_registered_source(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _resolve_registered_source(
+    body: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     registry = source_store.load_registry()
     sources = [s for s in registry.get("sources") or [] if isinstance(s, dict)]
     requested = body.get("source_path") or body.get("path")
     if requested:
         norm = _norm_path(str(requested))
-        source = next((s for s in sources if _norm_path(str(s.get("path") or "")) == norm), None)
+        source = next(
+            (s for s in sources if _norm_path(str(s.get("path") or "")) == norm), None
+        )
         if source is None:
-            raise ExtractionFilterError({
-                "error": "source_not_registered",
-                "path_hash": _hash(norm),
-            })
+            raise ExtractionFilterError(
+                {
+                    "error": "source_not_registered",
+                    "path_hash": _hash(norm),
+                }
+            )
     else:
         active = registry.get("active_path")
         if not active:
             raise ExtractionFilterError({"error": "no_active_export"})
         active_norm = _norm_path(str(active))
-        source = next((s for s in sources if _norm_path(str(s.get("path") or "")) == active_norm), None)
+        source = next(
+            (s for s in sources if _norm_path(str(s.get("path") or "")) == active_norm),
+            None,
+        )
         if source is None:
-            raise ExtractionFilterError({
-                "error": "active_source_not_registered",
-                "path_hash": _hash(active_norm),
-            })
+            raise ExtractionFilterError(
+                {
+                    "error": "active_source_not_registered",
+                    "path_hash": _hash(active_norm),
+                }
+            )
 
     desc = dataio.describe_export_source(str(source.get("path") or ""))
     if not desc.get("ok"):
-        raise ExtractionFilterError({"error": "invalid_export", "detail": desc.get("error")})
+        raise ExtractionFilterError(
+            {"error": "invalid_export", "detail": desc.get("error")}
+        )
     return source, desc
 
 
@@ -221,25 +266,29 @@ def _module_options(desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         safe_columns = [c for c in columns if not _is_identifier_column(c)]
         coverage_pct, covered = _coverage(path / file_name, cohort_size)
         module = str(item.get("module") or Path(file_name).stem.split("__", 1)[0])
-        out.append({
-            "module": module,
-            "table": Path(file_name).stem,
-            "file": file_name,
-            "row_count": int(item.get("rows") or 0),
-            "columns": safe_columns,
-            "hidden_identifier_columns": len(columns) - len(safe_columns),
-            "coverage_pct": coverage_pct,
-            "covered_entities": covered,
-            "coverage_denominator": cohort_size,
-            "quality_status": _quality_status(module, coverage_pct),
-        })
+        out.append(
+            {
+                "module": module,
+                "table": Path(file_name).stem,
+                "file": file_name,
+                "row_count": int(item.get("rows") or 0),
+                "columns": safe_columns,
+                "hidden_identifier_columns": len(columns) - len(safe_columns),
+                "coverage_pct": coverage_pct,
+                "covered_entities": covered,
+                "coverage_denominator": cohort_size,
+                "quality_status": _quality_status(module, coverage_pct),
+            }
+        )
     return out
 
 
 def _coverage(path: Path, cohort_size: Any) -> Tuple[float | None, int | None]:
     if not isinstance(cohort_size, int) or cohort_size <= 0:
         return None, None
-    ids = dataio._read_stay_ids(path)  # reads one identifier column only, not full frames.
+    ids = dataio._read_stay_ids(
+        path
+    )  # reads one identifier column only, not full frames.
     if ids is None:
         return None, None
     covered = len(ids)
@@ -277,12 +326,18 @@ def _requested_unsupported(filters: Dict[str, Any]) -> List[Dict[str, Any]]:
         if key in _UNSUPPORTED_FILTERS:
             unsupported.append({"id": key, "reason": _UNSUPPORTED_FILTERS[key]})
         elif key not in _SUPPORTED_FILTERS:
-            unsupported.append({"id": key, "reason": "Unknown filter for this endpoint."})
+            unsupported.append(
+                {"id": key, "reason": "Unknown filter for this endpoint."}
+            )
     return unsupported
 
 
 def _clean_applied_filters(filters: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: v for k, v in filters.items() if k in _SUPPORTED_FILTERS and _truthy_request(v)}
+    return {
+        k: v
+        for k, v in filters.items()
+        if k in _SUPPORTED_FILTERS and _truthy_request(v)
+    }
 
 
 def _column_options(modules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -292,7 +347,9 @@ def _column_options(modules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             counts[column] = counts.get(column, 0) + 1
     return [
         {"name": name, "module_count": count}
-        for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:80]
+        for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[
+            :80
+        ]
     ]
 
 
