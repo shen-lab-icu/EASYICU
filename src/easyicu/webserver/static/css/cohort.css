@@ -289,6 +289,23 @@
   fill:#a8842f;
   font-size:8.5px;
 }
+/* cohort age × LOS complexity heatmap */
+.cxh{
+  display:block;
+  height:auto;
+  max-width:100%;
+}
+.cxh-axis{
+  fill:var(--ink-4, #94a3b8);
+  font-family:var(--font-mono, monospace);
+  font-size:10px;
+}
+.cxh-val{
+  fill:var(--ink-2, #334155);
+  font-family:var(--font-mono, monospace);
+  font-size:11px;
+  font-weight:600;
+}
 .risk-table-wrap{
   margin-top:18px;
 }

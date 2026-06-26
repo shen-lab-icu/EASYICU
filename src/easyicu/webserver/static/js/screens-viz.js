@@ -3094,6 +3094,31 @@
     return (rows || []).map(([label, pct]) => `<div class="qrow"><span>${cohortText(label)}</span><div class="qbar"><span style="width:${pct == null ? 0 : Math.max(0, Math.min(100, pct)).toFixed(0)}%"></span></div><span class="qv">${fmtPct(pct)}</span></div>`).join('');
   }
 
+  function cohortComplexityHeatmap(cx) {
+    const ageGroups = (cx && cx.age_groups) || [];
+    const losGroups = (cx && cx.los_groups) || [];
+    const z = (cx && cx.z) || [];
+    if (!ageGroups.length || !losGroups.length || !(cx && cx.total)) {
+      return `<div class="muted" style="font-size:11px;">${t('No age × LOS pairs in this export.', '此导出没有年龄×住院时长配对。')}</div>`;
+    }
+    const maxN = Math.max(1, Number(cx.max) || 0);
+    const cw = 48, lh = 24, lw = 58, top = 18, padB = 4;
+    const w = lw + losGroups.length * cw, h = top + ageGroups.length * lh + padB;
+    const colHeaders = losGroups.map((lg, j) => `<text x="${lw + j * cw + (cw - 4) / 2}" y="12" text-anchor="middle" class="cxh-axis">${esc(lg)}</text>`).join('');
+    const body = ageGroups.map((ag, i) => {
+      const rowLabel = `<text x="0" y="${top + i * lh + lh / 2 + 3}" class="cxh-axis">${esc(ag)}</text>`;
+      const cells = losGroups.map((lg, j) => {
+        const n = (z[i] && z[i][j]) || 0;
+        const intensity = n / maxN;
+        const fill = `rgba(15,118,110,${(0.06 + intensity * 0.8).toFixed(3)})`;
+        const tx = lw + j * cw + (cw - 4) / 2;
+        return `<rect x="${lw + j * cw}" y="${top + i * lh}" width="${cw - 4}" height="${lh - 4}" rx="3" fill="${fill}"></rect><text x="${tx}" y="${top + i * lh + lh / 2 + 3}" text-anchor="middle" class="cxh-val"${intensity > 0.55 ? ' style="fill:#fff;"' : ''}>${n || ''}</text>`;
+      }).join('');
+      return rowLabel + cells;
+    }).join('');
+    return `<svg class="cxh" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMinYMin meet" role="img" aria-label="${t('Age by ICU LOS complexity heatmap', '年龄与 ICU 住院时长复杂度热力图')}">${colHeaders}${body}</svg>`;
+  }
+
   function cohortSnapshotBody() {
     const review = cohortReview();
     if (review && review.summary) {
@@ -3133,6 +3158,12 @@
           ${(s.admission && s.admission.bins && s.admission.bins.length) ? `<div class="eyebrow" style="margin:12px 0 8px;">${t('Admission type', '入院类型')}</div>${cohortDistBars(s.admission.bins)}` : ''}
         </div>
       </div>
+      ${(s.complexity && s.complexity.total) ? `
+      <div class="card pad mt-16">
+        <div class="eyebrow" style="margin-bottom:8px;">${t('Age × ICU LOS complexity', '年龄 × ICU 住院时长复杂度')}</div>
+        <div style="overflow-x:auto;">${cohortComplexityHeatmap(s.complexity)}</div>
+        <div style="font-size:11px;color:var(--ink-4);margin-top:6px;">${t('Entity counts per age band × ICU length-of-stay band (bounded aggregate, no rows).', '各年龄段 × ICU 住院时长段的实体计数（有界聚合，不含行级数据）。')}</div>
+      </div>` : ''}
       <div class="cols-2 mt-16">
         <div class="card pad">
           <div class="eyebrow" style="margin-bottom:8px;">${cohortText('Aggregate ranges')}</div>

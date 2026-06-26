@@ -200,6 +200,9 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
     assert "htmlOf(t.html)" in dock_js
     assert "htmlOf(label)" in dock_js
     assert (
+        "js/screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
+    )
+    assert (
         "js/screens-guided-idea-provider.js?v=20260626-guided-provider-config"
         in index_html
     )
@@ -253,6 +256,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     None
 ):
     guided_js = _static_js("screens-guided.js")
+    projects_js = _static_js("screens-guided-projects.js")
     provider_js = _static_js("screens-guided-idea-provider.js")
     api_js = _static_js("api.js")
     guided_css = _static_css("guided.css")
@@ -370,10 +374,17 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
 
     assert "css/guided.css?v=20260626-guided-api-boundary" in index_html
     assert "js/api.js?v=20260626-guided-provider-config" in index_html
+    assert (
+        "js/screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
+    )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
+    projects_pos = index_html.find("screens-guided-projects.js")
     guided_pos = index_html.find("screens-guided.js?")
-    assert provider_pos != -1 and guided_pos != -1
+    assert projects_pos != -1 and provider_pos != -1 and guided_pos != -1
+    assert projects_pos < guided_pos
     assert provider_pos < guided_pos
+    assert "window.EU_GUIDED_PROJECTS = {" in projects_js
+    assert "guidedProjectContext()" in guided_js
     assert "js/screens-guided.js?v=20260626-guided-new-thread" in index_html
 
 
@@ -1034,7 +1045,7 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "--xdb-grid-cols" in viz_js
     assert "xdb-density-svg" in viz_js
     assert "xdb-density-line" in viz_js
-    assert "js/screens-viz.js?v=20260626-patient-category" in index_html
+    assert "js/screens-viz.js?v=20260626-complexity-heatmap" in index_html
     assert "css/crossdb.css?v=20260626-viz-richness" in index_html
     assert ".xdb-dist-panel" in crossdb_css
     assert ".xdb-dist-row" in crossdb_css
@@ -1074,8 +1085,13 @@ def test_native_cohort_snapshot_renders_real_distribution_charts() -> None:
     assert "cohortDistBars(s.admission.bins)" in viz_js
     assert "Admission type" in viz_js
     assert "入院类型" in viz_js
+    # Age × LOS complexity heatmap restored from the legacy cohort dashboard.
+    assert "function cohortComplexityHeatmap(" in viz_js
+    assert "cohortComplexityHeatmap(s.complexity)" in viz_js
+    assert "Age × ICU LOS complexity" in viz_js
+    assert "年龄 × ICU 住院时长复杂度" in viz_js
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260626-patient-category" in index_html
+    assert "js/screens-viz.js?v=20260626-complexity-heatmap" in index_html
 
 
 def test_native_patient_view_renders_multichannel_vital_timeline() -> None:
@@ -1193,6 +1209,7 @@ def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations(
             "screens-agent.js",
             "screens-extraction.js",
             "screens-guided.js",
+            "screens-guided-projects.js",
             "screens-help.js",
             "screens-ideas.js",
             "screens-settings.js",
@@ -1229,6 +1246,8 @@ def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations(
 
 def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     guided_js = _static_js("screens-guided.js")
+    projects_js = _static_js("screens-guided-projects.js")
+    guided_project_surface = guided_js + projects_js
     guided_css = _static_css("guided.css")
     api_js = _static_js("api.js")
     index_html = _static_html("index.html")
@@ -1297,56 +1316,59 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "Seeded examples" not in guided_js
     assert "data-sess" not in guided_js
     assert "That is a seeded example" not in guided_js
-    assert "New / open study folder" in guided_js
+    assert "New / open study folder" in projects_js
     assert "gdFolderControls" in guided_js
     assert "gdFolderDialogHost" in guided_js
-    assert "data-folder-menu-toggle" in guided_js
-    assert "data-folder-choice" in guided_js
-    assert "data-folder-dialog" in guided_js
-    assert "New blank study folder" in guided_js
+    assert "data-folder-menu-toggle" in projects_js
+    assert "data-folder-choice" in projects_js
+    assert "data-folder-dialog" in projects_js
+    assert "New blank study folder" in projects_js
     assert (
         "Choose a parent folder, then create a metadata-only Guided project subfolder"
-        in guided_js
+        in projects_js
     )
     assert (
         "Create a metadata-only local folder under the EasyICU projects root"
-        not in guided_js
+        not in guided_project_surface
     )
-    assert "Use existing folder" in guided_js
+    assert "Use existing folder" in projects_js
     assert (
-        "Required setup stays here instead of jumping to Classic Workspace" in guided_js
+        "Required setup stays here instead of jumping to Classic Workspace"
+        in projects_js
     )
     assert "guidedKnownProjectRows" in guided_js
-    assert "Recent local projects" in guided_js
-    assert "Optional shortcut. The list stays collapsed until you ask" in guided_js
-    assert "Shown only after you ask" in guided_js
-    assert "Detected local project folders" not in guided_js
-    assert "Scanning local project folders" not in guided_js
+    assert "ctx.guidedKnownProjectRows()" in projects_js
+    assert "Recent local projects" in projects_js
+    assert "Optional shortcut. The list stays collapsed until you ask" in projects_js
+    assert "Shown only after you ask" in projects_js
+    assert "Detected local project folders" not in guided_project_surface
+    assert "Scanning local project folders" not in guided_project_surface
     assert "guidedKnownProjectsOpen" in guided_js
-    assert "data-toggle-known-projects" in guided_js
-    assert "data-known-project" in guided_js
-    assert "data-refreshfolderchoices" in guided_js
-    assert "Path paste remains an advanced fallback" in guided_js
-    assert "data-browseprojectfolder" in guided_js
+    assert "guidedKnownProjectsOpen" in projects_js
+    assert "data-toggle-known-projects" in projects_js
+    assert "data-known-project" in projects_js
+    assert "data-refreshfolderchoices" in projects_js
+    assert "Path paste remains an advanced fallback" in projects_js
+    assert "data-browseprojectfolder" in projects_js
     assert "loadGuidedFolderBrowser" in guided_js
-    assert "data-guided-folder-browser" in guided_js
-    assert "data-folder-browser-entry" in guided_js
-    assert "data-folder-browser-shortcut" in guided_js
-    assert "data-folder-browser-use" in guided_js
-    assert "Use Browse to choose a folder" in guided_js
-    assert "Choose a local study folder" in guided_js
-    assert "Open project or extracted data folder" in guided_js
-    assert "Local folder path" in guided_js
-    assert "local EasyICU project or export folder" in guided_js
-    assert "data-openprojectfolder" in guided_js
-    assert "data-reviewexportfolder" in guided_js
-    assert "data-existing-project-dir" in guided_js
-    assert "data-project-open-status" in guided_js
+    assert "data-guided-folder-browser" in projects_js
+    assert "data-folder-browser-entry" in projects_js
+    assert "data-folder-browser-shortcut" in projects_js
+    assert "data-folder-browser-use" in projects_js
+    assert "Use Browse to choose a folder" in projects_js
+    assert "Choose a local study folder" in projects_js
+    assert "Open project or extracted data folder" in projects_js
+    assert "Local folder path" in projects_js
+    assert "local EasyICU project or export folder" in projects_js
+    assert "data-openprojectfolder" in projects_js
+    assert "data-reviewexportfolder" in projects_js
+    assert "data-existing-project-dir" in projects_js
+    assert "data-project-open-status" in projects_js
     assert "setGuidedProjectOpenStatus" in guided_js
     assert "openExistingGuidedProject(pathEl && pathEl.value, box)" in guided_js
     assert "registerExistingExportForReview(pathEl && pathEl.value, box)" in guided_js
     assert "window.EU_API.registerWorkspaceSource(raw" in guided_js
-    assert "Review extracted data" in guided_js
+    assert "Review extracted data" in guided_project_surface
     assert "project memory is optional for this read-only review" in guided_js
     assert "Opening folder memory and restoring this project context" in guided_js
     assert (
@@ -1355,13 +1377,13 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     )
     assert "openExistingGuidedProject" in guided_js
     assert "Creating a <strong>metadata-only local study folder</strong>" in guided_js
-    assert "Create new local study folder" in guided_js
-    assert "Choose the parent folder first" in guided_js
-    assert "data-draft-parent-dir" in guided_js
-    assert "data-browsedraftparent" in guided_js
-    assert "Create inside folder" in guided_js
-    assert "Will create" in guided_js
-    assert "guided-${slug || 'study'}-..." in guided_js
+    assert "Create new local study folder" in projects_js
+    assert "Choose the parent folder first" in projects_js
+    assert "data-draft-parent-dir" in projects_js
+    assert "data-browsedraftparent" in projects_js
+    assert "Create inside folder" in projects_js
+    assert "Will create" in projects_js
+    assert "guided-${slug || 'study'}-..." in projects_js
     assert "payload.parent_dir = parent" in guided_js
     assert "captureGuidedDraftDialogState(box)" in guided_js
     assert "normalize('NFKC')" in guided_js
@@ -1372,13 +1394,13 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "pendingGuidedGoal = null;" in guided_js
     assert "startFreshGuidedProjectThread(title, path)" in guided_js
     assert "if (!continuePendingGuidedGoal())" not in guided_js
-    assert "data-createdraft" in guided_js
-    assert "data-draft-title" in guided_js
+    assert "data-createdraft" in projects_js
+    assert "data-draft-title" in projects_js
     assert "folder_slug" in guided_js
     assert "createLocalGuidedDraft('New study draft')" not in guided_js
-    assert "Studies · local folders" not in guided_js
-    assert "Creates a new local project folder" not in guided_js
-    assert "Created a new project folder" not in guided_js
+    assert "Studies · local folders" not in guided_project_surface
+    assert "Creates a new local project folder" not in guided_project_surface
+    assert "Created a new project folder" not in guided_project_surface
     assert 'class="gd-home-link"' in guided_js
     assert 'data-open="entry"' in guided_js
     assert "Back to EasyICU home" in guided_js
@@ -1419,6 +1441,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gdf-card" in guided_css
     assert ".gd-handoff-ready" in guided_css
     assert "api.js?v=20260626-guided-provider-config" in index_html
+    assert "screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260626-guided-provider-config"
         in index_html
@@ -1623,8 +1646,8 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/cohort.css?v=20260626-patient-category" in index_html
-    assert "js/screens-viz.js?v=20260626-patient-category" in index_html
+    assert "css/cohort.css?v=20260626-complexity-heatmap" in index_html
+    assert "js/screens-viz.js?v=20260626-complexity-heatmap" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js

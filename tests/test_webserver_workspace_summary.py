@@ -2022,6 +2022,12 @@ def test_cohort_review_summary_uses_active_source_without_row_payload(
     assert "admission" in summary
     assert "count" in summary["admission"]
     assert isinstance(summary["admission"]["bins"], list)
+    complexity = summary["complexity"]
+    assert complexity["age_groups"] == ["<40", "40-59", "60-74", ">=75"]
+    assert complexity["los_groups"] == ["<2d", "2-5d", "5-10d", ">=10d"]
+    assert len(complexity["z"]) == 4 and all(len(row) == 4 for row in complexity["z"])
+    assert complexity["total"] == sum(sum(row) for row in complexity["z"])
+    assert complexity["max"] == max(max(row) for row in complexity["z"])
     assert summary["sex"]["female_pct"] == 66.7
     assert summary["sofa2"]["median"] == 6.5
     assert [b["label"] for b in summary["sofa2"]["bins"]] == [
