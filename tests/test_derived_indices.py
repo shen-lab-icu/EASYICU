@@ -12,7 +12,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from easyicu.concept_callbacks import (
+from easyicu.concept.callbacks import (
     ConceptCallbackContext,
     _callback_bun_creatinine_ratio,
     _callback_corrected_calcium,

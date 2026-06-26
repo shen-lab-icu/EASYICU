@@ -1209,7 +1209,7 @@ def _concept_dictionary() -> Optional[object]:
         return _DICT_CACHE["d"]  # type: ignore[return-value]
     dictionary: Optional[object] = None
     try:  # local import to avoid import-time cost / cycles
-        from ..concept_loader import load_dictionary
+        from ..concept.loader import load_dictionary
 
         dictionary = load_dictionary()
     except Exception:

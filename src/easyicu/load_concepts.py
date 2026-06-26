@@ -13,7 +13,7 @@ from .concept import Concept, load_dictionary
 from .config import DataSourceConfig, TableConfig, load_src_cfg
 from .datasource import ICUDataSource
 from .table import load_table
-from .ts_utils import change_interval
+from .io.ts_utils import change_interval
 
 # DataSource 别名用于向后兼容
 DataSource = ICUDataSource
@@ -548,7 +548,7 @@ class ConceptLoader:
         # 直接使用 ConceptResolver，因为它们需要concept_callbacks中的回调函数
         if hasattr(concept, 'class_name') and concept.class_name == 'rec_cncpt':
             from .concept import ConceptResolver
-            from .ts_utils import ICUTable
+            from .io.ts_utils import ICUTable
             
             # 🚀 重要：必须重用 ConceptLoader 的数据源，以便共享表缓存和预加载的数据
             # 如果创建新的数据源，预加载的表会丢失
@@ -1121,7 +1121,7 @@ class ConceptLoader:
                     
                     # 提取结果
                     if isinstance(result_dict, dict) and concept.name in result_dict:
-                        from .ts_utils import ICUTable
+                        from .io.ts_utils import ICUTable
                         result_table = result_dict[concept.name]
                         if isinstance(result_table, ICUTable):
                             result = result_table.data
@@ -1189,7 +1189,7 @@ class ConceptLoader:
         if not target_unit or 'value' not in data.columns or 'unit' not in data.columns:
             return data
         try:
-            from .unit_conversion import UnitConverter
+            from .utils.unit_conversion import UnitConverter
         except ImportError:
             logger.debug("unit_conversion module unavailable; skipping conversion")
             return data

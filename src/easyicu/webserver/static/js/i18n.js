@@ -20,6 +20,7 @@
   window.applySettingsState = function (settings, opts) {
     settings = settings || {};
     opts = opts || {};
+    const previousLang = window.EU_LANG;
     const lang = validLang(settings.language) ? settings.language : (validLang(window.EU_LANG) ? window.EU_LANG : 'en');
     window.EU_LANG = lang;
     if (opts.syncStorage) {
@@ -32,6 +33,9 @@
     }
     applyLangDom(lang);
     applyDisplayDom(settings);
+    if (previousLang !== lang || opts.notifyLanguage) {
+      try { window.dispatchEvent(new CustomEvent('easyicu:languagechange', { detail: { language: lang } })); } catch (e) {}
+    }
   };
   window.t = function (en, zh) {
     return window.EU_LANG === 'zh' ? (zh == null ? en : zh) : en;
@@ -48,6 +52,7 @@
     }
     applyLangDom(l);
     if (window.__euRender) window.__euRender();
+    try { window.dispatchEvent(new CustomEvent('easyicu:languagechange', { detail: { language: l } })); } catch (e) {}
   };
   // apply on boot
   document.addEventListener('DOMContentLoaded', function () {

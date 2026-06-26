@@ -199,7 +199,7 @@ def test_eicu_uses_eicu_rate_mass(cdict, name, target_unit):
 @pytest.mark.parametrize("name,_iid,_u1,_u2,_max",
                          RATE_CONCEPTS, ids=[c[0] for c in RATE_CONCEPTS])
 def test_registered_as_window_concept(name, _iid, _u1, _u2, _max):
-    from easyicu.compat import (
+    from easyicu.utils.compat import (
         DURATION_CONCEPTS,
         POINT_EVENT_CONCEPTS,
         WINDOW_CONCEPTS,
@@ -212,7 +212,7 @@ def test_registered_as_window_concept(name, _iid, _u1, _u2, _max):
 @pytest.mark.parametrize("name,_iid,unit_primary,_u2,_max",
                          RATE_CONCEPTS, ids=[c[0] for c in RATE_CONCEPTS])
 def test_registered_in_webapp_catalog(name, _iid, unit_primary, _u2, _max):
-    from easyicu.concept_catalog import (
+    from easyicu.concept.catalog import (
         CONCEPT_DB_COVERAGE,
         CONCEPT_DICTIONARY,
     )

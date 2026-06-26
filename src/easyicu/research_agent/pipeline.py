@@ -2575,7 +2575,7 @@ def _build_probe_summary(
     missing_df.to_csv(missing_path, index=False)
     files.append(missing_path)
 
-    from easyicu.data_quality import composite_score_completeness
+    from easyicu.io.data_quality import composite_score_completeness
 
     for variable in context.variables:
         if variable.role not in {

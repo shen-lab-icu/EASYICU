@@ -1,6 +1,6 @@
 import pandas as pd
 
-from easyicu.circ_failure import calculate_circ_failure_status, load_circ_failure
+from easyicu.scores.circ_failure import calculate_circ_failure_status, load_circ_failure
 
 
 def _concept_frame(name: str, values: list[float]) -> pd.DataFrame:

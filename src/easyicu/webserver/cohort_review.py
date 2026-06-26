@@ -8,7 +8,9 @@ their backend contracts exist.
 from __future__ import annotations
 
 import hashlib
+import copy
 import math
+from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
@@ -16,6 +18,37 @@ from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 
 _READ_MODULES = ("demographics", "outcome", "sofa1_score", "sofa2_score", "sepsis3_sofa2")
+_COVERAGE_UNIQUE_STAY_SCAN_ROW_LIMIT = 1_000_000
+_INTERACTIVE_TIME_INDEXED_READ_ROW_LIMIT = 2_000_000
+_INTERACTIVE_SKIP_MODULES = {"sofa1_score", "sofa2_score"}
+_SURVIVAL_INTERACTIVE_ENTITY_LIMIT = 250_000
+_SUMMARY_CACHE_MAX = 8
+_SUMMARY_CACHE: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+_MAX_COMPARE_FEATURES = 48
+_FEATURE_RESERVED_COLUMNS = {
+    "stay_id",
+    "subject_id",
+    "hadm_id",
+    "icustay_id",
+    "patientunitstayid",
+    "charttime",
+    "time",
+    "timestamp",
+    "starttime",
+    "endtime",
+}
+_DEFAULT_COMPARE_FEATURES = (
+    "blood_gas:lact",
+    "vitals:hr",
+    "vitals:map",
+    "respiratory:pafi",
+    "chemistry:crea",
+    "chemistry:bun",
+    "hematology:wbc",
+    "renal:aki_stage",
+    "vasopressors:norepi_equiv",
+    "ventilator:peep",
+)
 _MODULE_COLUMNS = {
     "demographics": (
         "stay_id",
@@ -115,6 +148,11 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     _reject_unsupported_request(body)
     source, desc = _resolve_registered_source(body)
     path = Path(str(desc.get("path") or source.get("path") or "")).expanduser()
+    requested_feature_ids = _requested_feature_ids(body)
+    cache_key = _summary_cache_key(path, desc, requested_feature_ids)
+    cached = _SUMMARY_CACHE.get(cache_key)
+    if cached is not None:
+        return copy.deepcopy(cached)
     frames = {
         module: _read_module_frame(path, desc, module)
         for module in _READ_MODULES
@@ -135,10 +173,10 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
 
     entity_ids = [str(value) for value in demo["stay_id"].tolist()]
     entity_set = set(entity_ids)
-    outcome = dataio._filter_by_stay(frames.get("outcome"), entity_set)
-    sofa1 = dataio._filter_by_stay(frames.get("sofa1_score"), entity_set)
-    sofa2 = dataio._filter_by_stay(frames.get("sofa2_score"), entity_set)
-    sepsis = dataio._filter_by_stay(frames.get("sepsis3_sofa2"), entity_set)
+    outcome = _filter_by_entity(frames.get("outcome"), entity_set)
+    sofa1 = _filter_by_entity(frames.get("sofa1_score"), entity_set)
+    sofa2 = _filter_by_entity(frames.get("sofa2_score"), entity_set)
+    sepsis = _filter_by_entity(frames.get("sepsis3_sofa2"), entity_set)
 
     death_col = _first_column(outcome, _DEATH_COLUMNS)
     los_col = _first_column(outcome, _LOS_COLUMNS)
@@ -164,6 +202,9 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     sex_values = list(demo[sex_col]) if sex_col else []
     coverage = _coverage_payload(path, desc)
     quality = _quality_summary(coverage)
+    feature_catalog = _feature_catalog(desc, coverage)
+    selected_feature_ids = _selected_feature_ids(feature_catalog, requested_feature_ids)
+    selected_feature_profiles = _selected_feature_profiles(path, desc, entity_set, feature_catalog, selected_feature_ids)
     mortality = _bool_summary(entity_ids, death_by_entity, true_label="deceased", false_label="survived")
     sepsis_summary = _bool_summary(entity_ids, sepsis_by_entity, true_label="positive", false_label="nonpositive")
     age_summary = _numeric_summary(age_by_entity.values())
@@ -224,7 +265,7 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         sepsis_by_entity=sepsis_by_entity,
     )
 
-    return {
+    payload = {
         "ok": True,
         "mode": "real",
         "demo": False,
@@ -235,7 +276,8 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
                 "export_manifest",
                 "bounded_column_reads",
                 "cohort_level_aggregates",
-                "survival_aggregate_if_time_to_event_available",
+            "survival_aggregate_if_time_to_event_available",
+                "selected_feature_aggregates",
             ],
             "payload_scope": "cohort_aggregate_only",
             "inference": "descriptive_plus_exploratory_logrank_when_time_to_event_available",
@@ -255,7 +297,10 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
             los_by_entity=los_by_entity,
             sofa_by_entity=sofa_by_entity,
             sepsis_by_entity=sepsis_by_entity,
+            selected_features=selected_feature_profiles,
         ),
+        "feature_catalog": _feature_catalog_payload(feature_catalog, selected_feature_ids),
+        "feature_selection": _feature_selection_payload(feature_catalog, selected_feature_ids, requested_feature_ids),
         "coverage": coverage,
         "quality": quality,
         "table_one": {
@@ -267,6 +312,32 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         "sofa_reclassification": sofa_reclassification,
         "blocked_features": blocked_features,
     }
+    _SUMMARY_CACHE[cache_key] = copy.deepcopy(payload)
+    while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX:
+        _SUMMARY_CACHE.pop(next(iter(_SUMMARY_CACHE)))
+    return payload
+
+
+def _summary_cache_key(path: Path, desc: Dict[str, Any], requested_feature_ids: Tuple[str, ...] | None) -> Tuple[Any, ...]:
+    summary = desc.get("summary") or {}
+    manifest_mtime = None
+    for name in ("_manifest.json", "easyicu_export_manifest.json"):
+        manifest_path = path / name
+        if manifest_path.exists():
+            try:
+                manifest_mtime = max(manifest_mtime or 0, manifest_path.stat().st_mtime_ns)
+            except OSError:
+                pass
+    return (
+        str(path.resolve() if path.exists() else path),
+        manifest_mtime,
+        desc.get("generated"),
+        summary.get("stays"),
+        summary.get("modules"),
+        summary.get("file_count"),
+        summary.get("total_rows"),
+        requested_feature_ids or ("__default_features__",),
+    )
 
 
 def _reject_unsupported_request(body: Dict[str, Any]) -> None:
@@ -338,10 +409,17 @@ def _read_module_frame(path: Path, desc: Dict[str, Any], module: str) -> Any:
     file_meta = next((f for f in desc.get("files") or [] if f.get("module") == module), None)
     if not file_meta:
         return None
+    file_path = path / str(file_meta.get("file") or "")
+    if (
+        module in _INTERACTIVE_SKIP_MODULES
+        and int(file_meta.get("rows") or 0) > _INTERACTIVE_TIME_INDEXED_READ_ROW_LIMIT
+        and file_path.suffix.lower() != ".parquet"
+    ):
+        return None
     columns = [c for c in _MODULE_COLUMNS[module] if c in (file_meta.get("columns") or [])]
     if "stay_id" not in columns:
         return None
-    return _read_selected_columns(path / str(file_meta.get("file") or ""), columns)
+    return _read_selected_columns(file_path, columns)
 
 
 def _fallback_entity_frame(path: Path, desc: Dict[str, Any]) -> Any:
@@ -362,6 +440,41 @@ def _read_selected_columns(path: Path, columns: List[str]) -> Any:
     return pd.read_csv(path, usecols=columns)
 
 
+def _filter_by_entity(frame: Any, entity_ids: set[str]) -> Any:
+    if frame is None or frame.empty or "stay_id" not in frame.columns:
+        return frame
+    normalized = _normalized_stay_id_series(frame["stay_id"])
+    mask = normalized.isin(entity_ids)
+    tmp = frame.loc[mask].copy()
+    tmp["stay_id"] = normalized.loc[mask].astype(str)
+    return tmp
+
+
+def _normalized_stay_id_series(series: Any) -> Any:
+    import pandas as pd
+    from pandas.api import types as pd_types
+
+    if pd_types.is_integer_dtype(series):
+        return series.astype("string").fillna("")
+
+    if pd_types.is_float_dtype(series):
+        normalized = series.astype("string").fillna("")
+        whole_number = series.notna() & ((series % 1) == 0)
+        if whole_number.any():
+            normalized.loc[whole_number] = series.loc[whole_number].astype("Int64").astype("string")
+        return normalized.fillna("")
+
+    normalized = series.astype("string").fillna("")
+    numeric = pd.to_numeric(series, errors="coerce")
+    try:
+        whole_number = numeric.notna() & ((numeric % 1) == 0)
+    except TypeError:
+        return normalized
+    if whole_number.any():
+        normalized.loc[whole_number] = numeric.loc[whole_number].astype("Int64").astype("string")
+    return normalized.fillna("")
+
+
 def _coverage_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
     cohort_size = (desc.get("summary") or {}).get("stays")
     out: List[Dict[str, Any]] = []
@@ -369,17 +482,30 @@ def _coverage_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         module = str(item.get("module") or "")
         if not module:
             continue
-        covered = _covered_entities(path, item, cohort_size)
-        coverage = round(covered / cohort_size * 100, 1) if isinstance(cohort_size, int) and cohort_size else None
+        rows = int(item.get("rows") or 0)
+        coverage_basis = "unique_entity_intersection"
+        skipped_reason = None
+        file_path = path / str(item.get("file") or "")
+        if rows > _COVERAGE_UNIQUE_STAY_SCAN_ROW_LIMIT and file_path.suffix.lower() != ".parquet":
+            covered = None
+            coverage_basis = "metadata_row_count_only"
+            skipped_reason = "unique_stay_scan_skipped_large_module"
+        else:
+            covered = _covered_entities(path, item, cohort_size)
+        coverage = round(covered / cohort_size * 100, 1) if isinstance(covered, int) and isinstance(cohort_size, int) and cohort_size else None
         status = _quality_status(module, coverage)
-        out.append({
+        row = {
             "module": module,
-            "rows": int(item.get("rows") or 0),
+            "rows": rows,
             "column_count": len(item.get("columns") or []),
             "covered_entities": covered,
             "coverage_pct": coverage,
+            "coverage_basis": coverage_basis,
             "quality_status": status,
-        })
+        }
+        if skipped_reason:
+            row["skipped_reason"] = skipped_reason
+        out.append(row)
     return out
 
 
@@ -389,10 +515,312 @@ def _covered_entities(path: Path, item: Dict[str, Any], cohort_size: Any) -> int
     file_name = str(item.get("file") or "")
     if not file_name:
         return None
-    ids = dataio._read_stay_ids(path / file_name)
+    file_path = path / file_name
+    if file_path.suffix.lower() == ".parquet":
+        try:
+            import pandas as pd
+
+            frame = pd.read_parquet(file_path, columns=["stay_id"])
+            if "stay_id" not in frame.columns:
+                return None
+            return min(int(frame["stay_id"].dropna().nunique()), cohort_size)
+        except Exception:
+            return None
+    ids = dataio._read_stay_ids(file_path)
     if ids is None:
         return None
     return min(len(ids), cohort_size)
+
+
+def _requested_feature_ids(body: Dict[str, Any]) -> Tuple[str, ...] | None:
+    raw = body.get("selected_features")
+    if raw is None:
+        raw = (body.get("feature_selection") or {}).get("selected_features") if isinstance(body.get("feature_selection"), dict) else None
+    if not isinstance(raw, list):
+        return None
+    out: List[str] = []
+    seen: set[str] = set()
+    for value in raw:
+        feature_id = str(value or "").strip()
+        if not feature_id or ":" not in feature_id or feature_id in seen:
+            continue
+        seen.add(feature_id)
+        out.append(feature_id)
+        if len(out) >= _MAX_COMPARE_FEATURES:
+            break
+    return tuple(out)
+
+
+def _feature_catalog(desc: Dict[str, Any], coverage: List[Dict[str, Any]]) -> Dict[str, Any]:
+    coverage_by_module = {str(row.get("module")): row for row in coverage if row.get("module")}
+    modules: List[Dict[str, Any]] = []
+    features_by_id: Dict[str, Dict[str, Any]] = {}
+    for item in desc.get("files") or []:
+        module = str(item.get("module") or "")
+        if not module:
+            continue
+        columns = [
+            str(column)
+            for column in item.get("columns") or []
+            if _is_compare_feature_column(str(column))
+        ]
+        coverage_row = coverage_by_module.get(module) or {}
+        feature_rows = [
+            {
+                "id": _feature_id(module, column),
+                "module": module,
+                "column": column,
+                "label": _feature_label(column),
+                "kind": _feature_kind_hint(column),
+                "rows": int(item.get("rows") or 0),
+                "coverage_pct": coverage_row.get("coverage_pct"),
+                "quality_status": coverage_row.get("quality_status"),
+            }
+            for column in columns
+        ]
+        for feature in feature_rows:
+            features_by_id[feature["id"]] = feature
+        modules.append({
+            "module": module,
+            "label": _module_label(module),
+            "rows": int(item.get("rows") or 0),
+            "feature_count": len(feature_rows),
+            "coverage_pct": coverage_row.get("coverage_pct"),
+            "quality_status": coverage_row.get("quality_status"),
+            "features": feature_rows,
+        })
+    modules.sort(key=lambda row: row["module"])
+    return {
+        "modules": modules,
+        "features_by_id": features_by_id,
+        "total_modules": len(modules),
+        "total_features": len(features_by_id),
+    }
+
+
+def _feature_catalog_payload(catalog: Dict[str, Any], selected_feature_ids: List[str]) -> Dict[str, Any]:
+    selected = set(selected_feature_ids)
+    modules = []
+    for module in catalog.get("modules") or []:
+        features = [
+            {key: value for key, value in feature.items() if key != "rows"} | {"selected": feature.get("id") in selected}
+            for feature in module.get("features") or []
+        ]
+        modules.append({
+            "module": module.get("module"),
+            "label": module.get("label"),
+            "rows": module.get("rows"),
+            "feature_count": module.get("feature_count"),
+            "coverage_pct": module.get("coverage_pct"),
+            "quality_status": module.get("quality_status"),
+            "selected_count": sum(1 for feature in features if feature.get("selected")),
+            "features": features,
+        })
+    return {
+        "total_modules": int(catalog.get("total_modules") or 0),
+        "total_features": int(catalog.get("total_features") or 0),
+        "max_selected_features": _MAX_COMPARE_FEATURES,
+        "modules": modules,
+    }
+
+
+def _feature_selection_payload(
+    catalog: Dict[str, Any],
+    selected_feature_ids: List[str],
+    requested_feature_ids: Tuple[str, ...] | None,
+) -> Dict[str, Any]:
+    features_by_id = catalog.get("features_by_id") or {}
+    selected = [features_by_id[feature_id] for feature_id in selected_feature_ids if feature_id in features_by_id]
+    default_ids = [feature_id for feature_id in _DEFAULT_COMPARE_FEATURES if feature_id in features_by_id]
+    return {
+        "mode": "requested" if requested_feature_ids is not None else "default",
+        "selected_count": len(selected),
+        "available_count": int(catalog.get("total_features") or 0),
+        "module_count": int(catalog.get("total_modules") or 0),
+        "max_selected_features": _MAX_COMPARE_FEATURES,
+        "default_ids": default_ids,
+        "selected": [
+            {
+                "id": feature.get("id"),
+                "module": feature.get("module"),
+                "column": feature.get("column"),
+                "label": feature.get("label"),
+                "kind": feature.get("kind"),
+            }
+            for feature in selected
+        ],
+        "ignored": [
+            feature_id
+            for feature_id in (requested_feature_ids or ())
+            if feature_id not in features_by_id
+        ],
+    }
+
+
+def _selected_feature_ids(catalog: Dict[str, Any], requested_feature_ids: Tuple[str, ...] | None) -> List[str]:
+    features_by_id = catalog.get("features_by_id") or {}
+    raw_ids = list(requested_feature_ids) if requested_feature_ids is not None else list(_DEFAULT_COMPARE_FEATURES)
+    out: List[str] = []
+    seen: set[str] = set()
+    for feature_id in raw_ids:
+        if feature_id in features_by_id and feature_id not in seen:
+            seen.add(feature_id)
+            out.append(feature_id)
+        if len(out) >= _MAX_COMPARE_FEATURES:
+            break
+    if out or requested_feature_ids is not None:
+        return out
+    return [feature_id for feature_id in list(features_by_id)[: min(8, _MAX_COMPARE_FEATURES)]]
+
+
+def _selected_feature_profiles(
+    path: Path,
+    desc: Dict[str, Any],
+    entity_set: set[str],
+    catalog: Dict[str, Any],
+    selected_feature_ids: List[str],
+) -> List[Dict[str, Any]]:
+    features_by_id = catalog.get("features_by_id") or {}
+    selected = [features_by_id[feature_id] for feature_id in selected_feature_ids if feature_id in features_by_id]
+    by_module: Dict[str, List[Dict[str, Any]]] = {}
+    for feature in selected:
+        by_module.setdefault(str(feature.get("module") or ""), []).append(feature)
+    out: List[Dict[str, Any]] = []
+    files_by_module = {str(item.get("module") or ""): item for item in desc.get("files") or [] if item.get("module")}
+    for module, features in by_module.items():
+        item = files_by_module.get(module)
+        if not item:
+            continue
+        file_path = path / str(item.get("file") or "")
+        rows = int(item.get("rows") or 0)
+        if rows > _COVERAGE_UNIQUE_STAY_SCAN_ROW_LIMIT and file_path.suffix.lower() != ".parquet":
+            for feature in features:
+                out.append({
+                    "id": feature["id"],
+                    "module": module,
+                    "column": feature["column"],
+                    "label": feature["label"],
+                    "kind": "blocked",
+                    "aggregation": "blocked_large_non_parquet",
+                    "mapping": {},
+                    "reason": "Large non-Parquet module requires an audited background aggregate before interactive comparison.",
+                })
+            continue
+        columns = ["stay_id"] + [str(feature["column"]) for feature in features if str(feature["column"]) in (item.get("columns") or [])]
+        if len(columns) <= 1:
+            continue
+        try:
+            frame = _filter_by_entity(_read_selected_columns(file_path, columns), entity_set)
+        except Exception as exc:
+            for feature in features:
+                out.append({
+                    "id": feature["id"],
+                    "module": module,
+                    "column": feature["column"],
+                    "label": feature["label"],
+                    "kind": "blocked",
+                    "aggregation": "read_failed",
+                    "mapping": {},
+                    "reason": f"Could not read selected feature column: {type(exc).__name__}",
+                })
+            continue
+        for feature in features:
+            column = str(feature.get("column") or "")
+            if column not in getattr(frame, "columns", []):
+                continue
+            out.append(_selected_feature_profile(frame, feature))
+    return out
+
+
+def _selected_feature_profile(frame: Any, feature: Dict[str, Any]) -> Dict[str, Any]:
+    column = str(feature.get("column") or "")
+    kind = _infer_feature_kind(frame, column)
+    if kind == "binary":
+        mapping = dataio._stay_bool(frame, column, missing_false=False)
+        aggregation = "entity_any_positive_pct"
+    elif kind == "numeric":
+        mapping = dataio._stay_numeric(frame, column, "median")
+        aggregation = "entity_median"
+    else:
+        mapping = _stay_present(frame, column)
+        kind = "presence"
+        aggregation = "entity_nonmissing_pct"
+    return {
+        "id": feature.get("id"),
+        "module": feature.get("module"),
+        "column": column,
+        "label": feature.get("label") or column,
+        "kind": kind,
+        "aggregation": aggregation,
+        "mapping": mapping,
+        "reason": None,
+    }
+
+
+def _infer_feature_kind(frame: Any, column: str) -> str:
+    if frame is None or getattr(frame, "empty", True) or column not in getattr(frame, "columns", []):
+        return "presence"
+    import pandas as pd
+
+    values = frame[column].dropna()
+    if values.empty:
+        return "presence"
+    sample = values.head(5000)
+    numeric = pd.to_numeric(sample, errors="coerce")
+    numeric_ratio = int(numeric.notna().sum()) / len(sample)
+    if numeric_ratio >= 0.85:
+        unique_values = {float(value) for value in numeric.dropna().unique()[:20]}
+        if unique_values and unique_values.issubset({0.0, 1.0}):
+            return "binary"
+        return "numeric"
+    flags = [dataio._truthy(value) for value in sample]
+    known_flags = [value for value in flags if value is not None]
+    if known_flags and len(known_flags) / len(sample) >= 0.85:
+        return "binary"
+    return "presence"
+
+
+def _stay_present(frame: Any, column: str) -> Dict[str, bool]:
+    if frame is None or getattr(frame, "empty", True) or "stay_id" not in frame.columns or column not in frame.columns:
+        return {}
+    out: Dict[str, bool] = {}
+    for entity_id, vals in frame.groupby("stay_id")[column]:
+        present = any(dataio._clean(value) is not None for value in vals)
+        if present:
+            out[str(entity_id)] = True
+    return out
+
+
+def _is_compare_feature_column(column: str) -> bool:
+    lower = column.strip().lower()
+    if lower in _FEATURE_RESERVED_COLUMNS:
+        return False
+    if lower.endswith("_id") or lower.endswith("id"):
+        return False
+    return bool(lower)
+
+
+def _feature_id(module: str, column: str) -> str:
+    return f"{module}:{column}"
+
+
+def _module_label(module: str) -> str:
+    return module.replace("_", " ").title()
+
+
+def _feature_label(column: str) -> str:
+    return column.replace("_", " ").upper() if len(column) <= 4 else column.replace("_", " ").title()
+
+
+def _feature_kind_hint(column: str) -> str:
+    lower = column.lower()
+    if lower.startswith(("is_", "has_")) or lower.endswith(("_ind", "_positive", "_failure", "_event", "_tx")):
+        return "binary"
+    if lower in {"death", "aki", "rrt", "abx", "susp_inf", "mech_vent", "vent_ind", "vaso_ind"}:
+        return "binary"
+    if lower in {"sex", "gender", "adm", "avpu"}:
+        return "categorical"
+    return "numeric"
 
 
 def _quality_summary(coverage: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -426,6 +854,7 @@ def _group_payload(
     los_by_entity: Dict[str, float],
     sofa_by_entity: Dict[str, float],
     sepsis_by_entity: Dict[str, bool],
+    selected_features: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     supported = [
         _group_from_bool("survival", "Survived vs Deceased", entity_ids, death_by_entity, false_name="Survived", true_name="Deceased"),
@@ -445,6 +874,7 @@ def _group_payload(
             los_by_entity=los_by_entity,
             sofa_by_entity=sofa_by_entity,
             sepsis_by_entity=sepsis_by_entity,
+            selected_features=selected_features,
         )
     return {
         "comparison_mode": "descriptive_only",
@@ -480,6 +910,7 @@ def _group_profile(
     los_by_entity: Dict[str, float],
     sofa_by_entity: Dict[str, float],
     sepsis_by_entity: Dict[str, bool],
+    selected_features: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     groups = _group_members(
         str(group_id or ""),
@@ -504,8 +935,64 @@ def _group_profile(
             {"metric": "Median SOFA-2", "kind": "numeric", "values": [_median_for(members, sofa_by_entity) for members in member_sets]},
             {"metric": "Median ICU LOS", "kind": "numeric", "unit": "days", "values": [_median_for(members, los_by_entity) for members in member_sets]},
             {"metric": "Sepsis-3 %", "kind": "percent", "values": [_bool_pct(members, sepsis_by_entity) for members in member_sets]},
-        ],
+        ] + _selected_feature_rows(member_sets, selected_features),
     }
+
+
+def _selected_feature_rows(member_sets: List[List[str]], selected_features: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for feature in selected_features:
+        kind = str(feature.get("kind") or "")
+        mapping = feature.get("mapping") or {}
+        label = str(feature.get("label") or feature.get("column") or feature.get("id") or "")
+        module = str(feature.get("module") or "")
+        if kind == "blocked":
+            rows.append({
+                "metric": label,
+                "feature_id": feature.get("id"),
+                "module": module,
+                "column": feature.get("column"),
+                "kind": "blocked",
+                "values": [None for _members in member_sets],
+                "status": "blocked",
+                "aggregation": feature.get("aggregation"),
+                "reason": feature.get("reason"),
+            })
+            continue
+        if kind == "binary":
+            rows.append({
+                "metric": f"{label} %",
+                "feature_id": feature.get("id"),
+                "module": module,
+                "column": feature.get("column"),
+                "kind": "percent",
+                "values": [_bool_pct(members, mapping) for members in member_sets],
+                "status": "selected_feature",
+                "aggregation": feature.get("aggregation"),
+            })
+        elif kind == "numeric":
+            rows.append({
+                "metric": f"Median {label}",
+                "feature_id": feature.get("id"),
+                "module": module,
+                "column": feature.get("column"),
+                "kind": "numeric",
+                "values": [_median_for(members, mapping) for members in member_sets],
+                "status": "selected_feature",
+                "aggregation": feature.get("aggregation"),
+            })
+        else:
+            rows.append({
+                "metric": f"{label} available %",
+                "feature_id": feature.get("id"),
+                "module": module,
+                "column": feature.get("column"),
+                "kind": "percent",
+                "values": [_bool_pct(members, mapping) for members in member_sets],
+                "status": "selected_feature",
+                "aggregation": feature.get("aggregation"),
+            })
+    return rows
 
 
 def _group_members(
@@ -677,11 +1164,18 @@ def _entity_numeric(frame: Any, column: str) -> Dict[str, float]:
     out: Dict[str, float] = {}
     if frame is None or frame.empty or "stay_id" not in frame.columns or column not in frame.columns:
         return out
-    for _, row in frame.iterrows():
-        entity_id = dataio._norm_id(row.get("stay_id"))
-        value = dataio._num(row.get(column))
+    import pandas as pd
+
+    entity_ids = frame["stay_id"].map(dataio._norm_id)
+    values = pd.to_numeric(frame[column], errors="coerce")
+    for entity_id, value in zip(entity_ids, values):
         if entity_id and value is not None:
-            out[entity_id] = value
+            try:
+                if pd.isna(value):
+                    continue
+            except Exception:
+                pass
+            out[entity_id] = float(value)
     return out
 
 
@@ -689,9 +1183,9 @@ def _entity_text(frame: Any, column: str) -> Dict[str, str]:
     out: Dict[str, str] = {}
     if frame is None or frame.empty or "stay_id" not in frame.columns or column not in frame.columns:
         return out
-    for _, row in frame.iterrows():
-        entity_id = dataio._norm_id(row.get("stay_id"))
-        value = dataio._clean(row.get(column))
+    entity_ids = frame["stay_id"].map(dataio._norm_id)
+    for entity_id, raw_value in zip(entity_ids, frame[column]):
+        value = dataio._clean(raw_value)
         if entity_id and value:
             out[entity_id] = value
     return out
@@ -769,6 +1263,24 @@ def _survival_analysis_payload(
     sofa_by_entity: Dict[str, float],
     sepsis_by_entity: Dict[str, bool],
 ) -> Dict[str, Any]:
+    if len(entity_ids) > _SURVIVAL_INTERACTIVE_ENTITY_LIMIT:
+        return {
+            "status": "blocked",
+            "reason": "Current export is loaded, but the cohort is above the interactive KM preview limit; continue with an audited local analysis job on this same export.",
+            "mode": "kaplan_meier_aggregate",
+            "scope": "exploratory_unadjusted",
+            "reportable": False,
+            "time_unit": "days",
+            "default_outcome": None,
+            "default_group": None,
+            "outcomes": [],
+            "group_options": [],
+            "curves": [],
+            "notes": [
+                f"Interactive survival is limited to {_SURVIVAL_INTERACTIVE_ENTITY_LIMIT:,} entities to keep the local UI responsive.",
+                "The current export remains active; no re-import is required for an audited local analysis job.",
+            ],
+        }
     specs = [
         {
             "id": "hospital_death",
@@ -1061,13 +1573,24 @@ def _km_group_payload(label: str, records: List[Tuple[float, bool]]) -> Dict[str
 def _km_points(records: List[Tuple[float, bool]]) -> List[Dict[str, Any]]:
     if not records:
         return [{"time": 0, "survival": 100.0, "at_risk": 0, "events": 0}]
-    event_times = sorted({time_value for time_value, event in records if event})
-    max_time = max(time_value for time_value, _event in records)
+    total_by_time: Counter[float] = Counter()
+    events_by_time: Counter[float] = Counter()
+    for time_value, event in records:
+        total_by_time[time_value] += 1
+        if event:
+            events_by_time[time_value] += 1
+    event_times = sorted(events_by_time)
+    max_time = max(total_by_time)
     survival = 1.0
     points = [{"time": 0, "survival": 100.0, "at_risk": len(records), "events": 0}]
+    at_risk_by_time: Dict[float, int] = {}
+    running = 0
+    for time_value in sorted(total_by_time, reverse=True):
+        running += total_by_time[time_value]
+        at_risk_by_time[time_value] = running
     for time_value in event_times:
-        at_risk = sum(1 for obs_time, _event in records if obs_time >= time_value)
-        events = sum(1 for obs_time, event in records if event and obs_time == time_value)
+        at_risk = at_risk_by_time.get(time_value, 0)
+        events = events_by_time[time_value]
         if at_risk > 0:
             survival *= max(0.0, 1.0 - events / at_risk)
         points.append({
@@ -1080,7 +1603,7 @@ def _km_points(records: List[Tuple[float, bool]]) -> List[Dict[str, Any]]:
         points.append({
             "time": _round_time(max_time),
             "survival": points[-1]["survival"],
-            "at_risk": sum(1 for obs_time, _event in records if obs_time >= max_time),
+            "at_risk": at_risk_by_time.get(max_time, 0),
             "events": 0,
         })
     return points
@@ -1124,14 +1647,28 @@ def _logrank_payload(
     label_a: str,
     label_b: str,
 ) -> Dict[str, Any]:
-    event_times = sorted({time_value for time_value, event in records_a + records_b if event})
+    total_a: Counter[float] = Counter()
+    total_b: Counter[float] = Counter()
+    events_a: Counter[float] = Counter()
+    events_b: Counter[float] = Counter()
+    for time_value, event in records_a:
+        total_a[time_value] += 1
+        if event:
+            events_a[time_value] += 1
+    for time_value, event in records_b:
+        total_b[time_value] += 1
+        if event:
+            events_b[time_value] += 1
+    event_times = sorted(set(events_a) | set(events_b))
+    risk_a = _risk_count_map(total_a, event_times)
+    risk_b = _risk_count_map(total_b, event_times)
     observed_a = expected_a = variance_a = 0.0
     total_events = 0
     for time_value in event_times:
-        n_a = sum(1 for obs_time, _event in records_a if obs_time >= time_value)
-        n_b = sum(1 for obs_time, _event in records_b if obs_time >= time_value)
-        d_a = sum(1 for obs_time, event in records_a if event and obs_time == time_value)
-        d_b = sum(1 for obs_time, event in records_b if event and obs_time == time_value)
+        n_a = risk_a.get(time_value, 0)
+        n_b = risk_b.get(time_value, 0)
+        d_a = events_a.get(time_value, 0)
+        d_b = events_b.get(time_value, 0)
         n_total = n_a + n_b
         d_total = d_a + d_b
         if n_total <= 1 or d_total <= 0:
@@ -1160,6 +1697,20 @@ def _logrank_payload(
         "p_value": round(p_value, 6),
         "interpretation": "exploratory_unadjusted_not_reportable",
     }
+
+
+def _risk_count_map(total_by_time: Counter[float], event_times: List[float]) -> Dict[float, int]:
+    """Return n-at-risk for arbitrary event times without scanning records repeatedly."""
+    observed_times = sorted(total_by_time, reverse=True)
+    out: Dict[float, int] = {}
+    running = 0
+    idx = 0
+    for event_time in sorted(event_times, reverse=True):
+        while idx < len(observed_times) and observed_times[idx] >= event_time:
+            running += total_by_time[observed_times[idx]]
+            idx += 1
+        out[event_time] = running
+    return out
 
 
 def _round_time(value: float) -> float:
@@ -1251,25 +1802,32 @@ def _sofa_reclassification_payload(
 def _sofa_transition_matrix(pairs: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
     labels = ["0-5", "6-8", "9-11", ">=12"]
     total = len(pairs)
+    counts: Counter[Tuple[str, str]] = Counter()
+    row_totals: Counter[str] = Counter()
+    for sofa1, sofa2 in pairs:
+        source_label = _sofa_severity_label(sofa1)
+        target_label = _sofa_severity_label(sofa2)
+        if source_label not in labels or target_label not in labels:
+            continue
+        counts[(source_label, target_label)] += 1
+        row_totals[source_label] += 1
     rows: List[Dict[str, Any]] = []
     for source_label in labels:
-        cells = []
-        row_total = 0
-        for target_label in labels:
-            count = sum(
-                1
-                for sofa1, sofa2 in pairs
-                if _sofa_severity_label(sofa1) == source_label and _sofa_severity_label(sofa2) == target_label
-            )
-            row_total += count
-            cells.append({"label": target_label, "count": count, "pct": _pct(count, total)})
+        cells = [
+            {"label": target_label, "count": counts[(source_label, target_label)], "pct": _pct(counts[(source_label, target_label)], total)}
+            for target_label in labels
+        ]
+        row_total = row_totals[source_label]
         rows.append({"label": source_label, "count": row_total, "cells": cells})
     return rows
 
 
 def _sofa_severity_label(value: Any) -> str:
-    score = dataio._num(value)
-    if score is None:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if not math.isfinite(score):
         return "unknown"
     if score <= 5:
         return "0-5"

@@ -68,14 +68,14 @@ def test_all_sources_use_set_val_true(name, _n, _dbs):
 
 # ── POINT_EVENT_CONCEPTS registration ──
 def test_all_registered_as_point_events():
-    from easyicu.compat import POINT_EVENT_CONCEPTS
+    from easyicu.utils.compat import POINT_EVENT_CONCEPTS
     for name, _, _ in MEDICATIONS:
         assert name in POINT_EVENT_CONCEPTS, f"{name} not in POINT_EVENT_CONCEPTS"
 
 
 # ── webapp catalog ──
 def test_all_in_webapp_catalog():
-    from easyicu.concept_catalog import CONCEPT_DICTIONARY, CONCEPT_DB_COVERAGE
+    from easyicu.concept.catalog import CONCEPT_DICTIONARY, CONCEPT_DB_COVERAGE
     for name, expected_count, _ in MEDICATIONS:
         assert name in CONCEPT_DICTIONARY, f"{name} not in CONCEPT_DICTIONARY"
         assert name in CONCEPT_DB_COVERAGE, f"{name} not in CONCEPT_DB_COVERAGE"

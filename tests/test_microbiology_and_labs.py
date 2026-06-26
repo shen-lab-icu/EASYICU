@@ -28,7 +28,7 @@ def test_extra_lab_median_plausible(database, lab, lo, hi):
 @pytest.mark.needs_real_data
 @pytest.mark.parametrize("database", ["miiv", "mimic", "eicu"])
 def test_microbiology_positivity_bands(database):
-    from easyicu.microbiology import load_microbiology
+    from easyicu.scores.microbiology import load_microbiology
 
     out = load_microbiology(database)
     assert not out.empty
@@ -43,7 +43,7 @@ def test_microbiology_positivity_bands(database):
 @pytest.mark.needs_real_data
 @pytest.mark.parametrize("database", ["sic", "hirid", "aumc"])
 def test_microbiology_na_databases(database):
-    from easyicu.microbiology import load_microbiology
+    from easyicu.scores.microbiology import load_microbiology
 
     assert load_microbiology(database).empty
 

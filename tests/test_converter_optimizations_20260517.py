@@ -25,7 +25,7 @@ import threading
 
 import duckdb
 
-from easyicu.data_converter import ConversionStatus, DataConverter
+from easyicu.io.data_converter import ConversionStatus, DataConverter
 
 
 def _read_parquet_column_type(parquet_path, column: str) -> str:

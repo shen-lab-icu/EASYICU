@@ -283,7 +283,7 @@
         </table>
       </div>
       <div class="row gap-8 mt-16">
-        <button class="btn primary" aria-disabled="true" tabindex="-1">${icon(stCtx === 'agent' ? 'shield' : 'arrow', 14)} ${stCtx === 'agent' ? 'Open review gate' : 'Open full workspace'}</button>
+        <button class="btn primary" aria-disabled="true" tabindex="-1">${icon(stCtx === 'agent' ? 'shield' : 'arrow', 14)} ${stCtx === 'agent' ? 'Open review checks' : 'Open full workspace'}</button>
         <button class="btn" aria-disabled="true" tabindex="-1">${icon('download', 14)} Export bundle</button>
         <span class="grow"></span>
         <span class="mono" style="font-size:10.5px;color:var(--ink-4);align-self:center;">${stMode === 'demo' ? 'demo · no tokens' : 'local · 0 uploads'}</span>

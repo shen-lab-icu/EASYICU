@@ -64,8 +64,8 @@ def test_eicu_lab_casing_matches_source_strings():
 
 
 def test_na_below_maps_sentinels_to_nan():
-    from easyicu.concept_callback_apply import _apply_callback
-    from easyicu.concept_schema import ConceptSource
+    from easyicu.concept.callback_apply import _apply_callback
+    from easyicu.concept.schema import ConceptSource
 
     src = ConceptSource(value_var="apache_iv", callback="transform_fun(na_below(0))")
     frame = pd.DataFrame({"id": [1, 2, 3, 4], "apache_iv": [-1.0, 0.0, 51.0, 211.0]})

@@ -12,7 +12,7 @@ from typing import Dict, Optional, Union
 import numpy as np
 import pandas as pd
 
-from .common_utils import SeriesUtils
+from .utils.common_utils import SeriesUtils
 from .table import IdTbl
 
 # Import missing callbacks
@@ -104,7 +104,7 @@ def sofa_score(
     Returns:
         DataFrame with SOFA score and optionally components
     """
-    from .ts_utils import slide
+    from .io.ts_utils import slide
     
     required = ['sofa_resp', 'sofa_coag', 'sofa_liver', 'sofa_cardio', 'sofa_cns', 'sofa_renal']
     
@@ -129,7 +129,7 @@ def sofa_score(
     # CRITICAL: fill_gaps should only fill within the range where we have data,
     # matching R ricu's behavior where time points are determined by component data.
     # We DON'T create arbitrary time grids beyond data boundaries.
-    from .ts_utils import fill_gaps as ricu_fill_gaps
+    from .io.ts_utils import fill_gaps as ricu_fill_gaps
     
     # Apply fill_gaps which will create hourly grid within data range for each patient
     # For miiv database, enforce ricu-style time filtering (time >= 0)

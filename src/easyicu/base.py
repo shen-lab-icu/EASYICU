@@ -19,8 +19,8 @@ import pandas as pd
 from .datasource import ICUDataSource
 from .concept import ConceptResolver, ConceptDictionary
 from .resources import load_data_sources, load_dictionary
-from .cache_manager import get_cache_manager
-from .parallel_config import get_global_config, get_runtime_load_strategy
+from .runtime.cache_manager import get_cache_manager
+from .runtime.parallel_config import get_global_config, get_runtime_load_strategy
 from .table import ICUTable
 
 logger = logging.getLogger(__name__)
@@ -264,7 +264,7 @@ class BaseICULoader:
 
         # Check production data paths from project_config
         try:
-            from .project_config import get_data_path
+            from .runtime.project_config import get_data_path
             prod_path = get_data_path(source='production', database=database)
             if prod_path and prod_path.exists():
                 if self.verbose:
@@ -301,7 +301,7 @@ class BaseICULoader:
         Use DataConverter or CLI to convert files before loading.
         """
         try:
-            from .data_converter import DataConverter
+            from .io.data_converter import DataConverter
             
             converter = DataConverter(
                 data_path=self.data_path,

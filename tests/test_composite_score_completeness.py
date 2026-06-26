@@ -12,9 +12,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from easyicu.sofa2 import sofa2_score
+from easyicu.scores.sofa2 import sofa2_score
 from easyicu.scores import sirs_score, qsofa_score, news_score, mews_score
-from easyicu.data_quality import composite_score_completeness
+from easyicu.io.data_quality import composite_score_completeness
 
 
 def _ts(name, values, ids=(1, 2, 3), t="2020-01-01"):

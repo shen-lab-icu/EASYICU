@@ -39,10 +39,10 @@ from .config import DataSourceConfig, DataSourceRegistry
 from .concept import ConceptDictionary, ConceptResolver
 from .datasource import FilterOp, FilterSpec, ICUDataSource, load_table
 from .resources import load_data_sources, load_dictionary, package_path
-from .logging_utils import configure_logging
-from .cache_manager import get_cache_manager, auto_clear_cache_if_enabled, clear_easyicu_cache, get_cache_status
-from .memory_manager import release_memory, get_rss_mb, get_available_memory_mb
-from .runtime_defaults import LoaderDefaults, resolve_loader_defaults
+from .utils.logging_utils import configure_logging
+from .runtime.cache_manager import get_cache_manager, auto_clear_cache_if_enabled, clear_easyicu_cache, get_cache_status
+from .runtime.memory_manager import release_memory, get_rss_mb, get_available_memory_mb
+from .runtime.runtime_defaults import LoaderDefaults, resolve_loader_defaults
 from .table import (
     ICUTable, 
     IdTbl, 
@@ -137,7 +137,7 @@ except ImportError:
 
 # 导入 KDIGO AKI 模块
 try:
-    from .kdigo_aki import (
+    from .scores.kdigo_aki import (
         kdigo_creatinine,
         kdigo_uo,
         kdigo_stages,
@@ -152,7 +152,7 @@ except ImportError as e:
 
 # 导入 Circulatory Failure 模块 (circEWS定义)
 try:
-    from .circ_failure import (
+    from .scores.circ_failure import (
         circ_failure_event,
         calculate_circ_failure_status,
         load_circ_failure,
@@ -174,7 +174,7 @@ _HAS_QUICKSTART = False
 
 # 导入并行配置模块（用于高级用户自定义配置）
 try:
-    from .parallel_config import (
+    from .runtime.parallel_config import (
         ParallelConfig,
         get_parallel_config,
         get_global_config,
@@ -205,7 +205,7 @@ _HAS_ENHANCED_API = _HAS_API  # 与主API统一
 
 # Optional imports with availability checks
 try:
-    from .assertions import (
+    from .utils.assertions import (
         assert_that,
         is_string,
         is_flag,
@@ -249,24 +249,24 @@ try:
 except ImportError:
     _HAS_UTILS = False
 try:
-    from .download import download_src, download_sources
+    from .io.download import download_src, download_sources
     _HAS_DOWNLOAD = True
 except ImportError:
     _HAS_DOWNLOAD = False
 
 try:
-    from .import_data import import_src, import_sources
+    from .io.import_data import import_src, import_sources
     _HAS_IMPORT = True
 except ImportError:
     _HAS_IMPORT = False
 try:
-    from .setup_data import setup_data
+    from .io.setup_data import setup_data
     _HAS_SETUP = True
 except ImportError:
     _HAS_SETUP = False
 
 try:
-    from .ts_utils import (
+    from .io.ts_utils import (
         change_interval,
         expand_intervals,
         expand,
@@ -299,7 +299,7 @@ except ImportError:
     _HAS_TS_UTILS = False
 
 try:
-    from .data_utils import (
+    from .io.data_utils import (
         add_column,
         aggregate_table,
         change_id_type,
@@ -320,7 +320,7 @@ except ImportError:
     _HAS_DATA_UTILS = False
 
 try:
-    from .data_env import (
+    from .io.data_env import (
         SrcEnv,
         DataEnv,
         attached_srcs,
@@ -359,7 +359,7 @@ except ImportError:
     _HAS_CALLBACKS = False
 
 try:
-    from .sepsis import (
+    from .scores.sepsis import (
         sep3,
         susp_inf,
         delta_cummin,
@@ -372,7 +372,7 @@ except ImportError:
 
 # SOFA-2 scoring functions
 try:
-    from .sofa2 import (
+    from .scores.sofa2 import (
         sofa2_score,
         sofa2_resp,
         sofa2_coag,
@@ -386,7 +386,7 @@ except ImportError:
     _HAS_SOFA2 = False
 
 try:
-    from .sepsis_sofa2 import (
+    from .scores.sepsis_sofa2 import (
         sep3_sofa2,
         label_sep3_sofa2,
     )
@@ -395,7 +395,7 @@ except ImportError:
     _HAS_SEPSIS_SOFA2 = False
 
 try:
-    from .export import (
+    from .io.export import (
         write_psv,
         read_psv,
         export_wide_format,
@@ -413,7 +413,7 @@ except ImportError:
     _HAS_EXPORT = False
 
 try:
-    from .file_utils import (
+    from .utils.file_utils import (
         data_dir,
         src_data_dir,
         ensure_dirs,
@@ -435,7 +435,7 @@ except ImportError:
     _HAS_FILE_UTILS = False
 
 try:
-    from .cli_utils import (
+    from .utils.cli_utils import (
         is_interactive,
         progress_init,
         progress_tick,
@@ -459,7 +459,7 @@ except ImportError:
     _HAS_CLI_UTILS = False
 
 try:
-    from .callback_utils import (
+    from .utils.callback_utils import (
         transform_fun,
         binary_op,
         comp_na,
@@ -487,7 +487,7 @@ except ImportError:
     _HAS_CALLBACK_UTILS = False
 
 try:
-    from .unit_conversion import (
+    from .utils.unit_conversion import (
         UnitConverter,
         convert_unit as convert_unit_value,
         celsius_to_fahrenheit,
@@ -513,7 +513,7 @@ except ImportError:
     _HAS_SCORES = False
 
 try:
-    from .data_quality import (
+    from .io.data_quality import (
         DataQualityValidator,
         validate_data_quality,
         print_quality_summary,
@@ -533,7 +533,7 @@ except ImportError:
 
 # 数据源工具
 try:
-    from .src_utils import (
+    from .io.src_utils import (
         src_name,
         src_prefix,
         src_extra_cfg,
@@ -549,7 +549,7 @@ except ImportError:
 
 # 表元数据访问器
 try:
-    from .table_meta import (
+    from .table.meta import (
         id_var,
         id_col,
         index_col,
@@ -569,7 +569,7 @@ except ImportError:
 
 # 底层数据加载
 try:
-    from .data_load import (
+    from .io.data_load import (
         load_src,
         load_difftime,
         load_id,
@@ -582,7 +582,7 @@ except ImportError:
 
 # 类型转换
 try:
-    from .table_convert import (
+    from .table.convert import (
         reclass_tbl,
         unclass_tbl,
         as_col_cfg,
@@ -598,7 +598,7 @@ except ImportError:
 
 # 概念管理
 try:
-    from .concept_utils import (
+    from .concept.utils import (
         add_concept,
         concept_availability,
         explain_dictionary,
@@ -610,7 +610,7 @@ except ImportError:
 
 # 临床工具
 try:
-    from .clinical_utils import (
+    from .utils.clinical_utils import (
         avpu,
         bmi,
         gcs,
@@ -627,7 +627,7 @@ except ImportError:
 
 # 数据工具
 try:
-    from .data_tools import (
+    from .io.data_tools import (
         unmerge,
         rm_na,
         change_dur_unit,
@@ -640,7 +640,7 @@ except ImportError:
 
 # ID映射系统
 try:
-    from .id_mapping import (
+    from .io.id_mapping import (
         id_map,
         id_map_helper,
         id_origin,
@@ -655,7 +655,7 @@ except ImportError:
 
 # 回调系统
 try:
-    from .callback_system import (
+    from .utils.callback_system import (
         do_callback,
         do_itm_load,
         set_callback,
@@ -671,7 +671,7 @@ except ImportError:
 
 # 概念构建
 try:
-    from .concept_builder import (
+    from .concept.builder import (
         new_concept,
         new_item,
         new_itm,
@@ -690,7 +690,7 @@ except ImportError:
 
 # 内存优化功能
 try:
-    from .memory_optimizer import (
+    from .runtime.memory_optimizer import (
         MemoryMonitor,
         MemoryConfig,
         MemoryEfficientTable,
@@ -707,7 +707,7 @@ _HAS_OPTIMIZED_DATASOURCE = False
 
 # 统一工具函数库
 try:
-    from .common_utils import (
+    from .utils.common_utils import (
         SeriesUtils,
         DataFrameUtils,
         TimeSeriesUtils,
@@ -1264,7 +1264,7 @@ __all__.extend([
 
 # 数据转换器
 try:
-    from .data_converter import (
+    from .io.data_converter import (
         DataConverter,
         ensure_database_ready,
     )
@@ -1278,7 +1278,7 @@ except ImportError:
 
 # 模块初始化时自动执行缓存清理（如果启用）
 try:
-    from .cache_manager import _initialize_cache_manager
+    from .runtime.cache_manager import _initialize_cache_manager
     _initialize_cache_manager()
 except ImportError:
     # 如果缓存管理器不可用，继续正常运行

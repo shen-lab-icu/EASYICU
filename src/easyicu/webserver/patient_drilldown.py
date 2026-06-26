@@ -11,13 +11,17 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from easyicu import concept_catalog
+from easyicu.concept import catalog as concept_catalog
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 
 _MAX_ENTITIES = 5
+_MAX_REVIEW_ENTITIES = 500
 _MAX_SIGNAL_POINTS = 12
 _MAX_REVIEW_SIGNALS = 24
+_MAX_TABLE_PREVIEW_ROWS = 24
+_MAX_TABLE_PREVIEW_COLUMNS = 14
+_MAX_TABLE_PREVIEW_MODULES = 32
 _READ_MODULES = ("demographics", "outcome", "sofa2_score", "sepsis3_sofa2", "vitals")
 _SIGNAL_SPECS = (
     ("hr", "Heart rate", "bpm"),
@@ -37,6 +41,18 @@ _TIME_COLUMNS = (
     "observationoffset",
 )
 _ID_COLUMNS = {"stay_id", "subject_id", "hadm_id"}
+_DIRECT_IDENTIFIER_COLUMN_KEYS = {
+    "stayid",
+    "icustayid",
+    "patientunitstayid",
+    "patienthealthsystemstayid",
+    "subjectid",
+    "hadmid",
+    "patientid",
+    "admissionid",
+    "caseid",
+    "uniquepid",
+}
 _METADATA_COLUMNS = {
     "valueuom",
     "unit",
@@ -136,12 +152,7 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
     """Return a real, bounded Patient Review payload for one registered export."""
     source, desc = _resolve_registered_source(body)
     path = Path(str(desc.get("path") or source.get("path") or "")).expanduser()
-    frames = {
-        module: _read_module_frame(path, desc, module)
-        for module in _READ_MODULES
-    }
-
-    demo = frames.get("demographics")
+    demo = _read_module_frame(path, desc, "demographics")
     if demo is None or getattr(demo, "empty", True):
         fallback = _fallback_entity_frame(path, desc)
         if fallback is None or getattr(fallback, "empty", True):
@@ -155,10 +166,20 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         raise PatientReviewError({"error": "no_entity_denominator"})
 
     entity_ids = [str(value) for value in demo["stay_id"].tolist()]
-    entity_set = set(entity_ids)
-    outcome = dataio._filter_by_stay(frames.get("outcome"), entity_set)
+    review_entity_ids = entity_ids[:_MAX_REVIEW_ENTITIES]
+    entity_set = set(review_entity_ids)
+    frames = {
+        "demographics": demo,
+        "outcome": _read_module_frame(path, desc, "outcome"),
+        "sepsis3_sofa2": _read_module_frame(path, desc, "sepsis3_sofa2"),
+        "sofa2_score": _read_module_frame(path, desc, "sofa2_score", entity_set),
+        "vitals": _read_module_frame(path, desc, "vitals", entity_set),
+    }
+    outcome_all = frames.get("outcome")
+    sepsis_all = frames.get("sepsis3_sofa2")
+    outcome = dataio._filter_by_stay(outcome_all, entity_set)
     sofa2 = dataio._filter_by_stay(frames.get("sofa2_score"), entity_set)
-    sepsis = dataio._filter_by_stay(frames.get("sepsis3_sofa2"), entity_set)
+    sepsis = dataio._filter_by_stay(sepsis_all, entity_set)
     vitals = dataio._filter_by_stay(frames.get("vitals"), entity_set)
     review_frames = _read_review_frames(path, desc, entity_set)
 
@@ -166,11 +187,19 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
     los_by_entity = dataio._stay_numeric(outcome, "los_icu", "median")
     sofa_by_entity = dataio._stay_numeric(sofa2, "sofa2", "max")
     sepsis_by_entity = dataio._stay_bool(sepsis, "sep3_sofa2", missing_false=True)
-    for entity_id in entity_ids:
+    for entity_id in review_entity_ids:
         if outcome is not None and not outcome.empty:
             death_by_entity.setdefault(entity_id, False)
         if sepsis is not None and not sepsis.empty:
             sepsis_by_entity.setdefault(entity_id, False)
+    death_by_entity_all = dataio._stay_bool(outcome_all, "death", missing_false=True)
+    los_by_entity_all = dataio._stay_numeric(outcome_all, "los_icu", "median")
+    sepsis_by_entity_all = dataio._stay_bool(sepsis_all, "sep3_sofa2", missing_false=True)
+    for entity_id in entity_ids:
+        if outcome_all is not None and not outcome_all.empty:
+            death_by_entity_all.setdefault(entity_id, False)
+        if sepsis_all is not None and not sepsis_all.empty:
+            sepsis_by_entity_all.setdefault(entity_id, False)
 
     requested_ref = str(body.get("entity_ref") or body.get("selected_ref") or "")
     ref_to_id = {_entity_ref(path, entity_id): entity_id for entity_id in entity_ids}
@@ -201,18 +230,23 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         "modules": int((desc.get("summary") or {}).get("modules") or 0),
         "file_count": int((desc.get("summary") or {}).get("file_count") or 0),
         "total_rows": int((desc.get("summary") or {}).get("total_rows") or 0),
+        "review_entities": len(review_entity_ids),
+        "review_entity_cap": _MAX_REVIEW_ENTITIES,
+        "review_scope": "browser_bounded_entity_sample" if len(review_entity_ids) < len(entity_ids) else "full_entity_set",
+        "static_aggregate_scope": "full_entity_set",
+        "dynamic_aggregate_scope": "browser_bounded_entity_sample" if len(review_entity_ids) < len(entity_ids) else "full_entity_set",
         "mean_age": dataio._series_mean(demo.get("age")) if "age" in demo.columns else None,
         "female_pct": dataio._sex_pct(demo.get("sex"), "female") if "sex" in demo.columns else None,
-        "mortality": dataio._bool_pct(list(death_by_entity.values())),
-        "median_los_icu": dataio._median(list(los_by_entity.values())),
+        "mortality": dataio._bool_pct(list((death_by_entity_all or death_by_entity).values())),
+        "median_los_icu": dataio._median(list((los_by_entity_all or los_by_entity).values())),
         "median_sofa2": dataio._median(list(sofa_by_entity.values())),
-        "sepsis_pct": dataio._bool_pct(list(sepsis_by_entity.values())),
+        "sepsis_pct": dataio._bool_pct(list((sepsis_by_entity_all or sepsis_by_entity).values())),
     }
     module_profiles = _module_profiles(desc, review_frames, entity_set)
     time_lanes = _time_lane_payloads(review_frames, selected_id)
     quality_metrics = _quality_metrics_payload(review_frames, entity_set)
     quality = _quality_from_module_profiles(module_profiles)
-    data_tables = _data_table_review_payload(module_profiles, summary)
+    data_tables = _data_table_review_payload(path, desc, module_profiles, summary)
     trajectory_review = _trajectory_review_payload(time_lanes, selected, entities, quality_metrics)
     patient_overview = _patient_overview_payload(selected, entities, time_lanes, quality_metrics)
     quality_review = _quality_review_payload(quality, quality_metrics)
@@ -237,7 +271,11 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
             "direct_identifiers_returned": False,
             "max_entity_options": _MAX_ENTITIES,
             "max_points_per_signal": _MAX_SIGNAL_POINTS,
-            "payload_tables_are_aggregated": True,
+            "max_table_preview_rows": _MAX_TABLE_PREVIEW_ROWS,
+            "max_table_preview_columns": _MAX_TABLE_PREVIEW_COLUMNS,
+            "bounded_table_previews": True,
+            "payload_tables_are_aggregated": False,
+            "payload_tables_are_bounded": True,
         },
         "summary": summary,
         "module_profiles": module_profiles,
@@ -294,7 +332,7 @@ def _resolve_registered_source(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Di
     return source, desc
 
 
-def _read_module_frame(path: Path, desc: Dict[str, Any], module: str) -> Any:
+def _read_module_frame(path: Path, desc: Dict[str, Any], module: str, stay_ids: set[str] | None = None) -> Any:
     file_meta = next((f for f in desc.get("files") or [] if f.get("module") == module), None)
     if not file_meta:
         return None
@@ -302,7 +340,7 @@ def _read_module_frame(path: Path, desc: Dict[str, Any], module: str) -> Any:
     columns = [c for c in _MODULE_COLUMNS[module] if c in (file_meta.get("columns") or [])]
     if "stay_id" not in columns:
         return None
-    return _read_selected_columns(path / file_name, columns)
+    return _read_selected_columns(path / file_name, columns, stay_ids=stay_ids)
 
 
 def _fallback_entity_frame(path: Path, desc: Dict[str, Any]) -> Any:
@@ -312,15 +350,52 @@ def _fallback_entity_frame(path: Path, desc: Dict[str, Any]) -> Any:
     return _read_selected_columns(path / str(file_meta.get("file") or ""), ["stay_id"])
 
 
-def _read_selected_columns(path: Path, columns: List[str]) -> Any:
+def _read_selected_columns(path: Path, columns: List[str], stay_ids: set[str] | None = None) -> Any:
     import pandas as pd
 
     suffix = path.suffix.lower()
     if suffix == ".parquet":
+        filters = _stay_id_filters(path, stay_ids) if stay_ids and "stay_id" in columns else None
+        if filters:
+            return pd.read_parquet(path, columns=columns, filters=filters)
         return pd.read_parquet(path, columns=columns)
     if suffix == ".xlsx":
-        return pd.read_excel(path, usecols=columns)
-    return pd.read_csv(path, usecols=columns)
+        frame = pd.read_excel(path, usecols=columns)
+    else:
+        frame = pd.read_csv(path, usecols=columns)
+    if stay_ids and "stay_id" in frame.columns:
+        frame = frame.copy()
+        frame["stay_id"] = frame["stay_id"].map(dataio._norm_id)
+        frame = frame[frame["stay_id"].isin(stay_ids)]
+    return frame
+
+
+def _stay_id_filters(path: Path, stay_ids: set[str]) -> List[Tuple[str, str, List[Any]]] | None:
+    values: List[Any]
+    try:
+        import pyarrow.parquet as pq
+        import pyarrow.types as pat
+
+        field = pq.ParquetFile(path).schema_arrow.field("stay_id")
+        if pat.is_integer(field.type):
+            values = [int(value) for value in stay_ids if str(value).isdigit()]
+        elif pat.is_floating(field.type):
+            values = [float(value) for value in stay_ids if _is_number_like(value)]
+        else:
+            values = [str(value) for value in stay_ids if str(value)]
+    except Exception:
+        values = [str(value) for value in stay_ids if str(value)]
+    if not values:
+        return None
+    return [("stay_id", "in", values)]
+
+
+def _is_number_like(value: Any) -> bool:
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def _read_review_frames(path: Path, desc: Dict[str, Any], entity_set: set[str]) -> List[Dict[str, Any]]:
@@ -335,7 +410,7 @@ def _read_review_frames(path: Path, desc: Dict[str, Any], entity_set: set[str]) 
     for item in desc.get("files") or []:
         module = str(item.get("module") or "")
         columns = [str(col) for col in (item.get("columns") or [])]
-        if not module or "stay_id" not in columns:
+        if not module or module not in _READ_MODULES or "stay_id" not in columns:
             continue
         feature_cols = _feature_columns(columns)
         time_cols = [col for col in _TIME_COLUMNS if col in columns]
@@ -343,7 +418,7 @@ def _read_review_frames(path: Path, desc: Dict[str, Any], entity_set: set[str]) 
         if len(selected_columns) <= 1:
             continue
         try:
-            frame = _read_selected_columns(path / str(item.get("file") or ""), selected_columns)
+            frame = _read_selected_columns(path / str(item.get("file") or ""), selected_columns, stay_ids=entity_set)
         except Exception:
             continue
         if frame is None or getattr(frame, "empty", True) or "stay_id" not in frame.columns:
@@ -629,10 +704,12 @@ def _quality_metrics_payload(review_frames: List[Dict[str, Any]], entity_set: se
 
 
 def _data_table_review_payload(
+    path: Path,
+    desc: Dict[str, Any],
     module_profiles: List[Dict[str, Any]],
     summary: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Mirror the old Data Tables review contract without source rows."""
+    """Mirror the old Data Tables review contract with bounded local previews."""
     module_count = len([row for row in module_profiles if int(row.get("feature_count") or 0) > 0])
     feature_count = sum(int(row.get("feature_count") or 0) for row in module_profiles)
     selected_count = sum(int(row.get("observed_features") or 0) for row in module_profiles)
@@ -679,14 +756,163 @@ def _data_table_review_payload(
             "selection_mode": "module_then_feature",
         },
         "detail_gate": {
-            "title": "Source records are optional",
+            "title": "Bounded local table previews",
             "default_open": False,
-            "reason": "The browser shows module aggregates and feature metadata; row previews stay out of the payload.",
-            "available_detail_modes": ["module_glance", "single_feature_metadata"],
+            "reason": "The browser renders capped module table previews with pseudonymous entity tokens; direct identifiers and full tables stay on disk.",
+            "available_detail_modes": ["module_table_preview", "module_glance", "single_feature_metadata"],
         },
         "modules": modules,
-        "payload_scope": "old_data_tables_semantics_without_row_payload",
+        "table_previews": _table_preview_payloads(path, desc, module_profiles),
+        "payload_scope": "old_data_tables_semantics_with_bounded_pseudonymous_table_previews",
     }
+
+
+def _table_preview_payloads(
+    path: Path,
+    desc: Dict[str, Any],
+    module_profiles: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    profile_by_module = {str(row.get("module") or ""): row for row in module_profiles}
+    previews: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in desc.get("files") or []:
+        module = str(item.get("module") or "")
+        if not module or module in seen:
+            continue
+        seen.add(module)
+        if len(previews) >= _MAX_TABLE_PREVIEW_MODULES:
+            break
+        columns = [str(col) for col in (item.get("columns") or [])]
+        id_col, read_columns, display_columns, hidden_count = _table_preview_columns(columns)
+        profile = profile_by_module.get(module) or {}
+        base = {
+            "module": module,
+            "label": profile.get("label") or _module_label(module),
+            "file": item.get("file"),
+            "rows_total": int(item.get("rows") or profile.get("rows") or 0),
+            "columns_total": len(columns),
+            "display_columns": display_columns,
+            "hidden_columns": hidden_count,
+            "row_cap": _MAX_TABLE_PREVIEW_ROWS,
+            "column_cap": _MAX_TABLE_PREVIEW_COLUMNS,
+            "pseudonymous_entity_column": bool(id_col),
+        }
+        if not read_columns:
+            previews.append({
+                **base,
+                "status": "unavailable",
+                "rows": [],
+                "row_count": 0,
+                "reason": "No displayable columns after direct identifiers are removed.",
+            })
+            continue
+        try:
+            frame = _read_table_preview(path / str(item.get("file") or ""), read_columns, _MAX_TABLE_PREVIEW_ROWS)
+        except Exception as exc:
+            previews.append({
+                **base,
+                "status": "unavailable",
+                "rows": [],
+                "row_count": 0,
+                "reason": str(exc)[:160],
+            })
+            continue
+        rows = _public_preview_rows(path, frame, id_col, display_columns)
+        previews.append({
+            **base,
+            "status": "ready" if rows else "empty",
+            "rows": rows,
+            "row_count": len(rows),
+            "truncated_rows": int(base["rows_total"]) > len(rows),
+            "truncated_columns": hidden_count > 0,
+            "payload_scope": "bounded_pseudonymous_module_table_preview",
+        })
+    return previews
+
+
+def _table_preview_columns(columns: List[str]) -> Tuple[str | None, List[str], List[str], int]:
+    id_col = next((col for col in columns if _is_direct_identifier_column(col)), None)
+    non_id = [col for col in columns if not _is_direct_identifier_column(col)]
+    time_cols = [col for col in _TIME_COLUMNS if col in non_id]
+    feature_cols = [col for col in _feature_columns(non_id) if col not in time_cols]
+    other_cols = [col for col in non_id if col not in time_cols and col not in feature_cols and col not in _METADATA_COLUMNS]
+    source_display = _ordered_unique([*time_cols, *feature_cols, *other_cols])
+    source_display = source_display[: max(0, _MAX_TABLE_PREVIEW_COLUMNS - (1 if id_col else 0))]
+    read_columns = _ordered_unique(([id_col] if id_col else []) + source_display)
+    display_columns = (["entity"] if id_col else []) + source_display
+    hidden_count = max(0, len([col for col in non_id if col not in source_display]))
+    return id_col, read_columns, display_columns, hidden_count
+
+
+def _is_direct_identifier_column(column: str) -> bool:
+    key = str(column or "").strip().lower().replace("_", "").replace("-", "")
+    return key in _DIRECT_IDENTIFIER_COLUMN_KEYS
+
+
+def _read_table_preview(path: Path, columns: List[str], nrows: int) -> Any:
+    import pandas as pd
+
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
+        try:
+            import pyarrow.parquet as pq
+
+            parquet = pq.ParquetFile(path)
+            for batch in parquet.iter_batches(batch_size=max(nrows, 1), columns=columns):
+                return batch.to_pandas().head(nrows)
+            return pd.DataFrame(columns=columns)
+        except Exception:
+            return pd.read_parquet(path, columns=columns).head(nrows)
+    if suffix == ".xlsx":
+        return pd.read_excel(path, usecols=columns, nrows=nrows)
+    return pd.read_csv(path, usecols=columns, nrows=nrows)
+
+
+def _public_preview_rows(
+    path: Path,
+    frame: Any,
+    id_col: str | None,
+    display_columns: List[str],
+) -> List[Dict[str, Any]]:
+    if frame is None or getattr(frame, "empty", True):
+        return []
+    rows: List[Dict[str, Any]] = []
+    for _, row in frame.iterrows():
+        public: Dict[str, Any] = {}
+        if id_col:
+            entity_id = dataio._norm_id(row.get(id_col))
+            public["entity"] = _entity_ref(path, entity_id) if entity_id else None
+        for col in display_columns:
+            if col == "entity":
+                continue
+            public[col] = _json_cell(row.get(col))
+        rows.append(public)
+        if len(rows) >= _MAX_TABLE_PREVIEW_ROWS:
+            break
+    return rows
+
+
+def _json_cell(value: Any) -> Any:
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except Exception:
+            pass
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
 def _trajectory_review_payload(
@@ -695,7 +921,7 @@ def _trajectory_review_payload(
     entities: List[Dict[str, Any]],
     quality_metrics: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Mirror old Time Series modes: lanes, single entity, comparison."""
+    """Build bounded time-window feature-matrix review metadata."""
     ready_lanes = [row for row in time_lanes if row.get("status") == "ready" and row.get("signals")]
     signal_count = sum(int(row.get("signal_count") or 0) for row in ready_lanes)
     selected_signals = []
@@ -720,23 +946,23 @@ def _trajectory_review_payload(
             },
             {
                 "index": "03",
-                "label": "Clinical lanes",
-                "detail": f"{len(ready_lanes)} lanes available",
+                "label": "Feature matrices",
+                "detail": f"{len(ready_lanes)} matrix groups available",
                 "status": "ready" if ready_lanes else "neutral",
             },
             {
                 "index": "04",
                 "label": "Review mode",
-                "detail": "clinical lanes / single entity / multi-entity comparison",
+                "detail": "time windows x features / single entity / aggregate comparison",
                 "status": "ready",
             },
         ],
         "modes": [
             {
-                "id": "clinical_lanes",
-                "label": "Clinical Lanes",
+                "id": "feature_matrix",
+                "label": "Feature Matrix",
                 "status": "ready" if ready_lanes else "unavailable",
-                "description": "Grouped longitudinal signals with clinical thresholds when available.",
+                "description": "Bounded time-window by feature matrices for grouped longitudinal signals.",
             },
             {
                 "id": "single_entity",
@@ -763,7 +989,7 @@ def _trajectory_review_payload(
             "features": comparison_features,
             "payload_scope": "aggregate_comparison_no_multi_entity_rows",
         },
-        "payload_scope": "old_timeseries_semantics_bounded",
+        "payload_scope": "feature_matrix_semantics_bounded",
     }
 
 
@@ -817,8 +1043,8 @@ def _patient_overview_payload(
         "data_table": {
             "mode": "Data Table",
             "available_features": len(available_features),
-            "row_preview": "blocked",
-            "reason": "Native Patient Overview preserves category metadata but does not return source rows.",
+            "row_preview": "available_in_data_tables",
+            "reason": "Use the Data Tables tab for bounded pseudonymous module table previews.",
         },
         "payload_scope": "old_patient_overview_semantics_pseudonymous",
     }

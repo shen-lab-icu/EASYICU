@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from easyicu.concept_availability_signal import ConceptAvailabilityRecord
+from easyicu.concept.availability_signal import ConceptAvailabilityRecord
 from easyicu.research_agent.concept_availability import (
     concept_database_availability_from_load_record,
 )

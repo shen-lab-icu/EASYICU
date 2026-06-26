@@ -1,0 +1,149 @@
+/* ============================================================
+   home.css — Entry + Home landing page (owner file)
+   Owns: .entry-*, .home-*, .col-* hero, .way-*, .mode-*,
+   .flow-* onboarding steps, .aux-card. Split out of screens.css
+   2026-06-26 so the landing page has a real owner and screens.css
+   is left holding only shared cross-screen workflow primitives.
+   Used by: app.js (entry/home render), screens-extraction.js,
+   screens-guided.js.
+   ============================================================ */
+
+/* ---------- Entry ---------- */
+.entry-shell{ min-height: 100vh; display: flex; flex-direction: column; }
+.entry-top{
+  display:flex; align-items:center; justify-content: space-between;
+  padding: 14px 28px; border-bottom: 1px solid var(--hair);
+  background: var(--rail);
+}
+.entry-top .mark{ width: 34px; height: 34px; border-radius: 9px; background: var(--ink); color:#fff; display:grid; place-items:center; }
+.entry-body{ width: 100%; max-width: 1100px; margin: 0 auto; padding: 48px 28px 64px; }
+
+/* ============================================================
+   Home — conversational hero (layout C) + variants A/B
+   ============================================================ */
+.home-wrap{ flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px 64px; min-height: 0; }
+.home-inner{ width: 100%; max-width: 680px; }
+.home-eyebrow{ text-align: center; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-4); }
+.home-h1{ text-align: center; font-size: 30px; font-weight: 600; letter-spacing: -0.025em; margin: 12px 0 0; color: var(--ink); }
+.home-sub{ text-align: center; font-size: 13px; color: var(--ink-3); margin: 9px auto 0; max-width: 52ch; line-height: 1.55; }
+
+/* the prompt box */
+.home-prompt{ margin-top: 26px; border: 1px solid var(--hair-2); border-radius: var(--r-4); background: var(--surface); box-shadow: var(--sh-2); transition: border-color .14s, box-shadow .14s; overflow: hidden; }
+.home-prompt:focus-within{ border-color: var(--accent-border); box-shadow: 0 0 0 3px var(--accent-soft), var(--sh-2); }
+.home-prompt .hp-input{ display: block; width: 100%; border: 0; background: transparent; font: inherit; font-size: 15px; color: var(--ink); padding: 20px 18px 10px; outline: none; resize: none; line-height: 1.55; min-height: 104px; }
+.home-prompt .hp-input::placeholder{ color: var(--ink-4); }
+.home-prompt .hp-bar{ display: flex; align-items: center; gap: 8px; padding: 8px 10px 10px; }
+.hp-datapill{ display: inline-flex; align-items: center; gap: 2px; background: var(--surface-2); border: 1px solid var(--hair); border-radius: var(--r-pill); padding: 3px; }
+.hp-datapill button{ display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 11px; border: 0; background: transparent; font: inherit; font-size: 11.5px; font-weight: 500; color: var(--ink-3); border-radius: var(--r-pill); cursor: pointer; }
+.hp-datapill button.on{ background: var(--surface); color: var(--ink); box-shadow: var(--sh-1); font-weight: 600; }
+.hp-hint{ font-size: 10.5px; color: var(--ink-4); margin-left: 4px; }
+.home-prompt .hp-send{ margin-left: auto; width: 38px; height: 38px; border-radius: var(--r-2); border: 0; background: var(--ink); color: #fff; cursor: pointer; display: grid; place-items: center; flex: none; transition: opacity .12s; }
+.home-prompt .hp-send:disabled{ opacity: .35; cursor: default; }
+
+/* suggestion chips */
+.home-chips{ display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
+.home-chip{ display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; padding: 8px 14px; border-radius: var(--r-pill); border: 1px solid var(--hair-2); background: var(--surface); color: var(--ink-2); cursor: pointer; transition: border-color .12s, background .12s, color .12s; }
+.home-chip:hover{ border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-ink); }
+.home-chip .ico{ color: var(--ink-4); }
+.home-chip:hover .ico{ color: var(--accent-ink); }
+
+/* Copilot-primary hero: Copilot wider + accented, Classic a slimmer secondary */
+.home-split{ display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; margin-top: 28px; align-items: stretch; }
+.home-col.col-classic{ background: var(--surface-2); box-shadow: none; }
+.col-badge{ margin-left: auto; flex: none; align-self: flex-start; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent-ink); background: var(--accent-soft); border: 1px solid var(--accent-border); border-radius: 999px; padding: 3px 9px; }
+.home-col{ display: flex; flex-direction: column; border: 1px solid var(--hair-2); border-radius: var(--r-4); background: var(--surface); box-shadow: var(--sh-1); overflow: hidden; }
+.home-col.col-copilot{ background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 55%, var(--surface)), var(--surface)); border-color: var(--accent-border); }
+.home-col .col-head{ display: flex; align-items: center; gap: 10px; padding: 15px 16px 0; }
+.home-col .col-mk{ width: 32px; height: 32px; border-radius: var(--r-2); flex: none; display: grid; place-items: center; }
+.home-col .col-head > div:not(.col-mk){ flex: 1; min-width: 0; }
+.col-copilot .col-mk{ background: var(--accent); color: #fff; }
+.col-classic .col-mk{ background: var(--ink); color: #fff; }
+.home-col .col-t{ font-size: 15px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; }
+.home-col .col-sub{ font-size: 11px; color: var(--ink-4); margin-top: 2px; }
+.home-col .col-body{ padding: 14px 16px 16px; display: flex; flex-direction: column; flex: 1; }
+.home-col .col-lead{ font-size: 12px; color: var(--ink-3); line-height: 1.5; margin: 0 0 13px; }
+.col-prompt{ border: 1px solid var(--hair-2); border-radius: var(--r-3); background: var(--surface); box-shadow: var(--sh-1); overflow: hidden; transition: border-color .14s, box-shadow .14s; }
+.col-prompt:focus-within{ border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.col-prompt .hp-input{ display: block; width: 100%; border: 0; background: transparent; font: inherit; font-size: 15px; color: var(--ink); padding: 18px 17px 8px; outline: none; line-height: 1.6; resize: none; min-height: 132px; }
+.col-prompt .hp-input::placeholder{ color: var(--ink-4); }
+.col-prompt .hp-bar{ display: flex; align-items: center; gap: 7px; padding: 8px 9px 9px; }
+.col-prompt .hp-send{ margin-left: auto; width: 42px; height: 42px; border-radius: var(--r-2); border: 0; background: var(--ink); color: #fff; cursor: pointer; display: grid; place-items: center; flex: none; }
+.home-col .col-chips{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.home-col .col-chips .home-chip{ font-size: 11.5px; padding: 6px 11px; }
+.col-entries{ display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
+.col-entry{ display: flex; align-items: center; gap: 13px; padding: 17px 15px; border-radius: var(--r-3); border: 1px solid var(--hair); background: var(--surface); cursor: pointer; text-align: left; font: inherit; width: 100%; transition: background .12s, border-color .12s, box-shadow .12s; }
+.col-entry:hover{ background: var(--surface-2); border-color: var(--accent-border); box-shadow: var(--sh-1); }
+.col-entry .ce-ico{ width: 36px; height: 36px; border-radius: var(--r-2); flex: none; background: var(--surface-2); color: var(--ink-3); display: grid; place-items: center; border: 1px solid var(--hair); }
+.col-entry:hover .ce-ico{ background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent-border); }
+.col-entry > span:not(.ce-ico):not(.ce-go){ flex: 1; min-width: 0; }
+.col-entry .ce-t{ display: block; font-size: 13.25px; font-weight: 600; color: var(--ink); line-height: 1.25; }
+.col-entry .ce-d{ display: block; font-size: 11.5px; color: var(--ink-4); margin-top: 2px; line-height: 1.3; }
+.col-entry .ce-go{ margin-left: auto; color: var(--ink-4); flex: none; opacity: .4; transition: opacity .12s, transform .12s; }
+.col-entry:hover .ce-go{ opacity: 1; transform: translateX(2px); }
+.col-classic .col-foot{ margin-top: auto; padding-top: 12px; }
+.col-dataline{ display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--ink-4); }
+@media (max-width: 860px){ .home-split{ grid-template-columns: 1fr; } }
+@media (max-width: 720px){ .home-split{ grid-template-columns: 1fr; } }
+
+/* quiet footer (secondary entries) */
+.home-foot{ margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--hair); display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.home-foot .hf-link{ display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-3); background: transparent; border: 0; cursor: pointer; padding: 7px 12px; border-radius: var(--r-2); transition: background .12s, color .12s; }
+.home-foot .hf-link:hover{ background: var(--surface-2); color: var(--ink); }
+.home-foot .hf-link .ico{ color: var(--ink-4); }
+.home-foot .hf-dot{ width: 3px; height: 3px; border-radius: 50%; background: var(--hair-3); }
+.home-resume{ margin-top: 18px; }
+.home-resume .card{ display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 15px; }
+
+/* variant A: data toggle above two way-cards */
+.home-datatoggle{ display: flex; justify-content: center; margin-bottom: 22px; }
+.home-datatoggle .seg.lg button{ min-width: 120px; justify-content: center; }
+
+@media (max-width: 560px){
+  .home-h1{ font-size: 24px; }
+  .home-prompt .hp-input{ font-size: 14px; }
+  .home-foot{ gap: 2px; }
+  .home-foot .hf-dot{ display: none; }
+}
+
+
+/* ---- two ways in (Copilot vs Workspace) ---- */
+.entry-ways{ display:grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 30px; }
+.way-card{ display:flex; flex-direction: column; align-items: stretch; text-align: left; cursor: pointer; border: 1px solid var(--hair-2); background: var(--surface); font: inherit; color: inherit; }
+.way-card:hover{ border-color: var(--accent-border); box-shadow: var(--sh-2); }
+.way-copilot{ background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 70%, var(--surface)), var(--surface)); border-color: var(--accent-border); }
+.way-head{ display:flex; align-items:center; justify-content: space-between; margin-bottom: 14px; }
+.way-mark{ width: 40px; height: 40px; border-radius: 11px; background: var(--ink); color:#fff; display:grid; place-items:center; }
+.way-mark.accent{ background: var(--accent); }
+.way-title{ font-size: 18px; font-weight: 600; letter-spacing: -0.015em; }
+.way-lead{ font-size: 12.75px; color: var(--ink-3); line-height: 1.55; margin: 8px 0 16px; flex: 1; }
+.way-go{ display:inline-flex; align-items:center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--accent-ink); }
+.way-card:not(.way-copilot) .way-go{ color: var(--ink); }
+.entry-modes-head{ margin-bottom: 14px; }
+@media (max-width: 760px){ .entry-ways{ grid-template-columns: 1fr; } }
+
+.entry-modes{ display:grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.mode-card{ display:flex; flex-direction: column; }
+.demo-card{ background: var(--accent-soft); border-color: var(--accent-border); }
+.mode-head{ display:flex; align-items:center; justify-content: space-between; margin-bottom: 12px; }
+.mode-mark{ width: 38px; height: 38px; border-radius: 10px; background: var(--ink); color:#fff; display:grid; place-items:center; }
+.mode-mark.accent{ background: var(--accent); }
+.mode-title{ font-size: 17px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+.mode-lead{ font-size: 12.75px; color: var(--ink-3); line-height: 1.55; margin: 0 0 14px; }
+.mode-list{ list-style: none; margin: 0 0 18px; padding: 0; display:flex; flex-direction: column; gap: 9px; flex: 1; }
+.mode-list li{ position: relative; padding-left: 18px; font-size: 12.5px; color: var(--ink-2); line-height: 1.45; }
+.mode-list li::before{ content:""; position:absolute; left: 2px; top: 7px; width: 5px; height: 5px; border-radius: 50%; background: var(--ink-4); }
+.demo-card .mode-list li::before{ background: var(--accent); }
+.entry-aux{ margin-top: 16px; }
+.aux-card{ display:flex; align-items:center; justify-content: space-between; gap: 16px; padding: 14px 18px; border: 1px dashed var(--hair-2); }
+.aux-ico{ width: 32px; height: 32px; border-radius: var(--r-2); background: var(--surface-2); color: var(--ink-3); display:grid; place-items:center; }
+.entry-steps{ margin-top: 40px; padding-top: 28px; border-top: 1px solid var(--hair); }
+.flow-step{ border-left: 1px solid var(--hair-2); padding: 2px 0 2px 16px; }
+.flow-n{ font-size: 11px; color: var(--ink-4); }
+.flow-t{ font-size: 14px; font-weight: 600; margin-top: 8px; }
+.flow-d{ font-size: 12px; color: var(--ink-3); margin-top: 5px; line-height: 1.45; }
+
+@media (max-width: 760px){
+  .entry-modes{ grid-template-columns: 1fr; }
+  .aux-card{ flex-direction: column; align-items: stretch; }
+  .entry-body{ padding: 28px 16px 48px; }
+}

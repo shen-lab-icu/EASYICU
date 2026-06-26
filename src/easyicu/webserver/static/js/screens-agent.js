@@ -3,7 +3,7 @@
      • Left rail = a persistent list of studies (projects), like chat sessions.
      • Each study carries a linked cohort, its own run history, outputs, and
        draft versions. Idea mining lives in the separate #ideas workspace.
-     • The pipeline + evidence gate are drawn explicitly per study.
+     • The pipeline + evidence checks are drawn explicitly per study.
    Outputs fail closed: Real mode lists only whitelisted local artifacts. */
 (function () {
   const S = (window.SCREENS = window.SCREENS || {});
@@ -22,7 +22,7 @@
         ['run 07', ['ROC + calibration', 'ROC + 校准'], 'complete', '2m 14s', ['today 14:22', '今天 14:22']],
         ['run 06', ['Table 1 + missingness', 'Table 1 + 缺失审计'], 'complete', '1m 02s', ['today 11:08', '今天 11:08']],
         ['run 05', ['Cohort summary only', '仅队列摘要'], 'complete', '0:36', ['yesterday', '昨天']],
-        ['run 04', ['Full plan (gated draft)', '完整计划(草稿受闸)'], 'blocked', '2m 41s', ['2 days ago', '2 天前']],
+        ['run 04', ['Full plan (review-ready draft)', '完整计划(草稿待核验)'], 'blocked', '2m 41s', ['2 days ago', '2 天前']],
       ],
       signed: false,
     },
@@ -76,14 +76,229 @@
   let agArtifact = { projectDir: null, name: null, loading: false, error: null, data: null };
   let agProvider = { provider: 'openai', consent: false, loading: false, error: null, status: null };
   let agIdeaProjects = { loading: false, error: null, data: null };
+  let agBlockFamily = 'all';
+  let agBlockSelected = 'nature_writing';
   const AG_JOB_KEY = 'easyicu.agent.activeJob.v1';
+  const AG_BLOCKS_VERSION = 'v1';
   let agResumeProbe = { loading: false, checkedJobId: null };
+
+  const BLOCK_FAMILIES = [
+    ['all', ['All blocks', '全部块']],
+    ['discovery', ['Discovery', '发现']],
+    ['analysis', ['Analysis', '分析']],
+    ['nature', ['Nature package', 'Nature 套件']],
+    ['submission', ['Submission', '投稿']],
+  ];
+  const BLOCK_LIBRARY = [
+    {
+      id: 'discovery_literature',
+      family: 'discovery',
+      title: ['Literature source intake', '文献来源录入'],
+      stage: ['Idea intake', '想法录入'],
+      icon: 'target',
+      desc: ['Capture a paper, PDF, review, or clinical question as the external source for an idea.', '把文章、PDF、综述或临床问题记录为研究想法的外部来源。'],
+      inputs: ['paper/PDF/topic', 'source metadata', 'uncertainty statement'],
+      outputs: ['source card', 'bounded excerpt', 'idea seed'],
+      evidence: ['source id', 'metadata', 'excerpt hash'],
+      route: 'ideas',
+    },
+    {
+      id: 'discovery_feasibility',
+      family: 'discovery',
+      title: ['Outcome-blind feasibility', '结局盲可行性'],
+      stage: ['Feasibility', '可行性'],
+      icon: 'shield',
+      desc: ['Check denominator, concept availability, windows, and portability before looking at target outcome differences.', '在查看目标结局差异前，先核查分母、概念可得性、时间窗和跨库可迁移性。'],
+      inputs: ['idea seed', 'candidate concepts', 'database scope'],
+      outputs: ['feasibility ledger', 'risk plan', 'go/hold call'],
+      evidence: ['coverage table', 'denominator summary', 'audit notes'],
+      route: 'ideas',
+    },
+    {
+      id: 'agent_handoff',
+      family: 'analysis',
+      title: ['Agent handoff object', 'Agent 交接对象'],
+      stage: ['Handoff', '交接'],
+      icon: 'agent',
+      desc: ['Freeze the confirmed study question, cohort recipe, concepts, and analysis boundaries for an Agent run.', '冻结已确认的问题、队列配方、概念和分析边界，供 Agent 运行使用。'],
+      inputs: ['confirmed idea', 'cohort recipe', 'allowed claims'],
+      outputs: ['project seed', 'analysis plan', 'run contract'],
+      evidence: ['project_seed.json', 'handoff manifest'],
+      route: 'agent',
+    },
+    {
+      id: 'analysis_agent_run',
+      family: 'analysis',
+      title: ['Evidence-bound analysis run', '证据绑定分析运行'],
+      stage: ['Run', '运行'],
+      icon: 'play',
+      desc: ['Run the local Agent project against an active export and write bounded artifacts for review.', '基于 active export 运行本地 Agent 项目，并写入有界产物供审阅。'],
+      inputs: ['active export', 'study id', 'provider choice'],
+      outputs: ['tables', 'figures', 'run manifest'],
+      evidence: ['artifact hashes', 'run_context.json', 'quality_gate.json'],
+      route: 'agent',
+    },
+    {
+      id: 'evidence_review',
+      family: 'analysis',
+      title: ['Evidence review and sign-off', '证据审阅与签署'],
+      stage: ['Review', '审阅'],
+      icon: 'check',
+      desc: ['Review local artifacts before any manuscript claim is unlocked or exported.', '在任何稿件论断解锁或导出前，审阅本地产物。'],
+      inputs: ['run artifacts', 'claim ledger', 'reviewer confirmations'],
+      outputs: ['human_signoff.json', 'readiness status'],
+      evidence: ['sha256 registry', 'review checklist'],
+      route: 'agent',
+    },
+    {
+      id: 'nature_figure',
+      family: 'nature',
+      title: ['Nature figure block', 'Nature 图件块'],
+      stage: ['Figure', '图件'],
+      icon: 'viz',
+      desc: ['Separate storyboard/reference figures from code-backed numeric result figures and preserve source-data provenance.', '区分 storyboard/reference 图和代码驱动的数值结果图，并保留 source-data provenance。'],
+      inputs: ['caption', 'source data or storyboard prompt', 'figure type'],
+      outputs: ['svg/png', 'source data', 'figure audit'],
+      evidence: ['plotting code', 'axis/unit checks', 'storyboard prompt when applicable'],
+      route: 'agent',
+    },
+    {
+      id: 'nature_writing',
+      family: 'nature',
+      title: ['Nature writing block', 'Nature 写作块'],
+      stage: ['Writing', '写作'],
+      icon: 'file',
+      desc: ['Draft or revise manuscript sections from evidence-bound claims, without promoting unsupported results.', '基于证据绑定论断起草或修订稿件章节，不放大无证据支撑的结果。'],
+      inputs: ['claim ledger', 'section target', 'tone constraints'],
+      outputs: ['section draft', 'revision notes', 'claim map'],
+      evidence: ['evidence ids', 'blocked unsupported claims'],
+      route: 'agent',
+    },
+    {
+      id: 'nature_citation',
+      family: 'nature',
+      title: ['Nature citation block', 'Nature 引用块'],
+      stage: ['Citation', '引用'],
+      icon: 'list',
+      desc: ['Attach citations to claims and keep literature provenance separate from result provenance.', '为论断绑定引用，并把文献 provenance 与结果 provenance 分开。'],
+      inputs: ['claim text', 'candidate references', 'citation style'],
+      outputs: ['citation map', 'reference list', 'unresolved claims'],
+      evidence: ['DOI/PMID', 'source title', 'retrieval notes'],
+      route: 'agent',
+    },
+    {
+      id: 'nature_data',
+      family: 'submission',
+      title: ['Data availability block', '数据可用性块'],
+      stage: ['Submission', '投稿'],
+      icon: 'db',
+      desc: ['Prepare Data Availability, source-data inventory, and FAIR metadata checks for submission.', '准备 Data Availability、source-data 清单和 FAIR metadata 核查。'],
+      inputs: ['artifact list', 'repository plan', 'data restrictions'],
+      outputs: ['data availability text', 'source-data checklist'],
+      evidence: ['artifact manifest', 'repository/access notes'],
+      route: 'agent',
+    },
+    {
+      id: 'reviewer_response',
+      family: 'submission',
+      title: ['Reviewer response block', '审稿回复块'],
+      stage: ['Revision', '返修'],
+      icon: 'history',
+      desc: ['Turn reviewer comments into response items, manuscript edits, and evidence-backed rebuttal notes.', '把审稿意见拆成回复项、稿件修改和证据支持的 rebuttal notes。'],
+      inputs: ['reviewer comments', 'changed sections', 'new artifacts'],
+      outputs: ['response letter', 'change map', 'open blockers'],
+      evidence: ['diff references', 'artifact ids'],
+      route: 'agent',
+    },
+  ];
+  const NATURE_PACK = ['nature_figure', 'nature_writing', 'nature_citation', 'nature_data'];
 
   /* continuity: Copilot can land a completed run */
   window.__euAgentPreset = function () { agSel = 'sepsis'; agTab = 'outputs'; };
 
   function esc(value) {
     return String(value == null ? '' : value).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  }
+  function bi(value) {
+    return Array.isArray(value) ? t(value[0], value[1]) : esc(value);
+  }
+  function blockById(id) {
+    return BLOCK_LIBRARY.find(b => b.id === id) || null;
+  }
+  function defaultWorkflowIds(s) {
+    if (!s || s.empty) return [];
+    if (s.ideaSeed) return ['discovery_literature', 'discovery_feasibility', 'agent_handoff', 'analysis_agent_run', 'evidence_review', 'nature_writing'];
+    if (s.id === 'lactate') return ['discovery_feasibility', 'agent_handoff', 'analysis_agent_run', 'evidence_review', 'nature_figure', 'nature_writing'];
+    return ['analysis_agent_run', 'evidence_review', 'nature_figure', 'nature_writing'];
+  }
+  function blockStoreKey(s) {
+    return `easyicu.agent.workflowBlocks.${AG_BLOCKS_VERSION}.${s && s.id ? s.id : 'none'}`;
+  }
+  function workflowIds(s) {
+    if (!s || s.empty) return [];
+    try {
+      const raw = localStorage.getItem(blockStoreKey(s));
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed)) {
+        const clean = parsed.filter(id => !!blockById(id));
+        if (clean.length) return clean;
+      }
+    } catch (_) {}
+    return defaultWorkflowIds(s);
+  }
+  function writeWorkflowIds(s, ids) {
+    if (!s || s.empty) return;
+    const clean = (ids || []).filter(id => !!blockById(id));
+    try { localStorage.setItem(blockStoreKey(s), JSON.stringify(clean)); } catch (_) {}
+  }
+  function workflowBlocks(s) {
+    return workflowIds(s).map(blockById).filter(Boolean);
+  }
+  function addWorkflowBlock(id) {
+    const s = study();
+    const ids = workflowIds(s);
+    if (!blockById(id) || ids.includes(id)) return;
+    ids.push(id);
+    writeWorkflowIds(s, ids);
+    agBlockSelected = id;
+  }
+  function addWorkflowPack(ids) {
+    const s = study();
+    const current = workflowIds(s);
+    ids.forEach(id => {
+      if (blockById(id) && !current.includes(id)) current.push(id);
+    });
+    writeWorkflowIds(s, current);
+    if (ids.length) agBlockSelected = ids[0];
+  }
+  function moveWorkflowBlock(index, delta) {
+    const s = study();
+    const ids = workflowIds(s);
+    const next = index + delta;
+    if (next < 0 || next >= ids.length) return;
+    const [row] = ids.splice(index, 1);
+    ids.splice(next, 0, row);
+    writeWorkflowIds(s, ids);
+    agBlockSelected = row;
+  }
+  function removeWorkflowBlock(index) {
+    const s = study();
+    const ids = workflowIds(s);
+    const removed = ids.splice(index, 1)[0];
+    writeWorkflowIds(s, ids);
+    if (agBlockSelected === removed) agBlockSelected = ids[index] || ids[index - 1] || 'nature_writing';
+  }
+  function resetWorkflowBlocks() {
+    const s = study();
+    writeWorkflowIds(s, defaultWorkflowIds(s));
+    agBlockSelected = workflowIds(s)[0] || 'nature_writing';
+  }
+  function familyLabel(key) {
+    const row = BLOCK_FAMILIES.find(f => f[0] === key);
+    return row ? bi(row[1]) : esc(key);
+  }
+  function blockListItems(items) {
+    return (items || []).map(x => `<span>${esc(x)}</span>`).join('');
   }
   function seedStudy(row) {
     const title = row.title || row.question || 'Idea-derived study';
@@ -225,7 +440,7 @@
       'missingness_audit.json': t('Missingness audit', '缺失审计'),
       'roc_curve.json': t('ROC curve', 'ROC 曲线'),
       'calibration_curve.json': t('Calibration curve', '校准曲线'),
-      'quality_gate.json': t('Evidence gate', '证据闸'),
+      'quality_gate.json': t('Evidence check', '证据核验'),
       'evidence_ledger.json': t('Evidence ledger', '证据账本'),
       'agent_plan.json': t('Agent plan', 'Agent 计划'),
       'manuscript_draft.json': t('Locked manuscript draft', '锁定论文草稿'),
@@ -445,7 +660,7 @@
       ['Plan', '计划', t('question → recipe', '问题 → 配方'), 'play'],
       ['Build', '构建', t('exports → 1 row / stay', '导出 → 每次住院一行'), 'layers'],
       ['Analyze', '分析', t('tables · figures · checks', '表 · 图 · 校验'), 'viz'],
-      ['Gate', '证据闸', t('evidence before drafting', '撰稿前的证据校验'), 'shield'],
+      ['Evidence check', '证据核验', t('evidence before drafting', '撰稿前的证据校验'), 'shield'],
       ['Draft', '草稿', t('approve · export', '确认 · 导出'), 'file'],
     ];
   }
@@ -534,6 +749,7 @@
           </div>
         </div>
         <div class="row gap-8">
+          <button class="btn sm" data-ag-tab="workflow">${icon('layers', 13)} ${t('Workflow Blocks', '工作流块')}</button>
           <button class="btn sm" data-nav="ideas">${icon('target', 13)} ${t('Open Idea Mining', '打开 Idea 挖掘')}</button>
           <span class="pill ok"><span class="dot"></span>${t('Analysis workspace', '分析运行工作台')}</span>
         </div>
@@ -550,11 +766,13 @@
     ];
     if (mode === 'idea') return [
       ['overview', t('Overview', '概览'), null],
+      ['workflow', t('Workflow Blocks', '工作流块'), workflowBlocks(s).length],
       ['runs', t('Dry-runs', '试运行'), s.runs.length],
       ['notes', t('Notes', '笔记'), null],
     ];
     return [
       ['overview', t('Overview', '概览'), null],
+      ['workflow', t('Workflow Blocks', '工作流块'), workflowBlocks(s).length],
       ['runs', t('Runs', '运行历史'), s.runs.length],
       ['outputs', t('Outputs', '产出'), outputCountForStudy()],
       ['draft', t('Draft', '草稿'), null],
@@ -594,7 +812,7 @@
       <div class="card pad">
         <div class="row" style="justify-content:space-between;align-items:baseline;">
           <div class="eyebrow">${t('Plan', '计划')} · ${plan.length} ${t('steps', '步')}</div>
-          ${s.mode === 'analysis' ? `<span class="pill ok" style="height:20px;"><span class="dot"></span>5 ${t('ready', '就绪')} · 1 ${t('gated', '受闸')}</span>` : `<span class="pill ok" style="height:20px;"><span class="dot"></span>${t('feasibility only', '仅可行性')}</span>`}
+          ${s.mode === 'analysis' ? `<span class="pill ok" style="height:20px;"><span class="dot"></span>5 ${t('ready', '就绪')} · 1 ${t('needs review', '待核验')}</span>` : `<span class="pill ok" style="height:20px;"><span class="dot"></span>${t('feasibility only', '仅可行性')}</span>`}
         </div>
         <div class="planlist mt-12">
           ${plan.map(([ti, d, st], i) => `
@@ -736,7 +954,7 @@
       return `
       <div class=\"nextbar gate\">
         <div class=\"nb-ico\">${icon('shield', 16)}</div>
-        <div class=\"grow\"><div class=\"nb-t\">${t('Evidence gate \u2014 1 check pending', '\u8bc1\u636e\u95f8 \u2014\u2014 \u8fd8\u5dee 1 \u9879\u6821\u9a8c')}</div><div class=\"nb-d\">${t('The draft stays locked until a reviewer signs off the findings.', '\u5728\u5ba1\u9605\u8005\u7b7e\u7f72\u7ed3\u8bba\u524d,\u8349\u7a3f\u4fdd\u6301\u9501\u5b9a\u3002')}</div></div>\n        <button class=\"btn primary\" data-ag-tab=\"draft\">${icon('check', 13)} ${t('Review & sign off', '\u5ba1\u9605\u5e76\u7b7e\u7f72')}</button>\n      </div>\n      <div class=\"card pad\" style=\"margin-top:10px;\">\n        <div class=\"eyebrow\" style=\"display:flex;align-items:center;gap:8px;\">${t('What unlocks the draft', '\u89e3\u9501\u8349\u7a3f\u7684\u6761\u4ef6')}<span class=\"mono\" style=\"margin-left:auto;color:var(--ink-4);font-size:10.5px;\">${passed}/${checks.length}</span></div>\n        <div class=\"gate-checklist\">\n          ${checks.map(([label, ok]) => `\n            <div class=\"gc-row ${ok ? 'ok' : 'pending'}\">\n              <span class=\"gc-mk\">${ok ? icon('check', 11, 2.8) : icon('clock', 11)}</span>\n              <span>${label}</span>\n              <span class=\"gc-tag\">${ok ? t('passed', '\u901a\u8fc7') : t('pending \u00b7 your turn', '\u5f85\u529e \u00b7 \u8f6e\u5230\u4f60')}</span>\n            </div>`).join('')}\n        </div>\n      </div>`;
+        <div class=\"grow\"><div class=\"nb-t\">${t('Evidence checks \u2014 1 check pending', '\u8bc1\u636e\u6838\u9a8c \u2014\u2014 \u8fd8\u5dee 1 \u9879\u6821\u9a8c')}</div><div class=\"nb-d\">${t('The draft stays locked until a reviewer signs off the findings.', '\u5728\u5ba1\u9605\u8005\u7b7e\u7f72\u7ed3\u8bba\u524d,\u8349\u7a3f\u4fdd\u6301\u9501\u5b9a\u3002')}</div></div>\n        <button class=\"btn primary\" data-ag-tab=\"draft\">${icon('check', 13)} ${t('Review & sign off', '\u5ba1\u9605\u5e76\u7b7e\u7f72')}</button>\n      </div>\n      <div class=\"card pad\" style=\"margin-top:10px;\">\n        <div class=\"eyebrow\" style=\"display:flex;align-items:center;gap:8px;\">${t('What unlocks the draft', '\u89e3\u9501\u8349\u7a3f\u7684\u6761\u4ef6')}<span class=\"mono\" style=\"margin-left:auto;color:var(--ink-4);font-size:10.5px;\">${passed}/${checks.length}</span></div>\n        <div class=\"gate-checklist\">\n          ${checks.map(([label, ok]) => `\n            <div class=\"gc-row ${ok ? 'ok' : 'pending'}\">\n              <span class=\"gc-mk\">${ok ? icon('check', 11, 2.8) : icon('clock', 11)}</span>\n              <span>${label}</span>\n              <span class=\"gc-tag\">${ok ? t('passed', '\u901a\u8fc7') : t('pending \u00b7 your turn', '\u5f85\u529e \u00b7 \u8f6e\u5230\u4f60')}</span>\n            </div>`).join('')}\n        </div>\n      </div>`;
     }
     if (s.status === 'idle') {
       return `
@@ -749,7 +967,7 @@
     return `
       <div class="nextbar accent">
         <div class="nb-ico">${icon('refresh', 16)}</div>
-        <div class="grow"><div class="nb-t">${t('Re-run or extend the analysis', '重新运行或扩展分析')}</div><div class="nb-d">${t('Outputs are current. Run again to refresh, or move to the evidence gate.', '产出为最新。可重新运行刷新,或前往证据闸。')}</div></div>
+        <div class="grow"><div class="nb-t">${t('Re-run or extend the analysis', '重新运行或扩展分析')}</div><div class="nb-d">${t('Outputs are current. Run again to refresh, or move to evidence verification.', '产出为最新。可重新运行刷新,或前往证据核验。')}</div></div>
         <button class="btn primary" data-ag-runbtn>${icon('refresh', 13)} ${t('Re-run', '重新运行')}</button>
       </div>`;
   }
@@ -759,7 +977,7 @@
     const src = activeExportSource();
     const sum = (src && src.summary) || {};
     const stats = src
-      ? [['Stays', '住院数', sum.stays == null ? '—' : Number(sum.stays).toLocaleString()], ['Modules', '模块', sum.modules == null ? '—' : String(sum.modules)], ['Rows', '行数', sum.total_rows == null ? '—' : Number(sum.total_rows).toLocaleString()], ['Gate', '证据闸', 'strict']]
+      ? [['Stays', '住院数', sum.stays == null ? '—' : Number(sum.stays).toLocaleString()], ['Modules', '模块', sum.modules == null ? '—' : String(sum.modules)], ['Rows', '行数', sum.total_rows == null ? '—' : Number(sum.total_rows).toLocaleString()], ['Evidence check', '证据核验', 'strict']]
       : s.id === 'crossdb'
       ? [['Databases', '数据库', '3'], ['Shared concepts', '共享概念', '6'], ['Mortality', '死亡率', '20.0%'], ['Concordance', '一致性', 'high']]
       : [['Mean age', '平均年龄', '54.8 y'], ['Mortality', '死亡率', '20.0%'], ['Sepsis-3', 'Sepsis-3', '45.3%'], ['Mech vent', '机械通气', '52.1%']];
@@ -826,8 +1044,125 @@
       </div>
       <div class="handoff">
         <span class="ho-ico">${icon('spark', 17)}</span>
-        <div class="ho-body"><b>${t('Rather drive this study by chat?', '想用对话来推进这项研究?')}</b> ${t('Guided study walks the same plan → run → review → gated-draft workflow conversationally, then hands the study back here.', '研究引导用对话走同一套 计划 → 运行 → 审阅 → 受闸草稿 的流程,完成后把研究交回这里。')}</div>
+        <div class="ho-body"><b>${t('Rather drive this study by chat?', '想用对话来推进这项研究?')}</b> ${t('Guided study walks the same plan → run → review → review-ready draft workflow conversationally, then hands the study back here.', '研究引导用对话走同一套 计划 → 运行 → 审阅 → 待核验草稿 的流程,完成后把研究交回这里。')}</div>
         <button class="btn" data-nav="guided">${icon('spark', 13)} ${t('Continue in Guided study', '在研究引导中继续')} ${icon('arrow', 13)}</button>
+      </div>`;
+  }
+
+  function blockContract(block) {
+    return `
+      <div class="ag-block-contract">
+        <div>
+          <div class="ag-block-k">${t('Inputs', '输入')}</div>
+          <div class="ag-block-tags">${blockListItems(block.inputs)}</div>
+        </div>
+        <div>
+          <div class="ag-block-k">${t('Outputs', '产物')}</div>
+          <div class="ag-block-tags">${blockListItems(block.outputs)}</div>
+        </div>
+        <div>
+          <div class="ag-block-k">${t('Evidence', '证据')}</div>
+          <div class="ag-block-tags evidence">${blockListItems(block.evidence)}</div>
+        </div>
+      </div>`;
+  }
+
+  function workflowRow(block, index, total) {
+    return `
+      <div class="ag-wf-row ${agBlockSelected === block.id ? 'selected' : ''}" data-ag-block-select="${block.id}">
+        <div class="ag-wf-n mono">${String(index + 1).padStart(2, '0')}</div>
+        <div class="ag-wf-ico">${icon(block.icon || 'layers', 14)}</div>
+        <div class="ag-wf-main">
+          <div class="ag-wf-title">${bi(block.title)}</div>
+          <div class="ag-wf-desc">${bi(block.stage)} · ${bi(block.desc)}</div>
+          <div class="ag-block-mini">${block.outputs.slice(0, 3).map(x => `<span>${esc(x)}</span>`).join('')}</div>
+        </div>
+        <div class="ag-wf-actions">
+          <button class="icobtn xs" data-ag-block-up="${index}" title="${t('Move up', '上移')}" ${index === 0 ? 'aria-disabled="true"' : ''}>${icon('chevdown', 12)}</button>
+          <button class="icobtn xs" data-ag-block-down="${index}" title="${t('Move down', '下移')}" ${index >= total - 1 ? 'aria-disabled="true"' : ''}>${icon('chevdown', 12)}</button>
+          <button class="icobtn xs danger" data-ag-block-remove="${index}" title="${t('Remove block', '移除块')}">${icon('stop', 12)}</button>
+        </div>
+      </div>`;
+  }
+
+  function tabWorkflow() {
+    const s = study();
+    if (s.empty) {
+      return `
+      <div class="state-hero empty-state" style="min-height:320px;">
+        <div class="glyph">${icon('layers', 28)}</div>
+        <div class="st-t">${t('No workflow blocks yet', '还没有工作流块')}</div>
+        <div class="st-d">${t('Create or select a local Agent project first. Blocks are stored per project and stay local to this browser.', '请先创建或选择一个本地 Agent 项目。Blocks 按项目存储，并只保留在本机浏览器。')}</div>
+        <div class="st-actions"><button class="btn primary" data-nav="ideas">${icon('target', 14)} ${t('Create from Idea Mining', '从 Idea Mining 创建')}</button></div>
+      </div>`;
+    }
+    const ids = workflowIds(s);
+    const rows = ids.map(blockById).filter(Boolean);
+    const selected = blockById(agBlockSelected) || rows[0] || BLOCK_LIBRARY[0];
+    const filtered = BLOCK_LIBRARY.filter(block => agBlockFamily === 'all' || block.family === agBlockFamily);
+    const inWorkflow = new Set(ids);
+    return `
+      <div class="ag-block-hero">
+        <div>
+          <div class="eyebrow">${t('Research Blocks', '研究块')}</div>
+          <div class="ag-block-title">${t('Assemble this project as auditable workflow blocks', '把这个项目组装成可审计的工作流块')}</div>
+          <div class="ag-block-sub">${t('Blocks define required inputs, generated artifacts, and evidence contracts. They do not change global prompts or run anything until you explicitly start an Agent run.', 'Blocks 定义必需输入、生成产物和证据契约；不会改全局 prompt，也不会在你显式启动 Agent run 前执行。')}</div>
+        </div>
+        <div class="row wrap gap-8">
+          <button class="btn sm" data-ag-block-pack="nature">${icon('plus', 12)} ${t('Add Nature pack', '加入 Nature 套件')}</button>
+          <button class="btn sm ghost" data-ag-block-reset>${icon('refresh', 12)} ${t('Reset default', '恢复默认')}</button>
+        </div>
+      </div>
+      <div class="ag-block-grid">
+        <section class="ag-block-panel">
+          <div class="ag-block-panel-head">
+            <div><div class="ag-block-panel-title">${t('Current workflow', '当前工作流')}</div><div class="ag-block-panel-sub">${rows.length} ${t('blocks queued for this project', '个块已加入此项目')}</div></div>
+            <span class="pill ok"><span class="dot"></span>${t('local config', '本地配置')}</span>
+          </div>
+          <div class="ag-wf-list">
+            ${rows.length ? rows.map((block, i) => workflowRow(block, i, rows.length)).join('') : `
+              <div class="empty-mini" style="min-height:160px;">
+                <div>${icon('layers', 22)}</div>
+                <h3>${t('No blocks selected', '尚未选择块')}</h3>
+                <p>${t('Add blocks from the library to make the workflow explicit.', '从右侧库中加入块，让工作流变得明确。')}</p>
+              </div>`}
+          </div>
+          ${selected ? `
+          <div class="ag-block-detail">
+            <div class="ag-block-chip">${familyLabel(selected.family)} · ${bi(selected.stage)}</div>
+            <div class="ag-block-detail-title">${bi(selected.title)}</div>
+            <div class="ag-block-detail-desc">${bi(selected.desc)}</div>
+            ${blockContract(selected)}
+            <div class="row wrap gap-8 mt-12">
+              <button class="btn sm" data-nav="${selected.route || 'agent'}">${icon('arrow', 12)} ${selected.route === 'ideas' ? t('Open Idea Mining', '打开 Idea Mining') : t('Open Agent Projects', '打开研究项目')}</button>
+              <span class="ag-block-note">${t('Execution remains gated by active export, provider consent, and evidence review.', '执行仍由 active export、provider 授权和证据审阅约束。')}</span>
+            </div>
+          </div>` : ''}
+        </section>
+        <section class="ag-block-panel">
+          <div class="ag-block-panel-head">
+            <div><div class="ag-block-panel-title">${t('Block library', '块库')}</div><div class="ag-block-panel-sub">${t('Insert exactly the capability this project needs.', '只插入当前项目需要的能力。')}</div></div>
+          </div>
+          <div class="ag-block-filters">
+            ${BLOCK_FAMILIES.map(([key, label]) => `<button class="chip ${agBlockFamily === key ? 'on' : ''}" data-ag-block-filter="${key}">${bi(label)}</button>`).join('')}
+          </div>
+          <div class="ag-lib-list">
+            ${filtered.map(block => `
+              <button class="ag-lib-card ${agBlockSelected === block.id ? 'selected' : ''}" data-ag-block-select="${block.id}" type="button">
+                <div class="ag-lib-top">
+                  <span class="ag-lib-ico">${icon(block.icon || 'layers', 13)}</span>
+                  <span class="ag-lib-title">${bi(block.title)}</span>
+                  <span class="ag-lib-family">${familyLabel(block.family)}</span>
+                </div>
+                <div class="ag-lib-desc">${bi(block.desc)}</div>
+                <div class="ag-block-mini">${block.inputs.slice(0, 3).map(x => `<span>${esc(x)}</span>`).join('')}</div>
+                <div class="ag-lib-actions">
+                  <span class="mono">${esc(block.id)}</span>
+                  <span class="btn sm ${inWorkflow.has(block.id) ? 'ghost' : 'primary'}" data-ag-block-add="${block.id}">${inWorkflow.has(block.id) ? t('Added', '已加入') : t('Add block', '加入块')}</span>
+                </div>
+              </button>`).join('')}
+          </div>
+        </section>
       </div>`;
   }
 
@@ -1024,7 +1359,7 @@
       return `
       <div class="split-320" style="grid-template-columns:1fr 300px;">
         <div class="card pad">
-          <div class="eyebrow">${t('Evidence gate', '证据闸')}</div>
+          <div class="eyebrow">${t('Evidence check', '证据核验')}</div>
           <div class="panel-title" style="margin-top:4px;">${signed ? t('Local sign-off recorded · draft locked', '本地签署已记录 · 草稿保持锁定') : t('Preflight complete · draft locked', '预检完成 · 草稿保持锁定')}</div>
           <div class="panel-sub">${t('This real run is analysis_only. It wrote bounded local evidence artifacts; human sign-off records review but does not make the draft reportable.', '这次真实运行是 analysis_only。它写入有界本地证据产物；人工签署只记录审阅,不会让草稿可报告。')}</div>
           <div class="checks2 mt-16">
@@ -1044,9 +1379,9 @@
           </div>` : `
           <div class="nextbar mt-16 gate" style="background:var(--surface-2);">
             <span class="pill warn"><span class="dot"></span>${esc(gate.status || 'analysis_only')}</span>
-            <div class="grow"><div class="nb-t">${t('Manuscript claims remain locked', '论文论断保持锁定')}</div><div class="nb-d">${t('A full agent run must pass its own evidence gate before any draft can unlock.', '只有完整 agent run 通过自己的证据闸后,草稿才可解锁。')}</div></div>
+            <div class="grow"><div class="nb-t">${t('Manuscript claims remain locked', '论文论断保持锁定')}</div><div class="nb-d">${t('A full agent run must pass its own evidence verification before any draft can unlock.', '只有完整 agent run 通过自己的证据核验后,草稿才可解锁。')}</div></div>
           </div>`}
-          ${readiness && failures.length ? `<div class="note warn mt-16"><div class="ico">${icon('alert', 16)}</div><div class="body"><span class="t">${t('Non-human gate failures', '非人工闸失败项')}</span><span class="d">${esc(failures.join(', '))}</span></div></div>` : ''}
+          ${readiness && failures.length ? `<div class="note warn mt-16"><div class="ico">${icon('alert', 16)}</div><div class="body"><span class="t">${t('Automated check failures', '自动核验失败项')}</span><span class="d">${esc(failures.join(', '))}</span></div></div>` : ''}
           ${readiness && readiness.signable ? `<div class="ev-detail mt-16">
             <div style="font-weight:600;font-size:12.25px;color:var(--ink);margin-bottom:3px;">${t('Local sign-off confirmations', '本地签署确认项')}</div>
             <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;">${t('This writes human_signoff.json only; it does not unlock a manuscript draft.', '这只会写入 human_signoff.json；不会解锁论文草稿。')}</div>
@@ -1088,7 +1423,7 @@
     <div class="split-320" style="grid-template-columns:1fr 300px;">
       <div class="col gap-16">
         <div class="card pad">
-          <div class="eyebrow">${t('Evidence gate', '证据闸')}</div>
+          <div class="eyebrow">${t('Evidence check', '证据核验')}</div>
           <div class="panel-title" style="margin-top:4px;">${s.signed ? t('Manuscript draft unlocked', '论文草稿已解锁') : t('Manuscript draft is locked until checks pass', '在校验通过前论文草稿保持锁定')}</div>
           <div class="panel-sub">${t('Every claim traces to a logged artifact — tap a check to see its evidence.', '每个论断都可追溯到已记录的产物 —— 点一项校验即可查看其证据。')}</div>
           <div class="checks2 mt-16">
@@ -1106,7 +1441,7 @@
               ${art && agEvOpen === i ? `<div class="ev-detail"><span class="ev-art">${icon('file', 12)} ${art}</span><div style="margin-top:5px;">${ev}</div><button class="btn sm mt-8" data-ag-tab="outputs">${icon('arrow', 12)} ${t('Open in Outputs', '在产出中打开')}</button></div>` : ''}
               ${isReview && agEvOpen === i ? `<div class="ev-detail">
                 <div style="font-weight:600;font-size:12.25px;color:var(--ink);margin-bottom:3px;">${t('What you are confirming', '你将确认以下事项')}</div>
-                <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;">${t('Sign-off is the last gate. Confirm each point, then the draft unlocks.', '签署是最后一道闸。逐项确认后，草稿即解锁。')}</div>
+                <div style="font-size:11.5px;color:var(--ink-3);margin-bottom:10px;">${t('Sign-off is the last release check. Confirm each point, then the draft unlocks.', '签署是最后一道放行检查。逐项确认后，草稿即解锁。')}</div>
                 <div class="review-todo">
                   ${[
                     [t('Findings match the logged tables & figures', '结论与已记录的表格和图一致'), '02 · Table 1'],
@@ -1151,6 +1486,7 @@
 
   function tabBody() {
     const s = study();
+    if (agTab === 'workflow') return tabWorkflow();
     if (agTab === 'runs') return tabRuns();
     if (agTab === 'outputs') return tabOutputs();
     if (agTab === 'notes') return tabNotes();
@@ -1249,7 +1585,7 @@
       s.runs.unshift([
         result.run_label || ('run ' + (result.run_id || '').slice(-6)),
         result.run_type === 'full'
-          ? [t('Provider-gated full scaffold', 'provider 受闸 full 骨架'), t('Provider-gated full scaffold', 'provider 受闸 full 骨架')]
+          ? [t('Provider-checked full scaffold', 'provider 已核验 full 骨架'), t('Provider-checked full scaffold', 'provider 已核验 full 骨架')]
           : [t('Registry-backed preflight', '注册表支持的预检'), t('Registry-backed preflight', '注册表支持的预检')],
         result.gate && result.gate.status === 'blocked' ? 'blocked' : 'complete',
         result.duration_sec != null ? `${result.duration_sec}s` : '—',
@@ -1302,6 +1638,35 @@
       agSel = b.dataset.agSel; agTab = 'overview'; repaintBody();
     }));
     host.querySelectorAll('[data-ag-tab]').forEach(b => b.addEventListener('click', () => { agTab = b.dataset.agTab; repaintBody(); }));
+    host.querySelectorAll('[data-ag-block-filter]').forEach(b => b.addEventListener('click', () => { agBlockFamily = b.dataset.agBlockFilter || 'all'; repaintBody(); }));
+    host.querySelectorAll('[data-ag-block-select]').forEach(b => b.addEventListener('click', () => { agBlockSelected = b.dataset.agBlockSelect || agBlockSelected; repaintBody(); }));
+    host.querySelectorAll('[data-ag-block-add]').forEach(b => b.addEventListener('click', e => {
+      e.stopPropagation();
+      addWorkflowBlock(b.dataset.agBlockAdd);
+      repaintBody();
+    }));
+    host.querySelectorAll('[data-ag-block-pack]').forEach(b => b.addEventListener('click', () => {
+      if ((b.dataset.agBlockPack || '') === 'nature') addWorkflowPack(NATURE_PACK);
+      repaintBody();
+    }));
+    host.querySelectorAll('[data-ag-block-reset]').forEach(b => b.addEventListener('click', () => { resetWorkflowBlocks(); repaintBody(); }));
+    host.querySelectorAll('[data-ag-block-up]').forEach(b => b.addEventListener('click', e => {
+      e.stopPropagation();
+      if (b.getAttribute('aria-disabled') === 'true') return;
+      moveWorkflowBlock(Number(b.dataset.agBlockUp || 0), -1);
+      repaintBody();
+    }));
+    host.querySelectorAll('[data-ag-block-down]').forEach(b => b.addEventListener('click', e => {
+      e.stopPropagation();
+      if (b.getAttribute('aria-disabled') === 'true') return;
+      moveWorkflowBlock(Number(b.dataset.agBlockDown || 0), 1);
+      repaintBody();
+    }));
+    host.querySelectorAll('[data-ag-block-remove]').forEach(b => b.addEventListener('click', e => {
+      e.stopPropagation();
+      removeWorkflowBlock(Number(b.dataset.agBlockRemove || 0));
+      repaintBody();
+    }));
     host.querySelectorAll('[data-ev]').forEach(b => b.addEventListener('click', () => { const i = +b.dataset.ev; agEvOpen = (agEvOpen === i ? -1 : i); repaintBody(); }));
     host.querySelectorAll('[data-ag-runbtn]').forEach(b => b.addEventListener('click', startRun));
     host.querySelectorAll('[data-ag-cancel-job]').forEach(b => b.addEventListener('click', () => {
@@ -1460,6 +1825,7 @@
         <div class="col gap-6" style="font-size:12px;">
           <div class="setup-row"><span class="k">${t('Active', '当前')}</span><span class="vv" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t(s.name[0], s.name[1])}</span></div>
           <div class="setup-row"><span class="k">${t('Mode', '模式')}</span><span class="vv">${t('Analysis', '分析')}</span></div>
+          <div class="setup-row"><span class="k">${t('Blocks', '块')}</span><span class="vv">${workflowBlocks(s).length}</span></div>
           <div class="setup-row"><span class="k">${t('Runs', '运行')}</span><span class="vv">${s.runs.length}</span></div>
         </div>
         <div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Guarantees', '保证')}</div>
@@ -1477,7 +1843,7 @@
           <div>
             <div class="eyebrow">${t('Agent Projects · 研究项目', '研究项目 · Agent Projects')}</div>
             <h1 style="margin-top:6px;">${t('Agent Projects', '研究项目')}</h1>
-            <p class="lead">${t('A workspace of research projects. Each study has a workflow, its own runs, outputs, and a gated draft — all auditable, all local.', '一个研究项目工作台。每个研究都有自己的工作流、运行记录、产出和受闸草稿 —— 全程可审计、全程本地。')}</p>
+            <p class="lead">${t('A workspace of research projects. Each study has a workflow, its own runs, outputs, and a review-ready draft — all auditable, all local.', '一个研究项目工作台。每个研究都有自己的工作流、运行记录、产出和待核验草稿 —— 全程可审计、全程本地。')}</p>
             <div style="font-size:11.5px;color:var(--ink-4);margin-top:9px;">${t('Key terms', '关键术语')}: ${window.gloss('denominator', t('denominator', '分母'))} · ${window.gloss('concept', t('concept', '概念'))} · ${window.gloss('SOFA')}</div>
           </div>
         </div>

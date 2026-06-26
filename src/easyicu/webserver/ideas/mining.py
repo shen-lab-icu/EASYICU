@@ -1,14 +1,16 @@
 """Native Web Idea Mining adapter.
 
 This module exposes a local-first, metadata-only discovery workflow for the
-FastAPI UI.  It deliberately stops short of live literature search or PDF
-full-text parsing: those require explicit provider/network opt-in.  The first
-web contract still produces the important artifacts the user needs: source
-evidence, idea ledger rows, data-dictionary feasibility, active-export
-pre-experiment summaries, and a frozen plan handoff draft.
+FastAPI UI.  Live literature search remains explicit network opt-in.  Local PDF
+and literature-folder ingestion are allowed, but only bounded excerpts, file
+metadata, and hashes are returned; full text is not persisted.  The web contract
+produces source evidence, idea ledger rows, data-dictionary feasibility,
+active-export pre-experiment summaries, and a frozen plan handoff draft.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import html
 import json
@@ -17,8 +19,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib import parse, request
+from xml.etree import ElementTree as ET
 
-from easyicu import concept_catalog
+from easyicu.concept import catalog as concept_catalog
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 
@@ -31,6 +34,10 @@ _AGENT_PROJECTS_PATH = _CONFIG_DIR / "webserver_agent_project_seeds.json"
 _MAX_SOURCE_QUOTE = 420
 _MAX_FEATURE_STATS = 24
 _MAX_FETCH_BYTES = 256_000
+_MAX_PDF_BYTES = 20 * 1024 * 1024
+_MAX_PDF_EXTRACT_PAGES = 8
+_MAX_PDF_EXCERPT = 1_200
+_MAX_LITERATURE_PDFS = 80
 _NETWORK_TIMEOUT_SEC = 8
 _TIME_COLUMNS = {
     "charttime",
@@ -71,6 +78,130 @@ class IdeaMiningWebError(ValueError):
     def __init__(self, detail: Dict[str, Any]):
         self.detail = detail
         super().__init__(str(detail.get("error") or "idea_mining_error"))
+
+
+def ingest_pdf_source(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract bounded local metadata from a selected PDF file.
+
+    The PDF bytes come from the browser file picker to the local FastAPI
+    process.  We compute metadata and a short excerpt, then discard the bytes.
+    """
+    filename = _clean(body.get("filename") or body.get("name") or "source.pdf", 240)
+    encoded = str(body.get("content_base64") or body.get("base64") or "").strip()
+    if not encoded:
+        raise IdeaMiningWebError({
+            "error": "pdf_file_required",
+            "reason": "Choose a local PDF file before ingesting a PDF source.",
+        })
+    try:
+        pdf_bytes = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise IdeaMiningWebError({
+            "error": "invalid_pdf_payload",
+            "reason": "The selected PDF could not be decoded by the local server.",
+        }) from exc
+    record = _extract_pdf_bytes(pdf_bytes, filename=filename)
+    suggestion = _suggestion_from_pdf_record(record)
+    payload = {
+        "ok": True,
+        "mode": "local_pdf_ingest",
+        "pdf": record,
+        "suggested_payload": suggestion,
+        "source_adapter": {
+            "status": "local_pdf_excerpt_ready",
+            "source_type": "pdf",
+            "network_calls": 0,
+            "external_llm_calls": 0,
+            "full_text_stored": False,
+            "reason": "A local PDF was parsed on this machine; only a bounded excerpt and file hash are returned.",
+        },
+        "privacy": {
+            "source_text_stored": False,
+            "full_text_stored": False,
+            "patient_rows_returned": False,
+            "network_calls": 0,
+            "external_llm_calls": 0,
+            "uploads": 0,
+        },
+    }
+    _assert_no_row_payload(payload)
+    return payload
+
+
+def scan_literature_folder(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Scan a local literature folder for PDFs without persisting full text."""
+    raw_path = str(body.get("path") or body.get("folder") or "").strip()
+    if not raw_path:
+        raise IdeaMiningWebError({
+            "error": "literature_folder_required",
+            "reason": "Choose a local folder that contains downloaded papers.",
+        })
+    folder = Path(raw_path).expanduser()
+    try:
+        folder = folder.resolve()
+    except OSError:
+        pass
+    if not folder.exists() or not folder.is_dir():
+        raise IdeaMiningWebError({
+            "error": "literature_folder_not_found",
+            "reason": "The selected literature folder does not exist on this machine.",
+            "path": str(folder),
+        })
+    pdfs: List[Path] = []
+    try:
+        for item in folder.rglob("*.pdf"):
+            if len(pdfs) >= _MAX_LITERATURE_PDFS:
+                break
+            if any(part.startswith(".") for part in item.parts):
+                continue
+            if item.is_file():
+                pdfs.append(item)
+    except PermissionError as exc:
+        raise IdeaMiningWebError({
+            "error": "literature_folder_permission_denied",
+            "reason": "EasyICU could not read this local literature folder.",
+            "path": str(folder),
+        }) from exc
+    documents: List[Dict[str, Any]] = []
+    representative: Optional[Dict[str, Any]] = None
+    for pdf in sorted(pdfs, key=lambda p: p.name.lower()):
+        meta = _pdf_file_record(pdf, extract_excerpt=representative is None)
+        documents.append(meta)
+        if representative is None and meta.get("excerpt"):
+            representative = meta
+    suggestion = _suggestion_from_pdf_record(representative or documents[0]) if documents else {}
+    payload = {
+        "ok": True,
+        "mode": "local_literature_folder",
+        "folder": {
+            "path": str(folder),
+            "name": folder.name,
+            "pdf_count": len(pdfs),
+            "returned": len(documents),
+            "truncated": len(pdfs) >= _MAX_LITERATURE_PDFS,
+        },
+        "documents": documents[:20],
+        "representative": representative,
+        "suggested_payload": suggestion,
+        "source_adapter": {
+            "status": "local_literature_folder_scanned" if documents else "no_pdf_found",
+            "source_type": "literature_folder",
+            "network_calls": 0,
+            "external_llm_calls": 0,
+            "full_text_stored": False,
+            "reason": "Scanned local PDF filenames and one bounded representative excerpt; no full-text library was persisted.",
+        },
+        "privacy": {
+            "source_text_stored": False,
+            "full_text_stored": False,
+            "patient_rows_returned": False,
+            "network_calls": 0,
+            "external_llm_calls": 0,
+            "uploads": 0,
+        },
+    }
+    _assert_no_row_payload(payload)
+    return payload
 
 
 def mine_ideas(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -162,9 +293,15 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
             suggestion["excerpt"] = fetched["description"]
         if fetched.get("doi") and not suggestion.get("doi"):
             suggestion["doi"] = fetched["doi"]
+    elif source_type == "pdf" and body.get("source_file_sha256"):
+        adapter["status"] = "local_pdf_excerpt_ready"
+        adapter["reason"] = "The selected local PDF has been parsed into a bounded excerpt and hash."
     elif source_type == "pdf" and not suggestion.get("excerpt"):
         adapter["status"] = "blocked_pdf_excerpt_required"
-        adapter["reason"] = "Paste a bounded excerpt first. Binary PDF upload/parsing is not enabled in this local contract."
+        adapter["reason"] = "Choose a local PDF file or paste a bounded excerpt first."
+    elif source_type == "literature_folder":
+        adapter["status"] = "local_literature_folder_ready" if body.get("literature_pdf_count") else "local_literature_folder_empty"
+        adapter["reason"] = "The selected local literature folder is represented by PDF metadata and a bounded excerpt."
     elif source_type == "frontier":
         adapter["status"] = "search_plan_ready"
         adapter["reason"] = "The topic is ready for an opt-in prior-art/literature search stage."
@@ -183,6 +320,144 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
     }
     _assert_no_row_payload(payload)
     return payload
+
+
+def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Search opt-in PubMed metadata and turn articles into idea candidates.
+
+    This is the "go find frontier papers" path.  It is deliberately not a
+    model call: the adapter searches bounded public metadata/abstracts only
+    after per-request network opt-in, then maps source sentences to the
+    EasyICU dictionary and the active export.  Without opt-in it returns the
+    exact query bundle and a blocked status, not seeded fake articles.
+    """
+    topic = _clean(body.get("topic") or body.get("research_question") or body.get("title") or "", 220)
+    journal = _clean(body.get("journal") or "", 120)
+    allow_network = bool(body.get("allow_network"))
+    limit = max(1, min(int(body.get("limit") or 8), 20))
+    if not topic:
+        raise IdeaMiningWebError({
+            "error": "frontier_topic_required",
+            "reason": "Describe the ICU topic, journal scope, review theme, DOI, or article clue before literature discovery.",
+        })
+    queries = _discovery_queries(topic, journal, body)
+    if not allow_network:
+        out = {
+            "ok": True,
+            "mode": "frontier_literature_discovery",
+            "status": "blocked_network_opt_in_required",
+            "search_performed": False,
+            "queries_to_run": queries,
+            "source_candidates": [],
+            "idea_candidates": [],
+            "suggested_payload": {},
+            "reason": "Literature discovery requires explicit per-source network opt-in. No request was made.",
+            "privacy": {
+                "source_text_stored": False,
+                "full_text_stored": False,
+                "patient_rows_returned": False,
+                "network_calls": 0,
+                "external_llm_calls": 0,
+                "uploads": 0,
+            },
+        }
+        _assert_no_row_payload(out)
+        return out
+
+    errors: List[str] = []
+    network_calls = 0
+    ids: List[str] = []
+    for query in queries[:3]:
+        try:
+            found = _pubmed_esearch(query, limit=limit)
+            network_calls += 1
+            ids.extend(found)
+        except Exception as exc:
+            errors.append(str(exc)[:240])
+    ids = _dedupe_strings(ids)[:limit]
+    articles: List[Dict[str, Any]] = []
+    if ids:
+        try:
+            articles = _pubmed_article_records(ids)
+            network_calls += 2
+        except Exception as exc:
+            errors.append(str(exc)[:240])
+            try:
+                articles = _pubmed_esummary(ids)
+                network_calls += 1
+            except Exception as inner:
+                errors.append(str(inner)[:240])
+                articles = []
+
+    export = _active_export()
+    export_index = _export_index(export)
+    source_candidates: List[Dict[str, Any]] = []
+    idea_candidates: List[Dict[str, Any]] = []
+    for article in articles:
+        source = _source_record({
+            "source_type": "pubmed",
+            "topic": topic,
+            "title": article.get("title"),
+            "journal": article.get("journal"),
+            "year": article.get("year"),
+            "doi": article.get("doi"),
+            "pmid": article.get("pmid"),
+            "url": f"https://pubmed.ncbi.nlm.nih.gov/{article.get('pmid')}/" if article.get("pmid") else "",
+            "excerpt": article.get("evidence_sentence") or article.get("abstract_excerpt") or article.get("title"),
+            "abstract": article.get("abstract_excerpt") or article.get("evidence_sentence") or "",
+        })
+        text = "\n".join([
+            topic,
+            str(article.get("title") or ""),
+            str(article.get("abstract_excerpt") or ""),
+            str(article.get("evidence_sentence") or ""),
+        ])
+        hits = _match_concepts(text)
+        idea = _idea_from_source(source, text, hits, export_index)
+        source["discovery_rank"] = len(source_candidates) + 1
+        source["pubmed_metadata_only"] = True
+        source_candidates.append(source)
+        idea_candidates.append({
+            "rank": len(idea_candidates) + 1,
+            "source_id": source.get("source_id"),
+            "idea": idea,
+            "source": source,
+            "suggested_payload": {
+                "source_type": "pubmed",
+                "topic": idea.get("idea_title") or topic,
+                "title": source.get("title"),
+                "journal": source.get("journal"),
+                "year": source.get("year"),
+                "doi": source.get("doi"),
+                "pmid": source.get("pmid"),
+                "url": source.get("url"),
+                "excerpt": source.get("evidence_quote"),
+            },
+        })
+    status = "searched" if idea_candidates else ("search_failed" if errors else "searched_no_hits")
+    out = {
+        "ok": True,
+        "mode": "frontier_literature_discovery",
+        "status": status,
+        "search_performed": True,
+        "queries_to_run": queries,
+        "network_calls": network_calls,
+        "source_candidates": source_candidates,
+        "idea_candidates": idea_candidates,
+        "suggested_payload": (idea_candidates[0].get("suggested_payload") if idea_candidates else {}),
+        "errors": errors,
+        "reason": "PubMed metadata/abstract discovery only; no full text, external LLM, or patient rows were used.",
+        "privacy": {
+            "source_text_stored": False,
+            "full_text_stored": False,
+            "patient_rows_returned": False,
+            "network_calls": network_calls,
+            "external_llm_calls": 0,
+            "uploads": 0,
+        },
+    }
+    _assert_no_row_payload(out)
+    return out
 
 
 def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
@@ -406,7 +681,7 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
     excerpt = _clean(body.get("excerpt") or body.get("source_quote") or "", _MAX_SOURCE_QUOTE)
     source_text = _clean(body.get("excerpt") or body.get("abstract") or body.get("notes") or topic, 4000)
     citation_key = _slug("|".join([title, str(year or ""), journal, doi, pmid]) or topic or "source")
-    return {
+    record = {
         "source_id": "source_" + _sha256("|".join([title, journal, str(year), doi, pmid, url]))[:12],
         "citation_key": citation_key,
         "source_type": source_type,
@@ -422,13 +697,135 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
         "source_text_stored": False,
         "rights_note": "Only metadata, hash and a bounded user-supplied quote are persisted.",
     }
+    if body.get("source_file_name"):
+        record["source_file_name"] = _clean(body.get("source_file_name"), 240)
+    if body.get("source_file_sha256"):
+        record["source_file_sha256"] = _clean(body.get("source_file_sha256"), 80)
+    if body.get("literature_folder"):
+        record["literature_folder"] = _norm_path(str(body.get("literature_folder") or ""))
+    if body.get("literature_pdf_count") is not None:
+        try:
+            record["literature_pdf_count"] = int(body.get("literature_pdf_count") or 0)
+        except Exception:
+            record["literature_pdf_count"] = 0
+    return record
 
 
 def _source_text(body: Dict[str, Any]) -> str:
     return "\n".join(
         str(body.get(k) or "")
-        for k in ("topic", "title", "abstract", "excerpt", "notes", "url", "journal")
+        for k in ("topic", "title", "abstract", "excerpt", "notes", "url", "journal", "source_file_name")
     ).strip()
+
+
+def _extract_pdf_bytes(pdf_bytes: bytes, *, filename: str) -> Dict[str, Any]:
+    if len(pdf_bytes) > _MAX_PDF_BYTES:
+        raise IdeaMiningWebError({
+            "error": "pdf_file_too_large",
+            "reason": f"Selected PDF is larger than the local bounded parser limit ({_MAX_PDF_BYTES // (1024 * 1024)} MB).",
+            "filename": filename,
+        })
+    try:
+        import fitz  # type: ignore
+    except Exception as exc:  # pragma: no cover - depends on local optional dependency
+        raise IdeaMiningWebError({
+            "error": "pdf_parser_unavailable",
+            "reason": "Local PDF parsing requires PyMuPDF (fitz), which is not available in this environment.",
+        }) from exc
+    digest = hashlib.sha256(pdf_bytes).hexdigest()
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as exc:
+        raise IdeaMiningWebError({
+            "error": "pdf_parse_failed",
+            "reason": "The selected file could not be parsed as a PDF.",
+            "filename": filename,
+        }) from exc
+    try:
+        metadata = dict(doc.metadata or {})
+        pages = int(getattr(doc, "page_count", 0) or 0)
+        text_parts: List[str] = []
+        for index in range(min(pages, _MAX_PDF_EXTRACT_PAGES)):
+            try:
+                text_parts.append(doc.load_page(index).get_text("text") or "")
+            except Exception:
+                continue
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+    extracted = _clean(" ".join(text_parts), _MAX_PDF_EXCERPT)
+    title = _clean(metadata.get("title") or Path(filename).stem, 220)
+    return {
+        "filename": filename,
+        "title": title,
+        "author": _clean(metadata.get("author") or "", 240) or None,
+        "page_count": pages,
+        "bytes": len(pdf_bytes),
+        "sha256": digest,
+        "excerpt": extracted,
+        "excerpt_char_count": len(extracted),
+        "pages_scanned": min(pages, _MAX_PDF_EXTRACT_PAGES),
+        "full_text_stored": False,
+    }
+
+
+def _pdf_file_record(path: Path, *, extract_excerpt: bool) -> Dict[str, Any]:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    base = {
+        "filename": path.name,
+        "path": str(path),
+        "bytes": int(size),
+        "sha256": None,
+        "excerpt": "",
+        "full_text_stored": False,
+    }
+    if size > _MAX_PDF_BYTES:
+        base["status"] = "skipped_too_large"
+        return base
+    try:
+        data = path.read_bytes()
+    except OSError:
+        base["status"] = "skipped_unreadable"
+        return base
+    if not extract_excerpt:
+        base["sha256"] = hashlib.sha256(data).hexdigest()
+        base["status"] = "metadata_only"
+        return base
+    try:
+        record = _extract_pdf_bytes(data, filename=path.name)
+        record["path"] = str(path)
+        record["status"] = "excerpt_ready"
+        return record
+    except IdeaMiningWebError as exc:
+        base["sha256"] = hashlib.sha256(data).hexdigest()
+        base["status"] = exc.detail.get("error") or "parse_failed"
+        base["reason"] = exc.detail.get("reason")
+        return base
+
+
+def _suggestion_from_pdf_record(record: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not record:
+        return {}
+    title = _clean(record.get("title") or Path(str(record.get("filename") or "paper")).stem, 220)
+    excerpt = _clean(record.get("excerpt") or "", _MAX_PDF_EXCERPT)
+    return {
+        "source_type": "pdf",
+        "topic": title,
+        "excerpt": excerpt,
+        "title": title,
+        "journal": None,
+        "year": None,
+        "doi": None,
+        "pmid": None,
+        "url": None,
+        "source_file_name": record.get("filename"),
+        "source_file_sha256": record.get("sha256"),
+    }
 
 
 def _match_concepts(text: str) -> List[Dict[str, Any]]:
@@ -973,6 +1370,126 @@ def _prior_art_queries(source: Dict[str, Any], title: str) -> List[str]:
     if doi:
         queries.append(f'"{doi}"')
     return queries[:4]
+
+
+def _discovery_queries(topic: str, journal: str, body: Dict[str, Any]) -> List[str]:
+    topic = _clean(topic, 220)
+    journal = _clean(journal or body.get("journal_scope") or "", 120)
+    year_from = _year(body.get("year_from") or body.get("start_year"))
+    year_to = _year(body.get("year_to") or body.get("end_year"))
+    year_filter = ""
+    if year_from and year_to:
+        year_filter = f' AND ("{year_from}"[Date - Publication] : "{year_to}"[Date - Publication])'
+    elif year_from:
+        year_filter = f' AND ("{year_from}"[Date - Publication] : "3000"[Date - Publication])'
+    journal_filter = f' AND "{journal}"[Journal]' if journal else ""
+    base = f'({topic}) AND (ICU OR "critical care" OR "intensive care")'
+    review = f'({topic}) AND (review[Publication Type] OR editorial[Publication Type] OR perspective OR commentary)'
+    db = f'({topic}) AND (MIMIC OR eICU OR "public database" OR "critical care database")'
+    return [
+        base + journal_filter + year_filter,
+        review + journal_filter + year_filter,
+        db + year_filter,
+    ]
+
+
+def _dedupe_strings(values: Iterable[str]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        key = str(value or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def _pubmed_article_records(ids: List[str]) -> List[Dict[str, Any]]:
+    """Fetch PubMed metadata plus bounded abstracts via EFetch XML."""
+    if not ids:
+        return []
+    params = parse.urlencode({"db": "pubmed", "id": ",".join(ids), "retmode": "xml"})
+    url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?" + params
+    with request.urlopen(url, timeout=_NETWORK_TIMEOUT_SEC) as resp:
+        raw = resp.read(_MAX_FETCH_BYTES)
+    root = ET.fromstring(raw)
+    rows: List[Dict[str, Any]] = []
+    for article_node in root.findall(".//PubmedArticle"):
+        medline = article_node.find("./MedlineCitation")
+        article = medline.find("./Article") if medline is not None else None
+        if medline is None or article is None:
+            continue
+        pmid = _clean(_node_text(medline.find("./PMID")), 80)
+        title = _clean(_node_text(article.find("./ArticleTitle")), 260)
+        journal_node = article.find("./Journal")
+        journal = _clean(
+            _node_text(journal_node.find("./Title") if journal_node is not None else None)
+            or _node_text(journal_node.find("./ISOAbbreviation") if journal_node is not None else None),
+            160,
+        )
+        year = _pubmed_year(article)
+        doi = _pubmed_article_id(article_node, "doi")
+        abstract = _clean(" ".join(
+            _node_text(node)
+            for node in article.findall("./Abstract/AbstractText")
+            if _node_text(node)
+        ), 3000)
+        evidence = _best_evidence_sentence(abstract or title)
+        rows.append({
+            "pmid": pmid,
+            "title": title,
+            "journal": journal,
+            "year": year,
+            "doi": doi,
+            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else None,
+            "abstract_excerpt": _clean(abstract, _MAX_PDF_EXCERPT),
+            "evidence_sentence": evidence,
+            "full_text_stored": False,
+        })
+    order = {str(pmid): i for i, pmid in enumerate(ids)}
+    rows.sort(key=lambda row: order.get(str(row.get("pmid") or ""), 9999))
+    return rows
+
+
+def _node_text(node: Any) -> str:
+    if node is None:
+        return ""
+    return "".join(node.itertext()).strip()
+
+
+def _pubmed_article_id(article_node: Any, kind: str) -> Optional[str]:
+    for item in article_node.findall(".//ArticleId"):
+        if str(item.attrib.get("IdType") or "").lower() == kind.lower():
+            value = _clean(_node_text(item), 180)
+            return value or None
+    return None
+
+
+def _pubmed_year(article: Any) -> Optional[int]:
+    for path in (
+        "./Journal/JournalIssue/PubDate/Year",
+        "./ArticleDate/Year",
+        "./Journal/JournalIssue/PubDate/MedlineDate",
+    ):
+        text = _node_text(article.find(path))
+        match = re.search(r"\b(19|20)\d{2}\b", text)
+        if match:
+            return _year(match.group(0))
+    return None
+
+
+def _best_evidence_sentence(text: str) -> str:
+    sentences = re.split(r"(?<=[.!?。！？])\s+", _clean(text, 2500))
+    keywords = (
+        "mortality", "death", "survival", "sepsis", "septic", "shock",
+        "vasopressor", "fluid", "lactate", "aki", "ventilation",
+        "ICU", "critical care",
+    )
+    for sentence in sentences:
+        if any(k.lower() in sentence.lower() for k in keywords):
+            return _clean(sentence, _MAX_SOURCE_QUOTE)
+    return _clean(sentences[0] if sentences else text, _MAX_SOURCE_QUOTE)
 
 
 def _fetch_url_metadata(url: str) -> Dict[str, Any]:

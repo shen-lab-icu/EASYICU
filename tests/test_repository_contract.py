@@ -73,22 +73,22 @@ def test_native_webserver_static_assets_are_packaged() -> None:
 
 def test_python39_compatible_union_annotations_use_future_import() -> None:
     files_requiring_future = [
-        "src/easyicu/attach.py",
-        "src/easyicu/concept.py",
-        "src/easyicu/concept_callbacks.py",
-        "src/easyicu/concept_parser.py",
+        "src/easyicu/io/attach.py",
+        "src/easyicu/concept/__init__.py",
+        "src/easyicu/concept/callbacks.py",
+        "src/easyicu/concept/parser.py",
         "src/easyicu/config.py",
-        "src/easyicu/data_converter.py",
-        "src/easyicu/data_utils.py",
+        "src/easyicu/io/data_converter.py",
+        "src/easyicu/io/data_utils.py",
         "src/easyicu/datasource.py",
-        "src/easyicu/download.py",
+        "src/easyicu/io/download.py",
         "src/easyicu/feature_compare.py",
         "src/easyicu/hosted_llm_server.py",
-        "src/easyicu/import_data.py",
-        "src/easyicu/logging_utils.py",
+        "src/easyicu/io/import_data.py",
+        "src/easyicu/utils/logging_utils.py",
         "src/easyicu/resources.py",
         "src/easyicu/scripts/extract_features.py",
-        "src/easyicu/ts_utils.py",
+        "src/easyicu/io/ts_utils.py",
     ]
 
     missing = []

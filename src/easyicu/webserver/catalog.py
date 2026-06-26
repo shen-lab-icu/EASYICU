@@ -16,7 +16,9 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict
 
-from easyicu import concept_catalog as cc
+from easyicu.concept import catalog as cc
+
+_ACTIVE_COVERAGE_FULL_READ_ROW_LIMIT = 1_000_000
 
 
 def _coverage_metadata(concept_dict: Dict[str, Any]) -> tuple[Dict[str, Dict[str, Any]], Dict[str, int]]:
@@ -121,12 +123,16 @@ def _active_export_coverage(concept_dict: Dict[str, Any]) -> Dict[str, Any]:
             "payload_scope": "aggregate_only_no_rows",
         }
 
+    files = [f for f in desc.get("files", []) if f.get("file")]
+    total_rows = int((desc.get("summary") or {}).get("total_rows") or 0)
+    if total_rows > _ACTIVE_COVERAGE_FULL_READ_ROW_LIMIT:
+        return _active_export_schema_coverage(desc, concept_dict)
+
     path = Path(str(active_path)).expanduser()
     try:
         path = path.resolve()
     except OSError:
         pass
-    files = [f for f in desc.get("files", []) if f.get("file")]
     stay_ids = dataio._fast_stay_ids(path, files)
     denominator = len(stay_ids) if stay_ids is not None else None
     concept_keys = set(concept_dict)
@@ -171,6 +177,51 @@ def _active_export_coverage(concept_dict: Dict[str, Any]) -> Dict[str, Any]:
         },
         "payload_scope": "aggregate_only_no_rows",
         "coverage_basis": "non_null_unique_stay_intersection",
+    }
+
+
+def _active_export_schema_coverage(desc: Dict[str, Any], concept_dict: Dict[str, Any]) -> Dict[str, Any]:
+    path = Path(str(desc.get("path") or "local")).expanduser()
+    try:
+        path = path.resolve()
+    except OSError:
+        pass
+    denominator = (desc.get("summary") or {}).get("stays")
+    concept_keys = set(concept_dict)
+    coverage: Dict[str, Dict[str, Any]] = {}
+    for file_meta in desc.get("files", []) or []:
+        module = str(file_meta.get("module") or "")
+        file_name = str(file_meta.get("file") or "")
+        for concept in [str(c) for c in file_meta.get("columns") or [] if str(c) in concept_keys]:
+            coverage.setdefault(concept, {
+                "kind": "active_event_schema" if _event_like_concept(module, concept) else "active_export_schema",
+                "module": module,
+                "file": file_name,
+                "coverage_pct": None,
+                "observed_entities": None,
+                "denominator": denominator,
+                "basis": "column_present_in_export_schema",
+            })
+    return {
+        "status": "ready",
+        "mode": "schema_only",
+        "source": {
+            "label": desc.get("label"),
+            "database": desc.get("database"),
+            "path_hash": hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:12],
+        },
+        "denominator": denominator,
+        "concepts": coverage,
+        "summary": {
+            "included": len(coverage),
+            "notInExport": max(0, len(concept_dict) - len(coverage)),
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "schemaOnly": len(coverage),
+        },
+        "payload_scope": "aggregate_only_no_rows",
+        "coverage_basis": "column_present_in_export_schema",
     }
 
 

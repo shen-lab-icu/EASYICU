@@ -60,13 +60,13 @@ def test_all_sources_use_set_val_true(cdict, name, _dbs, _cov):
 
 @pytest.mark.parametrize("name,_dbs,_cov", BATCH8, ids=[m[0] for m in BATCH8])
 def test_registered_as_point_event(name, _dbs, _cov):
-    from easyicu.compat import POINT_EVENT_CONCEPTS
+    from easyicu.utils.compat import POINT_EVENT_CONCEPTS
     assert name in POINT_EVENT_CONCEPTS
 
 
 @pytest.mark.parametrize("name,_dbs,expected_cov", BATCH8, ids=[m[0] for m in BATCH8])
 def test_registered_in_webapp_catalog(name, _dbs, expected_cov):
-    from easyicu.concept_catalog import (
+    from easyicu.concept.catalog import (
         CONCEPT_DB_COVERAGE,
         CONCEPT_DICTIONARY,
     )

@@ -151,6 +151,15 @@ def crossdb_raw_distribution(body: Dict[str, Any]) -> dict:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
 
+@app.post("/api/crossdb-review/raw-root-scan")
+def crossdb_raw_root_scan(body: Dict[str, Any]) -> dict:
+    """Preflight a local raw ICU data root before launching Cross-DB loading."""
+    try:
+        return crossdb_review.crossdb_raw_root_scan(body)
+    except crossdb_review.CrossdbReviewError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
 @app.post("/api/crossdb-review/demo-distribution")
 def crossdb_demo_distribution(body: Dict[str, Any]) -> dict:
     """Return bounded legacy-seeded Cross-DB demo density aggregates."""
@@ -418,18 +427,28 @@ def post_guided_drafts_list(body: Dict[str, Any] | None = None) -> dict:
     return guided_sessions.list_guided_drafts(limit=int((body or {}).get("limit") or 20))
 
 
+def _guided_draft_remove_response(body: Dict[str, Any] | None) -> dict:
+    result = guided_sessions.remove_guided_draft(body or {})
+    if not result.get("ok") and not result.get("blocked"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
 @app.post("/api/guided/drafts/remove")
-def post_guided_draft_remove(body: Dict[str, Any]) -> dict:
+def post_guided_draft_remove(body: Dict[str, Any] | None = None) -> dict:
     """Remove a metadata-only guided draft from the local registry.
 
     This deliberately does not delete the local project folder. Project folders
     may contain Idea Mining or Agent artifacts and require separate explicit
     file-system management.
     """
-    result = guided_sessions.remove_guided_draft(body or {})
-    if not result.get("ok") and not result.get("blocked"):
-        raise HTTPException(status_code=400, detail=result)
-    return result
+    return _guided_draft_remove_response(body)
+
+
+@app.delete("/api/guided/drafts/remove")
+def delete_guided_draft_remove(body: Dict[str, Any] | None = None) -> dict:
+    """Compatibility path for cached clients that used DELETE for draft removal."""
+    return _guided_draft_remove_response(body)
 
 
 @app.post("/api/guided/session")
@@ -549,6 +568,33 @@ def post_ideas_resolve_source(body: Dict[str, Any]) -> dict:
     """Resolve a paper/PDF/frontier source seed into bounded metadata."""
     try:
         return idea_mining_web.resolve_source(body)
+    except idea_mining_web.IdeaMiningWebError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/ideas/discover")
+def post_ideas_discover(body: Dict[str, Any]) -> dict:
+    """Run or prepare opt-in PubMed/frontier literature discovery."""
+    try:
+        return idea_mining_web.discover_literature(body)
+    except idea_mining_web.IdeaMiningWebError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/ideas/ingest-pdf")
+def post_ideas_ingest_pdf(body: Dict[str, Any]) -> dict:
+    """Parse a selected local PDF into bounded metadata and a short excerpt."""
+    try:
+        return idea_mining_web.ingest_pdf_source(body)
+    except idea_mining_web.IdeaMiningWebError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
+
+
+@app.post("/api/ideas/literature-folder")
+def post_ideas_literature_folder(body: Dict[str, Any]) -> dict:
+    """Scan a local literature folder for PDF metadata and bounded excerpts."""
+    try:
+        return idea_mining_web.scan_literature_folder(body)
     except idea_mining_web.IdeaMiningWebError as exc:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 

@@ -43,16 +43,16 @@
         { id: 'crossdb', label: ['Cross-DB Benchmark', '跨库基准'], ico: 'benchmark' },
       ],
     },
-    { n: 3, id: 'agent', label: ['Analyze & draft', '分析与撰稿'], sub: ['runs → gated manuscript', '运行 → 受闸草稿'], ico: 'agent' },
+    { n: 3, id: 'agent', label: ['Analyze & draft', '分析与撰稿'], sub: ['runs → review-ready manuscript', '运行 → 待核验草稿'], ico: 'agent' },
   ];
   const VIZ_IDS = ['patient', 'cohort', 'crossdb'];
   /* User-facing data workspace: task-oriented labels, no migration-era "classic"
      terminology in the navigation. */
   const CLASSIC = [
-    { id: 'extraction', label: ['Extract Data', '抽取数据'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract', stale: false },
-    { id: 'patient', label: ['Patient Drilldown', '患者明细'], sub: ['single-patient review', '单患者审阅'], ico: 'patient', stale: true },
-    { id: 'cohort', label: ['Cohort Review', '队列审阅'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort', stale: true },
-    { id: 'crossdb', label: ['Cross-DB Compare', '跨库对比'], sub: ['multi-database checks', '多数据库检查'], ico: 'benchmark', stale: true },
+    { id: 'extraction', label: ['Extract Data', '抽取数据'], sub: ['choose cohort + modules', '选择队列 + 模块'], ico: 'extract' },
+    { id: 'patient', label: ['Patient Drilldown', '患者明细'], sub: ['single-patient review', '单患者审阅'], ico: 'patient' },
+    { id: 'cohort', label: ['Cohort Review', '队列审阅'], sub: ['groups + coverage', '分组 + 覆盖率'], ico: 'cohort' },
+    { id: 'crossdb', label: ['Cross-DB Compare', '跨库对比'], sub: ['multi-database checks', '多数据库检查'], ico: 'benchmark' },
   ];
   let classicOpen = true;
   function phaseOf(r) {
@@ -119,7 +119,7 @@
       </button>
       <button class="cp-entry agent-entry ${route === 'agent' ? 'on' : ''}" data-nav="agent">
         <span class="cp-ico">${icon('agent', 16)}</span>
-        <span class="cp-body"><span class="cp-t">${t('Run a Research Project', '运行研究项目')}</span><span class="cp-d">${t('confirmed plan → evidence-gated draft', '确认计划 → 证据闸草稿')}</span></span>
+        <span class="cp-body"><span class="cp-t">${t('Run a Research Project', '运行研究项目')}</span><span class="cp-d">${t('confirmed plan → evidence-checked draft', '确认计划 → 证据核验草稿')}</span></span>
         <span class="cp-go">${icon('arrow', 14)}</span>
       </button>
       <div class="sec-label nav-sec">${t('Data & Review', '数据与审阅')}</div>
@@ -135,7 +135,7 @@
           ${CLASSIC.map(c => `
             <button class="wsitem ${route === c.id ? 'active' : ''}" data-nav="${c.id}">
               <span class="ico">${icon(c.ico, 15)}</span>
-              <span class="wsi-copy"><span class="wsi-t">${L(c.label)}${(window.EU_STALE && c.stale) ? ` <span class="jp-stale">${icon('refresh', 9)} ${t('stale', '过期')}</span>` : ''}</span><span class="wsi-sub">${L(c.sub)}</span></span>
+              <span class="wsi-copy"><span class="wsi-t">${L(c.label)}</span><span class="wsi-sub">${L(c.sub)}</span></span>
             </button>`).join('')}
         </div>` : ''}
       </div>

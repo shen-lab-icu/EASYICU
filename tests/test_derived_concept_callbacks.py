@@ -18,7 +18,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from easyicu.concept_callbacks import (
+from easyicu.concept.callbacks import (
     CALLBACK_REGISTRY,
     ConceptCallbackContext,
     _callback_anion_gap,

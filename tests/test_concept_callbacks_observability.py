@@ -2,7 +2,7 @@ import logging
 
 import pandas as pd
 
-from easyicu.concept_callbacks import _match_fio2_fallback_loop_original
+from easyicu.concept.callbacks import _match_fio2_fallback_loop_original
 
 
 def test_merge_asof_fallback_logs_skipped_patient_groups(caplog):

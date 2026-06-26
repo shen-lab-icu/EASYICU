@@ -38,6 +38,17 @@
     }
     return value == null ? '' : String(value);
   }
+  function tx(en, zh) { return window.t ? window.t(en, zh) : en; }
+  function labelEn(ctx) {
+    const label = ctx && ctx.label;
+    return label && typeof label === 'object' ? (label.en || label.zh || '') : (label || '');
+  }
+  function labelZh(ctx) {
+    const label = ctx && ctx.label;
+    return label && typeof label === 'object' ? (label.zh || label.en || '') : (label || '');
+  }
+  function labelOf(ctx) { return tx(labelEn(ctx), labelZh(ctx)); }
+  function contextText(route) { return tx('on ', '当前页面：') + labelOf(ctxFor(route)); }
   function chipText(chip) {
     if (Array.isArray(chip)) return htmlOf(chip[0]);
     return localized({ en: chip.label_en || chip.label || '', zh: chip.label_zh || chip.label || chip.label_en || '' });
@@ -129,7 +140,7 @@
   }
   function appendRouteGreeting(route) {
     const c = ctxFor(route);
-    thread.push({ ctxline: true, html: bi(`now on ${c.label}`, `现在在：${c.label}`) });
+    thread.push({ ctxline: true, html: bi(`now on ${labelEn(c)}`, `现在在：${labelZh(c)}`) });
     render();
     const action = backendExplainActionForRoute(route);
     if (action && hasPageGuideBackend()) {
@@ -160,50 +171,50 @@
   /* ---- per-route context: greeting + chips + answers ---- */
   const CTX = {
     entry: {
-      label: 'Home',
+      label: bi('Home', '首页'),
       hi: bi(`This Page guide explains the current screen and offers safe shortcuts. Open Guided Copilot when you want a full conversational study plan.`, `页面指南会解释当前页面并提供安全快捷操作。需要完整对话式研究规划时，请打开 Guided Copilot。`),
       chips: [[bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act'], [bi('How does EasyICU work?', 'EasyICU 怎么工作？'), '@say:how'], [bi('Load a demo workspace', '加载演示工作区'), '@load', 'act']],
     },
     extraction: {
-      label: 'Data Extraction',
+      label: bi('Data Extraction', '数据抽取'),
       hi: bi(`You’re in Data Extraction. Use the page controls to configure cohort, modules, and export. This guide can explain the page or open Guided Copilot.`, `这里是数据抽取。请用页面控件配置队列、模块和导出。页面指南可以解释页面，或打开 Guided Copilot。`),
       chips: [[bi('How does extraction work?', '抽取怎么工作？'), '@say:extract'], [bi('What gets exported?', '会导出什么？'), '@say:export'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']],
     },
     patient: {
-      label: 'Patient Review',
+      label: bi('Patient Review', '患者审阅'),
       hi: bi(`This is Patient Review — tables, time series, a patient overview, and data-quality flags. I can load a demo workspace so it’s populated.`, `这里是患者审阅：包含表格、时间序列、患者概览和数据质量标记。我可以先加载一个演示工作区。`),
       chips: [[bi('Load demo workspace', '加载演示工作区'), '@load', 'act'], [bi('What’s in each tab?', '每个标签页是什么？'), '@say:tabs'], [bi('Explain data-quality flags', '解释数据质量标记'), '@say:quality']],
     },
     cohort: {
-      label: 'Cohort Statistics',
+      label: bi('Cohort Statistics', '队列统计'),
       hi: bi(`Cohort Statistics compares groups, audits coverage, and reclassifies SOFA. I can re-run it or explain what you’re seeing.`, `队列统计用于分组比较、覆盖率审计和 SOFA 重分类。我可以重新运行，或解释当前结果。`),
       chips: [[bi('Re-run statistics', '重新运行统计'), '@cohortrun', 'act'], [bi('Explain SOFA reclassification', '解释 SOFA 重分类'), '@say:sofa'], [bi('What’s the comparison?', '当前比较是什么？'), '@say:contrast']],
     },
     crossdb: {
-      label: 'Cross-DB Benchmark',
+      label: bi('Cross-DB Benchmark', '跨库对比'),
       hi: bi(`Cross-DB Benchmark applies one cohort definition across ICU databases. I can load it or explain where databases diverge.`, `跨库比较会把同一个队列定义应用到多个 ICU 数据库。我可以加载比较，或解释哪些数据库差异最大。`),
       chips: [[bi('Load the benchmark', '加载跨库比较'), '@loadcross', 'act'], [bi('Which databases overlap?', '哪些数据库有重叠？'), '@say:overlap'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']],
     },
     agent: {
-      label: 'Agent Projects',
-      hi: bi(`The Research Agent runs an auditable pipeline and drafts findings — but the draft stays gated until checks pass. Want the run, or the reasoning?`, `Research Agent 会运行可审计 pipeline 并生成 findings 草稿，但检查通过前草稿保持锁定。你想看运行，还是想看 gate 逻辑？`),
+      label: bi('Agent Projects', '研究项目'),
+      hi: bi(`The Research Agent runs an auditable pipeline and drafts findings — but the draft stays locked until checks pass. Want the run, or the reasoning?`, `Research Agent 会运行可审计 pipeline 并生成 findings 草稿，但检查通过前草稿保持锁定。你想看运行，还是想看核验逻辑？`),
       chips: [[bi('Why is the draft locked?', '为什么草稿锁定？'), '@say:gate'], [bi('Show a completed run', '查看已完成 run'), '@agentrun', 'act'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']],
     },
-    states: { label: 'Workspace States', hi: bi(`This is the states reference — loading, empty, no-data, error, blocked, success. Use the shortcuts below or open Guided Copilot.`, `这里是工作区状态参考：加载、空、无数据、错误、阻断、成功。可用下方快捷操作，或打开 Guided Copilot。`), chips: [[bi('When do states show?', '状态什么时候出现？'), '@say:states'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']] },
-    settings: { label: 'Settings', hi: bi(`Settings are local-first and reversible. Ask me what any option does.`, `设置是本地优先且可回退的。你可以问任意选项的含义。`), chips: [[bi('Is my data uploaded?', '我的数据会上传吗？'), '@say:privacy'], [bi('Explain the evidence gate', '解释 evidence gate'), '@say:gate']] },
-    tutorial: { label: 'Get Started', hi: bi(`Get Started orients you to the workflow. Open Guided Copilot for the full conversational path.`, `快速上手会介绍整个流程；完整对话式路径请打开 Guided Copilot。`), chips: [[bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act'], [bi('How does EasyICU work?', 'EasyICU 怎么工作？'), '@say:how']] },
+    states: { label: bi('Workspace States', '工作区状态'), hi: bi(`This is the states reference — loading, empty, no-data, error, blocked, success. Use the shortcuts below or open Guided Copilot.`, `这里是工作区状态参考：加载、空、无数据、错误、阻断、成功。可用下方快捷操作，或打开 Guided Copilot。`), chips: [[bi('When do states show?', '状态什么时候出现？'), '@say:states'], [bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act']] },
+    settings: { label: bi('Settings', '设置'), hi: bi(`Settings are local-first and reversible. Ask me what any option does.`, `设置是本地优先且可回退的。你可以问任意选项的含义。`), chips: [[bi('Is my data uploaded?', '我的数据会上传吗？'), '@say:privacy'], [bi('Explain evidence checks', '解释证据核验'), '@say:gate']] },
+    tutorial: { label: bi('Get Started', '快速上手'), hi: bi(`Get Started orients you to the workflow. Open Guided Copilot for the full conversational path.`, `快速上手会介绍整个流程；完整对话式路径请打开 Guided Copilot。`), chips: [[bi('Open Guided Copilot', '打开 Guided Copilot'), '@guided', 'act'], [bi('How does EasyICU work?', 'EasyICU 怎么工作？'), '@say:how']] },
   };
 
   const ANSWERS = {
     how: bi(`EasyICU runs locally and moves a study through four stages: <strong>frame → extract → review → analyze & draft</strong>. This Page guide explains and links; Guided Copilot handles full conversational planning. Nothing is uploaded.`, `EasyICU 在本机运行，把研究推进为四步：<strong>定义问题 → 抽取 → 审阅 → 分析与草稿</strong>。页面指南负责解释和跳转；完整对话式规划由 Guided Copilot 承担。不会上传数据。`),
-    extract: bi(`Extraction has a one-click <strong>recommended</strong> path — first ICU stay, full available ICU window with a 30-day cap, six core feature modules — that writes analysis-ready frames plus a reproducible manifest. Need more control? The <strong>Customize</strong> panel opens cohort criteria, feature modules, and export format. Either way, nothing runs on incomplete data.`, `抽取有一键<strong>推荐路径</strong>：首个 ICU stay、完整可用 ICU 窗口并设 30 天上限、核心特征模块，输出可分析数据表和可复现 manifest。需要更多控制时，<strong>自定义</strong>面板可以配置队列、模块和导出格式。`),
-    export: bi(`An export bundle is the concept data plus a <strong>manifest.json</strong> — not the figures. Code, tables, and figures come from a Research Agent run, with an evidence ledger.`, `导出包包含概念数据和 <strong>manifest.json</strong>，不是图件。代码、表格和图件来自 Research Agent run，并附 evidence ledger。`),
+    extract: bi(`Extraction has a one-click <strong>recommended</strong> path — first ICU stay, full available ICU window with a 30-day cap, six core feature modules — that writes analysis-ready frames plus a reproducible manifest. Need more control? The <strong>Customize</strong> panel opens cohort criteria, feature modules, and export format. Either way, nothing runs on incomplete data.`, `抽取有一键<strong>推荐路径</strong>：首个 ICU stay、完整可用 ICU 窗口并设 30 天上限、核心特征模块，输出可分析数据表和可复现清单。需要更多控制时，<strong>自定义</strong>面板可以配置队列、模块和导出格式。`),
+    export: bi(`An export bundle is the concept data plus a <strong>manifest.json</strong> — not the figures. Code, tables, and figures come from a Research Agent run, with an evidence ledger.`, `导出包包含概念数据和 <strong>manifest.json</strong> 清单，不是图件。代码、表格和图件来自 Research Agent run，并附证据台账。`),
     tabs: bi(`<ul class="mb-list"><li><strong>Data Tables</strong> — raw stay-level rows</li><li><strong>Time Series</strong> — hourly trajectories</li><li><strong>Patient Overview</strong> — one stay at a glance</li><li><strong>Data Quality</strong> — coverage, ranges, missingness</li></ul>`, `<ul class="mb-list"><li><strong>数据表</strong>：stay 级数据</li><li><strong>时间序列</strong>：小时级轨迹</li><li><strong>患者概览</strong>：单个 stay 一屏查看</li><li><strong>数据质量</strong>：覆盖率、范围和缺失</li></ul>`),
     quality: bi(`Flags mark concepts that are sparse or out-of-range. They protect your denominators — a flagged module is surfaced before it can bias a model. Want me to load the workspace so you can see them?`, `标记用于提示稀疏或越界的概念，保护分母不被悄悄污染。某个模块影响模型前，会先暴露出来。要我加载工作区给你看吗？`),
     sofa: bi(`SOFA reclassification shows how patients move between severity bands when you recompute the score — it’s a sensitivity check, not a new finding.`, `SOFA 重分类展示重新计算评分后患者如何在严重度分层之间移动。它是敏感性检查，不是新的临床发现。`),
-    contrast: bi(`The default contrast is Survived vs Deceased; you can switch to age groups, sex, length-of-stay, or Sepsis vs non-sepsis. All values shown are seeded demo numbers.`, `默认比较是存活 vs 死亡；也可以切换到年龄、性别、住院时长或 Sepsis vs 非 Sepsis。演示模式下显示的是 seeded demo 数字。`),
-    overlap: bi(`Only concepts present in every selected database can be compared fairly — the availability matrix shows where one is missing. Lactate and MAP usually overlap; some scores are partial.`, `只有在所选数据库中都存在的概念才适合公平比较；availability matrix 会显示缺失在哪里。乳酸和 MAP 通常有重叠，部分评分可能不完整。`),
-    gate: bi(`Drafting is a deliberate second stage. A claim may only be written once it traces to a logged artifact — denominators resolved, coverage above threshold, tables reproducing from the manifest — and a human signs off. That’s why the draft is locked until then.`, `草稿是有意延后的阶段。只有当 claim 能追溯到已记录 artifact，并且分母、覆盖率、表格复现和人工签署都通过后，才允许写入稿件。所以在此之前草稿保持锁定。`),
+    contrast: bi(`The default contrast is Survived vs Deceased; you can switch to age groups, sex, length-of-stay, or Sepsis vs non-sepsis. All values shown are seeded demo numbers.`, `默认比较是存活 vs 死亡；也可以切换到年龄、性别、住院时长或 Sepsis vs 非 Sepsis。演示模式下显示的是种子演示数字。`),
+    overlap: bi(`Only concepts present in every selected database can be compared fairly — the availability matrix shows where one is missing. Lactate and MAP usually overlap; some scores are partial.`, `只有在所选数据库中都存在的概念才适合公平比较；可用性矩阵会显示缺失在哪里。乳酸和 MAP 通常有重叠，部分评分可能不完整。`),
+    gate: bi(`Drafting is a deliberate second stage. A claim may only be written once it traces to a logged artifact — denominators resolved, coverage above threshold, tables reproducing from the manifest — and a human signs off. That’s why the draft is locked until then.`, `草稿是有意延后的阶段。只有当声明能追溯到已记录产物，并且分母、覆盖率、表格复现和人工签署都通过后，才允许写入稿件。所以在此之前草稿保持锁定。`),
     states: bi(`Every data surface passes through the same six: loading (skeletons), empty (first run), no-data (0 results), error (recoverable), blocked (gated), success. The reference page lets you preview each.`, `每个数据界面都经过六种状态：加载、空、无数据、错误、阻断和成功。参考页可以预览这些状态。`),
     privacy: bi(`No. EasyICU is local-first and the guarantee is enforced — extraction, review, and analysis run on your machine. Only the agent’s plan text can ever leave, and only if you explicitly enable it. Never patient rows.`, `不会。EasyICU 是本地优先：抽取、审阅和分析都在你的机器上运行。只有你明确启用时，Agent 的计划文本才可能离开本机，患者行永远不会发送。`),
   };
@@ -253,7 +264,7 @@
   function drive(tok) {
     switch (tok) {
       case '@load': try { window.__euVizPreset && window.__euVizPreset(); } catch (e) {} nav('#patient'); return bi('Loaded a demo workspace — Patient Review is populated. Tabs are live on the left.', '已加载演示工作区，Patient Review 已填充。左侧标签页可以直接查看。');
-      case '@loadcross': try { window.__euVizPreset && window.__euVizPreset(); } catch (e) {} nav('#crossdb'); return bi('Loaded the benchmark — Cross-DB is on the left with the availability matrix.', '已加载跨库比较，Cross-DB 页面会显示 availability matrix。');
+      case '@loadcross': try { window.__euVizPreset && window.__euVizPreset(); } catch (e) {} nav('#crossdb'); return bi('Loaded the benchmark — Cross-DB is on the left with the availability matrix.', '已加载跨库比较，跨库页面会显示可用性矩阵。');
       case '@cohortrun': nav('#cohort'); setTimeout(() => { const b = document.querySelector('[data-cohort-run]'); if (b) b.click(); }, 240); return bi('Re-running cohort statistics — watch the panel recompute on the left.', '正在重新运行队列统计，请看左侧面板重新计算。');
       case '@agentrun': try { window.__euAgentPreset && window.__euAgentPreset(); } catch (e) {} nav('#agent'); return bi('Opened a completed Research Agent run — the Summary gate is on the left.', '已打开一个完成的 Research Agent run，左侧是 Summary gate。');
     }
@@ -299,7 +310,7 @@
     const r = routeOf();
     const c = ctxFor(r);
     if (force || !thread.length) {
-      thread = [{ ctxline: true, html: bi(`on ${c.label}`, `当前页面：${c.label}`) }];
+      thread = [{ ctxline: true, html: bi(`on ${labelEn(c)}`, `当前页面：${labelZh(c)}`) }];
       render(); renderChips([]);
       if (hasPageGuideBackend()) {
         try {
@@ -319,7 +330,7 @@
   /* ---- open / close ---- */
   function open() {
     dock.classList.add('open'); backdrop.classList.add('open'); fab.hidden = true;
-    document.getElementById('cpCtx').textContent = (window.t ? window.t('on ', '当前页面：') : 'on ') + ctxFor(routeOf()).label;
+    document.getElementById('cpCtx').textContent = contextText(routeOf());
     greet();
     setTimeout(() => input && input.focus(), 320);
     try { localStorage.setItem('easyicu_dock', '1'); } catch (e) {}
@@ -331,31 +342,60 @@
   }
   function toggle() { dock.classList.contains('open') ? close() : open(); }
 
+  function refreshLanguage() {
+    if (!dock || !fab) return;
+    fab.setAttribute('aria-label', tx('Open EasyICU page guide', '打开 EasyICU 页面指南'));
+    fab.innerHTML = `<span class="fab-mk">${icon('spark', 14)}</span> ${tx('Page guide', '页面指南')}`;
+    dock.setAttribute('aria-label', tx('EasyICU page guide', 'EasyICU 页面指南'));
+    const name = dock.querySelector('.cp-name');
+    const ctx = dock.querySelector('#cpCtx');
+    const expand = dock.querySelector('#cpExpand');
+    const closeBtn = dock.querySelector('#cpClose');
+    const send = dock.querySelector('#cpSend');
+    const foot = dock.querySelector('.cp-foot');
+    if (name) name.textContent = tx('Page guide', '页面指南');
+    if (ctx) ctx.textContent = contextText(routeOf());
+    if (expand) {
+      expand.setAttribute('title', tx('Open Guided Copilot', '打开 Guided Copilot'));
+      expand.setAttribute('aria-label', tx('Open Guided Copilot', '打开 Guided Copilot'));
+    }
+    if (closeBtn) {
+      closeBtn.setAttribute('title', tx('Close', '关闭'));
+      closeBtn.setAttribute('aria-label', tx('Close page guide', '关闭页面指南'));
+    }
+    if (input) {
+      input.setAttribute('placeholder', tx('Optional shortcut, e.g. "open Patient Review"...', '可选快捷指令，例如“打开患者审阅”…'));
+      input.setAttribute('aria-label', tx('Page guide shortcut', '页面指南快捷指令'));
+    }
+    if (send) send.setAttribute('aria-label', tx('Run shortcut', '运行快捷指令'));
+    if (foot) foot.textContent = tx('Page-specific · safe shortcuts · local only', '当前页面 · 安全快捷操作 · 仅本地');
+    if (dock.classList.contains('open')) greet(true);
+    else {
+      render();
+      renderChips(ctxFor(routeOf()).chips);
+    }
+  }
+
   /* ---- build ---- */
   function build() {
-    const pageGuideLabel = window.t ? window.t('Page guide', '页面指南') : 'Page guide';
-    const pageGuideContext = window.t ? window.t('screen guide', '页面指南') : 'screen guide';
-    const shortcutPlaceholder = window.t
-      ? window.t('Optional shortcut, e.g. “open Patient Review”…', '可选快捷指令，例如“打开患者审阅”…')
-      : 'Optional shortcut, e.g. “open Patient Review”…';
     backdrop = document.createElement('div'); backdrop.id = 'cpBackdrop';
-    fab = document.createElement('button'); fab.id = 'cpFab'; fab.setAttribute('aria-label', 'Open EasyICU page guide');
-    fab.innerHTML = `<span class="fab-mk">${icon('spark', 14)}</span> ${pageGuideLabel}`;
-    dock = document.createElement('aside'); dock.id = 'cpDock'; dock.setAttribute('aria-label', 'EasyICU page guide');
+    fab = document.createElement('button'); fab.id = 'cpFab'; fab.setAttribute('aria-label', tx('Open EasyICU page guide', '打开 EasyICU 页面指南'));
+    fab.innerHTML = `<span class="fab-mk">${icon('spark', 14)}</span> ${tx('Page guide', '页面指南')}`;
+    dock = document.createElement('aside'); dock.id = 'cpDock'; dock.setAttribute('aria-label', tx('EasyICU page guide', 'EasyICU 页面指南'));
     dock.innerHTML = `
       <div class="cp-head">
         <div class="cp-mk">${icon('spark', 16)}</div>
-        <div class="grow"><div class="cp-name">${pageGuideLabel}</div><div class="cp-ctx" id="cpCtx">${pageGuideContext}</div></div>
-        <button class="cp-iconbtn" id="cpExpand" title="Open Guided Copilot" aria-label="Open Guided Copilot">${icon('grid', 16)}</button>
-        <button class="cp-iconbtn" id="cpClose" title="Close" aria-label="Close page guide">${icon('stop', 15)}</button>
+        <div class="grow"><div class="cp-name">${tx('Page guide', '页面指南')}</div><div class="cp-ctx" id="cpCtx">${contextText(routeOf())}</div></div>
+        <button class="cp-iconbtn" id="cpExpand" title="${tx('Open Guided Copilot', '打开 Guided Copilot')}" aria-label="${tx('Open Guided Copilot', '打开 Guided Copilot')}">${icon('grid', 16)}</button>
+        <button class="cp-iconbtn" id="cpClose" title="${tx('Close', '关闭')}" aria-label="${tx('Close page guide', '关闭页面指南')}">${icon('stop', 15)}</button>
       </div>
       <div class="cp-scroll" id="cpScroll" role="log" aria-live="polite"></div>
       <div class="cp-suggest" id="cpSuggest"></div>
       <div class="cp-composer">
-        <input class="c-in" id="cpInput" placeholder="${shortcutPlaceholder}" autocomplete="off" aria-label="Page guide shortcut" />
-        <button class="c-go" id="cpSend" aria-label="Run shortcut">${icon('arrow', 16)}</button>
+        <input class="c-in" id="cpInput" placeholder="${tx('Optional shortcut, e.g. "open Patient Review"...', '可选快捷指令，例如“打开患者审阅”…')}" autocomplete="off" aria-label="${tx('Page guide shortcut', '页面指南快捷指令')}" />
+        <button class="c-go" id="cpSend" aria-label="${tx('Run shortcut', '运行快捷指令')}">${icon('arrow', 16)}</button>
       </div>
-      <div class="cp-foot">Page-specific · safe shortcuts · local only</div>`;
+      <div class="cp-foot">${tx('Page-specific · safe shortcuts · local only', '当前页面 · 安全快捷操作 · 仅本地')}</div>`;
     document.body.appendChild(backdrop); document.body.appendChild(fab); document.body.appendChild(dock);
 
     scroll = dock.querySelector('#cpScroll');
@@ -394,11 +434,12 @@
       if (r === 'guided') { close(); fab.hidden = true; }
       else { if (!dock.classList.contains('open')) fab.hidden = false; }
       if (dock.classList.contains('open') && r !== lastRoute && r !== 'guided') {
-        document.getElementById('cpCtx').textContent = (window.t ? window.t('on ', '当前页面：') : 'on ') + ctxFor(r).label;
+        document.getElementById('cpCtx').textContent = contextText(r);
         appendRouteGreeting(r);
       }
       lastRoute = r;
     });
+    window.addEventListener('easyicu:languagechange', refreshLanguage);
 
     lastRoute = routeOf();
     if (routeOf() === 'guided') fab.hidden = true;
@@ -406,8 +447,11 @@
 
   function init() {
     build();
-    window.EUPageGuide = { open, close, toggle };
+    window.EUPageGuide = { open, close, toggle, refreshLanguage };
     window.EUCopilot = window.EUPageGuide; // compatibility for existing shell shortcuts
+    refreshLanguage();
+    setTimeout(refreshLanguage, 0);
+    setTimeout(refreshLanguage, 250);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

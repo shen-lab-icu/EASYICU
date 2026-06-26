@@ -1,9 +1,9 @@
 import pandas as pd
 
 from easyicu.callbacks import sofa2_cns, sofa2_resp
-from easyicu.concept_callbacks import ConceptCallbackContext, _callback_sofa_component
-from easyicu.sofa2 import sofa2_cardio as standalone_sofa2_cardio
-from easyicu.sofa2 import sofa2_resp as standalone_sofa2_resp
+from easyicu.concept.callbacks import ConceptCallbackContext, _callback_sofa_component
+from easyicu.scores.sofa2 import sofa2_cardio as standalone_sofa2_cardio
+from easyicu.scores.sofa2 import sofa2_resp as standalone_sofa2_resp
 from easyicu.table import ICUTable
 
 

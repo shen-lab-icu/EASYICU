@@ -147,17 +147,43 @@
 .range-ctl input[type="range"]{ width:100%; accent-color:var(--accent); }
 .range-val{ min-width:58px; text-align:right; font-size:11px; color:var(--ink-3); white-space:nowrap; }
 
+/* Extraction export destination */
+.ex-export-destination{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:8px;
+  align-items:center;
+  margin-top:12px;
+}
+.ex-export-path{ width:100%; min-width:0; }
+.ex-export-browse{ flex:none; height:34px; }
+
 /* Extraction module selection */
 .modgrid{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
 .modcard{
   min-width:0;
   border:1px solid var(--hair-2); border-radius:var(--r-2);
-  background:var(--surface); cursor:pointer; transition:border-color .12s, background .12s;
+  background:var(--surface); cursor:pointer; overflow:hidden;
+  transition:border-color .12s, background .12s, box-shadow .12s;
 }
 .modcard:hover{ border-color:var(--hair-3); background:var(--surface-2); }
-.modcard.on{ border-color:var(--accent-border); background:var(--accent-soft); }
-.modcard.open{ grid-column:1 / -1; cursor:default; }
+.modcard.on{
+  border-color:var(--accent-border);
+  background:color-mix(in srgb,var(--accent-soft) 34%,var(--surface));
+  box-shadow:inset 3px 0 0 var(--accent);
+}
+.modcard.open{
+  grid-column:1 / -1; cursor:default;
+  background:var(--surface);
+  border-color:var(--accent-border);
+  box-shadow:inset 4px 0 0 var(--accent), var(--sh-1);
+}
 .modcard-head{ display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px; padding:8px; }
+.modcard.open .modcard-head{
+  padding:10px 10px 9px 12px;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--accent-soft) 72%,var(--surface)) 0%,var(--surface) 74%);
+  border-bottom:1px solid var(--accent-border);
+}
 .mod-pick{
   min-width:0; display:flex; align-items:center; gap:10px; padding:2px 4px;
   border:0; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer;
@@ -168,14 +194,34 @@
   color:var(--ink-3); font-size:11px; cursor:pointer;
 }
 .mod-detail-btn:hover{ border-color:var(--accent-border); color:var(--accent-ink); background:var(--surface); }
+.modcard.open .mod-detail-btn{
+  border-color:var(--accent-border);
+  background:var(--surface);
+  color:var(--accent-ink);
+}
 .modcard .mk{
   width:18px; height:18px; flex:none; border-radius:5px;
   border:1.5px solid var(--hair-3); display:grid; place-items:center; color:#fff;
 }
 .modcard.on .mk{ background:var(--accent); border-color:var(--accent); }
 .modcard .nm{ font-size:12.5px; font-weight:600; min-width:0; }
+.modcard.open .nm{ font-size:13px; }
 .modcard .ct{ font-family:var(--font-mono); font-size:10.5px; color:var(--ink-4); margin-left:auto; }
-.mod-concepts{ border-top:1px solid var(--hair); padding:10px 12px 12px; background:color-mix(in srgb,var(--surface) 72%,transparent); border-radius:0 0 var(--r-2) var(--r-2); }
+.mod-concepts{
+  position:relative;
+  border-top:0;
+  padding:12px 12px 14px 24px;
+  background:color-mix(in srgb,var(--surface-2) 68%,var(--surface));
+  border-radius:0 0 var(--r-2) var(--r-2);
+}
+.mod-concepts::before{
+  content:"";
+  position:absolute;
+  left:12px; top:14px; bottom:14px;
+  width:2px;
+  border-radius:999px;
+  background:color-mix(in srgb,var(--accent) 34%,transparent);
+}
 .mod-concept-toolbar{ display:flex; align-items:center; gap:10px; margin-bottom:9px; }
 .mod-concept-toolbar .hint{ font-size:11.5px; color:var(--ink-3); }
 .mod-concept-toolbar .spacer{ flex:1; }
@@ -183,19 +229,124 @@
 .linkbtn:hover{ text-decoration:underline; }
 .concept-list{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
 .concept-toggle{
+  position:relative;
   min-width:0; display:grid; grid-template-columns:18px minmax(0,1fr) auto; align-items:center; gap:8px;
-  padding:7px 8px; border:1px solid var(--hair); border-radius:8px; background:var(--surface);
+  padding:7px 9px; border:1px solid var(--hair); border-radius:6px; background:var(--surface);
   color:var(--ink); font:inherit; text-align:left; cursor:pointer;
+  box-shadow:0 1px 0 rgba(15, 23, 42, .03);
 }
 .concept-toggle:hover{ border-color:var(--hair-3); background:var(--surface-2); }
-.concept-toggle.on{ border-color:var(--accent-border); background:var(--accent-soft); }
-.concept-toggle .mk{ width:16px; height:16px; border-radius:5px; }
+.concept-toggle.on{
+  border-color:color-mix(in srgb,var(--accent-border) 58%,var(--hair));
+  background:var(--surface);
+  box-shadow:inset 3px 0 0 color-mix(in srgb,var(--accent) 62%,transparent), 0 1px 0 rgba(15, 23, 42, .03);
+}
+.concept-toggle .mk{ width:16px; height:16px; border-radius:4px; }
 .concept-toggle.on .mk{ background:var(--accent); border-color:var(--accent); }
 .cx-main{ min-width:0; display:flex; flex-direction:column; gap:1px; }
 .cx-name{ font-size:12px; font-weight:600; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cx-id{ font-size:10.5px; color:var(--ink-4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cx-unit{ font-size:10.5px; color:var(--ink-4); white-space:nowrap; }
 .mod-empty{ padding:9px 10px; color:var(--ink-4); font-size:12px; border:1px dashed var(--hair); border-radius:8px; }
+
+/* Sepsis/SOFA definition checkpoint */
+.sepsis-def-panel{
+  margin-top:12px;
+  padding:13px;
+  border:1px solid color-mix(in srgb,var(--warn,#b45309) 24%,var(--hair));
+  border-radius:var(--r-2);
+  background:linear-gradient(180deg,color-mix(in srgb,var(--warn,#b45309) 7%,var(--surface)) 0%,var(--surface) 100%);
+}
+.sepsis-def-head{
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+}
+.sepsis-def-ico{
+  width:26px;
+  height:26px;
+  flex:none;
+  display:grid;
+  place-items:center;
+  border-radius:7px;
+  color:var(--warn,#9a5a00);
+  background:color-mix(in srgb,var(--warn,#b45309) 11%,var(--surface));
+  border:1px solid color-mix(in srgb,var(--warn,#b45309) 22%,transparent);
+}
+.sepsis-def-kicker{
+  font-size:9.5px;
+  font-weight:650;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  color:var(--warn,#9a5a00);
+}
+.sepsis-def-title{
+  margin-top:2px;
+  font-size:13px;
+  font-weight:700;
+  color:var(--ink);
+}
+.sepsis-def-copy{
+  margin-top:4px;
+  max-width:86ch;
+  font-size:11.5px;
+  line-height:1.45;
+  color:var(--ink-3);
+}
+.sepsis-def-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+  margin-top:12px;
+}
+.sepsis-def-row{
+  min-width:0;
+  padding:10px;
+  border:1px solid var(--hair);
+  border-radius:7px;
+  background:color-mix(in srgb,var(--surface) 86%,transparent);
+}
+.sepsis-def-label{
+  margin-bottom:7px;
+  font-size:11px;
+  font-weight:650;
+  color:var(--ink-2);
+}
+.sepsis-def-chips{
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+}
+.sepsis-def-chip{
+  display:inline-flex;
+  align-items:center;
+  min-height:22px;
+  padding:3px 7px;
+  border-radius:999px;
+  border:1px solid var(--hair);
+  background:var(--surface);
+  color:var(--ink-3);
+  font-size:10.5px;
+  line-height:1.2;
+  white-space:normal;
+}
+.sepsis-def-chip.current{
+  border-color:color-mix(in srgb,var(--accent-border) 64%,var(--hair));
+  background:color-mix(in srgb,var(--accent-soft) 44%,var(--surface));
+  color:var(--accent-ink);
+}
+.sepsis-def-chip.review{
+  border-style:dashed;
+}
+.sepsis-def-foot{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  margin-top:10px;
+  font-size:11px;
+  line-height:1.4;
+  color:var(--ink-4);
+}
 
 /* Sticky extraction summary rail */
 .ex2-summary{ align-self:stretch; min-width:0; }
@@ -214,6 +365,7 @@
   .adv-row{ grid-template-columns:1fr; gap:6px; }
   .cohort-preset-grid{ grid-template-columns:1fr; }
   .range-pair{ grid-template-columns:1fr; }
+  .sepsis-def-grid{ grid-template-columns:1fr; }
 }
 
 @media (max-width:560px){

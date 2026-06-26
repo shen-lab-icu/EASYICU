@@ -128,7 +128,7 @@ def _concept_dict_meta() -> Dict[str, Dict[str, str]]:
     malformed dictionary just yields no enrichment.
     """
     try:
-        from ..concept_loader import _load_concept_dict_cached  # heavy import
+        from ..concept.loader import _load_concept_dict_cached  # heavy import
 
         raw = _load_concept_dict_cached()
     except Exception:

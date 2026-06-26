@@ -614,7 +614,7 @@ def _get_smart_workers(num_concepts: int, num_patients: Optional[int] = None) ->
     if os.getenv('EASYICU_NO_AUTO_PARALLEL'):
         return 1, None
     
-    from .parallel_config import get_global_config, get_runtime_load_strategy
+    from .runtime.parallel_config import get_global_config, get_runtime_load_strategy
 
     strategy = get_runtime_load_strategy(
         [f"concept_{i}" for i in range(num_concepts)],
@@ -681,8 +681,8 @@ def _get_auto_chunk_strategy(
     if num_patients is None or num_patients < 2000:
         return None
 
-    from .parallel_config import get_global_config, get_runtime_load_strategy
-    from .memory_manager import get_available_memory_mb
+    from .runtime.parallel_config import get_global_config, get_runtime_load_strategy
+    from .runtime.memory_manager import get_available_memory_mb
 
     config = get_global_config()
     available_memory_mb = get_available_memory_mb()
@@ -1025,7 +1025,7 @@ def load_concepts(
     effective_parallel_workers = parallel_workers
     
     if concept_workers is None or parallel_workers is None:
-        from .parallel_config import get_global_config, get_runtime_load_strategy
+        from .runtime.parallel_config import get_global_config, get_runtime_load_strategy
 
         runtime_strategy = get_runtime_load_strategy(
             concepts_list,
@@ -1101,7 +1101,7 @@ def load_concepts(
     # 6. 可用内存 >= 16GB → 进程内分批 + malloc_trim（更快）
     # ====================================================================
     
-    from .memory_manager import (
+    from .runtime.memory_manager import (
         auto_batch_size, estimate_memory_mb,
         get_available_memory_mb, inprocess_batch_load,
         inprocess_batch_load_streaming, subprocess_batch_load,
@@ -1414,7 +1414,7 @@ def load_concepts(
         special_dict: Dict[str, pd.DataFrame] = {}
         if _need_kdigo:
             try:
-                from .kdigo_aki import load_kdigo_aki
+                from .scores.kdigo_aki import load_kdigo_aki
                 aki_df = load_kdigo_aki(
                     database=database, data_path=str(data_path) if data_path else None,
                     patient_ids=patient_ids if isinstance(patient_ids, list) else None,
@@ -1435,7 +1435,7 @@ def load_concepts(
                 logger.warning(f"load_kdigo_aki failed: {e}")
         if _need_circ:
             try:
-                from .circ_failure import load_circ_failure
+                from .scores.circ_failure import load_circ_failure
                 cf_df = load_circ_failure(
                     database=database, data_path=str(data_path) if data_path else None,
                     max_patients=max_patients,
@@ -1458,7 +1458,7 @@ def load_concepts(
             # 'charlson' -> charlson_index, 'elixhauser' -> elixhauser_vw.
             # The full per-condition flags remain available via
             # easyicu.comorbidity.load_comorbidity(...).
-            from .comorbidity import load_comorbidity
+            from .scores.comorbidity import load_comorbidity
             _comorb_index_col = {'charlson': 'charlson_index',
                                  'elixhauser': 'elixhauser_vw'}
             for c in _need_comorb:
@@ -1481,7 +1481,7 @@ def load_concepts(
                     col = como[id_cols + [src_col]].rename(columns={src_col: c})
                     special_dict[c] = col.copy()
         if _need_outcome:
-            from .outcomes import load_outcomes
+            from .scores.outcomes import load_outcomes
             try:
                 oc = load_outcomes(
                     database, data_path=str(data_path) if data_path else None,
@@ -1500,7 +1500,7 @@ def load_concepts(
                     if c in oc.columns and id_cols:
                         special_dict[c] = oc[id_cols + [c]].copy()
         if _need_micro:
-            from .microbiology import load_microbiology
+            from .scores.microbiology import load_microbiology
             try:
                 mic = load_microbiology(
                     database, data_path=str(data_path) if data_path else None,
@@ -3429,7 +3429,7 @@ def _get_default_db_path(database: str) -> Optional[str]:
     if not _root:
         return None
     try:
-        from easyicu.data_paths import find_database_path
+        from easyicu.io.data_paths import find_database_path
         path = find_database_path(_root, database)
     except ImportError:
         path = os.path.join(_root, database)
@@ -3625,7 +3625,7 @@ def _extract_special_worker(
             # shared sep3()/sep3_sofa2() so both labels match load_sepsis3 and the
             # module export (unified to delta 2026-06-22).
             if need_sofa1 and 'sofa' in merged.columns:
-                from .sepsis import sep3 as _sep3
+                from .scores.sepsis import sep3 as _sep3
                 result = _sep3(
                     merged[[id_col, time_col, 'sofa']],
                     merged[[id_col, time_col, 'susp_inf']],
@@ -3639,7 +3639,7 @@ def _extract_special_worker(
                     saved['sep3_sofa1'] = {'path': path, 'rows': len(result)}
 
             if need_sofa2 and 'sofa2' in merged.columns:
-                from .sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
+                from .scores.sepsis_sofa2 import sep3_sofa2 as _sep3_sofa2
                 result = _sep3_sofa2(
                     merged[[id_col, time_col, 'sofa2']],
                     merged[[id_col, time_col, 'susp_inf']],
@@ -3737,7 +3737,7 @@ def extract_database(
     import time
     import shutil
 
-    from .memory_manager import get_rss_mb, get_available_memory_mb
+    from .runtime.memory_manager import get_rss_mb, get_available_memory_mb
 
     t_start = time.time()
 

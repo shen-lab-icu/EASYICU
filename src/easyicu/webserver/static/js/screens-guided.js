@@ -121,18 +121,17 @@
     },
     full: {
       label: 'Full study', goal: 'draft',
-      chip: 'All the way to a gated draft',
+      chip: 'All the way to a review-ready draft',
       hi: bi(
-        `The full ride — <strong>extract → review → analyse → gated draft</strong>. Everything runs locally and the draft stays locked until checks pass.`,
-        `完整流程：<strong>抽取 → 审阅 → 分析 → 受控草稿</strong>。所有步骤都在本机运行，检查通过前草稿保持锁定。`,
+        `The full ride — <strong>extract → review → analyse → review-ready draft</strong>. Everything runs locally and the draft stays locked until checks pass.`,
+        `完整流程：<strong>抽取 → 审阅 → 分析 → 待核验草稿</strong>。所有步骤都在本机运行，检查通过前草稿保持锁定。`,
       ),
     },
   };
 
   /* ============== runtime state ============== */
   let branch, depth, dataMode, mods, cohortPhase, extractPhase, runPhase, draftPhase;
-  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedExtract, guidedReview, guidedAgent, guidedIdea;
-  let guidedHistory = { loading: false, error: null, data: null };
+  let thread, chips, busy, expandedStep, whyOpen, autop, patientN, clarified, outputsReady, diffExpanded, liveAgentRun, workspaceSnapshot, workspaceSnapshotPath, guidedExtract, guidedReview, guidedAgent, guidedIdea, guidedIdeaProvider, guidedLiteratureBrowser;
   let guidedDrafts = { loading: false, error: null, data: null };
   let guidedCopilot = { loading: false, error: null, session: null, last: null };
   let selectedGuidedRun = null;
@@ -142,6 +141,7 @@
   let guidedFolderDialogMode = null;
   let guidedFolderSeedTitle = 'New local study';
   let guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
+  let guidedKnownProjectsOpen = false;
   let guidedSlotSaveTimer = null;
   let studyParams;   // dynamic params extracted from clarify answers + free text
 
@@ -181,12 +181,13 @@
   function reset() {
     branch = 'predict'; depth = 'full'; dataMode = 'demo'; mods = DEFAULT_MODS.slice();
     cohortPhase = 'normal'; extractPhase = 'run'; runPhase = 'run'; draftPhase = 'gate';
-    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null; guidedReview = null; guidedAgent = null; guidedIdea = null;
+    thread = []; chips = []; busy = false; expandedStep = 'question'; whyOpen = {}; autop = false; patientN = 10; clarified = null; outputsReady = false; diffExpanded = false; liveAgentRun = null; workspaceSnapshot = null; workspaceSnapshotPath = null; guidedExtract = null; guidedReview = null; guidedAgent = null; guidedIdea = null; guidedLiteratureBrowser = null;
     pendingGuidedGoal = null;
     guidedFolderMenuOpen = false;
     guidedFolderDialogMode = null;
     guidedFolderSeedTitle = 'New local study';
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
+    guidedKnownProjectsOpen = false;
     studyParams = { outcome: 'In-hospital mortality', window: 'full available window', exposure: 'lactate', scope: 'all 19 modules', caught: null };
     studyStatus = {}; studyVal = {};
     gen++;
@@ -252,6 +253,11 @@
     const match = text.match(/^\/Users\/[^/]+\/(.+)$/);
     return match ? '~/' + match[1] : text;
   }
+  function compactHash(value) {
+    const text = String(value || '');
+    if (!text) return '';
+    return text.length > 14 ? `${text.slice(0, 8)}...${text.slice(-6)}` : text;
+  }
   function fmtRunTime(value) {
     if (!value) return '';
     const d = new Date(String(value));
@@ -285,7 +291,7 @@
       return [
         ['Resolve export source', 'done'],
         ['Summarise cohort snapshot', 'done'],
-        ['Evaluate evidence gate', 'done'],
+        ['Evaluate evidence checks', 'done'],
         ['Write local artifacts', 'done'],
       ];
     }
@@ -1027,7 +1033,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const checks = Array.isArray(gate.checks) ? gate.checks : [];
         return cardShell('draft', 'shield', 'Preflight complete · draft locked', gate.status || 'analysis_only', `
           <div class="m-bubble" style="background:var(--surface-2);border:1px solid var(--hair);font-size:12.25px;margin-bottom:12px;">Local preflight finished for <span class="mono">${esc(live.run_id || 'run')}</span>. <span style="color:var(--ink-4);">No external model call, no uploads, and no patient rows persisted. Manuscript claims remain locked.</span></div>
-          <div class="eyebrow" style="margin:0 0 8px;">Evidence gate</div>
+          <div class="eyebrow" style="margin:0 0 8px;">Evidence checks</div>
           <div class="checks">
             ${checks.map(c => `<div class="check-row ${c.passed ? 'ok' : 'pending'}"><span class="check-mk">${c.passed ? icon('check', 11, 2.8) : icon('clock', 11)}</span><span style="font-size:11.75px;color:${c.passed ? 'var(--ink)' : 'var(--ink-3)'};">${esc(c.label || c.id)}</span><span class="grow"></span><span class="mono" style="font-size:10px;color:${c.passed ? 'var(--ok)' : 'var(--ink-4)'};">${c.passed ? 'passed' : 'pending'}</span></div>`).join('')}
           </div>`,
@@ -1035,7 +1041,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
            <button class="btn sm" data-act="open">${icon('grid', 13)} Open workspace</button>`);
       }
       if (draftPhase === 'signed') {
-        return cardShell('draft', 'check', 'Study assembled', 'gated draft unlocked', `
+        return cardShell('draft', 'check', 'Study assembled', 'draft unlocked after checks', `
           <div class="col gap-6" style="font-size:12px;">
             <div class="setup-row"><span class="k">Data</span><span class="vv">${patientN} stays · ${mods.length} modules</span></div>
             <div class="setup-row"><span class="k">Analysis</span><span class="vv">5 steps · 6 artifacts</span></div>
@@ -1048,7 +1054,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       }
       return cardShell('draft', 'shield', 'Findings drafted · review required', 'evidence-bound', `
         <div class="m-bubble" style="background:var(--surface-2);border:1px solid var(--hair);font-size:12.25px;margin-bottom:12px;">${b.findings}</div>
-        <div class="eyebrow" style="margin:0 0 8px;">Evidence gate</div>
+        <div class="eyebrow" style="margin:0 0 8px;">Evidence checks</div>
         <div class="checks">
           ${[['Denominators resolved', true], ['Coverage ≥ threshold', true], ['Reproduces from manifest', true], ['Model card attached', true], ['Reviewer sign-off', false]].map(([t, ok]) => `<div class="check-row ${ok ? 'ok' : 'pending'}"><span class="check-mk">${ok ? icon('check', 11, 2.8) : icon('clock', 11)}</span><span style="font-size:11.75px;color:${ok ? 'var(--ink)' : 'var(--ink-3)'};">${t}</span><span class="grow"></span><span class="mono" style="font-size:10px;color:${ok ? 'var(--ok)' : 'var(--ink-4)'};">${ok ? 'passed' : 'pending'}</span></div>`).join('')}
         </div>`,
@@ -1574,7 +1580,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           ${groups.map((g, i) => `<div class="gdr-km-row"><span class="line c${i % 4}"></span><strong>${esc(g.label || `Group ${i + 1}`)}</strong><em>n ${fmtInt(g.n)} · events ${fmtInt(g.events)}</em></div>`).join('')}
         </div>
         ${times.length && rows.length ? `<div class="gdr-risk"><strong>${t('Number at risk', '风险人数表')}</strong><table><thead><tr><th>Group</th>${times.map(x => `<th>${fmtNum(x)}d</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.label)}</td>${(row.values || []).map(v => `<td>${fmtInt(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : ''}
-        <div class="gdr-note">${t('Exploratory aggregate only. Manuscript claims still need Agent evidence gate and human review.', '仅为探索性聚合结果。论文结论仍需 Agent evidence gate 和人工审阅。')}</div>
+        <div class="gdr-note">${t('Exploratory aggregate only. Manuscript claims still need Agent evidence checks and human review.', '仅为探索性聚合结果。论文结论仍需 Agent 证据核验和人工审阅。')}</div>
       </div>`;
   }
   function renderGuidedCohortPanel(cohort) {
@@ -1686,7 +1692,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           <span class="gdx-ico">${icon('agent', 15)}</span>
           <div>
             <strong>${t('Run Agent preflight inside Copilot', '在 Copilot 内运行 Agent 预检')}</strong>
-            <span>${t('Same /api/jobs/agent-run path as Agent Projects, defaulting to local mock/preflight and evidence gate.', '复用 Agent Projects 相同的 /api/jobs/agent-run，默认本地 mock/preflight 与 evidence gate。')}</span>
+            <span>${t('Same /api/jobs/agent-run path as Agent Projects, defaulting to local mock/preflight and evidence checks.', '复用 Agent Projects 相同的 /api/jobs/agent-run，默认本地 mock/preflight 与证据核验。')}</span>
           </div>
         </div>
         <label class="gda-question">
@@ -1704,7 +1710,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         ${guidedAgent.result ? `<div class="gda-result">
           ${guidedMetricCard(t('Run type', '运行类型'), result.run_type || 'preflight')}
           ${guidedMetricCard(t('Reportable', '可报告'), result.reportable ? 'true' : 'false', t('Draft remains locked until sign-off.', '签署前草稿保持锁定。'))}
-          ${guidedMetricCard(t('Gate', '证据闸'), gate.status || 'analysis_only', gate.reason || '')}
+          ${guidedMetricCard(t('Evidence check', '证据核验'), gate.status || 'analysis_only', gate.reason || '')}
           ${guidedMetricCard(t('Artifacts', 'Artifacts'), fmtInt(artCount), result.project_dir ? compactPath(result.project_dir) : '')}
         </div>` : ''}
         <div class="gdx-actions">
@@ -1796,9 +1802,18 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       doi: '',
       pmid: '',
       url: '',
+      sourceFileName: '',
+      sourceFileSha256: '',
+      sourceFileBytes: 0,
+      sourceFilePages: 0,
+      literatureFolder: '',
+      literaturePdfCount: 0,
       allowNetwork: false,
       planEdits: '',
       resolving: false,
+      pdfIngesting: false,
+      literatureScanning: false,
+      discovering: false,
       mining: false,
       priorArting: false,
       handoffing: false,
@@ -1808,8 +1823,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       prior: null,
       handoff: null,
       project: null,
+      pdf: null,
+      literatureScan: null,
+      discovery: null,
       error: null,
     };
+    guidedIdeaProvider = { provider: 'openai', loading: false, error: null, status: null };
+    guidedLiteratureBrowser = { open: false, loading: false, error: null, data: null, path: '' };
   }
   function startGuidedIdeaFlow(label) {
     if (label) pushUser(label);
@@ -1817,8 +1837,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     setVal({ question: 'idea mining', analysis: 'not started', draft: 'locked' });
     markThrough('question', 'active');
     thread.push({ bot: true, html: bi(
-      `We can mine a research idea here, without leaving Copilot. Paste a paper clue, PDF excerpt, review topic, or manual idea; I’ll create a local evidence-bound idea ledger, check the active export, and prepare a handoff for Agent Projects.`,
-      `可以直接在 Copilot 里挖掘研究想法。粘贴文章线索、PDF 摘录、综述主题或手动想法后，我会生成本地 evidence-bound idea ledger，检查 active export，并准备交接给 Agent Projects。`,
+      `We can mine a research idea here, without leaving Copilot. Choose a local PDF, scan a local literature folder, paste a paper clue, or describe the topic; I’ll create a local evidence-bound idea ledger, check the active export, and prepare a handoff for Agent Projects.`,
+      `可以直接在 Copilot 里挖掘研究想法。选择本地 PDF、扫描本地文献库文件夹、粘贴文章线索，或描述主题后，我会生成本地 evidence-bound idea ledger，检查 active export，并准备交接给 Agent Projects。`,
     ) });
     thread.push({ guidedIdea: true });
     chips = [];
@@ -1838,12 +1858,38 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       doi: String(guidedIdea.doi || '').trim(),
       pmid: String(guidedIdea.pmid || '').trim(),
       url: String(guidedIdea.url || '').trim(),
+      source_file_name: String(guidedIdea.sourceFileName || '').trim(),
+      source_file_sha256: String(guidedIdea.sourceFileSha256 || '').trim(),
+      literature_folder: String(guidedIdea.literatureFolder || '').trim(),
+      literature_pdf_count: Number(guidedIdea.literaturePdfCount || 0),
       allow_network: !!guidedIdea.allowNetwork,
     };
   }
   function guidedIdeaHasInput() {
     const p = guidedIdeaPayload();
-    return !!(p.topic || p.excerpt || p.title || p.url || p.doi || p.pmid);
+    return !!(p.topic || p.excerpt || p.title || p.url || p.doi || p.pmid || p.source_file_sha256 || p.literature_folder);
+  }
+  function applyGuidedIdeaSuggestion(suggested) {
+    if (!guidedIdea || !suggested) return;
+    const scalarMap = {
+      topic: 'topic',
+      excerpt: 'excerpt',
+      title: 'title',
+      journal: 'journal',
+      year: 'year',
+      doi: 'doi',
+      pmid: 'pmid',
+      url: 'url',
+      source_file_name: 'sourceFileName',
+      source_file_sha256: 'sourceFileSha256',
+      literature_folder: 'literatureFolder',
+    };
+    Object.entries(scalarMap).forEach(([from, to]) => {
+      if (!guidedIdea[to] && suggested[from]) guidedIdea[to] = String(suggested[from]);
+    });
+    if (!guidedIdea.literaturePdfCount && suggested.literature_pdf_count != null) {
+      guidedIdea.literaturePdfCount = Number(suggested.literature_pdf_count || 0);
+    }
   }
   function guidedIdeaSelected() {
     const result = guidedIdea && guidedIdea.result;
@@ -1854,6 +1900,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function guidedIdeaStatusText() {
     if (!guidedIdea) return '';
     if (guidedIdea.resolving) return t('Resolving bounded source metadata...', '正在解析有界来源元数据...');
+    if (guidedIdea.discovering) return t('Searching opt-in PubMed metadata and mapping candidate ideas...', '正在按 opt-in 检索 PubMed 元数据并映射候选 idea...');
     if (guidedIdea.mining) return t('Mining local idea ledger and active-export feasibility...', '正在生成本地 idea ledger 并检查 active export 可行性...');
     if (guidedIdea.priorArting) return t('Checking prior art under explicit opt-in rules...', '正在按显式 opt-in 规则检查 prior art...');
     if (guidedIdea.handoffing) return t('Writing local handoff plan...', '正在写入本地 handoff plan...');
@@ -1861,9 +1908,209 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     if (guidedIdea.error) return esc(guidedIdea.error);
     if (guidedIdea.project) return t('Agent project seed created from the idea handoff.', '已从 idea handoff 创建 Agent project seed。');
     if (guidedIdea.handoff) return t('Handoff written. You can create an Agent project seed next.', 'handoff 已写入。下一步可创建 Agent project seed。');
-    if (guidedIdea.result) return t('Idea ledger and pre-experiment are ready.', 'idea ledger 与预实验已生成。');
+    if (guidedIdea.result) return t('Local idea ledger and pre-experiment are ready; API-backed checks remain gated until configured.', '本地 idea ledger 与预实验已生成；需要 API 的检查仍会在配置前保持阻断。');
     if (guidedIdea.resolved) return t('Source metadata resolved. Run local mining next.', '来源元数据已解析。下一步运行本地挖掘。');
     return t('Add a source clue or topic, then run local mining.', '先添加来源线索或主题，然后运行本地挖掘。');
+  }
+  function requestGuidedIdeaProviderStatus(force) {
+    if (!guidedIdeaProvider) guidedIdeaProvider = { provider: 'openai', loading: false, error: null, status: null };
+    if (!window.EU_API || !window.EU_API.loadAgentProviderStatus) return;
+    if (!force && (guidedIdeaProvider.loading || guidedIdeaProvider.status || guidedIdeaProvider.error)) return;
+    guidedIdeaProvider = Object.assign({}, guidedIdeaProvider, { loading: true, error: null });
+    window.EU_API.loadAgentProviderStatus(guidedIdeaProvider.provider || 'openai').then(data => {
+      guidedIdeaProvider = Object.assign({}, guidedIdeaProvider, {
+        loading: false,
+        error: null,
+        status: (data && data.provider_status) || data || null,
+      });
+      renderThread();
+    }).catch(err => {
+      guidedIdeaProvider = Object.assign({}, guidedIdeaProvider, {
+        loading: false,
+        error: err && err.message ? err.message : String(err || 'provider_status_error'),
+        status: null,
+      });
+      renderThread();
+    });
+  }
+  function renderGuidedIdeaCapabilityPanel() {
+    if (!guidedIdeaProvider) guidedIdeaProvider = { provider: 'openai', loading: false, error: null, status: null };
+    const st = guidedIdeaProvider.status || {};
+    const envFile = st.env_file || {};
+    const missing = Array.isArray(st.missing) ? st.missing : [];
+    const ready = !!st.ready;
+    const aiOn = !!st.ai_enabled;
+    const keyReady = !!st.credential_present;
+    const modelReady = !!st.model_present;
+    const envStatus = envFile.status || 'not_loaded';
+    const blocked = missing.length ? missing.join(', ') : (ready ? '' : t('provider not ready', 'provider 未就绪'));
+    const providers = [
+      ['openai', 'OpenAI'],
+      ['openrouter', 'OpenRouter'],
+      ['deepseek', 'DeepSeek'],
+      ['custom', 'Custom/local'],
+    ];
+    return `
+      <div class="gdx-status ${ready ? 'ok' : 'warn'}">
+        <span>${icon(ready ? 'check' : 'shield', 12)}</span>
+        <div>
+          <strong>${t('Capability boundary', '能力边界')}</strong>
+          <small>${t('Local source parsing, dictionary matching, active-export feasibility, and handoff can run without an API. Prior-art search and AI synthesis require explicit opt-in and provider readiness.', '本地来源解析、字典匹配、active export 可行性和交接不需要 API。既有研究检索和 AI 综合必须显式 opt-in 且 provider 就绪。')}</small>
+        </div>
+      </div>
+      <div class="gdi-feature-list">
+        <div class="gdi-feature-row">
+          <div><strong>${t('Local deterministic mining', '本地确定性挖掘')}</strong><small>${t('PDF/folder bounded excerpt, dictionary feasibility, pre-experiment, Agent handoff seed', 'PDF/文件夹有界摘录、字典可行性、预实验、Agent 交接种子')}</small></div>
+          <span class="pill ok">${t('available now', '当前可用')}</span>
+        </div>
+        <div class="gdi-feature-row">
+          <div><strong>${t('Network prior-art check', '联网既有研究检查')}</strong><small>${t('Runs only after the per-source network checkbox is selected; no request is made otherwise.', '只有勾选当前来源的网络 opt-in 后才会请求；否则不会联网。')}</small></div>
+          <span class="pill ${guidedIdea && guidedIdea.allowNetwork ? 'warn' : 'dashed'}">${guidedIdea && guidedIdea.allowNetwork ? t('armed for one request', '已允许一次请求') : t('blocked until opt-in', '等待 opt-in')}</span>
+        </div>
+        <div class="gdi-feature-row">
+          <div><strong>${t('AI synthesis / full Agent provider', 'AI 综合 / full Agent provider')}</strong><small>${ready ? t('Provider readiness passed. A later Agent run still needs per-run confirmation and evidence checks.', 'provider 已就绪。后续 Agent run 仍需要逐次确认和证据核验。') : t('Blocked: configure AI opt-in, API key, model, and endpoint before any provider call.', '已阻断：需要配置 AI opt-in、API key、模型和端点后才允许 provider 调用。')}</small></div>
+          <span class="pill ${ready ? 'ok' : 'warn'}">${ready ? t('ready', '就绪') : esc(blocked)}</span>
+        </div>
+      </div>
+      <div class="gdi-feature-list">
+        <div class="gdi-feature-row">
+          <div><strong>${t('Provider', 'Provider')}</strong><small>${esc(guidedIdeaProvider.provider || st.provider || 'openai')}</small></div>
+          <span>${guidedIdeaProvider.loading ? t('checking...', '检查中...') : ready ? t('ready', '就绪') : t('blocked', '受阻')}</span>
+        </div>
+        <div class="gdi-feature-row">
+          <div><strong>${t('Readiness flags', '就绪标记')}</strong><small>${t('Only variable names and booleans are shown; secret values and base URL values are never returned.', '只显示变量名和布尔值；密钥值和 base URL 值不会返回。')}</small></div>
+          <span class="gdi-tags">
+            <code>AI ${aiOn ? 'on' : 'off'}</code>
+            <code>key ${keyReady ? 'present' : 'missing'}</code>
+            <code>model ${modelReady ? 'present' : 'missing'}</code>
+          </span>
+        </div>
+        <div class="gdi-feature-row">
+          <div><strong>${t('Env sources', '环境变量来源')}</strong><small>${t('Sanitized provider status from Agent provider readiness.', '来自 Agent provider readiness 的脱敏状态。')}</small></div>
+          <span class="gdi-tags">
+            <code>${esc(st.credential_source || (st.credential_env_candidates || [])[0] || 'credential env')}</code>
+            <code>${esc(st.model_source || (st.model_env_candidates || [])[0] || 'model env')}</code>
+            <code>${esc(st.base_url_source || (st.base_url_env_candidates || [])[0] || 'base_url env')}</code>
+            <code>${esc(envStatus)}</code>
+          </span>
+        </div>
+        ${guidedIdeaProvider.error ? `<div class="gdi-feature-row"><div><strong>${t('Provider status unavailable', 'provider 状态不可用')}</strong><small>${esc(guidedIdeaProvider.error)}</small></div><span class="pill warn">error</span></div>` : ''}
+      </div>
+      <div class="gdx-actions">
+        ${providers.map(([p, label]) => `<button type="button" class="btn sm ${guidedIdeaProvider.provider === p ? 'primary' : ''}" data-gi-provider="${p}">${esc(label)}</button>`).join('')}
+        <button type="button" class="btn sm" data-gi-provider-refresh>${icon('refresh', 12)} ${t('Check API status', '检查 API 状态')}</button>
+        <button type="button" class="btn sm" data-open="settings">${icon('gear', 12)} ${t('Configure in Settings', '去设置中配置')}</button>
+      </div>`;
+  }
+  function renderGuidedIdeaPdfPicker() {
+    const pdf = guidedIdea && guidedIdea.pdf;
+    const status = guidedIdea && guidedIdea.pdfIngesting
+      ? t('Reading selected PDF...', '正在读取选中的 PDF...')
+      : pdf
+        ? `${pdf.filename || guidedIdea.sourceFileName || 'PDF'} · ${fmtInt(pdf.page_count, '?')} ${t('pages', '页')} · ${compactHash(pdf.sha256 || guidedIdea.sourceFileSha256)}`
+        : t('Choose a local PDF. Only a bounded excerpt and SHA-256 hash are kept; full text is not stored.', '选择本地 PDF。只保留有界摘录和 SHA-256 哈希，不保存全文。');
+    return `
+      <div class="gdx-status ${pdf ? 'ok' : ''}">
+        <input type="file" accept="application/pdf,.pdf" data-gi-pdf-file hidden />
+        <span>${icon(pdf ? 'check' : 'file', 12)}</span>
+        <div><strong>${esc(status)}</strong><small>${t('The browser reads the file locally and sends bounded metadata to the local EasyICU server.', '浏览器在本机读取文件，并只把有界元数据交给本机 EasyICU 服务。')}</small></div>
+        <button type="button" class="btn sm" data-gi-pdf-pick ${guidedIdea.pdfIngesting ? 'disabled' : ''}>${icon('folder', 12)} ${pdf ? t('Choose another PDF', '换一个 PDF') : t('Choose PDF', '选择 PDF')}</button>
+      </div>
+      ${pdf && pdf.excerpt ? `<div class="gdi-muted">${t('Extracted excerpt', '已提取摘录')} · ${fmtInt(pdf.excerpt_char_count, '0')} chars</div>` : ''}`;
+  }
+  function renderGuidedLiteratureBrowser() {
+    const browser = guidedLiteratureBrowser || {};
+    if (!browser.open) return '';
+    const data = browser.data || {};
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    const shortcuts = Array.isArray(data.shortcuts) ? data.shortcuts : [];
+    const currentPath = data.path || browser.path || '';
+    const parent = data.parent || '';
+    const failed = browser.error || (data && data.ok === false ? data.error : '');
+    return `
+      <div class="gds-browser" data-guided-literature-browser>
+        <div class="gds-browser-head">
+          <div>
+            <strong>${t('Literature folder picker', '文献库文件夹选择器')}</strong>
+            <span>${t('Browse local folders through EasyICU. Select a folder that contains downloaded PDFs.', '通过 EasyICU 浏览本地文件夹。请选择包含已下载 PDF 的文件夹。')}</span>
+          </div>
+          <button class="btn sm ghost" type="button" data-lit-browser-close>${icon('close', 12)}</button>
+        </div>
+        <div class="gds-browser-path"><span>${t('Current', '当前')}</span><code>${esc(compactPath(currentPath) || t('Home folder', '主目录'))}</code></div>
+        ${shortcuts.length ? `<div class="gds-browser-shortcuts">${shortcuts.map((item, i) => `
+          <button class="btn sm" type="button" data-lit-browser-shortcut="${i}">${esc(item.name || 'Folder')}</button>`).join('')}</div>` : ''}
+        ${failed ? `<div class="gds-browser-message warn">${icon('info', 12)} <span>${esc(String(failed))}</span></div>` : ''}
+        <div class="gds-browser-list">
+          ${browser.loading ? `<div class="gds-browser-empty">${icon('refresh', 13)} ${t('Loading folders...', '正在加载文件夹...')}</div>` : ''}
+          ${!browser.loading && !entries.length ? `<div class="gds-browser-empty">${t('No child folders here. You can still choose the current folder.', '这里没有下级文件夹。也可以直接选择当前文件夹。')}</div>` : ''}
+          ${!browser.loading && entries.map((entry, i) => `
+            <button class="gds-browser-row" type="button" data-lit-browser-entry="${i}">
+              <span class="gds-ico">${icon('folder', 13)}</span>
+              <span><strong>${esc(entry.name || 'Folder')}</strong><code>${esc(compactPath(entry.path || ''))}</code></span>
+              ${entry.hint ? `<em>${esc(entry.hint)}</em>` : ''}
+            </button>`).join('')}
+        </div>
+        <div class="gds-browser-actions">
+          <button class="btn sm" type="button" data-lit-browser-up ${parent ? '' : 'disabled'}>${icon('back', 12)} ${t('Up', '上一级')}</button>
+          <span class="grow"></span>
+          <button class="btn primary sm" type="button" data-lit-browser-use ${currentPath ? '' : 'disabled'}>${icon('check', 12)} ${t('Use this folder', '选择此文件夹')}</button>
+        </div>
+      </div>`;
+  }
+  function renderGuidedIdeaLiteraturePicker() {
+    const scan = guidedIdea && guidedIdea.literatureScan;
+    const docs = scan && Array.isArray(scan.documents) ? scan.documents.slice(0, 4) : [];
+    return `
+      <div class="gdi-field wide">
+        <span>${t('Local literature folder', '本地文献库文件夹')}</span>
+        <div class="path-field">
+          <span class="pf-path">${esc(guidedIdea.literatureFolder || t('Choose a folder containing local PDFs', '选择一个包含本地 PDF 的文件夹'))}</span>
+          <button type="button" class="btn sm" data-gi-lit-browse>${icon('folder', 12)} ${t('Browse...', '浏览...')}</button>
+        </div>
+        <input data-gi-field="literatureFolder" value="${attr(guidedIdea.literatureFolder || '')}" placeholder="${attr(t('Optional: paste a folder path if browser selection is unavailable', '可选：如果浏览器选择不可用，可以粘贴文件夹路径'))}" />
+      </div>
+      <div class="gdx-actions">
+        <button type="button" class="btn primary" data-gi-lit-scan ${guidedIdea.literatureScanning ? 'disabled' : ''}>${icon('search', 13)} ${guidedIdea.literatureScanning ? t('Scanning PDFs...', '正在扫描 PDF...') : t('Scan literature folder', '扫描文献库文件夹')}</button>
+      </div>
+      ${renderGuidedLiteratureBrowser()}
+      ${scan ? `<div class="gdx-status ok">
+        <span>${icon('check', 12)}</span>
+        <div><strong>${fmtInt((scan.folder || {}).pdf_count, 0)} ${t('PDFs found', '个 PDF 已发现')}</strong><small>${esc(compactPath((scan.folder || {}).path || guidedIdea.literatureFolder || ''))}</small></div>
+      </div>` : ''}
+      ${docs.length ? `<div class="gdi-feature-list">${docs.map(doc => `<div class="gdi-feature-row"><div><strong>${esc(doc.title || doc.filename || 'PDF')}</strong><small>${esc(compactPath(doc.path || doc.filename || ''))}</small></div><span>${compactHash(doc.sha256 || '')}</span></div>`).join('')}</div>` : ''}`;
+  }
+  function renderGuidedIdeaDiscovery() {
+    const discovery = guidedIdea && guidedIdea.discovery;
+    if (!discovery && guidedIdea && guidedIdea.sourceType !== 'frontier') return '';
+    const candidates = discovery && Array.isArray(discovery.idea_candidates) ? discovery.idea_candidates.slice(0, 6) : [];
+    const queries = discovery && Array.isArray(discovery.queries_to_run) ? discovery.queries_to_run.slice(0, 4) : [];
+    return `
+      <div class="gdi-prior">
+        <div class="gdi-ledger-title">
+          <div>
+            <span class="gdx-label">${t('Literature discovery', '文献发现')}</span>
+            <strong>${esc((discovery && discovery.status) || t('not searched yet', '尚未检索'))}</strong>
+          </div>
+          <button type="button" class="btn sm ${guidedIdea && guidedIdea.allowNetwork ? 'primary' : ''}" data-gi-discover ${guidedIdea && guidedIdea.discovering ? 'disabled' : ''}>${guidedIdea && guidedIdea.discovering ? '<span class="spin"></span>' : icon('search', 12)} ${t('Discover papers', '检索文章')}</button>
+        </div>
+        <p>${esc((discovery && discovery.reason) || t('Use this for frontier/review topics. It searches PubMed metadata only after network opt-in, then maps candidate ideas to the EasyICU dictionary and active export.', '用于前沿/review 主题。只有勾选网络 opt-in 后才检索 PubMed 元数据，然后把候选 idea 映射到 EasyICU 字典和当前导出。'))}</p>
+        ${queries.length ? `<div class="gdi-query-list">${queries.map(q => `<code>${esc(q)}</code>`).join('')}</div>` : ''}
+        ${candidates.length ? `<div class="gdi-feature-list">
+          ${candidates.map((row, i) => {
+            const idea = row.idea || {};
+            const src = row.source || {};
+            const feas = idea.feasibility || {};
+            return `<div class="gdi-feature-row">
+              <div>
+                <strong>${esc(idea.idea_title || src.title || 'Candidate idea')}</strong>
+                <small>${esc([src.year, src.journal, src.pmid ? 'PMID ' + src.pmid : ''].filter(Boolean).join(' · '))}</small>
+              </div>
+              <span class="pill ${feas.tier === 'executable' ? 'ok' : 'warn'}">${esc(feas.tier || idea.go_no_go || 'review')}</span>
+              <button type="button" class="btn sm" data-gi-discovery-use="${i}">${t('Use', '使用')}</button>
+            </div>`;
+          }).join('')}
+        </div>` : ''}
+      </div>`;
   }
   function renderGuidedIdeaSourceFields() {
     if (!guidedIdea) resetGuidedIdeaState();
@@ -1871,7 +2118,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const tabs = [
       ['manual', t('Manual idea', '手动想法')],
       ['url', t('Article URL', '文章链接')],
-      ['pdf', t('PDF excerpt', 'PDF 摘录')],
+      ['pdf', t('PDF file', 'PDF 文件')],
+      ['literature_folder', t('Literature folder', '文献库文件夹')],
       ['frontier', t('Frontier topic', '前沿主题')],
     ];
     return `
@@ -1887,6 +2135,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           <span>${t('Source quote or PDF excerpt', '来源句子或 PDF 摘录')}</span>
           <textarea rows="3" data-gi-field="excerpt" placeholder="${attr(t('Paste only the sentence(s) that motivated the idea; do not paste a full paper.', '只粘贴触发想法的句子；不要粘贴全文。'))}">${esc(guidedIdea.excerpt || '')}</textarea>
         </label>
+        ${tab === 'pdf' ? renderGuidedIdeaPdfPicker() : ''}
+        ${tab === 'literature_folder' ? renderGuidedIdeaLiteraturePicker() : ''}
+        ${tab === 'frontier' ? renderGuidedIdeaDiscovery() : ''}
         <div class="gdi-meta-grid">
           <label class="gdi-field"><span>Title</span><input data-gi-field="title" value="${attr(guidedIdea.title || '')}" placeholder="${attr(t('Article or review title', '文章或综述标题'))}" /></label>
           <label class="gdi-field"><span>Journal</span><input data-gi-field="journal" value="${attr(guidedIdea.journal || '')}" placeholder="e.g. Intensive Care Medicine" /></label>
@@ -1982,7 +2233,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           <div><span class="gdx-label">Prior-art check</span><strong>${esc(prior.status || 'not checked')}</strong></div>
           <button type="button" class="btn sm" data-gi-prior ${guidedIdea.priorArting ? 'disabled' : ''}>${icon('search', 12)} ${t('Check prior art', '检查既有研究')}</button>
         </div>
-        <p>${esc(prior.reason || t('Optional network metadata search. It stays blocked until you explicitly opt in.', '可选网络元数据搜索。未显式 opt-in 前保持阻断。'))}</p>
+        <p>${esc(prior.reason || t('Optional bounded network metadata search. It does not use an LLM provider, and it stays blocked until you explicitly opt in for this source.', '可选有界网络元数据搜索。它不使用 LLM provider，且在当前来源显式 opt-in 前保持阻断。'))}</p>
         ${queries.length ? `<div class="gdi-query-list">${queries.slice(0, 4).map(q => `<code>${esc(q)}</code>`).join('')}</div>` : ''}
         ${results.length ? `<div class="gdi-feature-list">${results.slice(0, 5).map(row => `<div class="gdi-feature-row"><div><strong>${esc(row.title || 'result')}</strong><small>${esc([row.year, row.journal, row.pmid].filter(Boolean).join(' · '))}</small></div><span>${esc(row.database || '')}</span></div>`).join('')}</div>` : ''}
       </div>`;
@@ -2012,6 +2263,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   }
   function renderGuidedIdeaCard() {
     if (!guidedIdea) resetGuidedIdeaState();
+    requestGuidedIdeaProviderStatus(false);
     const idea = guidedIdeaSelected();
     const result = guidedIdea.result;
     const miningBlocked = guidedIdea.mining || guidedIdea.resolving;
@@ -2025,9 +2277,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           </div>
         </div>
         ${renderGuidedIdeaSourceFields()}
+        ${renderGuidedIdeaCapabilityPanel()}
         <div class="gdx-status ${guidedIdea.error ? 'bad' : result ? 'ok' : ''}">
           <span>${icon(guidedIdea.error ? 'x' : result ? 'check' : 'shield', 12)}</span>
-          <div><strong>${guidedIdeaStatusText()}</strong><small>${t('No patient rows, full papers, or external calls unless you explicitly opt in.', '不会返回患者行、全文或外部调用，除非你显式 opt-in。')}</small></div>
+          <div><strong>${guidedIdeaStatusText()}</strong><small>${t('No patient rows, full papers, external calls, or provider clients unless you explicitly opt in and provider readiness passes.', '不会返回患者行、全文、外部调用或 provider client，除非你显式 opt-in 且 provider readiness 通过。')}</small></div>
         </div>
         <div class="gdx-actions">
           <button type="button" class="btn" data-gi-resolve ${guidedIdea.resolving ? 'disabled' : ''}>${icon('search', 13)} ${t('Resolve source', '解析来源')}</button>
@@ -2042,6 +2295,119 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         ${guidedIdea.project ? `<div class="gdx-status ok"><span>${icon('check', 12)}</span><div><strong>${t('Agent project seed created', 'Agent project seed 已创建')}</strong><small>${esc(compactPath((guidedIdea.project.project || {}).project_dir || (guidedIdea.project.project || {}).study_id || ''))}</small></div></div>` : ''}
       </div>`;
   }
+  function loadGuidedLiteratureBrowser(path) {
+    if (!guidedLiteratureBrowser) guidedLiteratureBrowser = { open: false, loading: false, error: null, data: null, path: '' };
+    guidedLiteratureBrowser.open = true;
+    guidedLiteratureBrowser.loading = true;
+    guidedLiteratureBrowser.error = null;
+    guidedLiteratureBrowser.path = String(path || guidedLiteratureBrowser.path || guidedIdea.literatureFolder || '');
+    renderThread();
+    if (!window.EU_API || !window.EU_API.listDir) {
+      guidedLiteratureBrowser.loading = false;
+      guidedLiteratureBrowser.error = t('Local folder picker API is unavailable.', '本地文件夹选择 API 不可用。');
+      renderThread();
+      return;
+    }
+    window.EU_API.listDir(guidedLiteratureBrowser.path)
+      .then(result => {
+        guidedLiteratureBrowser.loading = false;
+        guidedLiteratureBrowser.data = result || {};
+        guidedLiteratureBrowser.path = (result && result.path) || guidedLiteratureBrowser.path || '';
+        guidedLiteratureBrowser.error = result && result.ok === false ? (result.error || 'folder_error') : null;
+        renderThread();
+      })
+      .catch(err => {
+        guidedLiteratureBrowser.loading = false;
+        guidedLiteratureBrowser.error = String(err && err.message || err || 'folder_error');
+        renderThread();
+      });
+  }
+  function ingestGuidedIdeaPdfFile(file) {
+    if (!guidedIdea || !file) return;
+    const name = String(file.name || '');
+    if (!/\.pdf$/i.test(name) && file.type && file.type !== 'application/pdf') {
+      guidedIdea.error = t('Choose a PDF file.', '请选择 PDF 文件。');
+      renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.ingestIdeaPdf) {
+      guidedIdea.error = t('PDF ingestion API is unavailable.', 'PDF 解析 API 不可用。');
+      renderThread();
+      return;
+    }
+    guidedIdea.sourceType = 'pdf';
+    guidedIdea.pdfIngesting = true;
+    guidedIdea.error = null;
+    renderThread();
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result || '');
+      const contentBase64 = text.includes(',') ? text.split(',').pop() : text;
+      window.EU_API.ingestIdeaPdf({ filename: name, content_base64: contentBase64 })
+        .then(result => {
+          guidedIdea.pdfIngesting = false;
+          guidedIdea.pdf = result && result.pdf ? result.pdf : null;
+          if (guidedIdea.pdf) {
+            guidedIdea.sourceFileName = guidedIdea.pdf.filename || name;
+            guidedIdea.sourceFileSha256 = guidedIdea.pdf.sha256 || '';
+            guidedIdea.sourceFileBytes = Number(guidedIdea.pdf.bytes || file.size || 0);
+            guidedIdea.sourceFilePages = Number(guidedIdea.pdf.page_count || 0);
+          }
+          applyGuidedIdeaSuggestion(result && result.suggested_payload);
+          guidedIdea.resolved = result;
+          renderThread();
+          scheduleGuidedSlotSave('ingest_idea_pdf');
+        })
+        .catch(err => {
+          guidedIdea.pdfIngesting = false;
+          guidedIdea.error = err.message || String(err);
+          renderThread();
+          scheduleGuidedSlotSave('ingest_idea_pdf_error');
+        });
+    };
+    reader.onerror = () => {
+      guidedIdea.pdfIngesting = false;
+      guidedIdea.error = t('Could not read the selected PDF file.', '无法读取选中的 PDF 文件。');
+      renderThread();
+    };
+    reader.readAsDataURL(file);
+  }
+  function scanGuidedLiteratureFolder() {
+    if (!guidedIdea || guidedIdea.literatureScanning) return;
+    const path = String(guidedIdea.literatureFolder || '').trim();
+    if (!path) {
+      guidedIdea.error = t('Choose or paste a local literature folder first.', '请先选择或粘贴本地文献库文件夹。');
+      renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.scanIdeaLiteratureFolder) {
+      guidedIdea.error = t('Literature-folder scan API is unavailable.', '文献库文件夹扫描 API 不可用。');
+      renderThread();
+      return;
+    }
+    guidedIdea.sourceType = 'literature_folder';
+    guidedIdea.literatureScanning = true;
+    guidedIdea.error = null;
+    renderThread();
+    window.EU_API.scanIdeaLiteratureFolder({ path })
+      .then(result => {
+        guidedIdea.literatureScanning = false;
+        guidedIdea.literatureScan = result;
+        const folder = (result && result.folder) || {};
+        guidedIdea.literatureFolder = folder.path || path;
+        guidedIdea.literaturePdfCount = Number(folder.pdf_count || 0);
+        applyGuidedIdeaSuggestion(result && result.suggested_payload);
+        guidedIdea.resolved = result;
+        renderThread();
+        scheduleGuidedSlotSave('scan_idea_literature_folder');
+      })
+      .catch(err => {
+        guidedIdea.literatureScanning = false;
+        guidedIdea.error = err.message || String(err);
+        renderThread();
+        scheduleGuidedSlotSave('scan_idea_literature_folder_error');
+      });
+  }
   function runGuidedIdeaResolve() {
     if (!guidedIdea || guidedIdea.resolving) return;
     if (!window.EU_API || !window.EU_API.resolveIdeaSource) {
@@ -2055,10 +2421,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     window.EU_API.resolveIdeaSource(guidedIdeaPayload()).then(result => {
       guidedIdea.resolving = false;
       guidedIdea.resolved = result;
-      const suggested = (result && result.suggested_payload) || {};
-      ['topic', 'excerpt', 'title', 'journal', 'year', 'doi', 'pmid', 'url'].forEach(key => {
-        if (!guidedIdea[key] && suggested[key]) guidedIdea[key] = String(suggested[key]);
-      });
+      applyGuidedIdeaSuggestion(result && result.suggested_payload);
       renderThread();
       scheduleGuidedSlotSave('resolve_idea_source');
     }).catch(err => {
@@ -2067,6 +2430,65 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderThread();
       scheduleGuidedSlotSave('resolve_idea_source_error');
     });
+  }
+  function runGuidedIdeaDiscover() {
+    if (!guidedIdea || guidedIdea.discovering) return;
+    const topic = String(guidedIdea.topic || guidedIdea.title || '').trim();
+    if (!topic) {
+      guidedIdea.error = t('Describe a frontier topic or review scope before literature discovery.', '请先描述前沿主题或 review 范围，再做文献发现。');
+      renderThread();
+      return;
+    }
+    if (!window.EU_API || !window.EU_API.discoverIdeas) {
+      guidedIdea.error = t('Literature discovery backend is unavailable.', '文献发现后端不可用。');
+      renderThread();
+      return;
+    }
+    guidedIdea.sourceType = 'frontier';
+    guidedIdea.discovering = true;
+    guidedIdea.error = null;
+    renderThread();
+    window.EU_API.discoverIdeas(Object.assign({}, guidedIdeaPayload(), {
+      topic,
+      journal: guidedIdea.journal || '',
+      limit: 8,
+      allow_network: !!guidedIdea.allowNetwork,
+    })).then(result => {
+      guidedIdea.discovering = false;
+      guidedIdea.discovery = result;
+      if (result && result.suggested_payload && result.status !== 'blocked_network_opt_in_required') {
+        applyGuidedIdeaSuggestion(result.suggested_payload);
+      }
+      renderThread();
+      scheduleGuidedSlotSave('discover_idea_literature');
+    }).catch(err => {
+      guidedIdea.discovering = false;
+      guidedIdea.error = err.message || String(err);
+      renderThread();
+      scheduleGuidedSlotSave('discover_idea_literature_error');
+    });
+  }
+  function useGuidedIdeaDiscoveryCandidate(index) {
+    if (!guidedIdea || !guidedIdea.discovery) return;
+    const rows = Array.isArray(guidedIdea.discovery.idea_candidates) ? guidedIdea.discovery.idea_candidates : [];
+    const row = rows[Number(index || 0)];
+    if (!row) return;
+    applyGuidedIdeaSuggestion(row.suggested_payload || {});
+    guidedIdea.sourceType = 'frontier';
+    guidedIdea.resolved = {
+      ok: true,
+      mode: 'frontier_discovery_candidate',
+      resolved_source: row.source || null,
+      suggested_payload: row.suggested_payload || {},
+      source_adapter: {
+        status: 'pubmed_candidate_selected',
+        network_calls: guidedIdea.discovery.network_calls || 0,
+        external_llm_calls: 0,
+      },
+    };
+    guidedIdea.error = null;
+    renderThread();
+    scheduleGuidedSlotSave('use_discovered_idea_candidate');
   }
   function runGuidedIdeaMine() {
     if (!guidedIdea || guidedIdea.mining) return;
@@ -2421,10 +2843,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     location.hash = '#agent';
   }
 
-  function localRunRows() {
-    const data = guidedHistory && guidedHistory.data;
-    return data && Array.isArray(data.runs) ? data.runs : [];
-  }
   function localDraftRows() {
     const data = guidedDrafts && guidedDrafts.data;
     return data && Array.isArray(data.drafts) ? data.drafts : [];
@@ -2475,21 +2893,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         `无法移除这个草稿：<span class="mono">${esc(err.message || String(err))}</span>`,
       );
       renderThread();
-    });
-  }
-  function loadGuidedHistory(force) {
-    if (!window.EU_API || !window.EU_API.loadAgentRunHistory) return;
-    if (!force && (guidedHistory.loading || guidedHistory.data || guidedHistory.error)) return;
-    guidedHistory = { loading: true, error: null, data: guidedHistory.data || null };
-    renderSessions();
-    window.EU_API.loadAgentRunHistory({ limit: 20 }).then(data => {
-      guidedHistory = { loading: false, error: null, data: data };
-      renderSessions();
-      if (guidedFolderDialogMode) renderGuidedFolderDialog();
-    }).catch(err => {
-      guidedHistory = { loading: false, error: err.message || String(err), data: null };
-      renderSessions();
-      if (guidedFolderDialogMode) renderGuidedFolderDialog();
     });
   }
   function guidedBackendContext() {
@@ -2685,16 +3088,27 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const session = guidedCopilot && guidedCopilot.session;
     if (session && session.project_dir && session.memory_scope === 'project_folder') return true;
     if (selectedGuidedDraft && selectedGuidedDraft.project_dir) return true;
-    if (selectedGuidedRun && selectedGuidedRun.project_dir) return true;
     return false;
   }
   function rememberPendingGoal(goal, label) {
     pendingGuidedGoal = goal ? { goal, label: label || (guidedGoalMeta(goal) && guidedGoalMeta(goal).label_en) || goal } : null;
   }
   function requireGuidedProjectMemory(goal, label) {
+    if (goal === 'review_data' && activeExportSource()) return false;
     if (hasGuidedProjectMemory()) return false;
     rememberPendingGoal(goal, label);
     if (label) pushUser(label);
+    if (goal === 'review_data') {
+      thread.push({ bot: true, html: bi(
+        `Choose a <strong>local EasyICU export folder</strong> first. I’ll register it as the active export and review it inside Copilot; project memory is optional for this read-only review.`,
+        `请先选择一个<strong>本地 EasyICU export 文件夹</strong>。我会把它注册为 active export，并直接在 Copilot 内审阅；这个只读审阅不强制要求项目记忆。`,
+      ) });
+      showGuidedDraftSetup(label || 'Review extracted data', 'open');
+      chips = [['Use active export', '@activeExport'], ['Choose export folder', '@folderopen']];
+      renderThread();
+      renderChips();
+      return true;
+    }
     thread.push({ bot: true, html: bi(
       `First choose or create a <strong>local study folder</strong>. Each folder owns a separate Guided conversation and memory, like a Codex/Claude project context.`,
       `请先选择或创建一个<strong>本地研究文件夹</strong>。每个文件夹都有独立的 Guided 对话和记忆，类似 Codex/Claude 的项目上下文。`,
@@ -2882,7 +3296,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           <span>${icon(hasGuidedProjectMemory() ? 'check' : 'folder', 13)}</span>
           <div><strong>${hasGuidedProjectMemory() ? t('Project memory bound', '已绑定项目记忆') : t('Start by binding a local study folder', '先绑定本地研究文件夹')}</strong>
           <small>${hasGuidedProjectMemory()
-            ? esc(compactPath((guidedCopilot.session && guidedCopilot.session.project_dir) || (selectedGuidedDraft && selectedGuidedDraft.project_dir) || (selectedGuidedRun && selectedGuidedRun.project_dir) || ''))
+            ? esc(compactPath((guidedCopilot.session && guidedCopilot.session.project_dir) || (selectedGuidedDraft && selectedGuidedDraft.project_dir) || ''))
             : t('Required setup stays inside Guided Copilot; every folder has its own conversation, settings, and handoff memory.', '必需配置都在 Guided Copilot 内完成；每个文件夹都有自己的对话、设置和交接记忆。')}</small></div>
           ${hasGuidedProjectMemory() ? '' : `<button class="btn sm" type="button" data-go="@foldernew">${t('New / open folder', '新建/打开文件夹')}</button>`}
         </div>
@@ -3082,22 +3496,30 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       });
     }
     localDraftRows().forEach(row => add(row, 'draft'));
-    localRunRows().forEach(row => add(row, 'run'));
     return rows.slice(0, 12);
   }
   function renderGuidedKnownProjectPicker() {
-    const loading = guidedDrafts.loading || guidedHistory.loading;
-    const error = guidedDrafts.error || guidedHistory.error;
+    const loading = guidedDrafts.loading;
+    const error = guidedDrafts.error;
     const rows = guidedKnownProjectRows();
+    if (!guidedKnownProjectsOpen) {
+      return `
+      <div class="gds-known collapsed">
+        <div class="gds-known-head">
+          <div><strong>${t('Recent local projects', '最近的本地项目')}</strong><span>${t('Optional shortcut. The list stays collapsed until you ask; no project is opened automatically.', '可选快捷入口。列表默认折叠，只有你主动展开才显示；不会自动打开任何项目。')}</span></div>
+          <button class="btn sm" type="button" data-toggle-known-projects>${icon('history', 12)} ${t('Show recent', '显示最近项目')}</button>
+        </div>
+      </div>`;
+    }
     return `
       <div class="gds-known">
         <div class="gds-known-head">
-          <div><strong>${t('Detected local project folders', '已检测到的本地项目文件夹')}</strong><span>${t('Pick one directly. These are read from the local Guided draft registry and Agent run history.', '直接选择一个。这些来自本机 Guided 草稿 registry 和 Agent run history。')}</span></div>
+          <div><strong>${t('Recent local projects', '最近的本地项目')}</strong><span>${t('Shown only after you ask. Pick one as a shortcut, or use Browse/manual path below.', '仅在你主动展开后显示。可以选一个作为快捷入口，也可以用下方浏览/手动路径。')}</span></div>
           <button class="btn sm" type="button" data-refreshfolderchoices>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
         </div>
-        ${loading ? `<div class="gds-known-empty">${icon('refresh', 12)} ${t('Scanning local project folders...', '正在扫描本地项目文件夹...')}</div>` : ''}
+        ${loading ? `<div class="gds-known-empty">${icon('refresh', 12)} ${t('Loading recent local projects...', '正在加载最近的本地项目...')}</div>` : ''}
         ${error ? `<div class="gds-known-empty warn">${icon('info', 12)} ${esc(error)}</div>` : ''}
-        ${!loading && !rows.length && !error ? `<div class="gds-known-empty">${t('No detected project folders yet. Create a new one, run an Agent project, or paste a local path below.', '暂未检测到项目文件夹。可以新建一个、运行 Agent 项目，或在下方粘贴本地路径。')}</div>` : ''}
+        ${!loading && !rows.length && !error ? `<div class="gds-known-empty">${t('No recent Guided project shortcuts yet. Create a new folder, browse a folder, or paste a local path below.', '暂无最近 Guided 项目快捷入口。可以新建文件夹、浏览文件夹，或在下方粘贴本地路径。')}</div>` : ''}
         ${rows.length ? `<div class="gds-known-list">${rows.map((row, i) => `
           <button class="gds-known-row" type="button" data-known-project="${i}">
             <span class="gds-known-kind">${row.kind === 'run' ? icon('history', 13) : icon('file', 13)}</span>
@@ -3180,14 +3602,20 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const title = guidedFolderSeedTitle || (BRANCH[branch] && BRANCH[branch].chip) || 'New local study';
     const slug = slugifyDraftFolder(title);
     const mode = guidedFolderDialogMode === 'open' ? 'open' : 'new';
+    const openForReview = pendingGuidedGoal && pendingGuidedGoal.goal === 'review_data';
+    const openActions = openForReview ? `
+      <button class="btn primary sm" data-reviewexportfolder>${icon('eye', 13)} ${t('Review extracted data', '审阅已提取数据')}</button>
+      <button class="btn sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open project memory', '打开项目记忆')}</button>` : `
+      <button class="btn primary sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open project memory', '打开项目记忆')}</button>
+      <button class="btn sm" data-reviewexportfolder>${icon('eye', 13)} ${t('Review extracted data', '审阅已提取数据')}</button>`;
     host.innerHTML = `
       <div class="gd-folder-backdrop" data-folder-dialog-close></div>
       <section class="gd-folder-dialog" data-folder-dialog data-draft-setup role="dialog" aria-modal="true" aria-label="${t('Choose a local study folder', '选择本地研究文件夹')}">
         <div class="gd-folder-dialog-head">
           <span class="gds-ico">${icon('folder', 15)}</span>
           <div>
-            <strong>${t('Choose a local study folder', '选择本地研究文件夹')}</strong>
-            <span>${t('Each folder owns its Guided conversation and memory. Required setup stays here instead of jumping to Classic Workspace.', '每个文件夹拥有自己的 Guided 对话和记忆。必需配置会留在这里完成，而不是强制跳到经典工作台。')}</span>
+            <strong>${t('Choose a local folder', '选择本地文件夹')}</strong>
+            <span>${t('Open a project folder for Guided memory, or choose an EasyICU export folder when you want to review extracted data.', '打开项目文件夹用于 Guided 记忆；如果要审阅已提取数据，请选择 EasyICU export 文件夹。')}</span>
           </div>
           <button class="gd-folder-close" type="button" data-folder-dialog-close aria-label="${t('Close', '关闭')}">×</button>
         </div>
@@ -3197,15 +3625,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         </div>
         ${mode === 'open' ? `
           <div class="gds-choice">
-            <div class="gds-choice-head"><strong>${t('Open existing project folder', '打开现有项目文件夹')}</strong><span>${t('Use this when you already have a local Guided, Idea Mining, or Agent project folder.', '已有本地 Guided、Idea Mining 或 Agent 项目文件夹时使用。')}</span></div>
-            ${renderGuidedKnownProjectPicker()}
+            <div class="gds-choice-head"><strong>${t('Open project or extracted data folder', '打开项目或已提取数据文件夹')}</strong><span>${t('Required setup stays here instead of jumping to Classic Workspace. Use a project folder for conversation memory, or an EasyICU export folder to review previously extracted data.', '必需配置都留在这里完成，不强制跳到其他页面。项目文件夹用于对话记忆；EasyICU export 文件夹用于审阅之前提取的数据。')}</span></div>
             <div class="gds-path-row">
-              <label class="gds-field"><span>${t('Project folder path', '项目文件夹路径')}</span><input data-existing-project-dir placeholder="~/easyicu/projects/my-study or C:\\Users\\you\\easyicu\\projects\\my-study" autocomplete="off" /></label>
+              <label class="gds-field"><span>${t('Local folder path', '本地文件夹路径')}</span><input data-existing-project-dir placeholder="${t('Paste a local project or EasyICU export folder path', '粘贴本地项目或 EasyICU 导出文件夹路径')}" autocomplete="off" /></label>
               <button class="btn sm" type="button" data-browseprojectfolder>${icon('folder', 13)} ${t('Browse...', '浏览...')}</button>
             </div>
-            <div class="gds-path"><span>${t('Scope', '范围')}</span><code>EasyICU projects folder</code><small>${t('Use Browse to choose a folder. Path paste remains an advanced fallback for terminal workflows.', '请使用“浏览”选择文件夹。路径粘贴只作为终端工作流的高级 fallback。')}</small></div>
+            <div class="gds-path"><span>${t('Scope', '范围')}</span><code>local EasyICU project or export folder</code><small>${t('Use Browse to choose a folder. Path paste remains an advanced fallback for terminal workflows.', '请使用“浏览”选择文件夹。路径粘贴只作为终端工作流的高级 fallback。')}</small></div>
             ${renderGuidedFolderBrowser()}
-            <div class="row gap-8"><button class="btn primary sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open folder memory', '打开文件夹记忆')}</button><button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
+            ${renderGuidedKnownProjectPicker()}
+            <div class="row gap-8">${openActions}<button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
             <div class="gds-status" data-project-open-status hidden></div>
           </div>` : `
           <div class="gds-choice">
@@ -3222,6 +3650,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     guidedFolderDialogMode = mode === 'open' ? 'open' : 'new';
     guidedFolderSeedTitle = seedTitle || guidedFolderSeedTitle || 'New local study';
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
+    guidedKnownProjectsOpen = false;
     renderGuidedFolderControls();
     renderGuidedFolderDialog();
     setTimeout(() => {
@@ -3234,6 +3663,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     guidedFolderMenuOpen = false;
     guidedFolderDialogMode = null;
     guidedFolderBrowser = { open: false, loading: false, error: null, data: null, path: '' };
+    guidedKnownProjectsOpen = false;
     renderGuidedFolderControls();
     renderGuidedFolderDialog();
   }
@@ -3249,11 +3679,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     const target = latestGuidedDraftSetupBox(box);
     if (!target) return;
     const status = target.querySelector('[data-project-open-status]');
-    const button = target.querySelector('[data-openprojectfolder]');
-    if (button) {
+    const buttons = target.querySelectorAll('[data-openprojectfolder], [data-reviewexportfolder]');
+    buttons.forEach(button => {
       button.disabled = state === 'loading';
       button.setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
-    }
+    });
     if (!status) return;
     if (!html) {
       status.hidden = true;
@@ -3264,6 +3694,73 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     status.hidden = false;
     status.className = `gds-status ${state || 'info'}`;
     status.innerHTML = html;
+  }
+  function registerExistingExportForReview(exportDir, setupBox, opts) {
+    const raw = String(exportDir || '').trim();
+    const options = opts || {};
+    if (!raw) {
+      setGuidedProjectOpenStatus(
+        setupBox,
+        'error',
+        `${icon('info', 12)} <span>${t('Choose or paste a local EasyICU export folder first, then I can review the extracted data.', '请先选择或粘贴一个本地 EasyICU export 文件夹，然后我才能审阅已提取数据。')}</span>`,
+      );
+      return Promise.resolve(false);
+    }
+    if (!window.EU_API || !window.EU_API.registerWorkspaceSource) {
+      setGuidedProjectOpenStatus(
+        setupBox,
+        'error',
+        `${icon('info', 12)} <span>${t('The export registration API is unavailable, so I cannot safely review that folder yet.', '导出注册 API 不可用，所以暂时不能安全审阅该文件夹。')}</span>`,
+      );
+      return Promise.resolve(false);
+    }
+    if (options.pushUser !== false) pushUser(`Review extracted data folder: ${raw}`);
+    setGuidedProjectOpenStatus(
+      setupBox,
+      'loading',
+      `${icon('refresh', 12)} <span>${t('Checking and registering this EasyICU export for review...', '正在检查并注册这个 EasyICU export 以便审阅...')}</span>`,
+    );
+    thread.push({ typing: true });
+    renderThread();
+    return window.EU_API.registerWorkspaceSource(raw, {
+      active: true,
+      crossdb: true,
+      label: 'Guided review export',
+    }).then(registry => {
+      thread = thread.filter(item => !item.typing);
+      const source = (registry.sources || []).find(s => s.path === registry.active_path) || (registry.sources || []).find(s => s.path === raw);
+      setGuidedProjectOpenStatus(
+        setupBox,
+        'ok',
+        `${icon('check', 12)} <span>${t('Export registered as the active data source. Loading review panels...', '导出已注册为 active 数据源，正在加载审阅面板...')}</span>`,
+      );
+      pendingGuidedGoal = null;
+      closeGuidedFolderDialog();
+      pushBot(
+        `Registered <span class="mono">${esc(compactPath(raw))}</span> as the active EasyICU export. I’ll review the extracted data here; no project memory or Agent run was created.`,
+        `已将 <span class="mono">${esc(compactPath(raw))}</span> 注册为 active EasyICU export。接下来会在这里审阅已提取数据；不会创建项目记忆或 Agent run。`,
+      );
+      setVal({ data: (source && (source.label || source.database)) || 'active export' });
+      startGuidedReviewFlow(null);
+      return true;
+    }).catch(err => {
+      thread = thread.filter(item => !item.typing);
+      const msg = err && (err.message || String(err)) || 'export_register_failed';
+      const fallback = options.projectReason
+        ? t('This folder is neither an openable Guided project nor a valid EasyICU export.', '这个文件夹既不是可打开的 Guided 项目，也不是有效的 EasyICU export。')
+        : t('This does not look like a valid EasyICU export folder.', '这看起来不是有效的 EasyICU export 文件夹。');
+      pushBot(
+        `I could not review that folder as extracted data: <span class="mono">${esc(msg)}</span>`,
+        `无法把该文件夹作为已提取数据审阅：<span class="mono">${esc(msg)}</span>`,
+      );
+      renderThread();
+      setGuidedProjectOpenStatus(
+        setupBox,
+        'error',
+        `${icon('info', 12)} <span>${esc(fallback)} <span class="mono">${esc(msg)}</span></span>`,
+      );
+      return false;
+    });
   }
   function openExistingGuidedProject(projectDir, setupBox) {
     const raw = String(projectDir || '').trim();
@@ -3304,14 +3801,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       thread = thread.filter(item => !item.typing);
       if (!result || !result.ok) {
         const reason = result && (result.reason || result.error) ? (result.reason || result.error) : 'unknown error';
-        pushBot(`Could not open project folder: <span class="mono">${esc(reason)}</span>`, `无法打开项目文件夹：<span class="mono">${esc(reason)}</span>`);
-        renderThread();
-        setGuidedProjectOpenStatus(
-          setupBox,
-          'error',
-          `${icon('info', 12)} <span>${t('Folder memory was not opened:', '文件夹记忆没有打开：')} <span class="mono">${esc(reason)}</span></span>`,
-        );
-        return;
+        return registerExistingExportForReview(raw, setupBox, {
+          pushUser: false,
+          projectReason: reason,
+        });
       }
       setGuidedProjectOpenStatus(
         setupBox,
@@ -3330,16 +3823,10 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       loadGuidedDrafts(true);
     }).catch(err => {
       thread = thread.filter(item => !item.typing);
-      pushBot(
-        `Could not open project folder: <span class="mono">${esc(err.message || String(err))}</span>`,
-        `无法打开项目文件夹：<span class="mono">${esc(err.message || String(err))}</span>`,
-      );
-      renderThread();
-      setGuidedProjectOpenStatus(
-        setupBox,
-        'error',
-        `${icon('info', 12)} <span>${t('Folder memory was not opened:', '文件夹记忆没有打开：')} <span class="mono">${esc(err.message || String(err))}</span></span>`,
-      );
+      return registerExistingExportForReview(raw, setupBox, {
+        pushUser: false,
+        projectReason: err && (err.message || String(err)) || 'open_project_failed',
+      });
     });
   }
   function createLocalGuidedDraft(label, folderSlug) {
@@ -3393,8 +3880,16 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     });
   }
   function openGuidedRunReview(row, label) {
-    if (!row || !row.project_dir || !window.EU_API || !window.EU_API.loadAgentRunReview) return;
+    if (!row || !row.project_dir || !window.EU_API || !window.EU_API.loadAgentRunReview) {
+      pushBot(
+        `This run does not expose a readable local artifact folder yet, so I cannot open it as a reviewable run.`,
+        `这个 run 还没有可读取的本地 artifact 文件夹，所以暂时不能作为可审阅运行打开。`,
+      );
+      renderThread();
+      return;
+    }
     selectedGuidedRun = row;
+    selectedGuidedDraft = null;
     pushUser(label || 'Review local run');
     pushBot(
       `Reading local run artifacts from <span class="mono">${esc(compactPath(row.project_dir))}</span>. Only whitelisted JSON files are opened.`,
@@ -3418,8 +3913,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       outputsReady = true;
       const readiness = (review.readiness && review.readiness.status) || row.readiness_status || 'analysis_only';
       pushBot(
-        `Opened <strong>${esc(review.study_id || row.study_id || 'local study')}</strong> / <span class="mono">${esc(review.run_id || row.run_id || 'run')}</span>: ${esc(readiness)} · ${(review.artifacts || []).length} artifacts. Draft/reportable remains locked unless the Agent gate says otherwise.`,
-        `已打开 <strong>${esc(review.study_id || row.study_id || '本地研究')}</strong> / <span class="mono">${esc(review.run_id || row.run_id || 'run')}</span>：${esc(readiness)} · ${(review.artifacts || []).length} 个 artifact。除非 Agent gate 明确允许，草稿/reportable 仍保持锁定。`,
+        `Opened <strong>${esc(review.study_id || row.study_id || 'local study')}</strong> / <span class="mono">${esc(review.run_id || row.run_id || 'run')}</span>: ${esc(readiness)} · ${(review.artifacts || []).length} artifacts. Draft/reportable remains locked unless Agent evidence checks say otherwise.`,
+        `已打开 <strong>${esc(review.study_id || row.study_id || '本地研究')}</strong> / <span class="mono">${esc(review.run_id || row.run_id || 'run')}</span>：${esc(readiness)} · ${(review.artifacts || []).length} 个 artifact。除非 Agent 证据核验明确允许，草稿/reportable 仍保持锁定。`,
       );
       thread.push({ diff: true });
       chips = [['Open in Agent Projects', '@openAgent'], ['Use active export for a new run', '@activeExport']];
@@ -3626,8 +4121,8 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       step: 'analysis', card: true,
       bot: () => [realMode()
         ? bi(
-            `Running a registry-backed local preflight — source resolution, bounded snapshot, evidence gate, and local artifact write. No external model call.`,
-            `正在运行 registry-backed 本地预检：解析数据源、生成有界快照、执行 evidence gate，并写入本地 artifact。不会调用外部模型。`,
+            `Running a registry-backed local preflight — source resolution, bounded snapshot, evidence checks, and local artifact write. No external model call.`,
+            `正在运行 registry-backed 本地预检：解析数据源、生成有界快照、执行证据核验，并写入本地 artifact。不会调用外部模型。`,
           )
         : bi(
             `Running the analysis — deterministic steps, no tokens. I’ll only draft findings after every step’s evidence contract passes.`,
@@ -3652,16 +4147,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
   function renderSessions() {
     const host = document.getElementById('gdSessions');
     if (!host) return;
-    const rows = localRunRows();
     const drafts = localDraftRows();
     const draftHtml = guidedDrafts.loading
-      ? `<div class="gd-empty-local"><div class="ss-t">Loading local drafts</div><div class="ss-m">Reading metadata-only guided draft registry.</div></div>`
+      ? `<div class="gd-empty-local"><div class="ss-t">${t('Loading study folders', '正在加载研究文件夹')}</div><div class="ss-m">${t('Reading metadata-only Guided folder registry.', '正在读取仅元数据的 Guided 文件夹 registry。')}</div></div>`
       : guidedDrafts.error
-        ? `<div class="gd-empty-local warn"><div class="ss-t">Local drafts unavailable</div><div class="ss-m">${esc(guidedDrafts.error)}</div></div>`
+        ? `<div class="gd-empty-local warn"><div class="ss-t">${t('Study folders unavailable', '研究文件夹不可用')}</div><div class="ss-m">${esc(guidedDrafts.error)}</div></div>`
         : drafts.length
           ? drafts.slice(0, 8).map((row, i) => `
             <div class="gd-sessline">
-              <button class="gd-sess draft ${selectedGuidedDraft && selectedGuidedDraft.id === row.id ? 'active' : ''}" data-localdraft="${i}">
+              <button class="gd-sess draft ${selectedGuidedDraft && selectedGuidedDraft.id === row.id ? 'active' : ''}" data-localdraft="${i}" title="${t('Open this folder conversation memory', '打开这个文件夹的对话记忆')}">
                 <span class="ss-fold">${icon('file', 15)}</span>
                 <span>
                   <span class="ss-t">${esc(row.title || 'Guided draft')}</span>
@@ -3673,32 +4167,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
               <button class="gd-sess-action danger" type="button" data-remove-localdraft="${i}" title="${t('Remove from Guided draft list', '从草稿列表移除')}" aria-label="${t('Remove from Guided draft list', '从草稿列表移除')}">${icon('close', 12)}</button>
             </div>`).join('')
           : `<div class="gd-empty-local">
-              <div class="ss-t">No guided drafts yet</div>
-              <div class="ss-m">Use New / open study folder to bind the conversation to a local project folder first.</div>
-            </div>`;
-    const localHtml = guidedHistory.loading
-      ? `<div class="gd-empty-local"><div class="ss-t">Loading local runs</div><div class="ss-m">Scanning configured local Agent project folders; export rows are not read.</div></div>`
-      : guidedHistory.error
-        ? `<div class="gd-empty-local warn"><div class="ss-t">Local run history unavailable</div><div class="ss-m">${esc(guidedHistory.error)}</div></div>`
-        : rows.length
-          ? rows.slice(0, 8).map((row, i) => `
-            <button class="gd-sess local ${selectedGuidedRun && selectedGuidedRun.project_dir === row.project_dir ? 'active' : ''}" data-localrun="${i}">
-              <span class="ss-fold">${icon('history', 15)}</span>
-              <span>
-                <span class="ss-t">${esc(row.study_id || 'study')} · ${esc(row.run_label || row.run_id || 'run')}</span>
-                <span class="ss-m">${esc(row.readiness_status || row.gate_status || 'analysis_only')} · ${esc(String(row.artifact_count || 0))} artifacts · ${esc(fmtRunTime(row.updated_at))}</span>
-                <span class="ss-m mono">${esc(compactPath(row.project_dir))}</span>
-              </span>
-            </button>`).join('')
-          : `<div class="gd-empty-local">
-              <div class="ss-t">No local runs found</div>
-              <div class="ss-m">Start an auditable Agent run to create a real local study folder.</div>
+              <div class="ss-t">${t('No study folders yet', '还没有研究文件夹')}</div>
+              <div class="ss-m">${t('Use New / open study folder to bind this conversation to a local project folder first.', '先使用“新建/打开研究文件夹”把这条对话绑定到本地项目文件夹。')}</div>
             </div>`;
     host.innerHTML = `
-      <div class="gd-rail-sec in-list">Local guided drafts <button class="gd-refresh-mini" data-refreshdrafts title="Refresh local drafts">${icon('refresh', 10)}</button></div>
-      ${draftHtml}
-      <div class="gd-rail-sec in-list">Local runs <button class="gd-refresh-mini" data-refreshruns title="Refresh local runs">${icon('refresh', 10)}</button></div>
-      ${localHtml}`;
+      <div class="gd-rail-sec in-list">${t('Study folders', '研究文件夹')} <button class="gd-refresh-mini" data-refreshdrafts title="${t('Refresh study folders', '刷新研究文件夹')}">${icon('refresh', 10)}</button></div>
+      <div class="gd-rail-note"><strong>${t('Conversation memory', '对话记忆')}</strong><span>${t('Open these to continue setup inside Guided Copilot.', '打开这里可继续 Guided Copilot 内的配置。')}</span></div>
+      ${draftHtml}`;
   }
 
   /* ============== screen ============== */
@@ -3760,7 +4235,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       renderAside();
       renderSessions();
       loadGuidedDrafts();
-      loadGuidedHistory();
       // continue from the dock if we just expanded it
       let bridged = false;
       try {
@@ -3942,6 +4416,84 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           scheduleGuidedSlotSave('set_idea_source_type');
           return;
         }
+        if (e.target.closest('[data-gi-pdf-pick]')) {
+          const fileInput = root.querySelector('[data-gi-pdf-file]');
+          if (fileInput) fileInput.click();
+          return;
+        }
+        if (e.target.closest('[data-gi-lit-browse]')) {
+          loadGuidedLiteratureBrowser(guidedIdea && guidedIdea.literatureFolder);
+          return;
+        }
+        if (e.target.closest('[data-gi-lit-scan]')) {
+          scanGuidedLiteratureFolder();
+          return;
+        }
+        if (e.target.closest('[data-gi-discover]')) {
+          runGuidedIdeaDiscover();
+          return;
+        }
+        const discoveryUse = e.target.closest('[data-gi-discovery-use]');
+        if (discoveryUse) {
+          useGuidedIdeaDiscoveryCandidate(discoveryUse.dataset.giDiscoveryUse || 0);
+          return;
+        }
+        const giProvider = e.target.closest('[data-gi-provider]');
+        if (giProvider) {
+          guidedIdeaProvider = {
+            provider: giProvider.dataset.giProvider || 'openai',
+            loading: false,
+            error: null,
+            status: null,
+          };
+          requestGuidedIdeaProviderStatus(true);
+          renderThread();
+          scheduleGuidedSlotSave('set_idea_provider');
+          return;
+        }
+        if (e.target.closest('[data-gi-provider-refresh]')) {
+          requestGuidedIdeaProviderStatus(true);
+          return;
+        }
+        if (e.target.closest('[data-lit-browser-close]')) {
+          if (guidedLiteratureBrowser) guidedLiteratureBrowser.open = false;
+          renderThread();
+          return;
+        }
+        const litShortcut = e.target.closest('[data-lit-browser-shortcut]');
+        if (litShortcut) {
+          const shortcuts = guidedLiteratureBrowser && guidedLiteratureBrowser.data && Array.isArray(guidedLiteratureBrowser.data.shortcuts)
+            ? guidedLiteratureBrowser.data.shortcuts
+            : [];
+          const row = shortcuts[Number(litShortcut.dataset.litBrowserShortcut || -1)];
+          if (row && row.path) loadGuidedLiteratureBrowser(row.path);
+          return;
+        }
+        const litEntry = e.target.closest('[data-lit-browser-entry]');
+        if (litEntry) {
+          const entries = guidedLiteratureBrowser && guidedLiteratureBrowser.data && Array.isArray(guidedLiteratureBrowser.data.entries)
+            ? guidedLiteratureBrowser.data.entries
+            : [];
+          const row = entries[Number(litEntry.dataset.litBrowserEntry || -1)];
+          if (row && row.path) loadGuidedLiteratureBrowser(row.path);
+          return;
+        }
+        if (e.target.closest('[data-lit-browser-up]')) {
+          const parent = guidedLiteratureBrowser && guidedLiteratureBrowser.data && guidedLiteratureBrowser.data.parent;
+          if (parent) loadGuidedLiteratureBrowser(parent);
+          return;
+        }
+        if (e.target.closest('[data-lit-browser-use]')) {
+          const path = (guidedLiteratureBrowser && guidedLiteratureBrowser.data && guidedLiteratureBrowser.data.path) || (guidedLiteratureBrowser && guidedLiteratureBrowser.path) || '';
+          if (guidedIdea && path) {
+            guidedIdea.literatureFolder = path;
+            guidedIdea.sourceType = 'literature_folder';
+          }
+          if (guidedLiteratureBrowser) guidedLiteratureBrowser.open = false;
+          renderThread();
+          scheduleGuidedSlotSave('set_literature_folder');
+          return;
+        }
         if (e.target.closest('[data-gi-resolve]')) {
           runGuidedIdeaResolve();
           return;
@@ -4021,8 +4573,6 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         const stEl = e.target.closest('[data-study]');
         if (stEl) { jumpToStep(stEl.dataset.study); return; }
         // sessions rail
-        const refreshRuns = e.target.closest('[data-refreshruns]');
-        if (refreshRuns) { loadGuidedHistory(true); return; }
         const refreshDrafts = e.target.closest('[data-refreshdrafts]');
         if (refreshDrafts) { loadGuidedDrafts(true); return; }
         const removeDraftEl = e.target.closest('[data-remove-localdraft]');
@@ -4040,23 +4590,22 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           openGuidedProjectMemory(row, localDraftEl, 'draft');
           return;
         }
-        const localRunEl = e.target.closest('[data-localrun]');
-        if (localRunEl) {
-          const row = localRunRows()[Number(localRunEl.dataset.localrun || -1)];
-          if (!row) return;
-          selectedGuidedRun = row;
-          selectedGuidedDraft = null;
-          openGuidedProjectMemory(row, localRunEl, 'run');
-          return;
-        }
         if (e.target.closest('[data-newstudy]')) {
           guidedFolderMenuOpen = !guidedFolderMenuOpen;
           renderGuidedFolderControls();
           return;
         }
+        if (e.target.closest('[data-toggle-known-projects]')) {
+          guidedKnownProjectsOpen = !guidedKnownProjectsOpen;
+          if (guidedKnownProjectsOpen) {
+            loadGuidedDrafts(true);
+          }
+          renderGuidedFolderDialog();
+          return;
+        }
         if (e.target.closest('[data-refreshfolderchoices]')) {
+          guidedKnownProjectsOpen = true;
           loadGuidedDrafts(true);
-          loadGuidedHistory(true);
           return;
         }
         const knownProjectEl = e.target.closest('[data-known-project]');
@@ -4106,7 +4655,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           const path = (guidedFolderBrowser.data && guidedFolderBrowser.data.path) || guidedFolderBrowser.path;
           const pathEl = box ? box.querySelector('[data-existing-project-dir]') : null;
           if (pathEl && path) pathEl.value = path;
-          openExistingGuidedProject(path, box);
+          if (pendingGuidedGoal && pendingGuidedGoal.goal === 'review_data') registerExistingExportForReview(path, box);
+          else openExistingGuidedProject(path, box);
+          return;
+        }
+        const reviewExportFolderEl = e.target.closest('[data-reviewexportfolder]');
+        if (reviewExportFolderEl) {
+          const box = reviewExportFolderEl.closest('[data-draft-setup]');
+          const pathEl = box ? box.querySelector('[data-existing-project-dir]') : null;
+          registerExistingExportForReview(pathEl && pathEl.value, box);
           return;
         }
         const openProjectFolderEl = e.target.closest('[data-openprojectfolder]');
@@ -4168,6 +4725,13 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (slug && !slug.dataset.edited) slug.value = slugifyDraftFolder(title.value);
       });
       shell.addEventListener('change', (e) => {
+        const giPdfFile = e.target.closest('[data-gi-pdf-file]');
+        if (giPdfFile && guidedIdea) {
+          const file = giPdfFile.files && giPdfFile.files[0];
+          ingestGuidedIdeaPdfFile(file);
+          giPdfFile.value = '';
+          return;
+        }
         const giNetwork = e.target.closest('[data-gi-network]');
         if (giNetwork && guidedIdea) {
           guidedIdea.allowNetwork = !!giNetwork.checked;

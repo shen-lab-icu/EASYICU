@@ -9,7 +9,7 @@ those values as **hours since ICU admission** — the post
 
 import pandas as pd
 
-from easyicu.sepsis import compute_sepsis3_onset, susp_inf
+from easyicu.scores.sepsis import compute_sepsis3_onset, susp_inf
 
 
 def test_susp_inf_numeric_hour_offsets_match_within_abx_window():

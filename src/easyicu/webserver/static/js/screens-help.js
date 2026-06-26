@@ -49,7 +49,7 @@
         ],
         [
           '2',
-          t('Extract & gate the data', '抽取并门控数据'),
+          t('Extract & verify the data', '抽取并核验数据'),
           t(
             'One click runs the recommended extraction — cohort, coverage-audited feature modules, and a reproducible export. Need more control? Open Customize to set every detail. Nothing runs on incomplete data.',
             '一键运行推荐抽取：队列、覆盖率审计过的特征模块和可复现导出。需要更多控制时，可以进入自定义配置；数据不完整时不会继续运行。',
@@ -129,7 +129,7 @@
               <div class="mode-mark accent" style="width:34px;height:34px;">${icon('flask', 17)}</div>
               <div style="font-size:17px;font-weight:600;letter-spacing:-0.01em;">${t('New here? Take the 2-minute demo tour', '第一次使用？先跑 2 分钟演示')}</div>
             </div>
-            <p style="font-size:12.75px;color:var(--ink-3);line-height:1.6;margin:12px 0 0;">${t('No tokens, no setup, no patient data. The demo generates 10 mock ICU stays so every screen, table, and review gate is fully explorable before you connect anything real.', '不需要 token、不需要配置、不需要患者数据。演示会生成 10 个模拟 ICU stay，让你在连接真实数据前先完整探索每个页面、表格和审阅门控。')}</p>
+            <p style="font-size:12.75px;color:var(--ink-3);line-height:1.6;margin:12px 0 0;">${t('No tokens, no setup, no patient data. The demo generates 10 mock ICU stays so every screen, table, and review check is fully explorable before you connect anything real.', '不需要 token、不需要配置、不需要患者数据。演示会生成 10 个模拟 ICU stay，让你在连接真实数据前先完整探索每个页面、表格和审阅检查。')}</p>
           </div>
           <div class="col gap-8" style="flex:none;">
             <button class="btn primary lg" data-nav="extraction">${icon('play', 15)} ${t('Start demo', '开始演示')}</button>
