@@ -203,10 +203,9 @@ def test_native_guided_and_page_guide_messages_are_bilingual() -> None:
         "js/screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
     )
     assert (
-        "js/screens-guided-idea-provider.js?v=20260626-guided-provider-config"
-        in index_html
+        "js/screens-guided-idea-provider.js?v=20260626-guided-api-first" in index_html
     )
-    assert "js/screens-guided.js?v=20260626-guided-new-thread" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-api-first" in index_html
     assert "js/copilot-dock.js?v=20260626-page-guide-refresh2" in index_html
 
 
@@ -306,6 +305,10 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "goal === 'run_agent'" in guided_js
     assert "isGuidedAgentIntent(v)" in guided_js
     assert "function startGuidedIdeaFlow" in guided_js
+    assert "thread.push({ guidedIdeaApiSetup: true })" in guided_js
+    assert "function renderGuidedIdeaApiSetupCard" in guided_js
+    assert "function showGuidedIdeaSourceForm" in guided_js
+    assert "function showGuidedIdeaApiSetup" in guided_js
     assert "function renderGuidedIdeaCard" in guided_js
     assert "function runGuidedIdeaMine" in guided_js
     assert "function runGuidedIdeaPriorArt" in guided_js
@@ -335,6 +338,8 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "data-gi-provider-model" in provider_js
     assert "data-gi-provider-save" in provider_js
     assert "data-gi-enable-ai" in provider_js
+    assert "data-gi-api-continue" in provider_js
+    assert "data-gi-api-back" in provider_js
     assert "function saveGuidedIdeaProviderConfig" in guided_js
     assert "function requestGuidedIdeaProviderStatus" in guided_js
     assert "API readiness setup" in provider_js
@@ -342,6 +347,8 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "API setup gate" not in provider_js
     assert "window.EU_GUIDED_IDEA_PROVIDER = {" in provider_js
     assert "function renderCapabilityPanel(" in provider_js
+    assert "function renderSetupPrompt(" in provider_js
+    assert "function renderMiniStatus(" in provider_js
     assert "data-gi-handoff" in guided_js
     assert "data-gi-project" in guided_js
 
@@ -385,7 +392,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert provider_pos < guided_pos
     assert "window.EU_GUIDED_PROJECTS = {" in projects_js
     assert "guidedProjectContext()" in guided_js
-    assert "js/screens-guided.js?v=20260626-guided-new-thread" in index_html
+    assert "js/screens-guided.js?v=20260626-guided-api-first" in index_html
 
 
 def test_native_agent_outputs_fail_closed_to_real_artifacts() -> None:
@@ -1045,7 +1052,7 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "--xdb-grid-cols" in viz_js
     assert "xdb-density-svg" in viz_js
     assert "xdb-density-line" in viz_js
-    assert "js/screens-viz.js?v=20260626-complexity-heatmap" in index_html
+    assert "js/screens-viz.js?v=20260626-group-comparison" in index_html
     assert "css/crossdb.css?v=20260626-viz-richness" in index_html
     assert ".xdb-dist-panel" in crossdb_css
     assert ".xdb-dist-row" in crossdb_css
@@ -1091,7 +1098,23 @@ def test_native_cohort_snapshot_renders_real_distribution_charts() -> None:
     assert "Age × ICU LOS complexity" in viz_js
     assert "年龄 × ICU 住院时长复杂度" in viz_js
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260626-complexity-heatmap" in index_html
+    assert "js/screens-viz.js?v=20260626-group-comparison" in index_html
+
+
+def test_native_cohort_groups_render_comparison_bar_chart() -> None:
+    """The descriptive-split group view must visualise the per-metric profile as
+    grouped bars (legacy cohort_group_page), not only the numeric table."""
+    viz_js = _static_js("screens-viz.js")
+    cohort_css = _static_css("cohort.css")
+
+    assert "function cohortGroupComparisonChart(" in viz_js
+    assert "cohortGroupComparisonChart(profileRows, profileColumns)" in viz_js
+    # Reuses the bounded descriptive profile payload; no new inferential stats.
+    assert "cohortProfileValue(row, v)" in viz_js
+    assert ".cgc-bar" in cohort_css
+    assert ".cgc-fill" in cohort_css
+    # The exact-value profile table stays alongside the chart (additive).
+    assert "Aggregate-only group characteristics" in viz_js
 
 
 def test_native_patient_view_renders_multichannel_vital_timeline() -> None:
@@ -1442,11 +1465,8 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert ".gd-handoff-ready" in guided_css
     assert "api.js?v=20260626-guided-provider-config" in index_html
     assert "screens-guided-projects.js?v=20260626-guided-projects-split" in index_html
-    assert (
-        "screens-guided-idea-provider.js?v=20260626-guided-provider-config"
-        in index_html
-    )
-    assert "screens-guided.js?v=20260626-guided-new-thread" in index_html
+    assert "screens-guided-idea-provider.js?v=20260626-guided-api-first" in index_html
+    assert "screens-guided.js?v=20260626-guided-api-first" in index_html
     assert "guided.css?v=20260626-guided-api-boundary" in index_html
     assert '<span class="gd-name">Guided Copilot</span>' in guided_js
     assert "Guided Copilot · local first · nothing leaves your machine" in guided_js
@@ -1646,8 +1666,8 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/cohort.css?v=20260626-complexity-heatmap" in index_html
-    assert "js/screens-viz.js?v=20260626-complexity-heatmap" in index_html
+    assert "css/cohort.css?v=20260626-group-comparison" in index_html
+    assert "js/screens-viz.js?v=20260626-group-comparison" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
