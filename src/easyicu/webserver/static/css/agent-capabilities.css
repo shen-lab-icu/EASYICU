@@ -1,0 +1,131 @@
+/* Agent Projects capability highlights. Owner: screens-agent.js / #agent. */
+.ag-wrap .ag-cap-grid{
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:12px;
+  margin:12px 0;
+}
+
+.ag-wrap .ag-cap-card{
+  min-width:0;
+  padding:13px 14px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-3);
+  background:var(--surface);
+  box-shadow:var(--sh-1);
+}
+
+.ag-wrap .ag-cap-card.evidence{
+  border-color:var(--accent-border);
+  background:linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 24%, var(--surface)) 0%, var(--surface) 100%);
+}
+
+.ag-wrap .ag-cap-card.cross{
+  background:color-mix(in srgb, var(--surface-2) 65%, var(--surface));
+}
+
+.ag-wrap .ag-cap-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+}
+
+.ag-wrap .ag-cap-title{
+  margin-top:3px;
+  font-size:13.5px;
+  line-height:1.25;
+  font-weight:700;
+  color:var(--ink);
+}
+
+.ag-wrap .ag-cap-text{
+  margin-top:8px;
+  font-size:11.75px;
+  line-height:1.52;
+  color:var(--ink-3);
+}
+
+.ag-wrap .ag-link-chain{
+  display:grid;
+  grid-template-columns:repeat(4, minmax(0, 1fr));
+  gap:7px;
+  margin-top:10px;
+}
+
+.ag-wrap .ag-link-chain span{
+  min-width:0;
+  padding:7px 8px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface);
+  font-size:10.5px;
+  font-weight:700;
+  color:var(--ink-2);
+  text-align:center;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.ag-wrap .ag-cap-metrics{
+  display:grid;
+  grid-template-columns:repeat(4, minmax(0, 1fr));
+  gap:7px;
+  margin-top:10px;
+}
+
+.ag-wrap .ag-cap-metrics div{
+  min-width:0;
+  padding:8px 9px;
+  border:1px solid var(--hair);
+  border-radius:var(--r-2);
+  background:var(--surface-2);
+}
+
+.ag-wrap .ag-cap-metrics span{
+  display:block;
+  font-size:9.75px;
+  font-weight:600;
+  color:var(--ink-4);
+}
+
+.ag-wrap .ag-cap-metrics strong{
+  display:block;
+  margin-top:3px;
+  font-size:12px;
+  font-weight:700;
+  color:var(--ink);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.ag-wrap .ag-cap-actions{
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-top:11px;
+}
+
+.ag-wrap .ag-cap-note{
+  min-width:180px;
+  flex:1;
+  font-size:10.75px;
+  line-height:1.4;
+  color:var(--ink-4);
+}
+
+@media (max-width: 1320px){
+  .ag-wrap .ag-cap-grid{
+    grid-template-columns:1fr;
+  }
+}
+
+@media (max-width: 720px){
+  .ag-wrap .ag-link-chain,
+  .ag-wrap .ag-cap-metrics{
+    grid-template-columns:repeat(2, minmax(0, 1fr));
+  }
+}

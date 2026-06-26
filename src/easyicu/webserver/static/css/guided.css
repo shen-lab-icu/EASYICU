@@ -1291,6 +1291,24 @@
   display: grid;
   gap: 10px;
 }
+.gdi-source-mode-note{
+  display: grid;
+  gap: 4px;
+  padding: 10px 11px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+}
+.gdi-source-mode-note strong{
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+.gdi-source-mode-note span{
+  color: var(--ink-4);
+  font-size: 11px;
+  line-height: 1.45;
+}
 .gdi-meta-grid{
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1395,6 +1413,60 @@
   color: var(--ink-2);
   font-size: 11.5px;
   line-height: 1.5;
+}
+.gdi-flow{
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+.gdi-flow-step{
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface-2);
+}
+.gdi-flow-step > span{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 21px;
+  width: 21px;
+  height: 21px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-pill);
+  color: var(--ink-4);
+  background: var(--surface);
+}
+.gdi-flow-step.done > span{
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 36%, var(--hair));
+  background: var(--ok-soft);
+}
+.gdi-flow-step.active{
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--hair));
+  background: var(--accent-soft);
+}
+.gdi-flow-step.locked{
+  opacity: .62;
+}
+.gdi-flow-step strong,
+.gdi-flow-step small{
+  display: block;
+  min-width: 0;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.gdi-flow-step strong{
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.gdi-flow-step small{
+  margin-top: 2px;
+  color: var(--ink-4);
+  font-size: 9.75px;
 }
 .gdi-ledger-title{
   display: flex;
@@ -1517,6 +1589,7 @@
   .gdx-modgrid,
   .gdx-result,
   .gca-grid,
+  .gdi-flow,
   .gdi-meta-grid,
   .gdi-ledger-grid,
   .gdi-stats,

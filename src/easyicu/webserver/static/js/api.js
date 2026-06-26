@@ -194,6 +194,9 @@
   function listDir(path) {
     return getJSON('/api/fs/list' + (path ? '?path=' + encodeURIComponent(path) : ''));
   }
+  function createDir(path) {
+    return postJSON('/api/fs/mkdir', { path: path });
+  }
   function scanPath(path, source) {
     return postJSON('/api/data/scan', { path: path, source: source || null });
   }
@@ -331,6 +334,9 @@
   function checkIdeaPriorArt(body) {
     return postJSON('/api/ideas/prior-art', body || {});
   }
+  function planIdea(body) {
+    return postJSON('/api/ideas/plan', body || {});
+  }
   function handoffIdea(body) {
     return postJSON('/api/ideas/handoff', body || {});
   }
@@ -383,6 +389,7 @@
   window.EU_API.renameWorkspaceSource = renameWorkspaceSource;
   window.EU_API.removeWorkspaceSource = removeWorkspaceSource;
   window.EU_API.listDir = listDir;
+  window.EU_API.createDir = createDir;
   window.EU_API.scanPath = scanPath;
   window.EU_API.loadExtractionFilterOptions = loadExtractionFilterOptions;
   window.EU_API.previewExtractionFilters = previewExtractionFilters;
@@ -428,6 +435,7 @@
   window.EU_API.ingestIdeaPdf = ingestIdeaPdf;
   window.EU_API.scanIdeaLiteratureFolder = scanIdeaLiteratureFolder;
   window.EU_API.checkIdeaPriorArt = checkIdeaPriorArt;
+  window.EU_API.planIdea = planIdea;
   window.EU_API.handoffIdea = handoffIdea;
   window.EU_API.createIdeaAgentProject = createIdeaAgentProject;
   window.EU_API.loadIdeaAgentProjects = loadIdeaAgentProjects;

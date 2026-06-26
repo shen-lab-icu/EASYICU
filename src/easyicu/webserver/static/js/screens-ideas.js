@@ -9,6 +9,7 @@
   let resolving = false;
   let discovering = false;
   let priorArting = false;
+  let planning = false;
   let handoffing = false;
   let projectCreating = false;
   let loadingRun = null;
@@ -17,6 +18,7 @@
   let sourceResolved = null;
   let discovery = null;
   let priorArt = null;
+  let planDraft = null;
   let projectSeed = null;
   let selectedRunId = null;
   let selectedRecordKey = null;
@@ -24,6 +26,10 @@
   let planEdits = '';
   let draft = {};
   let activeStep = 'source';
+  let pdfIngesting = false;
+  let pdfInfo = null;
+  let literatureScanning = false;
+  let literatureScan = null;
 
   function esc(v) {
     return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -65,7 +71,7 @@
   function activeStepLabel() {
     if (activeStep === 'ledger') return t('Ledger', '台账');
     if (activeStep === 'evidence') return t('Feasibility', '可行性');
-    if (activeStep === 'handoff') return t('Handoff', '交接');
+    if (activeStep === 'handoff') return t('Plan / replan', '计划 / replan');
     return t('Source', '来源');
   }
   function repaint() {
@@ -93,6 +99,10 @@
       year: inputValOr(root, '#ideaYear', 'year'),
       doi: inputValOr(root, '#ideaDoi', 'doi'),
       url: inputValOr(root, '#ideaUrl', 'url'),
+      source_file_name: (pdfInfo && pdfInfo.filename) || fieldValue('source_file_name'),
+      source_file_sha256: (pdfInfo && pdfInfo.sha256) || fieldValue('source_file_sha256'),
+      literature_folder: inputValOr(root, '#ideaLiteratureFolder', 'literature_folder'),
+      literature_pdf_count: literatureScan && literatureScan.folder ? Number(literatureScan.folder.pdf_count || 0) : Number(fieldValue('literature_pdf_count') || 0),
       allow_network: opt ? !!opt.checked : !!(draft && draft.allow_network),
     };
     return draft;
@@ -124,10 +134,11 @@
   }
   function sourceTabs() {
     const rows = [
-      ['manual', 'Manual idea', '手动输入', 'Paste a topic, article metadata, or excerpt.'],
-      ['url', 'Article metadata', '文章元数据', 'Paste title/abstract/excerpt; the URL is citation metadata until live fetch is enabled.'],
-      ['pdf', 'PDF excerpt', 'PDF 摘录', 'Paste bounded text now; full PDF parsing comes later.'],
-      ['frontier', 'Frontier search', '前沿检索', 'Describe journals/topics; PubMed metadata search requires opt-in.'],
+      ['manual', 'Manual idea', '手动想法', 'Start from a clinical hunch.'],
+      ['url', 'Article URL', '文章链接', 'Resolve bounded article metadata from a DOI or URL.'],
+      ['pdf', 'PDF file', 'PDF 文件', 'Choose a local PDF; only bounded metadata is retained.'],
+      ['literature_folder', 'Literature folder', '文献库文件夹', 'Scan a local folder of PDFs.'],
+      ['frontier', 'Frontier topic', '前沿主题', 'Prepare or opt in to PubMed metadata discovery.'],
     ];
     return `
       <div class="modeswitch ideas-source-switch" data-ideas-tabs>
@@ -135,8 +146,9 @@
       </div>`;
   }
   function modeTitle() {
-    if (srcType === 'url') return t('Article metadata seed', '文章元数据种子');
-    if (srcType === 'pdf') return t('PDF excerpt seed', 'PDF 摘录种子');
+    if (srcType === 'url') return t('Article URL seed', '文章链接种子');
+    if (srcType === 'pdf') return t('PDF file seed', 'PDF 文件种子');
+    if (srcType === 'literature_folder') return t('Literature folder seed', '文献库文件夹种子');
     if (srcType === 'frontier') return t('Frontier topic seed', '前沿主题种子');
     return t('Manual idea seed', '手动想法种子');
   }
@@ -144,26 +156,32 @@
     if (srcType === 'frontier') return t('Frontier topic / journal scope', '前沿主题 / 期刊范围');
     if (srcType === 'url') return t('Question this article suggests', '这篇文章启发的问题');
     if (srcType === 'pdf') return t('Question from this excerpt', '这段摘录启发的问题');
+    if (srcType === 'literature_folder') return t('Review scope for this library', '这批文献的综述范围');
     return t('Idea / research question', '想法 / 研究问题');
   }
   function modeExcerptLabel() {
     if (srcType === 'frontier') return t('Reasoning notes or review theme', '推理备注或 review 主题');
     if (srcType === 'pdf') return t('Bounded PDF excerpt', '有界 PDF 摘录');
     if (srcType === 'url') return t('Abstract / quoted trigger sentence', '摘要 / 触发原文句子');
+    if (srcType === 'literature_folder') return t('Library notes', '文献库备注');
     return t('Source quote or rationale sentence', '来源引用或触发句');
   }
   function modePlaceholder() {
     if (srcType === 'frontier') return 'e.g. ICU long-term outcomes after septic shock, editorials/reviews in Intensive Care Medicine';
     if (srcType === 'url') return 'e.g. What ICU-database study could test this trial or review insight?';
     if (srcType === 'pdf') return 'e.g. The excerpt suggests a measurable ICU exposure, outcome, or subgroup.';
+    if (srcType === 'literature_folder') return 'e.g. septic shock resuscitation reviews, ARDS ventilation editorials';
     return 'e.g. Vasopressor-first resuscitation and mortality among adult septic shock ICU patients';
   }
   function sourceModeHint() {
     if (srcType === 'url') {
-      return t('Article URL mode is metadata-only for now: paste the title, abstract/excerpt, or rationale sentence. The app will not fetch the URL until the opt-in adapter is connected.', '文章链接模式目前仅作元数据：请粘贴标题、摘要/摘录或触发句。接入 opt-in adapter 前，应用不会自动抓取链接。');
+      return t('Article URL mode resolves bounded metadata from a DOI or URL after source opt-in. Add the key quote if you want the ledger to preserve the article-specific rationale.', '文章链接模式会在来源 opt-in 后从 DOI 或 URL 解析有界元数据。若希望台账保留文章特定理由，请补一条关键引文。');
     }
     if (srcType === 'pdf') {
-      return t('PDF mode currently accepts pasted bounded excerpts. Full PDF parsing and upload handling are still blocked behind a separate parser/opt-in stage.', 'PDF 模式目前只接受粘贴的有界摘录。完整 PDF 解析和上传处理仍需单独 parser/opt-in 阶段。');
+      return t('PDF mode reads a selected local PDF through the browser and sends only bounded metadata, excerpt, and SHA-256 to the local server.', 'PDF 模式通过浏览器读取本地 PDF，只把有界元数据、摘录和 SHA-256 交给本机服务。');
+    }
+    if (srcType === 'literature_folder') {
+      return t('Literature folder mode scans local PDFs for metadata and candidate source clues. No full paper text or patient rows are stored in this screen.', '文献库文件夹模式会扫描本地 PDF 元数据和候选来源线索。本页不保存全文或患者行。');
     }
     if (srcType === 'frontier') {
       return t('Frontier mode can prepare queries without network access. If you opt in, it searches bounded PubMed metadata/abstracts, maps candidate ideas to the EasyICU dictionary, then lets you choose one for the local ledger.', '前沿模式在未联网时只准备检索式；如果你 opt-in，会检索有界 PubMed 元数据/摘要，把候选 idea 映射到 EasyICU 字典，并让你选择其中一个生成本地台账。');
@@ -175,8 +193,9 @@
     const hasExcerpt = !!payload.excerpt;
     const hasTitle = !!payload.title;
     if (srcType === 'url' && !payload.url) return t('Paste the article URL, then add a title, abstract, excerpt, or rationale sentence.', '请先粘贴文章链接，并补充标题、摘要、摘录或触发句。');
-    if (srcType === 'url' && !(hasTopic || hasExcerpt || hasTitle)) return t('This version does not fetch the URL automatically. Add a title, abstract, excerpt, or rationale sentence before mining.', '当前版本不会自动抓取链接。请先补充标题、摘要、摘录或触发句再挖掘。');
-    if (srcType === 'pdf' && !hasExcerpt) return t('Paste a bounded PDF excerpt before mining. Full PDF parsing is not enabled in this local pass.', '请先粘贴有界 PDF 摘录。本地第一版尚未启用完整 PDF 解析。');
+    if (srcType === 'url' && !(hasTopic || hasExcerpt || hasTitle || payload.doi)) return t('Resolve the URL or add a title, DOI, abstract, excerpt, or rationale sentence before mining.', '请先解析链接，或补充标题、DOI、摘要、摘录或触发句再挖掘。');
+    if (srcType === 'pdf' && !(hasExcerpt || payload.source_file_sha256 || hasTitle)) return t('Choose a local PDF or paste a bounded PDF excerpt before mining.', '请先选择本地 PDF 或粘贴有界 PDF 摘录。');
+    if (srcType === 'literature_folder' && !payload.literature_folder) return t('Choose or paste a local literature folder before mining.', '请先选择或粘贴本地文献库文件夹。');
     if (srcType === 'frontier' && !hasTopic) return t('Describe the frontier topic or journal scope before mining. Live search is a separate opt-in stage.', '请先描述前沿主题或期刊范围。真实检索属于单独 opt-in 阶段。');
     if (!(hasTopic || hasExcerpt || hasTitle || payload.url)) return t('Enter a topic, source title, URL, or excerpt before mining.', '请先输入主题、来源标题、链接或摘录。');
     return '';
@@ -208,6 +227,7 @@
     selectedRunId = data && data.run_id ? data.run_id : null;
     selectedRecordKey = recordKey || runRecordKey(data || {}, 'current') || selectedRunId;
     priorArt = data && data.prior_art_check ? data.prior_art_check : null;
+    planDraft = data && data.idea_plan ? data.idea_plan : null;
     window.EU_IDEA_HANDOFF = data && data.handoff ? data.handoff : null;
     projectSeed = data && data.agent_project ? data.agent_project : null;
     draft = draftFromRun(data || {});
@@ -215,7 +235,7 @@
     planEdits = ((window.EU_IDEA_HANDOFF || {}).handoff_plan || {}).human_plan_notes || '';
     sourceResolved = null;
     err = null;
-    activeStep = window.EU_IDEA_HANDOFF || projectSeed ? 'handoff' : data ? 'ledger' : 'source';
+    activeStep = window.EU_IDEA_HANDOFF || projectSeed || planDraft ? 'handoff' : data ? 'ledger' : 'source';
   }
   function runIdeaDiscovery() {
     if (discovering) return;
@@ -241,6 +261,81 @@
       discovering = false;
       repaint();
     });
+  }
+  function applySuggestedPayload(suggested) {
+    if (!suggested) return;
+    draft = Object.assign({}, draft, Object.fromEntries(Object.entries(suggested).filter(([, v]) => v != null && v !== '')));
+  }
+  function ingestPdfFile(file) {
+    if (!file || pdfIngesting) return;
+    const name = String(file.name || '');
+    if (!/\.pdf$/i.test(name) && file.type && file.type !== 'application/pdf') {
+      err = t('Choose a PDF file.', '请选择 PDF 文件。');
+      repaint();
+      return;
+    }
+    if (!(window.EU_API && window.EU_API.ingestIdeaPdf)) {
+      err = t('PDF ingestion API is unavailable.', 'PDF 解析 API 不可用。');
+      repaint();
+      return;
+    }
+    srcType = 'pdf';
+    pdfIngesting = true;
+    err = null;
+    repaint();
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result || '');
+      const contentBase64 = text.includes(',') ? text.split(',').pop() : text;
+      window.EU_API.ingestIdeaPdf({ filename: name, content_base64: contentBase64 })
+        .then(data => {
+          pdfInfo = data && data.pdf ? data.pdf : null;
+          if (pdfInfo) {
+            draft.source_file_name = pdfInfo.filename || name;
+            draft.source_file_sha256 = pdfInfo.sha256 || '';
+          }
+          applySuggestedPayload(data && data.suggested_payload);
+          sourceResolved = data;
+        })
+        .catch(e => { err = e.message || String(e); })
+        .finally(() => { pdfIngesting = false; repaint(); });
+    };
+    reader.onerror = () => {
+      pdfIngesting = false;
+      err = t('Could not read the selected PDF file.', '无法读取选中的 PDF 文件。');
+      repaint();
+    };
+    reader.readAsDataURL(file);
+  }
+  function scanLiteratureFolder() {
+    if (literatureScanning) return;
+    const payload = collectPayload(document);
+    const path = String(payload.literature_folder || '').trim();
+    if (!path) {
+      err = t('Choose or paste a local literature folder first.', '请先选择或粘贴本地文献库文件夹。');
+      repaint();
+      return;
+    }
+    if (!(window.EU_API && window.EU_API.scanIdeaLiteratureFolder)) {
+      err = t('Literature-folder scan API is unavailable.', '文献库文件夹扫描 API 不可用。');
+      repaint();
+      return;
+    }
+    srcType = 'literature_folder';
+    literatureScanning = true;
+    err = null;
+    repaint();
+    window.EU_API.scanIdeaLiteratureFolder({ path })
+      .then(data => {
+        literatureScan = data;
+        const folder = data && data.folder ? data.folder : {};
+        if (folder.path) draft.literature_folder = folder.path;
+        draft.literature_pdf_count = Number(folder.pdf_count || 0);
+        applySuggestedPayload(data && data.suggested_payload);
+        sourceResolved = data;
+      })
+      .catch(e => { err = e.message || String(e); })
+      .finally(() => { literatureScanning = false; repaint(); });
   }
   function useDiscoveryCandidate(index) {
     const rows = discovery && Array.isArray(discovery.idea_candidates) ? discovery.idea_candidates : [];
@@ -300,27 +395,18 @@
     const handoff = window.EU_IDEA_HANDOFF;
     const project = projectSeed;
     const source = result && (result.source_evidence || [])[0];
-    return `
-      <div class="ideas-summary-strip">
-        <div class="ideas-summary-item ${source ? 'ready' : 'idle'}"><span>${icon(source ? 'check' : 'file', 13)}</span><div><b>${t('Source', '来源')}</b><small>${source ? esc(source.title || source.journal || 'bound') : t('waiting for input', '等待输入')}</small></div></div>
-        <div class="ideas-summary-item ${idea ? 'ready' : 'idle'}"><span>${icon(idea ? 'target' : 'clock', 13)}</span><div><b>${t('Idea ledger', 'Idea 台账')}</b><small>${idea ? esc(idea.go_no_go || 'draft') : t('not mined', '尚未挖掘')}</small></div></div>
-        <div class="ideas-summary-item ${pre ? 'ready' : 'idle'}"><span>${icon(pre ? 'beaker' : 'shield', 13)}</span><div><b>${t('Pre-experiment', '预实验')}</b><small>${pre ? esc(pre.status || 'checked') : t('after mining', '挖掘后生成')}</small></div></div>
-        <div class="ideas-summary-item ${handoff || project ? 'ready' : 'idle'}"><span>${icon(project ? 'agent' : handoff ? 'check' : 'arrow', 13)}</span><div><b>${t('Plan handoff', '计划交接')}</b><small>${project ? t('project seed ready', '项目种子已生成') : handoff ? t('frozen for Agent', '已冻结给 Agent') : t('locked until review', '评审后解锁')}</small></div></div>
-      </div>`;
-  }
-  function stepNav() {
     const steps = [
-      ['source', t('1. Source', '1. 来源'), t('Paste the paper clue or research hunch.', '粘贴文章线索或研究直觉。'), 'file'],
-      ['ledger', t('2. Idea ledger', '2. Idea 台账'), t('Review evidence-bound candidate ideas.', '查看证据绑定候选想法。'), 'target'],
-      ['evidence', t('3. Feasibility', '3. 可行性'), t('Check dictionary, export coverage, and prior art.', '检查字典、导出覆盖和已有研究。'), 'beaker'],
-      ['handoff', t('4. Handoff', '4. 交接'), t('Freeze a seed for Research Projects.', '冻结给研究项目的种子。'), 'agent'],
+      ['source', t('Source', '来源'), source ? esc(source.title || source.journal || 'bound') : t('waiting for input', '等待输入'), source ? 'check' : 'file'],
+      ['ledger', t('Idea ledger', 'Idea 台账'), idea ? esc(idea.go_no_go || 'draft') : t('not mined', '尚未挖掘'), idea ? 'target' : 'clock'],
+      ['evidence', t('Pre-experiment', '预实验'), pre ? esc(pre.status || 'checked') : t('after mining', '挖掘后生成'), pre ? 'beaker' : 'shield'],
+      ['handoff', t('Plan / replan', '计划 / replan'), project ? t('project seed ready', '项目种子已生成') : handoff ? t('frozen for Agent', '已冻结给 Agent') : planDraft ? t('plan draft ready', '计划草案已生成') : t('plan required', '需要计划'), project ? 'agent' : handoff || planDraft ? 'check' : 'arrow'],
     ];
-    return `<div class="ideas-step-nav">${steps.map(row => {
+    return `<div class="ideas-summary-strip">${steps.map(row => {
       const state = stepState(row[0]);
-      const cls = [activeStep === row[0] ? 'active' : '', state].filter(Boolean).join(' ');
-      return `<button class="ideas-step-tab ${cls}" data-idea-step="${row[0]}" ${state === 'locked' ? 'aria-disabled="true"' : ''}>
-        <span class="ideas-step-icon">${icon(state === 'ready' && row[0] !== activeStep ? 'check' : row[3], 13)}</span>
-        <span><b>${row[1]}</b><small>${row[2]}</small></span>
+      const cls = ['ideas-summary-item', state === 'ready' ? 'ready' : 'idle', activeStep === row[0] ? 'active' : ''].filter(Boolean).join(' ');
+      return `<button type="button" class="${cls}" data-idea-step="${row[0]}" ${state === 'locked' ? 'aria-disabled="true"' : ''}>
+        <span>${icon(state === 'ready' && row[0] !== activeStep ? 'check' : row[3], 13)}</span>
+        <div><b>${row[1]}</b><small>${row[2]}</small></div>
       </button>`;
     }).join('')}</div>`;
   }
@@ -361,6 +447,89 @@
         }).join('')}</div>` : ''}
       </div>`;
   }
+  function optInBlock() {
+    return `
+      <details class="ideas-advanced mt-10">
+        <summary>${icon('shield', 13)} ${t('Network and provider opt-in', '网络与模型 opt-in')} <span>${t('off by default', '默认关闭')}</span></summary>
+        <label class="rtodo-row mt-10 ideas-network-row">
+          <input type="checkbox" id="ideaNetworkOptIn" ${fieldValue('allow_network') === 'true' || fieldValue('allow_network') === true ? 'checked' : ''} />
+          <span class="rtodo-t">${t('Allow one bounded network metadata/prior-art request for this source', '允许本来源进行一次有界网络元数据 / prior-art 请求')}</span>
+          <span class="rtodo-ref mono">opt-in</span>
+        </label>
+        <div class="muted mt-8">${t('URL/DOI metadata and PubMed prior-art checks stay blocked until this source-level opt-in is checked. Provider calls still require provider readiness.', 'URL/DOI 元数据和 PubMed prior-art 检查在勾选本来源 opt-in 前保持阻断。Provider 调用仍需要 provider readiness。')}</div>
+      </details>`;
+  }
+  function pdfPickerBlock() {
+    const label = pdfIngesting
+      ? t('Reading selected PDF...', '正在读取选中的 PDF...')
+      : pdfInfo
+        ? `${pdfInfo.filename || 'PDF'} · ${fmt(pdfInfo.page_count)} ${t('pages', '页')} · ${String(pdfInfo.sha256 || '').slice(0, 8)}...`
+        : t('Choose a local PDF. Only bounded metadata/excerpt plus SHA-256 are retained.', '选择本地 PDF。只保留有界元数据/摘录和 SHA-256。');
+    return `
+      <div class="ideas-source-picker">
+        <input type="file" accept="application/pdf,.pdf" id="ideaPdfFile" hidden />
+        <div>
+          <b>${esc(label)}</b>
+          <span>${t('The full PDF is read locally by the browser and is not stored by this workbench.', 'PDF 全文由浏览器在本机读取，本工作台不保存全文。')}</span>
+        </div>
+        <button class="btn sm" type="button" data-idea-pdf-pick>${icon('folder', 13)} ${pdfInfo ? t('Choose another PDF', '换一个 PDF') : t('Choose PDF', '选择 PDF')}</button>
+      </div>`;
+  }
+  function literatureFolderBlock() {
+    const folder = literatureScan && literatureScan.folder;
+    const docs = literatureScan && Array.isArray(literatureScan.documents) ? literatureScan.documents.slice(0, 4) : [];
+    return `
+      <div class="ideas-folder-source">
+        <label class="field ideas-field"><span>${t('Local literature folder', '本地文献库文件夹')}</span><input id="ideaLiteratureFolder" placeholder="/Users/.../papers" value="${esc(fieldValue('literature_folder'))}" /></label>
+        <button class="btn ${literatureScanning ? '' : 'primary'}" type="button" data-idea-lit-scan>${literatureScanning ? '<span class="spin"></span>' : icon('search', 13)} ${literatureScanning ? t('Scanning PDFs...', '正在扫描 PDF...') : t('Scan folder', '扫描文件夹')}</button>
+      </div>
+      ${folder ? `<div class="note ok mt-10"><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${fmt(folder.pdf_count)} ${t('PDFs found', '个 PDF 已发现')}</div><div class="d">${esc(folder.path || fieldValue('literature_folder'))}</div></div></div>` : ''}
+      ${docs.length ? `<div class="ideas-feature-list mt-10">${docs.map(doc => `<div class="ideas-feature-row"><div class="ideas-feature-name"><b>${esc(doc.title || doc.filename || 'PDF')}</b><span class="mono">${esc(doc.filename || doc.path || '')}</span></div><span class="mono">${esc(String(doc.sha256 || '').slice(0, 8))}</span></div>`).join('')}</div>` : ''}`;
+  }
+  function sourceSpecificForm() {
+    if (srcType === 'manual') return `
+      <div class="ideas-primary-grid mt-14">
+        <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="4" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
+        <label class="field ideas-field"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="4" placeholder="${t('Optional: paste the sentence, clinical observation, or rationale that triggered the idea.', '可选：粘贴触发这个想法的句子、临床观察或理由。')}">${esc(fieldValue('excerpt'))}</textarea></label>
+      </div>`;
+    if (srcType === 'url') return `
+      <div class="ideas-url-stack mt-14">
+        <label class="field ideas-field"><span>${t('Article URL', '文章链接')}</span><input id="ideaUrl" placeholder="https://www.nejm.org/doi/full/..." value="${esc(fieldValue('url'))}" /></label>
+        <div class="ideas-meta-grid mt-10">
+          <label class="field ideas-field"><span>DOI / PMID</span><input id="ideaDoi" placeholder="10.xxxx or PMID" value="${esc(fieldValue('doi'))}" /></label>
+          <label class="field ideas-field"><span>Title</span><input id="ideaTitle" placeholder="${t('Resolved or manually entered title', '解析或手动输入的标题')}" value="${esc(fieldValue('title'))}" /></label>
+          <label class="field ideas-field"><span>Journal</span><input id="ideaJournal" placeholder="e.g. NEJM" value="${esc(fieldValue('journal'))}" /></label>
+          <label class="field ideas-field ideas-year"><span>Year</span><input id="ideaYear" placeholder="2026" value="${esc(fieldValue('year'))}" /></label>
+        </div>
+        <label class="field ideas-field mt-10"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="3" placeholder="${t('Optional: paste the article sentence that should become an ICU-database question.', '可选：粘贴应转化为 ICU 数据库问题的文章句子。')}">${esc(fieldValue('excerpt'))}</textarea></label>
+        ${optInBlock()}
+      </div>`;
+    if (srcType === 'pdf') return `
+      <div class="ideas-url-stack mt-14">
+        ${pdfPickerBlock()}
+        <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="3" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
+        <label class="field ideas-field"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="4" placeholder="${t('Optional: paste a bounded passage if the PDF parser did not extract the motivating sentence.', '可选：如果 PDF 解析没有抽到触发句，可以粘贴一段有界摘录。')}">${esc(fieldValue('excerpt'))}</textarea></label>
+        <div class="ideas-meta-grid mt-10">
+          <label class="field ideas-field"><span>Title</span><input id="ideaTitle" placeholder="${t('Auto-filled from PDF when available', '可由 PDF 自动填充')}" value="${esc(fieldValue('title'))}" /></label>
+          <label class="field ideas-field"><span>DOI / PMID</span><input id="ideaDoi" placeholder="10.xxxx or PMID" value="${esc(fieldValue('doi'))}" /></label>
+        </div>
+      </div>`;
+    if (srcType === 'literature_folder') return `
+      <div class="ideas-url-stack mt-14">
+        ${literatureFolderBlock()}
+        <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="3" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
+      </div>`;
+    return `
+      <div class="ideas-url-stack mt-14">
+        <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="4" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
+        <div class="ideas-meta-grid mt-10">
+          <label class="field ideas-field"><span>${t('Journal scope', '期刊范围')}</span><input id="ideaJournal" placeholder="NEJM, JAMA, ICM..." value="${esc(fieldValue('journal'))}" /></label>
+          <label class="field ideas-field ideas-year"><span>${t('Year window', '年份窗口')}</span><input id="ideaYear" placeholder="2024-2026" value="${esc(fieldValue('year'))}" /></label>
+        </div>
+        ${optInBlock()}
+        ${discoveryPanel()}
+      </div>`;
+  }
   function sourceForm() {
     return `
       <div class="card pad ideas-compose ideas-core-card">
@@ -373,30 +542,7 @@
           <div class="ico">${icon('shield', 14)}</div>
           <div class="body"><div class="t">${esc(modeTitle())}</div><div class="d">${esc(sourceModeHint())}</div></div>
         </div>
-        <div class="ideas-primary-grid mt-14">
-          <label class="field ideas-field"><span>${modePrimaryLabel()}</span><textarea id="ideaTopic" rows="4" placeholder="${esc(modePlaceholder())}">${esc(fieldValue('topic'))}</textarea></label>
-          <label class="field ideas-field"><span>${modeExcerptLabel()}</span><textarea id="ideaExcerpt" rows="4" placeholder="${t('Paste only the sentence(s) or bounded excerpt that triggered the idea. We store this quote and hashes, not the full paper.', '只粘贴触发想法的句子或有界摘录。系统保存引用和哈希，不保存全文。')}">${esc(fieldValue('excerpt'))}</textarea></label>
-        </div>
-        <section class="ideas-advanced ideas-source-metadata mt-14">
-          <div class="ideas-advanced-head">${icon('list', 13)} <b>${t('Source metadata', '来源元数据')}</b> <span>${t('optional, but useful for citation and prior-art checks', '可选；用于引用和已有研究检查')}</span></div>
-          <div class="ideas-meta-grid mt-10">
-            <label class="field ideas-field"><span>Title</span><input id="ideaTitle" placeholder="Article or review title" value="${esc(fieldValue('title'))}" /></label>
-            <label class="field ideas-field"><span>Journal</span><input id="ideaJournal" placeholder="e.g. Intensive Care Medicine" value="${esc(fieldValue('journal'))}" /></label>
-            <label class="field ideas-field ideas-year"><span>Year</span><input id="ideaYear" placeholder="2026" value="${esc(fieldValue('year'))}" /></label>
-            <label class="field ideas-field"><span>DOI / PMID</span><input id="ideaDoi" placeholder="10.xxxx or PMID" value="${esc(fieldValue('doi'))}" /></label>
-            <label class="field ideas-field ideas-url-field"><span>URL</span><input id="ideaUrl" placeholder="https://..." value="${esc(fieldValue('url'))}" /></label>
-          </div>
-        </section>
-        <details class="ideas-advanced mt-10">
-          <summary>${icon('shield', 13)} ${t('Network and provider opt-in', '网络与模型 opt-in')} <span>${t('off by default', '默认关闭')}</span></summary>
-          <label class="rtodo-row mt-10 ideas-network-row">
-            <input type="checkbox" id="ideaNetworkOptIn" ${fieldValue('allow_network') === 'true' || fieldValue('allow_network') === true ? 'checked' : ''} />
-            <span class="rtodo-t">${t('Allow one bounded network metadata/prior-art request for this source', '允许本来源进行一次有界网络元数据 / prior-art 请求')}</span>
-            <span class="rtodo-ref mono">opt-in</span>
-          </label>
-          <div class="muted mt-8">${t('This pass does not fetch the URL, parse a PDF, or call an external LLM unless you explicitly opt in and a provider is configured.', '除非你明确 opt-in 且 provider 已配置，否则这一版不会抓取链接、解析 PDF 或调用外部 LLM。')}</div>
-        </details>
-        ${discoveryPanel()}
+        ${sourceSpecificForm()}
         ${!result ? `<div class="ideas-zero-line mt-12">${icon('clock', 13)} <span>${t('No idea ledger yet', '还没有 idea 台账')}</span><b>${t('Next: create one local, auditable record.', '下一步：生成一条本地、可审计记录。')}</b></div>` : ''}
         <div class="row gap-8 mt-16 ideas-actions">
           <button class="btn" data-idea-resolve ${resolving ? 'aria-disabled="true"' : ''}>${resolving ? '<span class="spin"></span>' : icon('search', 14)} ${t('Resolve source', '解析来源')}</button>
@@ -493,7 +639,7 @@
         </div>
         <div class="ideas-inline-actions mt-14">
           <button class="btn primary" data-idea-step="evidence">${icon('beaker', 13)} ${t('Review feasibility', '查看可行性')}</button>
-          <button class="btn" data-idea-step="handoff">${icon('agent', 13)} ${t('Plan handoff', '计划交接')}</button>
+          <button class="btn" data-idea-step="handoff">${icon('agent', 13)} ${t('Plan / replan', '计划 / replan')}</button>
         </div>
       </div>`;
   }
@@ -537,24 +683,30 @@
     const stats = pre.feature_statistics || [];
     const visibleStats = stats.slice(0, 4);
     const hiddenStats = stats.slice(4);
-    const riskCount = stats.filter(s => pct(s.coverage_pct) < 50).length;
+    const isEventMetric = (s) => s && s.metric_kind === 'event_rate';
+    const riskCount = stats.filter(s => !isEventMetric(s) && (s.low_coverage || pct(s.coverage_pct) < 50)).length;
     const featureRow = (s) => {
       const n = s.numeric_summary || {};
-      const coverage = pct(s.coverage_pct);
-      const tone = coverageTone(coverage);
-      const summary = n.available ? `median ${fmt(n.median)} · min ${fmt(n.min)} · max ${fmt(n.max)}` : t('categorical, non-numeric, or empty', '分类、非数值或为空');
+      const eventMetric = isEventMetric(s);
+      const metricPct = eventMetric ? pct(s.event_rate_pct) : pct(s.coverage_pct);
+      const tone = eventMetric ? 'event' : coverageTone(metricPct);
+      const summary = eventMetric
+        ? t('binary/event indicator; non-events are not missing', '二分类/事件指标；阴性患者不是缺失')
+        : (n.available ? `median ${fmt(n.median)} · min ${fmt(n.min)} · max ${fmt(n.max)}` : t('categorical, non-numeric, or empty', '分类、非数值或为空'));
+      const meta = eventMetric
+        ? `<span>${t('Events', '事件')} ${fmt(s.event_entities ?? s.records)}</span><span>${t('Non-events', '非事件')} ${fmt(s.non_event_entities)}</span>`
+        : `<span>${t('Records', '记录')} ${fmt(s.records)}</span><span>${t('Missing', '缺失')} ${pctLabel(s.missing_pct)}</span>`;
       return `<div class="ideas-feature-row ${tone}">
         <div class="ideas-feature-name">
           <b>${esc(s.label)}</b>
           <span class="mono">${esc(s.module || '')} · ${esc(s.concept_id || '')}</span>
         </div>
         <div class="ideas-feature-cov">
-          <div class="ideas-cov-head"><span>${t('Coverage', '覆盖')}</span><b>${pctLabel(s.coverage_pct)}</b></div>
-          <div class="ideas-cov-bar"><i style="width:${coverage}%"></i></div>
+          <div class="ideas-cov-head"><span>${eventMetric ? t('Event rate', '事件率') : t('Coverage', '覆盖')}</span><b>${pctLabel(eventMetric ? s.event_rate_pct : s.coverage_pct)}</b></div>
+          <div class="ideas-cov-bar"><i style="width:${metricPct}%"></i></div>
         </div>
         <div class="ideas-feature-meta">
-          <span>${t('Records', '记录')} ${fmt(s.records)}</span>
-          <span>${t('Missing', '缺失')} ${pctLabel(s.missing_pct)}</span>
+          ${meta}
         </div>
         <div class="ideas-feature-summary">${esc(summary)}</div>
       </div>`;
@@ -578,20 +730,45 @@
       </div>`;
   }
   function planBuilder() {
-    const plan = result && result.handoff_plan;
-    if (!plan) return '';
+    const plan = (planDraft && planDraft.plan) || (window.EU_IDEA_HANDOFF && window.EU_IDEA_HANDOFF.handoff_plan);
+    if (!result) return '';
+    if (!plan) {
+      return `
+      <div class="card pad ideas-core-card">
+        <div class="section-head">
+          <span class="sec-ico">${icon('agent', 14)}</span>
+          <div><h2>${t('Plan / replan before Agent', 'Agent 前计划 / replan')}</h2><p>${t('Generate a study plan from the idea ledger and pre-experiment before freezing an Agent handoff.', '先根据 idea 台账和预实验生成研究计划，然后再冻结交接给 Agent。')}</p></div>
+        </div>
+        <div class="note warn mt-8"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${t('Plan required before handoff', '交接前需要计划')}</div><div class="d">${t('This step collects the clinical question, feasibility risks, cohort/module confirmations, analysis family, reference method motifs, and reporting boundary. It is not an Agent run.', '这一步收集临床问题、可行性风险、队列/模块确认、分析类型、参考方法套路和报告边界。它不是 Agent run。')}</div></div></div>
+        <div class="row gap-8 mt-12">
+          <button class="btn primary" data-idea-plan ${planning ? 'aria-disabled="true"' : ''}>${planning ? '<span class="spin"></span>' : icon('agent', 14)} ${t('Generate study plan', '生成研究计划')}</button>
+        </div>
+      </div>`;
+    }
+    const patterns = Array.isArray(plan.reference_analysis_patterns) ? plan.reference_analysis_patterns : [];
+    const constraints = Array.isArray(plan.clinical_icu_constraints) ? plan.clinical_icu_constraints : [];
+    const confirmations = Array.isArray(plan.required_user_confirmations) ? plan.required_user_confirmations : [];
+    const miniList = (rows) => rows.length ? `<div class="ideas-feature-list mt-10">${rows.map(row => {
+      const label = typeof row === 'object' ? (row.pattern || row.title || '') : String(row || '');
+      const body = typeof row === 'object' ? [row.use_for, row.guardrail].filter(Boolean).join(' · ') : '';
+      return `<div class="ideas-feature-row"><div class="ideas-feature-name"><b>${esc(label)}</b>${body ? `<span class="mono">${esc(body)}</span>` : ''}</div></div>`;
+    }).join('')}</div>` : '';
     return `
       <div class="card pad ideas-core-card">
         <div class="section-head">
           <span class="sec-ico">${icon('agent', 14)}</span>
-          <div><h2>${t('Plan handoff', '计划交接')}</h2><p>${t('Confirm or edit the plan before sending it to Agent Projects. This does not unlock a manuscript draft.', '交给 Agent Projects 前先确认或微调计划。这里不会解锁论文草稿。')}</p></div>
+          <div><h2>${t('Plan / replan before Agent', 'Agent 前计划 / replan')}</h2><p>${t('Confirm or revise the plan before sending it to Agent Projects. This does not unlock a manuscript draft.', '交给 Agent Projects 前先确认或修订计划。这里不会解锁论文草稿。')}</p></div>
         </div>
-        <div class="note ok mt-8"><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${esc(plan.research_question || '')}</div><div class="d">${t('Draft analysis plan is locked until human confirmation and evidence checks pass.', '分析计划草稿在人工确认和证据核验通过前保持锁定。')}</div></div></div>
+        <div class="note ok mt-8"><div class="ico">${icon('check', 14)}</div><div class="body"><div class="t">${esc(plan.research_question || '')}</div><div class="d">${esc((plan.agent_boundary && plan.agent_boundary.reason) || t('Draft analysis plan is locked until human confirmation and evidence checks pass.', '分析计划草稿在人工确认和证据核验通过前保持锁定。'))}</div></div></div>
         <div class="ledger compact mt-12">
           ${(plan.analysis_plan || []).map((x, i) => `<div class="ledger-row"><span class="ledger-ico">${String(i + 1).padStart(2, '0')}</span><div>${esc(x)}</div></div>`).join('')}
         </div>
+        ${patterns.length ? `<details class="ideas-compact-details mt-10" open><summary>${icon('book', 13)} ${t('Reference method patterns', '参考方法套路')} <span>${patterns.length}</span></summary>${miniList(patterns)}</details>` : ''}
+        ${constraints.length ? `<details class="ideas-compact-details mt-10"><summary>${icon('shield', 13)} ${t('ICU constraints', 'ICU 场景约束')} <span>${constraints.length}</span></summary>${miniList(constraints)}</details>` : ''}
+        ${confirmations.length ? `<div class="ideas-interpretation mt-10"><div>${icon('shield', 13)} <span>${t('Still needs confirmation', '仍需确认')}: ${confirmations.map(esc).join(' · ')}</span></div></div>` : ''}
         <label class="field ideas-plan-edits mt-12"><span>${t('Natural-language plan edits', '用自然语言微调计划')}</span><textarea id="ideaPlanEdits" rows="4" placeholder="${t('e.g. use AKI as the endpoint, restrict to first ICU stay, add missingness sensitivity...', '例如:把 AKI 作为结局,限制首次 ICU 入住,增加缺失敏感性分析...')}">${esc(planEdits)}</textarea></label>
         <div class="row gap-8 mt-12">
+          <button class="btn" data-idea-replan ${planning ? 'aria-disabled="true"' : ''}>${planning ? '<span class="spin"></span>' : icon('refresh', 14)} ${t('Replan from notes', '根据说明重规划')}</button>
           <button class="btn primary" data-idea-handoff ${handoffing ? 'aria-disabled="true"' : ''}>${handoffing ? '<span class="spin"></span>' : icon('arrow', 14)} ${t('Freeze handoff for Agent', '冻结并交给 Agent')}</button>
           ${window.EU_IDEA_HANDOFF ? `<button class="btn primary" data-idea-create-project ${projectCreating ? 'aria-disabled="true"' : ''}>${projectCreating ? '<span class="spin"></span>' : icon('agent', 13)} ${t('Create Agent project', '创建研究项目')}</button>` : ''}
           <button class="btn" data-nav="agent">${icon('agent', 13)} ${t('Open Agent Projects', '打开 Agent Projects')}</button>
@@ -618,7 +795,7 @@
     }
     if (activeStep === 'evidence') {
       if (!result) return warning + lockedStep('evidence');
-      return warning + preExperiment() + priorArtPanel() + blockedPanel() + `<div class="ideas-inline-actions mt-14"><button class="btn primary" data-idea-step="handoff">${icon('agent', 13)} ${t('Prepare Agent handoff', '准备 Agent 交接')}</button><button class="btn" data-nav="dictionary">${icon('list', 13)} ${t('Open dictionary', '查看字典')}</button><button class="btn" data-nav="extraction">${icon('extract', 13)} ${t('Use active export', '使用当前导出')}</button></div>`;
+      return warning + preExperiment() + priorArtPanel() + blockedPanel() + `<div class="ideas-inline-actions mt-14"><button class="btn primary" data-idea-step="handoff">${icon('agent', 13)} ${t('Prepare plan / replan', '准备计划 / replan')}</button><button class="btn" data-nav="dictionary">${icon('list', 13)} ${t('Open dictionary', '查看字典')}</button><button class="btn" data-nav="extraction">${icon('extract', 13)} ${t('Use active export', '使用当前导出')}</button></div>`;
     }
     if (activeStep === 'handoff') {
       if (!result) return warning + lockedStep('handoff');
@@ -717,7 +894,6 @@
           ${ideaDetailHead()}
           <div class="ag-body ideas-body">
             <div class="ideas-work-grid">
-              ${stepNav()}
               <div class="ideas-step-panel">${activeStepPanel()}</div>
             </div>
           </div>
@@ -751,6 +927,7 @@
       collectPayload(document);
       srcType = btn.dataset.ideaSrc || 'manual';
       draft.source_type = srcType;
+      draft.allow_network = false;
       repaint();
     }));
     root.querySelectorAll('[data-idea-step]').forEach(btn => btn.addEventListener('click', () => {
@@ -763,7 +940,7 @@
       repaint();
     }));
     root.querySelectorAll('[data-idea-new]').forEach(btn => btn.addEventListener('click', () => {
-      result = null; err = null; planEdits = ''; sourceResolved = null; discovery = null; priorArt = null; projectSeed = null; selectedRunId = null; selectedRecordKey = null; draft = {}; activeStep = 'source'; window.EU_IDEA_HANDOFF = null; repaint();
+      result = null; err = null; planEdits = ''; sourceResolved = null; discovery = null; priorArt = null; planDraft = null; projectSeed = null; selectedRunId = null; selectedRecordKey = null; draft = {}; activeStep = 'source'; window.EU_IDEA_HANDOFF = null; repaint();
     }));
     const resolveBtn = root.querySelector('[data-idea-resolve]');
     if (resolveBtn) resolveBtn.addEventListener('click', () => {
@@ -781,6 +958,21 @@
     if (discoverBtn) discoverBtn.addEventListener('click', () => {
       runIdeaDiscovery();
     });
+    const pdfPick = root.querySelector('[data-idea-pdf-pick]');
+    if (pdfPick) pdfPick.addEventListener('click', () => {
+      const fileInput = root.querySelector('#ideaPdfFile');
+      if (fileInput) fileInput.click();
+    });
+    const pdfFile = root.querySelector('#ideaPdfFile');
+    if (pdfFile) pdfFile.addEventListener('change', () => {
+      const file = pdfFile.files && pdfFile.files[0];
+      ingestPdfFile(file);
+      pdfFile.value = '';
+    });
+    const litScan = root.querySelector('[data-idea-lit-scan]');
+    if (litScan) litScan.addEventListener('click', () => {
+      scanLiteratureFolder();
+    });
     root.querySelectorAll('[data-idea-use-discovery]').forEach(btn => btn.addEventListener('click', () => {
       useDiscoveryCandidate(btn.dataset.ideaUseDiscovery || 0);
     }));
@@ -793,13 +985,17 @@
       mining = true; err = null; result = null; priorArt = null; projectSeed = null; window.EU_IDEA_HANDOFF = null;
       repaint();
       window.EU_API.mineIdeas(payload).then(data => {
-        result = data; selectedRunId = data.run_id || null; selectedRecordKey = runRecordKey(data, 'current') || selectedRunId; err = null; planEdits = ''; activeStep = 'ledger'; window.EU_IDEA_LAST_RUN = data; upsertHistoryRun(data);
+        result = data; selectedRunId = data.run_id || null; selectedRecordKey = runRecordKey(data, 'current') || selectedRunId; err = null; planEdits = ''; planDraft = null; activeStep = 'ledger'; window.EU_IDEA_LAST_RUN = data; upsertHistoryRun(data);
       }).catch(e => {
         err = e.message || String(e);
       }).finally(() => { mining = false; repaint(); });
     });
     const planBox = root.querySelector('#ideaPlanEdits');
-    if (planBox) planBox.addEventListener('input', () => { planEdits = planBox.value; });
+    if (planBox) planBox.addEventListener('input', () => {
+      planEdits = planBox.value;
+      window.EU_IDEA_HANDOFF = null;
+      projectSeed = null;
+    });
     const priorBtn = root.querySelector('[data-idea-prior-art]');
     if (priorBtn) priorBtn.addEventListener('click', () => {
       if (priorArting || !result || !(window.EU_API && window.EU_API.checkIdeaPriorArt)) return;
@@ -812,9 +1008,48 @@
         allow_network: !!payload.allow_network,
       }).then(data => { priorArt = data; activeStep = 'evidence'; }).catch(e => { err = e.message || String(e); }).finally(() => { priorArting = false; repaint(); });
     });
+    const planBtn = root.querySelector('[data-idea-plan]');
+    if (planBtn) planBtn.addEventListener('click', () => {
+      if (planning || !result || !(window.EU_API && window.EU_API.planIdea)) return;
+      planning = true; err = null; planEdits = inputVal(document, '#ideaPlanEdits') || planEdits;
+      repaint();
+      window.EU_API.planIdea({
+        run_id: result.run_id,
+        idea_id: result.selected_idea_id,
+        mode: 'plan',
+        plan_edits: planEdits,
+      }).then(data => {
+        planDraft = data;
+        window.EU_IDEA_HANDOFF = null;
+        projectSeed = null;
+        activeStep = 'handoff';
+      }).catch(e => { err = e.message || String(e); }).finally(() => { planning = false; repaint(); });
+    });
+    const replanBtn = root.querySelector('[data-idea-replan]');
+    if (replanBtn) replanBtn.addEventListener('click', () => {
+      if (planning || !result || !(window.EU_API && window.EU_API.planIdea)) return;
+      planning = true; err = null; planEdits = inputVal(document, '#ideaPlanEdits') || planEdits;
+      repaint();
+      window.EU_API.planIdea({
+        run_id: result.run_id,
+        idea_id: result.selected_idea_id,
+        mode: 'replan',
+        plan_edits: planEdits,
+      }).then(data => {
+        planDraft = data;
+        window.EU_IDEA_HANDOFF = null;
+        projectSeed = null;
+        activeStep = 'handoff';
+      }).catch(e => { err = e.message || String(e); }).finally(() => { planning = false; repaint(); });
+    });
     const handoffBtn = root.querySelector('[data-idea-handoff]');
     if (handoffBtn) handoffBtn.addEventListener('click', () => {
       if (handoffing || !result || !(window.EU_API && window.EU_API.handoffIdea)) return;
+      if (!planDraft && !(window.EU_IDEA_HANDOFF && window.EU_IDEA_HANDOFF.handoff_plan)) {
+        err = t('Generate and review the study plan before freezing an Agent handoff.', '请先生成并审阅研究计划，再冻结交接给 Agent。');
+        repaint();
+        return;
+      }
       handoffing = true; err = null; planEdits = inputVal(document, '#ideaPlanEdits');
       repaint();
       window.EU_API.handoffIdea({

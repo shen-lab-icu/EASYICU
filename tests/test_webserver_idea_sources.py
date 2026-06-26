@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,18 @@ def _write_pdf(path: Path, text: str) -> bytes:
     doc.close()
     path.write_bytes(pdf_bytes)
     return pdf_bytes
+
+
+def test_idea_mining_requires_source_seed_before_resolve_or_mine() -> None:
+    client = TestClient(app)
+
+    resolve = client.post("/api/ideas/resolve-source", json={})
+    mine = client.post("/api/ideas/mine", json={})
+
+    assert resolve.status_code == 400
+    assert mine.status_code == 400
+    assert resolve.json()["detail"]["error"] == "idea_source_required"
+    assert mine.json()["detail"]["error"] == "idea_source_required"
 
 
 def test_idea_mining_ingests_selected_local_pdf_metadata_only(tmp_path: Path) -> None:
@@ -78,6 +91,175 @@ def test_idea_mining_scans_local_literature_folder_without_full_text_persistence
     assert payload["source_adapter"]["network_calls"] == 0
     assert payload["privacy"]["full_text_stored"] is False
     assert payload["suggested_payload"]["source_type"] == "pdf"
+
+
+def test_idea_url_resolution_falls_back_to_crossref_when_journal_html_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeResponse:
+        def __init__(self, payload: bytes):
+            self.payload = payload
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+            return None
+
+        def read(self, limit: int = -1) -> bytes:
+            return self.payload if limit < 0 else self.payload[:limit]
+
+    def fake_urlopen(req, timeout=0):  # type: ignore[no-untyped-def]
+        url = getattr(req, "full_url", str(req))
+        calls.append(url)
+        if "api.crossref.org" not in url:
+            raise OSError("HTTP Error 403: Forbidden")
+        return FakeResponse(
+            json.dumps(
+                {
+                    "status": "ok",
+                    "message": {
+                        "title": ["Vasopressors or Fluids in Early Septic Shock"],
+                        "container-title": ["New England Journal of Medicine"],
+                        "published-online": {"date-parts": [[2026, 6, 11]]},
+                        "DOI": "10.1056/NEJMoa2516225",
+                    },
+                }
+            ).encode("utf-8")
+        )
+
+    monkeypatch.setattr(idea_mining.request, "urlopen", fake_urlopen)
+
+    payload = idea_mining.resolve_source(
+        {
+            "source_type": "url",
+            "url": "https://www.nejm.org/doi/full/10.1056/NEJMoa2516225",
+            "allow_network": True,
+        }
+    )
+
+    assert len(calls) == 2
+    assert payload["source_adapter"]["status"] == "metadata_fetched"
+    assert payload["source_adapter"]["metadata_source"] == "crossref"
+    assert payload["source_adapter"]["network_calls"] == 2
+    assert payload["suggested_payload"]["title"] == "Vasopressors or Fluids in Early Septic Shock"
+    assert payload["suggested_payload"]["topic"] == "Vasopressors or Fluids in Early Septic Shock"
+    assert payload["suggested_payload"]["journal"] == "New England Journal of Medicine"
+    assert payload["suggested_payload"]["year"] == 2026
+    assert payload["suggested_payload"]["doi"] == "10.1056/NEJMoa2516225"
+    assert payload["resolved_source"]["title"] == "Vasopressors or Fluids in Early Septic Shock"
+
+
+def test_idea_mining_maps_resolved_nejm_title_to_vasopressor_fluid_concepts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path / "idea_runs")
+    monkeypatch.setattr(idea_mining, "_HISTORY_PATH", tmp_path / "idea_history.json")
+    monkeypatch.setattr(idea_mining, "_active_export", lambda: None)
+
+    response = TestClient(app).post(
+        "/api/ideas/mine",
+        json={
+            "source_type": "url",
+            "topic": "NEJM idea seed",
+            "title": "Vasopressors or Fluids in Early Septic Shock",
+            "journal": "New England Journal of Medicine",
+            "year": 2026,
+            "doi": "10.1056/NEJMoa2516225",
+            "url": "https://www.nejm.org/doi/full/10.1056/NEJMoa2516225",
+        },
+    )
+
+    assert response.status_code == 200
+    idea = response.json()["idea_ledger"][0]
+    concept_ids = {row["concept_id"] for row in idea["mapped_concepts"]}
+    assert {"vaso_ind", "death"} <= concept_ids
+    assert concept_ids & {"total_input_ml", "fluid_balance", "fluid_balance_cumulative"}
+    assert "death and death" not in idea["rationale"].lower()
+
+
+def test_idea_plan_stage_precedes_agent_handoff_and_stays_metadata_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(idea_mining, "_RUN_ROOT", tmp_path / "idea_runs")
+    monkeypatch.setattr(idea_mining, "_HISTORY_PATH", tmp_path / "idea_history.json")
+    monkeypatch.setattr(idea_mining, "_active_export", lambda: None)
+    client = TestClient(app)
+
+    mined = client.post(
+        "/api/ideas/mine",
+        json={
+            "source_type": "url",
+            "topic": "NEJM idea seed",
+            "title": "Vasopressors or Fluids in Early Septic Shock",
+            "journal": "New England Journal of Medicine",
+            "year": 2026,
+            "doi": "10.1056/NEJMoa2516225",
+            "url": "https://www.nejm.org/doi/full/10.1056/NEJMoa2516225",
+        },
+    )
+    assert mined.status_code == 200
+    run = mined.json()
+    idea = run["idea_ledger"][0]
+
+    planned = client.post(
+        "/api/ideas/plan",
+        json={
+            "run_id": run["run_id"],
+            "idea_id": idea["idea_id"],
+            "mode": "plan",
+            "plan_edits": "Keep this as an ICU observational feasibility plan before Agent run.",
+        },
+    )
+    assert planned.status_code == 200
+    plan_payload = planned.json()
+    plan = plan_payload["plan"]
+
+    assert plan_payload["schema_version"] == "easyicu.web_idea_plan/1"
+    assert plan_payload["planner"]["stage"] == "idea_mining_plan_before_agent"
+    assert plan_payload["planner"]["agent_run_created"] is False
+    assert plan_payload["planner"]["draft_unlocked"] is False
+    assert plan_payload["privacy"]["patient_rows_returned"] is False
+    assert plan_payload["privacy"]["agent_run_created"] is False
+    assert plan_payload["privacy"]["draft_unlocked"] is False
+    assert plan_payload["privacy"]["reportable"] is False
+    assert plan["reference_analysis_patterns"]
+    assert plan["clinical_icu_constraints"]
+    assert plan["required_user_confirmations"]
+    assert "prepare or register a usable EasyICU export" in plan["required_user_confirmations"]
+    assert plan["agent_boundary"]["agent_run_created"] is False
+    assert plan["agent_boundary"]["draft_unlocked"] is False
+    assert "target-trial-style translation" in str(plan["reference_analysis_patterns"])
+    assert "stay_id" not in str(plan_payload)
+    assert "subject_id" not in str(plan_payload)
+    assert "tableRows" not in str(plan_payload)
+
+    loaded = client.post("/api/ideas/run", json={"run_id": run["run_id"]})
+    assert loaded.status_code == 200
+    assert loaded.json()["idea_plan"]["schema_version"] == "easyicu.web_idea_plan/1"
+
+    handoff = client.post(
+        "/api/ideas/handoff",
+        json={
+            "run_id": run["run_id"],
+            "idea_id": idea["idea_id"],
+            "plan_edits": "Use first ICU stay and require explicit mortality horizon.",
+        },
+    )
+    assert handoff.status_code == 200
+    frozen = handoff.json()
+    assert frozen["handoff_plan"]["reference_analysis_patterns"]
+    assert frozen["handoff_plan"]["human_plan_notes"] == (
+        "Use first ICU stay and require explicit mortality horizon."
+    )
+    assert frozen["handoff_plan"]["selection_mode"] == "human_curated_with_text_edits"
+    assert frozen["agent_seed"]["requires_human_confirmation"] is True
+    assert frozen["agent_seed"]["reportable"] is False
+    assert frozen["agent_seed"]["draft_unlocked"] is False
 
 
 def test_idea_literature_discovery_blocks_without_network_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:

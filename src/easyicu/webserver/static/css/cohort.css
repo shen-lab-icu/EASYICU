@@ -4,6 +4,55 @@
   gap:14px;
   margin:12px 0 14px;
 }
+.surv-outcome-grid{
+  display:grid;
+  gap:8px;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+}
+.surv-outcome-card{
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:8px;
+  min-height:76px;
+  padding:10px 12px;
+}
+.surv-outcome-card.active{
+  background:#ecfeff;
+  border-color:#9bdbe2;
+  box-shadow:inset 3px 0 0 #0f766e;
+}
+.surv-outcome-card.muted{
+  background:#f7f7f4;
+}
+.surv-outcome-card span,
+.surv-outcome-card b,
+.surv-outcome-card em{
+  display:block;
+}
+.surv-outcome-card span{
+  color:var(--ink-2);
+  font-size:12px;
+  font-weight:700;
+  line-height:1.25;
+}
+.surv-outcome-card strong{
+  color:var(--ink-1);
+  display:block;
+  font-family:var(--font-mono);
+  font-size:22px;
+  line-height:1.1;
+  margin-top:8px;
+}
+.surv-outcome-card b,
+.surv-outcome-card em{
+  color:var(--ink-4);
+  font-family:var(--font-mono);
+  font-size:10.5px;
+  font-style:normal;
+  font-weight:600;
+  line-height:1.35;
+  margin-top:4px;
+}
 .surv-label{
   color:var(--ink-4);
   font-family:var(--font-mono);
@@ -289,22 +338,97 @@
   fill:#a8842f;
   font-size:8.5px;
 }
-/* cohort age × LOS complexity heatmap */
-.cxh{
-  display:block;
-  height:auto;
-  max-width:100%;
+/* cohort clinical phenotype profile */
+.cprof-grid{
+  display:grid;
+  gap:12px;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  margin-top:12px;
 }
-.cxh-axis{
-  fill:var(--ink-4, #94a3b8);
-  font-family:var(--font-mono, monospace);
-  font-size:10px;
+.cprof-domain{
+  background:#fff;
+  border:1px solid var(--line, #e5e2da);
+  border-radius:10px;
+  padding:12px;
 }
-.cxh-val{
-  fill:var(--ink-2, #334155);
-  font-family:var(--font-mono, monospace);
+.cprof-domain.unavailable{
+  background:#fafaf8;
+}
+.cprof-domain.partial{
+  border-color:#d9c07a;
+}
+.cprof-head{
+  align-items:flex-start;
+  display:flex;
+  gap:10px;
+  justify-content:space-between;
+  margin-bottom:10px;
+}
+.cprof-head h3{
+  font-size:14px;
+  line-height:1.25;
+  margin:3px 0 0;
+}
+.cprof-items{
+  display:grid;
+  gap:8px;
+}
+.cprof-item{
+  background:#f8faf9;
+  border:1px solid #ece9e1;
+  border-radius:8px;
+  padding:9px 10px;
+}
+.cprof-item.unavailable{
+  background:#f7f6f2;
+  color:var(--ink-4, #94a3b8);
+}
+.cprof-k{
+  color:var(--ink-3, #64748b);
   font-size:11px;
-  font-weight:600;
+  font-weight:650;
+}
+.cprof-v{
+  color:var(--ink-1, #0f172a);
+  font-family:var(--font-mono, monospace);
+  font-size:19px;
+  font-weight:760;
+  letter-spacing:0;
+  line-height:1.25;
+  margin-top:2px;
+}
+.cprof-d{
+  color:var(--ink-4, #94a3b8);
+  font-size:11px;
+  line-height:1.35;
+  margin-top:5px;
+}
+.cprof-bar{
+  background:#ebe8df;
+  border-radius:999px;
+  height:7px;
+  margin-top:7px;
+  overflow:hidden;
+}
+.cprof-bar span{
+  background:#0f766e;
+  border-radius:999px;
+  display:block;
+  height:100%;
+  min-width:2px;
+}
+.cprof-item.partial .cprof-bar span,
+.cprof-item.warn .cprof-bar span{
+  background:#b7791f;
+}
+.cprof-item.bad .cprof-bar span,
+.cprof-item.unavailable .cprof-bar span{
+  background:#94a3b8;
+}
+@media (max-width: 980px){
+  .cprof-grid{
+    grid-template-columns:1fr;
+  }
 }
 /* cohort group comparison — grouped bars per metric across descriptive splits */
 .cgc{
@@ -396,6 +520,126 @@
   font-size:10.5px;
   text-transform:uppercase;
 }
+.sofa-matrix-head{
+  align-items:flex-start;
+  display:flex;
+  gap:14px;
+  justify-content:space-between;
+}
+.sofa-matrix-head p{
+  color:var(--ink-4);
+  font-size:11.5px;
+  line-height:1.45;
+  margin:4px 0 0;
+  max-width:680px;
+}
+.sofa-matrix-toggle{
+  align-items:center;
+  background:#f7f7f4;
+  border:1px solid var(--line);
+  border-radius:8px;
+  display:inline-flex;
+  flex:0 0 auto;
+  gap:2px;
+  padding:3px;
+}
+.sofa-matrix-toggle button{
+  background:transparent;
+  border:0;
+  border-radius:6px;
+  color:var(--ink-3);
+  cursor:pointer;
+  font:600 11px var(--font);
+  min-width:56px;
+  padding:6px 9px;
+}
+.sofa-matrix-toggle button.active{
+  background:#fff;
+  box-shadow:0 1px 3px rgba(15,23,42,0.12);
+  color:var(--ink-1);
+}
+.sofa-heat-scroll{
+  margin-top:10px;
+  overflow-x:auto;
+  padding-bottom:2px;
+}
+.sofa-heatmap{
+  display:grid;
+  gap:6px;
+  grid-template-columns:minmax(96px,0.9fr) repeat(var(--sofa-data-cols), minmax(92px,1fr));
+  min-width:620px;
+}
+.sofa-heat-head{
+  align-items:center;
+  color:var(--ink-4);
+  display:flex;
+  font:700 10.5px var(--font-mono);
+  min-height:30px;
+  text-transform:uppercase;
+}
+.sofa-heat-head.col{
+  justify-content:center;
+}
+.sofa-heat-head.row{
+  color:var(--ink-2);
+  justify-content:flex-start;
+}
+.sofa-heat-head.corner{
+  color:var(--ink-3);
+}
+.sofa-heat-cell{
+  align-items:center;
+  background:var(--heat-bg,#eef4f3);
+  border:1px solid rgba(15,23,42,0.08);
+  border-radius:8px;
+  color:var(--ink-1);
+  display:flex;
+  justify-content:center;
+  min-height:54px;
+  padding:8px 6px;
+}
+.sofa-heat-cell.up{
+  border-color:rgba(190,76,76,0.24);
+}
+.sofa-heat-cell.down{
+  border-color:rgba(42,111,178,0.24);
+}
+.sofa-heat-cell.same{
+  border-color:rgba(34,137,122,0.25);
+}
+.sofa-heat-value{
+  font-size:13px;
+  font-weight:700;
+  line-height:1;
+}
+.sofa-heat-legend{
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+  margin-top:10px;
+}
+.sofa-heat-legend span{
+  align-items:center;
+  color:var(--ink-3);
+  display:inline-flex;
+  font-size:11px;
+  gap:6px;
+}
+.sofa-heat-legend i{
+  border-radius:4px;
+  display:inline-block;
+  height:10px;
+  width:18px;
+}
+.sofa-heat-legend i.same{
+  background:rgba(34,137,122,0.38);
+}
+.sofa-heat-legend i.up{
+  background:rgba(190,76,76,0.38);
+}
+.sofa-heat-legend i.down{
+  background:rgba(42,111,178,0.38);
+}
 .surv-blocked{
   border:1px solid var(--line);
   border-radius:8px;
@@ -422,6 +666,9 @@
   .surv-head{
     grid-template-columns:1fr;
   }
+  .surv-outcome-grid{
+    grid-template-columns:1fr;
+  }
   .surv-head{
     display:grid;
   }
@@ -436,5 +683,12 @@
   }
   .surv-blocked-row{
     grid-template-columns:1fr;
+  }
+  .sofa-matrix-head{
+    align-items:stretch;
+    flex-direction:column;
+  }
+  .sofa-matrix-toggle{
+    width:max-content;
   }
 }

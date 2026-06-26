@@ -233,6 +233,77 @@
 .qrow{ display: grid; grid-template-columns: 130px 1fr 48px; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--hair); font-size: 12.5px; }
 .qrow:last-child{ border-bottom: 0; }
 .qrow .qv{ font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); text-align: right; }
+.patient-table-frame{
+  border: 1px solid var(--hair);
+  border-radius: var(--r-3);
+  background: var(--surface);
+  overflow: hidden;
+}
+.patient-id-note{
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--hair);
+  color: var(--ink-4);
+  font-size: 11.5px;
+  line-height: 1.45;
+  background: color-mix(in srgb, var(--accent-soft) 34%, var(--surface));
+}
+.patient-table-scroll{
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+.patient-preview-table{
+  min-width: max(760px, calc(var(--pt-cols, 8) * 128px));
+  width: max-content;
+}
+.patient-preview-table th,
+.patient-preview-table td{
+  white-space: nowrap;
+}
+.patient-preview-table .patient-entity-col,
+.patient-preview-table .patient-entity-token{
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--hair);
+}
+.patient-preview-table .patient-entity-col{
+  z-index: 2;
+  background: var(--surface-2);
+}
+.patient-table-pager{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--ink-4);
+  font-size: 11.5px;
+}
+.patient-page-readout{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 220px;
+}
+.patient-page-size{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.patient-page-size select{
+  height: 30px;
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  padding: 0 8px;
+}
 
 /* Cohort "jump to" cards — surface the easily-missed Coverage / SOFA tabs */
 .coh-jump{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 22px; }
