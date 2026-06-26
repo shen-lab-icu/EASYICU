@@ -92,13 +92,12 @@
 
   function sidebar() {
     const scr = screenOf(route);
-    const cur = phaseOf(route);
-    const goal = window.goalPhase ? window.goalPhase() : 4;
+    const workspaceIndex = CLASSIC.findIndex(c => c.id === route);
     const classicActive = CLASSIC.some(c => c.id === route);
     const wsOpen = classicOpen || classicActive;
 
     const rail = scr.rail ? scr.rail() : '';
-    const progLabel = cur > 0 ? `${Math.min(cur, goal)} / ${goal}` : `· / ${goal}`;
+    const progLabel = workspaceIndex >= 0 ? `${workspaceIndex + 1} / ${CLASSIC.length}` : `· / ${CLASSIC.length}`;
 
     return `
     <aside class="sidebar">
