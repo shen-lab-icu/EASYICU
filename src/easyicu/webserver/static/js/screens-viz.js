@@ -76,6 +76,8 @@
   let patientView = 'idle';   // idle | loading | loaded
   let patientTab = 'tables';
   let patientTableModule = null;
+  let patientTablePage = 1;
+  let patientTablePageSize = 24;
   let crossView = 'idle';     // idle | loading | loaded
   let crossDensityModule = 'all';
   let crossDensityFeature = null;
@@ -283,7 +285,7 @@
     return String(v);
   }
   function patientColumnLabel(col) {
-    if (col === 'entity') return t('Entity', '实体');
+    if (col === 'entity') return t('Pseudonymous entity', '伪匿名实体');
     return col;
   }
   function patientSignalLabel(signal) {
@@ -976,6 +978,9 @@
     const body = {};
     body.source_path = active;
     if (entityRef) body.entity_ref = entityRef;
+    if (patientTableModule) body.table_module = patientTableModule;
+    body.table_page = patientTablePage;
+    body.table_page_size = patientTablePageSize;
     window.EU_API.loadPatientReviewDrilldown(body).then(payload => {
       window.EU_PATIENT_DRILLDOWN = payload;
       window.EU_VIZ_WORKSPACE = patientWorkspaceFromDrilldown(payload);
@@ -1625,6 +1630,13 @@
       const activePreview = activePatientTablePreview(drill);
       const previewColumns = activePreview && Array.isArray(activePreview.display_columns) ? activePreview.display_columns : [];
       const previewRows = activePreview && Array.isArray(activePreview.rows) ? activePreview.rows : [];
+      const previewPage = (activePreview && activePreview.pagination) || {};
+      const page = Number(previewPage.page || activePreview && activePreview.page || patientTablePage || 1);
+      const pageCount = Number(previewPage.page_count || activePreview && activePreview.page_count || 1);
+      const rowStart = Number(previewPage.row_start || activePreview && activePreview.row_start || 0);
+      const rowEnd = Number(previewPage.row_end || activePreview && activePreview.row_end || 0);
+      const hasPrevious = Boolean(previewPage.has_previous || activePreview && activePreview.has_previous);
+      const hasNext = Boolean(previewPage.has_next || activePreview && activePreview.has_next);
       const basisScope = drill.demo ? 'catalog-seeded demo aggregate' : 'demographics aggregate';
       const rows = [
         ['Entities', fmtInt(s.entities), drill.demo ? 'seeded demo denominator' : 'cohort denominator from active export'],
@@ -1657,19 +1669,34 @@
       <div class="row wrap gap-6 mt-12" data-pt-table-picker>
         ${previews.map(p => `<button type="button" class="chip ${activePreview && p.module === activePreview.module ? 'solid' : ''}" data-pt-table-module="${esc(p.module)}" style="${activePreview && p.module === activePreview.module ? 'border-color:var(--ink);color:var(--ink);' : ''}">${esc(p.label || p.module)} <span class="mono" style="font-size:10.5px;color:var(--ink-4);">${fmtInt(p.rows_total)} ${t('rows', '行')}</span></button>`).join('')}
       </div>
-      <div class="table-wrap table-scroll mt-12" data-patient-table-preview>
-        <table class="eu-table">
-          <thead><tr>${previewColumns.map(c => `<th${c === 'entity' ? '' : ' class="num"'}>${esc(patientColumnLabel(c))}</th>`).join('')}</tr></thead>
+      <div class="patient-table-frame mt-12">
+        <div class="patient-id-note">${drill.demo ? t('Demo entity tokens are seeded UI references.', '演示实体 token 是种子界面引用。') : t('Entity tokens are local pseudonymous references. Direct clinical identifiers stay on disk.', '实体 token 是本地伪匿名引用；直接临床标识符保留在磁盘上。')}</div>
+        <div class="patient-table-scroll" data-patient-table-preview style="--pt-cols:${Math.max(6, previewColumns.length)};">
+        <table class="eu-table patient-preview-table">
+          <thead><tr>${previewColumns.map(c => `<th${c === 'entity' ? ' class="patient-entity-col"' : ' class="num"'}>${esc(patientColumnLabel(c))}</th>`).join('')}</tr></thead>
           <tbody>
-            ${previewRows.length ? previewRows.map(r => `<tr>${previewColumns.map(c => `<td class="${c === 'entity' ? 'key mono' : 'num'}">${esc(fmtCell(r[c]))}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${Math.max(1, previewColumns.length)}" class="muted">${esc(activePreview && activePreview.reason ? activePreview.reason : t('No preview rows available for this module.', '这个模块没有可预览行。'))}</td></tr>`}
+            ${previewRows.length ? previewRows.map(r => `<tr>${previewColumns.map(c => `<td class="${c === 'entity' ? 'key mono patient-entity-token' : 'num'}">${esc(fmtCell(r[c]))}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${Math.max(1, previewColumns.length)}" class="muted">${esc(activePreview && activePreview.reason ? activePreview.reason : t('No preview rows available for this module.', '这个模块没有可预览行。'))}</td></tr>`}
           </tbody>
         </table>
+        </div>
+      </div>
+      <div class="patient-table-pager mt-8">
+        <button type="button" class="btn sm" data-pt-page-prev ${hasPrevious ? '' : 'disabled'}>${icon('arrow-left', 13)} ${t('Previous', '上一页')}</button>
+        <div class="patient-page-readout">
+          <span class="mono">${esc(activePreview && activePreview.module || '')}</span>
+          <span>${rowStart && rowEnd ? `${fmtInt(rowStart)}-${fmtInt(rowEnd)}` : fmtInt(activePreview && activePreview.row_count)} / ${fmtInt(activePreview && activePreview.rows_total)} ${t('rows', '行')}</span>
+          <span>${t('page', '第')} ${fmtInt(page)} / ${fmtInt(pageCount)} ${t('page', '页')}</span>
+        </div>
+        <label class="patient-page-size">${t('Rows', '行数')}
+          <select data-pt-page-size>
+            ${[24, 50, 100].map(n => `<option value="${n}" ${Number(patientTablePageSize) === n ? 'selected' : ''}>${n}</option>`).join('')}
+          </select>
+        </label>
+        <button type="button" class="btn sm" data-pt-page-next ${hasNext ? '' : 'disabled'}>${t('Next', '下一页')} ${icon('arrow-right', 13)}</button>
       </div>
       <div class="row wrap gap-6 mt-8" style="font-size:11.5px;color:var(--ink-4);">
-        <span class="mono">${esc(activePreview && activePreview.module || '')}</span>
-        <span>${t('showing', '显示')} ${fmtInt(activePreview && activePreview.row_count)} / ${fmtInt(activePreview && activePreview.rows_total)} ${t('rows', '行')}</span>
         <span>${fmtInt(previewColumns.length)} / ${fmtInt(activePreview && activePreview.columns_total)} ${t('columns', '列')}</span>
-        ${(activePreview && activePreview.truncated_rows) ? `<span>${t('row preview capped', '行预览已截断')}</span>` : ''}
+        ${(activePreview && activePreview.truncated_rows) ? `<span>${t('server-paged preview', '服务端分页预览')}</span>` : ''}
         ${(activePreview && activePreview.truncated_columns) ? `<span>${t('column preview capped', '列预览已截断')}</span>` : ''}
       </div>` : `
       <div class="empty mt-16"><div class="glyph">${icon('rows', 22)}</div><div class="t">${t('No table preview available', '暂无表格预览')}</div><div class="d">${t('This export has module metadata but no displayable table columns after identifier removal.', '这个导出有模块元数据，但去除标识符后没有可显示的表格列。')}</div></div>`}
@@ -2064,14 +2091,45 @@
       case 'quality': return ptQuality();
     }
   }
+  function refreshPatientTablePage() {
+    if (window.EU_DATA !== 'real') {
+      repaintScreen('patient');
+      return;
+    }
+    patientView = 'loading';
+    repaintScreen('patient');
+    loadRealPatient(ok => { patientView = ok ? 'loaded' : 'idle'; repaintScreen('patient'); });
+  }
   function bindPatientTableControls(root) {
-    root.querySelectorAll('[data-pt-table-module]').forEach(b => b.addEventListener('click', () => {
-      patientTableModule = b.dataset.ptTableModule || null;
-      const body = root.querySelector('#ptbody');
-      if (body) body.innerHTML = patientTabBody();
-      bindPatientTableControls(root);
-      bindPatientEntitySelection(root);
+    root.querySelectorAll('[data-pt-table-module]').forEach(b => b.addEventListener('click', e => {
+      e.preventDefault();
+      const nextModule = b.dataset.ptTableModule || null;
+      if (nextModule === patientTableModule) return;
+      patientTableModule = nextModule;
+      patientTablePage = 1;
+      refreshPatientTablePage();
     }));
+    const prev = root.querySelector('[data-pt-page-prev]');
+    if (prev) prev.addEventListener('click', e => {
+      e.preventDefault();
+      if (prev.disabled || patientTablePage <= 1) return;
+      patientTablePage = Math.max(1, patientTablePage - 1);
+      refreshPatientTablePage();
+    });
+    const next = root.querySelector('[data-pt-page-next]');
+    if (next) next.addEventListener('click', e => {
+      e.preventDefault();
+      if (next.disabled) return;
+      patientTablePage += 1;
+      refreshPatientTablePage();
+    });
+    const pageSize = root.querySelector('[data-pt-page-size]');
+    if (pageSize) pageSize.addEventListener('change', () => {
+      const parsed = Number(pageSize.value);
+      patientTablePageSize = [24, 50, 100].includes(parsed) ? parsed : 24;
+      patientTablePage = 1;
+      refreshPatientTablePage();
+    });
   }
   function bindPatientEntitySelection(root) {
     root.querySelectorAll('[data-patient-entity]').forEach(b => b.addEventListener('click', () => {
@@ -3240,6 +3298,28 @@
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Demo / seeded example values for UI preview — not a real run output.', '演示 / 示例数据，仅用于界面预览 —— 非真实运行结果。')}</p>`;
   }
 
+  function cohortGroupComparisonChart(rows, columns) {
+    const cols = columns || [];
+    const metrics = (rows || []).filter(r => (r.values || []).some(v => typeof v === 'number' && Number.isFinite(v)));
+    if (!metrics.length || !cols.length) return '';
+    const colors = ['#0f766e', '#2563eb', '#8b5cf6', '#b45309'];
+    return `
+      <div class="cgc">
+        <div class="cgc-legend">${cols.map((c, i) => `<span><i style="background:${colors[i % colors.length]};"></i>${esc(cohortText(c))}</span>`).join('')}</div>
+        ${metrics.map(row => {
+          const vals = (row.values || []).map(v => (typeof v === 'number' && Number.isFinite(v)) ? v : null);
+          const maxV = Math.max(1, ...vals.map(v => v == null ? 0 : Math.abs(v)));
+          return `
+          <div class="cgc-row">
+            <div class="cgc-metric">${esc(cohortText(row.metric))}${row.unit ? ` <span class="mono">${esc(cohortText(row.unit))}</span>` : ''}</div>
+            <div class="cgc-bars">
+              ${vals.map((v, i) => `<div class="cgc-bar"><div class="cgc-fill" style="width:${v == null ? 0 : (Math.abs(v) / maxV * 100).toFixed(0)}%;background:${colors[i % colors.length]};"></div><span class="cgc-val">${cohortProfileValue(row, v)}</span></div>`).join('')}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+  }
+
   function cohortGroupsBody() {
     const review = cohortReview();
     if (review && review.summary) {
@@ -3288,6 +3368,7 @@
       </div>
 
       <div class="sec-stack"><div class="lbl">${cohortText('Descriptive profile')}</div><h2>${cohortText('Aggregate-only group characteristics')}</h2></div>
+      ${cohortGroupComparisonChart(profileRows, profileColumns)}
       <div class="table-wrap table-scroll">
         <table class="eu-table">
           <thead><tr><th>${cohortText('Metric')}</th>${profileColumns.map(col => `<th class="num">${esc(cohortText(col))}</th>`).join('')}<th>${cohortText('Status')}</th></tr></thead>
