@@ -153,6 +153,142 @@
   height:8px;
   width:22px;
 }
+/* patient vital-sign timeline (multi-channel SVG, screens-viz Time Series view) */
+.pvt-wrap{
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+}
+.pvt-lane{
+  border:1px solid var(--hair, #e5e2da);
+  border-radius:10px;
+  padding:10px 12px;
+  background:var(--surface, #fff);
+}
+.pvt-head{
+  align-items:center;
+  display:flex;
+  justify-content:space-between;
+  margin-bottom:6px;
+}
+.pvt-name{
+  font-size:12.5px;
+  font-weight:650;
+  color:var(--ink);
+}
+.pvt-meta{
+  color:var(--ink-4);
+  font-size:10.5px;
+}
+.pvt-svg{
+  display:block;
+  height:108px;
+  width:100%;
+}
+.pvt-legend{
+  margin:8px 0 0;
+}
+.pvt-legend em{
+  color:var(--ink-4);
+  font-size:10px;
+  font-style:normal;
+}
+/* patient overview — clinical category dashboard (restored legacy layout) */
+.pcat{
+  border:1px solid var(--hair, #e5e2da);
+  border-radius:12px;
+  padding:14px 16px;
+  background:var(--surface, #fff);
+  margin-top:14px;
+}
+.pcat-head{
+  align-items:baseline;
+  display:flex;
+  justify-content:space-between;
+  margin-bottom:12px;
+}
+.pcat-title{
+  font-size:13px;
+  font-weight:650;
+  color:var(--ink);
+}
+.pcat-meta{
+  color:var(--ink-4);
+  font-size:10.5px;
+}
+.pcc-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(132px, 1fr));
+  gap:10px;
+}
+.pcc{
+  border:1px solid var(--hair, #e5e2da);
+  border-radius:9px;
+  padding:9px 11px;
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+.pcc-lbl{
+  color:var(--ink-3);
+  font-size:10.5px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:0.02em;
+}
+.pcc-val{
+  font-size:18px;
+  font-weight:650;
+  line-height:1.1;
+  color:var(--ink);
+}
+.pcc-delta{
+  color:var(--ink-4);
+  font-size:10.5px;
+  font-style:normal;
+  font-family:var(--font-mono, monospace);
+}
+.pcs-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(208px, 1fr));
+  gap:12px;
+  margin-top:14px;
+}
+.pcs-cell{
+  border:1px solid var(--hair, #e5e2da);
+  border-radius:9px;
+  padding:8px 10px;
+  background:var(--surface, #fff);
+}
+.pcs-head{
+  align-items:baseline;
+  display:flex;
+  justify-content:space-between;
+  font-size:11px;
+  margin-bottom:4px;
+}
+.pcs-head span:first-child{
+  font-weight:600;
+  color:var(--ink-2, #334155);
+}
+.pcs-head .mono{
+  color:var(--ink-4);
+  font-size:10.5px;
+}
+.pcs-svg{
+  display:block;
+  height:84px;
+  width:100%;
+}
+.pcs-thr-line{
+  stroke:#cbb86b;
+  stroke-width:1;
+  stroke-dasharray:3 3;
+}
+.pcs-thr{
+  fill:#a8842f;
+  font-size:8.5px;
+}
 .risk-table-wrap{
   margin-top:18px;
 }

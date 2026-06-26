@@ -1,3 +1,15 @@
+/* ---------- Cross-DB module availability heatmap ---------- */
+.xdb-avail-cell{
+  font-variant-numeric:tabular-nums;
+  transition:background 120ms ease;
+}
+.xdb-avail-cell.missing{
+  color:var(--ink-4, #94a3b8);
+}
+.xdb-avail-cell.present{
+  background:rgba(15,118,110,0.12);
+}
+
 /* ---------- Cross-DB distribution ranges ---------- */
 .xdb-dist-panel{
   border:1px solid var(--hair);

@@ -7,6 +7,7 @@ The adapter is intentionally narrow:
 - prompts contain bounded aggregate summaries only, never patient rows;
 - model output must be JSON and still goes through STRICT evidence audit.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -43,7 +44,9 @@ def require_external_credentials(
     if not provider_meta.get("external"):
         return provider_meta
     try:
-        credentials = _load_external_credentials(str(provider_meta.get("provider") or ""), environ=environ)
+        credentials = _load_external_credentials(
+            str(provider_meta.get("provider") or ""), environ=environ
+        )
     except ProviderAdapterError as exc:
         raise ProviderAdapterError({**provider_meta, **exc.detail}) from exc
     updated = dict(provider_meta)
@@ -63,11 +66,15 @@ def generate_bound_provider_payload(
     cohort: Dict[str, Any],
     quality: List[Dict[str, Any]],
     output_artifacts: Optional[Dict[str, Dict[str, Any]]] = None,
-    transport: Optional[Callable[[Dict[str, Any], Dict[str, str]], Dict[str, Any]]] = None,
+    transport: Optional[
+        Callable[[Dict[str, Any], Dict[str, str]], Dict[str, Any]]
+    ] = None,
     environ: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
     """Call an OpenAI-compatible provider and return bounded artifacts."""
-    credentials = _load_external_credentials(str(provider_meta.get("provider") or ""), environ=environ)
+    credentials = _load_external_credentials(
+        str(provider_meta.get("provider") or ""), environ=environ
+    )
     max_output_tokens = _max_output_tokens(environ=environ)
     json_format_style = _json_format_style(environ=environ)
     request = _build_chat_request(
@@ -96,24 +103,28 @@ def generate_bound_provider_payload(
         )
     else:
         response = transport(request, headers)
-    payload = _coerce_provider_payload(response, run_id=run_id, study_id=study_id, question=question)
+    payload = _coerce_provider_payload(
+        response, run_id=run_id, study_id=study_id, question=question
+    )
     provider_update = dict(provider_meta)
     provider_update.update(_credential_public_metadata(credentials))
-    provider_update.update({
-        "client": "OpenAICompatibleChat",
-        "client_constructed": True,
-        "external_calls": int(provider_meta.get("external_calls") or 0) + 1,
-        "max_external_calls_per_run": _MAX_EXTERNAL_CALLS_PER_RUN,
-        "max_output_tokens": max_output_tokens,
-        "json_format_style": json_format_style,
-        "provider_gate": "external_provider_ready",
-        "provider_gate_order": [
-            *list(provider_meta.get("provider_gate_order") or []),
-            "client_constructed",
-            "external_call_completed",
-        ],
-        "usage": _public_usage(response),
-    })
+    provider_update.update(
+        {
+            "client": "OpenAICompatibleChat",
+            "client_constructed": True,
+            "external_calls": int(provider_meta.get("external_calls") or 0) + 1,
+            "max_external_calls_per_run": _MAX_EXTERNAL_CALLS_PER_RUN,
+            "max_output_tokens": max_output_tokens,
+            "json_format_style": json_format_style,
+            "provider_gate": "external_provider_ready",
+            "provider_gate_order": [
+                *list(provider_meta.get("provider_gate_order") or []),
+                "client_constructed",
+                "external_call_completed",
+            ],
+            "usage": _public_usage(response),
+        }
+    )
     return {
         "agent_plan": payload["agent_plan"],
         "manuscript_draft": payload["manuscript_draft"],
@@ -160,7 +171,9 @@ def provider_readiness(
         "credential_source": key_name if api_key else None,
         "base_url_env_candidates": base_names,
         "base_url_present": has_base_url,
-        "base_url_source": base_name if base_url else ("provider_default" if default_base else None),
+        "base_url_source": (
+            base_name if base_url else ("provider_default" if default_base else None)
+        ),
         "model_env_candidates": model_names,
         "model_present": bool(model),
         "model_source": model_name if model else None,
@@ -203,20 +216,26 @@ def write_provider_config(
     base_url = str(base_url or "").strip()
     model = str(model or "").strip()
     if not api_key:
-        raise ProviderAdapterError({
-            "error": "external_provider_api_key_required",
-            "secrets_returned": False,
-        })
+        raise ProviderAdapterError(
+            {
+                "error": "external_provider_api_key_required",
+                "secrets_returned": False,
+            }
+        )
     if not model:
-        raise ProviderAdapterError({
-            "error": "external_provider_model_required",
-            "secrets_returned": False,
-        })
+        raise ProviderAdapterError(
+            {
+                "error": "external_provider_model_required",
+                "secrets_returned": False,
+            }
+        )
     if not base_url and not _default_base_url(provider_text):
-        raise ProviderAdapterError({
-            "error": "external_provider_base_url_required",
-            "secrets_returned": False,
-        })
+        raise ProviderAdapterError(
+            {
+                "error": "external_provider_base_url_required",
+                "secrets_returned": False,
+            }
+        )
     entries: Dict[str, str] = {
         _api_key_env_names(provider_text)[0]: api_key,
         _model_env_names(provider_text)[0]: model,
@@ -231,11 +250,13 @@ def write_provider_config(
         entries["EASYICU_LLM_JSON_FORMAT_STYLE"] = json_format_style
     path = _DEFAULT_PROVIDER_ENV_FILE
     if path.exists() and not force:
-        raise ProviderAdapterError({
-            "error": "external_provider_env_file_exists",
-            "env_file": str(path),
-            "secrets_returned": False,
-        })
+        raise ProviderAdapterError(
+            {
+                "error": "external_provider_env_file_exists",
+                "env_file": str(path),
+                "secrets_returned": False,
+            }
+        )
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
     lines = [
@@ -245,11 +266,13 @@ def write_provider_config(
     ]
     for key, value in entries.items():
         if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", key):
-            raise ProviderAdapterError({
-                "error": "external_provider_invalid_env_key",
-                "env_key": key,
-                "secrets_returned": False,
-            })
+            raise ProviderAdapterError(
+                {
+                    "error": "external_provider_invalid_env_key",
+                    "env_key": key,
+                    "secrets_returned": False,
+                }
+            )
         lines.append(f"{key}={_quote_env_value(value)}")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
@@ -302,31 +325,39 @@ def _load_external_credentials(
         "env_file": env_file,
     }
     if env_file.get("status") == "insecure_permissions":
-        raise ProviderAdapterError({
-            **attempted,
-            "error": "external_provider_env_file_permissions",
-            "blocked_by": "external_provider_credentials",
-        })
+        raise ProviderAdapterError(
+            {
+                **attempted,
+                "error": "external_provider_env_file_permissions",
+                "blocked_by": "external_provider_credentials",
+            }
+        )
     if not api_key:
-        raise ProviderAdapterError({
-            **attempted,
-            "error": "external_provider_credentials_required",
-            "blocked_by": "external_provider_credentials",
-        })
+        raise ProviderAdapterError(
+            {
+                **attempted,
+                "error": "external_provider_credentials_required",
+                "blocked_by": "external_provider_credentials",
+            }
+        )
     if not base_url:
-        raise ProviderAdapterError({
-            **attempted,
-            "error": "external_provider_base_url_required",
-            "blocked_by": "external_provider_credentials",
-            "credential_source": key_name,
-        })
+        raise ProviderAdapterError(
+            {
+                **attempted,
+                "error": "external_provider_base_url_required",
+                "blocked_by": "external_provider_credentials",
+                "credential_source": key_name,
+            }
+        )
     if not model:
-        raise ProviderAdapterError({
-            **attempted,
-            "error": "external_provider_model_required",
-            "blocked_by": "external_provider_credentials",
-            "credential_source": key_name,
-        })
+        raise ProviderAdapterError(
+            {
+                **attempted,
+                "error": "external_provider_model_required",
+                "blocked_by": "external_provider_credentials",
+                "credential_source": key_name,
+            }
+        )
     return {
         "provider": provider,
         "api_key": api_key,
@@ -441,12 +472,12 @@ def _build_chat_request(
         "Use only the bounded aggregate context. Do not invent patient rows. "
         "Return exactly one JSON object with this shape and no sectioned "
         "manuscript keys: "
-        "{\"agent_plan\":{\"steps\":[{\"id\":\"step_001\",\"title\":\"...\","
-        "\"evidence_ids\":[\"run_context.json\"]}]},"
-        "\"manuscript_draft\":{\"claims\":[{\"id\":\"claim_001\","
-        "\"text\":\"...\",\"evidence_ids\":[\"cohort_summary.json\"]}],"
-        "\"sentences\":[{\"id\":\"sentence_001\",\"text\":\"...\","
-        "\"evidence_ids\":[\"quality_gate.json\"]}]}}. "
+        '{"agent_plan":{"steps":[{"id":"step_001","title":"...",'
+        '"evidence_ids":["run_context.json"]}]},'
+        '"manuscript_draft":{"claims":[{"id":"claim_001",'
+        '"text":"...","evidence_ids":["cohort_summary.json"]}],'
+        '"sentences":[{"id":"sentence_001","text":"...",'
+        '"evidence_ids":["quality_gate.json"]}]}}. '
         "agent_plan must be an object, not an array. Do not return title, "
         "abstract, introduction, methods, or results sections. Every claim "
         "and sentence must include evidence_ids drawn only from "
@@ -588,7 +619,9 @@ def _coerce_provider_payload(
     if isinstance(plan, list):
         plan = {"steps": plan}
     if not isinstance(plan, dict) or not isinstance(draft, dict):
-        raise ProviderAdapterError({"error": "external_provider_payload_missing_artifacts"})
+        raise ProviderAdapterError(
+            {"error": "external_provider_payload_missing_artifacts"}
+        )
     plan.setdefault("run_id", run_id)
     plan.setdefault("study_id", study_id)
     plan.setdefault("execution", "external_provider_scaffold")
@@ -604,12 +637,16 @@ def _coerce_provider_payload(
 def _extract_message_content(response: Dict[str, Any]) -> str:
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices:
-        raise ProviderAdapterError({"error": "external_provider_response_missing_choices"})
+        raise ProviderAdapterError(
+            {"error": "external_provider_response_missing_choices"}
+        )
     first = choices[0] if isinstance(choices[0], dict) else {}
     message = first.get("message") if isinstance(first, dict) else {}
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, str) or not content.strip():
-        raise ProviderAdapterError({"error": "external_provider_response_missing_content"})
+        raise ProviderAdapterError(
+            {"error": "external_provider_response_missing_content"}
+        )
     return content
 
 
@@ -622,12 +659,16 @@ def _parse_json_object(content: str) -> Dict[str, Any]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ProviderAdapterError({
-            "error": "external_provider_response_json_invalid",
-            "message": str(exc),
-        }) from exc
+        raise ProviderAdapterError(
+            {
+                "error": "external_provider_response_json_invalid",
+                "message": str(exc),
+            }
+        ) from exc
     if not isinstance(parsed, dict):
-        raise ProviderAdapterError({"error": "external_provider_response_json_not_object"})
+        raise ProviderAdapterError(
+            {"error": "external_provider_response_json_not_object"}
+        )
     return parsed
 
 
@@ -651,7 +692,13 @@ def _normalize_provider(provider: str) -> str:
 
 
 def _is_offline_provider(provider: str) -> bool:
-    return _normalize_provider(provider) in {"mock", "offline", "none", "local", "disabled"}
+    return _normalize_provider(provider) in {
+        "mock",
+        "offline",
+        "none",
+        "local",
+        "disabled",
+    }
 
 
 def _env_token(provider: str) -> str:

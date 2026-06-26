@@ -4,13 +4,13 @@ The Agent Outputs tab must not invent Table 1, missingness, ROC, or
 calibration cards. This module builds those artifacts from the active EasyICU
 export only, using aggregate payloads that avoid row-level identifiers.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from easyicu.webserver import dataio
-
 
 OUTPUT_ARTIFACT_NAMES = [
     "table1_summary.json",
@@ -55,7 +55,9 @@ def build_agent_output_artifacts(
     context = _load_context(export_path, source)
     frames = context["frames"]
     entity_ids = context["entity_ids"]
-    death_by_entity = _bool_by_entity(frames.get("outcome"), "death", missing_false=True)
+    death_by_entity = _bool_by_entity(
+        frames.get("outcome"), "death", missing_false=True
+    )
     feature_values = _feature_values_by_entity(frames, entity_ids)
     predictor = _select_predictor(feature_values, death_by_entity)
 
@@ -106,7 +108,11 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
             frame = dataio._read_export_frame(path)  # local exported module table
         except Exception:
             continue
-        if frame is None or getattr(frame, "empty", True) or _ENTITY_COLUMN not in frame.columns:
+        if (
+            frame is None
+            or getattr(frame, "empty", True)
+            or _ENTITY_COLUMN not in frame.columns
+        ):
             continue
         frame = frame.copy()
         frame[_ENTITY_COLUMN] = frame[_ENTITY_COLUMN].map(dataio._norm_id)
@@ -117,7 +123,12 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
     if demo is not None and _ENTITY_COLUMN in demo.columns:
         entity_ids = [
             sid
-            for sid in demo[_ENTITY_COLUMN].dropna().astype(str).drop_duplicates().head(500).tolist()
+            for sid in demo[_ENTITY_COLUMN]
+            .dropna()
+            .astype(str)
+            .drop_duplicates()
+            .head(500)
+            .tolist()
             if sid
         ]
     if not entity_ids:
@@ -125,7 +136,12 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
             if _ENTITY_COLUMN in frame.columns:
                 entity_ids = [
                     sid
-                    for sid in frame[_ENTITY_COLUMN].dropna().astype(str).drop_duplicates().head(500).tolist()
+                    for sid in frame[_ENTITY_COLUMN]
+                    .dropna()
+                    .astype(str)
+                    .drop_duplicates()
+                    .head(500)
+                    .tolist()
                     if sid
                 ]
                 if entity_ids:
@@ -151,11 +167,24 @@ def _table1_payload(
     groups = _group_entity_ids(entity_ids, death_by_entity)
     variables = [
         _numeric_table_row("Age", "demographics", "age", frames, groups),
-        _categorical_bool_row("Female sex", "demographics", "sex", frames, groups, true_values={"f", "female"}),
-        _numeric_table_row("SOFA-2 score", "sofa2_score", "sofa2", frames, groups, aggregate="max"),
+        _categorical_bool_row(
+            "Female sex",
+            "demographics",
+            "sex",
+            frames,
+            groups,
+            true_values={"f", "female"},
+        ),
+        _numeric_table_row(
+            "SOFA-2 score", "sofa2_score", "sofa2", frames, groups, aggregate="max"
+        ),
         _numeric_table_row("ICU length of stay", "outcome", "los_icu", frames, groups),
-        _numeric_table_row("Hospital length of stay", "outcome", "los_hosp", frames, groups),
-        _categorical_bool_row("Sepsis-3 (SOFA-2 based)", "sepsis3_sofa2", "sep3_sofa2", frames, groups),
+        _numeric_table_row(
+            "Hospital length of stay", "outcome", "los_hosp", frames, groups
+        ),
+        _categorical_bool_row(
+            "Sepsis-3 (SOFA-2 based)", "sepsis3_sofa2", "sep3_sofa2", frames, groups
+        ),
     ]
     variables = [row for row in variables if row is not None]
     return {
@@ -171,8 +200,16 @@ def _table1_payload(
         },
         "groups": [
             {"id": "overall", "label": "Overall", "entities": len(groups["overall"])},
-            {"id": "survived", "label": "Survived", "entities": len(groups["survived"])},
-            {"id": "deceased", "label": "Deceased", "entities": len(groups["deceased"])},
+            {
+                "id": "survived",
+                "label": "Survived",
+                "entities": len(groups["survived"]),
+            },
+            {
+                "id": "deceased",
+                "label": "Deceased",
+                "entities": len(groups["deceased"]),
+            },
         ],
         "variables": variables,
         "cohort_snapshot": {
@@ -202,18 +239,28 @@ def _missingness_payload(
             present = _present_entity_count(frame, str(col))
             non_missing = _non_missing_record_count(frame, str(col))
             coverage = round(present / denominator * 100, 1) if denominator else None
-            rows.append({
-                "module": module,
-                "feature": str(col),
-                "label": _label(str(col)),
-                "entities_observed": present,
-                "denominator": denominator,
-                "coverage_pct": coverage,
-                "missing_pct": round(100 - coverage, 1) if coverage is not None else None,
-                "records_non_missing": non_missing,
-                "coverage_basis": "entity_non_missing_presence",
-            })
-    rows.sort(key=lambda row: (str(row["module"]), -(row.get("coverage_pct") or 0), str(row["feature"])))
+            rows.append(
+                {
+                    "module": module,
+                    "feature": str(col),
+                    "label": _label(str(col)),
+                    "entities_observed": present,
+                    "denominator": denominator,
+                    "coverage_pct": coverage,
+                    "missing_pct": (
+                        round(100 - coverage, 1) if coverage is not None else None
+                    ),
+                    "records_non_missing": non_missing,
+                    "coverage_basis": "entity_non_missing_presence",
+                }
+            )
+    rows.sort(
+        key=lambda row: (
+            str(row["module"]),
+            -(row.get("coverage_pct") or 0),
+            str(row["feature"]),
+        )
+    )
     return {
         "kind": "missingness_audit",
         "status": "ok" if rows else "not_available",
@@ -223,11 +270,14 @@ def _missingness_payload(
         "module_quality": quality,
         "rows": rows,
         "summary": {
-            "features_with_full_coverage": sum(1 for row in rows if row.get("coverage_pct") == 100.0),
+            "features_with_full_coverage": sum(
+                1 for row in rows if row.get("coverage_pct") == 100.0
+            ),
             "features_below_80_pct": sum(
                 1
                 for row in rows
-                if isinstance(row.get("coverage_pct"), (int, float)) and row["coverage_pct"] < 80
+                if isinstance(row.get("coverage_pct"), (int, float))
+                and row["coverage_pct"] < 80
             ),
             "modules": summary.get("modules"),
         },
@@ -282,7 +332,9 @@ def _calibration_payload(
             "requires at least 5 entities, both outcome classes, and a numeric predictor for bounded bins",
             predictor,
         )
-    probabilities = _logistic_probabilities([score for score, _ in pairs], [event for _, event in pairs])
+    probabilities = _logistic_probabilities(
+        [score for score, _ in pairs], [event for _, event in pairs]
+    )
     bins = _calibration_bins(probabilities, [event for _, event in pairs])
     return {
         "kind": "calibration_curve",
@@ -298,7 +350,9 @@ def _calibration_payload(
     }
 
 
-def _group_entity_ids(entity_ids: List[str], death_by_entity: Dict[str, bool]) -> Dict[str, List[str]]:
+def _group_entity_ids(
+    entity_ids: List[str], death_by_entity: Dict[str, bool]
+) -> Dict[str, List[str]]:
     overall = list(entity_ids)
     return {
         "overall": overall,
@@ -355,7 +409,9 @@ def _categorical_bool_row(
     }
 
 
-def _feature_values_by_entity(frames: Dict[str, Any], entity_ids: List[str]) -> Dict[Tuple[str, str], Dict[str, float]]:
+def _feature_values_by_entity(
+    frames: Dict[str, Any], entity_ids: List[str]
+) -> Dict[Tuple[str, str], Dict[str, float]]:
     entity_set = set(entity_ids)
     out: Dict[Tuple[str, str], Dict[str, float]] = {}
     for module, frame in frames.items():
@@ -408,7 +464,9 @@ def _select_predictor(
     return best
 
 
-def _prediction_pairs(predictor: Optional[Dict[str, Any]], death_by_entity: Dict[str, bool]) -> List[Tuple[float, int]]:
+def _prediction_pairs(
+    predictor: Optional[Dict[str, Any]], death_by_entity: Dict[str, bool]
+) -> List[Tuple[float, int]]:
     if not predictor:
         return []
     values = predictor.get("values") or {}
@@ -431,7 +489,9 @@ def _can_score(pairs: List[Tuple[float, int]], *, min_pairs: int) -> bool:
     return labels == {0, 1}
 
 
-def _roc_points(pairs: List[Tuple[float, int]]) -> Tuple[List[Dict[str, float]], Optional[float]]:
+def _roc_points(
+    pairs: List[Tuple[float, int]],
+) -> Tuple[List[Dict[str, float]], Optional[float]]:
     total_pos = sum(event for _, event in pairs)
     total_neg = len(pairs) - total_pos
     if not total_pos or not total_neg:
@@ -443,21 +503,25 @@ def _roc_points(pairs: List[Tuple[float, int]]) -> Tuple[List[Dict[str, float]],
     last_score: Optional[float] = None
     for score, event in ordered:
         if last_score is not None and score != last_score:
-            points.append({
-                "threshold": round(float(last_score), 6),
-                "fpr": round(fp / total_neg, 6),
-                "tpr": round(tp / total_pos, 6),
-            })
+            points.append(
+                {
+                    "threshold": round(float(last_score), 6),
+                    "fpr": round(fp / total_neg, 6),
+                    "tpr": round(tp / total_pos, 6),
+                }
+            )
         if event:
             tp += 1
         else:
             fp += 1
         last_score = score
-    points.append({
-        "threshold": round(float(last_score if last_score is not None else 0), 6),
-        "fpr": round(fp / total_neg, 6),
-        "tpr": round(tp / total_pos, 6),
-    })
+    points.append(
+        {
+            "threshold": round(float(last_score if last_score is not None else 0), 6),
+            "fpr": round(fp / total_neg, 6),
+            "tpr": round(tp / total_pos, 6),
+        }
+    )
     auc = 0.0
     for left, right in zip(points, points[1:]):
         auc += (right["fpr"] - left["fpr"]) * (right["tpr"] + left["tpr"]) / 2
@@ -489,7 +553,9 @@ def _logistic_probabilities(scores: List[float], labels: List[int]) -> List[floa
     ]
 
 
-def _calibration_bins(probabilities: List[float], labels: List[int]) -> List[Dict[str, Any]]:
+def _calibration_bins(
+    probabilities: List[float], labels: List[int]
+) -> List[Dict[str, Any]]:
     if not probabilities or len(probabilities) != len(labels):
         return []
     paired = sorted(zip(probabilities, labels), key=lambda row: row[0])
@@ -503,19 +569,28 @@ def _calibration_bins(probabilities: List[float], labels: List[int]) -> List[Dic
             continue
         probs = [p for p, _ in chunk]
         events = [y for _, y in chunk]
-        bins.append({
-            "bin": i + 1,
-            "entities": len(chunk),
-            "predicted_mean": round(sum(probs) / len(probs), 4),
-            "observed_event_rate": round(sum(events) / len(events), 4),
-            "probability_min": round(min(probs), 4),
-            "probability_max": round(max(probs), 4),
-        })
+        bins.append(
+            {
+                "bin": i + 1,
+                "entities": len(chunk),
+                "predicted_mean": round(sum(probs) / len(probs), 4),
+                "observed_event_rate": round(sum(events) / len(events), 4),
+                "probability_min": round(min(probs), 4),
+                "probability_max": round(max(probs), 4),
+            }
+        )
     return bins
 
 
-def _numeric_by_entity(frame: Any, feature: str, *, aggregate: str = "median") -> Dict[str, float]:
-    if frame is None or getattr(frame, "empty", True) or _ENTITY_COLUMN not in frame.columns or feature not in frame.columns:
+def _numeric_by_entity(
+    frame: Any, feature: str, *, aggregate: str = "median"
+) -> Dict[str, float]:
+    if (
+        frame is None
+        or getattr(frame, "empty", True)
+        or _ENTITY_COLUMN not in frame.columns
+        or feature not in frame.columns
+    ):
         return {}
     import pandas as pd
 
@@ -536,7 +611,12 @@ def _bool_by_entity(
     true_values: Optional[set[str]] = None,
     missing_false: bool = False,
 ) -> Dict[str, bool]:
-    if frame is None or getattr(frame, "empty", True) or _ENTITY_COLUMN not in frame.columns or feature not in frame.columns:
+    if (
+        frame is None
+        or getattr(frame, "empty", True)
+        or _ENTITY_COLUMN not in frame.columns
+        or feature not in frame.columns
+    ):
         return {}
     out: Dict[str, bool] = {}
     accepted = true_values or {"1", "true", "t", "yes", "y", "positive", "present"}
@@ -546,7 +626,17 @@ def _bool_by_entity(
             text = "" if value is None else str(value).strip().lower()
             if text in accepted:
                 flags.append(True)
-            elif text in {"0", "false", "f", "m", "male", "no", "n", "negative", "absent"}:
+            elif text in {
+                "0",
+                "false",
+                "f",
+                "m",
+                "male",
+                "no",
+                "n",
+                "negative",
+                "absent",
+            }:
                 flags.append(False)
             elif missing_false and text in {"", "nan", "none", "null"}:
                 flags.append(False)

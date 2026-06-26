@@ -4,6 +4,7 @@ The registry is the shared contract between Data Extraction, Patient/Cohort
 Review, Cross-DB, Copilot, and Agent Projects. It records only local paths and
 bounded metadata; patient rows are not persisted here.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -33,7 +34,9 @@ def _read_raw() -> Dict[str, Any]:
 
 def _write_raw(data: Dict[str, Any]) -> None:
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    _CONFIG_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _CONFIG_PATH.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 def _norm_path(raw_path: str) -> str:
@@ -49,7 +52,9 @@ def _source_id(path: str) -> str:
     return "src_" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:12]
 
 
-def _source_from_path(path: str, label: str | None = None, registered_at: str | None = None) -> Dict[str, Any]:
+def _source_from_path(
+    path: str, label: str | None = None, registered_at: str | None = None
+) -> Dict[str, Any]:
     norm = _norm_path(path)
     desc = dataio.describe_export_source(norm)
     item: Dict[str, Any] = {
@@ -60,13 +65,15 @@ def _source_from_path(path: str, label: str | None = None, registered_at: str | 
         "registered_at": registered_at or _now(),
     }
     if desc.get("ok"):
-        item.update({
-            "database": desc.get("database"),
-            "generated": desc.get("generated"),
-            "modules": desc.get("modules", []),
-            "summary": desc.get("summary", {}),
-            "file_count": len(desc.get("files", [])),
-        })
+        item.update(
+            {
+                "database": desc.get("database"),
+                "generated": desc.get("generated"),
+                "modules": desc.get("modules", []),
+                "summary": desc.get("summary", {}),
+                "file_count": len(desc.get("files", [])),
+            }
+        )
     else:
         item["error"] = desc.get("error", "invalid_export")
     return item
@@ -93,7 +100,9 @@ def _raw_removed_paths(raw: Dict[str, Any]) -> List[str]:
 def _autodiscovered_paths() -> List[str]:
     settings = settings_store.load_settings()
     bases = [
-        Path(str(settings.get("export_dir") or settings_store.DEFAULTS["export_dir"])).expanduser(),
+        Path(
+            str(settings.get("export_dir") or settings_store.DEFAULTS["export_dir"])
+        ).expanduser(),
         Path.home() / "easyicu" / "exports",
     ]
     paths: List[str] = []
@@ -110,9 +119,13 @@ def _autodiscovered_paths() -> List[str]:
             continue
         for child in children:
             try:
-                if child.is_dir() and dataio.describe_export_source(str(child)).get("ok"):
+                if child.is_dir() and dataio.describe_export_source(str(child)).get(
+                    "ok"
+                ):
                     paths.append(str(child))
-            except Exception:  # noqa: BLE001 - arbitrary local folders must not break registry boot.
+            except (
+                Exception
+            ):  # noqa: BLE001 - arbitrary local folders must not break registry boot.
                 continue
     return _dedup_paths(paths)
 
@@ -138,13 +151,20 @@ def load_registry() -> Dict[str, Any]:
             continue
         by_path.setdefault(path, _source_from_path(path))
 
-    sources = sorted(by_path.values(), key=lambda s: (not s.get("ok"), str(s.get("label") or "").lower()))
+    sources = sorted(
+        by_path.values(),
+        key=lambda s: (not s.get("ok"), str(s.get("label") or "").lower()),
+    )
     valid_paths = [str(s["path"]) for s in sources if s.get("ok")]
-    active_path = _norm_path(raw.get("active_path") or "") if raw.get("active_path") else None
+    active_path = (
+        _norm_path(raw.get("active_path") or "") if raw.get("active_path") else None
+    )
     if active_path not in valid_paths:
         active_path = valid_paths[0] if valid_paths else None
 
-    crossdb_paths = [p for p in _dedup_paths(raw.get("crossdb_paths") or []) if p in valid_paths]
+    crossdb_paths = [
+        p for p in _dedup_paths(raw.get("crossdb_paths") or []) if p in valid_paths
+    ]
     if len(crossdb_paths) < 2 and len(valid_paths) >= 2:
         crossdb_paths = valid_paths[:2]
     elif not crossdb_paths and active_path:
@@ -189,17 +209,21 @@ def save_registry(patch: Dict[str, Any]) -> Dict[str, Any]:
         }
         for s in existing.values()
     ]
-    _write_raw({
-        "sources": persist_sources,
-        "active_path": active_path,
-        "crossdb_paths": crossdb_paths,
-        "removed_paths": sorted(removed_paths),
-        "updated_at": _now(),
-    })
+    _write_raw(
+        {
+            "sources": persist_sources,
+            "active_path": active_path,
+            "crossdb_paths": crossdb_paths,
+            "removed_paths": sorted(removed_paths),
+            "updated_at": _now(),
+        }
+    )
     return load_registry()
 
 
-def register_source(path: str, label: str | None = None, active: bool = True, crossdb: bool = True) -> Dict[str, Any]:
+def register_source(
+    path: str, label: str | None = None, active: bool = True, crossdb: bool = True
+) -> Dict[str, Any]:
     source = _source_from_path(path, label=label)
     if not source.get("ok"):
         return {"ok": False, "error": source.get("error"), "source": source}
@@ -207,11 +231,13 @@ def register_source(path: str, label: str | None = None, active: bool = True, cr
     next_paths = list(registry.get("crossdb_paths") or [])
     if crossdb and source["path"] not in next_paths:
         next_paths.append(source["path"])
-    return save_registry({
-        "sources": [source],
-        "active_path": source["path"] if active else registry.get("active_path"),
-        "crossdb_paths": next_paths,
-    })
+    return save_registry(
+        {
+            "sources": [source],
+            "active_path": source["path"] if active else registry.get("active_path"),
+            "crossdb_paths": next_paths,
+        }
+    )
 
 
 def rename_source(path: str, label: str) -> Dict[str, Any]:
@@ -222,7 +248,9 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
         return {"ok": False, "error": "label_required", "path": norm}
 
     registry = load_registry()
-    current = next((s for s in registry.get("sources", []) if s.get("path") == norm), None)
+    current = next(
+        (s for s in registry.get("sources", []) if s.get("path") == norm), None
+    )
     if current is None:
         return {"ok": False, "error": "source_not_registered", "path": norm}
 
@@ -235,39 +263,52 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
             continue
         item_path = _norm_path(str(item.get("path")))
         if item_path == norm:
-            persist_sources.append({
-                "path": norm,
-                "label": clean_label,
-                "registered_at": item.get("registered_at") or current.get("registered_at"),
-            })
+            persist_sources.append(
+                {
+                    "path": norm,
+                    "label": clean_label,
+                    "registered_at": item.get("registered_at")
+                    or current.get("registered_at"),
+                }
+            )
             updated = True
         else:
-            persist_sources.append({
-                "path": item_path,
-                "label": item.get("label"),
-                "registered_at": item.get("registered_at"),
-            })
+            persist_sources.append(
+                {
+                    "path": item_path,
+                    "label": item.get("label"),
+                    "registered_at": item.get("registered_at"),
+                }
+            )
     if not updated:
-        persist_sources.append({
+        persist_sources.append(
+            {
+                "path": norm,
+                "label": clean_label,
+                "registered_at": current.get("registered_at") or _now(),
+            }
+        )
+
+    _write_raw(
+        {
+            "sources": persist_sources,
+            "active_path": raw.get("active_path") or registry.get("active_path"),
+            "crossdb_paths": raw.get("crossdb_paths")
+            or registry.get("crossdb_paths")
+            or [],
+            "removed_paths": [p for p in _raw_removed_paths(raw) if p != norm],
+            "updated_at": _now(),
+        }
+    )
+    result = load_registry()
+    result.update(
+        {
+            "action": "renamed_source_metadata",
             "path": norm,
             "label": clean_label,
-            "registered_at": current.get("registered_at") or _now(),
-        })
-
-    _write_raw({
-        "sources": persist_sources,
-        "active_path": raw.get("active_path") or registry.get("active_path"),
-        "crossdb_paths": raw.get("crossdb_paths") or registry.get("crossdb_paths") or [],
-        "removed_paths": [p for p in _raw_removed_paths(raw) if p != norm],
-        "updated_at": _now(),
-    })
-    result = load_registry()
-    result.update({
-        "action": "renamed_source_metadata",
-        "path": norm,
-        "label": clean_label,
-        "disk_touched": False,
-    })
+            "disk_touched": False,
+        }
+    )
     return result
 
 
@@ -275,7 +316,9 @@ def remove_source(path: str) -> Dict[str, Any]:
     """Unregister one source without deleting or modifying its export folder."""
     norm = _norm_path(path)
     registry = load_registry()
-    current = next((s for s in registry.get("sources", []) if s.get("path") == norm), None)
+    current = next(
+        (s for s in registry.get("sources", []) if s.get("path") == norm), None
+    )
     if current is None:
         return {"ok": False, "error": "source_not_registered", "path": norm}
 
@@ -288,7 +331,9 @@ def remove_source(path: str) -> Dict[str, Any]:
             "registered_at": item.get("registered_at"),
         }
         for item in stored
-        if isinstance(item, dict) and item.get("path") and _norm_path(str(item.get("path"))) != norm
+        if isinstance(item, dict)
+        and item.get("path")
+        and _norm_path(str(item.get("path"))) != norm
     ]
     remaining_valid = [
         str(s["path"])
@@ -302,22 +347,25 @@ def remove_source(path: str) -> Dict[str, Any]:
 
     raw_crossdb = raw.get("crossdb_paths") or registry.get("crossdb_paths") or []
     crossdb_paths = [
-        p for p in _dedup_paths(raw_crossdb)
-        if p != norm and p in remaining_valid
+        p for p in _dedup_paths(raw_crossdb) if p != norm and p in remaining_valid
     ]
     removed_paths = set(_raw_removed_paths(raw))
     removed_paths.add(norm)
-    _write_raw({
-        "sources": persist_sources,
-        "active_path": active_path,
-        "crossdb_paths": crossdb_paths,
-        "removed_paths": sorted(removed_paths),
-        "updated_at": _now(),
-    })
+    _write_raw(
+        {
+            "sources": persist_sources,
+            "active_path": active_path,
+            "crossdb_paths": crossdb_paths,
+            "removed_paths": sorted(removed_paths),
+            "updated_at": _now(),
+        }
+    )
     result = load_registry()
-    result.update({
-        "action": "unregistered_source_only",
-        "removed_path": norm,
-        "disk_deleted": False,
-    })
+    result.update(
+        {
+            "action": "unregistered_source_only",
+            "removed_path": norm,
+            "disk_deleted": False,
+        }
+    )
     return result

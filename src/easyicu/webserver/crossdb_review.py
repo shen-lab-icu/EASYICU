@@ -4,6 +4,7 @@ Stage18 compares two or more registered EasyICU exports using cohort-level
 aggregates only. Matched cohorts, row-level filters, p-values/SMDs, and formal
 cross-database claims remain fail-closed until the numeric evidence audit gate.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -12,7 +13,11 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from easyicu.concept import catalog as concept_catalog
-from easyicu.io.data_paths import DATABASE_ALIASES, _path_looks_like_database, find_database_path
+from easyicu.io.data_paths import (
+    DATABASE_ALIASES,
+    _path_looks_like_database,
+    find_database_path,
+)
 from easyicu.webserver import cohort_review
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
@@ -69,81 +74,208 @@ _DEMO_MULTIDB_DATABASES = ("miiv", "eicu", "aumc", "hirid", "mimic", "sic")
 _DEMO_RECORDS_PER_FEATURE = 192
 _DEMO_MULTIDB_FEATURE_SPECS = {
     "miiv": {
-        "hr": (80, 15), "sbp": (120, 20), "dbp": (70, 12), "map": (85, 15),
-        "temp": (37.2, 0.5), "resp": (18, 4), "spo2": (96, 3),
-        "glu": (140, 50), "na": (140, 5), "k": (4.2, 0.6), "crea": (1.2, 0.8),
-        "bili": (1.5, 1.2), "lact": (2.2, 1.5),
-        "hgb": (11, 2), "plt": (200, 80), "wbc": (12, 5),
-        "ph": (7.38, 0.08), "po2": (90, 20), "pco2": (40, 8), "fio2": (45, 20),
-        "sofa2": (5.2, 3.8), "sofa2_resp": (1.2, 1.1), "sofa2_coag": (0.8, 0.9),
-        "sofa2_liver": (0.6, 0.8), "sofa2_cardio": (1.0, 1.2), "sofa2_cns": (0.8, 1.0),
+        "hr": (80, 15),
+        "sbp": (120, 20),
+        "dbp": (70, 12),
+        "map": (85, 15),
+        "temp": (37.2, 0.5),
+        "resp": (18, 4),
+        "spo2": (96, 3),
+        "glu": (140, 50),
+        "na": (140, 5),
+        "k": (4.2, 0.6),
+        "crea": (1.2, 0.8),
+        "bili": (1.5, 1.2),
+        "lact": (2.2, 1.5),
+        "hgb": (11, 2),
+        "plt": (200, 80),
+        "wbc": (12, 5),
+        "ph": (7.38, 0.08),
+        "po2": (90, 20),
+        "pco2": (40, 8),
+        "fio2": (45, 20),
+        "sofa2": (5.2, 3.8),
+        "sofa2_resp": (1.2, 1.1),
+        "sofa2_coag": (0.8, 0.9),
+        "sofa2_liver": (0.6, 0.8),
+        "sofa2_cardio": (1.0, 1.2),
+        "sofa2_cns": (0.8, 1.0),
         "sofa2_renal": (0.8, 1.0),
     },
     "eicu": {
-        "hr": (85, 18), "sbp": (125, 25), "dbp": (72, 14), "map": (88, 18),
-        "temp": (37.0, 0.6), "resp": (20, 5), "spo2": (95, 4),
-        "glu": (150, 60), "na": (139, 6), "k": (4.0, 0.7), "crea": (1.4, 1.0),
-        "bili": (1.8, 1.5), "lact": (2.5, 1.8),
-        "hgb": (10.5, 2.2), "plt": (180, 90), "wbc": (13, 6),
-        "ph": (7.36, 0.09), "po2": (85, 22), "pco2": (42, 10), "fio2": (50, 25),
-        "sofa2": (6.0, 4.2), "sofa2_resp": (1.4, 1.2), "sofa2_coag": (0.9, 1.0),
-        "sofa2_liver": (0.7, 0.9), "sofa2_cardio": (1.2, 1.3), "sofa2_cns": (0.9, 1.1),
+        "hr": (85, 18),
+        "sbp": (125, 25),
+        "dbp": (72, 14),
+        "map": (88, 18),
+        "temp": (37.0, 0.6),
+        "resp": (20, 5),
+        "spo2": (95, 4),
+        "glu": (150, 60),
+        "na": (139, 6),
+        "k": (4.0, 0.7),
+        "crea": (1.4, 1.0),
+        "bili": (1.8, 1.5),
+        "lact": (2.5, 1.8),
+        "hgb": (10.5, 2.2),
+        "plt": (180, 90),
+        "wbc": (13, 6),
+        "ph": (7.36, 0.09),
+        "po2": (85, 22),
+        "pco2": (42, 10),
+        "fio2": (50, 25),
+        "sofa2": (6.0, 4.2),
+        "sofa2_resp": (1.4, 1.2),
+        "sofa2_coag": (0.9, 1.0),
+        "sofa2_liver": (0.7, 0.9),
+        "sofa2_cardio": (1.2, 1.3),
+        "sofa2_cns": (0.9, 1.1),
         "sofa2_renal": (0.9, 1.1),
     },
     "aumc": {
-        "hr": (75, 12), "sbp": (115, 18), "dbp": (65, 10), "map": (80, 12),
-        "temp": (37.4, 0.4), "resp": (16, 3), "spo2": (97, 2),
-        "glu": (130, 45), "na": (141, 4), "k": (4.3, 0.5), "crea": (1.0, 0.6),
-        "bili": (1.2, 1.0), "lact": (1.8, 1.2),
-        "hgb": (11.5, 1.8), "plt": (220, 70), "wbc": (11, 4),
-        "ph": (7.40, 0.06), "po2": (95, 18), "pco2": (38, 6), "fio2": (40, 18),
-        "sofa2": (4.5, 3.5), "sofa2_resp": (1.0, 1.0), "sofa2_coag": (0.7, 0.8),
-        "sofa2_liver": (0.5, 0.7), "sofa2_cardio": (0.9, 1.1), "sofa2_cns": (0.7, 0.9),
+        "hr": (75, 12),
+        "sbp": (115, 18),
+        "dbp": (65, 10),
+        "map": (80, 12),
+        "temp": (37.4, 0.4),
+        "resp": (16, 3),
+        "spo2": (97, 2),
+        "glu": (130, 45),
+        "na": (141, 4),
+        "k": (4.3, 0.5),
+        "crea": (1.0, 0.6),
+        "bili": (1.2, 1.0),
+        "lact": (1.8, 1.2),
+        "hgb": (11.5, 1.8),
+        "plt": (220, 70),
+        "wbc": (11, 4),
+        "ph": (7.40, 0.06),
+        "po2": (95, 18),
+        "pco2": (38, 6),
+        "fio2": (40, 18),
+        "sofa2": (4.5, 3.5),
+        "sofa2_resp": (1.0, 1.0),
+        "sofa2_coag": (0.7, 0.8),
+        "sofa2_liver": (0.5, 0.7),
+        "sofa2_cardio": (0.9, 1.1),
+        "sofa2_cns": (0.7, 0.9),
         "sofa2_renal": (0.7, 0.9),
     },
     "hirid": {
-        "hr": (78, 14), "sbp": (118, 22), "dbp": (68, 11), "map": (83, 14),
-        "temp": (37.3, 0.5), "resp": (17, 4), "spo2": (96, 3),
-        "glu": (135, 48), "na": (140, 5), "k": (4.1, 0.6), "crea": (1.1, 0.7),
-        "bili": (1.4, 1.1), "lact": (2.0, 1.4),
-        "hgb": (11.2, 2.0), "plt": (210, 75), "wbc": (11.5, 4.5),
-        "ph": (7.39, 0.07), "po2": (92, 19), "pco2": (39, 7), "fio2": (42, 19),
-        "sofa2": (4.8, 3.6), "sofa2_resp": (1.1, 1.0), "sofa2_coag": (0.7, 0.9),
-        "sofa2_liver": (0.5, 0.7), "sofa2_cardio": (1.0, 1.1), "sofa2_cns": (0.7, 0.9),
+        "hr": (78, 14),
+        "sbp": (118, 22),
+        "dbp": (68, 11),
+        "map": (83, 14),
+        "temp": (37.3, 0.5),
+        "resp": (17, 4),
+        "spo2": (96, 3),
+        "glu": (135, 48),
+        "na": (140, 5),
+        "k": (4.1, 0.6),
+        "crea": (1.1, 0.7),
+        "bili": (1.4, 1.1),
+        "lact": (2.0, 1.4),
+        "hgb": (11.2, 2.0),
+        "plt": (210, 75),
+        "wbc": (11.5, 4.5),
+        "ph": (7.39, 0.07),
+        "po2": (92, 19),
+        "pco2": (39, 7),
+        "fio2": (42, 19),
+        "sofa2": (4.8, 3.6),
+        "sofa2_resp": (1.1, 1.0),
+        "sofa2_coag": (0.7, 0.9),
+        "sofa2_liver": (0.5, 0.7),
+        "sofa2_cardio": (1.0, 1.1),
+        "sofa2_cns": (0.7, 0.9),
         "sofa2_renal": (0.8, 1.0),
     },
     "mimic": {
-        "hr": (82, 16), "sbp": (122, 21), "dbp": (71, 13), "map": (86, 16),
-        "temp": (37.1, 0.5), "resp": (19, 4), "spo2": (95, 3),
-        "glu": (145, 55), "na": (139, 5), "k": (4.1, 0.6), "crea": (1.3, 0.9),
-        "bili": (1.6, 1.3), "lact": (2.3, 1.6),
-        "hgb": (10.8, 2.1), "plt": (190, 85), "wbc": (12.5, 5.5),
-        "ph": (7.37, 0.08), "po2": (88, 21), "pco2": (41, 9), "fio2": (48, 22),
-        "sofa2": (5.5, 4.0), "sofa2_resp": (1.3, 1.1), "sofa2_coag": (0.8, 0.9),
-        "sofa2_liver": (0.6, 0.8), "sofa2_cardio": (1.1, 1.2), "sofa2_cns": (0.8, 1.0),
+        "hr": (82, 16),
+        "sbp": (122, 21),
+        "dbp": (71, 13),
+        "map": (86, 16),
+        "temp": (37.1, 0.5),
+        "resp": (19, 4),
+        "spo2": (95, 3),
+        "glu": (145, 55),
+        "na": (139, 5),
+        "k": (4.1, 0.6),
+        "crea": (1.3, 0.9),
+        "bili": (1.6, 1.3),
+        "lact": (2.3, 1.6),
+        "hgb": (10.8, 2.1),
+        "plt": (190, 85),
+        "wbc": (12.5, 5.5),
+        "ph": (7.37, 0.08),
+        "po2": (88, 21),
+        "pco2": (41, 9),
+        "fio2": (48, 22),
+        "sofa2": (5.5, 4.0),
+        "sofa2_resp": (1.3, 1.1),
+        "sofa2_coag": (0.8, 0.9),
+        "sofa2_liver": (0.6, 0.8),
+        "sofa2_cardio": (1.1, 1.2),
+        "sofa2_cns": (0.8, 1.0),
         "sofa2_renal": (0.9, 1.0),
     },
     "sic": {
-        "hr": (77, 13), "sbp": (116, 19), "dbp": (67, 11), "map": (82, 13),
-        "temp": (37.3, 0.4), "resp": (17, 3), "spo2": (97, 2),
-        "glu": (132, 46), "na": (141, 4), "k": (4.2, 0.5), "crea": (1.05, 0.65),
-        "bili": (1.3, 1.0), "lact": (1.9, 1.3),
-        "hgb": (11.3, 1.9), "plt": (215, 72), "wbc": (11.2, 4.2),
-        "ph": (7.40, 0.06), "po2": (93, 18), "pco2": (38, 6), "fio2": (41, 18),
-        "sofa2": (4.2, 3.3), "sofa2_resp": (1.0, 1.0), "sofa2_coag": (0.6, 0.8),
-        "sofa2_liver": (0.5, 0.7), "sofa2_cardio": (0.8, 1.0), "sofa2_cns": (0.6, 0.8),
+        "hr": (77, 13),
+        "sbp": (116, 19),
+        "dbp": (67, 11),
+        "map": (82, 13),
+        "temp": (37.3, 0.4),
+        "resp": (17, 3),
+        "spo2": (97, 2),
+        "glu": (132, 46),
+        "na": (141, 4),
+        "k": (4.2, 0.5),
+        "crea": (1.05, 0.65),
+        "bili": (1.3, 1.0),
+        "lact": (1.9, 1.3),
+        "hgb": (11.3, 1.9),
+        "plt": (215, 72),
+        "wbc": (11.2, 4.2),
+        "ph": (7.40, 0.06),
+        "po2": (93, 18),
+        "pco2": (38, 6),
+        "fio2": (41, 18),
+        "sofa2": (4.2, 3.3),
+        "sofa2_resp": (1.0, 1.0),
+        "sofa2_coag": (0.6, 0.8),
+        "sofa2_liver": (0.5, 0.7),
+        "sofa2_cardio": (0.8, 1.0),
+        "sofa2_cns": (0.6, 0.8),
         "sofa2_renal": (0.7, 0.9),
     },
 }
 _DEMO_FEATURE_BOUNDS = {
-    "hr": (35, 180), "sbp": (60, 230), "dbp": (25, 140), "map": (35, 170),
-    "temp": (34.0, 42.0), "resp": (5, 50), "spo2": (60, 100),
-    "glu": (25, 600), "na": (110, 170), "k": (1.8, 8.5), "crea": (0.1, 12.0),
-    "bili": (0.1, 30.0), "lact": (0.2, 18.0),
-    "hgb": (3.5, 22.0), "plt": (5, 900), "wbc": (0.1, 80),
-    "ph": (6.8, 7.8), "po2": (20, 320), "pco2": (10, 120), "fio2": (21, 100),
-    "sofa2": (0, 24), "sofa2_resp": (0, 4), "sofa2_coag": (0, 4), "sofa2_liver": (0, 4),
-    "sofa2_cardio": (0, 4), "sofa2_cns": (0, 4), "sofa2_renal": (0, 4),
+    "hr": (35, 180),
+    "sbp": (60, 230),
+    "dbp": (25, 140),
+    "map": (35, 170),
+    "temp": (34.0, 42.0),
+    "resp": (5, 50),
+    "spo2": (60, 100),
+    "glu": (25, 600),
+    "na": (110, 170),
+    "k": (1.8, 8.5),
+    "crea": (0.1, 12.0),
+    "bili": (0.1, 30.0),
+    "lact": (0.2, 18.0),
+    "hgb": (3.5, 22.0),
+    "plt": (5, 900),
+    "wbc": (0.1, 80),
+    "ph": (6.8, 7.8),
+    "po2": (20, 320),
+    "pco2": (10, 120),
+    "fio2": (21, 100),
+    "sofa2": (0, 24),
+    "sofa2_resp": (0, 4),
+    "sofa2_coag": (0, 4),
+    "sofa2_liver": (0, 4),
+    "sofa2_cardio": (0, 4),
+    "sofa2_cns": (0, 4),
+    "sofa2_renal": (0, 4),
 }
 
 
@@ -157,20 +289,28 @@ def crossdb_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     for source in requested_sources:
         safe_source = _safe_registered_source(source)
         try:
-            cohort_payloads.append(cohort_review.cohort_review_summary({"source_path": source["path"]}))
+            cohort_payloads.append(
+                cohort_review.cohort_review_summary({"source_path": source["path"]})
+            )
         except cohort_review.CohortReviewError as exc:
-            errors.append({
-                "source": safe_source,
-                "error": (exc.detail or {}).get("error") or "cohort_summary_failed",
-                "detail": _safe_error_detail(exc.detail),
-            })
+            errors.append(
+                {
+                    "source": safe_source,
+                    "error": (exc.detail or {}).get("error") or "cohort_summary_failed",
+                    "detail": _safe_error_detail(exc.detail),
+                }
+            )
     if errors:
-        raise CrossdbReviewError({
-            "error": "invalid_export",
-            "sources": [_safe_registered_source(source) for source in requested_sources],
-            "errors": errors,
-            "privacy": _privacy_payload(),
-        })
+        raise CrossdbReviewError(
+            {
+                "error": "invalid_export",
+                "sources": [
+                    _safe_registered_source(source) for source in requested_sources
+                ],
+                "errors": errors,
+                "privacy": _privacy_payload(),
+            }
+        )
 
     sources = [
         _source_aggregate(source, payload)
@@ -183,18 +323,20 @@ def crossdb_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     blocked_features = _blocked_features()
 
     if compatibility_gate["status"] != "compatible":
-        raise CrossdbReviewError({
-            "error": "crossdb_incompatible",
-            "mode": "real",
-            "demo": False,
-            "source_count": len(sources),
-            "sources": _public_sources(sources),
-            "shared_modules": shared_modules,
-            "all_modules": all_modules,
-            "compatibility_gate": compatibility_gate,
-            "blocked_features": blocked_features,
-            "privacy": _privacy_payload(),
-        })
+        raise CrossdbReviewError(
+            {
+                "error": "crossdb_incompatible",
+                "mode": "real",
+                "demo": False,
+                "source_count": len(sources),
+                "sources": _public_sources(sources),
+                "shared_modules": shared_modules,
+                "all_modules": all_modules,
+                "compatibility_gate": compatibility_gate,
+                "blocked_features": blocked_features,
+                "privacy": _privacy_payload(),
+            }
+        )
 
     return {
         "ok": True,
@@ -240,18 +382,24 @@ def crossdb_raw_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
     data_root = _resolve_raw_data_root(body)
     databases = _resolve_raw_databases(data_root, body)
     features = _resolve_raw_features(body)
-    max_patients = _bounded_int(body.get("max_patients"), default=300, minimum=20, maximum=2000)
-    sample_size = _bounded_int(body.get("sample_size"), default=1500, minimum=100, maximum=10000)
+    max_patients = _bounded_int(
+        body.get("max_patients"), default=300, minimum=20, maximum=2000
+    )
+    sample_size = _bounded_int(
+        body.get("sample_size"), default=1500, minimum=100, maximum=10000
+    )
 
     if len(databases) < 2:
-        raise CrossdbReviewError({
-            "error": "need_two_raw_databases",
-            "mode": "real",
-            "source_type": "raw_database_root",
-            "root_hash": _hash(str(data_root)),
-            "detected_databases": databases,
-            "privacy": _privacy_payload(),
-        })
+        raise CrossdbReviewError(
+            {
+                "error": "need_two_raw_databases",
+                "mode": "real",
+                "source_type": "raw_database_root",
+                "root_hash": _hash(str(data_root)),
+                "detected_databases": databases,
+                "privacy": _privacy_payload(),
+            }
+        )
 
     try:
         frames = _load_raw_feature_data(
@@ -262,31 +410,45 @@ def crossdb_raw_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
             sample_size=sample_size,
         )
     except Exception as exc:
-        raise CrossdbReviewError({
-            "error": "raw_distribution_load_failed",
-            "mode": "real",
-            "source_type": "raw_database_root",
-            "root_hash": _hash(str(data_root)),
-            "detail": str(exc),
-            "privacy": _privacy_payload(),
-        }) from exc
+        raise CrossdbReviewError(
+            {
+                "error": "raw_distribution_load_failed",
+                "mode": "real",
+                "source_type": "raw_database_root",
+                "root_hash": _hash(str(data_root)),
+                "detail": str(exc),
+                "privacy": _privacy_payload(),
+            }
+        ) from exc
 
-    loaded = {str(db): frame for db, frame in (frames or {}).items() if _raw_frame_has_values(frame)}
+    loaded = {
+        str(db): frame
+        for db, frame in (frames or {}).items()
+        if _raw_frame_has_values(frame)
+    }
     if len(loaded) < 2:
-        raise CrossdbReviewError({
-            "error": "loaded_fewer_than_two_raw_databases",
-            "mode": "real",
-            "source_type": "raw_database_root",
-            "root_hash": _hash(str(data_root)),
-            "requested_databases": databases,
-            "loaded_databases": sorted(loaded),
-            "feature_count": len(features),
-            "privacy": _privacy_payload(),
-        })
+        raise CrossdbReviewError(
+            {
+                "error": "loaded_fewer_than_two_raw_databases",
+                "mode": "real",
+                "source_type": "raw_database_root",
+                "root_hash": _hash(str(data_root)),
+                "requested_databases": databases,
+                "loaded_databases": sorted(loaded),
+                "feature_count": len(features),
+                "privacy": _privacy_payload(),
+            }
+        )
 
-    sources = [_raw_source_summary(db, frame, data_root) for db, frame in loaded.items()]
+    sources = [
+        _raw_source_summary(db, frame, data_root) for db, frame in loaded.items()
+    ]
     feature_distributions = _raw_feature_distribution_payload(loaded, features)
-    shared_modules = [row["module"] for row in feature_distributions if row.get("shared_feature_count")]
+    shared_modules = [
+        row["module"]
+        for row in feature_distributions
+        if row.get("shared_feature_count")
+    ]
     return {
         "ok": True,
         "mode": "real",
@@ -309,9 +471,22 @@ def crossdb_raw_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
             "inferential_statistics_allowed": False,
             "claim_level": "preview_not_reportable",
             "checks": [
-                {"id": "raw_database_count", "passed": len(sources) >= 2, "value": len(sources), "minimum": 2},
-                {"id": "feature_density_available", "passed": bool(feature_distributions), "feature_count": len(features)},
-                {"id": "no_patient_rows_returned", "passed": True, "basis": "aggregate_density_payload"},
+                {
+                    "id": "raw_database_count",
+                    "passed": len(sources) >= 2,
+                    "value": len(sources),
+                    "minimum": 2,
+                },
+                {
+                    "id": "feature_density_available",
+                    "passed": bool(feature_distributions),
+                    "feature_count": len(features),
+                },
+                {
+                    "id": "no_patient_rows_returned",
+                    "passed": True,
+                    "basis": "aggregate_density_payload",
+                },
             ],
             "reasons": [],
             "warnings": [],
@@ -397,12 +572,12 @@ def crossdb_raw_root_scan(body: Dict[str, Any]) -> Dict[str, Any]:
 
     detected_keys = {entry["key"] for entry in detected}
     detected_selected = [entry for entry in detected if entry["key"] in requested]
-    missing = _raw_missing_database_payload([db for db in requested if db not in detected_keys])
+    missing = _raw_missing_database_payload(
+        [db for db in requested if db not in detected_keys]
+    )
     unrecognized = _unrecognized_raw_child_folders(root, recognized_top_folders)
     direct_unrecognized = (
-        bool(_path_looks_like_database(str(root)))
-        and not detected
-        and root.name
+        bool(_path_looks_like_database(str(root))) and not detected and root.name
     )
     if direct_unrecognized and root.name not in unrecognized:
         unrecognized.insert(0, root.name)
@@ -444,15 +619,18 @@ def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
                 "ok": False,
                 "cancelled": True,
                 "cancelled_at": phase,
-                "cancel_reason": getattr(job, "cancel_reason", None) or "user_requested",
+                "cancel_reason": getattr(job, "cancel_reason", None)
+                or "user_requested",
                 "privacy": _privacy_payload(),
             }
 
-        job.emit({
-            "type": "progress",
-            "phase": "resolving",
-            "message": "Resolving local raw database root and feature catalog.",
-        })
+        job.emit(
+            {
+                "type": "progress",
+                "phase": "resolving",
+                "message": "Resolving local raw database root and feature catalog.",
+            }
+        )
         _reject_unsupported_request(request_body)
         data_root = _resolve_raw_data_root(request_body)
         databases = _resolve_raw_databases(data_root, request_body)
@@ -460,30 +638,37 @@ def make_crossdb_raw_distribution_runner(body: Dict[str, Any]):
         cancelled = _cancelled("resolving")
         if cancelled is not None:
             return cancelled
-        job.emit({
-            "type": "progress",
-            "phase": "loading",
-            "current": 0,
-            "total": len(databases),
-            "databases": databases,
-            "feature_count": len(features),
-            "message": (
-                f"Loading aggregate feature distributions for {len(databases)} "
-                f"local databases and {len(features)} concepts."
-            ),
-        })
+        job.emit(
+            {
+                "type": "progress",
+                "phase": "loading",
+                "current": 0,
+                "total": len(databases),
+                "databases": databases,
+                "feature_count": len(features),
+                "message": (
+                    f"Loading aggregate feature distributions for {len(databases)} "
+                    f"local databases and {len(features)} concepts."
+                ),
+            }
+        )
         payload = crossdb_raw_distribution(request_body)
         cancelled = _cancelled("loading")
         if cancelled is not None:
             return cancelled
-        job.emit({
-            "type": "progress",
-            "phase": "finalizing",
-            "current": len(payload.get("sources") or []),
-            "total": len(databases),
-            "feature_count": sum(len(row.get("features") or []) for row in payload.get("feature_distributions") or []),
-            "message": "Finalizing aggregate-only Cross-DB density payload.",
-        })
+        job.emit(
+            {
+                "type": "progress",
+                "phase": "finalizing",
+                "current": len(payload.get("sources") or []),
+                "total": len(databases),
+                "feature_count": sum(
+                    len(row.get("features") or [])
+                    for row in payload.get("feature_distributions") or []
+                ),
+                "message": "Finalizing aggregate-only Cross-DB density payload.",
+            }
+        )
         return payload
 
     return runner
@@ -508,13 +693,15 @@ def crossdb_demo_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
         maximum=1000,
     )
     if len(databases) < 2:
-        raise CrossdbReviewError({
-            "error": "need_two_demo_databases",
-            "mode": "demo",
-            "source_type": "legacy_simulated_multidb_feature_frames",
-            "requested_databases": databases,
-            "privacy": _privacy_payload(),
-        })
+        raise CrossdbReviewError(
+            {
+                "error": "need_two_demo_databases",
+                "mode": "demo",
+                "source_type": "legacy_simulated_multidb_feature_frames",
+                "requested_databases": databases,
+                "privacy": _privacy_payload(),
+            }
+        )
 
     frames = _generate_demo_multidb_feature_frames(
         databases=databases,
@@ -523,19 +710,25 @@ def crossdb_demo_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
     )
     loaded = {db: frame for db, frame in frames.items() if _raw_frame_has_values(frame)}
     if len(loaded) < 2:
-        raise CrossdbReviewError({
-            "error": "loaded_fewer_than_two_demo_databases",
-            "mode": "demo",
-            "source_type": "legacy_simulated_multidb_feature_frames",
-            "requested_databases": databases,
-            "loaded_databases": sorted(loaded),
-            "feature_count": len(features),
-            "privacy": _privacy_payload(),
-        })
+        raise CrossdbReviewError(
+            {
+                "error": "loaded_fewer_than_two_demo_databases",
+                "mode": "demo",
+                "source_type": "legacy_simulated_multidb_feature_frames",
+                "requested_databases": databases,
+                "loaded_databases": sorted(loaded),
+                "feature_count": len(features),
+                "privacy": _privacy_payload(),
+            }
+        )
 
     sources = [_demo_source_summary(db, frame) for db, frame in loaded.items()]
     feature_distributions = _raw_feature_distribution_payload(loaded, features)
-    shared_modules = [row["module"] for row in feature_distributions if row.get("shared_feature_count")]
+    shared_modules = [
+        row["module"]
+        for row in feature_distributions
+        if row.get("shared_feature_count")
+    ]
     return {
         "ok": True,
         "mode": "demo",
@@ -558,9 +751,22 @@ def crossdb_demo_distribution(body: Dict[str, Any]) -> Dict[str, Any]:
             "inferential_statistics_allowed": False,
             "claim_level": "demo_not_reportable",
             "checks": [
-                {"id": "demo_database_count", "passed": len(sources) >= 2, "value": len(sources), "minimum": 2},
-                {"id": "legacy_demo_feature_specs", "passed": bool(feature_distributions), "feature_count": len(features)},
-                {"id": "no_row_payload_returned", "passed": True, "basis": "aggregate_density_payload"},
+                {
+                    "id": "demo_database_count",
+                    "passed": len(sources) >= 2,
+                    "value": len(sources),
+                    "minimum": 2,
+                },
+                {
+                    "id": "legacy_demo_feature_specs",
+                    "passed": bool(feature_distributions),
+                    "feature_count": len(features),
+                },
+                {
+                    "id": "no_row_payload_returned",
+                    "passed": True,
+                    "basis": "aggregate_density_payload",
+                },
             ],
             "reasons": [],
             "warnings": [
@@ -609,7 +815,9 @@ def _resolve_demo_features(body: Dict[str, Any]) -> List[str]:
     catalog_set = set(catalog_features)
     if isinstance(requested, list) and requested:
         candidates = [str(item).strip() for item in requested if str(item).strip()]
-    elif str(body.get("feature_scope") or "").strip() == "legacy_demo_supported_features":
+    elif (
+        str(body.get("feature_scope") or "").strip() == "legacy_demo_supported_features"
+    ):
         supported = _legacy_demo_supported_features()
         candidates = [feature for feature in catalog_features if feature in supported]
     else:
@@ -630,11 +838,13 @@ def _resolve_demo_features(body: Dict[str, Any]) -> List[str]:
         if len(out) >= max_features:
             break
     if not out:
-        raise CrossdbReviewError({
-            "error": "no_supported_demo_features_requested",
-            "supported_feature_count": len(catalog_features),
-            "privacy": _privacy_payload(),
-        })
+        raise CrossdbReviewError(
+            {
+                "error": "no_supported_demo_features_requested",
+                "supported_feature_count": len(catalog_features),
+                "privacy": _privacy_payload(),
+            }
+        )
     return out
 
 
@@ -653,7 +863,9 @@ def _generate_demo_multidb_feature_frames(
         specs = _DEMO_MULTIDB_FEATURE_SPECS.get(db) or {}
         rows = []
         for feature in features:
-            mean, std, low, high, integer_like = _demo_feature_profile(db, feature, specs.get(feature))
+            mean, std, low, high, integer_like = _demo_feature_profile(
+                db, feature, specs.get(feature)
+            )
             if integer_like and low == 0 and high == 1:
                 p = max(0.02, min(0.98, float(mean)))
                 values = rng.binomial(1, p, int(records_per_feature))
@@ -690,8 +902,14 @@ def _demo_feature_profile(db: str, feature: str, explicit: Any = None) -> tuple:
     """Return deterministic demo mean/std/bounds for any catalog concept."""
     if explicit:
         mean, std = explicit
-        low, high = _DEMO_FEATURE_BOUNDS.get(feature, (float(mean) - 4 * float(std), float(mean) + 4 * float(std)))
-        integer_like = feature in {"sex", "death", "adm"} or feature.startswith(("sofa", "aki_stage", "sep3_")) or _catalog_unit(feature).lower() == "boolean"
+        low, high = _DEMO_FEATURE_BOUNDS.get(
+            feature, (float(mean) - 4 * float(std), float(mean) + 4 * float(std))
+        )
+        integer_like = (
+            feature in {"sex", "death", "adm"}
+            or feature.startswith(("sofa", "aki_stage", "sep3_"))
+            or _catalog_unit(feature).lower() == "boolean"
+        )
         return float(mean), float(std), float(low), float(high), integer_like
 
     low, high, integer_like = _demo_feature_bounds(feature)
@@ -714,11 +932,19 @@ def _demo_feature_profile(db: str, feature: str, explicit: Any = None) -> tuple:
 def _demo_feature_bounds(feature: str) -> tuple:
     if feature in _DEMO_FEATURE_BOUNDS:
         low, high = _DEMO_FEATURE_BOUNDS[feature]
-        return float(low), float(high), feature.startswith(("sofa", "aki_stage", "sep3_"))
+        return (
+            float(low),
+            float(high),
+            feature.startswith(("sofa", "aki_stage", "sep3_")),
+        )
 
     unit = _catalog_unit(feature).lower()
-    integer_like = False
-    if unit == "boolean" or feature.endswith("_ind") or feature.endswith("60") or feature.startswith(("sep3_", "infection_")):
+    if (
+        unit == "boolean"
+        or feature.endswith("_ind")
+        or feature.endswith("60")
+        or feature.startswith(("sep3_", "infection_"))
+    ):
         return 0.0, 1.0, True
     if unit.startswith("0-"):
         try:
@@ -761,13 +987,15 @@ def _resolve_raw_data_root(body: Dict[str, Any]) -> Path:
         path = Path(raw).expanduser()
         if path.exists() and path.is_dir():
             return _normalize_raw_root(path)
-        raise CrossdbReviewError({
-            "error": "raw_data_root_not_found",
-            "source_type": "raw_database_root",
-            "root_hash": _hash(raw),
-            "hint": "The requested ICU data root does not exist or is not a directory.",
-            "privacy": _privacy_payload(),
-        })
+        raise CrossdbReviewError(
+            {
+                "error": "raw_data_root_not_found",
+                "source_type": "raw_database_root",
+                "root_hash": _hash(raw),
+                "hint": "The requested ICU data root does not exist or is not a directory.",
+                "privacy": _privacy_payload(),
+            }
+        )
 
     candidates = []
     env_root = str(__import__("os").environ.get("EASYICU_DATA_PATH") or "").strip()
@@ -786,12 +1014,14 @@ def _resolve_raw_data_root(body: Dict[str, Any]) -> Path:
             return normalized
         if len(_detect_raw_databases(path)) >= 2:
             return path
-    raise CrossdbReviewError({
-        "error": "raw_data_root_not_found",
-        "source_type": "raw_database_root",
-        "hint": "Provide a local ICU data root containing at least two database folders.",
-        "privacy": _privacy_payload(),
-    })
+    raise CrossdbReviewError(
+        {
+            "error": "raw_data_root_not_found",
+            "source_type": "raw_database_root",
+            "hint": "Provide a local ICU data root containing at least two database folders.",
+            "privacy": _privacy_payload(),
+        }
+    )
 
 
 def _normalize_raw_root(path: Path) -> Path:
@@ -918,7 +1148,9 @@ def _raw_database_scan_entry(root: Path, db: str) -> Dict[str, Any] | None:
     return payload
 
 
-def _unrecognized_raw_child_folders(root: Path, recognized_top_folders: set[str]) -> List[str]:
+def _unrecognized_raw_child_folders(
+    root: Path, recognized_top_folders: set[str]
+) -> List[str]:
     try:
         children = sorted(
             [child for child in root.iterdir() if child.is_dir()],
@@ -945,7 +1177,9 @@ def _raw_child_name_matches_known_alias(name: str) -> bool:
             alias_norm = str(alias).lower().replace("_", "-")
             if lower == alias_norm or normalized == alias_norm:
                 return True
-            if alias_norm and (alias_norm in normalized or normalized.startswith(alias_norm)):
+            if alias_norm and (
+                alias_norm in normalized or normalized.startswith(alias_norm)
+            ):
                 return True
     return False
 
@@ -959,7 +1193,9 @@ def _resolve_raw_features(body: Dict[str, Any]) -> List[str]:
     elif str(body.get("feature_scope") or "").strip() == "all_catalog":
         features = _catalog_features_in_order()
     else:
-        min_coverage = _bounded_int(body.get("coverage_min"), default=2, minimum=1, maximum=6)
+        min_coverage = _bounded_int(
+            body.get("coverage_min"), default=2, minimum=1, maximum=6
+        )
         features = [
             concept
             for concept in concept_catalog.CONCEPT_DICTIONARY
@@ -980,7 +1216,9 @@ def _resolve_raw_features(body: Dict[str, Any]) -> List[str]:
         if len(out) >= max_features:
             break
     if not out:
-        raise CrossdbReviewError({"error": "no_supported_features_requested", "privacy": _privacy_payload()})
+        raise CrossdbReviewError(
+            {"error": "no_supported_features_requested", "privacy": _privacy_payload()}
+        )
     return out
 
 
@@ -1003,7 +1241,9 @@ def _load_raw_feature_data(
         db_path = mdd._get_db_path(db)
         if not db_path.exists():
             continue
-        chunks = [concepts[i:i + chunk_size] for i in range(0, len(concepts), chunk_size)]
+        chunks = [
+            concepts[i : i + chunk_size] for i in range(0, len(concepts), chunk_size)
+        ]
         all_data = []
         for chunk in chunks:
             try:
@@ -1025,7 +1265,9 @@ def _load_raw_feature_data(
                             max_patients=max_patients,
                             verbose=False,
                         )
-                        all_data.extend(_wide_concepts_to_long(frame, [concept], sample_size))
+                        all_data.extend(
+                            _wide_concepts_to_long(frame, [concept], sample_size)
+                        )
                     except Exception:
                         continue
         if all_data:
@@ -1033,7 +1275,9 @@ def _load_raw_feature_data(
     return result
 
 
-def _wide_concepts_to_long(frame: Any, concepts: List[str], sample_size: int) -> List[Any]:
+def _wide_concepts_to_long(
+    frame: Any, concepts: List[str], sample_size: int
+) -> List[Any]:
     import pandas as pd
 
     if frame is None or getattr(frame, "empty", True):
@@ -1051,7 +1295,12 @@ def _wide_concepts_to_long(frame: Any, concepts: List[str], sample_size: int) ->
 
 
 def _raw_frame_has_values(frame: Any) -> bool:
-    return hasattr(frame, "columns") and "concept" in frame.columns and "value" in frame.columns and not frame.empty
+    return (
+        hasattr(frame, "columns")
+        and "concept" in frame.columns
+        and "value" in frame.columns
+        and not frame.empty
+    )
 
 
 def _raw_source_summary(db: str, frame: Any, data_root: Path) -> Dict[str, Any]:
@@ -1086,7 +1335,9 @@ def _demo_source_summary(db: str, frame: Any) -> Dict[str, Any]:
     }
 
 
-def _raw_comparison_rows(frames: Dict[str, Any], features: List[str]) -> List[Dict[str, Any]]:
+def _raw_comparison_rows(
+    frames: Dict[str, Any], features: List[str]
+) -> List[Dict[str, Any]]:
     dbs = list(frames)
     rows: List[Dict[str, Any]] = []
     feature_counts = [
@@ -1094,20 +1345,32 @@ def _raw_comparison_rows(frames: Dict[str, Any], features: List[str]) -> List[Di
         for db in dbs
     ]
     record_counts = [int(len(frames[db])) for db in dbs]
-    rows.append({
-        "key": "feature_rows",
-        "label": "Feature rows",
-        "values": record_counts,
-        "delta": max(record_counts) - min(record_counts) if len(record_counts) >= 2 else None,
-        "comparison": "descriptive_range",
-    })
-    rows.append({
-        "key": "concepts_present",
-        "label": "Concepts present",
-        "values": feature_counts,
-        "delta": max(feature_counts) - min(feature_counts) if len(feature_counts) >= 2 else None,
-        "comparison": "descriptive_range",
-    })
+    rows.append(
+        {
+            "key": "feature_rows",
+            "label": "Feature rows",
+            "values": record_counts,
+            "delta": (
+                max(record_counts) - min(record_counts)
+                if len(record_counts) >= 2
+                else None
+            ),
+            "comparison": "descriptive_range",
+        }
+    )
+    rows.append(
+        {
+            "key": "concepts_present",
+            "label": "Concepts present",
+            "values": feature_counts,
+            "delta": (
+                max(feature_counts) - min(feature_counts)
+                if len(feature_counts) >= 2
+                else None
+            ),
+            "comparison": "descriptive_range",
+        }
+    )
     for feature in features[:8]:
         values = []
         for db in dbs:
@@ -1117,22 +1380,34 @@ def _raw_comparison_rows(frames: Dict[str, Any], features: List[str]) -> List[Di
                 import pandas as pd
 
                 numeric = pd.to_numeric(subset, errors="coerce").dropna()
-                values.append(round(float(numeric.median()), 3) if not numeric.empty else None)
+                values.append(
+                    round(float(numeric.median()), 3) if not numeric.empty else None
+                )
             else:
                 values.append(None)
-        numeric_values = [float(value) for value in values if isinstance(value, (int, float))]
+        numeric_values = [
+            float(value) for value in values if isinstance(value, (int, float))
+        ]
         if numeric_values:
-            rows.append({
-                "key": f"{feature}_median",
-                "label": f"{feature} median",
-                "values": values,
-                "delta": round(max(numeric_values) - min(numeric_values), 3) if len(numeric_values) >= 2 else None,
-                "comparison": "descriptive_range",
-            })
+            rows.append(
+                {
+                    "key": f"{feature}_median",
+                    "label": f"{feature} median",
+                    "values": values,
+                    "delta": (
+                        round(max(numeric_values) - min(numeric_values), 3)
+                        if len(numeric_values) >= 2
+                        else None
+                    ),
+                    "comparison": "descriptive_range",
+                }
+            )
     return rows
 
 
-def _raw_feature_distribution_payload(frames: Dict[str, Any], features: List[str]) -> List[Dict[str, Any]]:
+def _raw_feature_distribution_payload(
+    frames: Dict[str, Any], features: List[str]
+) -> List[Dict[str, Any]]:
     module_map = _feature_module_map()
     dbs = list(frames)
     by_module: Dict[str, List[str]] = {}
@@ -1148,54 +1423,71 @@ def _raw_feature_distribution_payload(frames: Dict[str, Any], features: List[str
             for db in dbs:
                 subset = frames[db].loc[frames[db]["concept"] == feature, "value"]
                 summary = _summarize_feature_distribution(subset)
-                present = summary.get("kind") not in {"empty", "missing"} and int(summary.get("non_null") or 0) > 0
+                present = (
+                    summary.get("kind") not in {"empty", "missing"}
+                    and int(summary.get("non_null") or 0) > 0
+                )
                 if present:
                     present_count += 1
-                values.append({
-                    "source": _RAW_DB_LABELS.get(db, db),
-                    "database": db,
-                    "present": present,
-                    **summary,
-                })
+                values.append(
+                    {
+                        "source": _RAW_DB_LABELS.get(db, db),
+                        "database": db,
+                        "present": present,
+                        **summary,
+                    }
+                )
             if present_count:
-                feature_rows.append({
-                    "feature": feature,
-                    "label": concept_catalog.CONCEPT_DICTIONARY.get(feature, (feature, feature, ""))[0],
-                    "shared": present_count == len(dbs),
-                    "present_count": present_count,
-                    "values": values,
-                })
+                feature_rows.append(
+                    {
+                        "feature": feature,
+                        "label": concept_catalog.CONCEPT_DICTIONARY.get(
+                            feature, (feature, feature, "")
+                        )[0],
+                        "shared": present_count == len(dbs),
+                        "present_count": present_count,
+                        "values": values,
+                    }
+                )
         if feature_rows:
-            out.append({
-                "module": module,
-                "source_count": len(dbs),
-                "feature_count": len(feature_rows),
-                "shared_feature_count": sum(1 for row in feature_rows if row["shared"]),
-                "features": feature_rows,
-            })
+            out.append(
+                {
+                    "module": module,
+                    "source_count": len(dbs),
+                    "feature_count": len(feature_rows),
+                    "shared_feature_count": sum(
+                        1 for row in feature_rows if row["shared"]
+                    ),
+                    "features": feature_rows,
+                }
+            )
     return out
 
 
-def _raw_module_availability(feature_distributions: List[Dict[str, Any]], sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _raw_module_availability(
+    feature_distributions: List[Dict[str, Any]], sources: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
     labels = [str(source.get("label") or source.get("database")) for source in sources]
     out = []
     for module in feature_distributions:
-        out.append({
-            "module": module.get("module"),
-            "present_count": sum(1 for _ in labels),
-            "source_count": len(labels),
-            "shared": module.get("shared_feature_count", 0) > 0,
-            "median_coverage_pct": None,
-            "values": [
-                {
-                    "source": label,
-                    "present": True,
-                    "coverage_pct": None,
-                    "quality_status": "aggregate_density_only",
-                }
-                for label in labels
-            ],
-        })
+        out.append(
+            {
+                "module": module.get("module"),
+                "present_count": sum(1 for _ in labels),
+                "source_count": len(labels),
+                "shared": module.get("shared_feature_count", 0) > 0,
+                "median_coverage_pct": None,
+                "values": [
+                    {
+                        "source": label,
+                        "present": True,
+                        "coverage_pct": None,
+                        "quality_status": "aggregate_density_only",
+                    }
+                    for label in labels
+                ],
+            }
+        )
     return out
 
 
@@ -1223,21 +1515,34 @@ def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int
 def _reject_unsupported_request(body: Dict[str, Any]) -> None:
     filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
     requested_filters = [
-        {"id": str(key), "reason": _UNSUPPORTED_FILTERS.get(str(key), "Cross-DB Stage18 does not accept row-level filters.")}
+        {
+            "id": str(key),
+            "reason": _UNSUPPORTED_FILTERS.get(
+                str(key), "Cross-DB Stage18 does not accept row-level filters."
+            ),
+        }
         for key, value in filters.items()
         if _truthy_request(value)
     ]
     if _truthy_request(body.get("matched_cohort")):
-        requested_filters.append({"id": "matched_cohort", "reason": _UNSUPPORTED_FILTERS["matched_cohort"]})
+        requested_filters.append(
+            {"id": "matched_cohort", "reason": _UNSUPPORTED_FILTERS["matched_cohort"]}
+        )
     comparison = body.get("comparison")
-    if isinstance(comparison, dict) and _truthy_request(comparison.get("matched_cohort")):
-        requested_filters.append({"id": "matched_cohort", "reason": _UNSUPPORTED_FILTERS["matched_cohort"]})
+    if isinstance(comparison, dict) and _truthy_request(
+        comparison.get("matched_cohort")
+    ):
+        requested_filters.append(
+            {"id": "matched_cohort", "reason": _UNSUPPORTED_FILTERS["matched_cohort"]}
+        )
     if requested_filters:
-        raise CrossdbReviewError({
-            "error": "unsupported_filter",
-            "unsupported": requested_filters,
-            "supported_scope": "registered_source_crossdb_aggregates_only",
-        })
+        raise CrossdbReviewError(
+            {
+                "error": "unsupported_filter",
+                "unsupported": requested_filters,
+                "supported_scope": "registered_source_crossdb_aggregates_only",
+            }
+        )
 
     stats = body.get("statistics") or body.get("stats") or []
     if isinstance(stats, str):
@@ -1245,23 +1550,32 @@ def _reject_unsupported_request(body: Dict[str, Any]) -> None:
     requested_stats = [
         {
             "id": str(item),
-            "reason": _UNSUPPORTED_STATISTICS.get(str(item), "Requested statistic is not supported by the Stage18 aggregate endpoint."),
+            "reason": _UNSUPPORTED_STATISTICS.get(
+                str(item),
+                "Requested statistic is not supported by the Stage18 aggregate endpoint.",
+            ),
         }
         for item in stats
         if _truthy_request(item)
     ]
     if requested_stats:
-        raise CrossdbReviewError({
-            "error": "unsupported_statistic",
-            "unsupported": requested_stats,
-            "supported_scope": "descriptive_crossdb_aggregate_only",
-        })
+        raise CrossdbReviewError(
+            {
+                "error": "unsupported_statistic",
+                "unsupported": requested_stats,
+                "supported_scope": "descriptive_crossdb_aggregate_only",
+            }
+        )
 
 
 def _resolve_registered_sources(body: Dict[str, Any]) -> List[Dict[str, Any]]:
     registry = source_store.load_registry()
-    sources = [s for s in registry.get("sources") or [] if isinstance(s, dict) and s.get("ok")]
-    by_path = {_norm_path(str(s.get("path") or "")): s for s in sources if s.get("path")}
+    sources = [
+        s for s in registry.get("sources") or [] if isinstance(s, dict) and s.get("ok")
+    ]
+    by_path = {
+        _norm_path(str(s.get("path") or "")): s for s in sources if s.get("path")
+    }
     requested = body.get("paths") or body.get("source_paths")
 
     if requested is not None:
@@ -1276,7 +1590,9 @@ def _resolve_registered_sources(body: Dict[str, Any]) -> List[Dict[str, Any]]:
             seen.add(norm)
             source = by_path.get(norm)
             if source is None:
-                raise CrossdbReviewError({"error": "source_not_registered", "path_hash": _hash(norm)})
+                raise CrossdbReviewError(
+                    {"error": "source_not_registered", "path_hash": _hash(norm)}
+                )
             selected.append(source)
     else:
         selected = []
@@ -1291,16 +1607,20 @@ def _resolve_registered_sources(body: Dict[str, Any]) -> List[Dict[str, Any]]:
                 selected.append(source)
 
     if len(selected) < 2:
-        raise CrossdbReviewError({
-            "error": "need_two_exports",
-            "source_count": len(selected),
-            "sources": [_safe_registered_source(source) for source in selected],
-            "privacy": _privacy_payload(),
-        })
+        raise CrossdbReviewError(
+            {
+                "error": "need_two_exports",
+                "source_count": len(selected),
+                "sources": [_safe_registered_source(source) for source in selected],
+                "privacy": _privacy_payload(),
+            }
+        )
     return selected
 
 
-def _source_aggregate(source: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+def _source_aggregate(
+    source: Dict[str, Any], payload: Dict[str, Any]
+) -> Dict[str, Any]:
     safe_source = dict(payload.get("source") or _safe_registered_source(source))
     summary = payload.get("summary") or {}
     coverage = payload.get("coverage") or []
@@ -1308,7 +1628,9 @@ def _source_aggregate(source: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
     desc = dataio.describe_export_source(str(source.get("path") or ""))
     modules = sorted({str(row.get("module")) for row in coverage if row.get("module")})
     if not modules:
-        modules = sorted(str(module) for module in (source.get("modules") or []) if module)
+        modules = sorted(
+            str(module) for module in (source.get("modules") or []) if module
+        )
     module_coverage = {
         str(row.get("module")): {
             "rows": int(row.get("rows") or 0),
@@ -1321,7 +1643,8 @@ def _source_aggregate(source: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
     return {
         "id": safe_source.get("id"),
         "label": safe_source.get("label"),
-        "path_hash": safe_source.get("path_hash") or _hash(str(source.get("path") or "")),
+        "path_hash": safe_source.get("path_hash")
+        or _hash(str(source.get("path") or "")),
         "database": safe_source.get("database"),
         "generated": safe_source.get("generated"),
         "summary": {
@@ -1341,7 +1664,9 @@ def _source_aggregate(source: Dict[str, Any], payload: Dict[str, Any]) -> Dict[s
         },
         "modules": modules,
         "module_coverage": module_coverage,
-        "feature_density": _source_feature_density(desc, summary.get("cohort_size"), module_coverage),
+        "feature_density": _source_feature_density(
+            desc, summary.get("cohort_size"), module_coverage
+        ),
         "feature_distributions": _source_feature_distributions(desc),
         "quality": {
             "modules_ok": quality.get("modules_ok"),
@@ -1365,39 +1690,65 @@ def _compatibility_gate(
     reasons: List[Dict[str, Any]] = []
 
     enough_sources = len(sources) >= 2
-    checks.append({"id": "source_count", "passed": enough_sources, "value": len(sources), "minimum": 2})
+    checks.append(
+        {
+            "id": "source_count",
+            "passed": enough_sources,
+            "value": len(sources),
+            "minimum": 2,
+        }
+    )
     if not enough_sources:
-        reasons.append({"id": "need_two_exports", "detail": "At least two registered exports are required."})
+        reasons.append(
+            {
+                "id": "need_two_exports",
+                "detail": "At least two registered exports are required.",
+            }
+        )
 
     denominators = [
-        {"label": source.get("label"), "cohort_size": (source.get("summary") or {}).get("cohort_size")}
+        {
+            "label": source.get("label"),
+            "cohort_size": (source.get("summary") or {}).get("cohort_size"),
+        }
         for source in sources
     ]
-    denominator_ok = all(isinstance(row["cohort_size"], (int, float)) and row["cohort_size"] > 0 for row in denominators)
-    checks.append({"id": "denominator_present", "passed": denominator_ok, "sources": denominators})
+    denominator_ok = all(
+        isinstance(row["cohort_size"], (int, float)) and row["cohort_size"] > 0
+        for row in denominators
+    )
+    checks.append(
+        {"id": "denominator_present", "passed": denominator_ok, "sources": denominators}
+    )
     if not denominator_ok:
         reasons.append({"id": "missing_denominator", "sources": denominators})
 
     missing_core = sorted(_REQUIRED_CORE_MODULES - shared)
-    checks.append({
-        "id": "core_modules_shared",
-        "passed": not missing_core,
-        "required_modules": sorted(_REQUIRED_CORE_MODULES),
-        "shared_modules": shared_modules,
-        "missing_modules": missing_core,
-    })
+    checks.append(
+        {
+            "id": "core_modules_shared",
+            "passed": not missing_core,
+            "required_modules": sorted(_REQUIRED_CORE_MODULES),
+            "shared_modules": shared_modules,
+            "missing_modules": missing_core,
+        }
+    )
     if missing_core:
-        reasons.append({
-            "id": "core_modules_not_shared",
-            "missing_shared_modules": missing_core,
-            "sources": [
-                {
-                    "label": source.get("label"),
-                    "missing_core_modules": sorted(_REQUIRED_CORE_MODULES - set(source.get("modules") or [])),
-                }
-                for source in sources
-            ],
-        })
+        reasons.append(
+            {
+                "id": "core_modules_not_shared",
+                "missing_shared_modules": missing_core,
+                "sources": [
+                    {
+                        "label": source.get("label"),
+                        "missing_core_modules": sorted(
+                            _REQUIRED_CORE_MODULES - set(source.get("modules") or [])
+                        ),
+                    }
+                    for source in sources
+                ],
+            }
+        )
 
     comparable_metrics = [
         "cohort_size",
@@ -1417,13 +1768,17 @@ def _compatibility_gate(
         comparable_metrics.append("los_median")
 
     warnings: List[Dict[str, Any]] = []
-    missing_optional = sorted((_OPTIONAL_COMPARISON_MODULES & set(all_modules)) - shared)
+    missing_optional = sorted(
+        (_OPTIONAL_COMPARISON_MODULES & set(all_modules)) - shared
+    )
     if missing_optional:
-        warnings.append({
-            "id": "optional_modules_not_shared",
-            "modules": missing_optional,
-            "effect": "dependent descriptive metrics are omitted from comparison rows",
-        })
+        warnings.append(
+            {
+                "id": "optional_modules_not_shared",
+                "modules": missing_optional,
+                "effect": "dependent descriptive metrics are omitted from comparison rows",
+            }
+        )
 
     compatible = all(check["passed"] for check in checks)
     return {
@@ -1441,7 +1796,9 @@ def _compatibility_gate(
     }
 
 
-def _comparison_rows(sources: List[Dict[str, Any]], gate: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _comparison_rows(
+    sources: List[Dict[str, Any]], gate: Dict[str, Any]
+) -> List[Dict[str, Any]]:
     comparable = set(gate.get("comparable_metrics") or [])
     rows: List[Dict[str, Any]] = []
     for key, label, digits, dependency in [
@@ -1461,18 +1818,24 @@ def _comparison_rows(sources: List[Dict[str, Any]], gate: Dict[str, Any]) -> Lis
             continue
         values = [(source.get("summary") or {}).get(key) for source in sources]
         numeric = [float(value) for value in values if isinstance(value, (int, float))]
-        delta = round(max(numeric) - min(numeric), digits) if len(numeric) >= 2 else None
-        rows.append({
-            "key": key,
-            "label": label,
-            "values": values,
-            "delta": delta,
-            "comparison": "descriptive_range",
-        })
+        delta = (
+            round(max(numeric) - min(numeric), digits) if len(numeric) >= 2 else None
+        )
+        rows.append(
+            {
+                "key": key,
+                "label": label,
+                "values": values,
+                "delta": delta,
+                "comparison": "descriptive_range",
+            }
+        )
     return rows
 
 
-def _module_availability(sources: List[Dict[str, Any]], all_modules: List[str]) -> List[Dict[str, Any]]:
+def _module_availability(
+    sources: List[Dict[str, Any]], all_modules: List[str]
+) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for module in all_modules:
         values = []
@@ -1486,20 +1849,28 @@ def _module_availability(sources: List[Dict[str, Any]], all_modules: List[str]) 
                 coverage = module_info.get("coverage_pct")
                 if isinstance(coverage, (int, float)):
                     coverage_values.append(float(coverage))
-            values.append({
-                "source": source.get("label"),
-                "present": present,
-                "coverage_pct": module_info.get("coverage_pct") if module_info else None,
-                "quality_status": module_info.get("quality_status") if module_info else "missing",
-            })
-        out.append({
-            "module": module,
-            "present_count": present_count,
-            "source_count": len(sources),
-            "shared": present_count == len(sources),
-            "median_coverage_pct": dataio._median(coverage_values),
-            "values": values,
-        })
+            values.append(
+                {
+                    "source": source.get("label"),
+                    "present": present,
+                    "coverage_pct": (
+                        module_info.get("coverage_pct") if module_info else None
+                    ),
+                    "quality_status": (
+                        module_info.get("quality_status") if module_info else "missing"
+                    ),
+                }
+            )
+        out.append(
+            {
+                "module": module,
+                "present_count": present_count,
+                "source_count": len(sources),
+                "shared": present_count == len(sources),
+                "median_coverage_pct": dataio._median(coverage_values),
+                "values": values,
+            }
+        )
     return out
 
 
@@ -1516,7 +1887,9 @@ def _source_feature_density(
     scan. The frontend labels this as record density.
     """
     out: Dict[str, Dict[str, Any]] = {}
-    denominator = int(cohort_size) if isinstance(cohort_size, int) and cohort_size > 0 else None
+    denominator = (
+        int(cohort_size) if isinstance(cohort_size, int) and cohort_size > 0 else None
+    )
     for item in desc.get("files") or []:
         module = str(item.get("module") or "")
         if not module:
@@ -1549,19 +1922,25 @@ def _source_feature_density(
 
 
 def _feature_density_payload(sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    modules = sorted({
-        module
-        for source in sources
-        for module in (source.get("feature_density") or {}).keys()
-    })
+    modules = sorted(
+        {
+            module
+            for source in sources
+            for module in (source.get("feature_density") or {}).keys()
+        }
+    )
     out: List[Dict[str, Any]] = []
     for module in modules:
-        features = sorted({
-            str(feature.get("feature"))
-            for source in sources
-            for feature in ((source.get("feature_density") or {}).get(module) or {}).get("features", [])
-            if feature.get("feature")
-        })
+        features = sorted(
+            {
+                str(feature.get("feature"))
+                for source in sources
+                for feature in (
+                    (source.get("feature_density") or {}).get(module) or {}
+                ).get("features", [])
+                if feature.get("feature")
+            }
+        )
         if not features:
             continue
         feature_rows: List[Dict[str, Any]] = []
@@ -1569,34 +1948,46 @@ def _feature_density_payload(sources: List[Dict[str, Any]]) -> List[Dict[str, An
             values = []
             present_count = 0
             for source in sources:
-                module_payload = ((source.get("feature_density") or {}).get(module) or {})
+                module_payload = (source.get("feature_density") or {}).get(module) or {}
                 hit = next(
-                    (item for item in module_payload.get("features") or [] if item.get("feature") == feature),
+                    (
+                        item
+                        for item in module_payload.get("features") or []
+                        if item.get("feature") == feature
+                    ),
                     None,
                 )
                 present = hit is not None
                 if present:
                     present_count += 1
-                values.append({
-                    "source": source.get("label"),
-                    "present": present,
-                    "records": hit.get("records") if hit else None,
-                    "density_per_100_entities": hit.get("density_per_100_entities") if hit else None,
-                    "coverage_pct": hit.get("coverage_pct") if hit else None,
-                })
-            feature_rows.append({
-                "feature": feature,
-                "present_count": present_count,
-                "shared": present_count == len(sources),
-                "values": values,
-            })
-        out.append({
-            "module": module,
-            "source_count": len(sources),
-            "feature_count": len(feature_rows),
-            "shared_feature_count": sum(1 for row in feature_rows if row["shared"]),
-            "features": feature_rows,
-        })
+                values.append(
+                    {
+                        "source": source.get("label"),
+                        "present": present,
+                        "records": hit.get("records") if hit else None,
+                        "density_per_100_entities": (
+                            hit.get("density_per_100_entities") if hit else None
+                        ),
+                        "coverage_pct": hit.get("coverage_pct") if hit else None,
+                    }
+                )
+            feature_rows.append(
+                {
+                    "feature": feature,
+                    "present_count": present_count,
+                    "shared": present_count == len(sources),
+                    "values": values,
+                }
+            )
+        out.append(
+            {
+                "module": module,
+                "source_count": len(sources),
+                "feature_count": len(feature_rows),
+                "shared_feature_count": sum(1 for row in feature_rows if row["shared"]),
+                "features": feature_rows,
+            }
+        )
     return out
 
 
@@ -1617,7 +2008,9 @@ def _source_feature_distributions(desc: Dict[str, Any]) -> Dict[str, Dict[str, A
         for feature in features:
             if feature not in frame:
                 continue
-            feature_payloads.append({"feature": feature, **_summarize_feature_distribution(frame[feature])})
+            feature_payloads.append(
+                {"feature": feature, **_summarize_feature_distribution(frame[feature])}
+            )
         if feature_payloads:
             out[module] = {
                 "module": module,
@@ -1627,20 +2020,28 @@ def _source_feature_distributions(desc: Dict[str, Any]) -> Dict[str, Dict[str, A
     return out
 
 
-def _feature_distribution_payload(sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    modules = sorted({
-        module
-        for source in sources
-        for module in (source.get("feature_distributions") or {}).keys()
-    })
+def _feature_distribution_payload(
+    sources: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    modules = sorted(
+        {
+            module
+            for source in sources
+            for module in (source.get("feature_distributions") or {}).keys()
+        }
+    )
     out: List[Dict[str, Any]] = []
     for module in modules:
-        features = sorted({
-            str(feature.get("feature"))
-            for source in sources
-            for feature in ((source.get("feature_distributions") or {}).get(module) or {}).get("features", [])
-            if feature.get("feature")
-        })
+        features = sorted(
+            {
+                str(feature.get("feature"))
+                for source in sources
+                for feature in (
+                    (source.get("feature_distributions") or {}).get(module) or {}
+                ).get("features", [])
+                if feature.get("feature")
+            }
+        )
         if not features:
             continue
         rows = []
@@ -1648,35 +2049,53 @@ def _feature_distribution_payload(sources: List[Dict[str, Any]]) -> List[Dict[st
             values = []
             present_count = 0
             for source in sources:
-                module_payload = ((source.get("feature_distributions") or {}).get(module) or {})
-                hit = next((item for item in module_payload.get("features") or [] if item.get("feature") == feature), None)
-                present = hit is not None and hit.get("kind") not in {"empty", "missing"}
+                module_payload = (source.get("feature_distributions") or {}).get(
+                    module
+                ) or {}
+                hit = next(
+                    (
+                        item
+                        for item in module_payload.get("features") or []
+                        if item.get("feature") == feature
+                    ),
+                    None,
+                )
+                present = hit is not None and hit.get("kind") not in {
+                    "empty",
+                    "missing",
+                }
                 if present:
                     present_count += 1
-                values.append({
-                    "source": source.get("label"),
-                    "present": present,
-                    "kind": hit.get("kind") if hit else "missing",
-                    "n": hit.get("n") if hit else 0,
-                    "non_null": hit.get("non_null") if hit else 0,
-                    "min": hit.get("min") if hit else None,
-                    "max": hit.get("max") if hit else None,
-                    "points": hit.get("points") if hit else [],
-                    "categories": hit.get("categories") if hit else [],
-                })
-            rows.append({
-                "feature": feature,
-                "present_count": present_count,
-                "shared": present_count == len(sources),
-                "values": values,
-            })
-        out.append({
-            "module": module,
-            "source_count": len(sources),
-            "feature_count": len(rows),
-            "shared_feature_count": sum(1 for row in rows if row["shared"]),
-            "features": rows,
-        })
+                values.append(
+                    {
+                        "source": source.get("label"),
+                        "present": present,
+                        "kind": hit.get("kind") if hit else "missing",
+                        "n": hit.get("n") if hit else 0,
+                        "non_null": hit.get("non_null") if hit else 0,
+                        "min": hit.get("min") if hit else None,
+                        "max": hit.get("max") if hit else None,
+                        "points": hit.get("points") if hit else [],
+                        "categories": hit.get("categories") if hit else [],
+                    }
+                )
+            rows.append(
+                {
+                    "feature": feature,
+                    "present_count": present_count,
+                    "shared": present_count == len(sources),
+                    "values": values,
+                }
+            )
+        out.append(
+            {
+                "module": module,
+                "source_count": len(sources),
+                "feature_count": len(rows),
+                "shared_feature_count": sum(1 for row in rows if row["shared"]),
+                "features": rows,
+            }
+        )
     return out
 
 
@@ -1697,10 +2116,20 @@ def _summarize_feature_distribution(series: Any) -> Dict[str, Any]:
     total = int(len(series))
     clean = series.dropna()
     if clean.empty:
-        return {"kind": "empty", "n": total, "non_null": 0, "points": [], "categories": []}
+        return {
+            "kind": "empty",
+            "n": total,
+            "non_null": 0,
+            "points": [],
+            "categories": [],
+        }
 
     bool_numeric = _bool_like_numeric(clean)
-    numeric = bool_numeric if bool_numeric is not None else pd.to_numeric(clean, errors="coerce")
+    numeric = (
+        bool_numeric
+        if bool_numeric is not None
+        else pd.to_numeric(clean, errors="coerce")
+    )
     numeric = numeric.dropna()
     if len(numeric) >= max(2, int(len(clean) * 0.65)):
         values = [float(v) for v in numeric.tolist()]
@@ -1716,10 +2145,20 @@ def _summarize_feature_distribution(series: Any) -> Dict[str, Any]:
 
     counts = clean.astype(str).str.strip().replace("", "missing").value_counts().head(8)
     categories = [
-        {"label": str(label), "count": int(count), "pct": round(int(count) / total * 100, 1) if total else None}
+        {
+            "label": str(label),
+            "count": int(count),
+            "pct": round(int(count) / total * 100, 1) if total else None,
+        }
         for label, count in counts.items()
     ]
-    return {"kind": "categorical", "n": total, "non_null": int(len(clean)), "points": [], "categories": categories}
+    return {
+        "kind": "categorical",
+        "n": total,
+        "non_null": int(len(clean)),
+        "points": [],
+        "categories": categories,
+    }
 
 
 def _bool_like_numeric(series: Any) -> Any:
@@ -1814,7 +2253,8 @@ def _safe_error_detail(detail: Dict[str, Any] | None) -> Dict[str, Any]:
     return {
         key: value
         for key, value in detail.items()
-        if key not in {"source", "selected", "entities", "groups", "coverage", "summary"}
+        if key
+        not in {"source", "selected", "entities", "groups", "coverage", "summary"}
     }
 
 

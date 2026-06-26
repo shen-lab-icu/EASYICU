@@ -5,6 +5,7 @@ registered EasyICU export and returns cohort-level aggregates only. Row-level
 filters, inferential statistics, and matched cohorts stay fail-closed until
 their backend contracts exist.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -17,7 +18,13 @@ from typing import Any, Dict, Iterable, List, Tuple
 from easyicu.webserver import dataio
 from easyicu.webserver import sources as source_store
 
-_READ_MODULES = ("demographics", "outcome", "sofa1_score", "sofa2_score", "sepsis3_sofa2")
+_READ_MODULES = (
+    "demographics",
+    "outcome",
+    "sofa1_score",
+    "sofa2_score",
+    "sepsis3_sofa2",
+)
 _COVERAGE_UNIQUE_STAY_SCAN_ROW_LIMIT = 1_000_000
 _INTERACTIVE_TIME_INDEXED_READ_ROW_LIMIT = 2_000_000
 _INTERACTIVE_SKIP_MODULES = {"sofa1_score", "sofa2_score"}
@@ -113,14 +120,25 @@ _MODULE_COLUMNS = {
 }
 _AGE_COLUMNS = ("age", "age_at_admission")
 _SEX_COLUMNS = ("sex", "gender")
+_ADM_COLUMNS = ("adm", "admission_type", "adm_type", "admission_location")
 _DEATH_COLUMNS = ("death", "mortality", "hospital_mortality", "in_hospital_mortality")
 _LOS_COLUMNS = ("los_icu", "icu_los", "los_days")
-_HOSP_DEATH_COLUMNS = ("hospital_mortality", "in_hospital_mortality", "death", "mortality")
+_HOSP_DEATH_COLUMNS = (
+    "hospital_mortality",
+    "in_hospital_mortality",
+    "death",
+    "mortality",
+)
 _HOSP_LOS_COLUMNS = ("los_hosp", "hospital_los", "los_hospital", "hosp_los", "los_days")
 _ICU_DEATH_COLUMNS = ("icu_death", "death_icu", "icu_mortality")
 _ICU_LOS_COLUMNS = ("los_icu", "icu_los")
 _MORT28_COLUMNS = ("mort_28d", "mortality_28d", "death_28d")
-_MORT28_TIME_COLUMNS = ("days_to_death_28d", "time_to_death_28d", "followup_days_28d", "survival_time_28d")
+_MORT28_TIME_COLUMNS = (
+    "days_to_death_28d",
+    "time_to_death_28d",
+    "followup_days_28d",
+    "survival_time_28d",
+)
 _SOFA1_COLUMNS = ("sofa1", "sofa1_total", "sofa", "sofa_total", "sofa_score", "score")
 _SOFA2_COLUMNS = ("sofa2", "sofa2_total", "sofa_score", "score")
 _SEPSIS_COLUMNS = ("sep3_sofa2", "sepsis3_sofa2", "sepsis3", "sepsis")
@@ -154,8 +172,7 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     if cached is not None:
         return copy.deepcopy(cached)
     frames = {
-        module: _read_module_frame(path, desc, module)
-        for module in _READ_MODULES
+        module: _read_module_frame(path, desc, module) for module in _READ_MODULES
     }
 
     demo = frames.get("demographics")
@@ -184,11 +201,15 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     sofa_col = _first_column(sofa2, _SOFA2_COLUMNS)
     sepsis_col = _first_column(sepsis, _SEPSIS_COLUMNS)
 
-    death_by_entity = dataio._stay_bool(outcome, death_col, missing_false=True) if death_col else {}
+    death_by_entity = (
+        dataio._stay_bool(outcome, death_col, missing_false=True) if death_col else {}
+    )
     los_by_entity = dataio._stay_numeric(outcome, los_col, "median") if los_col else {}
     sofa1_by_entity = dataio._stay_numeric(sofa1, sofa1_col, "max") if sofa1_col else {}
     sofa_by_entity = dataio._stay_numeric(sofa2, sofa_col, "max") if sofa_col else {}
-    sepsis_by_entity = dataio._stay_bool(sepsis, sepsis_col, missing_false=True) if sepsis_col else {}
+    sepsis_by_entity = (
+        dataio._stay_bool(sepsis, sepsis_col, missing_false=True) if sepsis_col else {}
+    )
     if outcome is not None and not outcome.empty and death_col:
         for entity_id in entity_ids:
             death_by_entity.setdefault(entity_id, False)
@@ -198,15 +219,23 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
 
     age_col = _first_column(demo, _AGE_COLUMNS)
     sex_col = _first_column(demo, _SEX_COLUMNS)
+    adm_col = _first_column(demo, _ADM_COLUMNS)
     age_by_entity = _entity_numeric(demo, age_col) if age_col else {}
     sex_values = list(demo[sex_col]) if sex_col else []
+    adm_values = list(demo[adm_col]) if adm_col else []
     coverage = _coverage_payload(path, desc)
     quality = _quality_summary(coverage)
     feature_catalog = _feature_catalog(desc, coverage)
     selected_feature_ids = _selected_feature_ids(feature_catalog, requested_feature_ids)
-    selected_feature_profiles = _selected_feature_profiles(path, desc, entity_set, feature_catalog, selected_feature_ids)
-    mortality = _bool_summary(entity_ids, death_by_entity, true_label="deceased", false_label="survived")
-    sepsis_summary = _bool_summary(entity_ids, sepsis_by_entity, true_label="positive", false_label="nonpositive")
+    selected_feature_profiles = _selected_feature_profiles(
+        path, desc, entity_set, feature_catalog, selected_feature_ids
+    )
+    mortality = _bool_summary(
+        entity_ids, death_by_entity, true_label="deceased", false_label="survived"
+    )
+    sepsis_summary = _bool_summary(
+        entity_ids, sepsis_by_entity, true_label="positive", false_label="nonpositive"
+    )
     age_summary = _numeric_summary(age_by_entity.values())
     los_summary = _numeric_summary(los_by_entity.values())
     sofa_summary = _numeric_summary(sofa_by_entity.values())
@@ -214,15 +243,30 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     summary = {
         "cohort_size": len(entity_ids),
         "entities": len(entity_ids),
-        "modules": int((desc.get("summary") or {}).get("modules") or len({f.get("module") for f in desc.get("files") or [] if f.get("module")})),
-        "file_count": int((desc.get("summary") or {}).get("file_count") or len(desc.get("files") or [])),
+        "modules": int(
+            (desc.get("summary") or {}).get("modules")
+            or len(
+                {f.get("module") for f in desc.get("files") or [] if f.get("module")}
+            )
+        ),
+        "file_count": int(
+            (desc.get("summary") or {}).get("file_count")
+            or len(desc.get("files") or [])
+        ),
         "total_records": int((desc.get("summary") or {}).get("total_rows") or 0),
         "mortality": mortality,
         "mortality_pct": mortality.get("pct"),
-        "age": age_summary,
+        "age": {
+            **age_summary,
+            "bins": _value_bins(age_by_entity.values(), _AGE_BIN_SPECS),
+        },
         "sex": _sex_summary(sex_values),
+        "admission": _category_summary(adm_values),
         "sofa2": {**sofa_summary, "bins": _sofa_bins(sofa_by_entity.values())},
-        "los_icu_days": los_summary,
+        "los_icu_days": {
+            **los_summary,
+            "bins": _value_bins(los_by_entity.values(), _LOS_BIN_SPECS),
+        },
         "sepsis3": sepsis_summary,
         "sepsis_pct": sepsis_summary.get("pct"),
     }
@@ -230,8 +274,12 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         entity_ids=entity_ids,
         sofa1_by_entity=sofa1_by_entity,
         sofa2_by_entity=sofa_by_entity,
-        has_sofa1_module=sofa1 is not None and not getattr(sofa1, "empty", True) and bool(sofa1_col),
-        has_sofa2_module=sofa2 is not None and not getattr(sofa2, "empty", True) and bool(sofa_col),
+        has_sofa1_module=sofa1 is not None
+        and not getattr(sofa1, "empty", True)
+        and bool(sofa1_col),
+        has_sofa2_module=sofa2 is not None
+        and not getattr(sofa2, "empty", True)
+        and bool(sofa_col),
     )
     blocked_features = [
         {
@@ -251,11 +299,16 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
         },
     ]
     if sofa_reclassification.get("status") != "ready":
-        blocked_features.append({
-            "id": "paired_sofa_reclassification",
-            "status": "blocked",
-            "reason": str(sofa_reclassification.get("reason") or "Paired SOFA-1/SOFA-2 reclassification is not available for this export."),
-        })
+        blocked_features.append(
+            {
+                "id": "paired_sofa_reclassification",
+                "status": "blocked",
+                "reason": str(
+                    sofa_reclassification.get("reason")
+                    or "Paired SOFA-1/SOFA-2 reclassification is not available for this export."
+                ),
+            }
+        )
     survival_analysis = _survival_analysis_payload(
         outcome=outcome,
         entity_ids=entity_ids,
@@ -276,7 +329,7 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
                 "export_manifest",
                 "bounded_column_reads",
                 "cohort_level_aggregates",
-            "survival_aggregate_if_time_to_event_available",
+                "survival_aggregate_if_time_to_event_available",
                 "selected_feature_aggregates",
             ],
             "payload_scope": "cohort_aggregate_only",
@@ -299,8 +352,12 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
             sepsis_by_entity=sepsis_by_entity,
             selected_features=selected_feature_profiles,
         ),
-        "feature_catalog": _feature_catalog_payload(feature_catalog, selected_feature_ids),
-        "feature_selection": _feature_selection_payload(feature_catalog, selected_feature_ids, requested_feature_ids),
+        "feature_catalog": _feature_catalog_payload(
+            feature_catalog, selected_feature_ids
+        ),
+        "feature_selection": _feature_selection_payload(
+            feature_catalog, selected_feature_ids, requested_feature_ids
+        ),
         "coverage": coverage,
         "quality": quality,
         "table_one": {
@@ -318,14 +375,18 @@ def cohort_review_summary(body: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def _summary_cache_key(path: Path, desc: Dict[str, Any], requested_feature_ids: Tuple[str, ...] | None) -> Tuple[Any, ...]:
+def _summary_cache_key(
+    path: Path, desc: Dict[str, Any], requested_feature_ids: Tuple[str, ...] | None
+) -> Tuple[Any, ...]:
     summary = desc.get("summary") or {}
     manifest_mtime = None
     for name in ("_manifest.json", "easyicu_export_manifest.json"):
         manifest_path = path / name
         if manifest_path.exists():
             try:
-                manifest_mtime = max(manifest_mtime or 0, manifest_path.stat().st_mtime_ns)
+                manifest_mtime = max(
+                    manifest_mtime or 0, manifest_path.stat().st_mtime_ns
+                )
             except OSError:
                 pass
     return (
@@ -343,16 +404,23 @@ def _summary_cache_key(path: Path, desc: Dict[str, Any], requested_feature_ids: 
 def _reject_unsupported_request(body: Dict[str, Any]) -> None:
     filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
     requested_filters = [
-        {"id": str(key), "reason": _UNSUPPORTED_FILTERS.get(str(key), "Cohort Review Stage17 does not accept row-level filters.")}
+        {
+            "id": str(key),
+            "reason": _UNSUPPORTED_FILTERS.get(
+                str(key), "Cohort Review Stage17 does not accept row-level filters."
+            ),
+        }
         for key, value in filters.items()
         if _truthy_request(value)
     ]
     if requested_filters:
-        raise CohortReviewError({
-            "error": "unsupported_filter",
-            "unsupported": requested_filters,
-            "supported_scope": "registered_source_cohort_aggregates_only",
-        })
+        raise CohortReviewError(
+            {
+                "error": "unsupported_filter",
+                "unsupported": requested_filters,
+                "supported_scope": "registered_source_cohort_aggregates_only",
+            }
+        )
 
     stats = body.get("statistics") or body.get("stats") or []
     if isinstance(stats, str):
@@ -360,53 +428,80 @@ def _reject_unsupported_request(body: Dict[str, Any]) -> None:
     requested_stats = [
         {
             "id": str(item),
-            "reason": _UNSUPPORTED_STATISTICS.get(str(item), "Requested statistic is not supported by the Stage17 aggregate endpoint."),
+            "reason": _UNSUPPORTED_STATISTICS.get(
+                str(item),
+                "Requested statistic is not supported by the Stage17 aggregate endpoint.",
+            ),
         }
         for item in stats
         if _truthy_request(item)
     ]
     if requested_stats:
-        raise CohortReviewError({
-            "error": "unsupported_statistic",
-            "unsupported": requested_stats,
-            "supported_scope": "descriptive_aggregate_only",
-        })
+        raise CohortReviewError(
+            {
+                "error": "unsupported_statistic",
+                "unsupported": requested_stats,
+                "supported_scope": "descriptive_aggregate_only",
+            }
+        )
 
     grouping = body.get("grouping") or body.get("comparison")
     if isinstance(grouping, dict) and grouping.get("mode") == "custom":
-        raise CohortReviewError({
-            "error": "unsupported_grouping",
-            "unsupported": [{"id": "custom", "reason": _UNSUPPORTED_FILTERS["custom_threshold"]}],
-            "supported_scope": "fixed_descriptive_group_splits_only",
-        })
+        raise CohortReviewError(
+            {
+                "error": "unsupported_grouping",
+                "unsupported": [
+                    {"id": "custom", "reason": _UNSUPPORTED_FILTERS["custom_threshold"]}
+                ],
+                "supported_scope": "fixed_descriptive_group_splits_only",
+            }
+        )
 
 
-def _resolve_registered_source(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _resolve_registered_source(
+    body: Dict[str, Any],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     registry = source_store.load_registry()
     sources = [s for s in registry.get("sources") or [] if isinstance(s, dict)]
     requested = body.get("source_path") or body.get("path")
     if requested:
         norm = _norm_path(str(requested))
-        source = next((s for s in sources if _norm_path(str(s.get("path") or "")) == norm), None)
+        source = next(
+            (s for s in sources if _norm_path(str(s.get("path") or "")) == norm), None
+        )
         if source is None:
-            raise CohortReviewError({"error": "source_not_registered", "path_hash": _hash(norm)})
+            raise CohortReviewError(
+                {"error": "source_not_registered", "path_hash": _hash(norm)}
+            )
     else:
         active = registry.get("active_path")
         if not active:
             raise CohortReviewError({"error": "no_active_export"})
         active_norm = _norm_path(str(active))
-        source = next((s for s in sources if _norm_path(str(s.get("path") or "")) == active_norm), None)
+        source = next(
+            (s for s in sources if _norm_path(str(s.get("path") or "")) == active_norm),
+            None,
+        )
         if source is None:
-            raise CohortReviewError({"error": "active_source_not_registered", "path_hash": _hash(active_norm)})
+            raise CohortReviewError(
+                {
+                    "error": "active_source_not_registered",
+                    "path_hash": _hash(active_norm),
+                }
+            )
 
     desc = dataio.describe_export_source(str(source.get("path") or ""))
     if not desc.get("ok"):
-        raise CohortReviewError({"error": "invalid_export", "detail": desc.get("error")})
+        raise CohortReviewError(
+            {"error": "invalid_export", "detail": desc.get("error")}
+        )
     return source, desc
 
 
 def _read_module_frame(path: Path, desc: Dict[str, Any], module: str) -> Any:
-    file_meta = next((f for f in desc.get("files") or [] if f.get("module") == module), None)
+    file_meta = next(
+        (f for f in desc.get("files") or [] if f.get("module") == module), None
+    )
     if not file_meta:
         return None
     file_path = path / str(file_meta.get("file") or "")
@@ -416,14 +511,19 @@ def _read_module_frame(path: Path, desc: Dict[str, Any], module: str) -> Any:
         and file_path.suffix.lower() != ".parquet"
     ):
         return None
-    columns = [c for c in _MODULE_COLUMNS[module] if c in (file_meta.get("columns") or [])]
+    columns = [
+        c for c in _MODULE_COLUMNS[module] if c in (file_meta.get("columns") or [])
+    ]
     if "stay_id" not in columns:
         return None
     return _read_selected_columns(file_path, columns)
 
 
 def _fallback_entity_frame(path: Path, desc: Dict[str, Any]) -> Any:
-    file_meta = next((f for f in desc.get("files") or [] if "stay_id" in (f.get("columns") or [])), None)
+    file_meta = next(
+        (f for f in desc.get("files") or [] if "stay_id" in (f.get("columns") or [])),
+        None,
+    )
     if not file_meta:
         return None
     return _read_selected_columns(path / str(file_meta.get("file") or ""), ["stay_id"])
@@ -461,7 +561,9 @@ def _normalized_stay_id_series(series: Any) -> Any:
         normalized = series.astype("string").fillna("")
         whole_number = series.notna() & ((series % 1) == 0)
         if whole_number.any():
-            normalized.loc[whole_number] = series.loc[whole_number].astype("Int64").astype("string")
+            normalized.loc[whole_number] = (
+                series.loc[whole_number].astype("Int64").astype("string")
+            )
         return normalized.fillna("")
 
     normalized = series.astype("string").fillna("")
@@ -471,7 +573,9 @@ def _normalized_stay_id_series(series: Any) -> Any:
     except TypeError:
         return normalized
     if whole_number.any():
-        normalized.loc[whole_number] = numeric.loc[whole_number].astype("Int64").astype("string")
+        normalized.loc[whole_number] = (
+            numeric.loc[whole_number].astype("Int64").astype("string")
+        )
     return normalized.fillna("")
 
 
@@ -486,13 +590,20 @@ def _coverage_payload(path: Path, desc: Dict[str, Any]) -> List[Dict[str, Any]]:
         coverage_basis = "unique_entity_intersection"
         skipped_reason = None
         file_path = path / str(item.get("file") or "")
-        if rows > _COVERAGE_UNIQUE_STAY_SCAN_ROW_LIMIT and file_path.suffix.lower() != ".parquet":
+        if (
+            rows > _COVERAGE_UNIQUE_STAY_SCAN_ROW_LIMIT
+            and file_path.suffix.lower() != ".parquet"
+        ):
             covered = None
             coverage_basis = "metadata_row_count_only"
             skipped_reason = "unique_stay_scan_skipped_large_module"
         else:
             covered = _covered_entities(path, item, cohort_size)
-        coverage = round(covered / cohort_size * 100, 1) if isinstance(covered, int) and isinstance(cohort_size, int) and cohort_size else None
+        coverage = (
+            round(covered / cohort_size * 100, 1)
+            if isinstance(covered, int) and isinstance(cohort_size, int) and cohort_size
+            else None
+        )
         status = _quality_status(module, coverage)
         row = {
             "module": module,
@@ -535,7 +646,11 @@ def _covered_entities(path: Path, item: Dict[str, Any], cohort_size: Any) -> int
 def _requested_feature_ids(body: Dict[str, Any]) -> Tuple[str, ...] | None:
     raw = body.get("selected_features")
     if raw is None:
-        raw = (body.get("feature_selection") or {}).get("selected_features") if isinstance(body.get("feature_selection"), dict) else None
+        raw = (
+            (body.get("feature_selection") or {}).get("selected_features")
+            if isinstance(body.get("feature_selection"), dict)
+            else None
+        )
     if not isinstance(raw, list):
         return None
     out: List[str] = []
@@ -551,8 +666,12 @@ def _requested_feature_ids(body: Dict[str, Any]) -> Tuple[str, ...] | None:
     return tuple(out)
 
 
-def _feature_catalog(desc: Dict[str, Any], coverage: List[Dict[str, Any]]) -> Dict[str, Any]:
-    coverage_by_module = {str(row.get("module")): row for row in coverage if row.get("module")}
+def _feature_catalog(
+    desc: Dict[str, Any], coverage: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    coverage_by_module = {
+        str(row.get("module")): row for row in coverage if row.get("module")
+    }
     modules: List[Dict[str, Any]] = []
     features_by_id: Dict[str, Dict[str, Any]] = {}
     for item in desc.get("files") or []:
@@ -580,15 +699,17 @@ def _feature_catalog(desc: Dict[str, Any], coverage: List[Dict[str, Any]]) -> Di
         ]
         for feature in feature_rows:
             features_by_id[feature["id"]] = feature
-        modules.append({
-            "module": module,
-            "label": _module_label(module),
-            "rows": int(item.get("rows") or 0),
-            "feature_count": len(feature_rows),
-            "coverage_pct": coverage_row.get("coverage_pct"),
-            "quality_status": coverage_row.get("quality_status"),
-            "features": feature_rows,
-        })
+        modules.append(
+            {
+                "module": module,
+                "label": _module_label(module),
+                "rows": int(item.get("rows") or 0),
+                "feature_count": len(feature_rows),
+                "coverage_pct": coverage_row.get("coverage_pct"),
+                "quality_status": coverage_row.get("quality_status"),
+                "features": feature_rows,
+            }
+        )
     modules.sort(key=lambda row: row["module"])
     return {
         "modules": modules,
@@ -598,24 +719,31 @@ def _feature_catalog(desc: Dict[str, Any], coverage: List[Dict[str, Any]]) -> Di
     }
 
 
-def _feature_catalog_payload(catalog: Dict[str, Any], selected_feature_ids: List[str]) -> Dict[str, Any]:
+def _feature_catalog_payload(
+    catalog: Dict[str, Any], selected_feature_ids: List[str]
+) -> Dict[str, Any]:
     selected = set(selected_feature_ids)
     modules = []
     for module in catalog.get("modules") or []:
         features = [
-            {key: value for key, value in feature.items() if key != "rows"} | {"selected": feature.get("id") in selected}
+            {key: value for key, value in feature.items() if key != "rows"}
+            | {"selected": feature.get("id") in selected}
             for feature in module.get("features") or []
         ]
-        modules.append({
-            "module": module.get("module"),
-            "label": module.get("label"),
-            "rows": module.get("rows"),
-            "feature_count": module.get("feature_count"),
-            "coverage_pct": module.get("coverage_pct"),
-            "quality_status": module.get("quality_status"),
-            "selected_count": sum(1 for feature in features if feature.get("selected")),
-            "features": features,
-        })
+        modules.append(
+            {
+                "module": module.get("module"),
+                "label": module.get("label"),
+                "rows": module.get("rows"),
+                "feature_count": module.get("feature_count"),
+                "coverage_pct": module.get("coverage_pct"),
+                "quality_status": module.get("quality_status"),
+                "selected_count": sum(
+                    1 for feature in features if feature.get("selected")
+                ),
+                "features": features,
+            }
+        )
     return {
         "total_modules": int(catalog.get("total_modules") or 0),
         "total_features": int(catalog.get("total_features") or 0),
@@ -630,8 +758,16 @@ def _feature_selection_payload(
     requested_feature_ids: Tuple[str, ...] | None,
 ) -> Dict[str, Any]:
     features_by_id = catalog.get("features_by_id") or {}
-    selected = [features_by_id[feature_id] for feature_id in selected_feature_ids if feature_id in features_by_id]
-    default_ids = [feature_id for feature_id in _DEFAULT_COMPARE_FEATURES if feature_id in features_by_id]
+    selected = [
+        features_by_id[feature_id]
+        for feature_id in selected_feature_ids
+        if feature_id in features_by_id
+    ]
+    default_ids = [
+        feature_id
+        for feature_id in _DEFAULT_COMPARE_FEATURES
+        if feature_id in features_by_id
+    ]
     return {
         "mode": "requested" if requested_feature_ids is not None else "default",
         "selected_count": len(selected),
@@ -657,9 +793,15 @@ def _feature_selection_payload(
     }
 
 
-def _selected_feature_ids(catalog: Dict[str, Any], requested_feature_ids: Tuple[str, ...] | None) -> List[str]:
+def _selected_feature_ids(
+    catalog: Dict[str, Any], requested_feature_ids: Tuple[str, ...] | None
+) -> List[str]:
     features_by_id = catalog.get("features_by_id") or {}
-    raw_ids = list(requested_feature_ids) if requested_feature_ids is not None else list(_DEFAULT_COMPARE_FEATURES)
+    raw_ids = (
+        list(requested_feature_ids)
+        if requested_feature_ids is not None
+        else list(_DEFAULT_COMPARE_FEATURES)
+    )
     out: List[str] = []
     seen: set[str] = set()
     for feature_id in raw_ids:
@@ -670,7 +812,10 @@ def _selected_feature_ids(catalog: Dict[str, Any], requested_feature_ids: Tuple[
             break
     if out or requested_feature_ids is not None:
         return out
-    return [feature_id for feature_id in list(features_by_id)[: min(8, _MAX_COMPARE_FEATURES)]]
+    return [
+        feature_id
+        for feature_id in list(features_by_id)[: min(8, _MAX_COMPARE_FEATURES)]
+    ]
 
 
 def _selected_feature_profiles(
@@ -681,48 +826,69 @@ def _selected_feature_profiles(
     selected_feature_ids: List[str],
 ) -> List[Dict[str, Any]]:
     features_by_id = catalog.get("features_by_id") or {}
-    selected = [features_by_id[feature_id] for feature_id in selected_feature_ids if feature_id in features_by_id]
+    selected = [
+        features_by_id[feature_id]
+        for feature_id in selected_feature_ids
+        if feature_id in features_by_id
+    ]
     by_module: Dict[str, List[Dict[str, Any]]] = {}
     for feature in selected:
         by_module.setdefault(str(feature.get("module") or ""), []).append(feature)
     out: List[Dict[str, Any]] = []
-    files_by_module = {str(item.get("module") or ""): item for item in desc.get("files") or [] if item.get("module")}
+    files_by_module = {
+        str(item.get("module") or ""): item
+        for item in desc.get("files") or []
+        if item.get("module")
+    }
     for module, features in by_module.items():
         item = files_by_module.get(module)
         if not item:
             continue
         file_path = path / str(item.get("file") or "")
         rows = int(item.get("rows") or 0)
-        if rows > _COVERAGE_UNIQUE_STAY_SCAN_ROW_LIMIT and file_path.suffix.lower() != ".parquet":
+        if (
+            rows > _COVERAGE_UNIQUE_STAY_SCAN_ROW_LIMIT
+            and file_path.suffix.lower() != ".parquet"
+        ):
             for feature in features:
-                out.append({
-                    "id": feature["id"],
-                    "module": module,
-                    "column": feature["column"],
-                    "label": feature["label"],
-                    "kind": "blocked",
-                    "aggregation": "blocked_large_non_parquet",
-                    "mapping": {},
-                    "reason": "Large non-Parquet module requires an audited background aggregate before interactive comparison.",
-                })
+                out.append(
+                    {
+                        "id": feature["id"],
+                        "module": module,
+                        "column": feature["column"],
+                        "label": feature["label"],
+                        "kind": "blocked",
+                        "aggregation": "blocked_large_non_parquet",
+                        "mapping": {},
+                        "reason": "Large non-Parquet module requires an audited background aggregate before interactive comparison.",
+                    }
+                )
             continue
-        columns = ["stay_id"] + [str(feature["column"]) for feature in features if str(feature["column"]) in (item.get("columns") or [])]
+        columns = ["stay_id"] + [
+            str(feature["column"])
+            for feature in features
+            if str(feature["column"]) in (item.get("columns") or [])
+        ]
         if len(columns) <= 1:
             continue
         try:
-            frame = _filter_by_entity(_read_selected_columns(file_path, columns), entity_set)
+            frame = _filter_by_entity(
+                _read_selected_columns(file_path, columns), entity_set
+            )
         except Exception as exc:
             for feature in features:
-                out.append({
-                    "id": feature["id"],
-                    "module": module,
-                    "column": feature["column"],
-                    "label": feature["label"],
-                    "kind": "blocked",
-                    "aggregation": "read_failed",
-                    "mapping": {},
-                    "reason": f"Could not read selected feature column: {type(exc).__name__}",
-                })
+                out.append(
+                    {
+                        "id": feature["id"],
+                        "module": module,
+                        "column": feature["column"],
+                        "label": feature["label"],
+                        "kind": "blocked",
+                        "aggregation": "read_failed",
+                        "mapping": {},
+                        "reason": f"Could not read selected feature column: {type(exc).__name__}",
+                    }
+                )
             continue
         for feature in features:
             column = str(feature.get("column") or "")
@@ -758,7 +924,11 @@ def _selected_feature_profile(frame: Any, feature: Dict[str, Any]) -> Dict[str, 
 
 
 def _infer_feature_kind(frame: Any, column: str) -> str:
-    if frame is None or getattr(frame, "empty", True) or column not in getattr(frame, "columns", []):
+    if (
+        frame is None
+        or getattr(frame, "empty", True)
+        or column not in getattr(frame, "columns", [])
+    ):
         return "presence"
     import pandas as pd
 
@@ -781,7 +951,12 @@ def _infer_feature_kind(frame: Any, column: str) -> str:
 
 
 def _stay_present(frame: Any, column: str) -> Dict[str, bool]:
-    if frame is None or getattr(frame, "empty", True) or "stay_id" not in frame.columns or column not in frame.columns:
+    if (
+        frame is None
+        or getattr(frame, "empty", True)
+        or "stay_id" not in frame.columns
+        or column not in frame.columns
+    ):
         return {}
     out: Dict[str, bool] = {}
     for entity_id, vals in frame.groupby("stay_id")[column]:
@@ -809,14 +984,29 @@ def _module_label(module: str) -> str:
 
 
 def _feature_label(column: str) -> str:
-    return column.replace("_", " ").upper() if len(column) <= 4 else column.replace("_", " ").title()
+    return (
+        column.replace("_", " ").upper()
+        if len(column) <= 4
+        else column.replace("_", " ").title()
+    )
 
 
 def _feature_kind_hint(column: str) -> str:
     lower = column.lower()
-    if lower.startswith(("is_", "has_")) or lower.endswith(("_ind", "_positive", "_failure", "_event", "_tx")):
+    if lower.startswith(("is_", "has_")) or lower.endswith(
+        ("_ind", "_positive", "_failure", "_event", "_tx")
+    ):
         return "binary"
-    if lower in {"death", "aki", "rrt", "abx", "susp_inf", "mech_vent", "vent_ind", "vaso_ind"}:
+    if lower in {
+        "death",
+        "aki",
+        "rrt",
+        "abx",
+        "susp_inf",
+        "mech_vent",
+        "vent_ind",
+        "vaso_ind",
+    }:
         return "binary"
     if lower in {"sex", "gender", "adm", "avpu"}:
         return "categorical"
@@ -857,11 +1047,25 @@ def _group_payload(
     selected_features: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     supported = [
-        _group_from_bool("survival", "Survived vs Deceased", entity_ids, death_by_entity, false_name="Survived", true_name="Deceased"),
+        _group_from_bool(
+            "survival",
+            "Survived vs Deceased",
+            entity_ids,
+            death_by_entity,
+            false_name="Survived",
+            true_name="Deceased",
+        ),
         _group_from_age(entity_ids, age_by_entity),
         _group_from_sex(entity_ids, sex_by_entity),
         _group_from_los(entity_ids, los_by_entity),
-        _group_from_bool("sepsis", "Sepsis vs Non-sepsis", entity_ids, sepsis_by_entity, false_name="Non-sepsis", true_name="Sepsis"),
+        _group_from_bool(
+            "sepsis",
+            "Sepsis vs Non-sepsis",
+            entity_ids,
+            sepsis_by_entity,
+            false_name="Non-sepsis",
+            true_name="Sepsis",
+        ),
     ]
     supported = [row for row in supported if row is not None]
     for row in supported:
@@ -928,70 +1132,127 @@ def _group_profile(
         "columns": columns,
         "inferential_statistics_allowed": False,
         "rows": [
-            {"metric": "N", "kind": "count", "values": [len(members) for members in member_sets]},
-            {"metric": "Mortality %", "kind": "percent", "values": [_bool_pct(members, death_by_entity) for members in member_sets]},
-            {"metric": "Female %", "kind": "percent", "values": [_female_pct(members, sex_by_entity) for members in member_sets]},
-            {"metric": "Median age", "kind": "numeric", "unit": "years", "values": [_median_for(members, age_by_entity) for members in member_sets]},
-            {"metric": "Median SOFA-2", "kind": "numeric", "values": [_median_for(members, sofa_by_entity) for members in member_sets]},
-            {"metric": "Median ICU LOS", "kind": "numeric", "unit": "days", "values": [_median_for(members, los_by_entity) for members in member_sets]},
-            {"metric": "Sepsis-3 %", "kind": "percent", "values": [_bool_pct(members, sepsis_by_entity) for members in member_sets]},
-        ] + _selected_feature_rows(member_sets, selected_features),
+            {
+                "metric": "N",
+                "kind": "count",
+                "values": [len(members) for members in member_sets],
+            },
+            {
+                "metric": "Mortality %",
+                "kind": "percent",
+                "values": [
+                    _bool_pct(members, death_by_entity) for members in member_sets
+                ],
+            },
+            {
+                "metric": "Female %",
+                "kind": "percent",
+                "values": [
+                    _female_pct(members, sex_by_entity) for members in member_sets
+                ],
+            },
+            {
+                "metric": "Median age",
+                "kind": "numeric",
+                "unit": "years",
+                "values": [
+                    _median_for(members, age_by_entity) for members in member_sets
+                ],
+            },
+            {
+                "metric": "Median SOFA-2",
+                "kind": "numeric",
+                "values": [
+                    _median_for(members, sofa_by_entity) for members in member_sets
+                ],
+            },
+            {
+                "metric": "Median ICU LOS",
+                "kind": "numeric",
+                "unit": "days",
+                "values": [
+                    _median_for(members, los_by_entity) for members in member_sets
+                ],
+            },
+            {
+                "metric": "Sepsis-3 %",
+                "kind": "percent",
+                "values": [
+                    _bool_pct(members, sepsis_by_entity) for members in member_sets
+                ],
+            },
+        ]
+        + _selected_feature_rows(member_sets, selected_features),
     }
 
 
-def _selected_feature_rows(member_sets: List[List[str]], selected_features: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _selected_feature_rows(
+    member_sets: List[List[str]], selected_features: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for feature in selected_features:
         kind = str(feature.get("kind") or "")
         mapping = feature.get("mapping") or {}
-        label = str(feature.get("label") or feature.get("column") or feature.get("id") or "")
+        label = str(
+            feature.get("label") or feature.get("column") or feature.get("id") or ""
+        )
         module = str(feature.get("module") or "")
         if kind == "blocked":
-            rows.append({
-                "metric": label,
-                "feature_id": feature.get("id"),
-                "module": module,
-                "column": feature.get("column"),
-                "kind": "blocked",
-                "values": [None for _members in member_sets],
-                "status": "blocked",
-                "aggregation": feature.get("aggregation"),
-                "reason": feature.get("reason"),
-            })
+            rows.append(
+                {
+                    "metric": label,
+                    "feature_id": feature.get("id"),
+                    "module": module,
+                    "column": feature.get("column"),
+                    "kind": "blocked",
+                    "values": [None for _members in member_sets],
+                    "status": "blocked",
+                    "aggregation": feature.get("aggregation"),
+                    "reason": feature.get("reason"),
+                }
+            )
             continue
         if kind == "binary":
-            rows.append({
-                "metric": f"{label} %",
-                "feature_id": feature.get("id"),
-                "module": module,
-                "column": feature.get("column"),
-                "kind": "percent",
-                "values": [_bool_pct(members, mapping) for members in member_sets],
-                "status": "selected_feature",
-                "aggregation": feature.get("aggregation"),
-            })
+            rows.append(
+                {
+                    "metric": f"{label} %",
+                    "feature_id": feature.get("id"),
+                    "module": module,
+                    "column": feature.get("column"),
+                    "kind": "percent",
+                    "values": [_bool_pct(members, mapping) for members in member_sets],
+                    "status": "selected_feature",
+                    "aggregation": feature.get("aggregation"),
+                }
+            )
         elif kind == "numeric":
-            rows.append({
-                "metric": f"Median {label}",
-                "feature_id": feature.get("id"),
-                "module": module,
-                "column": feature.get("column"),
-                "kind": "numeric",
-                "values": [_median_for(members, mapping) for members in member_sets],
-                "status": "selected_feature",
-                "aggregation": feature.get("aggregation"),
-            })
+            rows.append(
+                {
+                    "metric": f"Median {label}",
+                    "feature_id": feature.get("id"),
+                    "module": module,
+                    "column": feature.get("column"),
+                    "kind": "numeric",
+                    "values": [
+                        _median_for(members, mapping) for members in member_sets
+                    ],
+                    "status": "selected_feature",
+                    "aggregation": feature.get("aggregation"),
+                }
+            )
         else:
-            rows.append({
-                "metric": f"{label} available %",
-                "feature_id": feature.get("id"),
-                "module": module,
-                "column": feature.get("column"),
-                "kind": "percent",
-                "values": [_bool_pct(members, mapping) for members in member_sets],
-                "status": "selected_feature",
-                "aggregation": feature.get("aggregation"),
-            })
+            rows.append(
+                {
+                    "metric": f"{label} available %",
+                    "feature_id": feature.get("id"),
+                    "module": module,
+                    "column": feature.get("column"),
+                    "kind": "percent",
+                    "values": [_bool_pct(members, mapping) for members in member_sets],
+                    "status": "selected_feature",
+                    "aggregation": feature.get("aggregation"),
+                }
+            )
     return rows
 
 
@@ -1006,31 +1267,118 @@ def _group_members(
     sepsis_by_entity: Dict[str, bool],
 ) -> List[Tuple[str, List[str]]]:
     if group_id == "survival":
-        return _bool_member_groups(entity_ids, death_by_entity, false_name="Survived", true_name="Deceased")
+        return _bool_member_groups(
+            entity_ids, death_by_entity, false_name="Survived", true_name="Deceased"
+        )
     if group_id == "age":
         return [
-            ("<65", [entity_id for entity_id in entity_ids if entity_id in age_by_entity and age_by_entity[entity_id] < 65]),
-            (">=65", [entity_id for entity_id in entity_ids if entity_id in age_by_entity and age_by_entity[entity_id] >= 65]),
-            ("Unknown", [entity_id for entity_id in entity_ids if entity_id not in age_by_entity]),
+            (
+                "<65",
+                [
+                    entity_id
+                    for entity_id in entity_ids
+                    if entity_id in age_by_entity and age_by_entity[entity_id] < 65
+                ],
+            ),
+            (
+                ">=65",
+                [
+                    entity_id
+                    for entity_id in entity_ids
+                    if entity_id in age_by_entity and age_by_entity[entity_id] >= 65
+                ],
+            ),
+            (
+                "Unknown",
+                [
+                    entity_id
+                    for entity_id in entity_ids
+                    if entity_id not in age_by_entity
+                ],
+            ),
         ]
     if group_id == "sex":
         return [
-            ("Female", [entity_id for entity_id in entity_ids if _sex_bucket(sex_by_entity.get(entity_id)) == "female"]),
-            ("Male", [entity_id for entity_id in entity_ids if _sex_bucket(sex_by_entity.get(entity_id)) == "male"]),
-            ("Unknown", [entity_id for entity_id in entity_ids if _sex_bucket(sex_by_entity.get(entity_id)) not in {"female", "male"}]),
+            (
+                "Female",
+                [
+                    entity_id
+                    for entity_id in entity_ids
+                    if _sex_bucket(sex_by_entity.get(entity_id)) == "female"
+                ],
+            ),
+            (
+                "Male",
+                [
+                    entity_id
+                    for entity_id in entity_ids
+                    if _sex_bucket(sex_by_entity.get(entity_id)) == "male"
+                ],
+            ),
+            (
+                "Unknown",
+                [
+                    entity_id
+                    for entity_id in entity_ids
+                    if _sex_bucket(sex_by_entity.get(entity_id))
+                    not in {"female", "male"}
+                ],
+            ),
         ]
     if group_id == "los":
         values = [value for value in los_by_entity.values() if value is not None]
         threshold = dataio._median(values)
         if threshold is None:
-            return [("Known", [entity_id for entity_id in entity_ids if entity_id in los_by_entity]), ("Unknown", [entity_id for entity_id in entity_ids if entity_id not in los_by_entity])]
+            return [
+                (
+                    "Known",
+                    [
+                        entity_id
+                        for entity_id in entity_ids
+                        if entity_id in los_by_entity
+                    ],
+                ),
+                (
+                    "Unknown",
+                    [
+                        entity_id
+                        for entity_id in entity_ids
+                        if entity_id not in los_by_entity
+                    ],
+                ),
+            ]
         return [
-            ("Short/median", [entity_id for entity_id in entity_ids if entity_id in los_by_entity and los_by_entity[entity_id] <= threshold]),
-            ("Long", [entity_id for entity_id in entity_ids if entity_id in los_by_entity and los_by_entity[entity_id] > threshold]),
-            ("Unknown", [entity_id for entity_id in entity_ids if entity_id not in los_by_entity]),
+            (
+                "Short/median",
+                [
+                    entity_id
+                    for entity_id in entity_ids
+                    if entity_id in los_by_entity
+                    and los_by_entity[entity_id] <= threshold
+                ],
+            ),
+            (
+                "Long",
+                [
+                    entity_id
+                    for entity_id in entity_ids
+                    if entity_id in los_by_entity
+                    and los_by_entity[entity_id] > threshold
+                ],
+            ),
+            (
+                "Unknown",
+                [
+                    entity_id
+                    for entity_id in entity_ids
+                    if entity_id not in los_by_entity
+                ],
+            ),
         ]
     if group_id == "sepsis":
-        return _bool_member_groups(entity_ids, sepsis_by_entity, false_name="Non-sepsis", true_name="Sepsis")
+        return _bool_member_groups(
+            entity_ids, sepsis_by_entity, false_name="Non-sepsis", true_name="Sepsis"
+        )
     return [("Cohort", list(entity_ids))]
 
 
@@ -1042,14 +1390,31 @@ def _bool_member_groups(
     true_name: str,
 ) -> List[Tuple[str, List[str]]]:
     return [
-        (false_name, [entity_id for entity_id in entity_ids if mapping.get(entity_id) is False]),
-        (true_name, [entity_id for entity_id in entity_ids if mapping.get(entity_id) is True]),
-        ("Unknown", [entity_id for entity_id in entity_ids if mapping.get(entity_id) not in {False, True}]),
+        (
+            false_name,
+            [entity_id for entity_id in entity_ids if mapping.get(entity_id) is False],
+        ),
+        (
+            true_name,
+            [entity_id for entity_id in entity_ids if mapping.get(entity_id) is True],
+        ),
+        (
+            "Unknown",
+            [
+                entity_id
+                for entity_id in entity_ids
+                if mapping.get(entity_id) not in {False, True}
+            ],
+        ),
     ]
 
 
 def _median_for(entity_ids: List[str], mapping: Dict[str, float]) -> float | None:
-    values = [mapping[entity_id] for entity_id in entity_ids if entity_id in mapping and mapping[entity_id] is not None]
+    values = [
+        mapping[entity_id]
+        for entity_id in entity_ids
+        if entity_id in mapping and mapping[entity_id] is not None
+    ]
     return dataio._median(values)
 
 
@@ -1063,7 +1428,9 @@ def _bool_pct(entity_ids: List[str], mapping: Dict[str, bool]) -> float | None:
 def _female_pct(entity_ids: List[str], mapping: Dict[str, str]) -> float | None:
     if not entity_ids:
         return None
-    count = sum(1 for entity_id in entity_ids if _sex_bucket(mapping.get(entity_id)) == "female")
+    count = sum(
+        1 for entity_id in entity_ids if _sex_bucket(mapping.get(entity_id)) == "female"
+    )
     return _pct(count, len(entity_ids))
 
 
@@ -1087,19 +1454,41 @@ def _group_from_bool(
         "status": "supported",
         "basis": "registered_export_aggregate",
         "groups": [
-            {"label": false_name, "count": false_count, "pct": _pct(false_count, len(entity_ids))},
-            {"label": true_name, "count": true_count, "pct": _pct(true_count, len(entity_ids))},
-            {"label": "Unknown", "count": unknown, "pct": _pct(unknown, len(entity_ids))},
+            {
+                "label": false_name,
+                "count": false_count,
+                "pct": _pct(false_count, len(entity_ids)),
+            },
+            {
+                "label": true_name,
+                "count": true_count,
+                "pct": _pct(true_count, len(entity_ids)),
+            },
+            {
+                "label": "Unknown",
+                "count": unknown,
+                "pct": _pct(unknown, len(entity_ids)),
+            },
         ],
         "inferential_statistics_allowed": False,
     }
 
 
-def _group_from_age(entity_ids: List[str], age_by_entity: Dict[str, float]) -> Dict[str, Any] | None:
+def _group_from_age(
+    entity_ids: List[str], age_by_entity: Dict[str, float]
+) -> Dict[str, Any] | None:
     if not age_by_entity:
         return None
-    younger = sum(1 for entity_id in entity_ids if entity_id in age_by_entity and age_by_entity[entity_id] < 65)
-    older = sum(1 for entity_id in entity_ids if entity_id in age_by_entity and age_by_entity[entity_id] >= 65)
+    younger = sum(
+        1
+        for entity_id in entity_ids
+        if entity_id in age_by_entity and age_by_entity[entity_id] < 65
+    )
+    older = sum(
+        1
+        for entity_id in entity_ids
+        if entity_id in age_by_entity and age_by_entity[entity_id] >= 65
+    )
     unknown = len(entity_ids) - younger - older
     return {
         "id": "age",
@@ -1109,17 +1498,31 @@ def _group_from_age(entity_ids: List[str], age_by_entity: Dict[str, float]) -> D
         "groups": [
             {"label": "<65", "count": younger, "pct": _pct(younger, len(entity_ids))},
             {"label": ">=65", "count": older, "pct": _pct(older, len(entity_ids))},
-            {"label": "Unknown", "count": unknown, "pct": _pct(unknown, len(entity_ids))},
+            {
+                "label": "Unknown",
+                "count": unknown,
+                "pct": _pct(unknown, len(entity_ids)),
+            },
         ],
         "inferential_statistics_allowed": False,
     }
 
 
-def _group_from_sex(entity_ids: List[str], sex_by_entity: Dict[str, str]) -> Dict[str, Any] | None:
+def _group_from_sex(
+    entity_ids: List[str], sex_by_entity: Dict[str, str]
+) -> Dict[str, Any] | None:
     if not sex_by_entity:
         return None
-    female = sum(1 for entity_id in entity_ids if _sex_bucket(sex_by_entity.get(entity_id)) == "female")
-    male = sum(1 for entity_id in entity_ids if _sex_bucket(sex_by_entity.get(entity_id)) == "male")
+    female = sum(
+        1
+        for entity_id in entity_ids
+        if _sex_bucket(sex_by_entity.get(entity_id)) == "female"
+    )
+    male = sum(
+        1
+        for entity_id in entity_ids
+        if _sex_bucket(sex_by_entity.get(entity_id)) == "male"
+    )
     unknown = len(entity_ids) - female - male
     return {
         "id": "sex",
@@ -1129,21 +1532,35 @@ def _group_from_sex(entity_ids: List[str], sex_by_entity: Dict[str, str]) -> Dic
         "groups": [
             {"label": "Female", "count": female, "pct": _pct(female, len(entity_ids))},
             {"label": "Male", "count": male, "pct": _pct(male, len(entity_ids))},
-            {"label": "Unknown", "count": unknown, "pct": _pct(unknown, len(entity_ids))},
+            {
+                "label": "Unknown",
+                "count": unknown,
+                "pct": _pct(unknown, len(entity_ids)),
+            },
         ],
         "inferential_statistics_allowed": False,
     }
 
 
-def _group_from_los(entity_ids: List[str], los_by_entity: Dict[str, float]) -> Dict[str, Any] | None:
+def _group_from_los(
+    entity_ids: List[str], los_by_entity: Dict[str, float]
+) -> Dict[str, Any] | None:
     values = [v for v in los_by_entity.values() if v is not None]
     if not values:
         return None
     threshold = dataio._median(values)
     if threshold is None:
         return None
-    short = sum(1 for entity_id in entity_ids if entity_id in los_by_entity and los_by_entity[entity_id] <= threshold)
-    long = sum(1 for entity_id in entity_ids if entity_id in los_by_entity and los_by_entity[entity_id] > threshold)
+    short = sum(
+        1
+        for entity_id in entity_ids
+        if entity_id in los_by_entity and los_by_entity[entity_id] <= threshold
+    )
+    long = sum(
+        1
+        for entity_id in entity_ids
+        if entity_id in los_by_entity and los_by_entity[entity_id] > threshold
+    )
     unknown = len(entity_ids) - short - long
     return {
         "id": "los",
@@ -1152,9 +1569,17 @@ def _group_from_los(entity_ids: List[str], los_by_entity: Dict[str, float]) -> D
         "basis": "median_los_descriptive_split",
         "threshold": threshold,
         "groups": [
-            {"label": "Short/median", "count": short, "pct": _pct(short, len(entity_ids))},
+            {
+                "label": "Short/median",
+                "count": short,
+                "pct": _pct(short, len(entity_ids)),
+            },
             {"label": "Long", "count": long, "pct": _pct(long, len(entity_ids))},
-            {"label": "Unknown", "count": unknown, "pct": _pct(unknown, len(entity_ids))},
+            {
+                "label": "Unknown",
+                "count": unknown,
+                "pct": _pct(unknown, len(entity_ids)),
+            },
         ],
         "inferential_statistics_allowed": False,
     }
@@ -1162,7 +1587,12 @@ def _group_from_los(entity_ids: List[str], los_by_entity: Dict[str, float]) -> D
 
 def _entity_numeric(frame: Any, column: str) -> Dict[str, float]:
     out: Dict[str, float] = {}
-    if frame is None or frame.empty or "stay_id" not in frame.columns or column not in frame.columns:
+    if (
+        frame is None
+        or frame.empty
+        or "stay_id" not in frame.columns
+        or column not in frame.columns
+    ):
         return out
     import pandas as pd
 
@@ -1181,7 +1611,12 @@ def _entity_numeric(frame: Any, column: str) -> Dict[str, float]:
 
 def _entity_text(frame: Any, column: str) -> Dict[str, str]:
     out: Dict[str, str] = {}
-    if frame is None or frame.empty or "stay_id" not in frame.columns or column not in frame.columns:
+    if (
+        frame is None
+        or frame.empty
+        or "stay_id" not in frame.columns
+        or column not in frame.columns
+    ):
         return out
     entity_ids = frame["stay_id"].map(dataio._norm_id)
     for entity_id, raw_value in zip(entity_ids, frame[column]):
@@ -1239,19 +1674,77 @@ def _sex_summary(values: List[Any]) -> Dict[str, Any]:
     }
 
 
-def _sofa_bins(values: Iterable[Any]) -> List[Dict[str, Any]]:
-    vals = [v for v in (dataio._num(v) for v in values) if v is not None]
+def _category_summary(values: List[Any], *, top_n: int = 6) -> Dict[str, Any]:
+    """Count a categorical column (e.g. admission type) into a bounded bar payload.
+
+    Returns ``label`` / ``count`` / ``pct`` rows shaped like ``_value_bins`` so the
+    frontend renders it through the same bar renderer. Low-frequency categories
+    beyond ``top_n`` collapse into one ``Other`` bucket so the chart stays bounded.
+    """
+    labels = [
+        str(v).strip()
+        for v in values
+        if str(v).strip() and str(v).strip().lower() != "nan"
+    ]
+    total = len(labels)
+    if not total:
+        return {"count": 0, "bins": []}
+    counts: Dict[str, int] = {}
+    for label in labels:
+        counts[label] = counts.get(label, 0) + 1
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     bins = [
-        ("0-5", lambda v: v <= 5),
-        ("6-8", lambda v: 6 <= v <= 8),
-        ("9-11", lambda v: 9 <= v <= 11),
-        (">=12", lambda v: v >= 12),
+        {"label": label, "count": count, "pct": _pct(count, total)}
+        for label, count in ordered[:top_n]
     ]
+    remainder = sum(count for _, count in ordered[top_n:])
+    if remainder:
+        bins.append(
+            {"label": "Other", "count": remainder, "pct": _pct(remainder, total)}
+        )
+    return {"count": total, "distinct": len(counts), "bins": bins}
+
+
+def _value_bins(values: Iterable[Any], specs: List[tuple]) -> List[Dict[str, Any]]:
+    """Bin numeric values into a labelled histogram payload.
+
+    ``specs`` is an ordered list of ``(label, predicate)`` pairs. The returned
+    rows mirror ``_sofa_bins`` (``label`` / ``count`` / ``pct``) so the frontend
+    renders every distribution chart through one bar renderer.
+    """
+    vals = [v for v in (dataio._num(v) for v in values) if v is not None]
     total = len(vals)
-    return [
-        {"label": label, "count": sum(1 for value in vals if predicate(value)), "pct": _pct(sum(1 for value in vals if predicate(value)), total)}
-        for label, predicate in bins
-    ]
+    out: List[Dict[str, Any]] = []
+    for label, predicate in specs:
+        count = sum(1 for value in vals if predicate(value))
+        out.append({"label": label, "count": count, "pct": _pct(count, total)})
+    return out
+
+
+_AGE_BIN_SPECS: List[tuple] = [
+    ("<40", lambda v: v < 40),
+    ("40-59", lambda v: 40 <= v < 60),
+    ("60-74", lambda v: 60 <= v < 75),
+    (">=75", lambda v: v >= 75),
+]
+_LOS_BIN_SPECS: List[tuple] = [
+    ("<2d", lambda v: v < 2),
+    ("2-5d", lambda v: 2 <= v < 5),
+    ("5-10d", lambda v: 5 <= v < 10),
+    (">=10d", lambda v: v >= 10),
+]
+
+
+def _sofa_bins(values: Iterable[Any]) -> List[Dict[str, Any]]:
+    return _value_bins(
+        values,
+        [
+            ("0-5", lambda v: v <= 5),
+            ("6-8", lambda v: 6 <= v <= 8),
+            ("9-11", lambda v: 9 <= v <= 11),
+            (">=12", lambda v: v >= 12),
+        ],
+    )
 
 
 def _survival_analysis_payload(
@@ -1304,10 +1797,7 @@ def _survival_analysis_payload(
             "time_label": "Days to 28-day death/censoring",
         },
     ]
-    outcomes = [
-        _survival_outcome_option(outcome, spec, entity_ids)
-        for spec in specs
-    ]
+    outcomes = [_survival_outcome_option(outcome, spec, entity_ids) for spec in specs]
     group_options = _survival_group_options(
         entity_ids=entity_ids,
         age_by_entity=age_by_entity,
@@ -1321,10 +1811,16 @@ def _survival_analysis_payload(
             continue
         event_col = str(option.get("event_column") or "")
         time_col = str(option.get("time_column") or "")
-        event_by_entity = dataio._stay_bool(outcome, event_col, missing_false=True) if event_col else {}
+        event_by_entity = (
+            dataio._stay_bool(outcome, event_col, missing_false=True)
+            if event_col
+            else {}
+        )
         for entity_id in entity_ids:
             event_by_entity.setdefault(entity_id, False)
-        time_by_entity = dataio._stay_numeric(outcome, time_col, "max") if time_col else {}
+        time_by_entity = (
+            dataio._stay_numeric(outcome, time_col, "max") if time_col else {}
+        )
         for group in group_options:
             if group.get("status") != "ready":
                 continue
@@ -1347,11 +1843,19 @@ def _survival_analysis_payload(
         elif not ready_groups:
             reason = "No supported two-group split is available for this cohort."
         else:
-            reason = "No survival curve could be computed from the available timed records."
+            reason = (
+                "No survival curve could be computed from the available timed records."
+            )
 
-    default_outcome = next((row["id"] for row in ready_outcomes if row["id"] == "hospital_death"), None)
-    default_outcome = default_outcome or (ready_outcomes[0]["id"] if ready_outcomes else None)
-    default_group = next((row["id"] for row in ready_groups if row["id"] == "sepsis"), None)
+    default_outcome = next(
+        (row["id"] for row in ready_outcomes if row["id"] == "hospital_death"), None
+    )
+    default_outcome = default_outcome or (
+        ready_outcomes[0]["id"] if ready_outcomes else None
+    )
+    default_group = next(
+        (row["id"] for row in ready_groups if row["id"] == "sepsis"), None
+    )
     default_group = default_group or (ready_groups[0]["id"] if ready_groups else None)
     return {
         "status": status,
@@ -1376,7 +1880,9 @@ def _survival_analysis_payload(
     }
 
 
-def _survival_outcome_option(outcome: Any, spec: Dict[str, Any], entity_ids: List[str]) -> Dict[str, Any]:
+def _survival_outcome_option(
+    outcome: Any, spec: Dict[str, Any], entity_ids: List[str]
+) -> Dict[str, Any]:
     base = {
         "id": spec["id"],
         "label": spec["label"],
@@ -1388,7 +1894,10 @@ def _survival_outcome_option(outcome: Any, spec: Dict[str, Any], entity_ids: Lis
         "event_count": 0,
     }
     if outcome is None or getattr(outcome, "empty", True):
-        return {**base, "reason": "Outcome module is not present in the registered export."}
+        return {
+            **base,
+            "reason": "Outcome module is not present in the registered export.",
+        }
 
     event_col = _first_column(outcome, spec["event_candidates"])
     if not event_col:
@@ -1413,9 +1922,12 @@ def _survival_outcome_option(outcome: Any, spec: Dict[str, Any], entity_ids: Lis
     usable = [
         entity_id
         for entity_id in entity_ids
-        if dataio._num(time_by_entity.get(entity_id)) is not None and float(time_by_entity[entity_id]) >= 0
+        if dataio._num(time_by_entity.get(entity_id)) is not None
+        and float(time_by_entity[entity_id]) >= 0
     ]
-    event_count = sum(1 for entity_id in usable if event_by_entity.get(entity_id) is True)
+    event_count = sum(
+        1 for entity_id in usable if event_by_entity.get(entity_id) is True
+    )
     if len(usable) < 2:
         return {
             **base,
@@ -1449,15 +1961,34 @@ def _survival_group_options(
             "id": "sepsis",
             "label": "Sepsis vs Non-sepsis",
             "basis": "sepsis3_sofa2_event_module",
-            "_members": _bool_member_groups(entity_ids, sepsis_by_entity, false_name="Non-sepsis", true_name="Sepsis"),
+            "_members": _bool_member_groups(
+                entity_ids,
+                sepsis_by_entity,
+                false_name="Non-sepsis",
+                true_name="Sepsis",
+            ),
         },
         {
             "id": "age",
             "label": "Age <65 vs >=65",
             "basis": "age_threshold_65_descriptive",
             "_members": [
-                ("<65", [entity_id for entity_id in entity_ids if entity_id in age_by_entity and age_by_entity[entity_id] < 65]),
-                (">=65", [entity_id for entity_id in entity_ids if entity_id in age_by_entity and age_by_entity[entity_id] >= 65]),
+                (
+                    "<65",
+                    [
+                        entity_id
+                        for entity_id in entity_ids
+                        if entity_id in age_by_entity and age_by_entity[entity_id] < 65
+                    ],
+                ),
+                (
+                    ">=65",
+                    [
+                        entity_id
+                        for entity_id in entity_ids
+                        if entity_id in age_by_entity and age_by_entity[entity_id] >= 65
+                    ],
+                ),
             ],
         },
         {
@@ -1465,8 +1996,22 @@ def _survival_group_options(
             "label": "Female vs Male",
             "basis": "sex_metadata_descriptive",
             "_members": [
-                ("Female", [entity_id for entity_id in entity_ids if _sex_bucket(sex_by_entity.get(entity_id)) == "female"]),
-                ("Male", [entity_id for entity_id in entity_ids if _sex_bucket(sex_by_entity.get(entity_id)) == "male"]),
+                (
+                    "Female",
+                    [
+                        entity_id
+                        for entity_id in entity_ids
+                        if _sex_bucket(sex_by_entity.get(entity_id)) == "female"
+                    ],
+                ),
+                (
+                    "Male",
+                    [
+                        entity_id
+                        for entity_id in entity_ids
+                        if _sex_bucket(sex_by_entity.get(entity_id)) == "male"
+                    ],
+                ),
             ],
         },
         _survival_sofa_group(entity_ids, sofa_by_entity),
@@ -1475,23 +2020,32 @@ def _survival_group_options(
     for row in raw_groups:
         if not row:
             continue
-        members = [(label, ids) for label, ids in row.get("_members", []) if label != "Unknown"]
+        members = [
+            (label, ids) for label, ids in row.get("_members", []) if label != "Unknown"
+        ]
         nonempty = [(label, ids) for label, ids in members if ids]
         status = "ready" if len(nonempty) >= 2 else "blocked"
-        out.append({
-            **row,
-            "status": status,
-            "reason": None if status == "ready" else "This split does not produce two non-empty groups in the current cohort.",
-            "groups": [
-                {"label": label, "count": len(ids)}
-                for label, ids in members
-            ],
-            "_members": members,
-        })
+        out.append(
+            {
+                **row,
+                "status": status,
+                "reason": (
+                    None
+                    if status == "ready"
+                    else "This split does not produce two non-empty groups in the current cohort."
+                ),
+                "groups": [
+                    {"label": label, "count": len(ids)} for label, ids in members
+                ],
+                "_members": members,
+            }
+        )
     return out
 
 
-def _survival_sofa_group(entity_ids: List[str], sofa_by_entity: Dict[str, float]) -> Dict[str, Any] | None:
+def _survival_sofa_group(
+    entity_ids: List[str], sofa_by_entity: Dict[str, float]
+) -> Dict[str, Any] | None:
     values = [value for value in sofa_by_entity.values() if value is not None]
     threshold = dataio._median(values)
     if threshold is None:
@@ -1502,8 +2056,24 @@ def _survival_sofa_group(entity_ids: List[str], sofa_by_entity: Dict[str, float]
         "basis": "median_sofa2_descriptive_split",
         "threshold": threshold,
         "_members": [
-            (f"SOFA-2 <= {threshold:g}", [entity_id for entity_id in entity_ids if entity_id in sofa_by_entity and sofa_by_entity[entity_id] <= threshold]),
-            (f"SOFA-2 > {threshold:g}", [entity_id for entity_id in entity_ids if entity_id in sofa_by_entity and sofa_by_entity[entity_id] > threshold]),
+            (
+                f"SOFA-2 <= {threshold:g}",
+                [
+                    entity_id
+                    for entity_id in entity_ids
+                    if entity_id in sofa_by_entity
+                    and sofa_by_entity[entity_id] <= threshold
+                ],
+            ),
+            (
+                f"SOFA-2 > {threshold:g}",
+                [
+                    entity_id
+                    for entity_id in entity_ids
+                    if entity_id in sofa_by_entity
+                    and sofa_by_entity[entity_id] > threshold
+                ],
+            ),
         ],
     }
 
@@ -1522,15 +2092,24 @@ def _survival_curve_payload(
             time_value = dataio._num(time_by_entity.get(entity_id))
             if time_value is None or time_value < 0:
                 continue
-            records.append((float(time_value), bool(event_by_entity.get(entity_id) is True)))
+            records.append(
+                (float(time_value), bool(event_by_entity.get(entity_id) is True))
+            )
         if records:
             km = _km_group_payload(label, records)
             group_records.append({"label": label, "records": records, "payload": km})
     if len(group_records) < 2:
         return None
 
-    risk_times = _risk_times([record for row in group_records for record in row["records"]])
-    logrank = _logrank_payload(group_records[0]["records"], group_records[1]["records"], group_records[0]["label"], group_records[1]["label"])
+    risk_times = _risk_times(
+        [record for row in group_records for record in row["records"]]
+    )
+    logrank = _logrank_payload(
+        group_records[0]["records"],
+        group_records[1]["records"],
+        group_records[0]["label"],
+        group_records[1]["label"],
+    )
     return {
         "outcome_id": outcome_option.get("id"),
         "group_id": group_option.get("id"),
@@ -1549,7 +2128,14 @@ def _survival_curve_payload(
             "rows": [
                 {
                     "label": row["label"],
-                    "values": [sum(1 for time_value, _event in row["records"] if time_value >= t) for t in risk_times],
+                    "values": [
+                        sum(
+                            1
+                            for time_value, _event in row["records"]
+                            if time_value >= t
+                        )
+                        for t in risk_times
+                    ],
                 }
                 for row in group_records
             ],
@@ -1593,19 +2179,23 @@ def _km_points(records: List[Tuple[float, bool]]) -> List[Dict[str, Any]]:
         events = events_by_time[time_value]
         if at_risk > 0:
             survival *= max(0.0, 1.0 - events / at_risk)
-        points.append({
-            "time": _round_time(time_value),
-            "survival": round(survival * 100, 1),
-            "at_risk": at_risk,
-            "events": events,
-        })
+        points.append(
+            {
+                "time": _round_time(time_value),
+                "survival": round(survival * 100, 1),
+                "at_risk": at_risk,
+                "events": events,
+            }
+        )
     if max_time and (not points or points[-1]["time"] != _round_time(max_time)):
-        points.append({
-            "time": _round_time(max_time),
-            "survival": points[-1]["survival"],
-            "at_risk": at_risk_by_time.get(max_time, 0),
-            "events": 0,
-        })
+        points.append(
+            {
+                "time": _round_time(max_time),
+                "survival": points[-1]["survival"],
+                "at_risk": at_risk_by_time.get(max_time, 0),
+                "events": 0,
+            }
+        )
     return points
 
 
@@ -1617,7 +2207,9 @@ def _km_median(points: List[Dict[str, Any]]) -> float | None:
     return None
 
 
-def _thin_points(points: List[Dict[str, Any]], max_points: int = 80) -> List[Dict[str, Any]]:
+def _thin_points(
+    points: List[Dict[str, Any]], max_points: int = 80
+) -> List[Dict[str, Any]]:
     if len(points) <= max_points:
         return points
     keep_indexes = {0, len(points) - 1}
@@ -1675,7 +2267,9 @@ def _logrank_payload(
             continue
         observed_a += d_a
         expected_a += d_total * (n_a / n_total)
-        variance_a += (n_a * n_b * d_total * (n_total - d_total)) / ((n_total ** 2) * (n_total - 1))
+        variance_a += (n_a * n_b * d_total * (n_total - d_total)) / (
+            (n_total**2) * (n_total - 1)
+        )
         total_events += d_total
     if variance_a <= 0 or total_events <= 0:
         return {
@@ -1699,7 +2293,9 @@ def _logrank_payload(
     }
 
 
-def _risk_count_map(total_by_time: Counter[float], event_times: List[float]) -> Dict[float, int]:
+def _risk_count_map(
+    total_by_time: Counter[float], event_times: List[float]
+) -> Dict[float, int]:
     """Return n-at-risk for arbitrary event times without scanning records repeatedly."""
     observed_times = sorted(total_by_time, reverse=True)
     out: Dict[float, int] = {}
@@ -1814,7 +2410,11 @@ def _sofa_transition_matrix(pairs: List[Tuple[float, float]]) -> List[Dict[str, 
     rows: List[Dict[str, Any]] = []
     for source_label in labels:
         cells = [
-            {"label": target_label, "count": counts[(source_label, target_label)], "pct": _pct(counts[(source_label, target_label)], total)}
+            {
+                "label": target_label,
+                "count": counts[(source_label, target_label)],
+                "pct": _pct(counts[(source_label, target_label)], total),
+            }
             for target_label in labels
         ]
         row_total = row_totals[source_label]

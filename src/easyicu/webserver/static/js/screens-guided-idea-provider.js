@@ -202,7 +202,7 @@
       <div class="gdx-status ${ready ? 'ok' : 'warn'}">
         <span>${icon(ctx, ready ? 'check' : 'shield', 12)}</span>
         <div>
-          <strong>${ready ? translate(ctx, 'API provider ready', 'API provider 已就绪') : translate(ctx, 'API setup gate', 'API 配置门槛')}</strong>
+          <strong>${ready ? translate(ctx, 'API provider ready', 'API provider 已就绪') : translate(ctx, 'API readiness setup', 'API 就绪配置')}</strong>
           <small>${translate(ctx, 'Local PDF/folder mining can run now. Frontier search, prior-art checks, AI synthesis, and full Agent provider calls need explicit opt-in and provider readiness first.', '本地 PDF/文献库挖掘可以直接运行。前沿检索、既有研究检查、AI 综合和 full Agent provider 调用必须先显式 opt-in 并通过 provider readiness。')}</small>
         </div>
       </div>

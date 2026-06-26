@@ -8,6 +8,7 @@ can use either the offline mock provider or an external provider after
 canonical AI opt-in, per-run opt-in, env credential checks, STRICT-style claim
 binding, artifact privacy scanning, and manuscript locking.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -80,22 +81,28 @@ def make_agent_run_runner(
         started = time.time()
         run_id = f"run_{job.id}"
         safe_study = _slug(study_id or "study")
-        root = Path(project_root).expanduser() if project_root else Path.home() / "easyicu" / "projects"
+        root = (
+            Path(project_root).expanduser()
+            if project_root
+            else Path.home() / "easyicu" / "projects"
+        )
         run_dir = root / safe_study / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         total_steps = 5 if resolved_run_type == "full" else 4
 
-        job.emit({
-            "type": "start",
-            "run_id": run_id,
-            "study_id": study_id,
-            "mode": mode,
-            "run_type": resolved_run_type,
-            "provider": dict(provider),
-            "local_only": True,
-            "uploads": 0,
-            "tokens": 0,
-        })
+        job.emit(
+            {
+                "type": "start",
+                "run_id": run_id,
+                "study_id": study_id,
+                "mode": mode,
+                "run_type": resolved_run_type,
+                "provider": dict(provider),
+                "local_only": True,
+                "uploads": 0,
+                "tokens": 0,
+            }
+        )
         if getattr(job, "cancel_requested", False):
             return _cancelled_agent_result(
                 job,
@@ -111,14 +118,16 @@ def make_agent_run_runner(
         source = dataio.describe_export_source(export_path)
         if not source.get("ok"):
             raise ValueError(str(source.get("error") or "invalid_export"))
-        job.emit({
-            "type": "progress",
-            "current": 1,
-            "total": total_steps,
-            "step": "source",
-            "label": "Source registry resolved",
-            "summary": source.get("summary", {}),
-        })
+        job.emit(
+            {
+                "type": "progress",
+                "current": 1,
+                "total": total_steps,
+                "step": "source",
+                "label": "Source registry resolved",
+                "summary": source.get("summary", {}),
+            }
+        )
         if getattr(job, "cancel_requested", False):
             return _cancelled_agent_result(
                 job,
@@ -138,15 +147,17 @@ def make_agent_run_runner(
         summary = dict(workspace.get("summary") or {})
         cohort = dict(workspace.get("cohort") or {})
         quality = [_quality_public(q) for q in workspace.get("quality", [])]
-        job.emit({
-            "type": "progress",
-            "current": 2,
-            "total": total_steps,
-            "step": "snapshot",
-            "label": "Export snapshot summarised",
-            "stays": summary.get("stays"),
-            "modules": summary.get("modules"),
-        })
+        job.emit(
+            {
+                "type": "progress",
+                "current": 2,
+                "total": total_steps,
+                "step": "snapshot",
+                "label": "Export snapshot summarised",
+                "stays": summary.get("stays"),
+                "modules": summary.get("modules"),
+            }
+        )
         if getattr(job, "cancel_requested", False):
             return _cancelled_agent_result(
                 job,
@@ -185,13 +196,15 @@ def make_agent_run_runner(
                 "quality": quality,
             },
         }
-        artifacts.update(agent_outputs.build_agent_output_artifacts(
-            export_path=export_path,
-            source=source,
-            summary=summary,
-            cohort=cohort,
-            quality=quality,
-        ))
+        artifacts.update(
+            agent_outputs.build_agent_output_artifacts(
+                export_path=export_path,
+                source=source,
+                summary=summary,
+                cohort=cohort,
+                quality=quality,
+            )
+        )
         strict_audit = None
         numeric_audit = None
         if getattr(job, "cancel_requested", False):
@@ -244,14 +257,16 @@ def make_agent_run_runner(
                 progress_label = "Mock full-agent scaffold generated"
             artifacts["agent_plan.json"] = full_payload["agent_plan"]
             artifacts["manuscript_draft.json"] = full_payload["manuscript_draft"]
-            job.emit({
-                "type": "progress",
-                "current": 3,
-                "total": total_steps,
-                "step": progress_step,
-                "label": progress_label,
-                "provider": dict(provider),
-            })
+            job.emit(
+                {
+                    "type": "progress",
+                    "current": 3,
+                    "total": total_steps,
+                    "step": progress_step,
+                    "label": progress_label,
+                    "provider": dict(provider),
+                }
+            )
             if getattr(job, "cancel_requested", False):
                 return _cancelled_agent_result(
                     job,
@@ -279,14 +294,16 @@ def make_agent_run_runner(
             numeric_audit=numeric_audit,
         )
 
-        job.emit({
-            "type": "gate",
-            "current": total_steps - 1,
-            "total": total_steps,
-            "step": "gate",
-            "label": "Evidence gate evaluated",
-            "gate": gate,
-        })
+        job.emit(
+            {
+                "type": "gate",
+                "current": total_steps - 1,
+                "total": total_steps,
+                "step": "gate",
+                "label": "Evidence gate evaluated",
+                "gate": gate,
+            }
+        )
         if getattr(job, "cancel_requested", False):
             return _cancelled_agent_result(
                 job,
@@ -305,7 +322,13 @@ def make_agent_run_runner(
         for name, payload in artifacts.items():
             out = run_dir / name
             _write_json(out, payload)
-            written.append(_artifact(out, run_dir, payload.get("summary") if isinstance(payload, dict) else None))
+            written.append(
+                _artifact(
+                    out,
+                    run_dir,
+                    payload.get("summary") if isinstance(payload, dict) else None,
+                )
+            )
 
         ledger = _ledger_payload(
             run_id,
@@ -321,14 +344,16 @@ def make_agent_run_runner(
         _write_json(ledger_path, ledger)
         written.append(_artifact(ledger_path, run_dir))
 
-        job.emit({
-            "type": "artifact",
-            "current": total_steps,
-            "total": total_steps,
-            "step": "artifacts",
-            "label": "Local artifacts written",
-            "artifacts": written,
-        })
+        job.emit(
+            {
+                "type": "artifact",
+                "current": total_steps,
+                "total": total_steps,
+                "step": "artifacts",
+                "label": "Local artifacts written",
+                "artifacts": written,
+            }
+        )
 
         return {
             "run_id": run_id,
@@ -427,9 +452,7 @@ def create_human_signoff(
         }
 
     provided = {
-        str(item).strip()
-        for item in (confirmations or [])
-        if str(item).strip()
+        str(item).strip() for item in (confirmations or []) if str(item).strip()
     }
     missing = sorted(_SIGNOFF_CONFIRMATIONS - provided)
     if missing:
@@ -498,7 +521,11 @@ def list_run_history(
     limit: int = 50,
 ) -> Dict[str, Any]:
     """List local agent run directories by reading whitelisted artifacts only."""
-    root = Path(project_root).expanduser() if project_root else Path.home() / "easyicu" / "projects"
+    root = (
+        Path(project_root).expanduser()
+        if project_root
+        else Path.home() / "easyicu" / "projects"
+    )
     root = root.resolve()
     if not root.exists() or not root.is_dir():
         return {
@@ -560,7 +587,11 @@ def read_run_artifact(project_dir: str, artifact_name: str) -> Dict[str, Any]:
             "message": str(exc),
         }
     if not isinstance(payload, dict):
-        return {"ok": False, "error": "artifact_json_not_object", "artifact": artifact_name}
+        return {
+            "ok": False,
+            "error": "artifact_json_not_object",
+            "artifact": artifact_name,
+        }
     privacy_scan = _scan_artifact_payloads({artifact_path.name: payload})
     return {
         "ok": True,
@@ -764,7 +795,10 @@ def _gate(
         {
             "id": "quality_audited",
             "label": "Module stay-id coverage audited",
-            "passed": all(q.get("coverage_basis") == "unique_stay_id_intersection" for q in quality),
+            "passed": all(
+                q.get("coverage_basis") == "unique_stay_id_intersection"
+                for q in quality
+            ),
             "modules": len(quality),
         },
         {
@@ -790,54 +824,78 @@ def _gate(
                 or provider.get("provider_gate") == "external_provider_ready"
             )
         )
-        checks.extend([
-            {
-                "id": "provider_opt_in",
-                "label": "LLM provider path resolved before invocation",
-                "passed": provider_ready,
-                "provider": (provider or {}).get("provider"),
-                "external": bool((provider or {}).get("external")),
-                "evidence": (
-                    "external_provider_adapter_after_opt_in"
-                    if bool((provider or {}).get("external"))
-                    else "offline_mock"
-                ),
-                "credentials_loaded": bool((provider or {}).get("credentials_loaded")),
-                "client_constructed": bool((provider or {}).get("client_constructed")),
-            },
-            {
-                "id": "strict_evidence_bound_claims",
-                "label": "All manuscript claims bind to known evidence",
-                "passed": bool(strict_audit and strict_audit.get("claims_passed")),
-                "claim_count": (strict_audit or {}).get("claim_count", 0),
-                "unbound_claims": (strict_audit or {}).get("unbound_claims", []),
-                "missing_evidence": (strict_audit or {}).get("missing_evidence", []),
-            },
-            {
-                "id": "strict_evidence_bound_sentences",
-                "label": "All manuscript sentences bind to known evidence",
-                "passed": bool(strict_audit and strict_audit.get("sentences_passed")),
-                "sentence_count": (strict_audit or {}).get("sentence_count", 0),
-                "unbound_sentences": (strict_audit or {}).get("unbound_sentences", []),
-                "missing_evidence": (strict_audit or {}).get("missing_evidence", []),
-            },
-            {
-                "id": "numeric_evidence_value_binding",
-                "label": "All numeric manuscript claims match artifact values",
-                "passed": bool(numeric_audit and numeric_audit.get("passed")),
-                "numeric_claim_count": (numeric_audit or {}).get("numeric_claim_count", 0),
-                "numeric_sentence_count": (numeric_audit or {}).get("numeric_sentence_count", 0),
-                "numeric_mention_count": (numeric_audit or {}).get("numeric_mention_count", 0),
-                "failure_count": (numeric_audit or {}).get("failure_count", 0),
-                "failures": (numeric_audit or {}).get("failures", []),
-                "tolerance_policy": (numeric_audit or {}).get("tolerance_policy", {}),
-            },
-        ])
-    checks.append({
-        "id": "human_signoff",
-        "label": "Human sign-off before manuscript claims",
-        "passed": False,
-    })
+        checks.extend(
+            [
+                {
+                    "id": "provider_opt_in",
+                    "label": "LLM provider path resolved before invocation",
+                    "passed": provider_ready,
+                    "provider": (provider or {}).get("provider"),
+                    "external": bool((provider or {}).get("external")),
+                    "evidence": (
+                        "external_provider_adapter_after_opt_in"
+                        if bool((provider or {}).get("external"))
+                        else "offline_mock"
+                    ),
+                    "credentials_loaded": bool(
+                        (provider or {}).get("credentials_loaded")
+                    ),
+                    "client_constructed": bool(
+                        (provider or {}).get("client_constructed")
+                    ),
+                },
+                {
+                    "id": "strict_evidence_bound_claims",
+                    "label": "All manuscript claims bind to known evidence",
+                    "passed": bool(strict_audit and strict_audit.get("claims_passed")),
+                    "claim_count": (strict_audit or {}).get("claim_count", 0),
+                    "unbound_claims": (strict_audit or {}).get("unbound_claims", []),
+                    "missing_evidence": (strict_audit or {}).get(
+                        "missing_evidence", []
+                    ),
+                },
+                {
+                    "id": "strict_evidence_bound_sentences",
+                    "label": "All manuscript sentences bind to known evidence",
+                    "passed": bool(
+                        strict_audit and strict_audit.get("sentences_passed")
+                    ),
+                    "sentence_count": (strict_audit or {}).get("sentence_count", 0),
+                    "unbound_sentences": (strict_audit or {}).get(
+                        "unbound_sentences", []
+                    ),
+                    "missing_evidence": (strict_audit or {}).get(
+                        "missing_evidence", []
+                    ),
+                },
+                {
+                    "id": "numeric_evidence_value_binding",
+                    "label": "All numeric manuscript claims match artifact values",
+                    "passed": bool(numeric_audit and numeric_audit.get("passed")),
+                    "numeric_claim_count": (numeric_audit or {}).get(
+                        "numeric_claim_count", 0
+                    ),
+                    "numeric_sentence_count": (numeric_audit or {}).get(
+                        "numeric_sentence_count", 0
+                    ),
+                    "numeric_mention_count": (numeric_audit or {}).get(
+                        "numeric_mention_count", 0
+                    ),
+                    "failure_count": (numeric_audit or {}).get("failure_count", 0),
+                    "failures": (numeric_audit or {}).get("failures", []),
+                    "tolerance_policy": (numeric_audit or {}).get(
+                        "tolerance_policy", {}
+                    ),
+                },
+            ]
+        )
+    checks.append(
+        {
+            "id": "human_signoff",
+            "label": "Human sign-off before manuscript claims",
+            "passed": False,
+        }
+    )
     hard_fail = any(not c["passed"] for c in checks if c["id"] != "human_signoff")
     return {
         "status": "blocked" if hard_fail else "analysis_only",
@@ -929,7 +987,8 @@ def _readiness_from_gate(
     ]
     human_check = next(
         (
-            check for check in checks
+            check
+            for check in checks
             if isinstance(check, dict) and check.get("id") == "human_signoff"
         ),
         None,
@@ -953,7 +1012,9 @@ def _readiness_from_gate(
         "gate_status": gate.get("status") if isinstance(gate, dict) else None,
         "gate_reason": gate.get("reason") if isinstance(gate, dict) else None,
         "checks_total": len(checks),
-        "checks_passed": sum(1 for check in checks if isinstance(check, dict) and check.get("passed")),
+        "checks_passed": sum(
+            1 for check in checks if isinstance(check, dict) and check.get("passed")
+        ),
         "non_human_failures": non_human_failures,
         "human_signoff_passed_in_gate": bool(human_check and human_check.get("passed")),
         "required_confirmations": sorted(_SIGNOFF_CONFIRMATIONS),
@@ -999,17 +1060,18 @@ def _signoff_integrity(
             missing.append(name)
             continue
         checked += 1
-        if (
-            str(item.get("sha256") or "") != str(current_item.get("sha256") or "")
-            or int(item.get("bytes") or -1) != int(current_item.get("bytes") or -2)
-        ):
-            tampered.append({
-                "name": name,
-                "signed_sha256": item.get("sha256"),
-                "current_sha256": current_item.get("sha256"),
-                "signed_bytes": item.get("bytes"),
-                "current_bytes": current_item.get("bytes"),
-            })
+        if str(item.get("sha256") or "") != str(
+            current_item.get("sha256") or ""
+        ) or int(item.get("bytes") or -1) != int(current_item.get("bytes") or -2):
+            tampered.append(
+                {
+                    "name": name,
+                    "signed_sha256": item.get("sha256"),
+                    "current_sha256": current_item.get("sha256"),
+                    "signed_bytes": item.get("bytes"),
+                    "current_bytes": current_item.get("bytes"),
+                }
+            )
     stale = bool(tampered or missing)
     return {
         "status": "stale" if stale else "verified",
@@ -1042,11 +1104,15 @@ def _history_row(review: Dict[str, Any], run_dir: Path) -> Dict[str, Any]:
         "artifact_count": len(artifacts),
         "artifact_names": [a.get("name") for a in artifacts],
         "updated_at_epoch": updated,
-        "updated_at": datetime.fromtimestamp(updated, timezone.utc).isoformat().replace("+00:00", "Z"),
+        "updated_at": datetime.fromtimestamp(updated, timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
     }
 
 
-def _public_review_payloads(payloads: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def _public_review_payloads(
+    payloads: Dict[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
     public: Dict[str, Dict[str, Any]] = {}
     if "run_context.json" in payloads:
         row = payloads["run_context.json"]
@@ -1102,7 +1168,9 @@ def _public_review_payloads(payloads: Dict[str, Dict[str, Any]]) -> Dict[str, Di
     return public
 
 
-def _public_single_artifact_payload(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _public_single_artifact_payload(
+    name: str, payload: Dict[str, Any]
+) -> Dict[str, Any]:
     public = _public_review_payloads({name: payload}).get(name)
     if public is not None:
         return public
@@ -1157,12 +1225,23 @@ def _evaluate_gate_with_ledger(
     provider: Dict[str, Any],
     strict_audit: Optional[Dict[str, Any]],
     numeric_audit: Optional[Dict[str, Any]],
-) -> tuple[Dict[str, Any], Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+) -> tuple[
+    Dict[str, Any], Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]
+]:
     if normalize_run_type(run_type) == "full":
         strict_audit = _strict_evidence_audit(artifacts)
         numeric_audit = numeric_evidence_audit.audit_numeric_evidence(artifacts)
     privacy_scan = _scan_artifact_payloads(artifacts)
-    gate = _gate(source, summary, quality, privacy_scan, run_type, provider, strict_audit, numeric_audit)
+    gate = _gate(
+        source,
+        summary,
+        quality,
+        privacy_scan,
+        run_type,
+        provider,
+        strict_audit,
+        numeric_audit,
+    )
     artifacts["quality_gate.json"]["gate"] = gate
     # Gate metadata is itself persisted inside quality_gate.json and mirrored
     # inside the ledger, so rescan a bounded fixed point before writing.
@@ -1181,8 +1260,19 @@ def _evaluate_gate_with_ledger(
             strict_audit,
             numeric_audit,
         )
-        privacy_scan = _scan_artifact_payloads({**artifacts, "evidence_ledger.json": ledger})
-        gate = _gate(source, summary, quality, privacy_scan, run_type, provider, strict_audit, numeric_audit)
+        privacy_scan = _scan_artifact_payloads(
+            {**artifacts, "evidence_ledger.json": ledger}
+        )
+        gate = _gate(
+            source,
+            summary,
+            quality,
+            privacy_scan,
+            run_type,
+            provider,
+            strict_audit,
+            numeric_audit,
+        )
         artifacts["quality_gate.json"]["gate"] = gate
     return gate, privacy_scan, strict_audit, numeric_audit
 
@@ -1279,32 +1369,42 @@ def _strict_evidence_audit(artifacts: Dict[str, Dict[str, Any]]) -> Dict[str, An
             continue
         evidence = [str(e) for e in row.get("evidence_ids") or []]
         if not evidence:
-            unbound_claims.append(str(row.get("claim_id") or row.get("text") or "claim"))
+            unbound_claims.append(
+                str(row.get("claim_id") or row.get("text") or "claim")
+            )
         for item in evidence:
             if item not in evidence_ids:
-                missing_evidence.append({
-                    "owner": str(row.get("claim_id") or "claim"),
-                    "evidence_id": item,
-                })
+                missing_evidence.append(
+                    {
+                        "owner": str(row.get("claim_id") or "claim"),
+                        "evidence_id": item,
+                    }
+                )
     for row in sentences:
         if not isinstance(row, dict):
             continue
         evidence = [str(e) for e in row.get("evidence_ids") or []]
         if not evidence:
-            unbound_sentences.append(str(row.get("sentence_id") or row.get("text") or "sentence"))
+            unbound_sentences.append(
+                str(row.get("sentence_id") or row.get("text") or "sentence")
+            )
         for item in evidence:
             if item not in evidence_ids:
-                missing_evidence.append({
-                    "owner": str(row.get("sentence_id") or "sentence"),
-                    "evidence_id": item,
-                })
+                missing_evidence.append(
+                    {
+                        "owner": str(row.get("sentence_id") or "sentence"),
+                        "evidence_id": item,
+                    }
+                )
     return {
         "mode": "strict",
         "evidence_ids": sorted(evidence_ids),
         "claim_count": len(claims),
         "sentence_count": len(sentences),
         "claims_passed": bool(claims) and not unbound_claims and not missing_evidence,
-        "sentences_passed": bool(sentences) and not unbound_sentences and not missing_evidence,
+        "sentences_passed": bool(sentences)
+        and not unbound_sentences
+        and not missing_evidence,
         "unbound_claims": unbound_claims,
         "unbound_sentences": unbound_sentences,
         "missing_evidence": missing_evidence,

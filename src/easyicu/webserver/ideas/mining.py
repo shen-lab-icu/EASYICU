@@ -7,6 +7,7 @@ metadata, and hashes are returned; full text is not persisted.  The web contract
 produces source evidence, idea ledger rows, data-dictionary feasibility,
 active-export pre-experiment summaries, and a frozen plan handoff draft.
 """
+
 from __future__ import annotations
 
 import base64
@@ -89,17 +90,21 @@ def ingest_pdf_source(body: Dict[str, Any]) -> Dict[str, Any]:
     filename = _clean(body.get("filename") or body.get("name") or "source.pdf", 240)
     encoded = str(body.get("content_base64") or body.get("base64") or "").strip()
     if not encoded:
-        raise IdeaMiningWebError({
-            "error": "pdf_file_required",
-            "reason": "Choose a local PDF file before ingesting a PDF source.",
-        })
+        raise IdeaMiningWebError(
+            {
+                "error": "pdf_file_required",
+                "reason": "Choose a local PDF file before ingesting a PDF source.",
+            }
+        )
     try:
         pdf_bytes = base64.b64decode(encoded, validate=True)
     except (binascii.Error, ValueError) as exc:
-        raise IdeaMiningWebError({
-            "error": "invalid_pdf_payload",
-            "reason": "The selected PDF could not be decoded by the local server.",
-        }) from exc
+        raise IdeaMiningWebError(
+            {
+                "error": "invalid_pdf_payload",
+                "reason": "The selected PDF could not be decoded by the local server.",
+            }
+        ) from exc
     record = _extract_pdf_bytes(pdf_bytes, filename=filename)
     suggestion = _suggestion_from_pdf_record(record)
     payload = {
@@ -132,21 +137,25 @@ def scan_literature_folder(body: Dict[str, Any]) -> Dict[str, Any]:
     """Scan a local literature folder for PDFs without persisting full text."""
     raw_path = str(body.get("path") or body.get("folder") or "").strip()
     if not raw_path:
-        raise IdeaMiningWebError({
-            "error": "literature_folder_required",
-            "reason": "Choose a local folder that contains downloaded papers.",
-        })
+        raise IdeaMiningWebError(
+            {
+                "error": "literature_folder_required",
+                "reason": "Choose a local folder that contains downloaded papers.",
+            }
+        )
     folder = Path(raw_path).expanduser()
     try:
         folder = folder.resolve()
     except OSError:
         pass
     if not folder.exists() or not folder.is_dir():
-        raise IdeaMiningWebError({
-            "error": "literature_folder_not_found",
-            "reason": "The selected literature folder does not exist on this machine.",
-            "path": str(folder),
-        })
+        raise IdeaMiningWebError(
+            {
+                "error": "literature_folder_not_found",
+                "reason": "The selected literature folder does not exist on this machine.",
+                "path": str(folder),
+            }
+        )
     pdfs: List[Path] = []
     try:
         for item in folder.rglob("*.pdf"):
@@ -157,11 +166,13 @@ def scan_literature_folder(body: Dict[str, Any]) -> Dict[str, Any]:
             if item.is_file():
                 pdfs.append(item)
     except PermissionError as exc:
-        raise IdeaMiningWebError({
-            "error": "literature_folder_permission_denied",
-            "reason": "EasyICU could not read this local literature folder.",
-            "path": str(folder),
-        }) from exc
+        raise IdeaMiningWebError(
+            {
+                "error": "literature_folder_permission_denied",
+                "reason": "EasyICU could not read this local literature folder.",
+                "path": str(folder),
+            }
+        ) from exc
     documents: List[Dict[str, Any]] = []
     representative: Optional[Dict[str, Any]] = None
     for pdf in sorted(pdfs, key=lambda p: p.name.lower()):
@@ -169,7 +180,9 @@ def scan_literature_folder(body: Dict[str, Any]) -> Dict[str, Any]:
         documents.append(meta)
         if representative is None and meta.get("excerpt"):
             representative = meta
-    suggestion = _suggestion_from_pdf_record(representative or documents[0]) if documents else {}
+    suggestion = (
+        _suggestion_from_pdf_record(representative or documents[0]) if documents else {}
+    )
     payload = {
         "ok": True,
         "mode": "local_literature_folder",
@@ -184,7 +197,9 @@ def scan_literature_folder(body: Dict[str, Any]) -> Dict[str, Any]:
         "representative": representative,
         "suggested_payload": suggestion,
         "source_adapter": {
-            "status": "local_literature_folder_scanned" if documents else "no_pdf_found",
+            "status": (
+                "local_literature_folder_scanned" if documents else "no_pdf_found"
+            ),
             "source_type": "literature_folder",
             "network_calls": 0,
             "external_llm_calls": 0,
@@ -268,7 +283,9 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
     }
     suggestion = {
         "topic": _clean(body.get("topic") or source.get("title") or "", 600),
-        "excerpt": _clean(body.get("excerpt") or source.get("evidence_quote") or "", _MAX_SOURCE_QUOTE),
+        "excerpt": _clean(
+            body.get("excerpt") or source.get("evidence_quote") or "", _MAX_SOURCE_QUOTE
+        ),
         "title": source.get("title"),
         "journal": source.get("journal"),
         "year": source.get("year"),
@@ -278,15 +295,19 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
     }
     if source_type == "url" and source.get("url") and not allow_network:
         adapter["status"] = "blocked_network_opt_in_required"
-        adapter["reason"] = "URL fetch is disabled until the user explicitly enables network resolution for this source."
+        adapter["reason"] = (
+            "URL fetch is disabled until the user explicitly enables network resolution for this source."
+        )
     elif source_type == "url" and source.get("url") and allow_network:
         fetched = _fetch_url_metadata(str(source["url"]))
-        adapter.update({
-            "status": fetched.get("status"),
-            "network_calls": fetched.get("network_calls", 0),
-            "fetch_performed": fetched.get("network_calls", 0) > 0,
-            "reason": fetched.get("reason"),
-        })
+        adapter.update(
+            {
+                "status": fetched.get("status"),
+                "network_calls": fetched.get("network_calls", 0),
+                "fetch_performed": fetched.get("network_calls", 0) > 0,
+                "reason": fetched.get("reason"),
+            }
+        )
         if fetched.get("title") and not suggestion.get("title"):
             suggestion["title"] = fetched["title"]
         if fetched.get("description") and not suggestion.get("excerpt"):
@@ -295,16 +316,26 @@ def resolve_source(body: Dict[str, Any]) -> Dict[str, Any]:
             suggestion["doi"] = fetched["doi"]
     elif source_type == "pdf" and body.get("source_file_sha256"):
         adapter["status"] = "local_pdf_excerpt_ready"
-        adapter["reason"] = "The selected local PDF has been parsed into a bounded excerpt and hash."
+        adapter["reason"] = (
+            "The selected local PDF has been parsed into a bounded excerpt and hash."
+        )
     elif source_type == "pdf" and not suggestion.get("excerpt"):
         adapter["status"] = "blocked_pdf_excerpt_required"
         adapter["reason"] = "Choose a local PDF file or paste a bounded excerpt first."
     elif source_type == "literature_folder":
-        adapter["status"] = "local_literature_folder_ready" if body.get("literature_pdf_count") else "local_literature_folder_empty"
-        adapter["reason"] = "The selected local literature folder is represented by PDF metadata and a bounded excerpt."
+        adapter["status"] = (
+            "local_literature_folder_ready"
+            if body.get("literature_pdf_count")
+            else "local_literature_folder_empty"
+        )
+        adapter["reason"] = (
+            "The selected local literature folder is represented by PDF metadata and a bounded excerpt."
+        )
     elif source_type == "frontier":
         adapter["status"] = "search_plan_ready"
-        adapter["reason"] = "The topic is ready for an opt-in prior-art/literature search stage."
+        adapter["reason"] = (
+            "The topic is ready for an opt-in prior-art/literature search stage."
+        )
     payload = {
         "ok": True,
         "resolved_source": source,
@@ -331,15 +362,20 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
     EasyICU dictionary and the active export.  Without opt-in it returns the
     exact query bundle and a blocked status, not seeded fake articles.
     """
-    topic = _clean(body.get("topic") or body.get("research_question") or body.get("title") or "", 220)
+    topic = _clean(
+        body.get("topic") or body.get("research_question") or body.get("title") or "",
+        220,
+    )
     journal = _clean(body.get("journal") or "", 120)
     allow_network = bool(body.get("allow_network"))
     limit = max(1, min(int(body.get("limit") or 8), 20))
     if not topic:
-        raise IdeaMiningWebError({
-            "error": "frontier_topic_required",
-            "reason": "Describe the ICU topic, journal scope, review theme, DOI, or article clue before literature discovery.",
-        })
+        raise IdeaMiningWebError(
+            {
+                "error": "frontier_topic_required",
+                "reason": "Describe the ICU topic, journal scope, review theme, DOI, or article clue before literature discovery.",
+            }
+        )
     queries = _discovery_queries(topic, journal, body)
     if not allow_network:
         out = {
@@ -394,47 +430,65 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
     source_candidates: List[Dict[str, Any]] = []
     idea_candidates: List[Dict[str, Any]] = []
     for article in articles:
-        source = _source_record({
-            "source_type": "pubmed",
-            "topic": topic,
-            "title": article.get("title"),
-            "journal": article.get("journal"),
-            "year": article.get("year"),
-            "doi": article.get("doi"),
-            "pmid": article.get("pmid"),
-            "url": f"https://pubmed.ncbi.nlm.nih.gov/{article.get('pmid')}/" if article.get("pmid") else "",
-            "excerpt": article.get("evidence_sentence") or article.get("abstract_excerpt") or article.get("title"),
-            "abstract": article.get("abstract_excerpt") or article.get("evidence_sentence") or "",
-        })
-        text = "\n".join([
-            topic,
-            str(article.get("title") or ""),
-            str(article.get("abstract_excerpt") or ""),
-            str(article.get("evidence_sentence") or ""),
-        ])
+        source = _source_record(
+            {
+                "source_type": "pubmed",
+                "topic": topic,
+                "title": article.get("title"),
+                "journal": article.get("journal"),
+                "year": article.get("year"),
+                "doi": article.get("doi"),
+                "pmid": article.get("pmid"),
+                "url": (
+                    f"https://pubmed.ncbi.nlm.nih.gov/{article.get('pmid')}/"
+                    if article.get("pmid")
+                    else ""
+                ),
+                "excerpt": article.get("evidence_sentence")
+                or article.get("abstract_excerpt")
+                or article.get("title"),
+                "abstract": article.get("abstract_excerpt")
+                or article.get("evidence_sentence")
+                or "",
+            }
+        )
+        text = "\n".join(
+            [
+                topic,
+                str(article.get("title") or ""),
+                str(article.get("abstract_excerpt") or ""),
+                str(article.get("evidence_sentence") or ""),
+            ]
+        )
         hits = _match_concepts(text)
         idea = _idea_from_source(source, text, hits, export_index)
         source["discovery_rank"] = len(source_candidates) + 1
         source["pubmed_metadata_only"] = True
         source_candidates.append(source)
-        idea_candidates.append({
-            "rank": len(idea_candidates) + 1,
-            "source_id": source.get("source_id"),
-            "idea": idea,
-            "source": source,
-            "suggested_payload": {
-                "source_type": "pubmed",
-                "topic": idea.get("idea_title") or topic,
-                "title": source.get("title"),
-                "journal": source.get("journal"),
-                "year": source.get("year"),
-                "doi": source.get("doi"),
-                "pmid": source.get("pmid"),
-                "url": source.get("url"),
-                "excerpt": source.get("evidence_quote"),
-            },
-        })
-    status = "searched" if idea_candidates else ("search_failed" if errors else "searched_no_hits")
+        idea_candidates.append(
+            {
+                "rank": len(idea_candidates) + 1,
+                "source_id": source.get("source_id"),
+                "idea": idea,
+                "source": source,
+                "suggested_payload": {
+                    "source_type": "pubmed",
+                    "topic": idea.get("idea_title") or topic,
+                    "title": source.get("title"),
+                    "journal": source.get("journal"),
+                    "year": source.get("year"),
+                    "doi": source.get("doi"),
+                    "pmid": source.get("pmid"),
+                    "url": source.get("url"),
+                    "excerpt": source.get("evidence_quote"),
+                },
+            }
+        )
+    status = (
+        "searched"
+        if idea_candidates
+        else ("search_failed" if errors else "searched_no_hits")
+    )
     out = {
         "ok": True,
         "mode": "frontier_literature_discovery",
@@ -444,7 +498,9 @@ def discover_literature(body: Dict[str, Any]) -> Dict[str, Any]:
         "network_calls": network_calls,
         "source_candidates": source_candidates,
         "idea_candidates": idea_candidates,
-        "suggested_payload": (idea_candidates[0].get("suggested_payload") if idea_candidates else {}),
+        "suggested_payload": (
+            idea_candidates[0].get("suggested_payload") if idea_candidates else {}
+        ),
         "errors": errors,
         "reason": "PubMed metadata/abstract discovery only; no full text, external LLM, or patient rows were used.",
         "privacy": {
@@ -476,7 +532,13 @@ def check_prior_art(body: Dict[str, Any]) -> Dict[str, Any]:
         source = _source_record(body)
         idea = {
             "idea_id": _slug(body.get("idea_id") or source.get("title") or "idea"),
-            "idea_title": _clean(body.get("idea_title") or body.get("topic") or source.get("title") or "ICU idea", 180),
+            "idea_title": _clean(
+                body.get("idea_title")
+                or body.get("topic")
+                or source.get("title")
+                or "ICU idea",
+                180,
+            ),
             "mapped_concepts": [],
         }
     queries = _prior_art_queries(source, str(idea.get("idea_title") or "ICU idea"))
@@ -525,7 +587,10 @@ def create_handoff(body: Dict[str, Any]) -> Dict[str, Any]:
     if not payload:
         raise IdeaMiningWebError({"error": "idea_run_not_found", "run_id": run_id})
     ideas = payload.get("idea_ledger") or []
-    idea = next((row for row in ideas if row.get("idea_id") == idea_id), ideas[0] if ideas else None)
+    idea = next(
+        (row for row in ideas if row.get("idea_id") == idea_id),
+        ideas[0] if ideas else None,
+    )
     if not idea:
         raise IdeaMiningWebError({"error": "idea_not_found", "idea_id": idea_id})
     edits = str(body.get("plan_edits") or "").strip()
@@ -659,12 +724,14 @@ def get_run(body: Dict[str, Any] | None = None) -> Dict[str, Any]:
     if project:
         out["agent_project"] = project
     out["privacy"] = dict(out.get("privacy") or {})
-    out["privacy"].update({
-        "source_text_stored": False,
-        "patient_rows_returned": False,
-        "direct_identifiers_returned": False,
-        "external_llm_calls": 0,
-    })
+    out["privacy"].update(
+        {
+            "source_text_stored": False,
+            "patient_rows_returned": False,
+            "direct_identifiers_returned": False,
+            "external_llm_calls": 0,
+        }
+    )
     _assert_no_row_payload(out)
     return out
 
@@ -678,11 +745,18 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
     doi = _clean(body.get("doi") or "", 180)
     pmid = _clean(body.get("pmid") or "", 80)
     source_type = _clean(body.get("source_type") or "manual", 40)
-    excerpt = _clean(body.get("excerpt") or body.get("source_quote") or "", _MAX_SOURCE_QUOTE)
-    source_text = _clean(body.get("excerpt") or body.get("abstract") or body.get("notes") or topic, 4000)
-    citation_key = _slug("|".join([title, str(year or ""), journal, doi, pmid]) or topic or "source")
+    excerpt = _clean(
+        body.get("excerpt") or body.get("source_quote") or "", _MAX_SOURCE_QUOTE
+    )
+    source_text = _clean(
+        body.get("excerpt") or body.get("abstract") or body.get("notes") or topic, 4000
+    )
+    citation_key = _slug(
+        "|".join([title, str(year or ""), journal, doi, pmid]) or topic or "source"
+    )
     record = {
-        "source_id": "source_" + _sha256("|".join([title, journal, str(year), doi, pmid, url]))[:12],
+        "source_id": "source_"
+        + _sha256("|".join([title, journal, str(year), doi, pmid, url]))[:12],
         "citation_key": citation_key,
         "source_type": source_type,
         "title": title,
@@ -702,7 +776,9 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
     if body.get("source_file_sha256"):
         record["source_file_sha256"] = _clean(body.get("source_file_sha256"), 80)
     if body.get("literature_folder"):
-        record["literature_folder"] = _norm_path(str(body.get("literature_folder") or ""))
+        record["literature_folder"] = _norm_path(
+            str(body.get("literature_folder") or "")
+        )
     if body.get("literature_pdf_count") is not None:
         try:
             record["literature_pdf_count"] = int(body.get("literature_pdf_count") or 0)
@@ -714,33 +790,48 @@ def _source_record(body: Dict[str, Any]) -> Dict[str, Any]:
 def _source_text(body: Dict[str, Any]) -> str:
     return "\n".join(
         str(body.get(k) or "")
-        for k in ("topic", "title", "abstract", "excerpt", "notes", "url", "journal", "source_file_name")
+        for k in (
+            "topic",
+            "title",
+            "abstract",
+            "excerpt",
+            "notes",
+            "url",
+            "journal",
+            "source_file_name",
+        )
     ).strip()
 
 
 def _extract_pdf_bytes(pdf_bytes: bytes, *, filename: str) -> Dict[str, Any]:
     if len(pdf_bytes) > _MAX_PDF_BYTES:
-        raise IdeaMiningWebError({
-            "error": "pdf_file_too_large",
-            "reason": f"Selected PDF is larger than the local bounded parser limit ({_MAX_PDF_BYTES // (1024 * 1024)} MB).",
-            "filename": filename,
-        })
+        raise IdeaMiningWebError(
+            {
+                "error": "pdf_file_too_large",
+                "reason": f"Selected PDF is larger than the local bounded parser limit ({_MAX_PDF_BYTES // (1024 * 1024)} MB).",
+                "filename": filename,
+            }
+        )
     try:
         import fitz  # type: ignore
     except Exception as exc:  # pragma: no cover - depends on local optional dependency
-        raise IdeaMiningWebError({
-            "error": "pdf_parser_unavailable",
-            "reason": "Local PDF parsing requires PyMuPDF (fitz), which is not available in this environment.",
-        }) from exc
+        raise IdeaMiningWebError(
+            {
+                "error": "pdf_parser_unavailable",
+                "reason": "Local PDF parsing requires PyMuPDF (fitz), which is not available in this environment.",
+            }
+        ) from exc
     digest = hashlib.sha256(pdf_bytes).hexdigest()
     try:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     except Exception as exc:
-        raise IdeaMiningWebError({
-            "error": "pdf_parse_failed",
-            "reason": "The selected file could not be parsed as a PDF.",
-            "filename": filename,
-        }) from exc
+        raise IdeaMiningWebError(
+            {
+                "error": "pdf_parse_failed",
+                "reason": "The selected file could not be parsed as a PDF.",
+                "filename": filename,
+            }
+        ) from exc
     try:
         metadata = dict(doc.metadata or {})
         pages = int(getattr(doc, "page_count", 0) or 0)
@@ -811,7 +902,9 @@ def _pdf_file_record(path: Path, *, extract_excerpt: bool) -> Dict[str, Any]:
 def _suggestion_from_pdf_record(record: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if not record:
         return {}
-    title = _clean(record.get("title") or Path(str(record.get("filename") or "paper")).stem, 220)
+    title = _clean(
+        record.get("title") or Path(str(record.get("filename") or "paper")).stem, 220
+    )
     excerpt = _clean(record.get("excerpt") or "", _MAX_PDF_EXCERPT)
     return {
         "source_type": "pdf",
@@ -839,13 +932,15 @@ def _match_concepts(text: str) -> List[Dict[str, Any]]:
         matched = [alias for alias in aliases if alias and _alias_hit(haystack, alias)]
         if not matched:
             continue
-        hits.append({
-            "concept_id": concept_id,
-            "label": en,
-            "unit": str(entry[2] if len(entry) > 2 else ""),
-            "matched_alias": sorted(matched, key=len, reverse=True)[0],
-            "module": _concept_module(concept_id),
-        })
+        hits.append(
+            {
+                "concept_id": concept_id,
+                "label": en,
+                "unit": str(entry[2] if len(entry) > 2 else ""),
+                "matched_alias": sorted(matched, key=len, reverse=True)[0],
+                "module": _concept_module(concept_id),
+            }
+        )
     hits.sort(key=lambda row: (row["concept_id"] in {"death", "los_icu"}, row["label"]))
     return hits[:24]
 
@@ -870,12 +965,20 @@ def _idea_from_source(
     concept_rows = [_concept_feasibility(row, export_index) for row in concepts]
     overall = _overall_feasibility(concept_rows)
     novelty = _prior_art(source, title)
-    go_no_go = "recommend" if overall["tier"] == "executable" else ("hold" if overall["tier"].startswith("T1") else "db-cannot-do")
+    go_no_go = (
+        "recommend"
+        if overall["tier"] == "executable"
+        else ("hold" if overall["tier"].startswith("T1") else "db-cannot-do")
+    )
     idea_payload = {
-        "idea_id": "idea_" + _sha256(json.dumps([source.get("source_id"), title], ensure_ascii=False))[:12],
+        "idea_id": "idea_"
+        + _sha256(json.dumps([source.get("source_id"), title], ensure_ascii=False))[
+            :12
+        ],
         "idea_title": title,
         "population": "adult ICU cohort",
-        "exposure_or_predictor": _concept_set_label(concepts) or (predictor["label"] if predictor else _clean(text, 90)),
+        "exposure_or_predictor": _concept_set_label(concepts)
+        or (predictor["label"] if predictor else _clean(text, 90)),
         "outcome": outcome["label"] if outcome else "In-hospital mortality",
         "analysis_family": _analysis_family(text),
         "source_id": source.get("source_id"),
@@ -916,7 +1019,12 @@ def _pre_experiment(
     ]
     if not concepts:
         concepts = list((export_index.get("concept_to_file") or {}).keys())[:6]
-    stats = _feature_stats(Path(str(desc.get("path") or source.get("path"))), concepts, export_index, entity_ids)
+    stats = _feature_stats(
+        Path(str(desc.get("path") or source.get("path"))),
+        concepts,
+        export_index,
+        entity_ids,
+    )
     required = [
         row.get("concept_id")
         for row in idea.get("mapped_concepts") or []
@@ -924,17 +1032,27 @@ def _pre_experiment(
     ]
     present = {row.get("concept_id") for row in stats}
     missing_required = [cid for cid in required if cid not in present]
-    status = "ready" if stats and not missing_required else ("partial" if stats else "blocked")
+    status = (
+        "ready"
+        if stats and not missing_required
+        else ("partial" if stats else "blocked")
+    )
     return {
         "status": status,
         "payload_scope": "aggregate_pre_experiment_no_row_payload",
         "source": {
             "label": source.get("label") or desc.get("label") or "Local export",
-            "path_hash": _sha256(str(source.get("path") or desc.get("path") or ""))[:16],
+            "path_hash": _sha256(str(source.get("path") or desc.get("path") or ""))[
+                :16
+            ],
             "database": desc.get("database"),
         },
         "cohort": {
-            "entities": len(entity_ids) if entity_ids else (desc.get("summary") or {}).get("stays"),
+            "entities": (
+                len(entity_ids)
+                if entity_ids
+                else (desc.get("summary") or {}).get("stays")
+            ),
             "modules": (desc.get("summary") or {}).get("modules"),
             "total_rows": (desc.get("summary") or {}).get("total_rows"),
         },
@@ -969,7 +1087,15 @@ def _handoff_plan(
         "variables": [
             {
                 "role": row.get("role")
-                or ("predictor" if i == 0 else ("outcome" if row.get("concept_id") == "death" else "covariate_or_feature")),
+                or (
+                    "predictor"
+                    if i == 0
+                    else (
+                        "outcome"
+                        if row.get("concept_id") == "death"
+                        else "covariate_or_feature"
+                    )
+                ),
                 "concept_id": row.get("concept_id"),
                 "label": row.get("label"),
                 "feasibility_tier": row.get("tier"),
@@ -1007,7 +1133,8 @@ def _active_export() -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
         (
             s
             for s in registry.get("sources") or []
-            if isinstance(s, dict) and _norm_path(str(s.get("path") or "")) == active_norm
+            if isinstance(s, dict)
+            and _norm_path(str(s.get("path") or "")) == active_norm
         ),
         None,
     )
@@ -1019,7 +1146,9 @@ def _active_export() -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
     return source, desc
 
 
-def _export_index(export: Optional[Tuple[Dict[str, Any], Dict[str, Any]]]) -> Dict[str, Any]:
+def _export_index(
+    export: Optional[Tuple[Dict[str, Any], Dict[str, Any]]],
+) -> Dict[str, Any]:
     if not export:
         return {"concept_to_file": {}, "entity_ids": set()}
     _source, desc = export
@@ -1078,24 +1207,28 @@ def _feature_stats(
         records = int(len(non_null))
         nums = dataio._numeric_values(non_null[concept_id])[:10000]
         coverage = round(observed_entities / denominator * 100, 1)
-        out.append({
-            "concept_id": concept_id,
-            "label": _concept_label(concept_id),
-            "module": str(item.get("module") or ""),
-            "records": records,
-            "observed_entities": observed_entities,
-            "coverage_pct": coverage,
-            "missing_pct": round(100 - coverage, 1),
-            "time_indexed": any(col in frame.columns for col in _TIME_COLUMNS),
-            "numeric_summary": _numeric_summary(nums),
-            "status": "ready" if records else "missing",
-        })
+        out.append(
+            {
+                "concept_id": concept_id,
+                "label": _concept_label(concept_id),
+                "module": str(item.get("module") or ""),
+                "records": records,
+                "observed_entities": observed_entities,
+                "coverage_pct": coverage,
+                "missing_pct": round(100 - coverage, 1),
+                "time_indexed": any(col in frame.columns for col in _TIME_COLUMNS),
+                "numeric_summary": _numeric_summary(nums),
+                "status": "ready" if records else "missing",
+            }
+        )
         if len(out) >= _MAX_FEATURE_STATS:
             break
     return out
 
 
-def _concept_feasibility(row: Dict[str, Any], export_index: Dict[str, Any]) -> Dict[str, Any]:
+def _concept_feasibility(
+    row: Dict[str, Any], export_index: Dict[str, Any]
+) -> Dict[str, Any]:
     concept_id = row.get("concept_id")
     in_export = concept_id in (export_index.get("concept_to_file") or {})
     if in_export:
@@ -1138,7 +1271,11 @@ def _overall_feasibility(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
             "label": "Needs re-extraction or extra modules",
             "reason": "At least one mapped concept is known to EasyICU but absent from the active export.",
         }
-    return {"tier": "T3_not_in_db", "label": "Not supported", "reason": "No executable dictionary mapping."}
+    return {
+        "tier": "T3_not_in_db",
+        "label": "Not supported",
+        "reason": "No executable dictionary mapping.",
+    }
 
 
 def _prior_art(source: Dict[str, Any], title: str) -> Dict[str, Any]:
@@ -1167,11 +1304,13 @@ def _blocked_features(body: Dict[str, Any]) -> List[Dict[str, Any]]:
         },
     ]
     if source_type in {"url", "pdf", "frontier"}:
-        rows.append({
-            "id": f"{source_type}_adapter",
-            "status": "planned",
-            "reason": "The UI captures metadata now; the live adapter will attach to this same ledger contract.",
-        })
+        rows.append(
+            {
+                "id": f"{source_type}_adapter",
+                "status": "planned",
+                "reason": "The UI captures metadata now; the live adapter will attach to this same ledger contract.",
+            }
+        )
     return rows
 
 
@@ -1193,7 +1332,9 @@ def _record_history(payload: Dict[str, Any]) -> None:
     }
     history = [row] + [item for item in history if item.get("run_id") != row["run_id"]]
     _HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _HISTORY_PATH.write_text(json.dumps(history[:100], indent=2, ensure_ascii=False), encoding="utf-8")
+    _HISTORY_PATH.write_text(
+        json.dumps(history[:100], indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 def _write_run(payload: Dict[str, Any]) -> Path:
@@ -1206,7 +1347,9 @@ def _write_run(payload: Dict[str, Any]) -> Path:
         "handoff_plan.json": payload.get("handoff_plan"),
         "idea_mining_run.json": {k: v for k, v in payload.items() if k != "run_dir"},
     }.items():
-        (run_dir / name).write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
+        (run_dir / name).write_text(
+            json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
     return run_dir
 
 
@@ -1244,10 +1387,14 @@ def _project_for_run(run_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _selected_idea(payload: Dict[str, Any], idea_id: str = "") -> Optional[Dict[str, Any]]:
+def _selected_idea(
+    payload: Dict[str, Any], idea_id: str = ""
+) -> Optional[Dict[str, Any]]:
     ideas = payload.get("idea_ledger") or []
     if idea_id:
-        match = next((row for row in ideas if str(row.get("idea_id") or "") == idea_id), None)
+        match = next(
+            (row for row in ideas if str(row.get("idea_id") or "") == idea_id), None
+        )
         if match:
             return match
     return ideas[0] if ideas else None
@@ -1298,8 +1445,12 @@ def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
     agent_seed = handoff.get("agent_seed") or {}
     base_id = _slug(agent_seed.get("study_id") or idea.get("idea_title") or "idea")
     root_id = f"idea-{base_id}" if not str(base_id).startswith("idea-") else base_id
-    run_suffix = _sha256(str(handoff.get("run_id") or handoff.get("created_at") or root_id))[:8]
-    study_id = root_id if root_id.endswith(f"-{run_suffix}") else f"{root_id}-{run_suffix}"
+    run_suffix = _sha256(
+        str(handoff.get("run_id") or handoff.get("created_at") or root_id)
+    )[:8]
+    study_id = (
+        root_id if root_id.endswith(f"-{run_suffix}") else f"{root_id}-{run_suffix}"
+    )
     source = (handoff.get("source_evidence") or [{}])[0]
     pre = handoff.get("pre_experiment") or {}
     concepts = [
@@ -1317,14 +1468,17 @@ def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
         "schema_version": "easyicu.agent_project_seed/1",
         "created_at": _now(),
         "study_id": study_id,
-        "title": idea.get("idea_title") or handoff.get("candidate_topic") or "Idea-derived study",
+        "title": idea.get("idea_title")
+        or handoff.get("candidate_topic")
+        or "Idea-derived study",
         "mode": "analysis",
         "status": "seeded_from_idea",
         "stage": 0,
         "source_run_id": handoff.get("run_id"),
         "source_idea_id": handoff.get("idea_id"),
         "question": plan.get("research_question") or agent_seed.get("question"),
-        "cohort": (plan.get("cohort") or {}).get("default") or "adult ICU cohort from active EasyICU export",
+        "cohort": (plan.get("cohort") or {}).get("default")
+        or "adult ICU cohort from active EasyICU export",
         "source": {
             "title": source.get("title"),
             "year": source.get("year"),
@@ -1335,7 +1489,8 @@ def _agent_project_seed(handoff: Dict[str, Any]) -> Dict[str, Any]:
             "source_text_hash": source.get("source_text_sha256"),
         },
         "concepts": concepts,
-        "pre_experiment_summary": plan.get("pre_experiment_summary") or {
+        "pre_experiment_summary": plan.get("pre_experiment_summary")
+        or {
             "status": pre.get("status"),
             "entities": (pre.get("cohort") or {}).get("entities"),
             "feature_count": len(pre.get("feature_statistics") or []),
@@ -1381,10 +1536,12 @@ def _discovery_queries(topic: str, journal: str, body: Dict[str, Any]) -> List[s
     if year_from and year_to:
         year_filter = f' AND ("{year_from}"[Date - Publication] : "{year_to}"[Date - Publication])'
     elif year_from:
-        year_filter = f' AND ("{year_from}"[Date - Publication] : "3000"[Date - Publication])'
+        year_filter = (
+            f' AND ("{year_from}"[Date - Publication] : "3000"[Date - Publication])'
+        )
     journal_filter = f' AND "{journal}"[Journal]' if journal else ""
     base = f'({topic}) AND (ICU OR "critical care" OR "intensive care")'
-    review = f'({topic}) AND (review[Publication Type] OR editorial[Publication Type] OR perspective OR commentary)'
+    review = f"({topic}) AND (review[Publication Type] OR editorial[Publication Type] OR perspective OR commentary)"
     db = f'({topic}) AND (MIMIC OR eICU OR "public database" OR "critical care database")'
     return [
         base + journal_filter + year_filter,
@@ -1424,29 +1581,40 @@ def _pubmed_article_records(ids: List[str]) -> List[Dict[str, Any]]:
         title = _clean(_node_text(article.find("./ArticleTitle")), 260)
         journal_node = article.find("./Journal")
         journal = _clean(
-            _node_text(journal_node.find("./Title") if journal_node is not None else None)
-            or _node_text(journal_node.find("./ISOAbbreviation") if journal_node is not None else None),
+            _node_text(
+                journal_node.find("./Title") if journal_node is not None else None
+            )
+            or _node_text(
+                journal_node.find("./ISOAbbreviation")
+                if journal_node is not None
+                else None
+            ),
             160,
         )
         year = _pubmed_year(article)
         doi = _pubmed_article_id(article_node, "doi")
-        abstract = _clean(" ".join(
-            _node_text(node)
-            for node in article.findall("./Abstract/AbstractText")
-            if _node_text(node)
-        ), 3000)
+        abstract = _clean(
+            " ".join(
+                _node_text(node)
+                for node in article.findall("./Abstract/AbstractText")
+                if _node_text(node)
+            ),
+            3000,
+        )
         evidence = _best_evidence_sentence(abstract or title)
-        rows.append({
-            "pmid": pmid,
-            "title": title,
-            "journal": journal,
-            "year": year,
-            "doi": doi,
-            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else None,
-            "abstract_excerpt": _clean(abstract, _MAX_PDF_EXCERPT),
-            "evidence_sentence": evidence,
-            "full_text_stored": False,
-        })
+        rows.append(
+            {
+                "pmid": pmid,
+                "title": title,
+                "journal": journal,
+                "year": year,
+                "doi": doi,
+                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else None,
+                "abstract_excerpt": _clean(abstract, _MAX_PDF_EXCERPT),
+                "evidence_sentence": evidence,
+                "full_text_stored": False,
+            }
+        )
     order = {str(pmid): i for i, pmid in enumerate(ids)}
     rows.sort(key=lambda row: order.get(str(row.get("pmid") or ""), 9999))
     return rows
@@ -1482,9 +1650,19 @@ def _pubmed_year(article: Any) -> Optional[int]:
 def _best_evidence_sentence(text: str) -> str:
     sentences = re.split(r"(?<=[.!?。！？])\s+", _clean(text, 2500))
     keywords = (
-        "mortality", "death", "survival", "sepsis", "septic", "shock",
-        "vasopressor", "fluid", "lactate", "aki", "ventilation",
-        "ICU", "critical care",
+        "mortality",
+        "death",
+        "survival",
+        "sepsis",
+        "septic",
+        "shock",
+        "vasopressor",
+        "fluid",
+        "lactate",
+        "aki",
+        "ventilation",
+        "ICU",
+        "critical care",
     )
     for sentence in sentences:
         if any(k.lower() in sentence.lower() for k in keywords):
@@ -1494,9 +1672,15 @@ def _best_evidence_sentence(text: str) -> str:
 
 def _fetch_url_metadata(url: str) -> Dict[str, Any]:
     if not url.lower().startswith(("http://", "https://")):
-        return {"status": "invalid_url", "network_calls": 0, "reason": "URL must start with http:// or https://."}
+        return {
+            "status": "invalid_url",
+            "network_calls": 0,
+            "reason": "URL must start with http:// or https://.",
+        }
     try:
-        req = request.Request(url, headers={"User-Agent": "EasyICU-local-metadata-resolver/1.0"})
+        req = request.Request(
+            url, headers={"User-Agent": "EasyICU-local-metadata-resolver/1.0"}
+        )
         with request.urlopen(req, timeout=_NETWORK_TIMEOUT_SEC) as resp:
             raw = resp.read(_MAX_FETCH_BYTES)
         text = raw.decode("utf-8", errors="replace")
@@ -1506,7 +1690,11 @@ def _fetch_url_metadata(url: str) -> Dict[str, Any]:
     description = _html_meta(text, "description") or _html_meta(text, "og:description")
     doi = _doi_from_text(text)
     return {
-        "status": "metadata_fetched" if title or description or doi else "metadata_fetch_empty",
+        "status": (
+            "metadata_fetched"
+            if title or description or doi
+            else "metadata_fetch_empty"
+        ),
         "network_calls": 1,
         "title": title,
         "description": _clean(description, _MAX_SOURCE_QUOTE),
@@ -1567,17 +1755,28 @@ def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
         seen.add(pmid)
         deduped.append(row)
     public_hits = [
-        row for row in deduped
-        if re.search(r"\b(MIMIC|eICU|HiRID|AUMC|SICdb|public database)\b", json.dumps(row, ensure_ascii=False), re.I)
+        row
+        for row in deduped
+        if re.search(
+            r"\b(MIMIC|eICU|HiRID|AUMC|SICdb|public database)\b",
+            json.dumps(row, ensure_ascii=False),
+            re.I,
+        )
     ]
     return {
-        "status": "searched" if deduped else ("search_failed" if errors else "searched_no_hits"),
+        "status": (
+            "searched"
+            if deduped
+            else ("search_failed" if errors else "searched_no_hits")
+        ),
         "search_performed": True,
         "network_calls": calls,
         "queries_to_run": queries,
         "result_count": len(deduped),
         "results": deduped[:12],
-        "public_database_used_by_prior_work": "possible" if public_hits else "not_detected_in_metadata",
+        "public_database_used_by_prior_work": (
+            "possible" if public_hits else "not_detected_in_metadata"
+        ),
         "direct_same_topic_hits": deduped[:5],
         "errors": errors,
         "reason": "PubMed metadata search only; full text and external LLM review were not used.",
@@ -1585,12 +1784,14 @@ def _pubmed_prior_art(queries: List[str]) -> Dict[str, Any]:
 
 
 def _pubmed_esearch(query: str, limit: int = 5) -> List[str]:
-    params = parse.urlencode({
-        "db": "pubmed",
-        "term": query,
-        "retmode": "json",
-        "retmax": max(1, min(limit, 20)),
-    })
+    params = parse.urlencode(
+        {
+            "db": "pubmed",
+            "term": query,
+            "retmode": "json",
+            "retmax": max(1, min(limit, 20)),
+        }
+    )
     url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?" + params
     with request.urlopen(url, timeout=_NETWORK_TIMEOUT_SEC) as resp:
         data = json.loads(resp.read(_MAX_FETCH_BYTES).decode("utf-8", errors="replace"))
@@ -1610,18 +1811,23 @@ def _pubmed_esummary(ids: List[str]) -> List[Dict[str, Any]]:
             continue
         journal = item.get("fulljournalname") or item.get("source")
         year = _year(str(item.get("pubdate") or "")[:4])
-        rows.append({
-            "pmid": str(pmid),
-            "title": _clean(item.get("title") or "", 260),
-            "journal": _clean(journal or "", 160),
-            "year": year,
-            "pubdate": _clean(item.get("pubdate") or "", 80),
-            "articleids": [
-                {"type": _clean(x.get("idtype") or "", 20), "value": _clean(x.get("value") or "", 120)}
-                for x in item.get("articleids") or []
-                if isinstance(x, dict) and x.get("value")
-            ][:4],
-        })
+        rows.append(
+            {
+                "pmid": str(pmid),
+                "title": _clean(item.get("title") or "", 260),
+                "journal": _clean(journal or "", 160),
+                "year": year,
+                "pubdate": _clean(item.get("pubdate") or "", 80),
+                "articleids": [
+                    {
+                        "type": _clean(x.get("idtype") or "", 20),
+                        "value": _clean(x.get("value") or "", 120),
+                    }
+                    for x in item.get("articleids") or []
+                    if isinstance(x, dict) and x.get("value")
+                ][:4],
+            }
+        )
     return rows
 
 
@@ -1633,7 +1839,9 @@ def _assert_no_row_payload(payload: Dict[str, Any]) -> None:
     text = json.dumps(payload, ensure_ascii=False)
     markers = [marker for marker in _DIRECT_ID_MARKERS if marker in text]
     if markers:
-        raise IdeaMiningWebError({"error": "row_level_payload_marker", "markers": sorted(markers)})
+        raise IdeaMiningWebError(
+            {"error": "row_level_payload_marker", "markers": sorted(markers)}
+        )
 
 
 def _pick_outcome(text: str, hits: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -1646,10 +1854,15 @@ def _pick_outcome(text: str, hits: List[Dict[str, Any]]) -> Optional[Dict[str, A
     return _concept_hit("death")
 
 
-def _pick_predictor(hits: List[Dict[str, Any]], outcome: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _pick_predictor(
+    hits: List[Dict[str, Any]], outcome: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
     outcome_id = outcome.get("concept_id") if outcome else None
     for row in hits:
-        if row.get("concept_id") != outcome_id and row.get("concept_id") not in {"death", "los_icu"}:
+        if row.get("concept_id") != outcome_id and row.get("concept_id") not in {
+            "death",
+            "los_icu",
+        }:
             return row
     return None
 
@@ -1677,13 +1890,29 @@ def _select_idea_concepts(
             return
         selected.append({**row, "role": role})
 
-    if any(tok in low for tok in ("vasopressor", "norepinephrine", "noradrenaline", "pressor")):
+    if any(
+        tok in low
+        for tok in ("vasopressor", "norepinephrine", "noradrenaline", "pressor")
+    ):
         for concept_id in _INTERVENTION_PRIORITY:
             if concept_id in by_id:
                 add(concept_id, "exposure")
                 break
-    if any(tok in low for tok in ("fluid", "fluids", "intravenous volume", "fluid-sparing", "resuscitation")):
-        for concept_id in ("total_input_ml", "fluid_balance_cumulative", "fluid_balance"):
+    if any(
+        tok in low
+        for tok in (
+            "fluid",
+            "fluids",
+            "intravenous volume",
+            "fluid-sparing",
+            "resuscitation",
+        )
+    ):
+        for concept_id in (
+            "total_input_ml",
+            "fluid_balance_cumulative",
+            "fluid_balance",
+        ):
             if concept_id in by_id:
                 add(concept_id, "exposure")
                 break
@@ -1717,7 +1946,10 @@ def _dedupe_concepts(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def _primary_predictor(concepts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     for role in ("exposure", "predictor", "covariate_or_subgroup", "feature"):
         for row in concepts:
-            if row.get("role") == role and row.get("concept_id") not in {"death", "los_icu"}:
+            if row.get("role") == role and row.get("concept_id") not in {
+                "death",
+                "los_icu",
+            }:
                 return row
     return None
 
@@ -1754,7 +1986,12 @@ def _idea_title(
     concepts: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     concept_ids = {row.get("concept_id") for row in concepts or []}
-    if concept_ids & {"vaso_ind", "norepi_equiv", "norepi_rate", "norepi_dur"} and concept_ids & {
+    if concept_ids & {
+        "vaso_ind",
+        "norepi_equiv",
+        "norepi_rate",
+        "norepi_dur",
+    } and concept_ids & {
         "total_input_ml",
         "fluid_balance",
         "fluid_balance_cumulative",
@@ -1791,14 +2028,20 @@ def _rationale(
 ) -> str:
     parts = []
     if predictor:
-        parts.append(f"Source text maps the candidate predictor to `{predictor['concept_id']}`.")
+        parts.append(
+            f"Source text maps the candidate predictor to `{predictor['concept_id']}`."
+        )
     exposure_ids = [
         str(row.get("concept_id"))
         for row in concepts or []
         if row.get("role") == "exposure"
     ]
     if len(exposure_ids) > 1:
-        parts.append("The source describes a strategy, so the ledger preserves multiple exposure concepts: " + ", ".join(exposure_ids) + ".")
+        parts.append(
+            "The source describes a strategy, so the ledger preserves multiple exposure concepts: "
+            + ", ".join(exposure_ids)
+            + "."
+        )
     if outcome:
         parts.append(f"Outcome can be represented by `{outcome['concept_id']}`.")
     parts.append("This is a pre-experiment triage result, not a manuscript finding.")
@@ -1818,8 +2061,14 @@ def _go_reason(go: str, feasibility: Dict[str, Any], prior_art: Dict[str, Any]) 
     if go == "recommend":
         return "Mapped concepts are present in the active export; prior-art search still needs explicit review before reporting novelty."
     if go == "hold":
-        return feasibility.get("reason") or "Some concepts need re-extraction before analysis."
-    return feasibility.get("reason") or "The idea is not executable on the current database."
+        return (
+            feasibility.get("reason")
+            or "Some concepts need re-extraction before analysis."
+        )
+    return (
+        feasibility.get("reason")
+        or "The idea is not executable on the current database."
+    )
 
 
 def _next_action(go: str, feasibility: Dict[str, Any]) -> str:
@@ -1832,13 +2081,19 @@ def _next_action(go: str, feasibility: Dict[str, Any]) -> str:
 
 def _pre_experiment_interpretation(stats: List[Dict[str, Any]]) -> List[str]:
     if not stats:
-        return ["No mapped feature is present in the active export; run extraction with the needed modules first."]
+        return [
+            "No mapped feature is present in the active export; run extraction with the needed modules first."
+        ]
     low = [row for row in stats if float(row.get("coverage_pct") or 0) < 50]
     notes = [f"{len(stats)} mapped feature(s) were summarized from the active export."]
     if low:
-        notes.append(f"{len(low)} feature(s) have <50% entity coverage and should be treated as feasibility risks.")
+        notes.append(
+            f"{len(low)} feature(s) have <50% entity coverage and should be treated as feasibility risks."
+        )
     else:
-        notes.append("Mapped features have at least 50% entity coverage in this pre-experiment summary.")
+        notes.append(
+            "Mapped features have at least 50% entity coverage in this pre-experiment summary."
+        )
     return notes
 
 
@@ -1860,37 +2115,49 @@ def _numeric_summary(values: List[float]) -> Dict[str, Any]:
 def _extra_aliases(concept_id: str, label: str) -> set[str]:
     aliases = {concept_id.replace("_", " "), label.lower()}
     if concept_id in {"vaso_ind", "norepi_equiv", "norepi_rate", "norepi_dur"}:
-        aliases.update({
-            "vasopressor",
-            "vasopressors",
-            "vasopressor use",
-            "early vasopressors",
-            "pressor",
-            "pressors",
-            "norepinephrine",
-            "noradrenaline",
-        })
+        aliases.update(
+            {
+                "vasopressor",
+                "vasopressors",
+                "vasopressor use",
+                "early vasopressors",
+                "pressor",
+                "pressors",
+                "norepinephrine",
+                "noradrenaline",
+            }
+        )
     if concept_id in {"total_input_ml", "fluid_balance", "fluid_balance_cumulative"}:
-        aliases.update({
-            "fluid",
-            "fluids",
-            "iv fluid",
-            "intravenous fluid",
-            "intravenous fluids",
-            "fluid volume",
-            "fluid exposure",
-            "fluid-sparing",
-            "restricted fluid",
-            "fluid resuscitation",
-        })
-    if concept_id in {"map", "sbp", "shock_index", "modified_shock_index", "diastolic_shock_index"}:
+        aliases.update(
+            {
+                "fluid",
+                "fluids",
+                "iv fluid",
+                "intravenous fluid",
+                "intravenous fluids",
+                "fluid volume",
+                "fluid exposure",
+                "fluid-sparing",
+                "restricted fluid",
+                "fluid resuscitation",
+            }
+        )
+    if concept_id in {
+        "map",
+        "sbp",
+        "shock_index",
+        "modified_shock_index",
+        "diastolic_shock_index",
+    }:
         aliases.update({"blood pressure", "hypotension", "shock"})
     if concept_id == "lact":
         aliases.update({"lactate", "乳酸"})
     if concept_id == "death":
         aliases.update({"mortality", "death", "survival", "死亡", "病死率"})
     if concept_id == "sep3_sofa2":
-        aliases.update({"sepsis", "sepsis-3", "septic shock", "suspected infection", "脓毒症"})
+        aliases.update(
+            {"sepsis", "sepsis-3", "septic shock", "suspected infection", "脓毒症"}
+        )
     if concept_id == "aki":
         aliases.update({"aki", "acute kidney injury", "急性肾损伤"})
     return aliases
@@ -1902,7 +2169,10 @@ def _alias_hit(haystack: str, alias: str) -> bool:
         return False
     if re.search(r"[\u4e00-\u9fff]", needle):
         return needle in haystack
-    return re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", haystack) is not None
+    return (
+        re.search(rf"(?<![a-z0-9]){re.escape(needle)}(?![a-z0-9])", haystack)
+        is not None
+    )
 
 
 def _norm_text(text: str) -> str:
@@ -1935,7 +2205,11 @@ def _sha256(text: str) -> str:
 def _run_id(source: Dict[str, Any], idea: Dict[str, Any]) -> str:
     stamp = time.strftime("%Y%m%d_%H%M%S")
     nonce = f"{time.time_ns() % 1_000_000_000:09d}"
-    digest = _sha256(json.dumps([source.get("source_id"), idea.get("idea_title")], ensure_ascii=False))[:8]
+    digest = _sha256(
+        json.dumps(
+            [source.get("source_id"), idea.get("idea_title")], ensure_ascii=False
+        )
+    )[:8]
     return f"idea_{stamp}_{nonce}_{digest}"
 
 
@@ -1944,7 +2218,9 @@ def _history_key(run_id: Any, created_at: Any) -> str:
 
 
 def _slug(value: Any, fallback: str = "item") -> str:
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip().lower()).strip("-._")
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "").strip().lower()).strip(
+        "-._"
+    )
     return slug[:96] or fallback
 
 

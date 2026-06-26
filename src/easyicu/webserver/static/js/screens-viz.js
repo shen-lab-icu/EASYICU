@@ -352,12 +352,10 @@
       'Outcome': t('Outcome', '结局'),
       'ICU LOS': t('ICU LOS', 'ICU 住院天数'),
       'Patient Summary': t('Patient Summary', '患者摘要'),
-      'Patient signal atlas': t('Patient signal atlas', '患者信号图谱'),
       'Available data': t('Available data', '可用数据'),
       'Case review': t('Case review', '病例审阅'),
-      'Review surface': t('Review surface', '审阅面板'),
+      'Clinical review': t('Clinical review', '临床审阅'),
       'Pseudonymous drilldown': t('Pseudonymous drilldown', '去标识患者审阅'),
-      'No signals in this category for the selected entity.': t('No signals in this category for the selected entity.', '所选实体在这个模块中没有可显示信号。'),
     };
     return map[String(value || '')] || value;
   }
@@ -372,29 +370,6 @@
     if (tone === 'warn') return 'color-mix(in srgb, var(--warn-soft) 58%, var(--surface))';
     if (tone === 'ok') return 'color-mix(in srgb, var(--ok-soft) 48%, var(--surface))';
     return 'var(--surface)';
-  }
-  function patientDeltaBadge(delta) {
-    const n = Number(delta);
-    if (!Number.isFinite(n)) return '';
-    const sign = n > 0 ? '+' : '';
-    const tone = Math.abs(n) < 0.01 ? 'neutral' : (n > 0 ? 'warn' : 'ok');
-    return `<span class="pill ${tone}" style="height:20px;font-size:10px;">Δ ${sign}${fmtNum(n, 1)}</span>`;
-  }
-  function patientFeatureTile(card, index = 0) {
-    const label = patientSignalLabel(card);
-    const unit = card && card.unit ? ` ${card.unit}` : '';
-    const color = patientToneColor(card && card.tone, index);
-    const current = card && card.current != null ? `${fmtNum(card.current, 1)}${unit}` : '—';
-    const values = (card && card.values) || [];
-    return `
-      <div style="min-width:0;border:1px solid var(--hair);border-radius:8px;background:${patientToneSoft(card && card.tone)};padding:9px 10px;">
-        <div class="row" style="justify-content:space-between;gap:8px;align-items:center;">
-          <span class="mono" style="font-size:10.5px;color:var(--ink-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(label)}</span>
-          ${patientDeltaBadge(card && card.delta)}
-        </div>
-        <div style="font-size:18px;font-weight:600;line-height:1.1;margin-top:6px;">${esc(current)}</div>
-        <div style="height:24px;margin-top:8px;">${values.length ? spark(values, 150, 24, color) : '<div style="height:1px;background:var(--hair);margin-top:12px;"></div>'}</div>
-      </div>`;
   }
   function patientOverviewCaseReview(selected, summaryCards, sections, drill) {
     const totalSignals = (sections || []).reduce((acc, section) => acc + Number(section.available_count || 0), 0);
@@ -426,39 +401,74 @@
         </div>
       </div>`;
   }
-  function patientOverviewModulePanel(section, index = 0) {
-    const cards = (section.cards || []).slice(0, 8);
+  function patientDeltaNote(delta) {
+    const n = Number(delta);
+    if (!Number.isFinite(n)) return t('latest', '最新');
+    if (Math.abs(n) < 1e-9) return t('stable', '稳定');
+    return `Δ ${n > 0 ? '+' : ''}${fmtNum(n, 1)}`;
+  }
+
+  function patientCategoryCard(card, index = 0) {
+    const unit = card && card.unit ? ` ${esc(card.unit)}` : '';
+    const value = card && card.current != null ? `${fmtNum(card.current, 1)}${unit}` : '—';
     return `
-      <div class="mini-chart" data-patient-overview-module="${esc(section.id || '')}">
-        <div class="mc-head">
-          <div>
-            <div style="font-weight:600;font-size:13px;">${esc(patientOverviewText(section.title || section.id))}</div>
-            <div class="mono" style="font-size:10.5px;color:var(--ink-4);">${fmtInt(section.available_count || cards.length)} ${t('signals for selected entity', '个所选实体信号')}</div>
-          </div>
-          <span class="pill ${cards.length ? 'ok' : 'warn'}" style="height:22px;">${cards.length ? t('available', '可用') : t('empty', '为空')}</span>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:8px;margin-top:10px;">
-          ${cards.length ? cards.map((card, i) => patientFeatureTile(card, index + i)).join('') : `<div style="font-size:12px;color:var(--ink-4);">${patientOverviewText('No signals in this category for the selected entity.')}</div>`}
-        </div>
+      <div class="pcc" style="border-left:3px solid ${patientToneColor(card && card.tone, index)};background:${patientToneSoft(card && card.tone)};">
+        <span class="pcc-lbl">${esc(patientSignalLabel(card))}</span>
+        <b class="pcc-val">${value}</b>
+        <em class="pcc-delta">${patientDeltaNote(card && card.delta)}</em>
       </div>`;
   }
-  function patientOverviewAtlas(sections) {
+
+  function patientConceptChart(card) {
+    const vals = ((card && card.values) || []).map(Number).filter(Number.isFinite);
+    if (vals.length < 2) return '';
+    const thrVals = ((card && card.thresholds) || []).map(th => Number(th.value)).filter(Number.isFinite);
+    const w = 232, h = 96, l = 6, rp = 6, tp = 8, bp = 8;
+    const plotW = w - l - rp, plotH = h - tp - bp;
+    const lo = Math.min(...vals, ...thrVals), hi = Math.max(...vals, ...thrVals);
+    const rng = (hi - lo) || 1;
+    const xOf = i => l + (vals.length <= 1 ? 0 : (i / (vals.length - 1)) * plotW);
+    const yOf = v => tp + (1 - (v - lo) / rng) * plotH;
+    const color = patientToneColor(card && card.tone, 0);
+    const pts = vals.map((v, i) => `${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(' ');
+    const thrLines = ((card && card.thresholds) || []).map(th => {
+      const v = Number(th.value);
+      if (!Number.isFinite(v)) return '';
+      const y = yOf(v).toFixed(1);
+      return `<line x1="${l}" x2="${w - rp}" y1="${y}" y2="${y}" class="pcs-thr-line"></line><text x="${w - rp}" y="${(Number(y) - 2).toFixed(1)}" text-anchor="end" class="pcs-thr">${esc(th.label || '')}</text>`;
+    }).join('');
+    return `
+      <div class="pcs-cell">
+        <div class="pcs-head"><span>${esc(patientSignalLabel(card))}</span><span class="mono">${fmtNum(card.current, 1)}${card.unit ? ` ${esc(card.unit)}` : ''}</span></div>
+        <svg class="pcs-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(patientSignalLabel(card))} ${t('trend', '趋势')}">
+          <rect x="${l}" y="${tp}" width="${plotW}" height="${plotH}" rx="3" fill="#fbfaf7" stroke="#ece7df"></rect>
+          ${thrLines}
+          <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"></polyline>
+        </svg>
+      </div>`;
+  }
+
+  function patientCategoryReview(sections) {
     const usable = (sections || []).filter(section => section && (section.cards || []).length);
     if (!usable.length) {
       return `<div class="empty mt-16"><div class="glyph">${icon('grid', 22)}</div><div class="t">${t('No module signals available', '暂无模块信号')}</div><div class="d">${t('The active export has no bounded patient-level values for this entity.', '当前导出没有这个实体的有界患者层面数值。')}</div></div>`;
     }
     return `
-      <div class="mt-18" data-patient-overview-atlas>
+      <div class="mt-18" data-patient-category-review>
         <div class="sec-stack">
-          <div class="lbl">${patientOverviewText('Review surface')}</div>
-          <h2 style="font-size:17px;margin:2px 0 0;">${patientOverviewText('Patient signal atlas')}</h2>
+          <div class="lbl">${patientOverviewText('Clinical review')}</div>
+          <h2 style="font-size:17px;margin:2px 0 0;">${t('Patient category dashboard', '患者分类看板')}</h2>
         </div>
-        <div style="font-size:12px;color:var(--ink-3);margin-top:4px;">${t('Modules are grouped as compact feature cells with latest value, delta, and a small bounded trajectory strip.', '模块以紧凑特征单元分组展示：最新值、变化量和有界小轨迹条放在同一审阅面板里。')}</div>
-        <div class="grid cards-2 mt-12">
-          ${usable.map((section, i) => patientOverviewModulePanel(section, i)).join('')}
-        </div>
+        <div style="font-size:12px;color:var(--ink-3);margin-top:4px;">${t('Concepts are grouped by clinical category with the latest value, trend delta, threshold tone, and a per-concept trajectory with reference lines.', '概念按临床分类分组，显示最新值、趋势变化、阈值着色，以及每个概念带参考线的轨迹图。')}</div>
+        ${usable.map(section => `
+          <div class="pcat" data-patient-category="${esc(section.id || '')}">
+            <div class="pcat-head"><span class="pcat-title">${esc(patientOverviewText(section.title || section.id))}</span><span class="mono pcat-meta">${fmtInt(section.available_count || (section.cards || []).length)} ${t('signals', '个信号')}</span></div>
+            <div class="pcc-grid">${(section.cards || []).map((card, i) => patientCategoryCard(card, i)).join('')}</div>
+            <div class="pcs-grid">${(section.cards || []).slice(0, 6).map(patientConceptChart).filter(Boolean).join('')}</div>
+          </div>`).join('')}
       </div>`;
   }
+
   function patientOverviewModuleLedger(drill) {
     const modules = Array.isArray(drill && drill.module_profiles) && drill.module_profiles.length
       ? drill.module_profiles
@@ -1750,6 +1760,44 @@
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">Demo / seeded example values for UI preview — not a real run output.</p>`;
   }
 
+  function patientVitalTimeline(lanes, entityLabel) {
+    const pvtColors = ['#0f766e', '#2563eb', '#8b5cf6', '#b45309', '#be123c', '#0369a1'];
+    const ready = (lanes || []).filter(l => (l.signals || []).some(s => Array.isArray(s.values) && s.values.filter(v => Number.isFinite(Number(v))).length > 1));
+    if (!ready.length) return '';
+    const panel = (lane) => {
+      const sigs = (lane.signals || []).filter(s => Array.isArray(s.values) && s.values.filter(v => Number.isFinite(Number(v))).length > 1).slice(0, 6);
+      if (!sigs.length) return '';
+      const w = 720, h = 132, l = 8, rp = 8, tp = 10, bp = 12;
+      const maxLen = Math.max(...sigs.map(s => s.values.length));
+      const plotW = w - l - rp, plotH = h - tp - bp;
+      const xOf = i => l + (maxLen <= 1 ? 0 : (i / (maxLen - 1)) * plotW);
+      const lineOf = (s) => {
+        const nums = s.values.map(Number);
+        const finite = nums.filter(Number.isFinite);
+        const mn = Math.min(...finite), mx = Math.max(...finite), rng = (mx - mn) || 1;
+        return nums.map((num, i) => Number.isFinite(num) ? `${xOf(i).toFixed(1)},${(tp + (1 - (num - mn) / rng) * plotH).toFixed(1)}` : '').filter(Boolean).join(' ');
+      };
+      return `
+        <div class="pvt-lane">
+          <div class="pvt-head"><span class="pvt-name">${esc(lane.label || lane.lane)}</span><span class="pvt-meta mono">${fmtInt(sigs.length)} ${t('signals', '个信号')}</span></div>
+          <svg class="pvt-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(lane.label || lane.lane)} ${t('timeline', '时间线')}">
+            <rect x="${l}" y="${tp}" width="${plotW}" height="${plotH}" rx="4" fill="#fbfbf8" stroke="#e5e2da"></rect>
+            ${[0.25, 0.5, 0.75].map(f => `<line x1="${l}" x2="${w - rp}" y1="${(tp + f * plotH).toFixed(1)}" y2="${(tp + f * plotH).toFixed(1)}" class="km-grid faint"></line>`).join('')}
+            ${sigs.map((s, i) => `<polyline points="${lineOf(s)}" fill="none" stroke="${pvtColors[i % pvtColors.length]}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"></polyline>`).join('')}
+          </svg>
+          <div class="km-legend pvt-legend">
+            ${sigs.map((s, i) => `<span><i style="background:${pvtColors[i % pvtColors.length]};"></i>${esc(patientSignalLabel(s))}${s.unit ? ` <em class="mono">${esc(s.unit)}</em>` : ''} · ${fmtNum(s.current, 1)}</span>`).join('')}
+          </div>
+        </div>`;
+    };
+    const panels = ready.map(panel).filter(Boolean).join('');
+    if (!panels) return '';
+    return `
+      <div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Vital-sign timeline', '生命体征时间线')}</div>
+      <div class="pvt-wrap">${panels}</div>
+      <p style="font-size:11px;color:var(--ink-4);margin-top:6px;">${t('Each lane overlays its bounded signals on a shared time index; every signal is min–max scaled to its own range.', '每个泳道在共享时间索引上叠加其有界信号；每条信号按自身范围 min–max 归一化。')} ${esc(entityLabel || '')}</p>`;
+  }
+
   function ptSeries() {
     const drill = patientDrilldown();
     const review = drill ? (drill.trajectory_review || {}) : {};
@@ -1775,6 +1823,7 @@
       <div class="row wrap gap-6 mt-16">
         ${(review.modes || []).map(mode => `<span class="chip ${mode.status === 'ready' ? 'solid' : ''}">${esc(patientSeriesLabel(mode.label || mode.id))} · ${esc(mode.status || 'available')}</span>`).join('')}
       </div>
+      ${patientVitalTimeline(readyLanes, (drill.selected || {}).label)}
       <div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Time-window × feature matrices', '时间窗口 × 特征矩阵')}</div>
       ${readyLanes.map(lane => patientFeatureMatrix(lane, drill)).join('')}
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${signalScope} ${fmtInt((drill.privacy || {}).max_points_per_signal)} ${t('points per feature for browser review; lane membership follows the EasyICU clinical concept catalog.', '个点/特征用于浏览器审阅；分组来自 EasyICU 临床概念目录。')}</p>`;
@@ -1827,7 +1876,7 @@
         ${entities.map(item => `<button type="button" class="chip ${item.ref === selected.ref ? 'solid' : ''}" data-patient-entity="${esc(item.ref)}" style="${item.ref === selected.ref ? 'border-color:var(--ink);color:var(--ink);' : ''}">${esc(item.label || item.ref)}</button>`).join('')}
       </div>
       ${patientOverviewCaseReview(selected, summaryCards, sections, drill)}
-      ${patientOverviewAtlas(sections)}
+      ${patientCategoryReview(sections)}
       ${patientOverviewModuleLedger(drill)}
       <div class="note info mt-16">
         <div class="ico">${icon('shield', 16)}</div>
@@ -3034,6 +3083,17 @@
       ` : `<div class="note warn mt-12"><div class="ico">${icon('alert', 14)}</div><div class="body"><div class="t">${cohortText('Paired reclassification blocked')}</div><div class="d">${esc(cohortReason(reclass.reason || 'Paired SOFA-1/SOFA-2 reclassification is not available for this export.'))}</div></div></div>`}`;
   }
 
+  function cohortDistBars(bins) {
+    const arr = (bins || []).filter(Boolean);
+    if (!arr.length) return `<div class="muted" style="font-size:11px;">${t('No binned values in this export.', '此导出无可分箱数值。')}</div>`;
+    const maxN = Math.max(1, ...arr.map(b => b.count || 0));
+    return arr.map(b => `<div class="qrow"><span>${esc(b.label)}</span><div class="qbar"><span style="width:${((b.count || 0) / maxN * 100).toFixed(0)}%"></span></div><span class="qv">${fmtInt(b.count)}</span></div>`).join('');
+  }
+
+  function cohortCompositionBars(rows) {
+    return (rows || []).map(([label, pct]) => `<div class="qrow"><span>${cohortText(label)}</span><div class="qbar"><span style="width:${pct == null ? 0 : Math.max(0, Math.min(100, pct)).toFixed(0)}%"></span></div><span class="qv">${fmtPct(pct)}</span></div>`).join('');
+  }
+
   function cohortSnapshotBody() {
     const review = cohortReview();
     if (review && review.summary) {
@@ -3047,6 +3107,31 @@
         <div class="stat"><div class="label">${cohortText('Sepsis-3 +')}</div><div class="val">${fmtPct(s.sepsis_pct)}</div></div>
         <div class="stat"><div class="label">${cohortText('Median SOFA-2')}</div><div class="val">${fmtNum(s.sofa2 && s.sofa2.median, 1)}</div></div>
         <div class="stat accent"><div class="label">${cohortText('Mortality')}</div><div class="val">${fmtPct(s.mortality_pct)}</div></div>
+      </div>
+      <div class="cols-2 mt-16">
+        <div class="card pad">
+          <div class="eyebrow" style="margin-bottom:8px;">${t('Age distribution', '年龄分布')}</div>
+          ${cohortDistBars(s.age && s.age.bins)}
+        </div>
+        <div class="card pad">
+          <div class="eyebrow" style="margin-bottom:8px;">${t('SOFA-2 severity', 'SOFA-2 严重度')}</div>
+          ${cohortDistBars(s.sofa2 && s.sofa2.bins)}
+        </div>
+      </div>
+      <div class="cols-2 mt-16">
+        <div class="card pad">
+          <div class="eyebrow" style="margin-bottom:8px;">${t('ICU LOS distribution', 'ICU 住院时长分布')}</div>
+          ${cohortDistBars(s.los_icu_days && s.los_icu_days.bins)}
+        </div>
+        <div class="card pad">
+          <div class="eyebrow" style="margin-bottom:8px;">${t('Cohort composition', '队列构成')}</div>
+          ${cohortCompositionBars([
+            ['Female', s.sex && s.sex.female_pct],
+            ['Mortality', s.mortality_pct],
+            ['Sepsis-3 +', s.sepsis_pct],
+          ])}
+          ${(s.admission && s.admission.bins && s.admission.bins.length) ? `<div class="eyebrow" style="margin:12px 0 8px;">${t('Admission type', '入院类型')}</div>${cohortDistBars(s.admission.bins)}` : ''}
+        </div>
       </div>
       <div class="cols-2 mt-16">
         <div class="card pad">
@@ -3633,6 +3718,7 @@
       'Module': '模块',
       'Shared': '共享',
       'Missing': '缺失',
+      'Present': '存在',
       'Yes': '是',
       'No': '否',
       'Database': '数据库',
@@ -3880,6 +3966,14 @@
         <button class="btn primary" data-run ${canRun ? '' : 'aria-disabled="true"'}>${icon('play', 13)} ${crossTerm('Load real density benchmark')}</button>
       </div>`;
   }
+  function crossAvailCell(v) {
+    if (!v || !v.present) return `<td class="num xdb-avail-cell missing">${crossTerm('Missing')}</td>`;
+    const pct = (typeof v.coverage_pct === 'number') ? v.coverage_pct : null;
+    if (pct == null) return `<td class="num xdb-avail-cell present">${crossTerm('Present')}</td>`;
+    const bg = pct >= 80 ? 'rgba(15,118,110,0.18)' : pct >= 50 ? 'rgba(180,83,9,0.16)' : 'rgba(190,18,60,0.14)';
+    return `<td class="num xdb-avail-cell" style="background:${bg};">${fmtPct(pct)}</td>`;
+  }
+
   function crossRealLoaded(xdb) {
     const sources = xdb.sources || [];
     const labels = sources.map(s => s.label || s.database || 'local');
@@ -3948,7 +4042,7 @@
         <table class="eu-table">
           <thead><tr><th>${crossTerm('Module')}</th>${labels.map(c => `<th class="num">${esc(c)}</th>`).join('')}<th class="num">${crossTerm('Shared')}</th></tr></thead>
           <tbody>
-            ${availability.map(row => `<tr><td class="key">${esc(catalogModuleLabel(row.module))}</td>${(row.values || []).map(v => `<td class="num">${v.present ? fmtPct(v.coverage_pct) : crossTerm('Missing')}</td>`).join('')}<td class="num">${row.shared ? crossTerm('Yes') : crossTerm('No')}</td></tr>`).join('')}
+            ${availability.map(row => `<tr><td class="key">${esc(catalogModuleLabel(row.module))}</td>${(row.values || []).map(v => crossAvailCell(v)).join('')}<td class="num">${row.shared ? crossTerm('Yes') : crossTerm('No')}</td></tr>`).join('')}
           </tbody>
         </table>
       </div>

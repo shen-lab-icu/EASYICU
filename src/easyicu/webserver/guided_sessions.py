@@ -6,6 +6,7 @@ started, while preserving the same local-first boundary as the rest of the
 native WebApp: no patient rows, no table previews, no external calls, and no
 manuscript unlock state.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -81,7 +82,12 @@ _GOAL_META = {
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _read_raw() -> Dict[str, Any]:
@@ -234,10 +240,14 @@ def _upsert_session(session: Dict[str, Any]) -> None:
 
 
 def _has_guided_project_marker(path: Path) -> bool:
-    return (path / "guided_draft.json").is_file() or (path / "guided_copilot_session.json").is_file()
+    return (path / "guided_draft.json").is_file() or (
+        path / "guided_copilot_session.json"
+    ).is_file()
 
 
-def _safe_project_dir(value: Any, *, allow_marked_external: bool = False) -> Path | None:
+def _safe_project_dir(
+    value: Any, *, allow_marked_external: bool = False
+) -> Path | None:
     text = str(value or "").strip()
     if not text:
         return None
@@ -248,7 +258,11 @@ def _safe_project_dir(value: Any, *, allow_marked_external: bool = False) -> Pat
         return None
     if candidate == root or root in candidate.parents:
         return candidate
-    if allow_marked_external and candidate.is_dir() and _has_guided_project_marker(candidate):
+    if (
+        allow_marked_external
+        and candidate.is_dir()
+        and _has_guided_project_marker(candidate)
+    ):
         return candidate
     return None
 
@@ -264,7 +278,11 @@ def _safe_project_parent_dir(value: Any) -> Path | None:
         return None
     if candidate == root:
         return candidate
-    if candidate == candidate.parent or not candidate.exists() or not candidate.is_dir():
+    if (
+        candidate == candidate.parent
+        or not candidate.exists()
+        or not candidate.is_dir()
+    ):
         return None
     return candidate
 
@@ -300,11 +318,15 @@ def _refresh_privacy(session: Dict[str, Any]) -> None:
 
 
 def _persist_session(session: Dict[str, Any]) -> None:
-    project_dir = _safe_project_dir(session.get("project_dir"), allow_marked_external=True) or _project_dir_for_session(str(session["id"]))
+    project_dir = _safe_project_dir(
+        session.get("project_dir"), allow_marked_external=True
+    ) or _project_dir_for_session(str(session["id"]))
     session["project_dir"] = str(project_dir)
     project_dir.mkdir(parents=True, exist_ok=True)
     _refresh_privacy(session)
-    _session_file(project_dir).write_text(json.dumps(session, indent=2, ensure_ascii=False), encoding="utf-8")
+    _session_file(project_dir).write_text(
+        json.dumps(session, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 def _goal_cards() -> List[Dict[str, str]]:
@@ -406,7 +428,23 @@ def _handoff_for(goal: str, session: Dict[str, Any]) -> Dict[str, Any]:
 
 def _infer_goal(text: str) -> str | None:
     value = text.lower()
-    if any(token in value for token in ("idea", "paper", "pdf", "article", "frontier", "选题", "想法", "文章", "论文", "综述", "前沿", "挖掘")):
+    if any(
+        token in value
+        for token in (
+            "idea",
+            "paper",
+            "pdf",
+            "article",
+            "frontier",
+            "选题",
+            "想法",
+            "文章",
+            "论文",
+            "综述",
+            "前沿",
+            "挖掘",
+        )
+    ):
         return "idea_mining"
     if any(
         token in value
@@ -430,9 +468,39 @@ def _infer_goal(text: str) -> str | None:
         )
     ):
         return "review_data"
-    if any(token in value for token in ("extract", "export", "data", "module", "feature", "cohort", "抽取", "导出", "数据", "特征", "队列")):
+    if any(
+        token in value
+        for token in (
+            "extract",
+            "export",
+            "data",
+            "module",
+            "feature",
+            "cohort",
+            "抽取",
+            "导出",
+            "数据",
+            "特征",
+            "队列",
+        )
+    ):
         return "data_extraction"
-    if any(token in value for token in ("agent", "analysis", "run", "model", "draft", "manuscript", "项目", "分析", "建模", "草稿", "运行")):
+    if any(
+        token in value
+        for token in (
+            "agent",
+            "analysis",
+            "run",
+            "model",
+            "draft",
+            "manuscript",
+            "项目",
+            "分析",
+            "建模",
+            "草稿",
+            "运行",
+        )
+    ):
         return "run_agent"
     return None
 
@@ -445,9 +513,24 @@ def _reply_choose_goal() -> Dict[str, Any]:
         },
         "goal_cards": _goal_cards(),
         "chips": [
-            {"label_en": "Find a Study Idea", "label_zh": "找研究想法", "action": "choose_goal", "goal": "idea_mining"},
-            {"label_en": "Prepare Data", "label_zh": "准备数据", "action": "choose_goal", "goal": "data_extraction"},
-            {"label_en": "Run a Research Project", "label_zh": "运行研究项目", "action": "choose_goal", "goal": "run_agent"},
+            {
+                "label_en": "Find a Study Idea",
+                "label_zh": "找研究想法",
+                "action": "choose_goal",
+                "goal": "idea_mining",
+            },
+            {
+                "label_en": "Prepare Data",
+                "label_zh": "准备数据",
+                "action": "choose_goal",
+                "goal": "data_extraction",
+            },
+            {
+                "label_en": "Run a Research Project",
+                "label_zh": "运行研究项目",
+                "action": "choose_goal",
+                "goal": "run_agent",
+            },
         ],
     }
 
@@ -462,8 +545,17 @@ def _reply_goal_ready(goal: str, session: Dict[str, Any]) -> Dict[str, Any]:
         "goal_cards": _goal_cards(),
         "handoff": _handoff_for(goal, session),
         "chips": [
-            {"label_en": f"Open {meta['label_en']}", "label_zh": f"打开{meta['label_zh']}", "action": "handoff_to_module", "goal": goal},
-            {"label_en": "Choose another goal", "label_zh": "重选目标", "action": "reset_goal"},
+            {
+                "label_en": f"Open {meta['label_en']}",
+                "label_zh": f"打开{meta['label_zh']}",
+                "action": "handoff_to_module",
+                "goal": goal,
+            },
+            {
+                "label_en": "Choose another goal",
+                "label_zh": "重选目标",
+                "action": "reset_goal",
+            },
         ],
     }
 
@@ -487,7 +579,9 @@ def create_guided_session(body: Dict[str, Any]) -> Dict[str, Any]:
         "context": context,
         "project_dir": str(project_dir),
         "project_kind": "guided_copilot_session_folder",
-        "project_title": _clean_text(payload.get("title"), "Guided Copilot session", max_len=90),
+        "project_title": _clean_text(
+            payload.get("title"), "Guided Copilot session", max_len=90
+        ),
         "memory_scope": "guided_frontdoor_session_folder",
         "messages": [],
         "created_at": now,
@@ -507,7 +601,9 @@ def create_guided_session(body: Dict[str, Any]) -> Dict[str, Any]:
 
 def open_guided_project(body: Dict[str, Any]) -> Dict[str, Any]:
     payload = body if isinstance(body, dict) else {}
-    project_dir = _safe_project_dir(payload.get("project_dir"), allow_marked_external=True)
+    project_dir = _safe_project_dir(
+        payload.get("project_dir"), allow_marked_external=True
+    )
     if project_dir is None:
         return {
             "ok": False,
@@ -538,7 +634,9 @@ def open_guided_project(body: Dict[str, Any]) -> Dict[str, Any]:
         draft = None
 
     with _LOCK:
-        session = _read_project_session(project_dir) or _find_session_by_project_dir(project_dir)
+        session = _read_project_session(project_dir) or _find_session_by_project_dir(
+            project_dir
+        )
         now = _now()
         if session is None:
             session = {
@@ -594,42 +692,54 @@ def post_guided_message(body: Dict[str, Any]) -> Dict[str, Any]:
     with _LOCK:
         session = _find_session(session_id) if session_id else None
         if session is None:
-            created = create_guided_session({"mode": payload.get("mode") or "local", "context": context})
+            created = create_guided_session(
+                {"mode": payload.get("mode") or "local", "context": context}
+            )
             session = _find_session(created["session"]["id"])
         if session is None:
             return {"ok": False, "error": "session_create_failed"}
 
         now = _now()
         goal = _infer_goal(text)
-        messages = session.get("messages") if isinstance(session.get("messages"), list) else []
+        messages = (
+            session.get("messages") if isinstance(session.get("messages"), list) else []
+        )
         messages.append({"role": "user", "text": text, "created_at": now})
         session["context"] = context
         if goal:
             session["goal"] = goal
             session["step"] = "handoff_ready"
             session["slots"] = {
-                **(session.get("slots") if isinstance(session.get("slots"), dict) else {}),
+                **(
+                    session.get("slots")
+                    if isinstance(session.get("slots"), dict)
+                    else {}
+                ),
                 "question_hint": text,
             }
             session["handoff"] = _handoff_for(goal, session)
             response = _reply_goal_ready(goal, session)
-            messages.append({
-                "role": "assistant",
-                "intent": "goal_detected",
-                "goal": goal,
-                "reply": response["reply"],
-                "created_at": now,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "intent": "goal_detected",
+                    "goal": goal,
+                    "reply": response["reply"],
+                    "created_at": now,
+                }
+            )
         else:
             session["step"] = "choose_goal"
             session["handoff"] = None
             response = _reply_choose_goal()
-            messages.append({
-                "role": "assistant",
-                "intent": "choose_goal_fallback",
-                "reply": response["reply"],
-                "created_at": now,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "intent": "choose_goal_fallback",
+                    "reply": response["reply"],
+                    "created_at": now,
+                }
+            )
         session["messages"] = messages[-_MAX_MESSAGES:]
         session["updated_at"] = now
         _persist_session(session)
@@ -659,7 +769,12 @@ def execute_guided_action(body: Dict[str, Any]) -> Dict[str, Any]:
                 "local_first": {"uploads": 0, "tokens": 0, "external_calls": 0},
             }
         if session is None:
-            created = create_guided_session({"mode": payload.get("mode") or "local", "context": payload.get("context")})
+            created = create_guided_session(
+                {
+                    "mode": payload.get("mode") or "local",
+                    "context": payload.get("context"),
+                }
+            )
             session = _find_session(created["session"]["id"])
         if session is None:
             return {"ok": False, "error": "session_create_failed"}
@@ -692,22 +807,32 @@ def execute_guided_action(body: Dict[str, Any]) -> Dict[str, Any]:
                 "local_first": {"uploads": 0, "tokens": 0, "external_calls": 0},
             }
         if action == "reset_goal":
-            messages = session.get("messages") if isinstance(session.get("messages"), list) else []
+            messages = (
+                session.get("messages")
+                if isinstance(session.get("messages"), list)
+                else []
+            )
             now = _now()
             session["goal"] = None
             session["handoff"] = None
             session["step"] = "choose_goal"
-            messages.append({
-                "role": "assistant",
-                "intent": "reset_goal",
-                "reply": _reply_choose_goal()["reply"],
-                "created_at": now,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "intent": "reset_goal",
+                    "reply": _reply_choose_goal()["reply"],
+                    "created_at": now,
+                }
+            )
             session["messages"] = messages[-_MAX_MESSAGES:]
             session["updated_at"] = now
             _persist_session(session)
             _upsert_session(session)
-            return {"ok": True, "session": _public_session(session), **_reply_choose_goal()}
+            return {
+                "ok": True,
+                "session": _public_session(session),
+                **_reply_choose_goal(),
+            }
         if action in {"choose_goal", "handoff_to_module"}:
             if goal not in _VALID_GOALS:
                 return {
@@ -725,21 +850,31 @@ def execute_guided_action(body: Dict[str, Any]) -> Dict[str, Any]:
             session["handoff"] = _handoff_for(goal, session)
             session["updated_at"] = now
             response = _reply_goal_ready(goal, session)
-            messages = session.get("messages") if isinstance(session.get("messages"), list) else []
-            messages.append({
-                "role": "user",
-                "action": action,
-                "goal": goal,
-                "text": response["handoff"]["label_en"],
-                "created_at": now,
-            })
-            messages.append({
-                "role": "assistant",
-                "intent": "goal_detected" if action == "choose_goal" else "module_handoff",
-                "goal": goal,
-                "reply": response["reply"],
-                "created_at": now,
-            })
+            messages = (
+                session.get("messages")
+                if isinstance(session.get("messages"), list)
+                else []
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "action": action,
+                    "goal": goal,
+                    "text": response["handoff"]["label_en"],
+                    "created_at": now,
+                }
+            )
+            messages.append(
+                {
+                    "role": "assistant",
+                    "intent": (
+                        "goal_detected" if action == "choose_goal" else "module_handoff"
+                    ),
+                    "goal": goal,
+                    "reply": response["reply"],
+                    "created_at": now,
+                }
+            )
             session["messages"] = messages[-_MAX_MESSAGES:]
             _persist_session(session)
             _upsert_session(session)
@@ -772,7 +907,10 @@ def execute_guided_action(body: Dict[str, Any]) -> Dict[str, Any]:
 def list_guided_sessions(limit: int = 20) -> Dict[str, Any]:
     with _LOCK:
         rows = _load_sessions()
-    rows.sort(key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
+    rows.sort(
+        key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
+        reverse=True,
+    )
     cap = max(1, min(int(limit or 20), 100))
     return {
         "ok": True,
@@ -807,23 +945,33 @@ def _slug(value: Any, fallback: str = "guided-study") -> str:
     return (text or fallback)[:64].strip("-._") or fallback
 
 
-def _project_dir_for(draft_id: str, title: str, requested_slug: Any = None, parent_dir: Any = None) -> Path | None:
+def _project_dir_for(
+    draft_id: str, title: str, requested_slug: Any = None, parent_dir: Any = None
+) -> Path | None:
     slug = _slug(requested_slug or title)
-    suffix = str(draft_id or "")[-6:] or hashlib.sha1(title.encode("utf-8")).hexdigest()[:6]
+    suffix = (
+        str(draft_id or "")[-6:] or hashlib.sha1(title.encode("utf-8")).hexdigest()[:6]
+    )
     parent = _safe_project_parent_dir(parent_dir)
     if parent is None:
         return None
     return parent / f"guided-{slug}-{suffix}"
 
 
-def _normalise_draft(body: Dict[str, Any], existing_id: str | None = None) -> Dict[str, Any]:
+def _normalise_draft(
+    body: Dict[str, Any], existing_id: str | None = None
+) -> Dict[str, Any]:
     created = _now()
-    title = _clean_text(body.get("title") or body.get("study_id"), "Untitled guided study", max_len=90)
+    title = _clean_text(
+        body.get("title") or body.get("study_id"), "Untitled guided study", max_len=90
+    )
     branch = _choice(body.get("branch"), _VALID_BRANCHES, "predict")
     depth = _choice(body.get("depth"), _VALID_DEPTHS, "full")
     data_mode = _choice(body.get("data_mode"), _VALID_DATA_MODES, "demo")
     draft_id = existing_id or _draft_id("|".join([created, title, branch, depth]))
-    project_dir = _project_dir_for(draft_id, title, body.get("folder_slug"), body.get("parent_dir"))
+    project_dir = _project_dir_for(
+        draft_id, title, body.get("folder_slug"), body.get("parent_dir")
+    )
     if project_dir is None:
         raise ValueError("invalid_guided_parent_dir")
     payload: Dict[str, Any] = {
@@ -863,7 +1011,10 @@ def list_guided_drafts(limit: int = 20) -> Dict[str, Any]:
     raw = _read_raw()
     rows = raw.get("drafts") if isinstance(raw.get("drafts"), list) else []
     drafts = [row for row in rows if isinstance(row, dict) and row.get("id")]
-    drafts.sort(key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""), reverse=True)
+    drafts.sort(
+        key=lambda row: str(row.get("updated_at") or row.get("created_at") or ""),
+        reverse=True,
+    )
     cap = max(1, min(int(limit or 20), 100))
     return {
         "ok": True,
@@ -886,7 +1037,9 @@ def remove_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
             "disk_deleted": False,
         }
     draft_id = _clean_text(payload.get("draft_id") or payload.get("id"), max_len=80)
-    project_dir = _safe_project_dir(payload.get("project_dir"), allow_marked_external=True)
+    project_dir = _safe_project_dir(
+        payload.get("project_dir"), allow_marked_external=True
+    )
     raw = _read_raw()
     rows = raw.get("drafts") if isinstance(raw.get("drafts"), list) else []
     kept: List[Dict[str, Any]] = []
@@ -895,7 +1048,9 @@ def remove_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(row, dict):
             continue
         same_id = bool(draft_id and row.get("id") == draft_id)
-        same_project = bool(project_dir and str(row.get("project_dir") or "") == str(project_dir))
+        same_project = bool(
+            project_dir and str(row.get("project_dir") or "") == str(project_dir)
+        )
         if same_id or same_project:
             removed = row
             continue
@@ -956,7 +1111,9 @@ def create_guided_draft(body: Dict[str, Any]) -> Dict[str, Any]:
         }
     raw = _read_raw()
     current = raw.get("drafts") if isinstance(raw.get("drafts"), list) else []
-    drafts = [row for row in current if isinstance(row, dict) and row.get("id") != draft["id"]]
+    drafts = [
+        row for row in current if isinstance(row, dict) and row.get("id") != draft["id"]
+    ]
     drafts.insert(0, draft)
     drafts = drafts[:_MAX_DRAFTS]
     raw["schema_version"] = max(2, int(raw.get("schema_version") or 1))
