@@ -2435,9 +2435,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     window.EU_API.loadGuidedDrafts({ limit: 20 }).then(data => {
       guidedDrafts = { loading: false, error: null, data: data };
       renderSessions();
+      if (guidedFolderDialogMode) renderGuidedFolderDialog();
     }).catch(err => {
       guidedDrafts = { loading: false, error: err.message || String(err), data: null };
       renderSessions();
+      if (guidedFolderDialogMode) renderGuidedFolderDialog();
     });
   }
   function loadGuidedHistory(force) {
@@ -2448,9 +2450,11 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     window.EU_API.loadAgentRunHistory({ limit: 20 }).then(data => {
       guidedHistory = { loading: false, error: null, data: data };
       renderSessions();
+      if (guidedFolderDialogMode) renderGuidedFolderDialog();
     }).catch(err => {
       guidedHistory = { loading: false, error: err.message || String(err), data: null };
       renderSessions();
+      if (guidedFolderDialogMode) renderGuidedFolderDialog();
     });
   }
   function guidedBackendContext() {
@@ -3027,6 +3031,46 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
           </div>` : ''}
       </div>`;
   }
+  function guidedKnownProjectRows() {
+    const seen = new Set();
+    const rows = [];
+    function add(row, kind) {
+      if (!row || !row.project_dir || seen.has(row.project_dir)) return;
+      seen.add(row.project_dir);
+      rows.push({
+        kind,
+        project_dir: row.project_dir,
+        title: row.title || row.study_id || row.run_label || (kind === 'run' ? 'Agent run folder' : 'Guided study folder'),
+        subtitle: kind === 'run'
+          ? `${row.readiness_status || row.gate_status || 'analysis_only'} · ${row.artifact_count || 0} artifacts · ${fmtRunTime(row.updated_at)}`
+          : `${row.status || 'metadata_only'} · ${row.depth || 'full'} · ${row.data_mode || 'local'} · ${fmtRunTime(row.updated_at || row.created_at)}`,
+      });
+    }
+    localDraftRows().forEach(row => add(row, 'draft'));
+    localRunRows().forEach(row => add(row, 'run'));
+    return rows.slice(0, 12);
+  }
+  function renderGuidedKnownProjectPicker() {
+    const loading = guidedDrafts.loading || guidedHistory.loading;
+    const error = guidedDrafts.error || guidedHistory.error;
+    const rows = guidedKnownProjectRows();
+    return `
+      <div class="gds-known">
+        <div class="gds-known-head">
+          <div><strong>${t('Detected local project folders', '已检测到的本地项目文件夹')}</strong><span>${t('Pick one directly. These are read from the local Guided draft registry and Agent run history.', '直接选择一个。这些来自本机 Guided 草稿 registry 和 Agent run history。')}</span></div>
+          <button class="btn sm" type="button" data-refreshfolderchoices>${icon('refresh', 12)} ${t('Refresh', '刷新')}</button>
+        </div>
+        ${loading ? `<div class="gds-known-empty">${icon('refresh', 12)} ${t('Scanning local project folders...', '正在扫描本地项目文件夹...')}</div>` : ''}
+        ${error ? `<div class="gds-known-empty warn">${icon('info', 12)} ${esc(error)}</div>` : ''}
+        ${!loading && !rows.length && !error ? `<div class="gds-known-empty">${t('No detected project folders yet. Create a new one, run an Agent project, or paste a local path below.', '暂未检测到项目文件夹。可以新建一个、运行 Agent 项目，或在下方粘贴本地路径。')}</div>` : ''}
+        ${rows.length ? `<div class="gds-known-list">${rows.map((row, i) => `
+          <button class="gds-known-row" type="button" data-known-project="${i}">
+            <span class="gds-known-kind">${row.kind === 'run' ? icon('history', 13) : icon('file', 13)}</span>
+            <span><strong>${esc(row.title)}</strong><small>${esc(row.subtitle)}</small><code>${esc(compactPath(row.project_dir))}</code></span>
+            <span class="gds-known-open">${icon('arrow', 13)}</span>
+          </button>`).join('')}</div>` : ''}
+      </div>`;
+  }
   function renderGuidedFolderDialog() {
     const host = document.getElementById('gdFolderDialogHost');
     if (!host) return;
@@ -3055,8 +3099,9 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         ${mode === 'open' ? `
           <div class="gds-choice">
             <div class="gds-choice-head"><strong>${t('Open existing project folder', '打开现有项目文件夹')}</strong><span>${t('Use this when you already have a local Guided, Idea Mining, or Agent project folder.', '已有本地 Guided、Idea Mining 或 Agent 项目文件夹时使用。')}</span></div>
+            ${renderGuidedKnownProjectPicker()}
             <label class="gds-field"><span>${t('Project folder path', '项目文件夹路径')}</span><input data-existing-project-dir placeholder="~/easyicu/projects/my-study or C:\\Users\\you\\easyicu\\projects\\my-study" autocomplete="off" /></label>
-            <div class="gds-path"><span>${t('Scope', '范围')}</span><code>EasyICU projects folder</code><small>${t('The browser cannot expose arbitrary absolute folders here. Paste the path from Finder, Explorer, Terminal, or PowerShell; EasyICU will validate it before opening memory.', '浏览器无法在这里可靠暴露任意绝对路径。请从 Finder、Explorer、Terminal 或 PowerShell 粘贴路径；EasyICU 会先校验再打开记忆。')}</small></div>
+            <div class="gds-path"><span>${t('Scope', '范围')}</span><code>EasyICU projects folder</code><small>${t('If the folder is listed above, choose it directly. Path paste is only an advanced fallback because browsers do not expose arbitrary absolute folder paths.', '如果文件夹已在上方列出，请直接选择。路径粘贴只是高级 fallback，因为浏览器不会暴露任意绝对文件夹路径。')}</small></div>
             <div class="row gap-8"><button class="btn primary sm" data-openprojectfolder>${icon('folder', 13)} ${t('Open folder memory', '打开文件夹记忆')}</button><button class="btn sm" data-folder-dialog-close>${t('Cancel', '取消')}</button></div>
             <div class="gds-status" data-project-open-status hidden></div>
           </div>` : `
@@ -3903,6 +3948,19 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
         if (e.target.closest('[data-newstudy]')) {
           guidedFolderMenuOpen = !guidedFolderMenuOpen;
           renderGuidedFolderControls();
+          return;
+        }
+        if (e.target.closest('[data-refreshfolderchoices]')) {
+          loadGuidedDrafts(true);
+          loadGuidedHistory(true);
+          return;
+        }
+        const knownProjectEl = e.target.closest('[data-known-project]');
+        if (knownProjectEl) {
+          const row = guidedKnownProjectRows()[Number(knownProjectEl.dataset.knownProject || -1)];
+          if (!row) return;
+          const box = knownProjectEl.closest('[data-draft-setup]');
+          openExistingGuidedProject(row.project_dir, box);
           return;
         }
         const openProjectFolderEl = e.target.closest('[data-openprojectfolder]');

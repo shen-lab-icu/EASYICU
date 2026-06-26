@@ -370,6 +370,111 @@
   font-size: 10.75px;
   line-height: 1.35;
 }
+.gds-known{
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--surface-2) 48%, var(--surface));
+}
+.gds-known-head{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.gds-known-head strong{
+  display: block;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.gds-known-head span{
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-4);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.gds-known-list{
+  display: grid;
+  gap: 5px;
+  max-height: 220px;
+  overflow: auto;
+}
+.gds-known-row{
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 54px;
+  padding: 8px 9px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-2);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.gds-known-row:hover{
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.gds-known-row strong{
+  display: block;
+  font-size: 12px;
+  line-height: 1.25;
+}
+.gds-known-row small,
+.gds-known-row code{
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-4);
+}
+.gds-known-row small{
+  margin-top: 1px;
+  font-size: 10.25px;
+}
+.gds-known-row code{
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 10.25px;
+}
+.gds-known-kind{
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r-1);
+  display: grid;
+  place-items: center;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent-soft) 56%, var(--surface));
+}
+.gds-known-open{
+  color: var(--ink-4);
+}
+.gds-known-empty{
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-height: 34px;
+  padding: 8px 9px;
+  border: 1px dashed var(--hair);
+  border-radius: var(--r-2);
+  color: var(--ink-4);
+  font-size: 10.75px;
+  line-height: 1.35;
+}
+.gds-known-empty.warn{
+  border-color: color-mix(in srgb, var(--warn) 36%, var(--hair));
+  background: var(--warn-soft);
+  color: color-mix(in srgb, var(--warn) 72%, var(--ink));
+}
 .gds-field{ display: grid; gap: 5px; }
 .gds-field span,
 .gds-path span{
