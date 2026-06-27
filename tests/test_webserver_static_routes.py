@@ -1361,7 +1361,7 @@ def test_native_crossdb_restores_distribution_visuals() -> None:
     assert "--xdb-grid-cols" in viz_js
     assert "xdb-density-svg" in viz_js
     assert "xdb-density-line" in viz_js
-    assert "js/screens-viz.js?v=20260627-survival-outcome-summary" in index_html
+    assert "js/screens-viz.js?v=20260627-cohort-review-payload-guard" in index_html
     assert "css/crossdb.css?v=20260626-viz-richness" in index_html
     assert ".xdb-dist-panel" in crossdb_css
     assert ".xdb-dist-row" in crossdb_css
@@ -1415,7 +1415,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20260627-survival-outcome-summary" in index_html
+    assert "js/screens-viz.js?v=20260627-cohort-review-payload-guard" in index_html
 
 
 def test_native_cohort_groups_render_comparison_bar_chart() -> None:
@@ -1881,7 +1881,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert ".patient-preview-table" in pages_css
     assert ".patient-table-pager" in pages_css
     assert "css/pages.css?v=20260626-patient-table-pagination" in index_html
-    assert "js/screens-viz.js?v=20260627-survival-outcome-summary" in index_html
+    assert "js/screens-viz.js?v=20260627-cohort-review-payload-guard" in index_html
     assert "browser review', '浏览器审阅" in viz_js
     assert "function buildDemoPatientDrilldown" in viz_js
     assert "payload_scope: 'catalog_shaped_seeded_demo_no_real_patient_rows'" in viz_js
@@ -1952,6 +1952,9 @@ def test_native_cohort_real_page_is_backend_backed_and_bilingual() -> None:
     assert "window.EU_API.loadCohortReviewSummary(body)" in viz_js
     assert "window.EU_COHORT_REVIEW = payload;" in viz_js
     assert "cohortWorkspaceFromReview(payload)" in viz_js
+    assert "function cohortLoaded()" in viz_js
+    assert "window.EU_DATA !== 'real' || !!(review && review.summary)" in viz_js
+    assert "function reloadStaleRealCohortIfNeeded" in viz_js
     assert "function cohortText" in viz_js
     assert "function cohortReason" in viz_js
     assert "'Backend evidence checks': '后端证据检查'" in viz_js
@@ -2004,8 +2007,8 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/cohort.css?v=20260627-survival-outcome-summary" in index_html
-    assert "js/screens-viz.js?v=20260627-survival-outcome-summary" in index_html
+    assert "css/cohort.css?v=20260627-" in index_html
+    assert "js/screens-viz.js?v=20260627-cohort-review-payload-guard" in index_html
     assert "let cohortView = 'idle';" in viz_js
     assert "let cohortFeatureScope = 'recommended';" in viz_js
     assert 'data-cohort-config-required="true"' in viz_js
