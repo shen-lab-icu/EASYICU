@@ -639,6 +639,20 @@
   function cohortReview() {
     return window.EU_COHORT_REVIEW || null;
   }
+  function cohortLoaded() {
+    const review = cohortReview();
+    return cohortView === 'loaded' && (window.EU_DATA !== 'real' || !!(review && review.summary));
+  }
+  function reloadStaleRealCohortIfNeeded(review) {
+    if (window.EU_DATA !== 'real' || cohortView !== 'loaded' || (review && review.summary)) return false;
+    if (!registryActivePath()) {
+      cohortView = 'idle';
+      return false;
+    }
+    cohortView = 'loading';
+    setTimeout(() => loadRealCohort(ok => { cohortView = ok ? 'loaded' : 'idle'; repaintScreen('cohort'); }), 0);
+    return true;
+  }
   function resetCohortFeatureSelection() {
     cohortFeatureModule = 'all';
     cohortSelectedFeatures = [];
@@ -4177,7 +4191,7 @@
     section: 'viz', nav: 'viz', sub: 'cohort',
     crumbs: ['Home', 'Data Visualization', 'Cohort Statistics'],
     get actionHtml() {
-      if (cohortView === 'loaded') {
+      if (cohortLoaded()) {
         return `<button class="btn" data-viz-reset>${icon('sliders', 13)} ${t('Edit setup', '编辑设置')}</button><button class="btn primary" data-cohort-run>${icon('refresh', 13)} ${t('Re-run', '重新运行')}</button>`;
       }
       const label = window.EU_DATA === 'real' ? t('Load export', '加载导出') : t('Run demo review', '运行演示审阅');
@@ -4310,8 +4324,9 @@
     render() {
       if (window.__euCohortPanel) { cohortPanel = window.__euCohortPanel; window.__euCohortPanel = null; }
       const ws = window.EU_VIZ_WORKSPACE;
-      const review = cohortReview();
-      const loaded = cohortView === 'loaded' && (window.EU_DATA !== 'real' || !!ws);
+      let review = cohortReview();
+      if (reloadStaleRealCohortIfNeeded(review)) review = null;
+      const loaded = cohortLoaded();
       const head = `
       <div class="row gap-8" style="font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.06em;text-transform:uppercase;color:var(--ink-4);margin-bottom:6px;white-space:nowrap;flex-wrap:wrap;row-gap:2px;">
         <span>${cohortText('Workspace')}</span> ${icon('chevron', 11)} <span>${ws ? cohortText('Local export') : (loaded ? cohortText('Demo cohort') : cohortText('Not configured'))}</span> ${icon('chevron', 11)} <span style="color:var(--ink-2);">${cohortText('Cohort statistics')}</span>
