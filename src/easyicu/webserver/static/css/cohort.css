@@ -572,6 +572,25 @@
   gap:2px;
   padding:3px;
 }
+.sofa-matrix-controls{
+  align-items:flex-end;
+  display:flex;
+  flex:0 0 auto;
+  flex-wrap:wrap;
+  gap:8px;
+  justify-content:flex-end;
+}
+.sofa-matrix-control{
+  align-items:flex-start;
+  display:grid;
+  gap:4px;
+}
+.sofa-matrix-control > span{
+  color:var(--ink-4);
+  font:700 10px var(--font-mono);
+  letter-spacing:.04em;
+  text-transform:uppercase;
+}
 .sofa-matrix-toggle button{
   background:transparent;
   border:0;
@@ -581,6 +600,12 @@
   font:600 11px var(--font);
   min-width:56px;
   padding:6px 9px;
+}
+.sofa-matrix-toggle button small{
+  color:var(--ink-4);
+  display:block;
+  font:600 9.5px var(--font-mono);
+  margin-top:1px;
 }
 .sofa-matrix-toggle button.active{
   background:#fff;
@@ -595,8 +620,8 @@
 .sofa-heatmap{
   display:grid;
   gap:6px;
-  grid-template-columns:minmax(96px,0.9fr) repeat(var(--sofa-data-cols), minmax(92px,1fr));
-  min-width:620px;
+  grid-template-columns:minmax(96px,0.9fr) repeat(var(--sofa-data-cols), minmax(var(--sofa-cell-min,92px),1fr));
+  min-width:var(--sofa-min-width,620px);
 }
 .sofa-heat-head{
   align-items:center;

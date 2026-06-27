@@ -100,6 +100,7 @@
   let cohortSurvivalOutcome = 'mort_28d';
   let cohortSurvivalGroup = 'sepsis';
   let cohortSofaMatrixMode = 'pct'; // pct | count
+  let cohortSofaMatrixGranularity = 'medium'; // coarse | medium | fine | exact
   let vizErr = null;
 
   function esc(v) {
@@ -2628,7 +2629,17 @@
       'Matrix value': '矩阵数值',
       'Percent': '百分比',
       'Count': '人数',
+      'Granularity': '粒度',
+      'Coarse': '粗略',
+      'Medium': '中等',
+      'Fine': '细粒度',
+      'Exact': '逐分',
+      '4 bands': '4 档',
+      '6 bands': '6 档',
+      '12 bands': '12 档',
+      '25 scores': '25 分',
       'Rows are SOFA-1 severity bands; columns are SOFA-2 bands. Color intensity follows the selected value.': '行是 SOFA-1 严重度分层，列是 SOFA-2 分层；颜色深浅随当前显示值变化。',
+      'Rows are SOFA-1 score bands; columns are SOFA-2 score bands. Use the granularity control to move from clinical bands to exact 0-24 scores.': '行是 SOFA-1 分数分箱，列是 SOFA-2 分数分箱。可用粒度控件从临床分层切到 0-24 逐分矩阵。',
       'Same severity band': '同一严重度层级',
       'SOFA-2 higher band': 'SOFA-2 更高层级',
       'SOFA-2 lower band': 'SOFA-2 更低层级',
@@ -3220,7 +3231,22 @@
     };
   }
 
+  function cohortDemoSofaExactMatrix(pairs) {
+    const labels = Array.from({ length: 25 }, (_, score) => String(score));
+    const total = pairs.length || 1;
+    return labels.map(sourceLabel => {
+      const sourceScore = Number(sourceLabel);
+      const cells = labels.map(targetLabel => {
+        const targetScore = Number(targetLabel);
+        const count = pairs.filter(([sofa1, sofa2]) => sofa1 === sourceScore && sofa2 === targetScore).length;
+        return { label: targetLabel, count, pct: Number((count / total * 100).toFixed(1)) };
+      });
+      return { label: sourceLabel, count: cells.reduce((acc, cell) => acc + cell.count, 0), cells };
+    });
+  }
+
   function cohortDemoSofaReview() {
+    const demoPairs = [[2, 2], [4, 7], [8, 5], [7, 7], [6, 9], [10, 13], [12, 11], [3, 3], [5, 5], [9, 9]];
     return {
       demo: true,
       summary: {
@@ -3256,6 +3282,9 @@
           { label: '10-13', cells: [{ count: 0, pct: 0.0 }, { count: 0, pct: 0.0 }, { count: 1, pct: 10.0 }, { count: 1, pct: 10.0 }] },
           { label: '14+', cells: [{ count: 0, pct: 0.0 }, { count: 0, pct: 0.0 }, { count: 0, pct: 0.0 }, { count: 0, pct: 0.0 }] },
         ],
+        exact_score_bins: Array.from({ length: 25 }, (_, score) => String(score)),
+        exact_score_matrix: cohortDemoSofaExactMatrix(demoPairs),
+        score_scale: { min: 0, max: 24, unit: 'SOFA points', aggregation: 'nearest_integer_clamped_0_24' },
       },
     };
   }
@@ -3304,13 +3333,126 @@
     return `rgba(34, 137, 122, ${a.toFixed(3)})`;
   }
 
+  const SOFA_MATRIX_GRANULARITIES = {
+    coarse: {
+      label: 'Coarse',
+      detail: '4 bands',
+      bins: [
+        { label: '0-5', min: 0, max: 5 },
+        { label: '6-8', min: 6, max: 8 },
+        { label: '9-11', min: 9, max: 11 },
+        { label: '12+', min: 12, max: 24 },
+      ],
+    },
+    medium: {
+      label: 'Medium',
+      detail: '6 bands',
+      bins: [
+        { label: '0-3', min: 0, max: 3 },
+        { label: '4-7', min: 4, max: 7 },
+        { label: '8-11', min: 8, max: 11 },
+        { label: '12-15', min: 12, max: 15 },
+        { label: '16-19', min: 16, max: 19 },
+        { label: '20-24', min: 20, max: 24 },
+      ],
+    },
+    fine: {
+      label: 'Fine',
+      detail: '12 bands',
+      bins: Array.from({ length: 12 }, (_, index) => {
+        const min = index * 2;
+        const max = index === 11 ? 24 : min + 1;
+        return { label: min === max ? String(min) : `${min}-${max}`, min, max };
+      }),
+    },
+    exact: {
+      label: 'Exact',
+      detail: '25 scores',
+      bins: Array.from({ length: 25 }, (_, score) => ({ label: String(score), min: score, max: score })),
+    },
+  };
+
+  function cohortSofaGranularityButtons(hasExactMatrix) {
+    if (!hasExactMatrix) return '';
+    const order = ['coarse', 'medium', 'fine', 'exact'];
+    return `
+      <div class="sofa-matrix-control">
+        <span>${cohortText('Granularity')}</span>
+        <div class="sofa-matrix-toggle" role="group" aria-label="${cohortText('Granularity')}">
+          ${order.map(key => {
+            const opt = SOFA_MATRIX_GRANULARITIES[key];
+            return `<button class="${cohortSofaMatrixGranularity === key ? 'active' : ''}" data-cohort-sofa-granularity="${key}" type="button">${cohortText(opt.label)} <small>${cohortText(opt.detail)}</small></button>`;
+          }).join('')}
+        </div>
+      </div>`;
+  }
+
+  function cohortSofaExactMatrixMap(reclass) {
+    const exact = reclass.exact_score_matrix || [];
+    if (!Array.isArray(exact) || !exact.length) return null;
+    const map = new Map();
+    exact.forEach(row => {
+      const source = Number(row && row.label);
+      if (!Number.isFinite(source)) return;
+      (row.cells || []).forEach(cell => {
+        const target = Number(cell && cell.label);
+        if (!Number.isFinite(target)) return;
+        map.set(`${source}|${target}`, Number(cell.count) || 0);
+      });
+    });
+    return map.size ? map : null;
+  }
+
+  function cohortSofaBinnedMatrix(reclass) {
+    const exactMap = cohortSofaExactMatrixMap(reclass);
+    if (!exactMap) {
+      return {
+        bins: reclass.severity_bins || [],
+        matrix: reclass.transition_matrix || [],
+        exact: false,
+      };
+    }
+    const granularity = SOFA_MATRIX_GRANULARITIES[cohortSofaMatrixGranularity] ? cohortSofaMatrixGranularity : 'medium';
+    const bins = SOFA_MATRIX_GRANULARITIES[granularity].bins;
+    const paired = Number(reclass.paired_count) || Array.from(exactMap.values()).reduce((acc, value) => acc + value, 0) || 0;
+    const matrix = bins.map(sourceBin => {
+      const cells = bins.map(targetBin => {
+        let count = 0;
+        for (let source = sourceBin.min; source <= sourceBin.max; source += 1) {
+          for (let target = targetBin.min; target <= targetBin.max; target += 1) {
+            count += exactMap.get(`${source}|${target}`) || 0;
+          }
+        }
+        return {
+          label: targetBin.label,
+          count,
+          pct: paired ? Number((count / paired * 100).toFixed(1)) : 0,
+        };
+      });
+      return {
+        label: sourceBin.label,
+        count: cells.reduce((acc, cell) => acc + cell.count, 0),
+        cells,
+      };
+    });
+    return {
+      bins: bins.map(row => row.label),
+      matrix,
+      exact: true,
+    };
+  }
+
   function cohortSofaHeatmap(reclass) {
-    const bins = reclass.severity_bins || [];
-    const matrix = reclass.transition_matrix || [];
+    const binned = cohortSofaBinnedMatrix(reclass);
+    const bins = binned.bins || [];
+    const matrix = binned.matrix || [];
     if (!bins.length || !matrix.length) {
       return `<div class="muted" style="font-size:11px;">${t('No paired SOFA-1/SOFA-2 bins in this export.', '此导出没有配对 SOFA-1/SOFA-2 分箱。')}</div>`;
     }
     const mode = cohortSofaMatrixMode === 'count' ? 'count' : 'pct';
+    const hasExactMatrix = !!binned.exact;
+    const cellMin = bins.length > 12 ? 54 : (bins.length > 6 ? 72 : 92);
+    const matrixMinWidth = Math.max(620, 112 + bins.length * cellMin);
     const maxCount = Math.max(1, ...matrix.flatMap(row => (row.cells || []).map(cell => Number(cell.count) || 0)));
     const maxPct = Math.max(1, ...matrix.flatMap(row => (row.cells || []).map(cell => Number(cell.pct) || 0)));
     const corner = `${t('SOFA-1', 'SOFA-1')} \\ ${t('SOFA-2', 'SOFA-2')}`;
@@ -3333,15 +3475,21 @@
       <div class="sofa-matrix-head mt-12">
         <div>
           <div class="rc-sec-t">${cohortText('Worst-ICU severity transition matrix')}</div>
-          <p>${cohortText('Rows are SOFA-1 severity bands; columns are SOFA-2 bands. Color intensity follows the selected value.')}</p>
+          <p>${hasExactMatrix ? cohortText('Rows are SOFA-1 score bands; columns are SOFA-2 score bands. Use the granularity control to move from clinical bands to exact 0-24 scores.') : cohortText('Rows are SOFA-1 severity bands; columns are SOFA-2 bands. Color intensity follows the selected value.')}</p>
         </div>
-        <div class="sofa-matrix-toggle" role="group" aria-label="${cohortText('Matrix value')}">
-          <button class="${mode === 'pct' ? 'active' : ''}" data-cohort-sofa-matrix-mode="pct" type="button">${cohortText('Percent')}</button>
-          <button class="${mode === 'count' ? 'active' : ''}" data-cohort-sofa-matrix-mode="count" type="button">N</button>
+        <div class="sofa-matrix-controls">
+          ${cohortSofaGranularityButtons(hasExactMatrix)}
+          <div class="sofa-matrix-control">
+            <span>${cohortText('Matrix value')}</span>
+            <div class="sofa-matrix-toggle" role="group" aria-label="${cohortText('Matrix value')}">
+              <button class="${mode === 'pct' ? 'active' : ''}" data-cohort-sofa-matrix-mode="pct" type="button">${cohortText('Percent')}</button>
+              <button class="${mode === 'count' ? 'active' : ''}" data-cohort-sofa-matrix-mode="count" type="button">N</button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="sofa-heat-scroll">
-        <div class="sofa-heatmap" style="--sofa-data-cols:${bins.length};">
+        <div class="sofa-heatmap" style="--sofa-data-cols:${bins.length}; --sofa-cell-min:${cellMin}px; --sofa-min-width:${matrixMinWidth}px;">
           <div class="sofa-heat-head corner">${esc(corner)}</div>
           ${headers}
           ${rows}
@@ -4117,6 +4265,12 @@
         const next = b.dataset.cohortSofaMatrixMode === 'count' ? 'count' : 'pct';
         if (next === cohortSofaMatrixMode) return;
         cohortSofaMatrixMode = next;
+        repaintScreen('cohort');
+      }));
+      root.querySelectorAll('[data-cohort-sofa-granularity]').forEach(b => b.addEventListener('click', () => {
+        const next = b.dataset.cohortSofaGranularity || 'medium';
+        if (!SOFA_MATRIX_GRANULARITIES[next] || next === cohortSofaMatrixGranularity) return;
+        cohortSofaMatrixGranularity = next;
         repaintScreen('cohort');
       }));
       root.querySelectorAll('[data-cohort-feature-module]').forEach(b => b.addEventListener('click', () => {

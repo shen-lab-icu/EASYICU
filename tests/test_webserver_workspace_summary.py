@@ -2454,6 +2454,20 @@ def test_cohort_review_sofa_reclassification_uses_paired_aggregate_without_row_p
     row_6_8 = {cell["label"]: cell for cell in matrix["6-8"]["cells"]}
     assert row_6_8["0-5"]["count"] == 1
     assert row_6_8["6-8"]["count"] == 1
+    assert reclass["score_scale"] == {
+        "min": 0,
+        "max": 24,
+        "unit": "SOFA points",
+        "aggregation": "nearest_integer_clamped_0_24",
+    }
+    assert reclass["exact_score_bins"][0] == "0"
+    assert reclass["exact_score_bins"][-1] == "24"
+    assert len(reclass["exact_score_matrix"]) == 25
+    assert len(reclass["exact_score_matrix"][0]["cells"]) == 25
+    exact_matrix = {row["label"]: row for row in reclass["exact_score_matrix"]}
+    row_7 = {cell["label"]: cell for cell in exact_matrix["7"]["cells"]}
+    assert row_7["5"]["count"] == 1
+    assert row_7["8"]["count"] == 1
     assert {row["id"]: row["status"] for row in reclass["mode_options"]} == {
         "worst_icu": "ready",
         "first24h": "blocked",
