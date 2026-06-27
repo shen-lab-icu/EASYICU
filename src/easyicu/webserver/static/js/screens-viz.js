@@ -3532,6 +3532,115 @@
       ${(profile.notes || []).length ? `<div class="note info mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body">${(profile.notes || []).map(note => `<div class="t">${esc(cohortProfileLabel(note))}</div><div class="d">${esc(cohortProfileReason(note))}</div>`).join('')}</div></div>` : ''}`;
   }
 
+  function demoNumericProfile(id, label, labelZh, value, unit, unitZh, min, max, count = 10) {
+    return { id, label, label_zh: labelZh, kind: 'numeric', status: 'ready', value, unit, unit_zh: unitZh, min, max, count };
+  }
+
+  function demoPctProfile(id, label, labelZh, pct, count, denominator = 10, kind = 'proportion') {
+    return { id, label, label_zh: labelZh, kind, status: 'ready', pct, count, denominator };
+  }
+
+  function demoCohortClinicalProfile() {
+    return {
+      status: 'seeded_demo_clinical_shape',
+      payload_scope: 'demo_cohort_aggregate_no_patient_rows',
+      domains: [
+        {
+          id: 'demo_demographics',
+          label: 'Demographics',
+          label_zh: '人口统计',
+          status: 'ready',
+          items: [
+            demoNumericProfile('age', 'Median age', '年龄中位数', 63, 'years', '岁', 28, 91),
+            demoPctProfile('female', 'Female', '女性', 44, 4),
+            {
+              id: 'admission',
+              label: 'Admission type',
+              label_zh: '入院类型',
+              kind: 'category',
+              status: 'ready',
+              count: 10,
+              distinct: 3,
+              bins: [
+                { label: t('Emergency', '急诊'), count: 5, pct: 50 },
+                { label: t('Transfer', '转入'), count: 3, pct: 30 },
+                { label: t('Elective', '择期'), count: 2, pct: 20 },
+              ],
+            },
+          ],
+        },
+        {
+          id: 'demo_severity_outcomes',
+          label: 'Severity and outcomes',
+          label_zh: '严重程度与结局',
+          status: 'ready',
+          items: [
+            demoNumericProfile('sofa2', 'Worst SOFA-2', '最严重 SOFA-2', 6, 'points', '分', 1, 18),
+            demoPctProfile('sepsis3', 'Sepsis-3 incidence', 'Sepsis-3 发生率', 60, 6, 10, 'event_rate'),
+            demoPctProfile('hospital_mortality', 'Hospital mortality', '院内死亡率', 20, 2, 10, 'event_rate'),
+            demoNumericProfile('icu_los', 'ICU length of stay', 'ICU 住院时长', 5.6, 'days', '天', 1.1, 21.4),
+          ],
+        },
+        {
+          id: 'demo_treatments',
+          label: 'Treatments and organ support',
+          label_zh: '治疗暴露与器官支持',
+          status: 'ready',
+          items: [
+            demoPctProfile('mechanical_ventilation', 'Mechanical ventilation', '机械通气', 50, 5, 10, 'event_rate'),
+            demoPctProfile('vasopressors', 'Vasopressor exposure', '血管活性药物暴露', 40, 4, 10, 'event_rate'),
+            demoPctProfile('rrt', 'Renal replacement therapy', '肾脏替代治疗', 10, 1, 10, 'event_rate'),
+            demoPctProfile('antibiotics', 'Antibiotic exposure', '抗感染治疗', 70, 7, 10, 'event_rate'),
+          ],
+        },
+        {
+          id: 'demo_diagnoses',
+          label: 'Diagnoses and comorbidities',
+          label_zh: '诊断与共病',
+          status: 'ready',
+          items: [
+            demoPctProfile('aki', 'AKI / renal dysfunction', 'AKI / 肾功能异常', 30, 3, 10, 'event_rate'),
+            demoPctProfile('respiratory_failure', 'Respiratory failure', '呼吸衰竭', 40, 4, 10, 'event_rate'),
+            demoPctProfile('shock', 'Shock phenotype', '休克表型', 30, 3, 10, 'event_rate'),
+            demoPctProfile('infection', 'Suspected infection', '疑似感染', 70, 7, 10, 'event_rate'),
+          ],
+        },
+        {
+          id: 'demo_vitals_labs',
+          label: 'Vitals and laboratory profile',
+          label_zh: '生命体征与实验室',
+          status: 'ready',
+          items: [
+            demoNumericProfile('map', 'Mean arterial pressure', '平均动脉压', 76, 'mmHg', 'mmHg', 45, 126),
+            demoNumericProfile('lactate', 'Lactate', '乳酸', 2.4, 'mmol/L', 'mmol/L', 0.8, 8.9),
+            demoNumericProfile('creatinine', 'Creatinine', '肌酐', 1.3, 'mg/dL', 'mg/dL', 0.5, 4.8),
+            demoNumericProfile('platelets', 'Platelets', '血小板', 168, '10^9/L', '10^9/L', 38, 420),
+          ],
+        },
+        {
+          id: 'demo_completeness',
+          label: 'Data completeness',
+          label_zh: '数据覆盖',
+          status: 'ready',
+          items: [
+            demoPctProfile('demographics_module', 'Demographics module', '人口统计模块', 100, 10, 10, 'module_coverage'),
+            demoPctProfile('vitals_module', 'Vital signs module', '生命体征模块', 100, 10, 10, 'module_coverage'),
+            demoPctProfile('labs_module', 'Laboratory modules', '实验室模块', 90, 9, 10, 'module_coverage'),
+            demoPctProfile('outcome_module', 'Outcome module', '结局模块', 100, 10, 10, 'module_coverage'),
+          ],
+        },
+      ],
+      notes: [
+        {
+          label: 'Demo-only clinical shape',
+          label_zh: '仅演示临床结构',
+          text: 'The demo shows the dimensions a real cohort profile should expose; values are seeded UI examples, not research results.',
+          text_zh: '演示页展示真实队列画像应覆盖的维度；数值是界面示例，不是研究结果。',
+        },
+      ],
+    };
+  }
+
   function cohortSnapshotBody() {
     const review = cohortReview();
     if (review && review.summary) {
@@ -3625,11 +3734,17 @@
       </div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Real local export summary. Formal analyses still require the evidence-bound agent path.', '真实本地导出摘要。正式分析仍需走 evidence-bound agent 路径。')}</p>`;
     }
-    const ages = [['18–39', 2], ['40–59', 3], ['60–74', 4], ['≥75', 1]];
-    const sofa = [['0–5', 4], ['6–8', 3], ['9–11', 2], ['≥12', 1]];
-    const maxA = Math.max(...ages.map(a => a[1])), maxS = Math.max(...sofa.map(s => s[1]));
+    const demoProfile = demoCohortClinicalProfile();
+    const domains = [
+      [t('Severity', '严重程度'), 6, t('median SOFA-2', 'SOFA-2 中位数')],
+      [t('Sepsis', 'Sepsis'), 60, t('incidence', '发生率')],
+      [t('Ventilation', '机械通气'), 50, t('exposure', '暴露率')],
+      [t('Vasopressors', '血管活性药'), 40, t('exposure', '暴露率')],
+      [t('AKI', 'AKI'), 30, t('phenotype', '表型')],
+      [t('Mortality', '死亡'), 20, t('event rate', '事件率')],
+    ];
     return `
-      <div class="sec-stack"><div class="lbl">Cohort profile</div><h2>${t('Demo cohort snapshot', '演示队列概览')}</h2></div>
+      <div class="sec-stack"><div class="lbl">Cohort profile</div><h2>${t('Demo clinical cohort profile', '演示临床队列画像')}</h2></div>
       <div class="stat-grid">
         <div class="stat accent"><div class="label">${t('Patients', '患者数')}</div><div class="val">10</div></div>
         <div class="stat"><div class="label">${t('Median age', '年龄中位数')}</div><div class="val">56</div></div>
@@ -3638,14 +3753,18 @@
         <div class="stat"><div class="label">${t('Median SOFA', 'SOFA 中位数')}</div><div class="val">6</div></div>
         <div class="stat accent"><div class="label">${t('Mortality', '死亡率')}</div><div class="val">20%</div></div>
       </div>
-      <div class="cols-2 mt-16">
-        <div class="card pad">
-          <div class="eyebrow" style="margin-bottom:8px;">${t('Age distribution', '年龄分布')}</div>
-          ${ages.map(([lab, n]) => `<div class="qrow"><span>${lab}</span><div class="qbar"><span style="width:${(n / maxA * 100)}%"></span></div><span class="qv">${n}</span></div>`).join('')}
-        </div>
-        <div class="card pad">
-          <div class="eyebrow" style="margin-bottom:8px;">${t('SOFA severity', 'SOFA 严重度')}</div>
-          ${sofa.map(([lab, n]) => `<div class="qrow"><span>${lab}</span><div class="qbar"><span style="width:${(n / maxS * 100)}%"></span></div><span class="qv">${n}</span></div>`).join('')}
+      <div class="card pad mt-16">
+        <div class="sec-stack mini"><div class="lbl">${t('Clinical domains', '临床维度')}</div><h3>${t('What a real cohort profile should summarize', '真实队列画像应总结哪些信息')}</h3></div>
+        ${cohortClinicalProfile(demoProfile)}
+      </div>
+      <div class="card pad mt-16">
+        <div class="eyebrow" style="margin-bottom:8px;">${t('At-a-glance phenotype balance', '一屏临床表型概览')}</div>
+        <div class="cprof-spark-grid">
+          ${domains.map(([label, value, hint]) => `<div class="cprof-spark">
+            <div class="cprof-spark-head"><span>${esc(label)}</span><b class="mono">${typeof value === 'number' && value <= 100 && value !== 6 ? fmtPct(value) : fmtNum(value, 1)}</b></div>
+            <div class="cprof-bar"><span style="width:${Math.max(4, Math.min(100, value === 6 ? 50 : value)).toFixed(1)}%"></span></div>
+            <div class="cprof-d">${esc(hint)}</div>
+          </div>`).join('')}
         </div>
       </div>
       <p style="font-size:11px;color:var(--ink-4);margin-top:8px;">${t('Demo / seeded example values for UI preview — not a real run output.', '演示 / 示例数据，仅用于界面预览 —— 非真实运行结果。')}</p>`;
