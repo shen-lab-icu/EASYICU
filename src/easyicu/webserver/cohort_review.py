@@ -2855,6 +2855,7 @@ def _sofa_reclassification_payload(
     same = sum(1 for delta in deltas if delta == 0)
     paired_count = len(pairs)
     matrix = _sofa_transition_matrix(pairs)
+    exact_matrix = _sofa_exact_transition_matrix(pairs)
     return {
         "status": "ready",
         "mode": "worst_icu",
@@ -2871,6 +2872,14 @@ def _sofa_reclassification_payload(
         "delta_summary": _numeric_summary(deltas),
         "severity_bins": [row["label"] for row in matrix],
         "transition_matrix": matrix,
+        "exact_score_bins": [str(value) for value in range(25)],
+        "exact_score_matrix": exact_matrix,
+        "score_scale": {
+            "min": 0,
+            "max": 24,
+            "unit": "SOFA points",
+            "aggregation": "nearest_integer_clamped_0_24",
+        },
         "mode_options": [
             {
                 "id": "worst_icu",
@@ -2919,6 +2928,48 @@ def _sofa_transition_matrix(pairs: List[Tuple[float, float]]) -> List[Dict[str, 
         row_total = row_totals[source_label]
         rows.append({"label": source_label, "count": row_total, "cells": cells})
     return rows
+
+
+def _sofa_exact_transition_matrix(pairs: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
+    labels = [str(value) for value in range(25)]
+    total = len(pairs)
+    counts: Counter[Tuple[int, int]] = Counter()
+    row_totals: Counter[int] = Counter()
+    for sofa1, sofa2 in pairs:
+        source_score = _sofa_score_index(sofa1)
+        target_score = _sofa_score_index(sofa2)
+        if source_score is None or target_score is None:
+            continue
+        counts[(source_score, target_score)] += 1
+        row_totals[source_score] += 1
+    rows: List[Dict[str, Any]] = []
+    for source_score in range(25):
+        cells = [
+            {
+                "label": str(target_score),
+                "count": counts[(source_score, target_score)],
+                "pct": _pct(counts[(source_score, target_score)], total),
+            }
+            for target_score in range(25)
+        ]
+        rows.append(
+            {
+                "label": str(source_score),
+                "count": row_totals[source_score],
+                "cells": cells,
+            }
+        )
+    return rows
+
+
+def _sofa_score_index(value: Any) -> int | None:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(score):
+        return None
+    return max(0, min(24, int(round(score))))
 
 
 def _sofa_severity_label(value: Any) -> str:

@@ -2117,6 +2117,15 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     assert "function cohortSofaHeatmap" in viz_js
     assert "cohortSofaMatrixMode" in viz_js
     assert "data-cohort-sofa-matrix-mode" in viz_js
+    assert "SOFA_MATRIX_GRANULARITIES" in viz_js
+    assert "cohortSofaMatrixGranularity = 'medium'" in viz_js
+    assert "data-cohort-sofa-granularity" in viz_js
+    assert "exact_score_matrix" in viz_js
+    assert "--sofa-min-width" in viz_js
+    assert (
+        "Rows are SOFA-1 score bands; columns are SOFA-2 score bands."
+        in viz_js
+    )
     assert "Rows are SOFA-1 severity bands; columns are SOFA-2 bands." in viz_js
     assert "reclass.status === 'ready'" in viz_js
     assert "Demo threshold uses SOFA ≥ 6" in viz_js
@@ -2127,9 +2136,13 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     assert ".sofa-heatmap" in cohort_css
     assert ".sofa-heat-cell" in cohort_css
     assert ".sofa-matrix-toggle" in cohort_css
+    assert ".sofa-matrix-controls" in cohort_css
+    assert "--sofa-cell-min" in cohort_css
+    assert "--sofa-min-width" in cohort_css
     assert ".surv-toolbar" not in redesign_css
     assert ".km-chart" not in redesign_css
     assert ".sofa-heatmap" not in redesign_css
+    assert ".sofa-matrix-controls" not in redesign_css
     for key in ["outcome", "age", "sex", "los", "sepsis", "custom"]:
         assert f"{key}:" in viz_js
 
