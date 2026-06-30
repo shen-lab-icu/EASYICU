@@ -41,6 +41,7 @@ from .analysis_types import (
     locked_analysis_type_guide,
     planner_analysis_type_guide,
 )
+from .method_capabilities import coder_method_capability_block
 from .cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
 from .icu_rules import (
     GENERAL_ICU_ANALYSIS_PRINCIPLES,
@@ -1311,6 +1312,8 @@ class CoderAgent:
                     f"Step inputs: {step.inputs}\n"
                     f"Expected outputs: {step.expected_outputs}\n"
                     f"Method: {step.method or '(unspecified — choose conservatively)'}\n\n"
+                    + coder_method_capability_block()
+                    + "\n\n"
                     "OUTPUT FORMAT — VERY IMPORTANT:\n"
                     "Return *only* a complete, runnable Python script. A "
                     "```python … ``` fence is acceptable; any text outside "
@@ -1389,10 +1392,8 @@ class CoderAgent:
                     "honoring explicit user preferences recorded in the "
                     "ResearchContext.\n\n"
                     "REPAIR CHECKLIST:\n"
-                    "- IMPORTS: only standard scientific Python is available — "
-                    "`pandas`, `numpy`, `scipy`, `sklearn`, `statsmodels`, "
-                    "`matplotlib`, `seaborn`, `pyarrow`, `duckdb`, and Python "
-                    "stdlib. **There is NO `easyicu.research_agent.rcs` / "
+                    "- IMPORTS: " + coder_method_capability_block() + "\n"
+                    "  **There is NO `easyicu.research_agent.rcs` / "
                     "`.metrics` / `.utils` etc.** — the analysis script runs in a "
                     "sandbox that has NO easyicu sub-modules on the path. If "
                     "you need restricted cubic splines, write your own helper "

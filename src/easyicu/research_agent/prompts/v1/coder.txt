@@ -347,9 +347,13 @@ PYTHON HYGIENE:
   string dtype) and fill labels with `.loc[mask] = "label"` assignments;
   use `default=None` only if every non-default branch is string-like and
   the result is immediately converted to an object/string Series.
-- Only import from the standard library, pandas, numpy, scipy,
-  matplotlib, statsmodels, and scikit-learn (`sklearn`). No network
-  access.
+- Import only the libraries named in the AVAILABLE ANALYTICAL LIBRARIES
+  block supplied with each step. That always includes the Python standard
+  library, pandas, numpy, scipy, matplotlib, seaborn, statsmodels, and
+  scikit-learn (`sklearn`), and may also list advanced packages verified
+  for this run (e.g. lifelines, shap, xgboost) — prefer the
+  family-appropriate one when present. Never import a package absent from
+  that block; the sandbox has no network to install it.
 
 PREDICTION / CLUSTERING APIs:
 - For mortality prediction tasks, prefer scikit-learn Pipelines with
