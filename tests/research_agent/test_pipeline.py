@@ -1195,6 +1195,154 @@ def test_plan_contract_does_not_relabel_covariate_as_primary_bias_audit(ra):
     assert revised.steps[0].step_id == "03_biomarker_mortality_association"
 
 
+def test_survival_analysis_type_drives_km_figure_contract(ra):
+    """A plan stamped analysis_type='survival' must be normalized to a
+    self-contained survival step carrying figure:survival_curves, even with no
+    user_preferences family. Regression: survival studies previously fell
+    through the contract (no survival bucket) and only got the robustness forest."""
+    from easyicu.research_agent import pipeline as pipeline_mod
+
+    ctx = ra.build_research_context(
+        research_question=(
+            "Time-to-event survival of 28-day mortality with Cox proportional "
+            "hazards stratified by SOFA-2 band."
+        ),
+        cohort=pd.DataFrame({
+            "stay_id": [1, 2, 3, 4],
+            "sofa2_band": [1, 2, 3, 4],
+            "followup_days": [5, 28, 12, 3],
+            "death": [0, 1, 0, 1],
+        }),
+        cohort_name="c",
+        database="miiv",
+        target_outcome="death",
+    )
+    plan = ra.schema.AnalysisPlan(
+        research_question=ctx.research_question,
+        analysis_type="survival",
+        steps=[
+            ra.schema.AnalysisStep(
+                step_id="03_cox_model",
+                intent="Fit a Cox proportional-hazards model for 28-day mortality.",
+                inputs=["sofa2_band", "followup_days", "death"],
+                expected_outputs=["table:hr"],
+                method="cox_proportional_hazards",
+            )
+        ],
+    )
+
+    revised, findings = pipeline_mod._enforce_advanced_plan_contract(
+        plan=plan,
+        context=ctx,
+    )
+
+    assert any(f.detail.get("family") == "survival" for f in findings), findings
+    surv_step = next(
+        s for s in revised.steps if s.step_id == "01_survival_analysis"
+    )
+    assert "figure:survival_curves" in surv_step.expected_outputs
+    assert "table:cox_summary" in surv_step.expected_outputs
+
+
+def test_normalise_contract_family_bridges_registry_keys(ra):
+    """The alias layer must map registry analysis_type keys onto contract
+    buckets so the stamped plan.analysis_type drives figure enforcement."""
+    from easyicu.research_agent import plan_utils
+
+    assert plan_utils._normalise_contract_family("survival") == "survival"
+    assert plan_utils._normalise_contract_family("trajectory_clustering") == "clustering"
+    # Result-bearing families that own their bucket pass through identically.
+    for key in (
+        "dynamic_prediction",
+        "causal_inference",
+        "treatment_response",
+        "validation",
+    ):
+        assert plan_utils._normalise_contract_family(key) == key
+    # Families without a figure/metric contract fall back to the heuristic.
+    assert plan_utils._normalise_contract_family("association_study") == ""
+    assert plan_utils._normalise_contract_family("descriptive_epidemiology") == ""
+    assert plan_utils._normalise_contract_family("multimodal") == ""
+    assert plan_utils._normalise_contract_family(None) == ""
+    # Legacy contract-bucket words still pass through unchanged.
+    assert plan_utils._normalise_contract_family("clustering") == "clustering"
+
+
+@pytest.mark.parametrize(
+    "analysis_type, question, step_intent, method, figure_tag",
+    [
+        (
+            "dynamic_prediction",
+            "Time-updated dynamic prediction of deterioration over rolling horizons.",
+            "Build a time-varying landmark prediction at each horizon.",
+            "landmark_model",
+            "figure:time_varying_discrimination",
+        ),
+        (
+            "causal_inference",
+            "Causal effect of early vasopressors using propensity-score IPW.",
+            "Estimate IPW propensity-weighted causal effect with covariate balance.",
+            "ipw",
+            "figure:covariate_balance",
+        ),
+        (
+            "treatment_response",
+            "Heterogeneous treatment response: who are the responders to steroids?",
+            "Test effect modification and summarize responder subgroups.",
+            "interaction_model",
+            "figure:subgroup_forest",
+        ),
+        (
+            "validation",
+            "External validation and transportability of the SOFA score.",
+            "Externally validate score discrimination and calibration.",
+            "external_validation",
+            "figure:external_validation",
+        ),
+    ],
+)
+def test_specific_analysis_types_drive_their_own_figure_contract(
+    ra, analysis_type, question, step_intent, method, figure_tag
+):
+    """Each specific, non-heuristic-reachable family must normalize to its own
+    canonical step carrying its distinctive figure — and must win over the
+    keyword heuristic (e.g. dynamic_prediction over the bare word 'prediction')."""
+    from easyicu.research_agent import pipeline as pipeline_mod
+
+    ctx = ra.build_research_context(
+        research_question=question,
+        cohort=pd.DataFrame({
+            "stay_id": [1, 2, 3, 4],
+            "exposure": [0, 1, 0, 1],
+            "death": [0, 1, 0, 1],
+        }),
+        cohort_name="c",
+        database="miiv",
+        target_outcome="death",
+    )
+    plan = ra.schema.AnalysisPlan(
+        research_question=question,
+        analysis_type=analysis_type,
+        steps=[
+            ra.schema.AnalysisStep(
+                step_id="03_step",
+                intent=step_intent,
+                inputs=["exposure", "death"],
+                expected_outputs=["table:x"],
+                method=method,
+            )
+        ],
+    )
+
+    revised, findings = pipeline_mod._enforce_advanced_plan_contract(
+        plan=plan, context=ctx
+    )
+
+    assert any(f.detail.get("family") == analysis_type for f in findings), findings
+    all_outputs = [o for s in revised.steps for o in s.expected_outputs]
+    assert figure_tag in all_outputs, all_outputs
+
+
 def test_pipeline_auto_enables_llm_concept_audit_for_non_mock_llm(ra, tmp_path: Path):
     class _TextLLM:
         name = "real-ish"

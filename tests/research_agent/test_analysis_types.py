@@ -238,7 +238,152 @@ def test_mock_planner_routes_survival_question_to_protocol_and_saves_user_prefer
     )
     step_ids = [step["step_id"] for step in plan["steps"]]
 
-    assert "04_survival_protocol" in step_ids, step_ids
+    # The advanced-plan contract now normalizes a survival question into a
+    # self-contained canonical survival step carrying the KM/Cox figure
+    # contract (replacing the mock planner's bare 04_survival_protocol). The
+    # figure output is then split into a dedicated sibling figure step, so the
+    # contract surfaces as 01_survival_analysis(+_figure) rather than a bare
+    # association plan.
+    assert "01_survival_analysis" in step_ids, step_ids
     assert "04_primary_association" not in step_ids
+    all_outputs = [
+        output for step in plan["steps"] for output in step["expected_outputs"]
+    ]
+    assert "figure:survival_curves" in all_outputs, step_ids
+    assert "table:cox_summary" in all_outputs
     assert ctx["user_preferences"]["inferred_analysis_family"] == "survival"
     assert "Kaplan-Meier" in (ctx["user_preferences"]["must_have_outputs"] or "")
+
+
+def test_planner_prompt_locks_inferred_family(ra):
+    """The planner prompt must name the single inferred family for THIS study,
+    not only present the generic catalog (regression: pilot plans came back
+    with analysis_type=None and every question collapsed to logistic)."""
+    import importlib
+
+    agents = importlib.import_module("easyicu.research_agent.agents")
+
+    def _ctx(question: str):
+        return ra.ResearchContext(
+            research_question=question,
+            cohort=ra.CohortDescriptor(
+                cohort_name="c", database="miiv", n_patients=200, n_stays=200
+            ),
+            variables=[
+                ra.ConceptDescriptor(
+                    name="sofa",
+                    role=ra.schema.VariableRole.COMPOSITE_SCORE,
+                    dtype="float64",
+                    is_ordinal=True,
+                ),
+                ra.ConceptDescriptor(
+                    name="death", role=ra.schema.VariableRole.OUTCOME, dtype="int64"
+                ),
+            ],
+            target_outcome="death",
+        )
+
+    cases = {
+        "Cox proportional hazards time-to-event survival of 28-day mortality.": "survival",
+        "Discover patient subphenotypes via trajectory clustering of vitals.": "trajectory_clustering",
+        "Estimate admission SOFA association with ICU mortality.": "association_study",
+    }
+    for question, expected_family in cases.items():
+        prompt = agents._build_planner_user_prompt(_ctx(question))
+        assert "LOCKED ANALYSIS FAMILY FOR THIS STUDY" in prompt
+        locked_line = next(
+            line for line in prompt.splitlines() if "LOCKED ANALYSIS FAMILY" in line
+        )
+        assert expected_family in locked_line, (question, locked_line)
+        # The full catalog still follows as reference.
+        assert "ANALYSIS-TYPE CATALOG" in prompt
+
+
+def test_parse_stamps_analysis_type_onto_plan(ra):
+    """PlannerAgent._parse must stamp the deterministically inferred family
+    onto the plan so downstream method/figure routing has a non-None signal."""
+    import importlib
+    import json
+
+    agents = importlib.import_module("easyicu.research_agent.agents")
+
+    ctx = ra.ResearchContext(
+        research_question="Cox proportional hazards survival of 28-day mortality.",
+        cohort=ra.CohortDescriptor(
+            cohort_name="c", database="miiv", n_patients=200, n_stays=200
+        ),
+        variables=[
+            ra.ConceptDescriptor(
+                name="death", role=ra.schema.VariableRole.OUTCOME, dtype="int64"
+            )
+        ],
+        target_outcome="death",
+    )
+    valid_plan = json.dumps(
+        {
+            "research_question": ctx.research_question,
+            "steps": [
+                {
+                    "step_id": "01_fit",
+                    "intent": "fit cox model",
+                    "inputs": [],
+                    "expected_outputs": ["table:hr"],
+                    "method": "cox_ph",
+                    "icu_rule_refs": [],
+                }
+            ],
+            "rationale": "r",
+        }
+    )
+    planner = agents.PlannerAgent.__new__(agents.PlannerAgent)
+    planner.last_dropped_plan_keys = {"top_level": [], "steps": []}
+    plan = agents.PlannerAgent._parse(planner, valid_plan, ctx)
+    assert plan.analysis_type == "survival", plan.analysis_type
+
+
+def test_infer_does_not_misclassify_lab_names_as_multimodal(ra):
+    """Substring 'ct' (CT scan) inside lab names like 'lactate' must not score
+    multimodal. Surfaced by a real gpt-5.4 run where an association cohort with a
+    lactate covariate stamped analysis_type='multimodal'."""
+    schema = ra.schema
+
+    def _ctx(extra_var_names):
+        variables = [
+            schema.ConceptDescriptor(
+                name="sofa",
+                role=schema.VariableRole.COMPOSITE_SCORE,
+                dtype="float64",
+                is_ordinal=True,
+            )
+        ]
+        for name in extra_var_names:
+            variables.append(
+                schema.ConceptDescriptor(
+                    name=name, role=schema.VariableRole.LAB, dtype="float64"
+                )
+            )
+        variables.append(
+            schema.ConceptDescriptor(
+                name="death", role=schema.VariableRole.OUTCOME, dtype="int64"
+            )
+        )
+        return schema.ResearchContext(
+            research_question=(
+                "Is admission SOFA associated with ICU mortality after adjusting "
+                "for age and lactate?"
+            ),
+            cohort=schema.CohortDescriptor(
+                cohort_name="c", database="miiv", n_patients=500, n_stays=500
+            ),
+            variables=variables,
+            target_outcome="death",
+        )
+
+    from easyicu.research_agent.analysis_types import infer_analysis_type
+
+    # Lab names containing the substring 'ct'/'note' etc. must NOT score multimodal.
+    assert infer_analysis_type(_ctx(["lactate"])).key == "association_study"
+    assert infer_analysis_type(_ctx(["lactate", "extract_flag"])).key == "association_study"
+    # Genuine modality variables must still be detected as multimodal.
+    assert infer_analysis_type(_ctx(["ct_scan_present"])).key == "multimodal"
+    assert infer_analysis_type(_ctx(["clinical_note"])).key == "multimodal"

@@ -720,10 +720,13 @@ def infer_analysis_type(
             )
             else 0
         )
+    # Word-boundary match, not substring: bare ``in`` made short modality tokens
+    # like "ct" (CT scan) fire inside ordinary lab names — "ct" is a substring of
+    # "la(ct)ate" — wrongly scoring a plain association cohort as multimodal.
     if any(
-        token in ((v.name or "") + " " + (v.description or "")).lower()
+        _keyword_present(((v.name or "") + " " + (v.description or "")).lower(), token)
         for v in context.variables
-        for token in ("note", "text", "waveform", "ecg", "image", "cxr", "ct", "mri")
+        for token in ("note", "notes", "text", "waveform", "ecg", "image", "imaging", "cxr", "ct", "mri")
     ):
         scores["multimodal"] += 2
     if context.cross_database_validation:
@@ -769,6 +772,30 @@ def planner_analysis_type_guide() -> str:
     return "\n".join(lines)
 
 
+def locked_analysis_type_guide(spec: AnalysisTypeSpec) -> str:
+    """Focused prompt block naming the single inferred family for THIS study.
+
+    Injected ahead of the full catalog so the planner builds the plan around
+    the locked family's candidate modules instead of silently collapsing every
+    question to a generic association/logistic plan. The full catalog still
+    follows as reference, and the planner may override with explicit
+    justification when the question clearly belongs to another family.
+    """
+    return (
+        f"LOCKED ANALYSIS FAMILY FOR THIS STUDY: `{spec.key}` — {spec.name}.\n"
+        f"{spec.description}\n"
+        f"Default module backbone (use these as your step set unless the "
+        f"context clearly rules one out): {', '.join(spec.candidate_steps)}.\n"
+        f"Mandatory guardrails for this family: {' '.join(spec.guardrails)}\n"
+        "Build the plan around THIS family and pick methods/figures it calls "
+        "for. Do not default to a generic association/logistic plan when the "
+        "locked family is survival, trajectory_clustering, dynamic_prediction, "
+        "causal_inference, etc. If the research question clearly belongs to a "
+        "different family than the one locked above, you may switch — but only "
+        "with an explicit one-line justification in `rationale`.\n"
+    )
+
+
 def analysis_type_catalog_markdown() -> str:
     """Human-readable markdown summary for docs or reports."""
     parts: List[str] = []
@@ -792,5 +819,6 @@ __all__ = [
     "get_analysis_type",
     "infer_analysis_type",
     "planner_analysis_type_guide",
+    "locked_analysis_type_guide",
     "analysis_type_catalog_markdown",
 ]

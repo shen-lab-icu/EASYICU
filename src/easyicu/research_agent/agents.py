@@ -36,7 +36,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .analysis_types import infer_analysis_type, planner_analysis_type_guide
+from .analysis_types import (
+    infer_analysis_type,
+    locked_analysis_type_guide,
+    planner_analysis_type_guide,
+)
 from .cohort_schema import ALLOWED_CTAS_AGGREGATIONS, known_concept_ids
 from .icu_rules import (
     GENERAL_ICU_ANALYSIS_PRINCIPLES,
@@ -385,6 +389,8 @@ def _build_planner_user_prompt(context: ResearchContext) -> str:
         "These are advisory execution specifications: do not use "
         "them to change the primary analysis, and do not describe "
         "their results as surprising or unexpected.\n\n"
+        + locked_analysis_type_guide(infer_analysis_type(context))
+        + "\n\n"
         + planner_analysis_type_guide()
         + "\n\n"
         "OUTPUT FORMAT — VERY IMPORTANT:\n"
@@ -557,7 +563,13 @@ class PlannerAgent:
             data["research_question"] = context.research_question
         data, dropped = _normalise_plan_payload(data)
         self.last_dropped_plan_keys = dropped
-        return AnalysisPlan.model_validate(data)
+        plan = AnalysisPlan.model_validate(data)
+        # Stamp the locked analysis family deterministically. The LLM is given
+        # the family in its prompt, but the field used downstream for method
+        # and figure routing is authoritative from infer_analysis_type so it
+        # cannot silently collapse to a generic association plan.
+        plan.analysis_type = infer_analysis_type(context).key
+        return plan
 
 
 # ---------------------------------------------------------------------------
@@ -1283,12 +1295,18 @@ class CoderAgent:
             format_violation_message,
         )
 
+        _family = infer_analysis_type(context)
         messages = [
             LLMMessage(role="system", content=_SYSTEM_GUIDE + _CODER_GUIDE),
             LLMMessage(
                 role="user",
                 content=(
                     f"Write the Python CODE for STEP {step.step_id}.\n"
+                    f"Locked analysis family: {_family.key} ({_family.name}). "
+                    f"Pick methods and figures this family calls for; do not "
+                    f"fall back to a generic association/logistic script when "
+                    f"the family and step method call for survival, clustering, "
+                    f"dynamic prediction, etc.\n"
                     f"Step intent: {step.intent}\n"
                     f"Step inputs: {step.inputs}\n"
                     f"Expected outputs: {step.expected_outputs}\n"
@@ -1828,6 +1846,7 @@ def _normalise_plan_payload(
     """
     allowed_plan = {
         "research_question",
+        "analysis_type",
         "cohort",
         "steps",
         "robustness_specs",

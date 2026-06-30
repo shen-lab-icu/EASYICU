@@ -3283,6 +3283,28 @@ _SEMANTIC_ALIAS_MAP: Dict[tuple, tuple] = {
         "clustering_visualization",
         "clustering_figure",
     ),
+    ("", "survival_curves.png"): (
+        "survival_curves",
+        "survival_figure",
+        "kaplan_meier",
+    ),
+    ("", "time_varying_discrimination.png"): (
+        "time_varying_discrimination",
+        "dynamic_prediction_figure",
+    ),
+    ("", "covariate_balance.png"): (
+        "covariate_balance",
+        "love_plot",
+        "causal_balance_figure",
+    ),
+    ("", "subgroup_forest.png"): (
+        "subgroup_forest",
+        "treatment_response_figure",
+    ),
+    ("", "external_validation.png"): (
+        "external_validation",
+        "validation_figure",
+    ),
 }
 
 
