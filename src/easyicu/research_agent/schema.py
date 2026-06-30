@@ -428,6 +428,16 @@ class AnalysisPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     research_question: str
+    analysis_type: Optional[str] = Field(
+        default=None,
+        description=(
+            "Locked EHR analysis family key (e.g. survival, "
+            "trajectory_clustering, prediction_model). Stamped deterministically "
+            "by the planner from infer_analysis_type(context); downstream method "
+            "selection and figure routing branch on this. None only on legacy "
+            "plans produced before the field existed."
+        ),
+    )
     steps: List[AnalysisStep]
     cohort: Optional[CohortDefinition] = Field(
         default=None,

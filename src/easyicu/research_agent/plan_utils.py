@@ -211,6 +211,63 @@ def _cohort_definition_contract_findings(
     ]
 
 
+# Contract "family" buckets this enforcer knows how to normalise. These are the
+# figure/metric-contract groupings, NOT the analysis_types registry keys — the
+# two vocabularies diverged historically. _normalise_contract_family bridges
+# them so the authoritative stamped ``plan.analysis_type`` (registry key) drives
+# the contract instead of only the keyword heuristic.
+_CONTRACT_FAMILIES = {
+    "prediction_model",
+    "clustering",
+    "robustness",
+    "bias_audit",
+    "survival",
+    "dynamic_prediction",
+    "causal_inference",
+    "treatment_response",
+    "validation",
+}
+# Registry analysis_type keys whose bucket name DIFFERS from the key. Keys that
+# already equal a contract bucket (survival, dynamic_prediction, ...) pass
+# through via the ``in _CONTRACT_FAMILIES`` check below, so only true renames go
+# here. Families with no figure/metric contract (descriptive_epidemiology,
+# association_study, multimodal, reinforcement_learning, the *_audit and
+# *_sensitivity shapes) are intentionally absent → they fall back to the keyword
+# heuristic / robustness forest rather than getting a forced filler figure.
+_ANALYSIS_TYPE_TO_CONTRACT_FAMILY = {
+    "trajectory_clustering": "clustering",
+}
+# Buckets the keyword heuristic below can already produce on its own. The
+# authoritative stamped ``plan.analysis_type`` is only allowed to INTRODUCE
+# buckets OUTSIDE this set, because infer_analysis_type is deliberately looser
+# than these gates — e.g. a bare "model" maps to prediction_model — and must not
+# widen the conservative prediction/clustering/bias enforcement onto plans the
+# heuristic leaves alone. The newer result-bearing buckets (survival,
+# dynamic_prediction, causal_inference, treatment_response, validation) are NOT
+# heuristic-reachable, so the stamped type is allowed to introduce them, and
+# their markers are specific enough to avoid the bare-"model" false-match.
+_HEURISTIC_REACHABLE_FAMILIES = {
+    "prediction_model",
+    "clustering",
+    "bias_audit",
+    "robustness",
+}
+
+
+def _normalise_contract_family(raw: Optional[str]) -> str:
+    """Map a registry analysis_type (or a legacy bucket) to a contract family.
+
+    Returns ``""`` for families this enforcer has no figure/metric contract for
+    (e.g. ``association_study``, ``descriptive_epidemiology``), so the caller
+    falls back to the keyword heuristic exactly as before. Values that are
+    already contract buckets pass through unchanged for backward compatibility.
+    """
+    value = (raw or "").strip().lower()
+    if value in _CONTRACT_FAMILIES:
+        return value
+    return _ANALYSIS_TYPE_TO_CONTRACT_FAMILY.get(value, "")
+
+
 def _enforce_advanced_plan_contract(
     *,
     plan: AnalysisPlan,
@@ -218,11 +275,23 @@ def _enforce_advanced_plan_contract(
 ) -> tuple[AnalysisPlan, List[ValidationFinding]]:
     """Constrain advanced plan shape while leaving analysis code to the agent."""
 
-    family = (
-        (context.user_preferences.inferred_analysis_family or "").lower()
+    # Priority: explicit user-declared family > authoritative stamped
+    # plan.analysis_type (specific, non-heuristic-reachable families only) >
+    # keyword heuristic. The stamped type is consulted before the heuristic so a
+    # specific family (survival, dynamic_prediction, causal_inference,
+    # treatment_response, validation) wins over the heuristic's looser keyword
+    # match (e.g. the bare word "prediction" -> prediction_model). It is gated to
+    # families the heuristic cannot reach because infer_analysis_type is itself
+    # too loose for the reachable ones (bare "model" -> prediction_model).
+    family = _normalise_contract_family(
+        context.user_preferences.inferred_analysis_family
         if context.user_preferences
-        else ""
+        else None
     )
+    if not family:
+        stamped = _normalise_contract_family(getattr(plan, "analysis_type", None))
+        if stamped and stamped not in _HEURISTIC_REACHABLE_FAMILIES:
+            family = stamped
     if not family:
         plan_blob = " ".join(
             [
@@ -299,7 +368,7 @@ def _enforce_advanced_plan_contract(
             )
         ):
             family = "prediction_model"
-    if family not in {"prediction_model", "clustering", "robustness", "bias_audit"}:
+    if family not in _CONTRACT_FAMILIES:
         return plan, []
 
     if family == "prediction_model":
@@ -353,6 +422,162 @@ def _enforce_advanced_plan_contract(
             "figure:clustering_visualization",
             "log:clustering_algorithm_details",
             "manifest:clustering_methodology",
+        ]
+    elif family == "survival":
+        markers = (
+            "survival",
+            "time-to-event",
+            "time to event",
+            "kaplan",
+            "kaplan-meier",
+            "kaplan meier",
+            "cox",
+            "hazard",
+            "proportional hazards",
+            "log-rank",
+            "log rank",
+            "person-time",
+        )
+        canonical_step_id = "01_survival_analysis"
+        canonical_method = "survival_analysis"
+        canonical_intent = (
+            "Run the time-to-event survival analysis in one self-contained "
+            "executable step: define time-zero and the follow-up window, "
+            "estimate Kaplan-Meier curves by the primary stratum, fit a Cox "
+            "proportional-hazards model, and write the hazard-ratio table plus "
+            "the survival-curve figure. Respect censoring and do not collapse "
+            "time-to-event into a static binary outcome."
+        )
+        required_outputs = [
+            "statistic:hazard_ratio",
+            "statistic:n_events",
+            "statistic:median_followup",
+            "table:cox_summary",
+            "figure:survival_curves",
+            "log:survival_time_definition",
+        ]
+    elif family == "dynamic_prediction":
+        markers = (
+            "dynamic prediction",
+            "time-updated",
+            "time updated",
+            "time-varying",
+            "time varying",
+            "time-dependent",
+            "rolling",
+            "landmark",
+            "early warning",
+            "deterioration",
+            "prediction horizon",
+            "update cadence",
+        )
+        canonical_step_id = "01_dynamic_prediction"
+        canonical_method = "dynamic_prediction"
+        canonical_intent = (
+            "Build the time-updated prediction analysis in one self-contained "
+            "executable step: keep prediction time, observation window, and "
+            "target horizon distinct, evaluate discrimination at each horizon "
+            "with a strict anti-leakage split, and write the time-varying "
+            "discrimination figure. Do not collapse longitudinal forecasting "
+            "into a single static prediction."
+        )
+        required_outputs = [
+            "statistic:time_varying_auroc",
+            "statistic:prediction_horizon",
+            "table:horizon_performance",
+            "figure:time_varying_discrimination",
+            "log:anti_leakage_audit",
+        ]
+    elif family == "causal_inference":
+        markers = (
+            "causal",
+            "propensity",
+            "ipw",
+            "iptw",
+            "inverse probability",
+            "g-formula",
+            "g-computation",
+            "doubly robust",
+            "target trial",
+            "instrumental variable",
+            "marginal structural",
+            "counterfactual",
+            "standardized mean difference",
+            "covariate balance",
+        )
+        canonical_step_id = "01_causal_effect_estimation"
+        canonical_method = "causal_inference"
+        canonical_intent = (
+            "Estimate the adjusted treatment effect in one self-contained "
+            "executable step: state the identification assumptions, check "
+            "covariate balance / positivity before and after weighting, report "
+            "the adjusted effect with its uncertainty, and write the "
+            "covariate-balance (love) figure. Keep causal language conditional "
+            "on the stated assumptions; do not over-claim causality."
+        )
+        required_outputs = [
+            "statistic:adjusted_effect",
+            "statistic:max_smd_after_weighting",
+            "table:covariate_balance",
+            "figure:covariate_balance",
+            "log:identification_assumptions",
+        ]
+    elif family == "treatment_response":
+        markers = (
+            "treatment response",
+            "responder",
+            "nonresponder",
+            "non-responder",
+            "heterogeneous treatment effect",
+            "effect modification",
+            "drug response",
+            "therapy response",
+            "cate",
+        )
+        canonical_step_id = "01_treatment_response_heterogeneity"
+        canonical_method = "treatment_response"
+        canonical_intent = (
+            "Characterize treatment-response heterogeneity in one self-contained "
+            "executable step: estimate the overall effect, test for effect "
+            "modification with an explicit interaction term, summarize "
+            "pre-specified subgroup effects, and write the subgroup forest "
+            "figure. Treat subgroup effects as exploratory and report the "
+            "interaction test plus multiplicity, not subgroup p-values alone."
+        )
+        required_outputs = [
+            "statistic:overall_effect",
+            "statistic:interaction_pvalue",
+            "table:subgroup_effects",
+            "figure:subgroup_forest",
+            "log:multiplicity_note",
+        ]
+    elif family == "validation":
+        markers = (
+            "external validation",
+            "externally validate",
+            "transportability",
+            "reclassification",
+            "net reclassification",
+            "score comparison",
+            "compare score",
+            "validate score",
+            "calibration-in-the-large",
+        )
+        canonical_step_id = "01_external_validation"
+        canonical_method = "validation"
+        canonical_intent = (
+            "Validate the score/model in one self-contained executable step: "
+            "evaluate discrimination and calibration on the validation cohort, "
+            "report calibration-in-the-large and slope alongside AUROC, and "
+            "write the external discrimination/calibration figure. Keep the "
+            "development and validation cohorts and time windows distinct."
+        )
+        required_outputs = [
+            "statistic:validation_auroc",
+            "statistic:calibration_slope",
+            "table:validation_performance",
+            "figure:external_validation",
+            "log:validation_cohort_definition",
         ]
     elif family == "bias_audit":
         markers = (
