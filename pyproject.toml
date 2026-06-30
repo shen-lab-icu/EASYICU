@@ -51,8 +51,17 @@ llmserver = [
 agentic = [
   "langgraph>=1.0"
 ]
+# Advanced analytical methods the research-agent sandbox may use. Mirrors
+# research_agent/method_capabilities.CURATED_METHOD_PACKAGES — the coder is only
+# allowed to import a package once it is declared here (reproducible) AND
+# importable at run time (verified by the capability probe).
+methods = [
+  "lifelines>=0.27",
+  "shap>=0.44",
+  "xgboost>=2.0"
+]
 all = [
-  "easyicu[dev,viz,webapp,llmserver,agentic]"
+  "easyicu[dev,viz,webapp,llmserver,agentic,methods]"
 ]
 
 [project.scripts]
