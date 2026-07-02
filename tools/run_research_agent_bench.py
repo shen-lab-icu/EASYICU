@@ -532,8 +532,28 @@ def _load_cost_summary(run_dir: Path) -> Dict[str, Any]:
         return {}
 
 
+def _active_error_count(manifest: Dict[str, Any]) -> Optional[int]:
+    readiness = manifest.get("readiness")
+    if not isinstance(readiness, dict):
+        return None
+    keys = ("numeric_error_count", "evidence_error_count", "analysis_error_count")
+    if not all(key in readiness for key in keys):
+        return None
+    total = 0
+    for key in keys:
+        try:
+            total += int(readiness.get(key) or 0)
+        except (TypeError, ValueError):
+            return None
+    return total
+
+
 def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
     manifest = _load_manifest(run_dir)
+    historical_error_count = sum(
+        1 for f in manifest.get("findings", []) if f.get("severity") == "error"
+    )
+    active_error_count = _active_error_count(manifest)
     or_value = _primary_or(
         run_dir,
         expected_predictor=getattr(item, "primary_predictor", ""),
@@ -560,9 +580,8 @@ def _score_arm(*, run_dir: Path, item, label: str) -> Dict[str, Any]:
         "n_warnings": sum(
             1 for f in manifest.get("findings", []) if f.get("severity") == "warning"
         ),
-        "n_errors": sum(
-            1 for f in manifest.get("findings", []) if f.get("severity") == "error"
-        ),
+        "n_errors": historical_error_count if active_error_count is None else active_error_count,
+        "n_historical_errors": historical_error_count,
         "evidence_count": len(manifest.get("evidence", [])),
         "evidence_kinds": _kinds_complete(manifest),
         "evidence_missing_in_manuscript": _evidence_missing_count(run_dir),
@@ -605,6 +624,52 @@ def _find_resumable_run(workdir: Path) -> Optional[str]:
     return sorted(candidates)[-1] if candidates else None
 
 
+def _normalize_resume_run_id(value: Optional[str]) -> Optional[str]:
+    """Validate a CLI-provided run id without accepting path traversal."""
+    run_id = str(value or "").strip()
+    if not run_id:
+        return None
+    if Path(run_id).name != run_id or "/" in run_id or "\\" in run_id:
+        raise SystemExit(
+            "--resume-run-id must be a run directory name such as "
+            "'run_20260701T085813_abcdef', not a path."
+        )
+    if not run_id.startswith("run_"):
+        raise SystemExit("--resume-run-id must start with 'run_'.")
+    return run_id
+
+
+def _resolve_resume_run_id(
+    *,
+    workdir: Path,
+    reuse_existing: bool,
+    resume_run_id: Optional[str] = None,
+) -> Optional[str]:
+    """Choose the run_id to pass into ResearchAgentPipeline.run.
+
+    ``--resume-run-id`` is an explicit user selection and therefore wins over
+    ``--reuse-existing`` auto-discovery. The explicit path must already contain
+    both the locked plan and partial manifest; otherwise a typo would silently
+    create a fresh run directory instead of continuing the selected plan.
+    """
+    explicit = _normalize_resume_run_id(resume_run_id)
+    if explicit:
+        run_dir = workdir / explicit
+        missing = [
+            name
+            for name in ("analysis_plan.json", "manifest_partial.json")
+            if not (run_dir / name).exists()
+        ]
+        if missing:
+            raise SystemExit(
+                f"Cannot resume {explicit!r} under {workdir}: missing "
+                f"{', '.join(missing)}. Choose a run that has already "
+                "produced a locked plan and checkpoint."
+            )
+        return explicit
+    return _find_resumable_run(workdir) if reuse_existing else None
+
+
 def _run_one_arm(
     *,
     item,
@@ -615,6 +680,9 @@ def _run_one_arm(
     llm,
     pipeline_options: Optional[Dict[str, Any]] = None,
     reuse_existing: bool = False,
+    resume_run_id: Optional[str] = None,
+    resume_from_step_id: Optional[str] = None,
+    stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     from easyicu.research_agent import ResearchAgentPipeline  # type: ignore
@@ -650,10 +718,15 @@ def _run_one_arm(
         disable_icu_context=disable_icu_context,
         **opts,
     )
-    resume_run_id = _find_resumable_run(workdir) if reuse_existing else None
-    if resume_run_id:
+    resolved_resume_run_id = _resolve_resume_run_id(
+        workdir=workdir,
+        reuse_existing=reuse_existing,
+        resume_run_id=resume_run_id,
+    )
+    if resolved_resume_run_id:
+        mode = "selected" if resume_run_id else "interrupted"
         print(
-            f"[research_agent] resuming interrupted run {resume_run_id} "
+            f"[research_agent] resuming {mode} run {resolved_resume_run_id} "
             f"(step-level checkpoint) for {item.key}/{label}"
         )
     started = time.monotonic()
@@ -665,7 +738,9 @@ def _run_one_arm(
         target_outcome=item.target_outcome,
         primary_exposure=(item.primary_predictor or None),
         inclusion_criteria=item.inclusion_criteria,
-        resume_run_id=resume_run_id,
+        resume_run_id=resolved_resume_run_id,
+        resume_from_step_id=resume_from_step_id,
+        stop_after_step_id=stop_after_step_id,
         force_writer_probe=bool(force_writer_probe),
     )
     elapsed = time.monotonic() - started
@@ -683,6 +758,9 @@ def _run_one_item(
     arms: Sequence[str],
     pipeline_options: Optional[Dict[str, Any]] = None,
     verbose: bool = True,
+    resume_run_id: Optional[str] = None,
+    resume_from_step_id: Optional[str] = None,
+    stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     if verbose:
@@ -701,6 +779,9 @@ def _run_one_item(
             label="naive",
             llm=llm,
             pipeline_options=pipeline_options,
+            resume_run_id=resume_run_id,
+            resume_from_step_id=resume_from_step_id,
+            stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
         )
     if "aware" in selected:
@@ -712,6 +793,9 @@ def _run_one_item(
             label="aware",
             llm=llm,
             pipeline_options=pipeline_options,
+            resume_run_id=resume_run_id,
+            resume_from_step_id=resume_from_step_id,
+            stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
         )
     payload = {
@@ -759,6 +843,9 @@ def _run_one_item_with_reuse(
     pipeline_options: Optional[Dict[str, Any]],
     reuse_existing: bool,
     verbose: bool = True,
+    resume_run_id: Optional[str] = None,
+    resume_from_step_id: Optional[str] = None,
+    stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     if verbose:
@@ -769,7 +856,7 @@ def _run_one_item_with_reuse(
 
     naive = _skipped_arm("naive")
     aware = _skipped_arm("aware")
-    if reuse_existing:
+    if reuse_existing and not resume_run_id:
         if "naive" in selected:
             naive = _reuse_arm_if_complete(
                 arm_dir=item_root / "naive", item=item, label="naive"
@@ -788,6 +875,9 @@ def _run_one_item_with_reuse(
             label="naive",
             llm=llm,
             pipeline_options=pipeline_options,
+            resume_run_id=resume_run_id,
+            resume_from_step_id=resume_from_step_id,
+            stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
         )
     if "aware" in selected and not _arm_was_run(aware):
@@ -799,6 +889,9 @@ def _run_one_item_with_reuse(
             label="aware",
             llm=llm,
             pipeline_options=pipeline_options,
+            resume_run_id=resume_run_id,
+            resume_from_step_id=resume_from_step_id,
+            stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
         )
 
@@ -1306,6 +1399,9 @@ def _run_suite(
     verbose: bool = True,
     request_timeout: float = 180.0,
     reuse_existing: bool = False,
+    resume_run_id: Optional[str] = None,
+    resume_from_step_id: Optional[str] = None,
+    stop_after_step_id: Optional[str] = None,
     case_registration: Optional[Dict[str, Any]] = None,
     force_writer_probe: bool = False,
     allow_mock_aware: bool = False,
@@ -1333,6 +1429,9 @@ def _run_suite(
                 arms=selected_arms,
                 pipeline_options=pipeline_options,
                 reuse_existing=reuse_existing,
+                resume_run_id=resume_run_id,
+                resume_from_step_id=resume_from_step_id,
+                stop_after_step_id=stop_after_step_id,
                 force_writer_probe=force_writer_probe,
                 verbose=verbose,
             )
@@ -1501,7 +1600,35 @@ def main() -> int:
     parser.add_argument(
         "--reuse-existing",
         action="store_true",
-        help="Reuse completed item/arm runs already present under --out-root.",
+        help=(
+            "Reuse completed item/arm runs already present under --out-root "
+            "and auto-resume the latest interrupted run in an item/arm."
+        ),
+    )
+    parser.add_argument(
+        "--resume-run-id",
+        default=None,
+        help=(
+            "Explicit run_id to continue under the selected item/arm directory. "
+            "Requires exactly one item and one arm; completed steps are skipped "
+            "and the interrupted step is rerun from that step."
+        ),
+    )
+    parser.add_argument(
+        "--resume-from-step-id",
+        default=None,
+        help=(
+            "With --resume-run-id, ignore completed checkpoint records from this "
+            "plan step onward so the selected step is rerun."
+        ),
+    )
+    parser.add_argument(
+        "--stop-after-step-id",
+        default=None,
+        help=(
+            "Stop execution after the named plan step. Useful for reviewing one "
+            "resumed step at a time."
+        ),
     )
     parser.add_argument(
         "--max-total-steps",
@@ -1647,6 +1774,24 @@ def main() -> int:
         args.arms,
         profile=submission_profile,
     )
+    explicit_resume_run_id = _normalize_resume_run_id(
+        getattr(args, "resume_run_id", None)
+    )
+    if explicit_resume_run_id and len(_normalize_arms(args.arms)) != 1:
+        raise SystemExit(
+            "--resume-run-id requires exactly one arm. Pass for example "
+            "'--arms aware' so the selected run_id maps to one item/arm folder."
+        )
+    resume_from_step_id = (
+        str(getattr(args, "resume_from_step_id", "") or "").strip() or None
+    )
+    stop_after_step_id = (
+        str(getattr(args, "stop_after_step_id", "") or "").strip() or None
+    )
+    if resume_from_step_id and not explicit_resume_run_id:
+        raise SystemExit("--resume-from-step-id requires --resume-run-id.")
+    if explicit_resume_run_id and args.models and len(args.models) != 1:
+        raise SystemExit("--resume-run-id cannot be combined with multiple models.")
     runner_kind = _enforce_submission_profile_runner(
         getattr(args, "runner", None),
         profile=submission_profile,
@@ -1688,6 +1833,9 @@ def main() -> int:
             model=ehrflow_model,
             request_timeout=float(args.request_timeout),
             reuse_existing=bool(args.reuse_existing),
+            resume_run_id=explicit_resume_run_id,
+            resume_from_step_id=resume_from_step_id,
+            stop_after_step_id=stop_after_step_id,
             force_writer_probe=bool(args.force_writer_probe),
             allow_mock_aware=bool(args.allow_mock_aware),
         )
@@ -1706,6 +1854,11 @@ def main() -> int:
             return 2
     else:
         items = all_items
+    if explicit_resume_run_id and len(items) != 1:
+        raise SystemExit(
+            "--resume-run-id requires exactly one benchmark item. Pass "
+            "'--items <key>' for the plan you want to continue."
+        )
 
     out_root = Path(args.out_root).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
@@ -1733,6 +1886,9 @@ def main() -> int:
             pipeline_options=pipeline_options,
             request_timeout=float(args.request_timeout),
             reuse_existing=bool(args.reuse_existing),
+            resume_run_id=explicit_resume_run_id,
+            resume_from_step_id=resume_from_step_id,
+            stop_after_step_id=stop_after_step_id,
             case_registration=case_registration,
             force_writer_probe=bool(args.force_writer_probe),
             allow_mock_aware=bool(args.allow_mock_aware),
@@ -1810,6 +1966,9 @@ def _run_ehrflowbench_jsonl(
     model: str = "mock",
     request_timeout: float = 180.0,
     reuse_existing: bool = False,
+    resume_run_id: Optional[str] = None,
+    resume_from_step_id: Optional[str] = None,
+    stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
     allow_mock_aware: bool = False,
 ) -> int:
@@ -1837,6 +1996,11 @@ def _run_ehrflowbench_jsonl(
             rows.append(
                 {"status": "invalid_json", "error": str(exc), "raw": line[:200]}
             )
+    if resume_run_id and len(rows) != 1:
+        raise SystemExit(
+            "--resume-run-id requires a one-row EHRFlowBench JSONL file so the "
+            "selected run_id maps to one item/arm folder."
+        )
 
     scores: List[Dict[str, Any]] = []
     pending: List[Dict[str, Any]] = []
@@ -1900,7 +2064,7 @@ def _run_ehrflowbench_jsonl(
         # 502 mid-batch never forces a full redo. An item counts as "done" only
         # if its latest run reached execution_complete — quota-disrupted
         # diagnostic_only runs are redone.
-        if reuse_existing and _ehrflow_item_done(out_root / key):
+        if reuse_existing and not resume_run_id and _ehrflow_item_done(out_root / key):
             print(f"\n=== {key} — reuse existing complete run ===")
             pending.append({"key": key, "status": "reused_complete"})
             continue
@@ -1917,6 +2081,9 @@ def _run_ehrflowbench_jsonl(
                 model=model,
                 request_timeout=request_timeout,
                 reuse_existing=reuse_existing,
+                resume_run_id=resume_run_id,
+                resume_from_step_id=resume_from_step_id,
+                stop_after_step_id=stop_after_step_id,
                 force_writer_probe=force_writer_probe,
             )
             scores.append(score)
@@ -1995,6 +2162,9 @@ def _run_one_item_from_cohort(
     model: str = "mock",
     request_timeout: float = 180.0,
     reuse_existing: bool = False,
+    resume_run_id: Optional[str] = None,
+    resume_from_step_id: Optional[str] = None,
+    stop_after_step_id: Optional[str] = None,
     force_writer_probe: bool = False,
 ) -> Dict[str, Any]:
     llm = _make_llm(provider=provider, model=model, request_timeout=request_timeout)
@@ -2012,6 +2182,9 @@ def _run_one_item_from_cohort(
             llm=llm,
             pipeline_options=pipeline_options,
             reuse_existing=reuse_existing,
+            resume_run_id=resume_run_id,
+            resume_from_step_id=resume_from_step_id,
+            stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
         )
     if "aware" in selected:
@@ -2024,6 +2197,9 @@ def _run_one_item_from_cohort(
             llm=llm,
             pipeline_options=pipeline_options,
             reuse_existing=reuse_existing,
+            resume_run_id=resume_run_id,
+            resume_from_step_id=resume_from_step_id,
+            stop_after_step_id=stop_after_step_id,
             force_writer_probe=force_writer_probe,
         )
     payload = {
