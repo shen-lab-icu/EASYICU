@@ -1788,6 +1788,12 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     assert quality_features["hr"]["missing_pct"] == 33.3
     assert quality_features["hr"]["out_of_physio_pct"] == 0.0
     assert payload["privacy"]["bounded_table_previews"] is True
+    assert payload["privacy"]["raw_source_rows_returned"] is False
+    assert payload["privacy"]["bounded_pseudonymous_preview_rows_returned"] is True
+    assert (
+        payload["privacy"]["row_payload_scope"]
+        == "bounded_pseudonymous_table_previews"
+    )
     assert payload["privacy"]["max_table_preview_rows"] == 24
     assert payload["privacy"]["max_table_page_size"] == 100
     assert (
@@ -1894,6 +1900,59 @@ def test_patient_review_drilldown_uses_active_source_with_bounded_table_previews
     serialized = json.dumps(payload)
     for marker in ["subject_id", "hadm_id", "tableRows", "stay_id", '"series"']:
         assert marker not in serialized
+
+
+def test_patient_review_multi_entity_traces_keep_times_aligned_after_numeric_filter(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(source_store, "_CONFIG_DIR", tmp_path / "cfg")
+    monkeypatch.setattr(source_store, "_CONFIG_PATH", tmp_path / "cfg" / "sources.json")
+    monkeypatch.setattr(source_store, "_autodiscovered_paths", lambda: [])
+    export_dir = _write_csv_export(tmp_path / "miiv", database="miiv")
+    vitals = pd.DataFrame(
+        {
+            "stay_id": [1, 1, 2, 2, 2],
+            "charttime": [
+                "2026-01-01 00:00",
+                "2026-01-01 01:00",
+                "2026-01-01 00:00",
+                "2026-01-01 01:00",
+                "2026-01-01 02:00",
+            ],
+            "hr": [90, 95, "", 82, 84],
+            "map": [70, 72, 75, 76, 77],
+            "spo2": [97, 98, 96, 96, 97],
+            "temp": [37.0, 37.2, 36.8, 36.9, 37.0],
+        }
+    )
+    vitals.to_csv(export_dir / "vitals.csv", index=False)
+    manifest = json.loads((export_dir / "_manifest.json").read_text(encoding="utf-8"))
+    for item in manifest["files"]:
+        if item["module"] == "vitals":
+            item["rows"] = len(vitals)
+    (export_dir / "_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    source_store.register_source(
+        str(export_dir), label="Review fixture", active=True, crossdb=True
+    )
+    client = TestClient(app)
+
+    response = client.post("/api/patient-review/drilldown", json={})
+
+    assert response.status_code == 200
+    comparison = response.json()["trajectory_review"]["multi_entity_comparison"]
+    assert comparison["feature"] == "hr"
+    traces = {row["label"]: row for row in comparison["traces"]}
+    assert traces["Entity 1"]["values"] == [90.0, 95.0]
+    assert traces["Entity 1"]["times"] == [
+        "2026-01-01 00:00",
+        "2026-01-01 01:00",
+    ]
+    assert traces["Entity 2"]["values"] == [82.0, 84.0]
+    assert traces["Entity 2"]["times"] == [
+        "2026-01-01 01:00",
+        "2026-01-01 02:00",
+    ]
 
 
 def test_patient_review_drilldown_renders_manifest_eligibility_flow(

@@ -21,6 +21,7 @@ drives ``DataConverter.convert_all(progress_callback=...)`` directly.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -740,7 +741,7 @@ def _render_export_readme(
         *(
             [
                 "- `feature_definitions.json` and `feature_definitions.csv` contain the selected concept IDs, names, units, exported module files, and callback provenance.",
-                "- Example definition row: `concept_id=age`, `module=demographics`, `unit=years`, `export_files=demographics.parquet`, `callback_import_path=easyicu.api.load_concepts`, `callback_project_path=<local EasyICU repo>`.",
+                "- Example definition row: `concept_id=age`, `module=demographics`, `unit=years`, `export_files=demographics.parquet`, `callback_import_path=easyicu.api.load_concepts`, `callback_project_ref=<local path omitted>`.",
                 "- Raw table/column lineage is included only when declared by the catalog; otherwise `raw_metadata_status=not_declared_in_current_catalog` is used instead of guessing.",
             ]
             if definition_files
@@ -856,6 +857,12 @@ def _feature_definition_payload(
 
     project_path = Path(__file__).resolve().parents[3]
     callback_source = Path(getattr(api_module, "__file__", "")).resolve()
+    data_source_ref = _shareable_path_reference(data_path)
+    export_ref = _shareable_path_reference(export_path)
+    callback_source_ref = _shareable_path_reference(
+        callback_source, relative_to=project_path
+    )
+    project_ref = _shareable_path_reference(project_path)
     file_by_module: Dict[str, List[str]] = {}
     for item in files:
         module = str(item.get("module") or "")
@@ -885,12 +892,13 @@ def _feature_definition_payload(
                     "description_en": desc_en,
                     "description_zh": desc_zh,
                     "source": {
-                        "data_path": str(data_path),
-                        "export_path": str(export_path),
+                        "data_source_ref": data_source_ref,
+                        "export_ref": export_ref,
                         "export_files": file_by_module.get(module, []),
                         "raw_tables": [],
                         "raw_columns": [],
                         "raw_metadata_status": "not_declared_in_current_catalog",
+                        "local_path_policy": "absolute_paths_omitted_from_shareable_manifest",
                         "note": (
                             "EasyICU resolves raw database tables inside concept "
                             "callbacks. This manifest records the selected concept "
@@ -902,8 +910,9 @@ def _feature_definition_payload(
                     "callback": {
                         "import_path": "easyicu.api.load_concepts",
                         "function": "load_concepts",
-                        "source_file": str(callback_source),
-                        "project_path": str(project_path),
+                        "source_module_file": callback_source_ref["hint"],
+                        "source_file_ref": callback_source_ref,
+                        "project_ref": project_ref,
                         "module_callback": derived_output_source,
                         "call_signature": (
                             "load_concepts(concept_ids, patient_ids=resolved_cohort, "
@@ -917,12 +926,43 @@ def _feature_definition_payload(
     return {
         "schema_version": "easyicu_feature_definitions_v1",
         "database": database,
-        "data_path": str(data_path),
-        "export_path": str(export_path),
+        "data_source_ref": data_source_ref,
+        "export_ref": export_ref,
         "record_count": len(records),
         "raw_lineage_scope": "catalog_metadata_plus_callback_provenance",
+        "local_path_policy": "absolute_paths_omitted_from_shareable_feature_definitions",
         "records": records,
     }
+
+
+def _shareable_path_reference(
+    path_like: str | Path, *, relative_to: Path | None = None
+) -> Dict[str, Any]:
+    raw = str(path_like or "")
+    path = Path(raw) if raw else Path("")
+    hint = path.name if raw else ""
+    if raw and relative_to is not None:
+        try:
+            hint = str(path.resolve().relative_to(relative_to.resolve()))
+        except Exception:
+            pass
+    return {
+        "hint": hint,
+        "sha256_12": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+        if raw
+        else "",
+        "absolute_path_omitted": bool(raw and path.is_absolute()),
+    }
+
+
+def _format_shareable_path_reference(ref: Any) -> str:
+    if not isinstance(ref, dict):
+        return ""
+    hint = str(ref.get("hint") or "")
+    digest = str(ref.get("sha256_12") or "")
+    if hint and digest:
+        return f"{hint}#{digest}"
+    return hint or digest
 
 
 def _write_feature_definition_files(
@@ -947,10 +987,14 @@ def _write_feature_definition_files(
         "raw_tables",
         "raw_columns",
         "raw_metadata_status",
+        "data_source_ref",
+        "export_ref",
+        "local_path_policy",
         "callback_import_path",
         "callback_function",
-        "callback_source_file",
-        "callback_project_path",
+        "callback_source_module_file",
+        "callback_source_file_ref",
+        "callback_project_ref",
         "module_callback",
         "description_en",
         "description_zh",
@@ -975,10 +1019,24 @@ def _write_feature_definition_files(
                     "raw_tables": ";".join(source.get("raw_tables") or []),
                     "raw_columns": ";".join(source.get("raw_columns") or []),
                     "raw_metadata_status": source.get("raw_metadata_status", ""),
+                    "data_source_ref": _format_shareable_path_reference(
+                        source.get("data_source_ref")
+                    ),
+                    "export_ref": _format_shareable_path_reference(
+                        source.get("export_ref")
+                    ),
+                    "local_path_policy": source.get("local_path_policy", ""),
                     "callback_import_path": callback.get("import_path", ""),
                     "callback_function": callback.get("function", ""),
-                    "callback_source_file": callback.get("source_file", ""),
-                    "callback_project_path": callback.get("project_path", ""),
+                    "callback_source_module_file": callback.get(
+                        "source_module_file", ""
+                    ),
+                    "callback_source_file_ref": _format_shareable_path_reference(
+                        callback.get("source_file_ref")
+                    ),
+                    "callback_project_ref": _format_shareable_path_reference(
+                        callback.get("project_ref")
+                    ),
                     "module_callback": callback.get("module_callback") or "",
                     "description_en": record.get("description_en", ""),
                     "description_zh": record.get("description_zh", ""),

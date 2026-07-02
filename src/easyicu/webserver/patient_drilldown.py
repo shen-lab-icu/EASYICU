@@ -304,6 +304,7 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
         },
         "privacy": {
             "raw_rows_returned": False,
+            "raw_source_rows_returned": False,
             "direct_identifiers_returned": False,
             "max_entity_options": _MAX_ENTITIES,
             "max_points_per_signal": _MAX_SIGNAL_POINTS,
@@ -311,6 +312,8 @@ def patient_review_drilldown(body: Dict[str, Any]) -> Dict[str, Any]:
             "max_table_preview_columns": _MAX_TABLE_PREVIEW_COLUMNS,
             "max_table_page_size": _MAX_TABLE_PAGE_SIZE,
             "bounded_table_previews": True,
+            "bounded_pseudonymous_preview_rows_returned": True,
+            "row_payload_scope": "bounded_pseudonymous_table_previews",
             "payload_tables_are_aggregated": False,
             "payload_tables_are_bounded": True,
         },
@@ -1013,6 +1016,35 @@ def _human_column_label(column: str) -> str:
     return " ".join(part.capitalize() for part in text.split()) or str(column or "")
 
 
+def _paired_numeric_time_values(
+    frame: Any, time_col: str, feature: str
+) -> Tuple[List[Any], List[float], int, List[float]]:
+    """Pair chart times with numeric values after applying the same row filter."""
+    times: List[Any] = []
+    values: List[float] = []
+    if (
+        frame is None
+        or getattr(frame, "empty", True)
+        or time_col not in frame.columns
+        or feature not in frame.columns
+    ):
+        return times, values, 0, values
+    one = frame.sort_values(time_col)
+    for raw_time, raw_value in zip(one[time_col], one[feature]):
+        num = dataio._num(raw_value)
+        if num is None:
+            continue
+        values.append(float(num))
+        times.append(_json_cell(raw_time))
+    point_count = len(values)
+    return (
+        times[:_MAX_SIGNAL_POINTS],
+        values[:_MAX_SIGNAL_POINTS],
+        point_count,
+        values,
+    )
+
+
 def _time_lane_payloads(
     review_frames: List[Dict[str, Any]], entity_id: str
 ) -> List[Dict[str, Any]]:
@@ -1027,24 +1059,12 @@ def _time_lane_payloads(
         time_col = item.get("time_col")
         if not time_col or time_col not in one.columns:
             continue
-        if time_col and time_col in one.columns:
-            one = one.sort_values(time_col)
         for feature in item.get("features") or []:
             if feature not in one.columns:
                 continue
-            # Keep charttime aligned with each numeric value so the front-end
-            # can render the real ICU-admission-hour axis instead of a bare
-            # index. dataio._numeric_values drops non-numeric rows, so we pair
-            # time and value row-by-row with the same drop rule rather than
-            # zipping the raw (unfiltered) time column.
-            times: List[Any] = []
-            values: List[float] = []
-            for raw_time, raw_value in zip(one[time_col], one[feature]):
-                num = dataio._num(raw_value)
-                if num is None:
-                    continue
-                values.append(float(num))
-                times.append(_json_cell(raw_time))
+            times, values, point_count, all_values = _paired_numeric_time_values(
+                one, str(time_col), str(feature)
+            )
             if not values:
                 continue
             by_feature.setdefault(
@@ -1055,13 +1075,13 @@ def _time_lane_payloads(
                     "unit": _concept_unit(feature),
                     "module": item.get("module"),
                     "time_indexed": bool(time_col),
-                    "values": values[:_MAX_SIGNAL_POINTS],
-                    "times": times[:_MAX_SIGNAL_POINTS],
-                    "point_count": len(values),
-                    "current": values[min(len(values), _MAX_SIGNAL_POINTS) - 1],
-                    "min": round(min(values), 3),
-                    "max": round(max(values), 3),
-                    "mean": round(sum(values) / len(values), 3),
+                    "values": values,
+                    "times": times,
+                    "point_count": point_count,
+                    "current": values[-1],
+                    "min": round(min(all_values), 3),
+                    "max": round(max(all_values), 3),
+                    "mean": round(sum(all_values) / len(all_values), 3),
                     "thresholds": _threshold_payload(feature),
                 },
             )
@@ -1736,22 +1756,18 @@ def _feature_traces_for_entities(
         one = subset[subset["stay_id"] == entity_id].copy()
         if one.empty:
             continue
-        one = one.sort_values(time_col)
-        values = dataio._numeric_values(one[feature])
-        if len(values) < 2:
+        times, values, point_count, _all_values = _paired_numeric_time_values(
+            one, str(time_col), str(feature)
+        )
+        if point_count < 2:
             continue
-        bounded_values = values[:_MAX_SIGNAL_POINTS]
-        bounded_times = [
-            _json_cell(value)
-            for value in list(one[time_col])[: len(bounded_values)]
-        ]
         traces.append(
             {
                 "ref": _entity_ref(path, entity_id),
                 "label": f"Entity {ordinal}",
-                "values": bounded_values,
-                "times": bounded_times,
-                "point_count": len(values),
+                "values": values,
+                "times": times,
+                "point_count": point_count,
                 "bounded": True,
                 "max_points": _MAX_SIGNAL_POINTS,
             }
